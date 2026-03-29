@@ -1,4 +1,4 @@
-## Unreleased
+## 1.0.0 (2026-03-29)
 
 First **stable public API** as **1.0.0** — authentication and authorization for [Litestar](https://litestar.dev/) as a native plugin, without shipping email delivery or UI (use `BaseUserManager` hooks).
 
