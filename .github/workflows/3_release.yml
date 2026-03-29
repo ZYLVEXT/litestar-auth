@@ -118,7 +118,9 @@ jobs:
             echo "No wheel or sdist found under dist/"
             exit 1
           fi
-          gh release upload "${{ needs.check-tag.outputs.tag }}" "${assets[@]}" --clobber
+          gh release upload "${{ needs.check-tag.outputs.tag }}" "${assets[@]}" \
+            --repo "${{ github.repository }}" \
+            --clobber
 
   pypi:
     name: Publish to PyPI
