@@ -1,0 +1,185 @@
+[project]
+name = "litestar-auth"
+version = "0.0.0"
+description = "Litestar Auth"
+readme = "README.md"
+license = {text = "MIT"}
+authors = [
+    {name = "Vladislav Shepilov", email = "shepilov.v@protonmail.com"},
+]
+maintainers = [
+    {name = "Vladislav Shepilov", email = "shepilov.v@protonmail.com"},
+]
+keywords = [
+    "library", "litestar", "auth", "authentication", "authorization", "jwt", "database", "redis", "oauth", "httpx-oauth",
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Topic :: Software Development :: Libraries",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+]
+requires-python = "<3.15.0,>=3.12.0"
+dependencies = [
+    "litestar>=2.21.1,<3.0",
+    "advanced-alchemy>=1.9.1,<2.0",
+    "pwdlib[argon2,bcrypt]>=0.3.0,<0.4.0",
+    "pyjwt>=2.12.1,<3.0",
+]
+
+[project.urls]
+homepage = "https://github.com/ZYLVEXT/litestar-auth"
+documentation = "https://zylvext.github.io/litestar-auth/"
+source = "https://github.com/ZYLVEXT/litestar-auth"
+tracker = "https://github.com/ZYLVEXT/litestar-auth/issues"
+
+[project.optional-dependencies]
+redis = ["redis>=7.4.0,<8.0.0"]
+oauth = ["httpx-oauth>=0.16.1,<0.17.0", "cryptography>=46.0.6"]
+totp = ["cryptography>=46.0.6"]
+all = ["litestar-auth[redis,oauth,totp]"]
+
+[dependency-groups]
+dev = [
+    "commitizen>=4.13.9",
+    "pip-audit>=2.10.0",
+    "pre-commit-uv>=4.2.1",
+    "pytest>=9.0.2",
+    "pytest-cov>=7.1.0",
+    "pytest-asyncio>=1.3.0",
+    "pytest-deadfixtures>=3.1.0",
+    "python-dotenv>=1.2.2",
+    "pytest-timeout>=2.4.0",
+    "pytest-xdist>=3.8.0",
+    "pre-commit>=4.5.1",
+    "ruff>=0.15.8",
+    "rust-just>=1.48.1",
+    "ty>=0.0.26",
+    "deptry>=0.25.1",
+]
+docs = [
+    "mkdocstrings[python]>=1.0.3",
+    "pymdown-extensions>=10.21",
+    "zensical>=0.0.30",
+]
+
+[tool.ty.environment]
+# Match project.requires-python minimum for type-checking.
+python-version = "3.12"
+
+[tool.ty.src]
+# Type-check the library and tests only (exclude docs snippets and tooling).
+include = ["litestar_auth", "tests"]
+
+[tool.deptry]
+experimental_namespace_package = false
+
+[tool.deptry.per_rule_ignores]
+DEP004 = ["dotenv"]
+DEP002 = ["redis", "httpx-oauth", "litestar-auth", "cryptography"]
+DEP003 = ["msgspec", "sqlalchemy"]
+
+[tool.uv]
+default-groups = []
+
+[tool.ruff]
+line-length = 120
+# Assume Python 3.12 to be compatible with typing.
+target-version = "py312"
+# Exclude a variety of commonly ignored directories.
+exclude = [
+    ".git",
+    ".ruff_cache",
+    "docs/snippets",
+    "ralph_helpers.py",
+]
+
+[tool.ruff.format]
+# Like Black, use double quotes for strings.
+quote-style = "double"
+# Like Black, indent with spaces, rather than tabs.
+indent-style = "space"
+# Like Black, respect magic trailing commas.
+skip-magic-trailing-comma = false
+# Like Black, automatically detect the appropriate line ending.
+line-ending = "auto"
+
+[tool.ruff.lint]
+preview = true
+select = ["ALL"]
+ignore = [
+    "E501",  # line too long, handled by ruff-format
+    "CPY001",  # Missing copyright notice at top of file
+]
+
+[tool.ruff.lint.pydocstyle]
+convention = "google"
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**/*.py" = ["ARG001", "ARG002", "N802", "N806", "PLC2701", "PLR0914", "PLR6301", "S", "SLF"]
+
+[tool.pytest.ini_options]
+timeout = 60
+pythonpath = ["."]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "session"
+minversion = "9.0"
+addopts = "-ra -q --strict-markers"
+filterwarnings = [
+    "error",
+    "error:::litestar_auth",
+    "ignore::litestar_auth.totp.SecurityWarning",
+    "ignore::DeprecationWarning:advanced_alchemy",
+]
+markers = """
+    imports: mark a test as an imports test
+    integration: mark a test as an integration test
+    e2e: end-to-end tests using real persistence and full plugin stack
+    unit: mark a test as a unit test
+"""
+
+[tool.coverage.run]
+source = ["litestar_auth"]
+branch = true
+
+[tool.coverage.report]
+precision = 1
+include = ["litestar_auth/*"]
+omit = [
+    "tests/*",
+]
+exclude_lines = [
+    # Have to re-enable the standard pragma
+    "pragma: no cover",
+    # Don't check obviously not implemented
+    "raise NotImplementedError",
+    # We don't really care what happens if fail
+    "except ImportError:",
+    # Don't check for typing-only code
+    "if TYPE_CHECKING:",
+    # Don't check for code that only runs itself
+    "if __name__ == .__main__.:",
+]
+show_missing = true
+
+[tool.commitizen]
+name = "cz_conventional_commits"
+tag_format = "$version"
+version_scheme = "semver"
+version_provider = "pep621"
+update_changelog_on_bump = false
+major_version_zero = true
+version_files = [
+    "pyproject.toml:version",
+    "litestar_auth/__init__.py:__version__",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["litestar_auth"]

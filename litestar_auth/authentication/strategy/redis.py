@@ -1,0 +1,253 @@
+"""Redis-backed authentication strategy."""
+
+from __future__ import annotations
+
+import importlib as _importlib
+import logging
+import secrets
+from datetime import timedelta
+from functools import partial
+from typing import TYPE_CHECKING, Any, Protocol, cast, override
+
+from litestar_auth._compat import _load_redis_asyncio as _load_redis_asyncio_compat
+from litestar_auth.authentication.strategy._opaque_tokens import build_opaque_token_key
+from litestar_auth.authentication.strategy.base import Strategy, UserManagerProtocol
+from litestar_auth.config import validate_secret_length
+from litestar_auth.exceptions import ConfigurationError
+from litestar_auth.types import ID, UP
+
+if TYPE_CHECKING:
+    from collections.abc import AsyncIterator, Callable
+
+    from redis.typing import PatternT
+
+DEFAULT_KEY_PREFIX = "litestar_auth:token:"
+DEFAULT_LIFETIME = timedelta(hours=1)
+DEFAULT_TOKEN_BYTES = 32
+DEFAULT_MAX_SCAN_KEYS = 10_000
+
+logger = logging.getLogger(__name__)
+
+_load_redis_asyncio = partial(_load_redis_asyncio_compat, feature_name="RedisTokenStrategy")
+importlib = _importlib
+
+
+class RedisClientProtocol(Protocol):
+    """Minimal async Redis client interface used by the token strategy."""
+
+    async def get(self, name: str, /) -> bytes | str | None:
+        """Return the stored value for a Redis key."""
+
+    async def setex(self, name: str, time: int, value: str, /) -> object:
+        """Store a Redis value with an expiration time in seconds."""
+
+    async def delete(self, *names: str) -> int:
+        """Delete one or more Redis keys."""
+
+    async def sadd(self, name: str, *values: str) -> int:
+        """Add one or more values to a Redis set."""
+
+    async def srem(self, name: str, *values: str) -> int:
+        """Remove one or more values from a Redis set."""
+
+    async def smembers(self, name: str) -> set[bytes] | set[str]:
+        """Return all members of a Redis set."""
+
+    async def expire(self, name: str, time: int) -> bool:
+        """Set the TTL for a key in seconds."""
+
+    def scan_iter(
+        self,
+        match: PatternT | None = None,
+        count: int | None = None,
+        _type: str | None = None,
+        **kwargs: Any,  # noqa: ANN401
+    ) -> AsyncIterator[str]:
+        """Iterate over Redis keys matching a pattern."""
+
+
+class RedisTokenStrategy(Strategy[UP, ID]):
+    """Stateful strategy that stores opaque tokens in Redis with TTL."""
+
+    def __init__(  # noqa: PLR0913
+        self,
+        *,
+        redis: RedisClientProtocol,
+        token_hash_secret: str,
+        lifetime: timedelta = DEFAULT_LIFETIME,
+        token_bytes: int = DEFAULT_TOKEN_BYTES,
+        key_prefix: str = DEFAULT_KEY_PREFIX,
+        subject_decoder: Callable[[str], ID] | None = None,
+        max_scan_keys: int = DEFAULT_MAX_SCAN_KEYS,
+    ) -> None:
+        """Initialize the strategy.
+
+        Args:
+            redis: Async Redis client compatible with ``redis.asyncio.Redis``.
+            token_hash_secret: High-entropy secret used for keyed token hashing (HMAC-SHA256).
+            lifetime: Token TTL applied to persisted keys.
+            token_bytes: Number of random bytes used for token generation.
+            key_prefix: Prefix used to namespace token keys in Redis.
+            subject_decoder: Optional callable that converts the stored user id
+                string into the identifier type expected by the user manager.
+            max_scan_keys: Safety cap on keys examined during scan-based fallback
+                invalidation.  Prevents runaway iteration on large keyspaces.
+
+        Raises:
+            ConfigurationError: When ``token_hash_secret`` fails minimum-length requirements.
+        """
+        _load_redis_asyncio()
+        try:
+            validate_secret_length(token_hash_secret, label="RedisTokenStrategy token_hash_secret")
+        except ConfigurationError as exc:
+            raise ConfigurationError(str(exc)) from exc
+
+        self.redis = redis
+        self._token_hash_secret = token_hash_secret.encode()
+        self.lifetime = lifetime
+        self.token_bytes = token_bytes
+        self.key_prefix = key_prefix
+        self.subject_decoder = subject_decoder
+        self._max_scan_keys = max_scan_keys
+
+    def _key(self, token: str) -> str:
+        """Return the Redis key for a token."""
+        return build_opaque_token_key(
+            key_prefix=self.key_prefix,
+            token_hash_secret=self._token_hash_secret,
+            token=token,
+        )
+
+    def _user_index_key(self, user_id: str) -> str:
+        """Return the Redis key for the per-user token index."""
+        return f"{self.key_prefix}user:{user_id}"
+
+    @staticmethod
+    def _decode_user_id(value: bytes | str) -> str:
+        """Normalize Redis payloads to text identifiers.
+
+        Returns:
+            Decoded user identifier text.
+        """
+        if isinstance(value, bytes):
+            return value.decode()
+        return value
+
+    @property
+    def _ttl_seconds(self) -> int:
+        """Return the configured token lifetime in whole seconds."""
+        return max(int(self.lifetime.total_seconds()), 1)
+
+    @override
+    async def read_token(
+        self,
+        token: str | None,
+        user_manager: UserManagerProtocol[UP, ID],
+    ) -> UP | None:
+        """Resolve a user from a Redis-backed token.
+
+        Returns:
+            The resolved user when the token exists and decodes successfully,
+            otherwise ``None``.
+        """
+        if token is None:
+            return None
+
+        stored_user_id = await self.redis.get(self._key(token))
+        if stored_user_id is None:
+            return None
+
+        user_id_text = self._decode_user_id(stored_user_id)
+
+        try:
+            user_id = self.subject_decoder(user_id_text) if self.subject_decoder is not None else user_id_text
+        except (TypeError, ValueError):
+            return None
+
+        return await user_manager.get(cast("ID", user_id))
+
+    @override
+    async def write_token(self, user: UP) -> str:
+        """Persist a new opaque token in Redis and return it.
+
+        Returns:
+            Newly created opaque token string.
+        """
+        token = secrets.token_urlsafe(self.token_bytes)
+        token_key = self._key(token)
+        user_id = str(user.id)
+        await self.redis.setex(token_key, self._ttl_seconds, user_id)
+        index_key = self._user_index_key(user_id)
+        await self.redis.sadd(index_key, token_key)
+        await self.redis.expire(index_key, self._ttl_seconds)
+        return token
+
+    @override
+    async def destroy_token(self, token: str, user: UP) -> None:
+        """Delete a persisted Redis token."""
+        token_key = self._key(token)
+        user_id = str(user.id)
+        index_key = self._user_index_key(user_id)
+        await self.redis.delete(token_key)
+        await self.redis.srem(index_key, token_key)
+
+    async def _invalidate_via_index(self, user_id: str) -> bool:
+        """Invalidate tokens using the per-user Redis set index.
+
+        Returns:
+            ``True`` when tokens were removed via the index (including the index
+            key). ``False`` when the index is empty so a scan-based fallback may
+            be required.
+        """
+        index_key = self._user_index_key(user_id)
+        members = await self.redis.smembers(index_key)
+        token_keys = [self._decode_user_id(member) for member in members] if members else []
+        if not token_keys:
+            return False
+        await self.redis.delete(*token_keys, index_key)
+        return True
+
+    async def _invalidate_via_scan(self, user_id: str) -> None:
+        """Best-effort invalidation by scanning the token keyspace.
+
+        Applies a safety cap (``_max_scan_keys``) to prevent unbounded
+        iteration on large keyspaces.  Remaining tokens expire naturally
+        via their Redis TTL.
+        """
+        redis_client = cast("RedisClientProtocol", self.redis)
+        pattern = f"{self.key_prefix}*"
+        keys_to_delete: list[str] = []
+        scanned = 0
+        async for key in redis_client.scan_iter(match=pattern, count=100):
+            scanned += 1
+            if scanned > self._max_scan_keys:
+                logger.warning(
+                    "Scan-based token invalidation hit safety cap (%d keys); "
+                    "remaining tokens for user %s may survive until TTL expiry.",
+                    self._max_scan_keys,
+                    user_id,
+                )
+                break
+            stored_user_id = await self.redis.get(key)
+            if stored_user_id is None:
+                continue
+            if self._decode_user_id(stored_user_id) == user_id:
+                keys_to_delete.append(key)
+        if keys_to_delete:
+            await self.redis.delete(*keys_to_delete)
+
+    async def invalidate_all_tokens(self, user: UP) -> None:
+        """Delete all Redis-backed tokens associated with the given user.
+
+        This uses a per-user index to delete only the keys associated with the
+        user, avoiding keyspace scans under the global prefix.
+
+        Backward compatibility:
+            If the per-user index is missing, we fall back to a best-effort scan
+            over keys matching the configured prefix and remove those whose
+            stored subject matches ``user.id``.
+        """
+        user_id = str(user.id)
+        if await self._invalidate_via_index(user_id):
+            return
+        await self._invalidate_via_scan(user_id)

@@ -1,0 +1,120 @@
+"""Tests for password hashing helpers."""
+
+from __future__ import annotations
+
+import importlib
+from typing import TYPE_CHECKING
+
+import pytest
+from pwdlib.hashers.bcrypt import BcryptHasher
+
+import litestar_auth.password as password_module
+
+if TYPE_CHECKING:
+    from litestar_auth.password import PasswordHelper
+
+pytestmark = pytest.mark.unit
+DEFAULT_HASHER_COUNT = 2
+
+
+def _password_helper_cls() -> type[PasswordHelper]:
+    """Import the password helper lazily so coverage includes module definitions.
+
+    Returns:
+        The runtime ``PasswordHelper`` class from ``litestar_auth.password``.
+    """
+    module = importlib.import_module("litestar_auth.password")
+    return module.PasswordHelper
+
+
+def test_password_module_executes_under_coverage() -> None:
+    """Reload the module in-test so coverage records class-body execution."""
+    reloaded_module = importlib.reload(password_module)
+
+    assert reloaded_module.PasswordHelper is not None
+    assert reloaded_module.PasswordHelper.__name__ == _password_helper_cls().__name__
+
+
+def test_default_initialization_uses_argon2_and_bcrypt() -> None:
+    """Default initialization prefers Argon2 and keeps bcrypt as a fallback hasher."""
+    helper = _password_helper_cls()()
+
+    assert len(helper.password_hash.hashers) == DEFAULT_HASHER_COUNT
+    assert helper.password_hash.hashers[0].__class__.__name__ == "Argon2Hasher"
+    assert helper.password_hash.hashers[1].__class__.__name__ == "BcryptHasher"
+
+
+def test_hash_returns_argon2_hash_and_uses_unique_salt() -> None:
+    """Hashes use Argon2 by default and produce unique salted outputs."""
+    helper = _password_helper_cls()()
+
+    first_hash = helper.hash("correct horse battery staple")
+    second_hash = helper.hash("correct horse battery staple")
+
+    assert first_hash != "correct horse battery staple"
+    assert second_hash != "correct horse battery staple"
+    assert first_hash != second_hash
+    assert first_hash.startswith("$argon2")
+    assert second_hash.startswith("$argon2")
+
+
+def test_verify_returns_true_for_matching_password() -> None:
+    """Verification succeeds when the plaintext matches the stored hash."""
+    helper = _password_helper_cls()()
+    hashed_password = helper.hash("s3cure-password")
+
+    assert helper.verify("s3cure-password", hashed_password) is True
+
+
+def test_verify_returns_false_for_wrong_or_unknown_hashes() -> None:
+    """Verification fails for invalid credentials and unknown hashes."""
+    helper = _password_helper_cls()()
+    hashed_password = helper.hash("s3cure-password")
+
+    assert helper.verify("wrong-password", hashed_password) is False
+    assert helper.verify("s3cure-password", "not-a-password-hash") is False
+
+
+def test_verify_accepts_bcrypt_hashes_as_fallback() -> None:
+    """Bcrypt hashes remain valid for compatibility with older credentials."""
+    helper = _password_helper_cls()()
+    bcrypt_hash = BcryptHasher().hash("legacy-password")
+
+    assert helper.verify("legacy-password", bcrypt_hash) is True
+
+
+def test_verify_and_update_returns_true_none_for_current_argon2_hash() -> None:
+    """When the stored hash is already Argon2, no upgrade is needed."""
+    helper = _password_helper_cls()()
+    hashed = helper.hash("s3cure-password")
+    verified, new_hash = helper.verify_and_update("s3cure-password", hashed)
+    assert verified is True
+    assert new_hash is None
+
+
+def test_verify_and_update_returns_new_hash_for_deprecated_bcrypt() -> None:
+    """When the stored hash is bcrypt, verification succeeds and returns upgraded Argon2 hash."""
+    helper = _password_helper_cls()()
+    bcrypt_hash = BcryptHasher().hash("legacy-password")
+    verified, new_hash = helper.verify_and_update("legacy-password", bcrypt_hash)
+    assert verified is True
+    assert new_hash is not None
+    assert new_hash.startswith("$argon2")
+    assert new_hash != bcrypt_hash
+
+
+def test_verify_and_update_returns_false_none_for_wrong_password() -> None:
+    """Failed verification returns (False, None) and does not update."""
+    helper = _password_helper_cls()()
+    hashed = helper.hash("s3cure-password")
+    verified, new_hash = helper.verify_and_update("wrong-password", hashed)
+    assert verified is False
+    assert new_hash is None
+
+
+def test_verify_and_update_returns_false_none_for_unknown_hash() -> None:
+    """Unknown hash format yields (False, None)."""
+    helper = _password_helper_cls()()
+    verified, new_hash = helper.verify_and_update("any-password", "not-a-valid-hash")
+    assert verified is False
+    assert new_hash is None
