@@ -1,0 +1,162 @@
+name: Tests
+
+on:
+  workflow_dispatch:
+  push:
+    branches: ["main"]
+    tags:
+      - "*.*.*"
+    paths:
+      - "litestar_auth/**"
+      - "tests/**"
+      - ".pre-commit-config.yaml"
+      - "pyproject.toml"
+      - "uv.lock"
+      - "justfile"
+      - ".github/workflows/**"
+  pull_request:
+    paths:
+      - "litestar_auth/**"
+      - "tests/**"
+      - ".pre-commit-config.yaml"
+      - "pyproject.toml"
+      - "uv.lock"
+      - "justfile"
+      - ".github/workflows/**"
+
+concurrency:
+  group: check-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+# Test job: id-token write is required for OIDC JWT (GitHub Actions OIDC reference).
+# Codecov: use_oidc per codecov-action README; token alternative in Codecov token docs.
+# https://docs.github.com/en/actions/deployment/security-hardening-your-deployments/about-security-hardening-with-openid-connect
+# https://github.com/codecov/codecov-action#using-oidc
+# https://docs.codecov.com/docs/codecov-tokens
+
+env:
+  VENV_PRECOMMIT_CACHE_VERSION: v1
+
+jobs:
+  pre-commit:
+    if: github.event.repository.fork == false
+    name: Pre-commit
+    runs-on: ubuntu-latest
+    env:
+      UV_PYTHON_PREFERENCE: only-managed
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Set uv Python install dir
+        run: echo "UV_PYTHON_INSTALL_DIR=${RUNNER_TEMP}/uv-python-dir" >> "$GITHUB_ENV"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7.6.0
+        with:
+          python-version: "3.12"
+          enable-cache: true
+          cache-python: true
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      # Cache key unique per run to avoid "another job may be creating this cache" when
+      # multiple runs or steps evaluate hashFiles differently (e.g. after uv sync).
+      # restore-keys restores the latest cache for this prefix; uv sync fixes deps if needed.
+      # See: https://github.com/actions/cache/blob/main/tips-and-workarounds.md#update-a-cache
+      - name: Restore .venv cache (pre-commit)
+        uses: actions/cache/restore@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
+        with:
+          path: .venv
+          key: venv-precommit-${{ env.VENV_PRECOMMIT_CACHE_VERSION }}-${{ runner.os }}-3.12-${{ github.run_id }}
+          restore-keys: |
+            venv-precommit-${{ env.VENV_PRECOMMIT_CACHE_VERSION }}-${{ runner.os }}-3.12-
+
+      - name: Install the project
+        run: uv sync --frozen --all-extras --group dev
+
+      - name: Save .venv cache (pre-commit)
+        uses: actions/cache/save@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
+        with:
+          path: .venv
+          key: venv-precommit-${{ env.VENV_PRECOMMIT_CACHE_VERSION }}-${{ runner.os }}-3.12-${{ github.run_id }}
+
+      - name: Run pre-commit (uv-managed)
+        run: uv run --no-sync pre-commit run --show-diff-on-failure --color=always --all-files
+        env:
+          SKIP: "detect-aws-credentials,no-commit-to-branch"
+
+  test:
+    name: Test (${{ matrix.python-version }} on ${{ matrix.os }})
+    needs: [pre-commit]
+    runs-on: ${{ matrix.os }}
+    if: github.event.repository.fork == false
+    permissions:
+      contents: read
+      id-token: write
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version:
+          - "3.12"
+          - "3.13"
+          - "3.14"
+        os:
+          - ubuntu-latest
+          - macos-latest
+          - windows-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7.6.0
+        with:
+          python-version: ${{ matrix.python-version }}
+          enable-cache: true
+          cache-python: true
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Add .local/bin to Windows PATH
+        if: runner.os == 'Windows'
+        shell: bash
+        run: echo "$USERPROFILE/.local/bin" >> "$GITHUB_PATH"
+
+      - name: Clear Python install dir (Windows)
+        if: runner.os == 'Windows'
+        shell: bash
+        run: rm -rf "${UV_PYTHON_INSTALL_DIR:-}" 2>/dev/null || true
+
+      - name: Set up Python
+        shell: bash
+        run: uv python install ${{ matrix.python-version }}
+
+      - name: Install the project
+        run: uv sync --frozen --all-extras --group dev
+
+      - name: Detect dead fixtures
+        run: uv run pytest --dead-fixtures
+
+      - name: Run tests (coverage + XML for Codecov)
+        run: >-
+          uv run pytest
+          --cov=litestar_auth
+          --cov-branch
+          --cov-report=term-missing
+          --cov-report=xml
+          --cov-fail-under=100
+          -n auto
+
+      # Codecov flags: ^[\w.\-]{1,45}$ (alphanumeric, _, -, .); see https://docs.codecov.com/docs/flags
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@3f20e214133d0983f9a10f3d63b0faf9241a3daa # v6.0.0
+        with:
+          fail_ci_if_error: true
+          files: coverage.xml
+          flags: ${{ matrix.os }}
+          name: py-${{ matrix.python-version }}-${{ matrix.os }}
+          use_oidc: true
