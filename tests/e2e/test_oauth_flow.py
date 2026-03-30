@@ -67,7 +67,11 @@ class OAuthUserDatabaseProxy:
         """
         async with self._session_maker() as session:
             with oauth_token_encryption_scope(self._oauth_scope):
-                return await SQLAlchemyUserDatabase(session).get_by_email(email)
+                return await SQLAlchemyUserDatabase(
+                    session,
+                    user_model=User,
+                    oauth_account_model=OAuthAccount,
+                ).get_by_email(email)
 
     async def get_by_oauth_account(self, oauth_name: str, account_id: str) -> User | None:
         """Load a user by linked OAuth account.
@@ -77,7 +81,11 @@ class OAuthUserDatabaseProxy:
         """
         async with self._session_maker() as session:
             with oauth_token_encryption_scope(self._oauth_scope):
-                return await SQLAlchemyUserDatabase(session).get_by_oauth_account(oauth_name, account_id)
+                return await SQLAlchemyUserDatabase(
+                    session,
+                    user_model=User,
+                    oauth_account_model=OAuthAccount,
+                ).get_by_oauth_account(oauth_name, account_id)
 
     async def upsert_oauth_account(  # noqa: PLR0913
         self,
@@ -93,7 +101,7 @@ class OAuthUserDatabaseProxy:
         """Create or update a persisted OAuth account."""
         async with self._session_maker() as session:
             with oauth_token_encryption_scope(self._oauth_scope):
-                user_db = SQLAlchemyUserDatabase(session)
+                user_db = SQLAlchemyUserDatabase(session, user_model=User, oauth_account_model=OAuthAccount)
                 persistent_user = await user_db.get(user.id)
                 assert persistent_user is not None
                 await user_db.upsert_oauth_account(
@@ -126,7 +134,7 @@ class OAuthManagerProxy:
         """
         with oauth_token_encryption_scope(self._oauth_scope):
             return OAuthUserManager(
-                user_db=SQLAlchemyUserDatabase(session),
+                user_db=SQLAlchemyUserDatabase(session, user_model=User, oauth_account_model=OAuthAccount),
                 password_helper=self._password_helper,
                 verification_token_secret="verify-secret-1234567890-1234567890",
                 reset_password_token_secret="reset-secret-1234567890-1234567890",
@@ -159,7 +167,7 @@ class OAuthManagerProxy:
             The updated user.
         """
         async with self._session_maker() as session:
-            user_db = SQLAlchemyUserDatabase(session)
+            user_db = SQLAlchemyUserDatabase(session, user_model=User, oauth_account_model=OAuthAccount)
             persistent_user = await user_db.get(user.id)
             assert persistent_user is not None
             return await self._build_manager(session).update(user_update, persistent_user)
@@ -167,7 +175,7 @@ class OAuthManagerProxy:
     async def on_after_login(self, user: User) -> None:
         """Delegate post-login hooks to the real manager."""
         async with self._session_maker() as session:
-            user_db = SQLAlchemyUserDatabase(session)
+            user_db = SQLAlchemyUserDatabase(session, user_model=User, oauth_account_model=OAuthAccount)
             persistent_user = await user_db.get(user.id)
             assert persistent_user is not None
             await self._build_manager(session).on_after_login(persistent_user)
@@ -393,7 +401,7 @@ async def create_local_user(
     async with state.session_maker() as session:
         with oauth_token_encryption_scope(state.oauth_scope):
             manager = OAuthUserManager(
-                user_db=SQLAlchemyUserDatabase(session),
+                user_db=SQLAlchemyUserDatabase(session, user_model=User, oauth_account_model=OAuthAccount),
                 password_helper=state.password_helper,
                 verification_token_secret="verify-secret-1234567890-1234567890",
                 reset_password_token_secret="reset-secret-1234567890-1234567890",
@@ -576,7 +584,7 @@ async def test_oauth_callback_returns_existing_user_when_provider_identity_alrea
     )
     async with state.session_maker() as session:
         with oauth_token_encryption_scope(state.oauth_scope):
-            user_db = SQLAlchemyUserDatabase(session)
+            user_db = SQLAlchemyUserDatabase(session, user_model=User, oauth_account_model=OAuthAccount)
             await user_db.upsert_oauth_account(
                 user_a,
                 oauth_name="github",

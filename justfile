@@ -20,7 +20,7 @@ typecheck:
 
 # Audit dependencies for known vulnerabilities and dependency issues.
 audit:
-    uv run pip-audit --ignore-vuln CVE-2026-4539  # pytest dependency
+    uv run pip-audit
     uv run deptry .
 
 # Build source and wheel distributions.

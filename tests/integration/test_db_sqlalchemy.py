@@ -15,8 +15,8 @@ from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.orm import Session as SASession
 
 from litestar_auth.authentication.strategy.db_models import AccessToken
-from litestar_auth.db import BaseOAuthAccountStore, BaseUserStore, SQLAlchemyUserDatabase
-from litestar_auth.db.sqlalchemy import _build_user_repository
+from litestar_auth.db import BaseOAuthAccountStore, BaseUserStore
+from litestar_auth.db.sqlalchemy import SQLAlchemyUserDatabase, _build_oauth_repository, _build_user_repository
 from litestar_auth.exceptions import OAuthAccountAlreadyLinkedError
 from litestar_auth.models import OAuthAccount, User
 from litestar_auth.oauth_encryption import (
@@ -34,7 +34,6 @@ if TYPE_CHECKING:
     from sqlalchemy.schema import MetaData
     from sqlalchemy.sql.base import Executable
 
-    from litestar_auth.db.sqlalchemy import SQLAlchemyUserModelProtocol
 
 pytestmark = pytest.mark.integration
 
@@ -150,18 +149,19 @@ def sqlalchemy_metadata() -> tuple[MetaData, ...]:
     return User.metadata, MyUser.metadata
 
 
-def create_database[UP: SQLAlchemyUserModelProtocol](
+def create_database(
     session: SASession,
     *,
-    user_model: type[UP] | None = None,
-) -> SQLAlchemyUserDatabase[UP]:
+    user_model: type[Any] = User,
+    oauth_account_model: type[Any] | None = OAuthAccount,
+) -> SQLAlchemyUserDatabase[Any]:
     """Create a SQLAlchemyUserDatabase backed by the adapter session.
 
     Returns:
         Configured SQLAlchemy user database adapter.
     """
     adapter = cast("AsyncSession", AsyncSessionAdapter(session))
-    return SQLAlchemyUserDatabase(session=adapter, user_model=user_model)
+    return SQLAlchemyUserDatabase(session=adapter, user_model=user_model, oauth_account_model=oauth_account_model)
 
 
 def test_sqlalchemy_user_database_reuses_repository_type_per_model(session: SASession) -> None:
@@ -186,6 +186,14 @@ def test_build_user_repository_returns_cached_repository_type() -> None:
     assert custom_repository is _build_user_repository(MyUser)
     assert custom_repository.model_type is MyUser
     assert custom_repository is not user_repository
+
+
+def test_build_oauth_repository_returns_cached_repository_type() -> None:
+    """The OAuth repository factory caches one repository class per OAuth model."""
+    oauth_repository = _build_oauth_repository(OAuthAccount)
+
+    assert oauth_repository is _build_oauth_repository(OAuthAccount)
+    assert oauth_repository.model_type is OAuthAccount
 
 
 def test_sqlalchemy_module_reload_preserves_repository_factory_contract() -> None:

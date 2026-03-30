@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import importlib.metadata
 import logging
 
 import pytest
@@ -37,7 +36,6 @@ from litestar_auth import (
     LitestarAuthConfig,
     LitestarAuthError,
     LoginCredentials,
-    OAuthAccount,
     OAuthAccountAlreadyLinkedError,
     PasswordHelper,
     RedisJWTDenylistStore,
@@ -48,7 +46,6 @@ from litestar_auth import (
     RefreshTokenRequest,
     RequestVerifyToken,
     ResetPassword,
-    SQLAlchemyUserDatabase,
     Strategy,
     TokenError,
     TotpDisableRequest,
@@ -57,7 +54,6 @@ from litestar_auth import (
     TotpUserProtocol,
     TotpVerifyRequest,
     Transport,
-    User,
     UserAlreadyExistsError,
     UserCreate,
     UserNotExistsError,
@@ -88,16 +84,16 @@ from litestar_auth import (
     verify_totp_with_store,
 )
 from litestar_auth.db import BaseUserStore
+from litestar_auth.db.sqlalchemy import SQLAlchemyUserDatabase
+from tests.conftest import project_version_from_pyproject
 
 pytestmark = [pytest.mark.unit, pytest.mark.imports]
 
 
 def test_root_package_reexports_public_api() -> None:
     """The package root exposes the documented public auth API."""
-    assert __version__ == importlib.metadata.version("litestar-auth")
+    assert __version__ == project_version_from_pyproject()
     assert LitestarAuthConfig is not None
-    assert User is not None
-    assert OAuthAccount is not None
     assert AccessToken is not None
     assert RefreshToken is not None
     assert PasswordHelper is not None

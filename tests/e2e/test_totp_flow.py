@@ -17,7 +17,6 @@ from litestar_auth._plugin.config import TotpConfig
 from litestar_auth.authentication.backend import AuthenticationBackend
 from litestar_auth.authentication.strategy.jwt import JWTStrategy
 from litestar_auth.authentication.transport.bearer import BearerTransport
-from litestar_auth.db.sqlalchemy import SQLAlchemyUserDatabase
 from litestar_auth.guards import is_authenticated
 from litestar_auth.manager import BaseUserManager
 from litestar_auth.models import User
@@ -108,7 +107,6 @@ def app() -> Iterator[Litestar]:
         session_maker=cast("Any", SessionMaker(engine)),
         user_model=User,
         user_manager_class=TOTPUserManager,
-        user_db_factory=SQLAlchemyUserDatabase,
         allow_nondurable_jwt_revocation=True,
         user_manager_kwargs={
             "password_helper": password_helper,

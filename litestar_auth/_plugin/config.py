@@ -2,27 +2,30 @@
 
 from __future__ import annotations
 
+import importlib
 import inspect
 import keyword
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from functools import partial
 from typing import TYPE_CHECKING, Any, Protocol, cast
 
+from sqlalchemy.ext.asyncio import AsyncSession
+
 from litestar_auth.config import DEFAULT_MINIMUM_PASSWORD_LENGTH
-from litestar_auth.db.sqlalchemy import SQLAlchemyUserDatabase
+from litestar_auth.db.base import BaseUserStore
 from litestar_auth.exceptions import ConfigurationError
 from litestar_auth.manager import require_password_length
 from litestar_auth.types import LoginIdentifier, UserProtocol
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Sequence
+    from collections.abc import Sequence
 
     import msgspec
-    from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+    from sqlalchemy.ext.asyncio import async_sessionmaker
 
     from litestar_auth.authentication.backend import AuthenticationBackend
     from litestar_auth.config import OAuthProviderConfig
-    from litestar_auth.db.base import BaseUserStore
     from litestar_auth.manager import BaseUserManager
     from litestar_auth.ratelimit import AuthRateLimitConfig
     from litestar_auth.totp import TotpAlgorithm, UsedTotpCodeStore
@@ -36,10 +39,21 @@ DEFAULT_USER_MODEL_DEPENDENCY_KEY = "litestar_auth_user_model"
 DEFAULT_DB_SESSION_DEPENDENCY_KEY = "db_session"
 DEFAULT_CSRF_COOKIE_NAME = "litestar_auth_csrf"
 OAUTH_ASSOCIATE_USER_MANAGER_DEPENDENCY_KEY = "litestar_auth_oauth_associate_user_manager"
-DEFAULT_USER_DB_FACTORY: UserDatabaseFactory[Any, Any] = cast(
-    "UserDatabaseFactory[Any, Any]",
-    SQLAlchemyUserDatabase,
-)
+
+
+def _build_default_user_db(session: AsyncSession, *, user_model: type[Any]) -> BaseUserStore[Any, Any]:
+    """Build a ``SQLAlchemyUserDatabase`` with a deferred adapter import.
+
+    Used by ``LitestarAuthConfig.__post_init__`` via ``functools.partial`` so the
+    SQLAlchemy adapter module is loaded only at first request-scoped call, not at
+    configuration time.
+
+    Returns:
+        A :class:`~litestar_auth.db.sqlalchemy.SQLAlchemyUserDatabase` bound to ``session``.
+    """
+    mod = importlib.import_module("litestar_auth.db.sqlalchemy")
+    return mod.SQLAlchemyUserDatabase(session, user_model=user_model)
+
 
 _VALID_LOGIN_IDENTIFIERS: frozenset[LoginIdentifier] = frozenset({"email", "username"})
 
@@ -247,7 +261,7 @@ class LitestarAuthConfig[UP: UserProtocol[Any], ID]:
     user_model: type[UP]
     user_manager_class: type[BaseUserManager[UP, ID]]
     session_maker: async_sessionmaker[AsyncSession] | None = None
-    user_db_factory: UserDatabaseFactory[UP, ID] = DEFAULT_USER_DB_FACTORY
+    user_db_factory: UserDatabaseFactory[UP, ID] | None = None
     user_manager_kwargs: dict[str, Any] = field(default_factory=dict)
     password_validator_factory: PasswordValidatorFactory[UP, ID] | None = None
     user_manager_factory: UserManagerFactory[UP, ID] | None = None
@@ -276,13 +290,18 @@ class LitestarAuthConfig[UP: UserProtocol[Any], ID]:
     login_identifier: LoginIdentifier = "email"
 
     def __post_init__(self) -> None:
-        """Validate configuration fields that must hold at construction time.
+        """Validate configuration fields and build defaults that depend on other fields.
 
         Raises:
             ConfigurationError: When ``login_identifier`` is not ``'email'`` or ``'username'``.
             ValueError: When ``db_session_dependency_key`` is not a valid Python identifier or is a
                 reserved keyword.
         """
+        if self.user_db_factory is None:
+            self.user_db_factory = cast(
+                "UserDatabaseFactory[UP, ID]",
+                partial(_build_default_user_db, user_model=self.user_model),
+            )
         if self.login_identifier not in _VALID_LOGIN_IDENTIFIERS:
             msg = f"Invalid login_identifier {self.login_identifier!r}. Expected 'email' or 'username'."
             raise ConfigurationError(msg)

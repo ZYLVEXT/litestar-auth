@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import sqlite3
+import tomllib
 from contextlib import asynccontextmanager
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 import pytest
@@ -19,6 +21,15 @@ if TYPE_CHECKING:
     from collections.abc import AsyncIterator, Callable, Iterator
 
     from sqlalchemy.schema import MetaData
+
+_REPO_ROOT = Path(__file__).resolve().parent.parent
+
+
+def project_version_from_pyproject() -> str:
+    """Return ``[project].version`` from the repo ``pyproject.toml`` (authoritative for tests)."""
+    with (_REPO_ROOT / "pyproject.toml").open("rb") as handle:
+        return tomllib.load(handle)["project"]["version"]
+
 
 type AppFixtureValue = Litestar | tuple[Litestar, *tuple[object, ...]]
 

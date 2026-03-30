@@ -1,6 +1,13 @@
 # Package overview
 
-The `litestar_auth` package re-exports stable symbols for application code. Prefer importing from the top-level package when possible:
+The `litestar_auth` package re-exports stable symbols for application code. ORM models (`User`, `OAuthAccount`) and the SQLAlchemy adapter (`SQLAlchemyUserDatabase`) are **not** re-exported from the root — import them from their own modules to keep imports explicit and avoid accidental mapper registration:
+
+```python
+from litestar_auth.models import User, OAuthAccount
+from litestar_auth.db.sqlalchemy import SQLAlchemyUserDatabase
+```
+
+Typical plugin wiring:
 
 ```python
 from litestar_auth import (
@@ -10,9 +17,9 @@ from litestar_auth import (
     JWTStrategy,
     BearerTransport,
     BaseUserManager,
-    User,
-    SQLAlchemyUserDatabase,
 )
+from litestar_auth.models import User
+from litestar_auth.db.sqlalchemy import SQLAlchemyUserDatabase
 ```
 
 ## Public surface (high level)
@@ -22,7 +29,7 @@ from litestar_auth import (
 | Plugin | `LitestarAuth`, `LitestarAuthConfig`, `OAuthConfig`, `TotpConfig` |
 | Backends | `AuthenticationBackend`, `BearerTransport`, `CookieTransport`, `JWTStrategy`, `DatabaseTokenStrategy`, `RedisTokenStrategy`, … |
 | Manager | `BaseUserManager`, `require_password_length`, `PasswordHelper` |
-| Persistence | `User`, `OAuthAccount`, `AccessToken`, `RefreshToken`, `SQLAlchemyUserDatabase` |
+| Persistence | `User`, `OAuthAccount` (from `litestar_auth.models`), `AccessToken`, `RefreshToken`, `SQLAlchemyUserDatabase` (from `litestar_auth.db.sqlalchemy`) |
 | Guards | `is_authenticated`, `is_active`, `is_verified`, `is_superuser` |
 | Errors | `ErrorCode`, `LitestarAuthError`, typed subclasses |
 | Protocols | `UserProtocol`, `GuardedUserProtocol`, `TotpUserProtocol` — [Types](types.md) |

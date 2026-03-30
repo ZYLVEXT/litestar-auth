@@ -1,6 +1,25 @@
 # Configuration
 
-The plugin is driven by **`LitestarAuthConfig`** (import from `litestar_auth`). This page lists **all** fields grouped by concern. Generated detail lives in the [Plugin API](api/plugin.md) (mkdocstrings).
+The plugin is driven by **`LitestarAuthConfig`** (import from `litestar_auth` or `litestar_auth.plugin`). This page lists **all** fields grouped by concern. Generated detail lives in the [Plugin API](api/plugin.md) (mkdocstrings).
+
+ORM models and the SQLAlchemy adapter are imported from their own modules — the root package does not re-export them:
+
+```python
+from litestar_auth.plugin import LitestarAuth, LitestarAuthConfig
+from litestar_auth.models import User  # or your own model
+from litestar_auth.db.sqlalchemy import SQLAlchemyUserDatabase
+```
+
+## Custom SQLAlchemy `User` and token models
+
+`LitestarAuthConfig.user_model` must satisfy **`UserProtocol`** (see [Types](types.md)): at minimum the fields and behaviors your chosen `BaseUserManager` and strategies use (`id`, `email`, `hashed_password`, `is_active`, `is_verified`, `is_superuser`, `totp_secret` as applicable).
+
+**Database-backed JWT / refresh** (`DatabaseTokenStrategy`): if you use the library’s `AccessToken` and `RefreshToken` from `litestar_auth.authentication.strategy.db_models`, your user class should declare relationships compatible with theirs:
+
+- Table names: `access_token`, `refresh_token`; `user_id` foreign keys target **`user.id`** (your user model’s table must be named `user`, or you must align FKs and relationships with your schema).
+- Match the default wiring in `litestar_auth.models.User`: `access_tokens` and `refresh_tokens` relationships with `back_populates="user"` pointing at those token classes. Diverging names or missing relationships can break mapper configuration or strategy code.
+
+**OAuth persistence**: `SQLAlchemyUserDatabase` requires **`user_model`** and accepts optional **`oauth_account_model`**. If you use OAuth methods (`get_by_oauth_account`, `upsert_oauth_account`) without providing `oauth_account_model`, a `TypeError` is raised. A custom OAuth class should keep the same columns and uniqueness as the library model (`oauth_name`, `account_id`, encrypted token fields, `user_id` FK to your user table’s primary key). If your user table is not `user`, supply an OAuth model whose foreign keys match your schema.
 
 ## Required (at runtime)
 
@@ -17,7 +36,7 @@ On the `LitestarAuthConfig` dataclass, `session_maker` is typed as optional for 
 
 | Field | Default | Role |
 | ----- | ------- | ---- |
-| `user_db_factory` | `SQLAlchemyUserDatabase` | `Callable[[AsyncSession], BaseUserStore]`. |
+| `user_db_factory` | `None` → built from `user_model` | `Callable[[AsyncSession], BaseUserStore]`. When `None`, the plugin builds a default factory using `config.user_model`. Override for custom persistence. |
 | `user_manager_kwargs` | `{}` | Passed to `user_manager_class` (e.g. `password_helper`, token secrets). |
 | `password_validator_factory` | `None` | Build custom password policy; else default length validator when manager accepts it. |
 | `user_manager_factory` | `None` | Full control over request-scoped manager construction (`UserManagerFactory`). |

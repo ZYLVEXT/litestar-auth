@@ -52,7 +52,6 @@ from litestar_auth.controllers import (
     create_users_controller,
     create_verify_controller,
 )
-from litestar_auth.db import SQLAlchemyUserDatabase
 from litestar_auth.exceptions import (
     AuthenticationError,
     AuthorizationError,
@@ -71,7 +70,6 @@ from litestar_auth.exceptions import (
 )
 from litestar_auth.guards import is_active, is_authenticated, is_superuser, is_verified
 from litestar_auth.manager import BaseUserManager, require_password_length
-from litestar_auth.models import OAuthAccount, User
 from litestar_auth.oauth import create_provider_oauth_controller, load_httpx_oauth_client
 from litestar_auth.password import PasswordHelper
 from litestar_auth.plugin import LitestarAuth, LitestarAuthConfig, OAuthConfig, TotpConfig
@@ -125,7 +123,6 @@ __all__ = (
     "LitestarAuthConfig",
     "LitestarAuthError",
     "LoginCredentials",
-    "OAuthAccount",
     "OAuthAccountAlreadyLinkedError",
     "OAuthConfig",
     "PasswordHelper",
@@ -137,7 +134,6 @@ __all__ = (
     "RefreshTokenRequest",
     "RequestVerifyToken",
     "ResetPassword",
-    "SQLAlchemyUserDatabase",
     "Strategy",
     "TokenError",
     "TotpConfig",
@@ -150,7 +146,6 @@ __all__ = (
     "TotpVerifyRequest",
     "Transport",
     "UnverifiedUserError",
-    "User",
     "UserAlreadyExistsError",
     "UserCreate",
     "UserNotExistsError",

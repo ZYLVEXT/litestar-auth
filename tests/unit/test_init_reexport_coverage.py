@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import importlib
-import importlib.metadata
 import logging
 from typing import TYPE_CHECKING
 
@@ -17,6 +16,7 @@ import litestar_auth.authentication.transport as transport_module
 import litestar_auth.controllers as controllers_module
 import litestar_auth.db as db_module
 import litestar_auth.guards as guards_module
+from tests.conftest import project_version_from_pyproject
 
 pytestmark = [pytest.mark.unit, pytest.mark.imports]
 
@@ -94,7 +94,7 @@ def _assert_exported_symbols(module: ModuleType, *, expected_names: Iterable[str
         ),
         pytest.param(
             db_module,
-            ("BaseOAuthAccountStore", "BaseUserStore", "SQLAlchemyUserDatabase"),
+            ("BaseOAuthAccountStore", "BaseUserStore"),
             id="db",
         ),
         pytest.param(
@@ -129,7 +129,7 @@ def test_root_reexport_module_executes_under_coverage(monkeypatch: pytest.Monkey
     reloaded_module = importlib.reload(litestar_auth_module)
 
     assert reloaded_module is litestar_auth_module
-    assert reloaded_module.__version__ == importlib.metadata.version("litestar-auth")
+    assert reloaded_module.__version__ == project_version_from_pyproject()
     _assert_exported_symbols(
         reloaded_module,
         expected_names=(
@@ -140,7 +140,6 @@ def test_root_reexport_module_executes_under_coverage(monkeypatch: pytest.Monkey
             "LitestarAuth",
             "LitestarAuthConfig",
             "PasswordHelper",
-            "SQLAlchemyUserDatabase",
             "UserCreate",
             "create_auth_controller",
             "create_provider_oauth_controller",

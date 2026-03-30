@@ -39,7 +39,6 @@ repos:
     -   id: pip-audit
         name: pip-audit
         entry: uv run pip-audit
-        args: ["--ignore-vuln", "CVE-2026-4539"]  # pytest dependency
         language: system
         pass_filenames: false
     -   id: commitizen

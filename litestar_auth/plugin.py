@@ -133,7 +133,11 @@ class LitestarAuth[UP: UserProtocol[Any], ID](InitPlugin):
         *,
         backends: Sequence[AuthenticationBackend[UP, ID]] | None = None,
     ) -> BaseUserManager[UP, ID]:
-        user_db = ScopedUserDatabaseProxyImpl(self.config.user_db_factory(session), oauth_scope=self)
+        user_db_factory = self.config.user_db_factory
+        if user_db_factory is None:  # pragma: no cover — __post_init__ always fills this
+            msg = "user_db_factory must be set (filled by __post_init__)"
+            raise TypeError(msg)
+        user_db = ScopedUserDatabaseProxyImpl(user_db_factory(session), oauth_scope=self)
         bound_backends = tuple(backends or self._session_bound_backends(session))
         return self._user_manager_factory(
             session=session,

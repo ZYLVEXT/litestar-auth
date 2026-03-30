@@ -15,7 +15,6 @@ from sqlalchemy.pool import StaticPool
 from litestar_auth.authentication.backend import AuthenticationBackend
 from litestar_auth.authentication.strategy.jwt import JWTStrategy
 from litestar_auth.authentication.transport.bearer import BearerTransport
-from litestar_auth.db.sqlalchemy import SQLAlchemyUserDatabase
 from litestar_auth.exceptions import ErrorCode
 from litestar_auth.manager import BaseUserManager
 from litestar_auth.models import User
@@ -262,7 +261,6 @@ def app() -> Iterator[tuple[Litestar, Engine, PasswordHelper, dict[str, UUID]]]:
         session_maker=cast("Any", SessionMaker(engine)),
         user_model=User,
         user_manager_class=UsersFlowManager,
-        user_db_factory=SQLAlchemyUserDatabase,
         allow_nondurable_jwt_revocation=True,
         user_manager_kwargs={
             "password_helper": password_helper,

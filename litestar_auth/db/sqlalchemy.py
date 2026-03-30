@@ -13,7 +13,6 @@ from sqlalchemy import select
 
 from litestar_auth.db.base import BaseUserStore
 from litestar_auth.exceptions import OAuthAccountAlreadyLinkedError
-from litestar_auth.models import OAuthAccount, User
 from litestar_auth.oauth_encryption import require_oauth_token_encryption_key
 from litestar_auth.types import UserProtocol
 
@@ -31,12 +30,6 @@ class SQLAlchemyUserModelProtocol(ModelProtocol, UserProtocol[UUID], Protocol):
 
 
 type UserModelT[UP: SQLAlchemyUserModelProtocol] = type[UP]
-
-
-class OAuthAccountRepository(SQLAlchemyAsyncRepository[OAuthAccount]):
-    """Repository wrapper for persisted OAuth accounts."""
-
-    model_type = OAuthAccount
 
 
 @cache
@@ -58,19 +51,56 @@ def _build_user_repository(
     )
 
 
+@cache
+def _build_oauth_repository(oauth_model: type[Any]) -> type[SQLAlchemyAsyncRepository[Any]]:
+    """Create a repository type bound to the provided OAuth account model.
+
+    Returns:
+        A cached Advanced Alchemy async repository subclass for ``oauth_model``.
+    """
+    return type(
+        f"{oauth_model.__name__}OAuthRepository",
+        (SQLAlchemyAsyncRepository,),
+        {"model_type": oauth_model},
+    )
+
+
 class SQLAlchemyUserDatabase[UP: SQLAlchemyUserModelProtocol](BaseUserStore[UP, UUID]):
     """Persist users via Advanced Alchemy's async SQLAlchemy repository."""
 
-    def __init__(self, session: AsyncSessionT, *, user_model: UserModelT[UP] | None = None) -> None:
+    def __init__(
+        self,
+        session: AsyncSessionT,
+        *,
+        user_model: UserModelT[UP],
+        oauth_account_model: type[Any] | None = None,
+    ) -> None:
         """Initialize the database adapter.
 
         Args:
             session: Async SQLAlchemy session used for all repository operations.
             user_model: SQLAlchemy user model used for repository operations.
+            oauth_account_model: SQLAlchemy model for OAuth account rows. Required
+                when using OAuth methods (``get_by_oauth_account``, ``upsert_oauth_account``).
         """
         self.session = session
-        self.user_model = cast("UserModelT[UP]", User if user_model is None else user_model)
+        self.user_model = user_model
+        self.oauth_account_model = oauth_account_model
         self._user_repository_type = _build_user_repository(self.user_model)
+
+    def _require_oauth_account_model(self) -> type[Any]:
+        """Return the OAuth account model or raise if not configured.
+
+        Raises:
+            TypeError: When ``oauth_account_model`` was not provided to the constructor.
+        """
+        if self.oauth_account_model is None:
+            msg = (
+                "OAuth methods require oauth_account_model. "
+                "Pass oauth_account_model=YourOAuthModel to SQLAlchemyUserDatabase()."
+            )
+            raise TypeError(msg)
+        return self.oauth_account_model
 
     def _repository(
         self,
@@ -116,10 +146,11 @@ class SQLAlchemyUserDatabase[UP: SQLAlchemyUserModelProtocol](BaseUserStore[UP, 
 
     async def get_by_oauth_account(self, oauth_name: str, account_id: str) -> UP | None:
         """Return a user linked to the given OAuth account, if present."""
-        statement = select(self.user_model).join(OAuthAccount, OAuthAccount.user_id == self.user_model.id)
+        oa = self._require_oauth_account_model()
+        statement = select(self.user_model).join(oa, oa.user_id == self.user_model.id)
         return await self._repository(statement=statement).get_one_or_none(
-            OAuthAccount.oauth_name == oauth_name,
-            OAuthAccount.account_id == account_id,
+            oa.oauth_name == oauth_name,
+            oa.account_id == account_id,
         )
 
     async def upsert_oauth_account(  # noqa: PLR0913
@@ -145,13 +176,15 @@ class SQLAlchemyUserDatabase[UP: SQLAlchemyUserModelProtocol](BaseUserStore[UP, 
                 linked to a different user.
         """
         require_oauth_token_encryption_key()
-        repository = OAuthAccountRepository(session=self.session, statement=select(OAuthAccount))
+        oa_model = self._require_oauth_account_model()
+        oauth_repo_type = _build_oauth_repository(oa_model)
+        repository = oauth_repo_type(session=self.session, statement=select(oa_model))
         oauth_account = await repository.get_one_or_none(
-            OAuthAccount.oauth_name == oauth_name,
-            OAuthAccount.account_id == account_id,
+            oa_model.oauth_name == oauth_name,
+            oa_model.account_id == account_id,
         )
         if oauth_account is None:
-            oauth_account = OAuthAccount(
+            oauth_account = oa_model(
                 user_id=user.id,
                 oauth_name=oauth_name,
                 account_id=account_id,
