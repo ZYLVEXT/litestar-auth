@@ -7,7 +7,7 @@ must be a URL-safe base64-encoded Fernet key (e.g. from ``Fernet.generate_key().
 
 from __future__ import annotations
 
-from collections.abc import Callable, Iterator  # noqa: TC003
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from contextvars import ContextVar
 from typing import Any, override
@@ -115,8 +115,19 @@ def oauth_token_encryption_scope(scope: OAuthEncryptionScope) -> Iterator[None]:
         _current_oauth_encryption_scope.reset(token)
 
 
-def get_oauth_encryption_key_callable() -> Callable[[], str | bytes | None]:
-    """Return a callable for EncryptedString that resolves the active scope key."""
+# May return None for plaintext mode; EncryptedString typings omit None — narrow at integration sites.
+OAuthEncryptionKeyCallable = Callable[[], str | bytes | None]
+
+
+def get_oauth_encryption_key_callable() -> OAuthEncryptionKeyCallable:
+    """Return a callable that resolves the active scope key (may be ``None``).
+
+    Advanced Alchemy :class:`~advanced_alchemy.types.EncryptedString` expects
+    ``Callable[[], str | bytes]`` for ``key``. When wiring this loader into
+    ``EncryptedString``, use ``typing.cast`` as in
+    ``litestar_auth.models._oauth_encrypted_types``; :class:`_RawFernetBackend`
+    still handles a ``None`` key at runtime.
+    """
     return _get_oauth_token_encryption_key
 
 

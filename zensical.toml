@@ -36,6 +36,7 @@ nav = [
     "cookbook/cookie_csrf.md",
     "cookbook/refresh_cookie.md",
     "cookbook/oauth_associate.md",
+    "cookbook/custom_user_oauth.md",
   ] },
   { "HTTP API" = "http_api.md" },
   { "Configuration" = "configuration.md" },

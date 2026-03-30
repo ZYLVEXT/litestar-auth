@@ -119,6 +119,9 @@ ignore = [
 convention = "google"
 
 [tool.ruff.lint.per-file-ignores]
+"litestar_auth/models/__init__.py" = ["PLC0415"]
+"litestar_auth/models/user.py" = ["TC001"]
+"litestar_auth/models/_oauth_encrypted_types.py" = ["TC003"]
 "tests/**/*.py" = ["ARG001", "ARG002", "N802", "N806", "PLC2701", "PLR0914", "PLR6301", "S", "SLF"]
 
 [tool.pytest.ini_options]

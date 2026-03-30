@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import sqlite3
+import subprocess
+import sys
 from typing import TYPE_CHECKING
 from uuid import UUID
 
@@ -12,6 +14,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 from sqlalchemy.pool import StaticPool
 
+import litestar_auth.models as litestar_auth_models
 from litestar_auth.authentication.strategy.db_models import AccessToken, RefreshToken
 from litestar_auth.models import OAuthAccount, User
 
@@ -19,6 +22,35 @@ if TYPE_CHECKING:
     from sqlalchemy.engine import Engine
 
 pytestmark = pytest.mark.unit
+
+
+def test_oauth_submodule_import_does_not_load_reference_user_module() -> None:
+    """Importing only ``litestar_auth.models.oauth`` must not execute ``models.user`` (no library ``User`` mapper)."""
+    code = (
+        "import sys\n"
+        "from litestar_auth.models.oauth import OAuthAccount\n"
+        'assert "litestar_auth.models.user" not in sys.modules\n'
+        'assert OAuthAccount.__tablename__ == "oauth_account"\n'
+    )
+    result = subprocess.run(
+        [sys.executable, "-c", code],
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    assert result.returncode == 0, (result.stdout, result.stderr)
+
+
+def test_models_package_getattr_unknown_name_raises() -> None:
+    """``__getattr__`` rejects names outside the lazy public exports (full error branch)."""
+    with pytest.raises(AttributeError, match=r"module 'litestar_auth\.models' has no attribute"):
+        _ = litestar_auth_models.NonexistentExport
+
+
+def test_models_package_dir_lists_lazy_exports() -> None:
+    """``__dir__`` advertises ``User`` and ``OAuthAccount`` for tab-completion / introspection."""
+    assert litestar_auth_models.__dir__() == ["OAuthAccount", "User"]  # noqa: PLC2801
 
 
 def create_test_engine() -> Engine:

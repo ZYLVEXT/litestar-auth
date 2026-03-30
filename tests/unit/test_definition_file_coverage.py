@@ -24,6 +24,7 @@ import litestar_auth.authentication.transport.base as transport_base_module
 import litestar_auth.db.base as db_base_module
 import litestar_auth.schemas as schemas_module
 import litestar_auth.types as types_module
+from litestar_auth.models.user import User as ModelsUser
 from tests._helpers import ExampleUser
 
 if TYPE_CHECKING:
@@ -193,35 +194,19 @@ def test_manager_protocols_module_reload_preserves_internal_protocols() -> None:
     assert "_validate_password" in reloaded_module.PasswordManagedUserManagerProtocol.__dict__
 
 
-def test_models_module_reload_executes_under_coverage(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Reload ORM definition modules in isolation and verify model metadata remains intact."""
+def test_models_oauth_module_reload_executes_under_coverage(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Reload ``models/oauth.py`` in isolation (fake UUID base) and verify OAuth table metadata."""
     reloaded_module = _load_reloaded_alias(
-        alias_name="_coverage_alias_models",
-        source_path=REPO_ROOT / "litestar_auth" / "models.py",
+        alias_name="_coverage_alias_models_oauth",
+        source_path=REPO_ROOT / "litestar_auth" / "models" / "oauth.py",
         monkeypatch=monkeypatch,
     )
 
-    assert reloaded_module.User.__name__ == "User"
     assert reloaded_module.OAuthAccount.__name__ == "OAuthAccount"
-    assert reloaded_module.User.__tablename__ == "user"
     assert reloaded_module.OAuthAccount.__tablename__ == "oauth_account"
-    assert set(reloaded_module.User.__table__.c.keys()).issuperset(
-        {"email", "hashed_password", "id", "is_active", "is_superuser", "is_verified", "totp_secret"},
-    )
     assert set(reloaded_module.OAuthAccount.__table__.c.keys()).issuperset(
         {"access_token", "account_email", "account_id", "expires_at", "id", "oauth_name", "refresh_token", "user_id"},
     )
-    assert sorted(reloaded_module.User.__annotations__) == [
-        "access_tokens",
-        "email",
-        "hashed_password",
-        "is_active",
-        "is_superuser",
-        "is_verified",
-        "oauth_accounts",
-        "refresh_tokens",
-        "totp_secret",
-    ]
     assert sorted(reloaded_module.OAuthAccount.__annotations__) == [
         "access_token",
         "account_email",
@@ -238,6 +223,25 @@ def test_models_module_reload_executes_under_coverage(monkeypatch: pytest.Monkey
         if constraint.name is not None
     } == {"uq_oauth_account_provider_identity"}
     assert reloaded_module.OAuthAccount.__table__.c.user_id.foreign_keys
+
+
+def test_models_user_module_columns_and_relationships() -> None:
+    """Reference ``User`` model (real package) keeps expected columns and OAuth inverse."""
+    assert ModelsUser.__tablename__ == "user"
+    assert set(ModelsUser.__table__.c.keys()).issuperset(
+        {"email", "hashed_password", "id", "is_active", "is_superuser", "is_verified", "totp_secret"},
+    )
+    assert sorted(ModelsUser.__annotations__) == [
+        "access_tokens",
+        "email",
+        "hashed_password",
+        "is_active",
+        "is_superuser",
+        "is_verified",
+        "oauth_accounts",
+        "refresh_tokens",
+        "totp_secret",
+    ]
 
 
 def test_db_models_module_reload_executes_under_coverage(monkeypatch: pytest.MonkeyPatch) -> None:

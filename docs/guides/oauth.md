@@ -41,7 +41,16 @@ Default **`oauth_associate_by_email=False`** avoids implicit linking by email al
 
 Use the plugin configuration rather than calling these directly unless you assemble routes yourself.
 
+## Custom `User` and `OAuthAccount`
+
+If you own the `user` table with your own model, import **`OAuthAccount` from `litestar_auth.models.oauth`** so the reference `User` mapper is never registered. Configure `user_model`, `user_db_factory` with `oauth_account_model`, and token encryption like any other app. Relationship rebinding (`relationship("MyUser", ...)`, subclassing, or `overlaps`) is covered in the [Custom user + OAuth cookbook](../cookbook/custom_user_oauth.md).
+
+### Audit columns on `oauth_account`
+
+The bundled `OAuthAccount` extends `UUIDBase` (no `created_at` / `updated_at`). If your existing schema has audit columns, use a **single** mapped class for `oauth_account` (for example subclass `UUIDAuditBase` and copy the column set). You cannot map two classes to the same table name on shared metadata; see the commented example under `docs/snippets/oauth_account_audit_model.py`.
+
 ## Related
 
 - [Configuration](../configuration.md) — `OAuthConfig` fields.
+- [Custom user + OAuth cookbook](../cookbook/custom_user_oauth.md).
 - [Security](security.md) — CSRF and cookie notes for browser flows.
