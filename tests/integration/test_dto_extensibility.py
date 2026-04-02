@@ -146,6 +146,37 @@ def app() -> tuple[
     return build_app()
 
 
+def test_custom_msgspec_schemas_publish_request_bodies_in_openapi(
+    app: tuple[
+        Litestar,
+        InMemoryUserDatabase,
+        UsersControllerManager,
+        InMemoryTokenStrategy,
+        ExampleUser,
+    ],
+) -> None:
+    """Configured custom request schemas remain the published OpenAPI request bodies."""
+    litestar_app, *_ = app
+
+    register_post = cast("Any", litestar_app.openapi_schema.paths)["/auth/register"].post
+    update_me_patch = cast("Any", litestar_app.openapi_schema.paths)["/users/me"].patch
+    update_user_patch = cast("Any", litestar_app.openapi_schema.paths)["/users/{user_id}"].patch
+    register_request_body = register_post.request_body
+    update_me_request_body = update_me_patch.request_body
+    update_user_request_body = update_user_patch.request_body
+    register_schema = cast("Any", litestar_app.openapi_schema.components.schemas)["ExtendedUserCreate"]
+    update_schema = cast("Any", litestar_app.openapi_schema.components.schemas)["ExtendedUserUpdate"]
+
+    assert register_request_body is not None
+    assert update_me_request_body is not None
+    assert update_user_request_body is not None
+    assert next(iter(register_request_body.content.values())).schema.ref == "#/components/schemas/ExtendedUserCreate"
+    assert next(iter(update_me_request_body.content.values())).schema.ref == "#/components/schemas/ExtendedUserUpdate"
+    assert next(iter(update_user_request_body.content.values())).schema.ref == "#/components/schemas/ExtendedUserUpdate"
+    assert "bio" in (register_schema.properties or {})
+    assert "bio" in (update_schema.properties or {})
+
+
 async def test_custom_msgspec_schemas_extend_register_and_users_responses(
     client: tuple[
         AsyncTestClient[Litestar],

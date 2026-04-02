@@ -8,8 +8,8 @@ import msgspec  # noqa: TC002
 from litestar import Controller, Request, post
 
 from litestar_auth.controllers._utils import (
+    _configure_request_body_handler,
     _create_before_request_handler,
-    _decode_request_body,
     _map_domain_exceptions,
     _require_msgspec_struct,
     _to_user_schema,
@@ -97,10 +97,9 @@ def create_register_controller[UP: RegisterControllerUserProtocol[Any], ID](
         async def register(  # noqa: PLR6301
             self,
             request: Request[Any, Any, Any],
+            data: msgspec.Struct,
             litestar_auth_user_manager: Any,  # noqa: ANN401
         ) -> msgspec.Struct:
-            data = await _decode_request_body(request, schema=user_create_schema_type)
-
             async def _increment_rate_limit() -> None:
                 if register_rate_limit is not None:
                     await register_rate_limit.increment(request)
@@ -120,5 +119,6 @@ def create_register_controller[UP: RegisterControllerUserProtocol[Any], ID](
             return _to_user_schema(user, user_read_schema_type)
 
     register_cls = RegisterController
+    _configure_request_body_handler(register_cls.register, schema=user_create_schema_type)
     register_cls.path = path
     return cast("type[Controller]", register_cls)

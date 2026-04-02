@@ -183,11 +183,67 @@ async def test_make_user_manager_dependency_provider_uses_configured_di_key() ->
         await generator.aclose()
 
     provider_function = cast("Any", provider)
+    parameter = inspect.signature(provider).parameters["custom_db_session"]
     assert manager == ("manager", marker)
     assert inspect.signature(provider).parameters.keys() == {"custom_db_session"}
+    assert parameter.kind is inspect.Parameter.POSITIONAL_OR_KEYWORD
+    assert parameter.annotation is Any
     assert provider.__annotations__ == {"custom_db_session": "Any"}
     assert provider.__module__ == "litestar_auth._plugin.dependencies"
     assert provider_function.__qualname__ == "_make_user_manager_dependency_provider.<locals>._provide_user_manager"
+
+
+async def test_make_user_manager_dependency_provider_rejects_positional_and_keyword_session() -> None:
+    """Providing both the positional session and keyword DI value fails closed."""
+    marker = object()
+
+    def build_user_manager(_session: object) -> object:
+        pytest.fail("build_user_manager should not run when duplicate dependency inputs are provided")
+
+    provider = _make_user_manager_dependency_provider(build_user_manager, "db_session")
+    generator = provider(marker, db_session=marker)
+    with pytest.raises(TypeError, match="got multiple values for argument 'db_session'"):
+        await anext(generator)
+
+
+async def test_make_user_manager_dependency_provider_positional_path_stops_after_single_yield() -> None:
+    """The direct positional-call path yields once and then stops cleanly."""
+    marker = object()
+
+    def build_user_manager(session: object) -> object:
+        return ("manager", session)
+
+    provider = _make_user_manager_dependency_provider(build_user_manager, "db_session")
+    generator = provider(marker)
+
+    assert await anext(generator) == ("manager", marker)
+    with pytest.raises(StopAsyncIteration):
+        await anext(generator)
+
+
+async def test_make_user_manager_dependency_provider_requires_session_dependency() -> None:
+    """Calling the provider without the configured dependency key raises TypeError."""
+
+    def build_user_manager(_session: object) -> object:
+        pytest.fail("build_user_manager should not run when the dependency is missing")
+
+    provider = _make_user_manager_dependency_provider(build_user_manager, "db_session")
+    generator = provider()
+    with pytest.raises(TypeError, match="missing 1 required argument: 'db_session'"):
+        await anext(generator)
+
+
+async def test_make_user_manager_dependency_provider_rejects_unexpected_keyword_dependencies() -> None:
+    """Unexpected keyword dependencies are rejected before building a user manager."""
+    marker = object()
+
+    def build_user_manager(_session: object) -> object:
+        pytest.fail("build_user_manager should not run for unexpected keyword dependencies")
+
+    provider = _make_user_manager_dependency_provider(build_user_manager, "db_session")
+    generator = provider(other_session=marker)
+    with pytest.raises(TypeError, match="got unexpected keyword argument\\(s\\): 'other_session'"):
+        await anext(generator)
 
 
 def test_register_dependencies_raises_for_dependency_key_collisions() -> None:

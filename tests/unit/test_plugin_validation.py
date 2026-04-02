@@ -199,6 +199,46 @@ def test_validate_backend_strategy_security_skips_non_database_strategies(
     _validate_backend_strategy_security(config)
 
 
+def test_validate_backend_strategy_security_warns_for_jwt_named_non_jwt_strategy(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """JWT-like backend names emit an advisory warning when the strategy is not JWT-based."""
+    monkeypatch.setattr(validation_module, "is_testing", lambda: False)
+    backend = _database_backend(accept_legacy_plaintext_tokens=False)
+    backend.name = "Jwt-database"
+    config = _minimal_config(backends=[backend])
+
+    with pytest.warns(
+        UserWarning,
+        match=r"Jwt-database.*DatabaseTokenStrategy.*'bearer' or 'database'",
+    ):
+        _validate_backend_strategy_security(config)
+
+
+def test_validate_backend_strategy_security_does_not_warn_for_jwt_named_jwt_strategy(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """JWT-backed strategies remain warning-free even when the backend name contains JWT."""
+    monkeypatch.setattr(validation_module, "is_testing", lambda: False)
+    config = _minimal_config(backends=[_jwt_backend(denylist_store=_DurableDenylistStore())])
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        _validate_backend_strategy_security(config)
+
+
+def test_validate_backend_strategy_security_does_not_warn_for_neutral_backend_name(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Neutral backend names stay silent even when the strategy is not JWT-based."""
+    monkeypatch.setattr(validation_module, "is_testing", lambda: False)
+    config = _minimal_config(backends=[_database_backend(accept_legacy_plaintext_tokens=False)])
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        _validate_backend_strategy_security(config)
+
+
 def test_validate_backend_strategy_security_allows_explicit_plaintext_token_override(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

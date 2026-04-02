@@ -166,11 +166,31 @@ def _validate_totp_pending_secret_config[UP: UserProtocol[Any], ID](config: Lite
 def _validate_backend_strategy_security[UP: UserProtocol[Any], ID](config: LitestarAuthConfig[UP, ID]) -> None:
     """Validate backend strategy security posture for non-test environments."""
     for backend in config.backends:
+        _warn_backend_name_strategy_mismatch(
+            backend_name=getattr(backend, "name", None),
+            strategy=getattr(backend, "strategy", None),
+        )
+
+    for backend in config.backends:
         strategy = getattr(backend, "strategy", None)
         _validate_database_strategy_legacy_mode(config=config, strategy=strategy)
         if isinstance(strategy, JWTStrategy):
             _validate_jwt_strategy_revocation(config=config, strategy=strategy)
             break
+
+
+def _warn_backend_name_strategy_mismatch(*, backend_name: object, strategy: object) -> None:
+    """Warn when a backend name implies JWT but the configured strategy is not JWT-backed."""
+    if not isinstance(backend_name, str) or "jwt" not in backend_name.casefold() or isinstance(strategy, JWTStrategy):
+        return
+
+    warnings.warn(
+        f"AuthenticationBackend name {backend_name!r} suggests JWTStrategy semantics, but the configured "
+        f"strategy is {type(strategy).__name__}. Consider a neutral name like 'bearer' or 'database' "
+        "to avoid misleading logs and configuration.",
+        UserWarning,
+        stacklevel=4,
+    )
 
 
 def _validate_database_strategy_legacy_mode[UP: UserProtocol[Any], ID](

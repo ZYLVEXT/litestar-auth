@@ -116,23 +116,6 @@ async def _invoke_reset_password(
     return response.status_code, cast("dict[str, Any]", response.json())
 
 
-def test_as_reset_password_returns_reset_password_instance() -> None:
-    """The type-narrowing helper returns validated reset payloads unchanged."""
-    payload = reset_module.ResetPassword(token="valid-token", password="new-password")
-
-    narrowed = reset_module._as_reset_password(payload)
-
-    assert narrowed is payload
-
-
-def test_as_reset_password_rejects_other_msgspec_structs() -> None:
-    """The type-narrowing helper rejects decoded bodies for other schemas."""
-    payload = reset_module.ForgotPassword(email="user@example.com")
-
-    with pytest.raises(TypeError, match="Decoded body must match ResetPassword schema"):
-        reset_module._as_reset_password(payload)
-
-
 async def test_reset_password_maps_invalid_reset_token_error_to_client_exception() -> None:
     """Invalid reset token errors are converted into a 400 response with the correct error code."""
     manager = DummyUserManager(error=InvalidResetPasswordTokenError("bad token"))

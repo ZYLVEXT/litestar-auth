@@ -12,6 +12,7 @@ from unittest.mock import AsyncMock, patch
 import jwt
 import pytest
 
+import litestar_auth.config as config_module
 from litestar_auth.exceptions import InvalidResetPasswordTokenError, InvalidVerifyTokenError
 from litestar_auth.manager import MAX_PASSWORD_LENGTH, RESET_PASSWORD_TOKEN_AUDIENCE, require_password_length
 from litestar_auth.manager import logger as manager_logger
@@ -116,6 +117,14 @@ def test_require_password_length_rejects_passwords_longer_than_default_maximum()
 def test_require_password_length_allows_passwords_at_default_maximum() -> None:
     """The default maximum length still accepts passwords up to 128 characters."""
     require_password_length("a" * MAX_PASSWORD_LENGTH)
+
+
+def test_password_length_exports_share_config_implementation() -> None:
+    """Manager exports point at the canonical config-based password-length policy."""
+    assert config_module.MAX_PASSWORD_LENGTH == MAX_PASSWORD_LENGTH
+    assert require_password_length.__module__ == config_module.require_password_length.__module__
+    assert require_password_length.__defaults__ == config_module.require_password_length.__defaults__
+    assert require_password_length.__kwdefaults__ == config_module.require_password_length.__kwdefaults__
 
 
 @pytest.mark.parametrize(

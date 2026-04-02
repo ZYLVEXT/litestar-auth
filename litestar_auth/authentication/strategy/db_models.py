@@ -44,3 +44,8 @@ class RefreshToken(DefaultBase):
         nullable=False,
     )
     user: Mapped[User] = relationship(back_populates="refresh_tokens")
+
+
+def import_token_orm_models() -> tuple[type[AccessToken], type[RefreshToken]]:
+    """Return the token ORM models to make mapper registration explicit for consumers."""
+    return AccessToken, RefreshToken

@@ -285,6 +285,34 @@ def test_validate_replay_and_password_requires_authenticate_for_step_up() -> Non
         )
 
 
+def test_enable_route_publishes_request_body_in_openapi_when_step_up_is_enabled() -> None:
+    """Password-protected enrollment advertises its request body in OpenAPI."""
+    app, *_ = build_app(totp_enable_requires_password=True)
+
+    enable_post = cast("Any", app.openapi_schema.paths)["/auth/2fa/enable"].post
+    verify_post = cast("Any", app.openapi_schema.paths)["/auth/2fa/verify"].post
+    confirm_post = cast("Any", app.openapi_schema.paths)["/auth/2fa/enable/confirm"].post
+    disable_post = cast("Any", app.openapi_schema.paths)["/auth/2fa/disable"].post
+    request_body = enable_post.request_body
+    enable_schema = cast("Any", app.openapi_schema.components.schemas)["TotpEnableRequest"]
+
+    assert request_body is not None
+    assert next(iter(request_body.content.values())).schema.ref == "#/components/schemas/TotpEnableRequest"
+    assert "password" in (enable_schema.properties or {})
+    assert verify_post.request_body is not None
+    assert confirm_post.request_body is not None
+    assert disable_post.request_body is not None
+
+
+def test_enable_route_omits_request_body_in_openapi_when_step_up_is_disabled() -> None:
+    """Password-optional enrollment keeps the no-body OpenAPI contract."""
+    app, *_ = build_app(totp_enable_requires_password=False)
+
+    enable_post = cast("Any", app.openapi_schema.paths)["/auth/2fa/enable"].post
+
+    assert enable_post.request_body is None
+
+
 async def test_enable_2fa_returns_secret_and_uri(
     client_and_db: tuple[AsyncTestClient[Litestar], InMemoryUserDatabase],
 ) -> None:
@@ -453,6 +481,58 @@ async def test_handle_enable_rejects_non_enable_request_payload(monkeypatch: pyt
     assert exc_info.value.extra == {"code": ErrorCode.LOGIN_PAYLOAD_INVALID}
 
 
+async def test_handle_enable_accepts_valid_decoded_payload(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Direct helper calls still support the legacy decode path when data is omitted."""
+    _app, user_db, _strategy, _user_manager = build_app()
+    user = next(iter(user_db.users_by_id.values()))
+    ctx, rate_limit, _backend = _build_direct_totp_context()
+    user_manager = SimpleNamespace(authenticate=AsyncMock(return_value=user))
+
+    async def return_valid_payload(*_args: object, **_kwargs: object) -> object:
+        await asyncio.sleep(0)
+        return totp_controller_module.TotpEnableRequest(password="correct-password")
+
+    monkeypatch.setattr(totp_controller_module, "_decode_request_body", return_valid_payload)
+
+    response = await _totp_handle_enable(
+        cast("Any", SimpleNamespace(user=user)),
+        ctx=cast("Any", ctx),
+        user_manager=cast("Any", user_manager),
+    )
+
+    assert response.secret
+    assert response.enrollment_token
+    assert response.uri.startswith("otpauth://")
+    user_manager.authenticate.assert_awaited_once_with(
+        user.email,
+        "correct-password",
+        login_identifier="email",
+    )
+    rate_limit.on_invalid_attempt.assert_not_awaited()
+    rate_limit.on_success.assert_awaited_once()
+
+
+async def test_handle_enable_rejects_invalid_explicit_data_payload() -> None:
+    """Direct helper calls reject explicit non-TotpEnableRequest payloads before authentication."""
+    _app, user_db, _strategy, _user_manager = build_app()
+    user = next(iter(user_db.users_by_id.values()))
+    ctx, _rate_limit, _backend = _build_direct_totp_context()
+    user_manager = SimpleNamespace(authenticate=AsyncMock(return_value=user))
+
+    with pytest.raises(ClientException) as exc_info:
+        await _totp_handle_enable(
+            cast("Any", SimpleNamespace(user=user)),
+            ctx=cast("Any", ctx),
+            data=cast("Any", object()),
+            user_manager=cast("Any", user_manager),
+        )
+
+    assert exc_info.value.status_code == HTTP_UNPROCESSABLE_ENTITY
+    assert exc_info.value.detail == "Invalid request payload."
+    assert exc_info.value.extra == {"code": ErrorCode.LOGIN_PAYLOAD_INVALID}
+    user_manager.authenticate.assert_not_awaited()
+
+
 async def test_enable_2fa_step_up_requires_password(async_test_client_factory: Any) -> None:  # noqa: ANN401
     """When step-up is enabled, /enable requires the current password."""
     app_value = build_app(totp_enable_requires_password=True)
@@ -592,6 +672,7 @@ async def test_enable_2fa_rejects_invalid_payload_shape() -> None:
     assert resp.status_code == HTTP_UNPROCESSABLE_ENTITY
     body = resp.json()
     code = body.get("code") or (body.get("extra") or {}).get("code")
+    assert body["detail"] == "Invalid request payload."
     assert code == ErrorCode.LOGIN_PAYLOAD_INVALID
     assert enable_backend.increment.await_count == 1
     assert verify_backend.increment.await_count == 0
@@ -622,6 +703,7 @@ async def test_enable_2fa_rejects_malformed_json_body() -> None:
     assert resp.status_code == HTTP_BAD_REQUEST
     body = resp.json()
     code = body.get("code") or (body.get("extra") or {}).get("code")
+    assert body["detail"] == "Invalid request body."
     assert code == ErrorCode.REQUEST_BODY_INVALID
     assert enable_backend.increment.await_count == 1
     assert verify_backend.increment.await_count == 0

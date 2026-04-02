@@ -252,15 +252,13 @@ async def test_users_handle_update_me_strips_privileged_fields() -> None:
     manager = RecordingUserManager(user_to_get=user)
 
     result = await _users_handle_update_me(
-        cast(
-            "Any",
-            DummyRequest(
-                user=user,
-                body_bytes=(
-                    b'{"email":"updated@example.com","password":"new-password","is_active":false,'
-                    b'"is_verified":false,"is_superuser":true}'
-                ),
-            ),
+        cast("Any", DummyRequest(user=user)),
+        ExtendedSelfUpdate(
+            email="updated@example.com",
+            password="new-password",
+            is_active=False,
+            is_verified=False,
+            is_superuser=True,
         ),
         ctx=build_context(),
         user_manager=cast("Any", manager),

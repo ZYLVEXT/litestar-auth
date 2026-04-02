@@ -8,7 +8,7 @@ import unicodedata
 from typing import TYPE_CHECKING, Any
 
 from litestar_auth._manager._coercions import _account_state_user
-from litestar_auth.config import DEFAULT_MINIMUM_PASSWORD_LENGTH
+from litestar_auth.config import DEFAULT_MINIMUM_PASSWORD_LENGTH, require_password_length
 from litestar_auth.exceptions import InactiveUserError, InvalidPasswordError, UnverifiedUserError
 
 if TYPE_CHECKING:
@@ -18,28 +18,6 @@ if TYPE_CHECKING:
 
 EMAIL_MAX_LENGTH = 320
 _EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
-
-_MAX_PASSWORD_LENGTH = 128
-
-
-def _require_password_length(
-    password: str,
-    minimum_length: int = DEFAULT_MINIMUM_PASSWORD_LENGTH,
-    *,
-    maximum_length: int = _MAX_PASSWORD_LENGTH,
-) -> None:
-    """Raise when a password falls outside the configured length bounds.
-
-    Raises:
-        ValueError: If ``password`` exceeds ``maximum_length`` or is shorter
-            than ``minimum_length``.
-    """
-    if len(password) > maximum_length:
-        msg = f"Password must be at most {maximum_length} characters long."
-        raise ValueError(msg)
-    if len(password) < minimum_length:
-        msg = f"Password must be at least {minimum_length} characters long."
-        raise ValueError(msg)
 
 
 class UserPolicy:
@@ -96,7 +74,7 @@ class UserPolicy:
             InvalidPasswordError: If the configured validator rejects ``password``.
         """
         try:
-            _require_password_length(password, minimum_length=DEFAULT_MINIMUM_PASSWORD_LENGTH)
+            require_password_length(password, minimum_length=DEFAULT_MINIMUM_PASSWORD_LENGTH)
         except ValueError as exc:
             raise InvalidPasswordError(str(exc)) from exc
 

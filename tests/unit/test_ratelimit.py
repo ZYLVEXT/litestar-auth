@@ -8,7 +8,7 @@ import logging
 from collections import deque
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, cast
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, call
 
 import pytest
 from litestar.connection import Request
@@ -32,6 +32,7 @@ pytestmark = pytest.mark.unit
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
+    from types import ModuleType
 
     from litestar.types import HTTPScope
 
@@ -43,6 +44,15 @@ REDIS_RETRY_AFTER = 4
 type RedisEvalNumber = str | bytes | bytearray | float | int
 
 KEY_CAP = 2
+
+
+def _reload_module(module_path: str) -> ModuleType:
+    """Import and reload a module so coverage records its module body.
+
+    Returns:
+        The reloaded module object.
+    """
+    return importlib.reload(importlib.import_module(module_path))
 
 
 def _as_number(value: object, *, name: str) -> RedisEvalNumber:
@@ -128,6 +138,92 @@ async def test_ratelimit_module_reload_preserves_public_api() -> None:
     )
     assert await reloaded_module._extract_email(request) == "Reloaded@Example.com"
     await orchestrator.on_success("verify", request)
+
+
+@pytest.mark.parametrize(
+    ("module_path", "expected_symbols"),
+    [
+        pytest.param(
+            "litestar_auth.ratelimit._helpers",
+            ("DEFAULT_KEY_PREFIX", "RedisScriptResult", "_extract_email", "_safe_key_part", "logger"),
+            id="_helpers",
+        ),
+        pytest.param(
+            "litestar_auth.ratelimit._protocol",
+            ("RateLimiterBackend", "RedisClientProtocol", "RedisPipelineProtocol"),
+            id="_protocol",
+        ),
+        pytest.param(
+            "litestar_auth.ratelimit._memory",
+            ("InMemoryRateLimiter",),
+            id="_memory",
+        ),
+        pytest.param(
+            "litestar_auth.ratelimit._redis",
+            ("RedisRateLimiter", "_load_package_redis_asyncio"),
+            id="_redis",
+        ),
+        pytest.param(
+            "litestar_auth.ratelimit._config",
+            ("AuthRateLimitConfig", "EndpointRateLimit", "RateLimitScope"),
+            id="_config",
+        ),
+        pytest.param(
+            "litestar_auth.ratelimit._orchestrator",
+            ("TotpRateLimitOrchestrator", "TotpSensitiveEndpoint"),
+            id="_orchestrator",
+        ),
+        pytest.param(
+            "litestar_auth.ratelimit",
+            (
+                "AuthRateLimitConfig",
+                "EndpointRateLimit",
+                "InMemoryRateLimiter",
+                "RedisRateLimiter",
+                "TotpRateLimitOrchestrator",
+                "_safe_key_part",
+                "logger",
+            ),
+            id="__init__",
+        ),
+    ],
+)
+def test_ratelimit_submodules_expose_stable_import_paths(
+    module_path: str,
+    expected_symbols: tuple[str, ...],
+) -> None:
+    """Each ratelimit submodule remains directly importable after decomposition."""
+    module = _reload_module(module_path)
+
+    assert module.__name__ == module_path
+    missing_symbols = [symbol for symbol in expected_symbols if not hasattr(module, symbol)]
+    assert missing_symbols == []
+
+
+async def test_ratelimit_protocol_stubs_behave_as_type_contracts() -> None:
+    """Protocol stubs remain directly callable without adding runtime behavior."""
+    protocol_module = _reload_module("litestar_auth.ratelimit._protocol")
+    pipeline_protocol = protocol_module.RedisPipelineProtocol
+    client_protocol = protocol_module.RedisClientProtocol
+    backend_protocol = protocol_module.RateLimiterBackend
+    dummy = object()
+    property_getter = backend_protocol.is_shared_across_workers.fget
+    enter = pipeline_protocol.__dict__["__aenter__"]
+    exit_ = pipeline_protocol.__dict__["__aexit__"]
+
+    assert await enter(dummy) is None
+    assert await exit_(dummy, None, None, None) is None
+    assert pipeline_protocol.incr(dummy, "counter") is None
+    assert pipeline_protocol.expire(dummy, "counter", 60) is None
+    assert await pipeline_protocol.execute(dummy) is None
+    assert await client_protocol.delete(dummy, "key") is None
+    assert await client_protocol.eval(dummy, "return 1", 1, "key") is None
+    assert property_getter is not None
+    assert property_getter(dummy) is None
+    assert await backend_protocol.check(dummy, "key") is None
+    assert await backend_protocol.increment(dummy, "key") is None
+    assert await backend_protocol.reset(dummy, "key") is None
+    assert await backend_protocol.retry_after(dummy, "key") is None
 
 
 async def test_memory_rate_limiter_blocks_after_max_attempts_within_window() -> None:
@@ -869,6 +965,25 @@ async def test_endpoint_rate_limit_before_request_raises_with_retry_after_header
     assert exc_info.value.headers == {"Retry-After": str(FULL_RETRY_AFTER)}
 
 
+async def test_endpoint_rate_limit_before_request_allows_under_limit_request() -> None:
+    """Allowed requests short-circuit before retry-after lookup or logging."""
+    backend = AsyncMock()
+    backend.check = AsyncMock(return_value=True)
+    backend.increment = AsyncMock(return_value=None)
+    backend.reset = AsyncMock(return_value=None)
+    backend.retry_after = AsyncMock(return_value=FULL_RETRY_AFTER)
+    limiter = EndpointRateLimit(
+        backend=cast("RateLimiterBackend", backend),
+        scope="ip",
+        namespace="login",
+    )
+
+    await limiter.before_request(_build_request())
+
+    backend.check.assert_awaited_once()
+    backend.retry_after.assert_not_called()
+
+
 async def test_endpoint_rate_limit_build_key_ip_email_normalizes_identifier() -> None:
     """IP-email scoped keys append a normalized identifier hash when present."""
     limiter = EndpointRateLimit(
@@ -1021,3 +1136,31 @@ async def test_endpoint_rate_limit_logs_trigger(caplog: pytest.LogCaptureFixture
     assert events == ["rate_limit_triggered"]
     assert getattr(caplog.records[0], "namespace", None) == "login"
     assert getattr(caplog.records[0], "scope", None) == "ip"
+
+
+async def test_totp_rate_limit_orchestrator_routes_actions_to_configured_limiters() -> None:
+    """Configured TOTP limiters receive the expected endpoint-specific callbacks."""
+    request = cast("Request[Any, Any, Any]", object())
+    enable_limiter = AsyncMock()
+    verify_limiter = AsyncMock()
+    orchestrator = ratelimit_module.TotpRateLimitOrchestrator(
+        enable=cast("EndpointRateLimit", enable_limiter),
+        verify=cast("EndpointRateLimit", verify_limiter),
+    )
+    empty_orchestrator = ratelimit_module.TotpRateLimitOrchestrator()
+
+    assert orchestrator._limiters == {"enable": enable_limiter, "verify": verify_limiter}
+
+    await orchestrator.before_request("enable", request)
+    await orchestrator.before_request("confirm_enable", request)
+    await orchestrator.on_invalid_attempt("verify", request)
+    await orchestrator.on_invalid_attempt("disable", request)
+    await orchestrator.on_account_state_failure("verify", request)
+    await orchestrator.on_account_state_failure("enable", request)
+    await empty_orchestrator.on_account_state_failure("verify", request)
+    await orchestrator.on_success("verify", request)
+    await orchestrator.on_success("confirm_enable", request)
+
+    enable_limiter.before_request.assert_awaited_once_with(request)
+    verify_limiter.increment.assert_awaited_once_with(request)
+    assert verify_limiter.reset.await_args_list == [call(request), call(request)]

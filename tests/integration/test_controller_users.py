@@ -19,6 +19,7 @@ from litestar_auth.controllers import create_users_controller
 from litestar_auth.exceptions import ErrorCode, InvalidPasswordError, UserAlreadyExistsError
 from litestar_auth.manager import BaseUserManager
 from litestar_auth.password import PasswordHelper
+from litestar_auth.schemas import UserUpdate
 from tests._helpers import auth_middleware_get_request_session, litestar_app_with_user_manager
 from tests.integration.conftest import (
     DummySessionMaker,
@@ -163,6 +164,26 @@ def hard_delete_app() -> tuple[
     return build_app(hard_delete=True)
 
 
+def test_users_patch_routes_publish_request_body_in_openapi(
+    app: tuple[Litestar, InMemoryUserDatabase, UsersControllerManager, InMemoryTokenStrategy, ExampleUser, ExampleUser],
+) -> None:
+    """Both patch routes publish request bodies in the generated OpenAPI schema."""
+    litestar_app, *_ = app
+
+    update_schema = cast("Any", litestar_app.openapi_schema.components.schemas)["UserUpdate"]
+    me_patch = cast("Any", litestar_app.openapi_schema.paths)["/users/me"].patch
+    admin_patch = cast("Any", litestar_app.openapi_schema.paths)["/users/{user_id}"].patch
+    me_request_body = me_patch.request_body
+    admin_request_body = admin_patch.request_body
+
+    assert me_request_body is not None
+    assert admin_request_body is not None
+    assert next(iter(me_request_body.content.values())).schema.ref == "#/components/schemas/UserUpdate"
+    assert next(iter(admin_request_body.content.values())).schema.ref == "#/components/schemas/UserUpdate"
+    assert "email" in (update_schema.properties or {})
+    assert "password" in (update_schema.properties or {})
+
+
 async def test_me_endpoints_return_public_payload_and_ignore_restricted_self_updates(
     client: tuple[
         AsyncTestClient[Litestar],
@@ -292,7 +313,7 @@ async def test_controller_me_methods_raise_not_authorized_when_request_user_is_m
 
     update_me_handler = cast("Any", controller_class).update_me
     with pytest.raises(NotAuthorizedException) as excinfo:
-        await update_me_handler.fn(object(), DummyRequest(), **um_kw)
+        await update_me_handler.fn(object(), DummyRequest(), UserUpdate(), **um_kw)
     assert str(excinfo.value.detail) == "Authentication credentials were not provided."
 
 
@@ -352,6 +373,35 @@ async def test_update_me_rejects_schema_validation_errors(
 
     assert response.status_code == HTTP_UNPROCESSABLE_ENTITY
     assert response.json()["detail"] == "Invalid request payload."
+    assert (response.json().get("extra") or {}).get("code") == ErrorCode.REQUEST_BODY_INVALID
+
+
+@pytest.mark.parametrize("route_path", ["/users/me", "/users/{user_id}"])
+async def test_users_patch_routes_reject_malformed_json_with_controller_error_contract(
+    client: tuple[
+        AsyncTestClient[Litestar],
+        InMemoryUserDatabase,
+        UsersControllerManager,
+        InMemoryTokenStrategy,
+        ExampleUser,
+        ExampleUser,
+    ],
+    route_path: str,
+) -> None:
+    """Both patch routes preserve the legacy 400 malformed-body payload shape."""
+    test_client, _, _, strategy, admin_user, regular_user = client
+    target_user = regular_user if route_path == "/users/me" else admin_user
+    request_path = route_path.format(user_id=regular_user.id)
+    token = await strategy.write_token(target_user)
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Content-Type": "application/json",
+    }
+
+    response = await test_client.patch(request_path, headers=headers, content="not-json")
+
+    assert response.status_code == HTTP_BAD_REQUEST
+    assert response.json()["detail"] == "Invalid request body."
     assert (response.json().get("extra") or {}).get("code") == ErrorCode.REQUEST_BODY_INVALID
 
 

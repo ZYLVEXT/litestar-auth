@@ -27,7 +27,7 @@ from litestar_auth.controllers._utils import (
     _build_controller_name,
     _create_before_request_handler,
     _create_rate_limit_handlers,
-    _decode_request_body,
+    _create_request_body_exception_handlers,
     _require_account_state,
 )
 from litestar_auth.exceptions import ConfigurationError, ErrorCode
@@ -141,6 +141,7 @@ def _make_auth_controller_context[UP: UserProtocol[Any], ID](  # noqa: PLR0913
 
 async def _handle_auth_login[UP: UserProtocol[Any], ID](
     request: Request[Any, Any, Any],
+    data: LoginCredentials,
     *,
     ctx: _AuthControllerContext[UP, ID],
     user_manager: AuthControllerUserManagerProtocol[UP, ID],
@@ -155,16 +156,6 @@ async def _handle_auth_login[UP: UserProtocol[Any], ID](
         ConfigurationError: When TOTP is enabled but the authenticated user model does not implement
             ``TotpUserProtocol`` (misconfiguration).
     """
-    decoded = await _decode_request_body(
-        request,
-        schema=LoginCredentials,
-        validation_detail="Invalid login payload.",
-        validation_code=ErrorCode.LOGIN_PAYLOAD_INVALID,
-    )
-    if not isinstance(decoded, LoginCredentials):
-        msg = "Invalid login payload."
-        raise ClientException(status_code=422, detail=msg, extra={"code": ErrorCode.LOGIN_PAYLOAD_INVALID})
-    data = decoded
     resolved_identifier = _resolve_login_identifier(data.identifier, ctx.login_identifier)
     user = await user_manager.authenticate(
         resolved_identifier,
@@ -303,18 +294,32 @@ def _define_auth_controller_class_di[UP: UserProtocol[Any], ID](
     Returns:
         Controller subclass implementing ``POST /login`` and ``POST /logout``.
     """
+    login_exception_handlers = _create_request_body_exception_handlers(
+        validation_detail="Invalid login payload.",
+        validation_code=ErrorCode.LOGIN_PAYLOAD_INVALID,
+    )
 
     class AuthController(Controller):
         """Backend-bound authentication endpoints."""
 
-        @post("/login", before_request=ctx.login_before)
+        @post(
+            "/login",
+            before_request=ctx.login_before,
+            exception_handlers=login_exception_handlers,
+        )
         async def login(
             self,
             request: Request[Any, Any, Any],
+            data: LoginCredentials,
             litestar_auth_user_manager: Any,  # noqa: ANN401
         ) -> object:
             del self
-            return await _handle_auth_login(request, ctx=ctx, user_manager=litestar_auth_user_manager)
+            return await _handle_auth_login(
+                request,
+                data,
+                ctx=ctx,
+                user_manager=litestar_auth_user_manager,
+            )
 
         @post("/logout", guards=[is_authenticated])
         async def logout(self, request: Request[Any, Any, Any]) -> object:

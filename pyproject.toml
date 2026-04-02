@@ -119,6 +119,7 @@ ignore = [
 convention = "google"
 
 [tool.ruff.lint.per-file-ignores]
+"litestar_auth/ratelimit/__init__.py" = ["PLC2701"]
 "litestar_auth/models/__init__.py" = ["PLC0415"]
 "litestar_auth/models/user.py" = ["TC001"]
 "litestar_auth/models/_oauth_encrypted_types.py" = ["TC003"]

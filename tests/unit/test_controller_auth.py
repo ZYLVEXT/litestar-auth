@@ -23,6 +23,7 @@ from litestar_auth.authentication.transport.cookie import CookieTransport
 from litestar_auth.controllers.auth import (
     _LOGIN_EMAIL_MAX_LENGTH,
     _LOGIN_USERNAME_MAX_LENGTH,
+    LoginCredentials,
     _attach_refresh_token,
     _get_refresh_strategy,
     _make_auth_controller_context,
@@ -548,9 +549,7 @@ async def test_login_uses_manager_account_state_validator_when_available() -> No
     controller_class = create_auth_controller(backend=backend)
     controller = cast("Any", controller_class(owner=MagicMock()))
     request = MagicMock()
-    request.body = AsyncMock(
-        return_value=b'{"identifier":"user@example.com","password":"correct-password"}',
-    )
+    data = LoginCredentials(identifier="user@example.com", password="correct-password")
     user = _MinimalUser()
     user.is_active = False
     user_manager = MagicMock()
@@ -561,6 +560,7 @@ async def test_login_uses_manager_account_state_validator_when_available() -> No
     response = await controller.login.fn(
         controller,
         request,
+        data,
         **{DEFAULT_USER_MANAGER_DEPENDENCY_KEY: user_manager},
     )
 
@@ -568,8 +568,8 @@ async def test_login_uses_manager_account_state_validator_when_available() -> No
     user_manager.require_account_state.assert_called_once_with(user, require_verified=False)
 
 
-async def test_login_rejects_non_login_credentials_payload(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Login raises a 422 when request decoding returns an unexpected object."""
+async def test_login_rejects_invalid_identifier_before_authentication() -> None:
+    """Login raises a 422 when the identifier does not match the configured login mode."""
     backend = AuthenticationBackend(
         name="test",
         transport=BearerTransport(),
@@ -587,10 +587,15 @@ async def test_login_rejects_non_login_credentials_payload(monkeypatch: pytest.M
     request = MagicMock()
     user_manager = MagicMock()
     user_manager.authenticate = AsyncMock()
-    monkeypatch.setattr(auth_controller_module, "_decode_request_body", AsyncMock(return_value=object()))
+    data = LoginCredentials(identifier="not-an-email", password="correct-password")
 
     with pytest.raises(ClientException) as exc_info:
-        await auth_controller_module._handle_auth_login(request, ctx=ctx, user_manager=user_manager)
+        await auth_controller_module._handle_auth_login(
+            request,
+            data,
+            ctx=ctx,
+            user_manager=user_manager,
+        )
 
     assert exc_info.value.status_code == STATUS_UNPROCESSABLE_ENTITY
     assert exc_info.value.extra == {"code": ErrorCode.LOGIN_PAYLOAD_INVALID}
@@ -620,7 +625,7 @@ async def test_login_returns_pending_token_when_totp_enabled() -> None:
         totp_pending_lifetime=timedelta(minutes=5),
     )
     request = MagicMock()
-    request.body = AsyncMock(return_value=b'{"identifier":"user@example.com","password":"correct-password"}')
+    data = LoginCredentials(identifier="user@example.com", password="correct-password")
     user = _TotpUser()
     user_manager = MagicMock()
     user_manager.authenticate = AsyncMock(return_value=user)
@@ -628,7 +633,12 @@ async def test_login_returns_pending_token_when_totp_enabled() -> None:
     user_manager.read_totp_secret = AsyncMock(return_value="JBSWY3DPEHPK3PXP")
     user_manager.require_account_state = MagicMock()
 
-    response = await auth_controller_module._handle_auth_login(request, ctx=ctx, user_manager=user_manager)
+    response = await auth_controller_module._handle_auth_login(
+        request,
+        data,
+        ctx=ctx,
+        user_manager=user_manager,
+    )
 
     assert isinstance(response, Response)
     payload = cast("dict[str, object]", response.content)
@@ -662,7 +672,7 @@ async def test_login_falls_back_to_full_login_when_totp_pending_token_is_not_iss
         totp_pending_lifetime=timedelta(minutes=5),
     )
     request = MagicMock()
-    request.body = AsyncMock(return_value=b'{"identifier":"user@example.com","password":"correct-password"}')
+    data = LoginCredentials(identifier="user@example.com", password="correct-password")
     user = _TotpUser()
     user_manager = MagicMock()
     user_manager.authenticate = AsyncMock(return_value=user)
@@ -670,7 +680,12 @@ async def test_login_falls_back_to_full_login_when_totp_pending_token_is_not_iss
     user_manager.read_totp_secret = AsyncMock(return_value=None)
     user_manager.require_account_state = MagicMock()
 
-    response = await auth_controller_module._handle_auth_login(request, ctx=ctx, user_manager=user_manager)
+    response = await auth_controller_module._handle_auth_login(
+        request,
+        data,
+        ctx=ctx,
+        user_manager=user_manager,
+    )
 
     assert isinstance(response, Response)
     assert response.content == {"access_token": "t", "token_type": "bearer"}
@@ -694,14 +709,19 @@ async def test_login_raises_configuration_error_when_totp_user_protocol_is_missi
         totp_pending_lifetime=timedelta(minutes=5),
     )
     request = MagicMock()
-    request.body = AsyncMock(return_value=b'{"identifier":"user@example.com","password":"correct-password"}')
+    data = LoginCredentials(identifier="user@example.com", password="correct-password")
     user_manager = MagicMock()
     user_manager.authenticate = AsyncMock(return_value=_MinimalUser())
     user_manager.on_after_login = AsyncMock()
     user_manager.require_account_state = MagicMock()
 
     with pytest.raises(ConfigurationError, match="does not implement TOTP fields"):
-        await auth_controller_module._handle_auth_login(request, ctx=ctx, user_manager=user_manager)
+        await auth_controller_module._handle_auth_login(
+            request,
+            data,
+            ctx=ctx,
+            user_manager=user_manager,
+        )
 
     user_manager.on_after_login.assert_not_awaited()
 

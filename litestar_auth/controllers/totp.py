@@ -15,9 +15,10 @@ from litestar import Controller, Request, post
 from litestar.exceptions import ClientException, NotAuthorizedException
 
 from litestar_auth.authentication.strategy.jwt import InMemoryJWTDenylistStore, JWTDenylistStore
-from litestar_auth.config import is_testing, validate_secret_length
+from litestar_auth.config import TOTP_ENROLL_AUDIENCE, is_testing, validate_secret_length
 from litestar_auth.controllers._utils import (
     AccountStateValidatorProvider,
+    _configure_request_body_handler,
     _decode_request_body,
     _require_account_state,
 )
@@ -46,7 +47,6 @@ from litestar_auth.ratelimit import TotpRateLimitOrchestrator, TotpSensitiveEndp
 INVALID_TOTP_TOKEN_DETAIL = "Invalid or expired 2FA pending token."  # noqa: S105
 INVALID_TOTP_CODE_DETAIL = "Invalid TOTP code."
 INVALID_ENROLL_TOKEN_DETAIL = "Invalid or expired enrollment token."  # noqa: S105
-TOTP_ENROLL_AUDIENCE = "litestar-auth:2fa-enroll"
 _TOTP_ENROLL_TOKEN_LIFETIME_SECONDS = 300  # 5 minutes
 TOTP_SENSITIVE_ENDPOINTS: tuple[TotpSensitiveEndpoint, ...] = ("enable", "confirm_enable", "verify", "disable")
 TOTP_RATE_LIMITED_ENDPOINTS: tuple[TotpSensitiveEndpoint, ...] = ("verify", "confirm_enable")
@@ -197,6 +197,7 @@ async def _totp_handle_enable[UP: UserProtocol[Any], ID](
     request: Request[Any, Any, Any],
     *,
     ctx: _TotpControllerContext[UP, ID],
+    data: TotpEnableRequest | None = None,
     user_manager: TotpUserManagerProtocol[UP, ID],
 ) -> TotpEnableResponse:
     """Generate a TOTP secret and associate it with the authenticated user.
@@ -223,16 +224,22 @@ async def _totp_handle_enable[UP: UserProtocol[Any], ID](
     )
     totp_user = user
     if ctx.totp_enable_requires_password:
-        decoded = await _decode_request_body(
-            request,
-            schema=TotpEnableRequest,
-            on_error=lambda current_request: ctx.totp_rate_limit.on_invalid_attempt("enable", current_request),
-            validation_code=ErrorCode.LOGIN_PAYLOAD_INVALID,
-        )
-        if not isinstance(decoded, TotpEnableRequest):
+        if data is None:
+            decoded = await _decode_request_body(
+                request,
+                schema=TotpEnableRequest,
+                on_error=lambda current_request: ctx.totp_rate_limit.on_invalid_attempt("enable", current_request),
+                validation_code=ErrorCode.LOGIN_PAYLOAD_INVALID,
+            )
+            if not isinstance(decoded, TotpEnableRequest):
+                msg = "Invalid request payload."
+                raise ClientException(status_code=422, detail=msg, extra={"code": ErrorCode.LOGIN_PAYLOAD_INVALID})
+            payload = decoded
+        elif not isinstance(data, TotpEnableRequest):
             msg = "Invalid request payload."
             raise ClientException(status_code=422, detail=msg, extra={"code": ErrorCode.LOGIN_PAYLOAD_INVALID})
-        payload = decoded
+        else:
+            payload = data
         authenticated = await user_manager.authenticate(
             totp_user.email,
             payload.password,
@@ -535,17 +542,8 @@ def _define_totp_controller_class_di[UP: UserProtocol[Any], ID](
         and ``/disable`` routes.
     """
 
-    class TotpController(Controller):
+    class _TotpControllerBase(Controller):
         """TOTP 2FA management endpoints."""
-
-        @post("/enable", guards=[is_authenticated])
-        async def enable(
-            self,
-            request: Request[Any, Any, Any],
-            litestar_auth_user_manager: Any,  # noqa: ANN401
-        ) -> TotpEnableResponse:
-            del self
-            return await _totp_handle_enable(request, ctx=ctx, user_manager=litestar_auth_user_manager)
 
         @post("/enable/confirm", guards=[is_authenticated])
         async def confirm_enable(
@@ -591,6 +589,50 @@ def _define_totp_controller_class_di[UP: UserProtocol[Any], ID](
                 data=data,
                 user_manager=litestar_auth_user_manager,
             )
+
+    if ctx.totp_enable_requires_password:
+
+        async def _on_enable_request_body_error(request: Request[Any, Any, Any]) -> None:
+            await ctx.totp_rate_limit.on_invalid_attempt("enable", request)
+
+        class TotpController(_TotpControllerBase):
+            """TOTP 2FA management endpoints."""
+
+            @post("/enable", guards=[is_authenticated])
+            async def enable(
+                self,
+                request: Request[Any, Any, Any],
+                litestar_auth_user_manager: Any,  # noqa: ANN401
+                data: msgspec.Struct | None = None,
+            ) -> TotpEnableResponse:
+                del self
+                return await _totp_handle_enable(
+                    request,
+                    ctx=ctx,
+                    data=cast("TotpEnableRequest | None", data),
+                    user_manager=litestar_auth_user_manager,
+                )
+
+        _configure_request_body_handler(
+            TotpController.enable,
+            schema=TotpEnableRequest,
+            validation_code=ErrorCode.LOGIN_PAYLOAD_INVALID,
+            on_validation_error=_on_enable_request_body_error,
+            on_decode_error=_on_enable_request_body_error,
+        )
+    else:
+
+        class TotpController(_TotpControllerBase):
+            """TOTP 2FA management endpoints."""
+
+            @post("/enable", guards=[is_authenticated])
+            async def enable(
+                self,
+                request: Request[Any, Any, Any],
+                litestar_auth_user_manager: Any,  # noqa: ANN401
+            ) -> TotpEnableResponse:
+                del self
+                return await _totp_handle_enable(request, ctx=ctx, user_manager=litestar_auth_user_manager)
 
     TotpController.__module__ = __name__
     TotpController.__qualname__ = TotpController.__name__

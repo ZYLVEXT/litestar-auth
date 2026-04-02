@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, cast
 from unittest.mock import AsyncMock
 from uuid import UUID, uuid4
 
@@ -112,6 +112,22 @@ def app() -> tuple[Litestar, InMemoryUserDatabase, TrackingUserManager]:
     return build_app()
 
 
+def test_register_publishes_request_body_for_custom_schema_in_openapi() -> None:
+    """The configured registration schema is published as the OpenAPI request body."""
+    password_helper = PasswordHelper()
+    user_manager = TrackingUserManager(InMemoryUserDatabase(), password_helper)
+    controller = create_register_controller(user_create_schema=ExtendedRegistrationCreate)
+    app = litestar_app_with_user_manager(user_manager, controller)
+
+    register_post = cast("Any", app.openapi_schema.paths)["/auth/register"].post
+    request_body = register_post.request_body
+    register_schema = cast("Any", app.openapi_schema.components.schemas)["ExtendedRegistrationCreate"]
+
+    assert request_body is not None
+    assert next(iter(request_body.content.values())).schema.ref == "#/components/schemas/ExtendedRegistrationCreate"
+    assert "bio" in (register_schema.properties or {})
+
+
 async def test_register_creates_user_returns_public_payload_and_calls_hook(
     client: tuple[AsyncTestClient[Litestar], InMemoryUserDatabase, TrackingUserManager],
 ) -> None:
@@ -219,6 +235,23 @@ async def test_register_rejects_schema_validation_errors() -> None:
     assert response.status_code == HTTP_UNPROCESSABLE_ENTITY
     body = response.json()
     assert body["detail"] == "Invalid request payload."
+    assert body["extra"]["code"] == ErrorCode.REQUEST_BODY_INVALID
+
+
+async def test_register_rejects_malformed_json_with_controller_error_contract() -> None:
+    """Register keeps the legacy 400 malformed-body payload shape."""
+    app, _user_db, _user_manager = build_app()
+
+    async with AsyncTestClient(app=app) as test_client:
+        response = await test_client.post(
+            "/auth/register",
+            content="not-json",
+            headers={"Content-Type": "application/json"},
+        )
+
+    assert response.status_code == HTTP_BAD_REQUEST
+    body = response.json()
+    assert body["detail"] == "Invalid request body."
     assert body["extra"]["code"] == ErrorCode.REQUEST_BODY_INVALID
 
 

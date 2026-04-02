@@ -16,7 +16,7 @@ from jwt import ExpiredSignatureError, InvalidTokenError
 
 from litestar_auth._compat import _load_redis_asyncio as _load_redis_asyncio_compat
 from litestar_auth.authentication.strategy.base import Strategy, UserManagerProtocol
-from litestar_auth.config import validate_secret_length
+from litestar_auth.config import JWT_ACCESS_TOKEN_AUDIENCE, validate_secret_length
 from litestar_auth.types import ID, UP
 
 logger = logging.getLogger(__name__)
@@ -28,7 +28,6 @@ if TYPE_CHECKING:
 
 DEFAULT_ALGORITHM = "HS256"
 DEFAULT_LIFETIME = timedelta(minutes=15)
-JWT_ACCESS_TOKEN_AUDIENCE = "litestar-auth:access"  # noqa: S105
 _ALLOWED_ALGORITHMS = frozenset(
     {
         "HS256",

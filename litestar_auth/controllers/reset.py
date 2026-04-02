@@ -9,9 +9,9 @@ from litestar import Controller, Request, post
 from litestar.status_codes import HTTP_200_OK, HTTP_202_ACCEPTED
 
 from litestar_auth.controllers._utils import (
+    _configure_request_body_handler,
     _create_before_request_handler,
     _create_rate_limit_handlers,
-    _decode_request_body,
     _map_domain_exceptions,
     _require_msgspec_struct,
     _to_user_schema,
@@ -41,21 +41,6 @@ class ResetPassword(msgspec.Struct):
 
     token: Annotated[str, msgspec.Meta(min_length=1, max_length=2048)]
     password: Annotated[str, msgspec.Meta(min_length=1, max_length=128)]
-
-
-def _as_reset_password(body: msgspec.Struct) -> ResetPassword:
-    """Narrow a decoded request body to ``ResetPassword`` without ``typing.cast``.
-
-    Returns:
-        The validated reset-password payload.
-
-    Raises:
-        TypeError: If the struct is not an instance of ``ResetPassword``.
-    """
-    if isinstance(body, ResetPassword):
-        return body
-    msg = "Decoded body must match ResetPassword schema"
-    raise TypeError(msg)
 
 
 class ResetPasswordControllerUserProtocol[ID](UserProtocol[ID], Protocol):
@@ -133,10 +118,9 @@ def create_reset_password_controller[UP: ResetPasswordControllerUserProtocol[Any
         async def reset_password(  # noqa: PLR6301
             self,
             request: Request[Any, Any, Any],
+            data: ResetPassword,
             litestar_auth_user_manager: Any,  # noqa: ANN401
         ) -> msgspec.Struct:
-            decoded = _as_reset_password(await _decode_request_body(request, schema=ResetPassword))
-
             async def _increment_rate_limit() -> None:
                 await reset_password_rate_limit_increment(request)
 
@@ -147,11 +131,12 @@ def create_reset_password_controller[UP: ResetPasswordControllerUserProtocol[Any
                 },
                 on_error=_increment_rate_limit,
             ):
-                user = await litestar_auth_user_manager.reset_password(decoded.token, decoded.password)
+                user = await litestar_auth_user_manager.reset_password(data.token, data.password)
 
             await reset_password_rate_limit_reset(request)
             return _to_user_schema(user, user_read_schema_type)
 
     reset_cls = ResetPasswordController
+    _configure_request_body_handler(reset_cls.reset_password, schema=ResetPassword)
     reset_cls.path = path
     return reset_cls

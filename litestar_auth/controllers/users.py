@@ -12,7 +12,7 @@ from litestar.params import Parameter
 
 from litestar_auth.controllers._utils import (
     AccountStateValidatorProvider,
-    _decode_request_body,
+    _configure_request_body_handler,
     _map_domain_exceptions,
     _require_account_state,
     _require_msgspec_struct,
@@ -121,6 +121,7 @@ async def _users_handle_get_me[UP: UsersControllerUserProtocol[Any], ID](
 
 async def _users_handle_update_me[UP: UsersControllerUserProtocol[Any], ID](
     request: Request[Any, Any, Any],
+    data: msgspec.Struct,
     *,
     ctx: _UsersControllerContext[UP, ID],
     user_manager: UsersControllerUserManagerProtocol[UP, ID],
@@ -138,7 +139,6 @@ async def _users_handle_update_me[UP: UsersControllerUserProtocol[Any], ID](
         msg = "Authentication credentials were not provided."
         raise NotAuthorizedException(detail=msg)
     await _require_account_state(user, user_manager=user_manager, require_verified=False)
-    data = await _decode_request_body(request, schema=ctx.user_update_schema_type)
     async with _map_domain_exceptions(
         {
             UserAlreadyExistsError: (400, ErrorCode.UPDATE_USER_EMAIL_ALREADY_EXISTS),
@@ -208,9 +208,15 @@ def _define_users_controller_class_di[UP: UsersControllerUserProtocol[Any], ID](
         async def update_me(  # noqa: PLR6301
             self,
             request: Request[Any, Any, Any],
+            data: msgspec.Struct,
             litestar_auth_user_manager: Any,  # noqa: ANN401
         ) -> msgspec.Struct:
-            return await _users_handle_update_me(request, ctx=ctx, user_manager=litestar_auth_user_manager)
+            return await _users_handle_update_me(
+                request,
+                data,
+                ctx=ctx,
+                user_manager=litestar_auth_user_manager,
+            )
 
         @get("/{user_id:str}", guards=[is_superuser])
         async def get_user(  # noqa: PLR6301
@@ -229,7 +235,7 @@ def _define_users_controller_class_di[UP: UsersControllerUserProtocol[Any], ID](
         async def update_user(  # noqa: PLR6301
             self,
             user_id: str,
-            request: Request[Any, Any, Any],
+            data: msgspec.Struct,
             litestar_auth_user_manager: Any,  # noqa: ANN401
         ) -> msgspec.Struct:
             user = await _users_get_user_or_404(
@@ -237,7 +243,6 @@ def _define_users_controller_class_di[UP: UsersControllerUserProtocol[Any], ID](
                 user_manager=litestar_auth_user_manager,
                 id_parser=ctx.id_parser,
             )
-            data = await _decode_request_body(request, schema=ctx.user_update_schema_type)
             async with _map_domain_exceptions(
                 {
                     UserAlreadyExistsError: (400, ErrorCode.UPDATE_USER_EMAIL_ALREADY_EXISTS),
@@ -278,6 +283,8 @@ def _define_users_controller_class_di[UP: UsersControllerUserProtocol[Any], ID](
             )
 
     users_cls = UsersController
+    _configure_request_body_handler(users_cls.update_me, schema=ctx.user_update_schema_type)
+    _configure_request_body_handler(users_cls.update_user, schema=ctx.user_update_schema_type)
     users_cls.__module__ = __name__
     users_cls.__qualname__ = users_cls.__name__
     return users_cls

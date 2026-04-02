@@ -11,6 +11,7 @@ import secrets
 from datetime import timedelta
 from typing import TYPE_CHECKING, Any
 
+from litestar_auth import config as _config
 from litestar_auth._manager import _protocols as _manager_protocols
 from litestar_auth._manager.account_tokens import (
     AccountTokenSecurityService,
@@ -29,7 +30,11 @@ from litestar_auth._manager.user_lifecycle import (
     _UserLifecycleManagerProtocol,
 )
 from litestar_auth._manager.user_policy import UserPolicy
-from litestar_auth.config import DEFAULT_MINIMUM_PASSWORD_LENGTH, _resolve_token_secret
+from litestar_auth.config import (
+    RESET_PASSWORD_TOKEN_AUDIENCE,
+    VERIFY_TOKEN_AUDIENCE,
+    _resolve_token_secret,
+)
 from litestar_auth.db.base import BaseOAuthAccountStore
 from litestar_auth.password import PasswordHelper
 from litestar_auth.types import LoginIdentifier, UserProtocol
@@ -43,14 +48,14 @@ if TYPE_CHECKING:
     from litestar_auth.db.base import BaseUserStore
     from litestar_auth.exceptions import InvalidResetPasswordTokenError, InvalidVerifyTokenError
 
-VERIFY_TOKEN_AUDIENCE = "litestar-auth:verify"  # noqa: S105
-RESET_PASSWORD_TOKEN_AUDIENCE = "litestar-auth:reset-password"  # noqa: S105
 DEFAULT_VERIFY_TOKEN_LIFETIME = timedelta(hours=1)
 DEFAULT_RESET_PASSWORD_TOKEN_LIFETIME = timedelta(hours=1)
 SAFE_FIELDS = _CANONICAL_SAFE_FIELDS
 _PRIVILEGED_FIELDS = _CANONICAL_PRIVILEGED_FIELDS
 ENCRYPTED_TOTP_SECRET_PREFIX = "fernet:"  # noqa: S105
 _MASKED = "**********"
+MAX_PASSWORD_LENGTH = _config.MAX_PASSWORD_LENGTH
+require_password_length = _config.require_password_length
 
 
 @dataclasses.dataclass(frozen=True, eq=False)
@@ -79,7 +84,6 @@ class _SecretValue:
 
 
 EMAIL_MAX_LENGTH = 320
-MAX_PASSWORD_LENGTH = 128
 _EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 logger = logging.getLogger(__name__)
 _DUMMY_PASSWORD_HASH = PasswordHelper().hash(secrets.token_urlsafe(32))
@@ -100,28 +104,6 @@ def _resolve_oauth_account_store[UP: UserProtocol[Any], ID](
         return user_db
 
     return None
-
-
-def require_password_length(
-    password: str,
-    minimum_length: int = DEFAULT_MINIMUM_PASSWORD_LENGTH,
-    *,
-    maximum_length: int = MAX_PASSWORD_LENGTH,
-) -> None:
-    """Raise when a password falls outside the configured length bounds.
-
-    The default ``minimum_length`` matches ``LitestarAuth``'s built-in password policy.
-
-    Raises:
-        ValueError: If ``password`` exceeds ``maximum_length`` or is shorter than ``minimum_length``.
-    """
-    if len(password) > maximum_length:
-        msg = f"Password must be at most {maximum_length} characters long."
-        raise ValueError(msg)
-
-    if len(password) < minimum_length:
-        msg = f"Password must be at least {minimum_length} characters long."
-        raise ValueError(msg)
 
 
 class BaseUserManager[UP: UserProtocol[Any], ID](  # noqa: PLR0904

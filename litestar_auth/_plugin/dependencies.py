@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import inspect
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, cast
@@ -106,21 +107,47 @@ def _make_user_manager_dependency_provider(
         ``db_session_key`` must be validated by :meth:`LitestarAuthConfig.__post_init__` before this
         runs; invalid keys are rejected at configuration construction time.
     """
-    # Annotate as ``Any`` so Litestar/msgspec does not reject test doubles (e.g. DummySession)
-    # that are not SQLAlchemy ``AsyncSession`` subclasses; DI still keys by parameter name.
-    namespace: dict[str, Any] = {
-        "Any": Any,
-        "build_user_manager": build_user_manager,
-    }
-    source = (
-        f"async def _provide_user_manager({db_session_key}: Any):\n    yield build_user_manager({db_session_key})\n"
+    missing = object()
+
+    async def _provide_user_manager(
+        session: object = missing,
+        /,
+        **dependencies: object,
+    ) -> AsyncGenerator[Any, None]:
+        if False:  # pragma: no cover
+            await asyncio.sleep(0)
+        if session is not missing:
+            if dependencies:
+                msg = f"_provide_user_manager() got multiple values for argument {db_session_key!r}"
+                raise TypeError(msg)
+            yield build_user_manager(cast("AsyncSession", session))
+            return
+
+        if len(dependencies) != 1 or db_session_key not in dependencies:
+            if not dependencies:
+                msg = f"_provide_user_manager() missing 1 required argument: {db_session_key!r}"
+            else:
+                unexpected = ", ".join(sorted(repr(name) for name in dependencies))
+                msg = f"_provide_user_manager() got unexpected keyword argument(s): {unexpected}"
+            raise TypeError(msg)
+
+        yield build_user_manager(cast("AsyncSession", dependencies[db_session_key]))
+
+    provider_fn = cast("Any", _provide_user_manager)
+    provider_fn.__signature__ = inspect.Signature(
+        parameters=(
+            inspect.Parameter(
+                db_session_key,
+                kind=inspect.Parameter.POSITIONAL_OR_KEYWORD,
+                annotation=Any,
+            ),
+        ),
     )
-    exec(source, namespace, namespace)  # noqa: S102
-    provider_fn: Callable[..., AsyncGenerator[Any, None]] = namespace["_provide_user_manager"]
-    # Exec'd functions get ``__module__ is None``; Litestar needs a real module for type-hint resolution.
+    provider_fn.__annotations__ = {db_session_key: "Any"}
+    # Litestar resolves forward references from the defining module; keep metadata stable.
     provider_fn.__module__ = __name__
     provider_fn.__qualname__ = "_make_user_manager_dependency_provider.<locals>._provide_user_manager"
-    return provider_fn
+    return cast("Callable[..., AsyncGenerator[Any, None]]", provider_fn)
 
 
 def register_dependencies[UP: UserProtocol[Any], ID](

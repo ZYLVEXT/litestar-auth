@@ -8,9 +8,18 @@ import warnings
 
 import pytest
 
+import litestar_auth.authentication.strategy.jwt as jwt_strategy_module
 import litestar_auth.config as config_module
+import litestar_auth.controllers.totp as totp_controller_module
+import litestar_auth.manager as manager_module
+import litestar_auth.totp_flow as totp_flow_module
 from litestar_auth.config import (
+    JWT_ACCESS_TOKEN_AUDIENCE,
     MINIMUM_SECRET_LENGTH,
+    RESET_PASSWORD_TOKEN_AUDIENCE,
+    TOTP_ENROLL_AUDIENCE,
+    TOTP_PENDING_AUDIENCE,
+    VERIFY_TOKEN_AUDIENCE,
     _resolve_token_secret,
     resolve_trusted_proxy_setting,
     validate_secret_length,
@@ -28,6 +37,49 @@ def test_config_module_executes_under_coverage() -> None:
 
     assert reloaded_module.MINIMUM_SECRET_LENGTH == MINIMUM_SECRET_LENGTH
     assert reloaded_module.validate_testing_mode_for_startup is config_module.validate_testing_mode_for_startup
+
+
+def test_config_defines_canonical_token_audiences() -> None:
+    """Shared token audiences are defined once in the config module."""
+    assert VERIFY_TOKEN_AUDIENCE == "litestar-auth:verify"
+    assert RESET_PASSWORD_TOKEN_AUDIENCE == "litestar-auth:reset-password"
+    assert JWT_ACCESS_TOKEN_AUDIENCE == "litestar-auth:access"
+    assert TOTP_PENDING_AUDIENCE == "litestar-auth:2fa-pending"
+    assert TOTP_ENROLL_AUDIENCE == "litestar-auth:2fa-enroll"
+
+
+@pytest.mark.parametrize(
+    ("module", "attribute", "expected"),
+    [
+        pytest.param(manager_module, "VERIFY_TOKEN_AUDIENCE", VERIFY_TOKEN_AUDIENCE, id="manager-verify"),
+        pytest.param(
+            manager_module,
+            "RESET_PASSWORD_TOKEN_AUDIENCE",
+            RESET_PASSWORD_TOKEN_AUDIENCE,
+            id="manager-reset-password",
+        ),
+        pytest.param(
+            jwt_strategy_module,
+            "JWT_ACCESS_TOKEN_AUDIENCE",
+            JWT_ACCESS_TOKEN_AUDIENCE,
+            id="jwt-access",
+        ),
+        pytest.param(totp_flow_module, "TOTP_PENDING_AUDIENCE", TOTP_PENDING_AUDIENCE, id="totp-pending"),
+        pytest.param(
+            totp_controller_module,
+            "TOTP_ENROLL_AUDIENCE",
+            TOTP_ENROLL_AUDIENCE,
+            id="totp-enroll",
+        ),
+    ],
+)
+def test_existing_modules_export_canonical_token_audiences(
+    module: object,
+    attribute: str,
+    expected: str,
+) -> None:
+    """Compatibility import paths stay aligned with the canonical config constants."""
+    assert getattr(module, attribute) == getattr(config_module, attribute) == expected
 
 
 def test_resolve_token_secret_generates_testing_secret(

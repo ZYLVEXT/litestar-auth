@@ -102,6 +102,22 @@ def app() -> tuple[Litestar, InMemoryUserDatabase, TrackingUserManager]:
     return build_app()
 
 
+def test_reset_password_publishes_request_body_in_openapi(
+    app: tuple[Litestar, InMemoryUserDatabase, TrackingUserManager],
+) -> None:
+    """The reset-password route publishes its request body in OpenAPI."""
+    litestar_app, *_ = app
+
+    reset_post = cast("Any", litestar_app.openapi_schema.paths)["/auth/reset-password"].post
+    request_body = reset_post.request_body
+    reset_schema = cast("Any", litestar_app.openapi_schema.components.schemas)["ResetPassword"]
+
+    assert request_body is not None
+    assert next(iter(request_body.content.values())).schema.ref == "#/components/schemas/ResetPassword"
+    assert "token" in (reset_schema.properties or {})
+    assert "password" in (reset_schema.properties or {})
+
+
 async def test_forgot_password_uses_same_response_for_existing_and_missing_email(
     client: tuple[AsyncTestClient[Litestar], InMemoryUserDatabase, TrackingUserManager],
 ) -> None:
@@ -275,6 +291,23 @@ async def test_reset_password_rejects_password_longer_than_128_characters() -> N
         )
 
     assert response.status_code == HTTP_UNPROCESSABLE_ENTITY
+
+
+async def test_reset_password_rejects_malformed_json_with_controller_error_contract() -> None:
+    """Reset-password keeps the legacy 400 malformed-body payload shape."""
+    app, _user_db, _user_manager = build_app()
+
+    async with AsyncTestClient(app=app) as client:
+        response = await client.post(
+            "/auth/reset-password",
+            content="not-json",
+            headers={"Content-Type": "application/json"},
+        )
+
+    assert response.status_code == HTTP_BAD_REQUEST
+    body = response.json()
+    assert body["detail"] == "Invalid request body."
+    assert body["extra"]["code"] == ErrorCode.REQUEST_BODY_INVALID
 
 
 async def test_reset_password_rejects_token_longer_than_2048_characters() -> None:

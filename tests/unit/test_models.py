@@ -15,6 +15,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy.pool import StaticPool
 
 import litestar_auth.models as litestar_auth_models
+from litestar_auth.authentication.strategy import import_token_orm_models
 from litestar_auth.authentication.strategy.db_models import AccessToken, RefreshToken
 from litestar_auth.models import OAuthAccount, User
 
@@ -249,6 +250,11 @@ def test_access_token_model_creates_schema_and_relationship() -> None:
         engine.dispose()
 
 
+def test_import_token_orm_models_returns_token_model_classes() -> None:
+    """The explicit token registration helper returns the mapped token model classes."""
+    assert import_token_orm_models() == (AccessToken, RefreshToken)
+
+
 def test_access_token_model_enforces_foreign_key_constraint() -> None:
     """Orphan access tokens are rejected by the database."""
     engine = create_test_engine()
@@ -320,3 +326,23 @@ def test_refresh_token_model_enforces_foreign_key_constraint() -> None:
                 session.commit()
     finally:
         engine.dispose()
+
+
+def test_db_models_side_effect_import_still_exposes_token_registration_helper() -> None:
+    """Importing the db-models module for mapper registration still works in isolation."""
+    code = (
+        "from importlib import import_module\n"
+        "db_models = import_module('litestar_auth.authentication.strategy.db_models')\n"
+        "from litestar_auth.authentication.strategy import import_token_orm_models\n"
+        "assert db_models.import_token_orm_models() == (db_models.AccessToken, db_models.RefreshToken)\n"
+        "assert import_token_orm_models() == (db_models.AccessToken, db_models.RefreshToken)\n"
+    )
+    result = subprocess.run(
+        [sys.executable, "-c", code],
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+
+    assert result.returncode == 0, (result.stdout, result.stderr)

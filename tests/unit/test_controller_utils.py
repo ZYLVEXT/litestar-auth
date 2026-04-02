@@ -3,19 +3,22 @@
 from __future__ import annotations
 
 import importlib
-from typing import Any, cast
+import inspect
+from typing import TYPE_CHECKING, Any, cast
 from unittest.mock import AsyncMock
 from uuid import uuid4
 
 import msgspec
 import pytest
-from litestar.exceptions import ClientException, PermissionDeniedException
+from litestar.exceptions import ClientException, NotAuthorizedException, PermissionDeniedException, ValidationException
 
 from litestar_auth.controllers import _utils
 from litestar_auth.controllers._utils import (
     _build_controller_name,
+    _configure_request_body_handler,
     _create_before_request_handler,
     _create_rate_limit_handlers,
+    _create_request_body_exception_handlers,
     _decode_request_body,
     _map_domain_exceptions,
     _require_account_state,
@@ -34,8 +37,13 @@ from litestar_auth.exceptions import (
     UserAlreadyExistsError,
 )
 
+if TYPE_CHECKING:
+    from collections.abc import Callable
+
 STATUS_BAD_REQUEST = 400
+STATUS_TOO_MANY_REQUESTS = 429
 STATUS_UNPROCESSABLE_ENTITY = 422
+STATUS_UNAUTHORIZED = 401
 
 pytestmark = pytest.mark.unit
 
@@ -85,6 +93,12 @@ class _MockRateLimit:
         self.increment = AsyncMock()
         self.reset = AsyncMock()
         self.before_request = AsyncMock()
+
+
+class _MockRouteHandler:
+    def __init__(self, fn: Callable[..., object]) -> None:
+        self.fn: Callable[..., object] = fn
+        self.exception_handlers: dict[type[Exception], object] | None = None
 
 
 def _raise_user_already_exists() -> None:
@@ -222,6 +236,65 @@ async def test_decode_request_body_uses_custom_decode_metadata() -> None:
     assert exc.status_code == STATUS_BAD_REQUEST
     assert exc.detail == "Body parsing failed."
     assert exc.extra == {"code": ErrorCode.LOGIN_PAYLOAD_INVALID}
+
+
+def test_configure_request_body_handler_updates_data_signature_and_handlers() -> None:
+    """Request-body helper rewrites the ``data`` annotation and installs legacy error handlers."""
+
+    def handler(self: object, request: object, data: msgspec.Struct) -> msgspec.Struct:
+        del self
+        del request
+        return data
+
+    route_handler = _MockRouteHandler(handler)
+
+    _configure_request_body_handler(cast("Any", route_handler), schema=_MinimalStruct)
+
+    signature = inspect.signature(route_handler.fn)
+    assert signature.parameters["data"].annotation is _MinimalStruct
+    assert route_handler.fn.__annotations__["data"] is _MinimalStruct
+    assert route_handler.exception_handlers is not None
+    assert set(route_handler.exception_handlers) == {ValidationException, ClientException}
+
+
+def test_configure_request_body_handler_requires_data_parameter() -> None:
+    """Request-body helper rejects handlers that do not expose a ``data`` parameter."""
+
+    def handler(self: object, request: object) -> None:
+        del self
+        del request
+
+    route_handler = _MockRouteHandler(handler)
+
+    with pytest.raises(TypeError, match=r"Request-body handlers must declare a `data` parameter\."):
+        _configure_request_body_handler(cast("Any", route_handler), schema=_MinimalStruct)
+
+
+def test_request_body_exception_handlers_preserve_non_decode_client_exceptions() -> None:
+    """Route-local body handlers keep unrelated client exceptions intact."""
+    handlers = _create_request_body_exception_handlers()
+    response = cast("Any", handlers[ClientException])(
+        cast("Any", _MockRequest(b"{}")),
+        NotAuthorizedException(detail="Authentication credentials were not provided."),
+    )
+
+    assert response.status_code == STATUS_UNAUTHORIZED
+    assert response.content == {
+        "status_code": STATUS_UNAUTHORIZED,
+        "detail": "Authentication credentials were not provided.",
+    }
+
+
+def test_request_body_exception_handlers_preserve_non_decode_headers() -> None:
+    """Route-local body handlers keep unrelated client-exception headers intact."""
+    handlers = _create_request_body_exception_handlers()
+    response = cast("Any", handlers[ClientException])(
+        cast("Any", _MockRequest(b"{}")),
+        ClientException(status_code=429, detail="Rate limit exceeded.", headers={"Retry-After": "2"}),
+    )
+
+    assert response.status_code == STATUS_TOO_MANY_REQUESTS
+    assert response.headers["Retry-After"] == "2"
 
 
 @pytest.mark.asyncio

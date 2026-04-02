@@ -12,7 +12,7 @@ from typing import TYPE_CHECKING, Any, Protocol, TypeGuard, cast
 import jwt
 from jwt import ExpiredSignatureError, InvalidTokenError
 
-from litestar_auth.config import is_testing
+from litestar_auth.config import TOTP_PENDING_AUDIENCE, is_testing
 from litestar_auth.exceptions import ConfigurationError
 from litestar_auth.totp import SecurityWarning, TotpAlgorithm, UsedTotpCodeStore, verify_totp_with_store
 from litestar_auth.types import TotpUserProtocol
@@ -20,8 +20,6 @@ from litestar_auth.types import TotpUserProtocol
 if TYPE_CHECKING:
     from litestar_auth.authentication.strategy.jwt import JWTDenylistStore
 
-
-TOTP_PENDING_AUDIENCE = "litestar-auth:2fa-pending"
 _DEFAULT_PENDING_TOKEN_LIFETIME = timedelta(minutes=5)
 _PENDING_JTI_HEX_LENGTH = 32
 

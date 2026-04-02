@@ -73,6 +73,7 @@ def _assert_exported_symbols(module: ModuleType, *, expected_names: Iterable[str
                 "RefreshableStrategy",
                 "Strategy",
                 "UserManagerProtocol",
+                "import_token_orm_models",
             ),
             id="authentication.strategy",
         ),

@@ -14,8 +14,15 @@ import warnings
 from litestar_auth.exceptions import ConfigurationError
 
 MINIMUM_SECRET_LENGTH = 32
-# Default minimum password length for ``require_password_length`` and the auth plugin.
+# Shared password-length bounds for built-in validation and schema metadata.
 DEFAULT_MINIMUM_PASSWORD_LENGTH = 12
+MAX_PASSWORD_LENGTH = 128
+# Canonical JWT audiences shared across account, auth, and TOTP flows.
+VERIFY_TOKEN_AUDIENCE = "litestar-auth:verify"  # noqa: S105
+RESET_PASSWORD_TOKEN_AUDIENCE = "litestar-auth:reset-password"  # noqa: S105
+JWT_ACCESS_TOKEN_AUDIENCE = "litestar-auth:access"  # noqa: S105
+TOTP_PENDING_AUDIENCE = "litestar-auth:2fa-pending"
+TOTP_ENROLL_AUDIENCE = "litestar-auth:2fa-enroll"
 type OAuthProviderConfig = tuple[str, object]
 
 
@@ -61,6 +68,30 @@ def validate_secret_length(secret: str, *, label: str, minimum_length: int = MIN
 
     msg = f"{label} must be at least {minimum_length} characters."
     raise ConfigurationError(msg)
+
+
+def require_password_length(
+    password: str,
+    minimum_length: int = DEFAULT_MINIMUM_PASSWORD_LENGTH,
+    *,
+    maximum_length: int = MAX_PASSWORD_LENGTH,
+) -> None:
+    """Raise when a password falls outside the configured length bounds.
+
+    The default ``minimum_length`` matches ``LitestarAuth``'s built-in password
+    policy.
+
+    Raises:
+        ValueError: If ``password`` exceeds ``maximum_length`` or is shorter
+            than ``minimum_length``.
+    """
+    if len(password) > maximum_length:
+        msg = f"Password must be at most {maximum_length} characters long."
+        raise ValueError(msg)
+
+    if len(password) < minimum_length:
+        msg = f"Password must be at least {minimum_length} characters long."
+        raise ValueError(msg)
 
 
 def _resolve_token_secret(

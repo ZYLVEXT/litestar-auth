@@ -12,10 +12,9 @@ from typing import TYPE_CHECKING, Any, Protocol, cast
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from litestar_auth.config import DEFAULT_MINIMUM_PASSWORD_LENGTH
+from litestar_auth.config import DEFAULT_MINIMUM_PASSWORD_LENGTH, require_password_length
 from litestar_auth.db.base import BaseUserStore
 from litestar_auth.exceptions import ConfigurationError
-from litestar_auth.manager import require_password_length
 from litestar_auth.types import LoginIdentifier, UserProtocol
 
 if TYPE_CHECKING:
