@@ -1,4 +1,4 @@
-"""Unit tests for plugin validation and startup security checks."""
+"""Unit tests for plugin validation and runtime helper checks."""
 
 from __future__ import annotations
 
@@ -12,17 +12,24 @@ from uuid import UUID
 import pytest
 from litestar.config.app import AppConfig
 
+import litestar_auth._plugin.middleware as middleware_module
+import litestar_auth._plugin.rate_limit as rate_limit_module
+import litestar_auth._plugin.startup as startup_module
 import litestar_auth._plugin.validation as validation_module
 from litestar_auth._plugin.config import DEFAULT_CSRF_COOKIE_NAME, LitestarAuthConfig, OAuthConfig, TotpConfig
+from litestar_auth._plugin.middleware import build_csrf_config, get_cookie_transports
+from litestar_auth._plugin.rate_limit import iter_rate_limit_endpoints
+from litestar_auth._plugin.startup import (
+    has_configured_oauth_providers,
+    has_configured_oauth_providers_for,
+    require_oauth_token_encryption_for_configured_providers,
+    warn_if_insecure_oauth_redirect_in_production,
+    warn_insecure_plugin_startup_defaults,
+)
 from litestar_auth._plugin.validation import (
     _validate_backend_strategy_security,
     _validate_totp_encryption_key,
     _validate_totp_pending_secret_config,
-    build_csrf_config,
-    get_cookie_transports,
-    has_configured_oauth_providers,
-    has_configured_oauth_providers_for,
-    require_oauth_token_encryption_for_configured_providers,
     validate_config,
     validate_cookie_auth_config,
     validate_password_validator_config,
@@ -31,13 +38,13 @@ from litestar_auth._plugin.validation import (
     validate_totp_config,
     validate_totp_sub_config,
     validate_user_model_login_identifier_fields,
-    warn_if_insecure_oauth_redirect_in_production,
-    warn_insecure_plugin_startup_defaults,
 )
 from litestar_auth.authentication.backend import AuthenticationBackend
 from litestar_auth.authentication.transport.bearer import BearerTransport
 from litestar_auth.authentication.transport.cookie import CookieTransport
+from litestar_auth.models import User as OrmUser
 from litestar_auth.ratelimit import AuthRateLimitConfig, EndpointRateLimit, InMemoryRateLimiter, RateLimiterBackend
+from litestar_auth.totp import InMemoryUsedTotpCodeStore
 from tests.integration.test_orchestrator import (
     DummySessionMaker,
     ExampleUser,
@@ -89,14 +96,40 @@ def test_plugin_validation_module_executes_under_coverage() -> None:
     reloaded_module = importlib.reload(validation_module)
 
     assert reloaded_module.validate_config.__name__ == validation_module.validate_config.__name__
+
+
+def test_plugin_middleware_module_executes_under_coverage() -> None:
+    """Reload the middleware helper module in-test so coverage records module-body execution."""
+    reloaded_module = importlib.reload(middleware_module)
+
     assert reloaded_module.build_csrf_config.__name__ == build_csrf_config.__name__
+    assert reloaded_module.get_cookie_transports.__name__ == get_cookie_transports.__name__
+
+
+def test_plugin_rate_limit_module_executes_under_coverage() -> None:
+    """Reload the shared rate-limit helper module in-test so coverage records module-body execution."""
+    reloaded_module = importlib.reload(rate_limit_module)
+
+    assert reloaded_module.iter_rate_limit_endpoints.__name__ == iter_rate_limit_endpoints.__name__
+
+
+def test_plugin_startup_module_executes_under_coverage() -> None:
+    """Reload the startup helper module in-test so coverage records module-body execution."""
+    reloaded_module = importlib.reload(startup_module)
+
+    assert reloaded_module.warn_insecure_plugin_startup_defaults.__name__ == (
+        startup_module.warn_insecure_plugin_startup_defaults.__name__
+    )
+    assert reloaded_module.require_oauth_token_encryption_for_configured_providers.__name__ == (
+        require_oauth_token_encryption_for_configured_providers.__name__
+    )
 
 
 def test_warn_insecure_plugin_startup_defaults_emits_all_expected_security_warnings(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Production startup emits warnings for each insecure default this task targets."""
-    monkeypatch.setattr(validation_module, "is_testing", lambda: False)
+    monkeypatch.setattr(startup_module, "is_testing", lambda: False)
     config = _minimal_config(
         backends=[
             _cookie_backend(),
@@ -106,7 +139,7 @@ def test_warn_insecure_plugin_startup_defaults_emits_all_expected_security_warni
         rate_limit_config=_rate_limit_config(backend=InMemoryRateLimiter(max_attempts=5, window_seconds=60)),
         totp_config=TotpConfig(
             totp_pending_secret="p" * 32,
-            totp_used_tokens_store=cast("Any", validation_module.InMemoryUsedTotpCodeStore()),
+            totp_used_tokens_store=cast("Any", InMemoryUsedTotpCodeStore()),
         ),
     )
     config.enable_refresh = True
@@ -128,14 +161,14 @@ def test_warn_insecure_plugin_startup_defaults_is_silent_in_testing(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Testing mode suppresses the insecure-default warnings."""
-    monkeypatch.setattr(validation_module, "is_testing", lambda: True)
+    monkeypatch.setattr(startup_module, "is_testing", lambda: True)
     config = _minimal_config(
         backends=[_cookie_backend(), _jwt_backend()],
         oauth_config=OAuthConfig(oauth_providers=[("github", object())]),
         rate_limit_config=_rate_limit_config(backend=InMemoryRateLimiter(max_attempts=5, window_seconds=60)),
         totp_config=TotpConfig(
             totp_pending_secret="p" * 32,
-            totp_used_tokens_store=cast("Any", validation_module.InMemoryUsedTotpCodeStore()),
+            totp_used_tokens_store=cast("Any", InMemoryUsedTotpCodeStore()),
         ),
     )
     config.enable_refresh = True
@@ -151,7 +184,7 @@ def test_warn_insecure_plugin_startup_defaults_is_silent_for_safe_production_con
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Safe production settings avoid the insecure-default warnings entirely."""
-    monkeypatch.setattr(validation_module, "is_testing", lambda: False)
+    monkeypatch.setattr(startup_module, "is_testing", lambda: False)
     config = _minimal_config(
         backends=[
             _cookie_backend(refresh_max_age=604800),
@@ -174,6 +207,51 @@ def test_warn_insecure_plugin_startup_defaults_is_silent_for_safe_production_con
         warn_insecure_plugin_startup_defaults(config)
 
     assert not records
+
+
+def test_warn_insecure_plugin_startup_defaults_warns_for_missing_refresh_cookie_max_age(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Refresh-cookie startup warnings stay with the startup helper owner."""
+    monkeypatch.setattr(startup_module, "is_testing", lambda: False)
+    config = _minimal_config(backends=[_cookie_backend()])
+    config.csrf_secret = "c" * 32
+    config.enable_refresh = True
+
+    with pytest.warns(startup_module.SecurityWarning, match="refresh_max_age is not set"):
+        warn_insecure_plugin_startup_defaults(config)
+
+
+def test_warn_insecure_plugin_startup_defaults_skips_refresh_warning_when_cookie_max_age_is_set(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Explicit refresh-cookie lifetimes suppress the startup helper warning."""
+    monkeypatch.setattr(startup_module, "is_testing", lambda: False)
+    config = _minimal_config(backends=[_cookie_backend(refresh_max_age=604800)])
+    config.csrf_secret = "c" * 32
+    config.enable_refresh = True
+
+    with warnings.catch_warnings(record=True) as records:
+        warnings.simplefilter("always")
+        warn_insecure_plugin_startup_defaults(config)
+
+    assert not [record for record in records if "refresh_max_age" in str(record.message)]
+
+
+def test_warn_insecure_plugin_startup_defaults_skips_refresh_warning_when_refresh_is_disabled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Disable-refresh configs do not warn about refresh-cookie max age."""
+    monkeypatch.setattr(startup_module, "is_testing", lambda: False)
+    config = _minimal_config(backends=[_cookie_backend()])
+    config.csrf_secret = "c" * 32
+    config.enable_refresh = False
+
+    with warnings.catch_warnings(record=True) as records:
+        warnings.simplefilter("always")
+        warn_insecure_plugin_startup_defaults(config)
+
+    assert not [record for record in records if "refresh_max_age" in str(record.message)]
 
 
 def test_validate_backend_strategy_security_rejects_legacy_plaintext_tokens(
@@ -330,6 +408,39 @@ def test_validate_user_model_login_identifier_fields_rejects_missing_attribute()
         validate_user_model_login_identifier_fields(config)
 
 
+def test_validate_user_model_login_identifier_fields_rejects_missing_email_attribute() -> None:
+    """Email login mode also validates the required user-model attribute."""
+
+    class _UserModel:
+        username = "present"
+
+    config = _minimal_config()
+    config.user_model = cast("type[ExampleUser]", _UserModel)
+    config.login_identifier = "email"
+
+    with pytest.raises(validation_module.ConfigurationError, match="has no 'email'"):
+        validate_user_model_login_identifier_fields(config)
+
+
+def test_validate_user_model_login_identifier_fields_rejects_missing_orm_username() -> None:
+    """ORM-backed models are checked through SQLAlchemy mapper state, not only hasattr()."""
+    config = _minimal_config()
+    config.user_model = OrmUser  # ty: ignore[invalid-assignment]
+    config.login_identifier = "username"
+
+    with pytest.raises(validation_module.ConfigurationError, match="has no 'username'"):
+        validate_user_model_login_identifier_fields(config)
+
+
+def test_validate_user_model_login_identifier_fields_accepts_present_orm_email() -> None:
+    """The reference ORM user model still satisfies email login mode."""
+    config = _minimal_config()
+    config.user_model = OrmUser  # ty: ignore[invalid-assignment]
+    config.login_identifier = "email"
+
+    validate_user_model_login_identifier_fields(config)
+
+
 def test_validate_password_validator_config_rejects_mixed_configuration() -> None:
     """The factory seam and legacy kwargs seam cannot both provide a password validator."""
     config = _minimal_config()
@@ -383,6 +494,55 @@ def test_validate_rate_limit_config_accepts_none() -> None:
     validate_rate_limit_config(None)
 
 
+def test_iter_rate_limit_endpoints_includes_request_verify_token() -> None:
+    """The shared iterator covers the late-bound verify-token request endpoint."""
+    rate_limit = EndpointRateLimit(
+        backend=InMemoryRateLimiter(max_attempts=5, window_seconds=60),
+        scope="ip",
+        namespace="request-verify-token",
+    )
+
+    endpoints = iter_rate_limit_endpoints(AuthRateLimitConfig(request_verify_token=rate_limit))
+
+    assert endpoints[-1] is rate_limit
+
+
+def test_warn_insecure_plugin_startup_defaults_warns_for_request_verify_token_inmemory_backend(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Startup warnings still inspect non-login endpoint rate-limit settings."""
+    monkeypatch.setattr(startup_module, "is_testing", lambda: False)
+    config = _minimal_config(
+        rate_limit_config=AuthRateLimitConfig(
+            request_verify_token=EndpointRateLimit(
+                backend=InMemoryRateLimiter(max_attempts=5, window_seconds=60),
+                scope="ip",
+                namespace="request-verify-token",
+            ),
+        ),
+    )
+
+    with warnings.catch_warnings(record=True) as records:
+        warnings.simplefilter("always")
+        warn_insecure_plugin_startup_defaults(config)
+
+    assert any("process-local in-memory backend" in str(record.message) for record in records)
+
+
+def test_validate_rate_limit_config_rejects_invalid_request_verify_token_trusted_proxy() -> None:
+    """Trusted-proxy validation still inspects non-login endpoint rate-limit settings."""
+    rate_limit = EndpointRateLimit(
+        backend=InMemoryRateLimiter(max_attempts=5, window_seconds=60),
+        scope="ip",
+        namespace="request-verify-token",
+        trusted_proxy=cast("bool", "yes"),
+    )
+
+    with pytest.raises(Exception, match="trusted_proxy must be a boolean") as exc_info:
+        validate_rate_limit_config(AuthRateLimitConfig(request_verify_token=rate_limit))
+    assert type(exc_info.value).__name__ == "ConfigurationError"
+
+
 def test_validate_totp_pending_secret_config_logs_sha1_warning(
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
@@ -431,6 +591,20 @@ def test_validate_totp_pending_secret_config_requires_algorithm() -> None:
         _validate_totp_pending_secret_config(config)
 
 
+def test_validate_totp_pending_secret_config_rejects_short_secret() -> None:
+    """Configured TOTP pending secrets still go through shared minimum-length validation."""
+    config = _minimal_config(
+        totp_config=TotpConfig(
+            totp_pending_secret="short",
+            totp_used_tokens_store=cast("Any", object()),
+        ),
+    )
+
+    with pytest.raises(Exception, match="at least 32") as exc_info:
+        _validate_totp_pending_secret_config(config)
+    assert type(exc_info.value).__name__ == "ConfigurationError"
+
+
 def test_validate_totp_encryption_key_requires_secret_in_production(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -462,7 +636,7 @@ def test_validate_totp_config_warns_for_insecure_cookie_transport(
         backends=[_cookie_backend()],
         totp_config=TotpConfig(
             totp_pending_secret="p" * 32,
-            totp_used_tokens_store=cast("Any", validation_module.InMemoryUsedTotpCodeStore()),
+            totp_used_tokens_store=cast("Any", InMemoryUsedTotpCodeStore()),
         ),
     )
 
@@ -479,7 +653,7 @@ def test_validate_totp_config_skips_insecure_cookie_warning_in_testing(
         backends=[_cookie_backend()],
         totp_config=TotpConfig(
             totp_pending_secret="p" * 32,
-            totp_used_tokens_store=cast("Any", validation_module.InMemoryUsedTotpCodeStore()),
+            totp_used_tokens_store=cast("Any", InMemoryUsedTotpCodeStore()),
         ),
     )
 
@@ -499,6 +673,15 @@ def test_validate_totp_sub_config_rejects_missing_replay_store_in_production(
     with pytest.raises(ValueError, match="totp_require_replay_protection=True requires"):
         validate_totp_sub_config(
             TotpConfig(totp_pending_secret="p" * 32),
+            user_manager_class=PluginUserManager,
+        )
+
+
+def test_validate_totp_sub_config_rejects_missing_pending_secret() -> None:
+    """The TOTP helper owns the missing-pending-secret branch directly."""
+    with pytest.raises(ValueError, match="totp_pending_secret"):
+        validate_totp_sub_config(
+            TotpConfig(totp_pending_secret=""),
             user_manager_class=PluginUserManager,
         )
 
@@ -699,28 +882,113 @@ def test_validate_config_runs_happy_path(monkeypatch: pytest.MonkeyPatch) -> Non
     validate_config(config)
 
 
-def test_validate_config_rejects_missing_backends(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The top-level validator fails fast when no backend is configured."""
+def test_validate_config_rejects_testing_mode_in_non_test_runtime(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Testing-mode startup is rejected by constructor-time validation outside pytest."""
+    config = _minimal_config()
+    monkeypatch.setenv("LITESTAR_AUTH_TESTING", "1")
+    monkeypatch.delenv("PYTEST_CURRENT_TEST", raising=False)
+
+    with pytest.raises(Exception, match=r"LITESTAR_AUTH_TESTING=1") as exc_info:
+        validate_config(config)
+    assert type(exc_info.value).__name__ == "ConfigurationError"
+
+
+def test_validate_config_allows_testing_mode_under_pytest_runtime(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Pytest execution keeps the testing-mode startup branch valid."""
+    config = _minimal_config()
+    monkeypatch.setenv("LITESTAR_AUTH_TESTING", "1")
+    monkeypatch.setenv("PYTEST_CURRENT_TEST", "tests/unit/test_plugin_validation.py::test_example")
+
+    validate_config(config)
+
+
+def test_validate_config_reports_missing_backends_before_later_errors(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Core startup prerequisites fail before later user-manager contract checks."""
     monkeypatch.setattr(validation_module, "validate_testing_mode_for_startup", lambda: None)
     config = _minimal_config(backends=[])
+
+    class _ManagerWithoutListUsers(PluginUserManager):
+        list_users = None
+
+    config.include_users = True
+    config.user_manager_class = cast("type[Any]", _ManagerWithoutListUsers)
 
     with pytest.raises(ValueError, match="at least one authentication backend"):
         validate_config(config)
 
 
-def test_validate_config_rejects_include_users_without_list_users(monkeypatch: pytest.MonkeyPatch) -> None:
-    """User listing cannot be enabled unless the manager exposes list_users()."""
+def test_validate_config_reports_user_manager_contract_errors_before_request_security_errors(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Credential-contract failures surface before later cookie-auth validation errors."""
     monkeypatch.setattr(validation_module, "validate_testing_mode_for_startup", lambda: None)
+    monkeypatch.setattr(validation_module, "is_testing", lambda: False)
 
     class _ManagerWithoutListUsers(PluginUserManager):
         list_users = None
 
-    config = _minimal_config()
+    config = _minimal_config(backends=[_cookie_backend()])
     config.include_users = True
     config.user_manager_class = cast("type[Any]", _ManagerWithoutListUsers)
 
     with pytest.raises(ValueError, match="define list_users"):
         validate_config(config)
+
+
+def test_validate_config_reports_totp_shape_errors_before_encryption_key_errors(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Malformed TOTP config surfaces before the production encryption-key requirement."""
+    monkeypatch.setattr(validation_module, "validate_testing_mode_for_startup", lambda: None)
+    monkeypatch.setattr(validation_module, "is_testing", lambda: False)
+    config = _minimal_config()
+    config.totp_config = cast(
+        "Any",
+        type(
+            "InvalidTotpConfig",
+            (),
+            {
+                "totp_pending_secret": "p" * 32,
+                "totp_algorithm": "",
+                "totp_used_tokens_store": object(),
+                "totp_require_replay_protection": True,
+                "totp_enable_requires_password": True,
+            },
+        )(),
+    )
+
+    with pytest.raises(ValueError, match="totp_algorithm must be configured"):
+        validate_config(config)
+
+
+def test_validate_request_security_config_checks_rate_limit_before_cookie_auth(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Request-facing validation preserves rate-limit checks before cookie-auth checks."""
+    config = _minimal_config()
+    calls: list[tuple[str, object]] = []
+
+    def _record_rate_limit(rate_limit_config: object) -> None:
+        calls.append(("rate_limit", rate_limit_config))
+
+    def _record_cookie(config_arg: object) -> None:
+        calls.append(("cookie", config_arg))
+
+    monkeypatch.setattr(validation_module, "validate_rate_limit_config", _record_rate_limit)
+    monkeypatch.setattr(validation_module, "validate_cookie_auth_config", _record_cookie)
+
+    validation_module.validate_request_security_config(config)
+
+    assert calls == [
+        ("rate_limit", config.rate_limit_config),
+        ("cookie", config),
+    ]
 
 
 def _minimal_config(

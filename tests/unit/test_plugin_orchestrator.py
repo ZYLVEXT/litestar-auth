@@ -2,14 +2,17 @@
 
 from __future__ import annotations
 
+import asyncio
 import importlib
+import warnings
 from dataclasses import dataclass
 from functools import partial
-from typing import TYPE_CHECKING, Any, cast
-from unittest.mock import patch
-from uuid import UUID
+from typing import Any, Literal, cast
+from unittest.mock import AsyncMock, patch
+from uuid import UUID, uuid4
 
 import pytest
+from cryptography.fernet import Fernet
 from litestar.config.app import AppConfig
 from litestar.config.csrf import CSRFConfig
 from litestar.exceptions import ClientException
@@ -23,12 +26,20 @@ from litestar_auth._plugin import (
     DEFAULT_USER_MANAGER_DEPENDENCY_KEY,
     DEFAULT_USER_MODEL_DEPENDENCY_KEY,
 )
+from litestar_auth._plugin.dependencies import DependencyProviders, register_dependencies
 from litestar_auth.authentication import Authenticator, LitestarAuthMiddleware
 from litestar_auth.authentication.backend import AuthenticationBackend
+from litestar_auth.authentication.strategy.jwt import JWTStrategy
 from litestar_auth.authentication.transport.bearer import BearerTransport
 from litestar_auth.authentication.transport.cookie import CookieTransport
+from litestar_auth.manager import require_password_length
+from litestar_auth.oauth_encryption import get_oauth_encryption_key_callable, oauth_token_encryption_scope
+from litestar_auth.password import PasswordHelper
 from litestar_auth.plugin import LitestarAuth, LitestarAuthConfig, OAuthConfig, TotpConfig
+from litestar_auth.ratelimit import AuthRateLimitConfig, EndpointRateLimit, InMemoryRateLimiter, RedisRateLimiter
+from litestar_auth.totp import InMemoryUsedTotpCodeStore, SecurityWarning
 from tests.integration.test_orchestrator import (
+    DummySession,
     DummySessionMaker,
     ExampleUser,
     InMemoryTokenStrategy,
@@ -37,9 +48,6 @@ from tests.integration.test_orchestrator import (
 )
 
 pytestmark = pytest.mark.unit
-
-if TYPE_CHECKING:
-    from litestar_auth._plugin.dependencies import DependencyProviders
 
 
 def test_plugin_module_executes_under_coverage() -> None:
@@ -55,6 +63,8 @@ def _minimal_config(
     *,
     backends: list[AuthenticationBackend[ExampleUser, UUID]] | None = None,
     include_users: bool = False,
+    user_manager_class: type[Any] | None = None,
+    login_identifier: Literal["email", "username"] = "email",
 ) -> LitestarAuthConfig[ExampleUser, UUID]:
     """Build a minimal plugin config for orchestrator-focused tests.
 
@@ -73,7 +83,7 @@ def _minimal_config(
         backends=configured_backends,
         session_maker=cast("Any", DummySessionMaker()),
         user_model=ExampleUser,
-        user_manager_class=PluginUserManager,
+        user_manager_class=user_manager_class or PluginUserManager,
         user_db_factory=lambda _session: user_db,
         user_manager_kwargs={
             "verification_token_secret": "verify-secret-12345678901234567890",
@@ -81,7 +91,18 @@ def _minimal_config(
             "id_parser": UUID,
         },
         include_users=include_users,
+        login_identifier=login_identifier,
     )
+
+
+def test_litestar_auth_init_delegates_to_validate_config() -> None:
+    """Plugin construction keeps validation ownership inside the facade."""
+    config = _minimal_config()
+
+    with patch("litestar_auth.plugin.validate_config") as validate_config_mock:
+        LitestarAuth(config)
+
+    validate_config_mock.assert_called_once_with(config)
 
 
 def test_on_app_init_runs_lifecycle_steps_in_order(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -160,6 +181,196 @@ def test_on_app_init_registers_middleware_controllers_dependencies_and_exception
     assert session_getter.func.__name__ == "get_or_create_scoped_session"
 
 
+def test_on_app_init_warns_for_nondurable_jwt_strategy_when_acknowledged() -> None:
+    """Lifecycle startup still surfaces the JWT durability warning after explicit opt-in."""
+    backend = AuthenticationBackend[ExampleUser, UUID](
+        name="jwt-backend",
+        transport=CookieTransport(),
+        strategy=cast("Any", JWTStrategy(secret="a" * 32, algorithm="HS256")),
+    )
+    config = _minimal_config(backends=[backend])
+    config.allow_nondurable_jwt_revocation = True
+    config.csrf_secret = "c" * 32
+    plugin = LitestarAuth(config)
+
+    with pytest.warns(SecurityWarning, match="process-local in-memory denylist"):
+        plugin.on_app_init(AppConfig())
+
+
+def test_on_app_init_warns_security_warning_for_inmemory_rate_limiter_in_production() -> None:
+    """Production app init emits SecurityWarning when rate-limit state is process-local."""
+    config = _minimal_config()
+    config.rate_limit_config = AuthRateLimitConfig(
+        login=EndpointRateLimit(
+            backend=InMemoryRateLimiter(max_attempts=3, window_seconds=60),
+            scope="ip",
+            namespace="login",
+        ),
+    )
+    plugin = LitestarAuth(config)
+
+    with pytest.warns(SecurityWarning, match="process-local in-memory backend"):
+        plugin.on_app_init(AppConfig())
+
+
+def test_on_app_init_does_not_warn_for_redis_rate_limiter() -> None:
+    """Shared Redis-backed rate limiting stays silent during app init."""
+
+    class _RedisStub:
+        async def delete(self, *names: str) -> int:
+            return len(names)
+
+        async def eval(self, script: str, numkeys: int, *keys_and_args: object) -> int:
+            del script, numkeys, keys_and_args
+            return 0
+
+    config = _minimal_config()
+    config.rate_limit_config = AuthRateLimitConfig(
+        login=EndpointRateLimit(
+            backend=RedisRateLimiter(redis=_RedisStub(), max_attempts=3, window_seconds=60),
+            scope="ip",
+            namespace="login",
+        ),
+    )
+    plugin = LitestarAuth(config)
+
+    with warnings.catch_warnings(record=True) as records:
+        warnings.simplefilter("always")
+        plugin.on_app_init(AppConfig())
+
+    assert not any(issubclass(record.category, SecurityWarning) for record in records)
+
+
+def test_on_app_init_does_not_warn_for_inmemory_rate_limiter_in_testing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Testing-mode lifecycle suppresses the in-memory rate-limit startup warning."""
+    monkeypatch.setenv("LITESTAR_AUTH_TESTING", "1")
+    monkeypatch.setenv("PYTEST_CURRENT_TEST", "tests/unit/test_plugin_orchestrator.py::test_example")
+    config = _minimal_config()
+    config.rate_limit_config = AuthRateLimitConfig(
+        login=EndpointRateLimit(
+            backend=InMemoryRateLimiter(max_attempts=3, window_seconds=60),
+            scope="ip",
+            namespace="login",
+        ),
+    )
+    plugin = LitestarAuth(config)
+
+    with warnings.catch_warnings(record=True) as records:
+        warnings.simplefilter("always")
+        plugin.on_app_init(AppConfig())
+
+    assert not any(issubclass(record.category, SecurityWarning) for record in records)
+
+
+def test_on_app_init_rejects_mismatched_cookie_transport_settings() -> None:
+    """Lifecycle middleware registration still rejects incompatible cookie transport shapes."""
+    first_backend = AuthenticationBackend[ExampleUser, UUID](
+        name="cookie-primary",
+        transport=CookieTransport(path="/auth"),
+        strategy=cast("Any", InMemoryTokenStrategy(token_prefix="cookie-primary")),
+    )
+    second_backend = AuthenticationBackend[ExampleUser, UUID](
+        name="cookie-secondary",
+        transport=CookieTransport(path="/other-auth"),
+        strategy=cast("Any", InMemoryTokenStrategy(token_prefix="cookie-secondary")),
+    )
+    config = _minimal_config(backends=[first_backend, second_backend])
+    config.csrf_secret = "c" * 32
+    plugin = LitestarAuth(config)
+
+    with pytest.raises(ValueError, match="must share path, domain, secure, and samesite"):
+        plugin.on_app_init(AppConfig())
+
+
+def test_on_app_init_accepts_multiple_matching_cookie_transports() -> None:
+    """Matching cookie transports share one orchestrator-managed CSRF config."""
+    backends = [
+        AuthenticationBackend[ExampleUser, UUID](
+            name=f"cookie-{index}",
+            transport=CookieTransport(path="/auth", secure=False, samesite="strict"),
+            strategy=cast("Any", InMemoryTokenStrategy(token_prefix=f"cookie-{index}")),
+        )
+        for index in range(3)
+    ]
+    config = _minimal_config(backends=backends)
+    config.csrf_secret = "c" * 32
+    plugin = LitestarAuth(config)
+
+    result = plugin.on_app_init(AppConfig())
+
+    assert result.csrf_config is not None
+    assert result.csrf_config.cookie_path == "/auth"
+    assert result.csrf_config.cookie_samesite == "strict"
+
+
+def test_on_app_init_requires_oauth_token_encryption_key_for_oauth_providers() -> None:
+    """OAuth-enabled startup fails closed without an encryption key in non-test runtime."""
+    config = _minimal_config()
+    config.oauth_config = OAuthConfig(oauth_providers=[("github", object())])
+    plugin = LitestarAuth(config)
+
+    with (
+        pytest.warns(SecurityWarning, match="oauth_token_encryption_key is not set"),
+        pytest.raises(Exception, match=r"Fernet\.generate_key\(\)") as exc_info,
+    ):
+        plugin.on_app_init(AppConfig())
+
+    assert type(exc_info.value).__name__ == "ConfigurationError"
+
+
+def test_on_app_init_allows_oauth_providers_when_encryption_key_is_configured() -> None:
+    """Configured OAuth encryption keys keep app-init startup guard silent."""
+    config = _minimal_config()
+    config.oauth_config = OAuthConfig(
+        oauth_providers=[("github", object())],
+        oauth_token_encryption_key="a" * 44,
+    )
+    plugin = LitestarAuth(config)
+
+    with warnings.catch_warnings(record=True) as records:
+        warnings.simplefilter("always")
+        result = plugin.on_app_init(AppConfig())
+
+    assert result is not None
+    assert not any(issubclass(record.category, SecurityWarning) for record in records)
+
+
+def test_on_app_init_warns_security_warning_for_inmemory_totp_used_store(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Production startup warns when the TOTP replay store is process-local."""
+    monkeypatch.delenv("LITESTAR_AUTH_TESTING", raising=False)
+    config = _minimal_config()
+    config.totp_config = TotpConfig(
+        totp_pending_secret="x" * 32,
+        totp_used_tokens_store=InMemoryUsedTotpCodeStore(),
+    )
+    config.user_manager_kwargs["totp_secret_key"] = Fernet.generate_key().decode()
+    plugin = LitestarAuth(config)
+
+    with pytest.warns(SecurityWarning, match="InMemoryUsedTotpCodeStore"):
+        plugin.on_app_init(AppConfig())
+
+
+def test_on_app_init_allows_missing_oauth_token_encryption_key_in_testing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Testing mode bypasses the OAuth token-encryption startup guard."""
+    monkeypatch.setenv("LITESTAR_AUTH_TESTING", "1")
+    config = _minimal_config()
+    config.oauth_config = OAuthConfig(oauth_providers=[("github", object())])
+    plugin = LitestarAuth(config)
+
+    with warnings.catch_warnings(record=True) as records:
+        warnings.simplefilter("always")
+        result = plugin.on_app_init(AppConfig())
+
+    assert result is not None
+    assert not any(issubclass(record.category, SecurityWarning) for record in records)
+
+
 def test_register_dependencies_delegates_with_bound_provider_methods() -> None:
     """Dependency registration passes the plugin's bound provider methods through unchanged."""
     plugin = LitestarAuth(_minimal_config())
@@ -178,6 +389,90 @@ def test_register_dependencies_delegates_with_bound_provider_methods() -> None:
     assert cast("Any", providers.backends)() is plugin.config.backends
     assert cast("Any", providers.user_model)() is plugin.config.user_model
     assert providers.oauth_associate_user_manager is plugin._provide_oauth_associate_user_manager
+
+
+def test_register_dependencies_registers_db_session_when_using_builtin_session_maker() -> None:
+    """Dependency helpers publish the plugin-owned DB session provider when needed."""
+    app_config = AppConfig()
+    app_config.dependencies = {}
+    config = _minimal_config()
+    config.db_session_dependency_key = "my_db_session"
+
+    async def _provide_config() -> object:
+        await asyncio.sleep(0)
+        return config
+
+    async def _provide_user_manager() -> object:
+        await asyncio.sleep(0)
+        yield object()
+
+    async def _provide_backends() -> object:
+        await asyncio.sleep(0)
+        return ()
+
+    async def _provide_user_model() -> object:
+        await asyncio.sleep(0)
+        return ExampleUser
+
+    async def _provide_oauth_associate() -> object:
+        await asyncio.sleep(0)
+        yield object()
+
+    register_dependencies(
+        app_config,
+        config,
+        providers=DependencyProviders(
+            config=_provide_config,
+            user_manager=_provide_user_manager,
+            backends=_provide_backends,
+            user_model=_provide_user_model,
+            oauth_associate_user_manager=_provide_oauth_associate,
+        ),
+    )
+
+    assert "my_db_session" in app_config.dependencies
+
+
+def test_register_dependencies_skips_builtin_db_session_when_external_declared() -> None:
+    """Dependency helpers avoid registering a conflicting DB-session provider."""
+    app_config = AppConfig()
+    app_config.dependencies = {}
+    config = _minimal_config()
+    config.db_session_dependency_provided_externally = True
+
+    async def _provide_config() -> object:
+        await asyncio.sleep(0)
+        return config
+
+    async def _provide_user_manager() -> object:
+        await asyncio.sleep(0)
+        yield object()
+
+    async def _provide_backends() -> object:
+        await asyncio.sleep(0)
+        return ()
+
+    async def _provide_user_model() -> object:
+        await asyncio.sleep(0)
+        return ExampleUser
+
+    async def _provide_oauth_associate() -> object:
+        await asyncio.sleep(0)
+        yield object()
+
+    register_dependencies(
+        app_config,
+        config,
+        providers=DependencyProviders(
+            config=_provide_config,
+            user_manager=_provide_user_manager,
+            backends=_provide_backends,
+            user_model=_provide_user_model,
+            oauth_associate_user_manager=_provide_oauth_associate,
+        ),
+    )
+
+    assert config.db_session_dependency_key not in app_config.dependencies
 
 
 def test_register_exception_handlers_delegates_to_shared_registration_function() -> None:
@@ -210,6 +505,27 @@ class _ScopedProxyRecorder:
     oauth_scope: object
 
 
+@dataclass(slots=True)
+class _FakeSessionBoundBackend:
+    strategy: object
+    bound_session: object | None = None
+
+    def with_session(self, session: object) -> _FakeSessionBoundBackend:
+        self.bound_session = session
+        return self
+
+
+@dataclass(slots=True)
+class _InvalidationStrategy:
+    invalidate_all_tokens: AsyncMock
+
+    def with_session(self, _session: object) -> _InvalidationStrategy:
+        return self
+
+
+EXPECTED_BOUND_BACKEND_COUNT = 2
+
+
 def test_build_user_manager_wraps_user_db_and_passes_bound_backends(monkeypatch: pytest.MonkeyPatch) -> None:
     """User-manager construction wraps the user DB and forwards session-bound backends."""
     plugin = LitestarAuth(_minimal_config())
@@ -238,6 +554,125 @@ def test_build_user_manager_wraps_user_db_and_passes_bound_backends(monkeypatch:
     assert captured["config"] is plugin.config
     assert captured["user_db"] == _ScopedProxyRecorder(user_db=raw_user_db, oauth_scope=plugin)
     assert captured["backends"] == (f"backend-for-{id(session)}",)
+
+
+def test_build_user_manager_attaches_session_bound_backends() -> None:
+    """Built managers receive request-local backends bound to the active session."""
+    config = _minimal_config(
+        backends=[
+            cast("AuthenticationBackend[ExampleUser, UUID]", _FakeSessionBoundBackend(strategy=object())),
+            cast("AuthenticationBackend[ExampleUser, UUID]", _FakeSessionBoundBackend(strategy=object())),
+        ],
+    )
+    plugin = LitestarAuth(config)
+
+    session = object()
+    manager = plugin._build_user_manager(cast("Any", session))
+
+    assert len(manager.backends) == EXPECTED_BOUND_BACKEND_COUNT
+    assert all(getattr(backend, "bound_session", None) is session for backend in manager.backends)
+
+
+def test_build_user_manager_passes_login_identifier_from_config() -> None:
+    """Session-bound manager construction forwards login_identifier from plugin config."""
+    plugin = LitestarAuth(_minimal_config(login_identifier="username"))
+
+    manager = plugin._build_user_manager(cast("Any", object()))
+
+    assert manager.login_identifier == "username"
+
+
+def test_build_user_manager_uses_explicit_password_validator_factory() -> None:
+    """Session-bound manager construction respects explicit password-validator factories."""
+    config = _minimal_config()
+    config.password_validator_factory = lambda _config: lambda password: require_password_length(password, 10)
+    plugin = LitestarAuth(config)
+
+    manager = plugin._build_user_manager(cast("Any", object()))
+
+    with pytest.raises(ValueError, match="at least 10"):
+        manager.password_validator("short")
+
+
+def test_build_user_manager_preserves_legacy_manager_without_password_validator_parameter() -> None:
+    """Compatibility builder still supports legacy manager constructors."""
+
+    class LegacyManagerWithoutPasswordValidator(PluginUserManager):
+        def __init__(
+            self,
+            user_db: object,
+            *,
+            verification_token_secret: str,
+            reset_password_token_secret: str,
+            backends: tuple[object, ...] = (),
+        ) -> None:
+            super().__init__(
+                cast("Any", user_db),
+                verification_token_secret=verification_token_secret,
+                reset_password_token_secret=reset_password_token_secret,
+                backends=backends,
+            )
+
+    config = _minimal_config(user_manager_class=LegacyManagerWithoutPasswordValidator)
+    config.user_manager_kwargs.pop("id_parser")
+    plugin = LitestarAuth(config)
+
+    manager = plugin._build_user_manager(cast("Any", object()))
+
+    assert isinstance(manager, LegacyManagerWithoutPasswordValidator)
+    assert manager.password_validator is None
+
+
+@pytest.mark.asyncio
+async def test_session_bound_user_manager_update_triggers_strategy_invalidation_on_email_change() -> None:
+    """Session-bound managers revoke backend sessions after sensitive updates."""
+    user = ExampleUser(
+        id=uuid4(),
+        email="user@example.com",
+        hashed_password=PasswordHelper().hash("correct-password"),
+    )
+    user_db = InMemoryUserDatabase([user])
+    invalidate_mock = AsyncMock()
+    backend = _FakeSessionBoundBackend(strategy=_InvalidationStrategy(invalidate_all_tokens=invalidate_mock))
+    config = LitestarAuthConfig[ExampleUser, UUID](
+        backends=[cast("AuthenticationBackend[ExampleUser, UUID]", backend)],
+        user_model=ExampleUser,
+        user_manager_class=PluginUserManager,
+        session_maker=cast("Any", DummySessionMaker()),
+        user_db_factory=lambda _session: user_db,
+        user_manager_kwargs={
+            "verification_token_secret": "x" * 32,
+            "reset_password_token_secret": "y" * 32,
+        },
+    )
+    plugin = LitestarAuth(config)
+
+    manager = plugin._build_user_manager(cast("Any", DummySession()))
+    await manager.update({"email": "updated@example.com"}, user)
+
+    invalidate_mock.assert_awaited_once()
+
+
+def test_session_bound_user_manager_uses_explicit_account_state_validator_contract() -> None:
+    """Session-bound managers preserve the configured account-state validator contract."""
+    calls: list[tuple[ExampleUser, bool]] = []
+
+    class _TrackingManager(PluginUserManager):
+        def require_account_state(self, user: ExampleUser, *, require_verified: bool = False) -> None:
+            del self
+            calls.append((user, require_verified))
+
+    plugin = LitestarAuth(_minimal_config(user_manager_class=_TrackingManager))
+    user = ExampleUser(
+        id=uuid4(),
+        email="user@example.com",
+        hashed_password=PasswordHelper().hash("correct-password"),
+    )
+
+    manager = plugin._build_user_manager(cast("Any", DummySession()))
+    manager.require_account_state(user, require_verified=True)
+
+    assert calls == [(user, True)]
 
 
 def test_session_bound_backends_rebinds_each_backend_to_current_session() -> None:
@@ -326,41 +761,6 @@ def test_resolve_account_state_validator_raises_for_missing_callable() -> None:
         plugin._resolve_account_state_validator()
 
 
-@pytest.mark.parametrize(
-    ("method_name", "patch_target", "expected"),
-    [
-        ("_build_controllers", "litestar_auth.plugin.build_controllers", ["controller"]),
-        ("_build_totp_controller", "litestar_auth.plugin.build_totp_controller", "totp-controller"),
-        ("_user_read_schema_kwargs", "litestar_auth.plugin.user_read_schema_kwargs", {"user": "read"}),
-        ("_register_schema_kwargs", "litestar_auth.plugin.register_schema_kwargs", {"register": "schema"}),
-        ("_users_schema_kwargs", "litestar_auth.plugin.users_schema_kwargs", {"users": "schema"}),
-    ],
-)
-def test_wrapper_methods_delegate_to_shared_builders(
-    method_name: str,
-    patch_target: str,
-    expected: object,
-) -> None:
-    """Thin wrapper helpers delegate to the shared builder utilities."""
-    plugin = LitestarAuth(_minimal_config())
-
-    with patch(patch_target, return_value=expected) as patched:
-        result = getattr(plugin, method_name)()
-
-    assert result == expected
-    patched.assert_called_once_with(plugin.config)
-
-
-def test_cookie_transports_wrapper_delegates_to_backend_filter() -> None:
-    """Cookie transport helper forwards the configured backend collection."""
-    plugin = LitestarAuth(_minimal_config())
-
-    with patch("litestar_auth.plugin.get_cookie_transports", return_value=["cookie-transport"]) as patched:
-        assert plugin._cookie_transports() == ["cookie-transport"]
-
-    patched.assert_called_once_with(plugin.config.backends)
-
-
 def test_provider_helpers_return_configured_objects() -> None:
     """Provider helpers expose the config values used by dependency registration."""
     plugin = LitestarAuth(_minimal_config())
@@ -370,50 +770,95 @@ def test_provider_helpers_return_configured_objects() -> None:
     assert plugin._provide_user_model() is plugin.config.user_model
 
 
-def test_wrapper_methods_delegate_with_explicit_arguments() -> None:
-    """Argument-bearing helper wrappers forward their explicit parameters intact."""
-    plugin = LitestarAuth(_minimal_config())
+@pytest.mark.asyncio
+async def test_provide_user_manager_respects_custom_db_session_key() -> None:
+    """Provider wrapper parameter names follow db_session_dependency_key."""
+    config = _minimal_config()
+    config.db_session_dependency_key = "custom_db"
+    plugin = LitestarAuth(config)
+    session = DummySession()
 
-    with patch("litestar_auth.plugin.backend_auth_path", return_value="/auth/secondary") as backend_auth_path_mock:
-        assert plugin._backend_auth_path(backend_name="secondary", index=1) == "/auth/secondary"
-    backend_auth_path_mock.assert_called_once_with(
-        auth_path=plugin.config.auth_path,
-        backend_name="secondary",
-        index=1,
+    gen = cast("Any", plugin._provide_user_manager(custom_db=session))
+    try:
+        manager = await anext(gen)
+        assert manager is not None
+    finally:
+        await gen.aclose()
+
+
+@pytest.mark.asyncio
+async def test_provide_user_manager_yields_request_scoped_manager() -> None:
+    """Provider wrappers yield one session-bound manager for each injected session."""
+    plugin = LitestarAuth(_minimal_config())
+    session = DummySession()
+
+    gen = cast("Any", plugin._provide_user_manager(session))
+    try:
+        manager = await anext(gen)
+        assert manager is not None
+        assert isinstance(manager, PluginUserManager)
+    finally:
+        await gen.aclose()
+
+
+@pytest.mark.asyncio
+async def test_provide_oauth_associate_user_manager_yields_manager() -> None:
+    """OAuth associate provider wrappers share the same request-scoped manager behavior."""
+    plugin = LitestarAuth(_minimal_config())
+    session = DummySession()
+
+    gen = cast("Any", plugin._provide_oauth_associate_user_manager(session))
+    try:
+        manager = await anext(gen)
+        assert manager is not None
+    finally:
+        await gen.aclose()
+
+
+def test_totp_backend_returns_configured_named_backend() -> None:
+    """The plugin exposes the same TOTP backend selected by the configured helper rules."""
+    primary_backend = AuthenticationBackend[ExampleUser, UUID](
+        name="primary",
+        transport=BearerTransport(),
+        strategy=cast("Any", InMemoryTokenStrategy(token_prefix="primary")),
+    )
+    secondary_backend = AuthenticationBackend[ExampleUser, UUID](
+        name="secondary",
+        transport=BearerTransport(),
+        strategy=cast("Any", InMemoryTokenStrategy(token_prefix="secondary")),
+    )
+    plugin = LitestarAuth(
+        _minimal_config(
+            backends=[primary_backend, secondary_backend],
+        ),
+    )
+    plugin.config.totp_config = TotpConfig(
+        totp_pending_secret="p" * 32,
+        totp_backend_name="secondary",
     )
 
-    with patch("litestar_auth.plugin.totp_backend", return_value="totp-backend") as totp_backend_mock:
-        assert plugin._totp_backend() == "totp-backend"
-    totp_backend_mock.assert_called_once_with(plugin.config)
-
-    with patch("litestar_auth.plugin.totp_path", return_value="/auth/2fa") as totp_path_mock:
-        assert plugin._totp_path() == "/auth/2fa"
-    totp_path_mock.assert_called_once_with(plugin.config.auth_path)
-
-    cookie_transports = [CookieTransport()]
-    with patch("litestar_auth.plugin.build_csrf_config", return_value="csrf-config") as build_csrf_config_mock:
-        assert plugin._build_csrf_config(cookie_transports) == "csrf-config"
-    build_csrf_config_mock.assert_called_once_with(plugin.config, cookie_transports)
-
-    with patch("litestar_auth.plugin.validate_config") as validate_config_mock:
-        plugin._validate_config()
-    validate_config_mock.assert_called_once_with(plugin.config)
-
-    app_config = AppConfig()
-    with patch("litestar_auth.plugin.warn_if_insecure_oauth_redirect_in_production") as warn_redirect_mock:
-        plugin._warn_if_insecure_oauth_redirect_in_production(app_config)
-    warn_redirect_mock.assert_called_once_with(config=plugin.config, app_config=app_config)
-
-
-def test_non_none_schema_kwargs_filters_none_values() -> None:
-    """Schema helper removes keys that are explicitly set to None."""
-    assert LitestarAuth._non_none_schema_kwargs(email="value", username=None, active=False) == {
-        "email": "value",
-        "active": False,
-    }
+    assert plugin._totp_backend() is secondary_backend
 
 
 def test_public_aliases_reexport_nested_config_types() -> None:
     """Plugin module re-exports nested config dataclasses for public callers."""
     assert OAuthConfig.__name__ == "OAuthConfig"
     assert TotpConfig.__name__ == "TotpConfig"
+
+
+def test_plugins_hold_distinct_oauth_encryption_keys() -> None:
+    """Separate plugin instances keep independent OAuth encryption-key scopes."""
+    key_provider = get_oauth_encryption_key_callable()
+    first_config = _minimal_config()
+    second_config = _minimal_config()
+    first_config.oauth_config = OAuthConfig(oauth_token_encryption_key="a" * 44)
+    second_config.oauth_config = OAuthConfig(oauth_token_encryption_key="b" * 44)
+
+    first_plugin = LitestarAuth(first_config)
+    second_plugin = LitestarAuth(second_config)
+
+    with oauth_token_encryption_scope(first_plugin):
+        assert key_provider() == "a" * 44
+
+    with oauth_token_encryption_scope(second_plugin):
+        assert key_provider() == "b" * 44

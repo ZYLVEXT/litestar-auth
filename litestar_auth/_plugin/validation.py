@@ -1,25 +1,22 @@
-"""Validation and startup checks for the auth plugin façade."""
+"""Constructor-time validation helpers for the auth plugin."""
 
 from __future__ import annotations
 
 import logging
 import warnings
-from typing import TYPE_CHECKING, Any, Protocol, cast
-from urllib.parse import urlsplit
+from typing import Any, cast
 
-from litestar.config.csrf import CSRFConfig
 from sqlalchemy import inspect as sa_inspect
 
 from litestar_auth._plugin.config import (
-    DEFAULT_CSRF_COOKIE_NAME,
     LitestarAuthConfig,
-    OAuthConfig,
     TotpConfig,
     user_manager_accepts_password_validator,
 )
+from litestar_auth._plugin.middleware import get_cookie_transports
+from litestar_auth._plugin.rate_limit import iter_rate_limit_endpoints
 from litestar_auth.authentication.strategy.db import DatabaseTokenStrategy
 from litestar_auth.authentication.strategy.jwt import JWTStrategy
-from litestar_auth.authentication.transport.cookie import CookieTransport
 from litestar_auth.config import (
     MINIMUM_SECRET_LENGTH,
     is_testing,
@@ -28,32 +25,8 @@ from litestar_auth.config import (
     validate_testing_mode_for_startup,
 )
 from litestar_auth.exceptions import ConfigurationError
-from litestar_auth.totp import InMemoryUsedTotpCodeStore, SecurityWarning
+from litestar_auth.totp import SecurityWarning
 from litestar_auth.types import UserProtocol
-
-if TYPE_CHECKING:
-    from collections.abc import Sequence
-
-    from litestar.config.app import AppConfig
-
-    from litestar_auth.authentication.backend import AuthenticationBackend
-    from litestar_auth.ratelimit import EndpointRateLimit
-
-
-class _RateLimitConfigProtocol(Protocol):
-    """Typed surface needed to validate endpoint rate-limit settings."""
-
-    login: EndpointRateLimit | None
-    refresh: EndpointRateLimit | None
-    register: EndpointRateLimit | None
-    forgot_password: EndpointRateLimit | None
-    reset_password: EndpointRateLimit | None
-    totp_enable: EndpointRateLimit | None
-    totp_verify: EndpointRateLimit | None
-    totp_disable: EndpointRateLimit | None
-    verify_token: EndpointRateLimit | None
-    request_verify_token: EndpointRateLimit | None
-
 
 logger = logging.getLogger("litestar_auth.plugin")
 
@@ -108,11 +81,11 @@ def validate_user_model_login_identifier_fields[UP: UserProtocol[Any], ID](
         raise ConfigurationError(msg)
 
 
-def validate_config[UP: UserProtocol[Any], ID](config: LitestarAuthConfig[UP, ID]) -> None:
-    """Validate the requested plugin configuration eagerly at startup.
+def validate_core_session_config[UP: UserProtocol[Any], ID](config: LitestarAuthConfig[UP, ID]) -> None:
+    """Validate constructor-time runtime-mode, backend, and session prerequisites.
 
     Raises:
-        ValueError: If required plugin, backend, or TOTP settings are invalid.
+        ValueError: If the plugin lacks a backend or a supported DB-session source.
     """
     validate_testing_mode_for_startup()
 
@@ -122,6 +95,13 @@ def validate_config[UP: UserProtocol[Any], ID](config: LitestarAuthConfig[UP, ID
 
     validate_session_maker_or_external_db_session(config)
 
+
+def validate_credential_config[UP: UserProtocol[Any], ID](config: LitestarAuthConfig[UP, ID]) -> None:
+    """Validate credential and user-manager contracts needed during construction.
+
+    Raises:
+        ValueError: If user-listing support is requested without ``list_users()``.
+    """
     validate_password_validator_config(config)
     validate_user_model_login_identifier_fields(config)
 
@@ -129,12 +109,45 @@ def validate_config[UP: UserProtocol[Any], ID](config: LitestarAuthConfig[UP, ID
         msg = "include_users=True requires user_manager_class to define list_users()."
         raise ValueError(msg)
 
+
+def validate_totp_domain_config[UP: UserProtocol[Any], ID](config: LitestarAuthConfig[UP, ID]) -> None:
+    """Validate TOTP feature-level configuration before deeper security checks."""
     validate_totp_config(config)
+
+
+def validate_request_security_config[UP: UserProtocol[Any], ID](config: LitestarAuthConfig[UP, ID]) -> None:
+    """Validate request-facing rate-limit and cookie-auth prerequisites."""
     validate_rate_limit_config(config.rate_limit_config)
     validate_cookie_auth_config(config)
+
+
+def validate_totp_secret_config[UP: UserProtocol[Any], ID](config: LitestarAuthConfig[UP, ID]) -> None:
+    """Validate TOTP secret-material and algorithm requirements."""
     _validate_totp_pending_secret_config(config)
+
+
+def validate_backend_security_config[UP: UserProtocol[Any], ID](config: LitestarAuthConfig[UP, ID]) -> None:
+    """Validate backend-strategy security posture for constructor-time setup."""
     _validate_backend_strategy_security(config)
+
+
+def validate_totp_encryption_config[UP: UserProtocol[Any], ID](config: LitestarAuthConfig[UP, ID]) -> None:
+    """Validate production encryption requirements for persisted TOTP secrets."""
     _validate_totp_encryption_key(config)
+
+
+def validate_config[UP: UserProtocol[Any], ID](config: LitestarAuthConfig[UP, ID]) -> None:
+    """Validate the requested plugin configuration during plugin construction."""
+    for validator in (
+        validate_core_session_config,
+        validate_credential_config,
+        validate_totp_domain_config,
+        validate_request_security_config,
+        validate_totp_secret_config,
+        validate_backend_security_config,
+        validate_totp_encryption_config,
+    ):
+        validator(config)
 
 
 def _validate_totp_pending_secret_config[UP: UserProtocol[Any], ID](config: LitestarAuthConfig[UP, ID]) -> None:
@@ -293,13 +306,13 @@ def validate_password_validator_config[UP: UserProtocol[Any], ID](config: Litest
 def validate_rate_limit_config(rate_limit_config: object) -> None:
     """Validate rate-limit backend settings (trusted-proxy flags).
 
-    In-memory rate-limit ``SecurityWarning`` emissions happen in
-    ``warn_insecure_plugin_startup_defaults`` during ``LitestarAuth.on_app_init``.
+    In-memory rate-limit ``SecurityWarning`` emissions happen during
+    ``LitestarAuth.on_app_init()`` in the startup runtime helper module.
     """
     if rate_limit_config is None:
         return
 
-    for endpoint_limit in _iter_rate_limit_endpoints(cast("Any", rate_limit_config)):
+    for endpoint_limit in iter_rate_limit_endpoints(cast("Any", rate_limit_config)):
         if endpoint_limit is None:
             continue
         resolve_trusted_proxy_setting(trusted_proxy=endpoint_limit.trusted_proxy)
@@ -375,221 +388,3 @@ def validate_totp_sub_config[UP: UserProtocol[Any]](
             "totp_enable_requires_password=False explicitly (not recommended)."
         )
         raise ValueError(msg)
-
-
-def _has_inmemory_rate_limit_backend(config: LitestarAuthConfig[Any, Any]) -> bool:
-    """Return whether any endpoint uses a process-local rate-limit backend."""
-    rate_limit_config = config.rate_limit_config
-    if rate_limit_config is None:
-        return False
-    for endpoint_limit in _iter_rate_limit_endpoints(cast("Any", rate_limit_config)):
-        if endpoint_limit is None:
-            continue
-        if not endpoint_limit.backend.is_shared_across_workers:
-            return True
-    return False
-
-
-def warn_insecure_plugin_startup_defaults[UP: UserProtocol[Any], ID](
-    config: LitestarAuthConfig[UP, ID],
-) -> None:
-    """Emit ``SecurityWarning`` for insecure production defaults.
-
-    Suppressed when ``is_testing()`` is true. Call from ``LitestarAuth.on_app_init``
-    before guards that may raise.
-    """
-    if is_testing():
-        return
-
-    oauth_config = config.oauth_config
-    if (
-        oauth_config is not None
-        and has_configured_oauth_providers(config)
-        and not oauth_config.oauth_token_encryption_key
-    ):
-        warnings.warn(
-            "OAuth providers are configured but oauth_token_encryption_key is not set; "
-            "OAuth access and refresh tokens may be stored in plaintext at rest. "
-            "Configure a Fernet key via oauth_token_encryption_key for production.",
-            SecurityWarning,
-            stacklevel=2,
-        )
-
-    for backend in config.backends:
-        strategy = getattr(backend, "strategy", None)
-        if isinstance(strategy, JWTStrategy) and not strategy.revocation_is_durable:
-            warnings.warn(
-                "JWTStrategy is configured with a process-local in-memory denylist. "
-                "Revoked tokens are not visible across workers; use RedisJWTDenylistStore or "
-                "allow_nondurable_jwt_revocation=True only with full understanding of the tradeoff.",
-                SecurityWarning,
-                stacklevel=2,
-            )
-            break
-
-    if _has_inmemory_rate_limit_backend(config):
-        warnings.warn(
-            "Auth rate limiting is configured with a process-local in-memory backend. "
-            "Rate-limit state will not be shared across workers in multi-worker deployments. "
-            "Use a Redis-backed rate limiter to enforce consistent limits across processes.",
-            SecurityWarning,
-            stacklevel=2,
-        )
-
-    totp_config = config.totp_config
-    if totp_config is not None and isinstance(totp_config.totp_used_tokens_store, InMemoryUsedTotpCodeStore):
-        warnings.warn(
-            "TOTP replay protection uses InMemoryUsedTotpCodeStore; used-code state is not "
-            "shared across workers. Use RedisUsedTotpCodeStore for production multi-worker deployments.",
-            SecurityWarning,
-            stacklevel=2,
-        )
-    _warn_refresh_cookie_max_age_mismatch(config)
-
-
-def _warn_refresh_cookie_max_age_mismatch[UP: UserProtocol[Any], ID](
-    config: LitestarAuthConfig[UP, ID],
-) -> None:
-    """Warn when a CookieTransport will silently inherit ``max_age`` for the refresh cookie.
-
-    When ``enable_refresh`` is true and a ``CookieTransport`` has ``refresh_max_age is None``,
-    the refresh cookie inherits the access-token ``max_age`` — which is typically much shorter
-    than the strategy's refresh lifetime.  The browser will delete the refresh cookie before it
-    expires server-side, causing silent refresh failures.
-    """
-    if not config.enable_refresh:
-        return
-
-    cookie_transports = get_cookie_transports(config.backends)
-    for transport in cookie_transports:
-        if transport.refresh_max_age is None:
-            warnings.warn(
-                "CookieTransport refresh_max_age is not set while enable_refresh=True. "
-                "The refresh cookie will inherit the access-token max_age, which is typically "
-                "much shorter than the strategy's refresh lifetime. Set refresh_max_age explicitly "
-                "on CookieTransport to match your strategy's refresh token TTL.",
-                SecurityWarning,
-                stacklevel=3,
-            )
-            break
-
-
-def require_oauth_token_encryption_for_configured_providers(
-    *,
-    config: LitestarAuthConfig[Any, Any],
-    require_key: object,
-) -> None:
-    """Fail closed when configured OAuth providers would persist plaintext tokens."""
-    if not has_configured_oauth_providers(config):
-        return
-    cast("Any", require_key)(context="OAuth providers are configured")
-
-
-def has_configured_oauth_providers(config: LitestarAuthConfig[Any, Any]) -> bool:
-    """Return whether this plugin config includes any OAuth provider integration."""
-    oauth_config = config.oauth_config
-    if oauth_config is None:
-        return False
-    return has_configured_oauth_providers_for(oauth_config)
-
-
-def has_configured_oauth_providers_for(oauth_config: OAuthConfig) -> bool:
-    """Return whether this OAuth config includes any provider integration."""
-    return bool(oauth_config.oauth_associate_providers or oauth_config.oauth_providers)
-
-
-def warn_if_insecure_oauth_redirect_in_production(
-    *,
-    config: LitestarAuthConfig[Any, Any],
-    app_config: AppConfig,
-) -> None:
-    """Warn when OAuth associate redirect resolution falls back to localhost in production."""
-    if getattr(app_config, "debug", False):
-        return
-
-    oauth_config = config.oauth_config
-    if oauth_config is None:
-        return
-    if not (oauth_config.include_oauth_associate and oauth_config.oauth_associate_providers):
-        return
-
-    associate_path = f"{config.auth_path.rstrip('/')}/associate"
-    redirect_base_url = oauth_config.oauth_associate_redirect_base_url or f"http://localhost{associate_path}"
-    host = urlsplit(redirect_base_url).hostname
-    if host not in {"localhost", "127.0.0.1", "::1"}:
-        return
-
-    logger.warning(
-        "Insecure OAuth redirect_base_url detected in production. "
-        "The configured OAuth associate redirect base URL resolves to localhost (%s). "
-        "Set oauth_associate_redirect_base_url to your public HTTPS origin instead of relying on the "
-        "http://localhost fallback.",
-        redirect_base_url,
-        extra={"event": "oauth_redirect_localhost_default"},
-    )
-
-
-def get_cookie_transports[UP: UserProtocol[Any], ID](
-    backends: Sequence[AuthenticationBackend[UP, ID]],
-) -> list[CookieTransport]:
-    """Return configured cookie transports from the backend list."""
-    return [
-        transport
-        for backend in backends
-        if isinstance((transport := getattr(backend, "transport", None)), CookieTransport)
-    ]
-
-
-def build_csrf_config[UP: UserProtocol[Any], ID](
-    config: LitestarAuthConfig[UP, ID],
-    cookie_transports: Sequence[CookieTransport],
-) -> CSRFConfig:
-    """Build a shared CSRF configuration for homogeneous cookie transports.
-
-    Returns:
-        CSRF settings derived from the shared cookie transport configuration.
-
-    Raises:
-        ValueError: If cookie transport settings are not homogeneous.
-    """
-    reference_transport = cookie_transports[0]
-    for transport in cookie_transports[1:]:
-        if (
-            transport.path != reference_transport.path
-            or transport.domain != reference_transport.domain
-            or transport.secure != reference_transport.secure
-            or transport.samesite != reference_transport.samesite
-        ):
-            msg = (
-                "All CookieTransport backends must share path, domain, secure, and samesite settings "
-                "to use the plugin-managed CSRF configuration."
-            )
-            raise ValueError(msg)
-
-    return CSRFConfig(
-        secret=cast("str", config.csrf_secret),
-        cookie_name=DEFAULT_CSRF_COOKIE_NAME,
-        cookie_path=reference_transport.path,
-        header_name=config.csrf_header_name,
-        cookie_secure=reference_transport.secure,
-        cookie_samesite=reference_transport.samesite,
-        cookie_domain=reference_transport.domain,
-    )
-
-
-def _iter_rate_limit_endpoints(
-    rate_limit_config: _RateLimitConfigProtocol,
-) -> tuple[EndpointRateLimit | None, ...]:
-    """Return every endpoint-specific rate-limit config for shared validation."""
-    return (
-        rate_limit_config.login,
-        rate_limit_config.refresh,
-        rate_limit_config.register,
-        rate_limit_config.forgot_password,
-        rate_limit_config.reset_password,
-        rate_limit_config.totp_enable,
-        rate_limit_config.totp_verify,
-        rate_limit_config.totp_disable,
-        rate_limit_config.verify_token,
-        rate_limit_config.request_verify_token,
-    )

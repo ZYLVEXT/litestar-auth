@@ -10,17 +10,8 @@ from litestar.plugins import InitPlugin
 
 from litestar_auth._plugin import config as _plugin_config
 from litestar_auth._plugin.controllers import (
-    _RegisterSchemaKwargs,
-    _UserReadSchemaKwargs,
-    _UsersSchemaKwargs,
-    backend_auth_path,
     build_controllers,
-    build_totp_controller,
-    register_schema_kwargs,
     totp_backend,
-    totp_path,
-    user_read_schema_kwargs,
-    users_schema_kwargs,
 )
 from litestar_auth._plugin.dependencies import (
     DependencyProviders,
@@ -28,6 +19,7 @@ from litestar_auth._plugin.dependencies import (
     register_dependencies,
     register_exception_handlers,
 )
+from litestar_auth._plugin.middleware import build_csrf_config, get_cookie_transports
 from litestar_auth._plugin.scoped_session import get_or_create_scoped_session
 from litestar_auth._plugin.session_binding import (
     _AccountStateValidator as PluginAccountStateValidator,
@@ -35,14 +27,12 @@ from litestar_auth._plugin.session_binding import (
 from litestar_auth._plugin.session_binding import (
     _ScopedUserDatabaseProxy as ScopedUserDatabaseProxyImpl,
 )
-from litestar_auth._plugin.validation import (
-    build_csrf_config,
-    get_cookie_transports,
+from litestar_auth._plugin.startup import (
     require_oauth_token_encryption_for_configured_providers,
-    validate_config,
     warn_if_insecure_oauth_redirect_in_production,
     warn_insecure_plugin_startup_defaults,
 )
+from litestar_auth._plugin.validation import validate_config
 from litestar_auth.authentication import Authenticator, LitestarAuthMiddleware
 from litestar_auth.oauth_encryption import (
     register_oauth_token_encryption_key,
@@ -54,12 +44,9 @@ if TYPE_CHECKING:
     from collections.abc import Sequence
 
     from litestar.config.app import AppConfig
-    from litestar.config.csrf import CSRFConfig
-    from litestar.types import ControllerRouterHandler
     from sqlalchemy.ext.asyncio import AsyncSession
 
     from litestar_auth.authentication.backend import AuthenticationBackend
-    from litestar_auth.authentication.transport.cookie import CookieTransport
     from litestar_auth.manager import BaseUserManager
 
     DEFAULT_CONFIG_DEPENDENCY_KEY = _plugin_config.DEFAULT_CONFIG_DEPENDENCY_KEY
@@ -227,58 +214,8 @@ class LitestarAuth[UP: UserProtocol[Any], ID](InitPlugin):
     def _provide_user_model(self) -> object:
         return self.config.user_model
 
-    def _build_controllers(self) -> list[ControllerRouterHandler]:
-        return build_controllers(self.config)
-
-    def _build_totp_controller(self) -> ControllerRouterHandler:
-        """Build TOTP controller with explicit endpoint and rate-limit wiring.
-
-        The generated controller always includes ``/2fa/enable``, ``/2fa/verify``,
-        and ``/2fa/disable``. Rate-limit config is passed through as a single
-        contract object; the controller orchestrator decides endpoint semantics.
-
-        Returns:
-            Controller router handler for the configured TOTP endpoint set.
-        """
-        return build_totp_controller(self.config)
-
-    def _user_read_schema_kwargs(self) -> _UserReadSchemaKwargs:
-        return user_read_schema_kwargs(self.config)
-
-    def _register_schema_kwargs(self) -> _RegisterSchemaKwargs:
-        return register_schema_kwargs(self.config)
-
-    def _users_schema_kwargs(self) -> _UsersSchemaKwargs:
-        return users_schema_kwargs(self.config)
-
-    @staticmethod
-    def _non_none_schema_kwargs(**kwargs: object | None) -> dict[str, object]:
-        return {key: value for key, value in kwargs.items() if value is not None}
-
-    def _backend_auth_path(self, *, backend_name: str, index: int) -> str:
-        return backend_auth_path(
-            auth_path=self.config.auth_path,
-            backend_name=backend_name,
-            index=index,
-        )
-
     def _totp_backend(self) -> AuthenticationBackend[UP, ID]:
         return totp_backend(self.config)
-
-    def _totp_path(self) -> str:
-        return totp_path(self.config.auth_path)
-
-    def _cookie_transports(self) -> list[CookieTransport]:
-        return get_cookie_transports(self.config.backends)
-
-    def _build_csrf_config(self, cookie_transports: Sequence[CookieTransport]) -> CSRFConfig:
-        return build_csrf_config(self.config, cookie_transports)
-
-    def _validate_config(self) -> None:
-        validate_config(self.config)
-
-    def _warn_if_insecure_oauth_redirect_in_production(self, app_config: AppConfig) -> None:
-        warn_if_insecure_oauth_redirect_in_production(config=self.config, app_config=app_config)
 
 
 __all__ = (
