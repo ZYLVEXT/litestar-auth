@@ -46,7 +46,6 @@ all = ["litestar-auth[redis,oauth,totp]"]
 dev = [
     "commitizen>=4.13.9",
     "pip-audit>=2.10.0",
-    "pre-commit-uv>=4.2.1",
     "pytest>=9.0.2",
     "pytest-cov>=7.1.0",
     "pytest-asyncio>=1.3.0",
@@ -54,11 +53,11 @@ dev = [
     "python-dotenv>=1.2.2",
     "pytest-timeout>=2.4.0",
     "pytest-xdist>=3.8.0",
-    "pre-commit>=4.5.1",
     "ruff>=0.15.8",
     "rust-just>=1.48.1",
     "ty>=0.0.26",
     "deptry>=0.25.1",
+    "prek>=0.3.8",
 ]
 docs = [
     "mkdocstrings[python]>=1.0.3",
@@ -176,7 +175,7 @@ version_scheme = "semver"
 version_provider = "pep621"
 update_changelog_on_bump = false
 major_version_zero = true
-# Refresh lockfile after version files change so uv.lock matches pyproject (pre-commit uv-lock hook).
+# Refresh lockfile after version files change so uv.lock matches pyproject (prek uv-lock hook).
 pre_bump_hooks = ["uv lock"]
 version_files = [
     "pyproject.toml:version",

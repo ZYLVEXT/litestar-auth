@@ -1,4 +1,4 @@
-# See https://pre-commit.com for more information
+# See https://prek.j178.dev/ for more information
 # See https://pre-commit.com/hooks.html for more hooks
 #
 # Run the same checks locally; CI uses prek after `uv sync` (see .github/workflows/1_test.yml):
@@ -101,7 +101,7 @@ repos:
 
   - repo: https://github.com/astral-sh/uv-pre-commit
     # uv version.
-    rev: 20d6e6698b00aed95d4f269a6309b11c2c57b202  # frozen: 0.11.2
+    rev: 0397b68f6f88c024f1d2b355a9818779f6336d16  # frozen: 0.11.3
     hooks:
       # Update the uv lockfile
       - id: uv-lock

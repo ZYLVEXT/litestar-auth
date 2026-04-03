@@ -533,7 +533,7 @@ def test_build_user_manager_wraps_user_db_and_passes_bound_backends(monkeypatch:
     raw_user_db = object()
     captured: dict[str, object] = {}
 
-    plugin.config.user_db_factory = lambda configured_session: raw_user_db if configured_session is session else None
+    plugin.config.user_db_factory = lambda configured_session: raw_user_db if configured_session is session else None  # ty:ignore[invalid-assignment]
     monkeypatch.setattr("litestar_auth.plugin.ScopedUserDatabaseProxyImpl", _ScopedProxyRecorder)
     monkeypatch.setattr(
         plugin,

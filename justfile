@@ -35,9 +35,9 @@ docs-serve:
 docs-build:
     uv run --group docs zensical build
 
-# Run all configured pre-commit hooks.
-pre-commit:
-    uv run pre-commit run --all-files
+# Run all configured prek hooks.
+prek:
+    uv run prek run --all-files
 
 # Run CI-style checks without auto-fixing files.
 check:

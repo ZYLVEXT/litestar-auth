@@ -47,7 +47,7 @@ jobs:
     runs-on: ubuntu-latest
     env:
       UV_PYTHON_PREFERENCE: only-managed
-      # Same as pre-commit: skip hooks that are CI-inappropriate on default branch / shared runners.
+      # Same as prek: skip hooks that are CI-inappropriate on default branch / shared runners.
       SKIP: detect-aws-credentials,no-commit-to-branch
     steps:
       - name: Check out repository
@@ -64,7 +64,7 @@ jobs:
           cache-python: true
           github-token: ${{ secrets.GITHUB_TOKEN }}
 
-      # Local hooks use `uv run` (language: system); cache .venv like the former pre-commit job.
+      # Local hooks use `uv run` (language: system); cache .venv like the former prek job.
       # prek-action also caches the prek hook environment (default cache: true).
       # Key includes run_id + run_attempt so "Re-run jobs" does not try to save the same
       # cache key twice (GitHub: "another job may be creating this cache").
