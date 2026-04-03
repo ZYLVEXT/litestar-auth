@@ -829,7 +829,7 @@ wheels = [
 
 [[package]]
 name = "litestar-auth"
-version = "1.0.4"
+version = "1.0.5"
 source = { editable = "." }
 dependencies = [
     { name = "advanced-alchemy" },

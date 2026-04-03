@@ -96,7 +96,7 @@ from litestar_auth.types import GuardedUserProtocol, TotpUserProtocol, UserProto
 
 logging.getLogger(__name__).addHandler(logging.NullHandler())  # noqa: RUF067
 
-__version__ = "1.0.4"
+__version__ = "1.0.5"
 
 __all__ = (
     "AccessToken",
