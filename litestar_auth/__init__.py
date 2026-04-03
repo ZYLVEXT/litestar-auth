@@ -2,20 +2,40 @@
 
 This package re-exports controllers, strategies, transports, the ``LitestarAuth``
 plugin, user manager base types, guards, and shared schemas. Import stable symbols
-from ``litestar_auth`` (or submodules such as ``litestar_auth.controllers``) for
-application wiring.
+from ``litestar_auth`` for compatibility, but prefer the more specific public
+submodules when guidance names one canonical entrypoint. For OAuth, the canonical
+login-helper import is ``litestar_auth.oauth.create_provider_oauth_controller``,
+while ``litestar_auth.controllers.create_oauth_controller`` and
+``create_oauth_associate_controller`` remain the advanced escape hatch for custom
+route tables.
 
 Examples:
-    Wire the plugin when building a Litestar application::
+    Wire the canonical database-backed bearer preset when building a Litestar application::
+
+        from uuid import UUID
 
         from litestar import Litestar
-        from litestar_auth import LitestarAuth, LitestarAuthConfig
+        from litestar_auth import DatabaseTokenAuthConfig, LitestarAuth, LitestarAuthConfig
+        from litestar_auth.models import User
 
-        app = Litestar(plugins=[LitestarAuth(LitestarAuthConfig(...))])
+        config = LitestarAuthConfig[User, UUID].with_database_token_auth(
+            database_token_auth=DatabaseTokenAuthConfig(
+                token_hash_secret="replace-with-32+-char-db-token-secret",
+            ),
+            user_model=User,
+            user_manager_class=YourUserManager,
+            session_maker=async_session_factory,
+            user_manager_kwargs={
+                "verification_token_secret": "replace-with-32+-char-secret",
+                "reset_password_token_secret": "replace-with-32+-char-secret",
+            },
+        )
+        app = Litestar(plugins=[LitestarAuth(config)])
 """
 
 import logging
 
+from litestar_auth._plugin.config import DatabaseTokenAuthConfig
 from litestar_auth.authentication import AuthenticationBackend, Authenticator
 from litestar_auth.authentication.strategy import (
     DatabaseTokenStrategy,
@@ -109,6 +129,7 @@ __all__ = (
     "BearerTransport",
     "ConfigurationError",
     "CookieTransport",
+    "DatabaseTokenAuthConfig",
     "DatabaseTokenStrategy",
     "EndpointRateLimit",
     "ErrorCode",

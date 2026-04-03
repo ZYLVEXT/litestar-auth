@@ -1,3 +1,21 @@
+## Unreleased
+
+### Changed
+
+- **Canonical DB bearer setup is now documented around the preset builder** — `DatabaseTokenAuthConfig` is exported from `litestar_auth`, and the docs now point opaque DB-token users to `LitestarAuthConfig.with_database_token_auth(...)` instead of hand-assembling `AuthenticationBackend(..., BearerTransport(), DatabaseTokenStrategy(...))` for the common case.
+- **Token ORM registration is now model-owned** — `litestar_auth.models.import_token_orm_models()` is the canonical helper for explicit `AccessToken` / `RefreshToken` mapper registration, while `litestar_auth.authentication.strategy.import_token_orm_models()` remains available as a compatibility path for existing call sites.
+- **Database token persistence can now target custom token ORM classes explicitly** — `DatabaseTokenStrategy` still defaults to the bundled `AccessToken` / `RefreshToken` models, but advanced integrations can pass `DatabaseTokenModels(...)` to bind login/logout, refresh rotation, and expired-token cleanup to mixin-composed custom token tables without patching library internals.
+- **Plugin OAuth route ownership is now explicit** — `oauth_providers` remains declarative metadata for manual login-controller registration and encryption checks, while `include_oauth_associate=True` plus non-empty `oauth_associate_providers` is the only plugin-owned OAuth auto-mount path; ambiguous associate-route no-op configs now fail during plugin construction instead of silently mounting nothing.
+- **OAuth docs and import coverage now point at one canonical login-helper path** — `litestar_auth.oauth.create_provider_oauth_controller(...)` is the documented login entrypoint, plugin-owned OAuth auto-mounting is documented only for `/auth/associate/{provider}/...`, and the lower-level controller factories are clearly marked as the advanced custom-route escape hatch.
+
+### Migration
+
+- Replace manual DB bearer assembly like `AuthenticationBackend(name="database", transport=BearerTransport(), strategy=DatabaseTokenStrategy(...))` with `DatabaseTokenAuthConfig(...)` plus `LitestarAuthConfig.with_database_token_auth(...)`.
+- Keep manual `backends=` assembly only for advanced cases such as multiple backends or a custom transport/strategy mix.
+- Replace `from litestar_auth.authentication.strategy import import_token_orm_models` with `from litestar_auth.models import import_token_orm_models`; keep the strategy import only as a compatibility shim while migrating existing code.
+- For custom DB token tables, compose `AccessTokenMixin` / `RefreshTokenMixin` / `UserAuthRelationshipMixin` on your own models and pass `DatabaseTokenModels(...)` to `DatabaseTokenStrategy` instead of copying the reference ORM classes.
+- If you declare `oauth_providers`, keep mounting login routes explicitly with `litestar_auth.oauth.create_provider_oauth_controller(...)`; only associate routes are plugin-owned, under `/auth/associate/{provider}/...` when `include_oauth_associate=True`.
+
 ## 1.0.5 (2026-04-03)
 
 ### Added

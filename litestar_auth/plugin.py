@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
+import inspect
 from functools import partial
-from typing import TYPE_CHECKING, Any, override
+from typing import TYPE_CHECKING, Any, cast, override
 
 from litestar.middleware import DefineMiddleware
 from litestar.plugins import InitPlugin
@@ -85,7 +86,14 @@ class LitestarAuth[UP: UserProtocol[Any], ID](InitPlugin):
             self._build_user_manager,
             self.config.db_session_dependency_key,
         )
-        self._provide_oauth_associate_user_manager = self._provide_user_manager
+        self._provide_request_backends = _make_backends_dependency_provider(
+            self._session_bound_backends,
+            self.config.db_session_dependency_key,
+        )
+        self._provide_oauth_associate_user_manager = _make_user_manager_dependency_provider(
+            self._build_user_manager,
+            self.config.db_session_dependency_key,
+        )
 
     @override
     def on_app_init(self, app_config: AppConfig) -> AppConfig:
@@ -112,6 +120,13 @@ class LitestarAuth[UP: UserProtocol[Any], ID](InitPlugin):
         Returns:
             Backends rebound to the provided request-local session.
         """
+        database_token_auth = self.config.database_token_auth
+        if database_token_auth is not None:
+            _plugin_config.bind_database_token_request_session(session)
+            return [
+                _plugin_config.build_database_token_backend(database_token_auth, session=session),
+            ]
+
         return [backend.with_session(session) for backend in self.config.backends]
 
     def _build_user_manager(
@@ -178,7 +193,7 @@ class LitestarAuth[UP: UserProtocol[Any], ID](InitPlugin):
             providers=DependencyProviders(
                 config=self._provide_config,
                 user_manager=self._provide_user_manager,
-                backends=self._provide_backends,
+                backends=self._provide_request_backends,
                 user_model=self._provide_user_model,
                 oauth_associate_user_manager=self._provide_oauth_associate_user_manager,
             ),
@@ -224,3 +239,51 @@ __all__ = (
     "OAuthConfig",
     "TotpConfig",
 )
+
+
+def _make_backends_dependency_provider[UP: UserProtocol[Any], ID](
+    build_backends: object,
+    db_session_key: str,
+) -> object:
+    """Build a dependency provider that returns request-scoped backends for the active session.
+
+    Returns:
+        Callable dependency provider whose signature matches ``db_session_key``.
+    """
+    missing = object()
+
+    def _provide_backends(
+        session: object = missing,
+        /,
+        **dependencies: object,
+    ) -> object:
+        if session is not missing:
+            if dependencies:
+                msg = f"_provide_backends() got multiple values for argument {db_session_key!r}"
+                raise TypeError(msg)
+            return cast("Any", build_backends)(session)
+
+        if len(dependencies) != 1 or db_session_key not in dependencies:
+            if not dependencies:
+                msg = f"_provide_backends() missing 1 required argument: {db_session_key!r}"
+            else:
+                unexpected = ", ".join(sorted(repr(name) for name in dependencies))
+                msg = f"_provide_backends() got unexpected keyword argument(s): {unexpected}"
+            raise TypeError(msg)
+
+        return cast("Any", build_backends)(dependencies[db_session_key])
+
+    provider_fn = cast("Any", _provide_backends)
+    provider_fn.__signature__ = inspect.Signature(
+        parameters=(
+            inspect.Parameter(
+                db_session_key,
+                kind=inspect.Parameter.POSITIONAL_OR_KEYWORD,
+                annotation=Any,
+            ),
+        ),
+    )
+    provider_fn.__annotations__ = {db_session_key: "Any"}
+    provider_fn.__module__ = __name__
+    provider_fn.__qualname__ = "_make_backends_dependency_provider.<locals>._provide_backends"
+    return provider_fn

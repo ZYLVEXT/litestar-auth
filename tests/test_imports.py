@@ -3,18 +3,24 @@
 from __future__ import annotations
 
 import logging
+from typing import Any, cast
+from uuid import UUID
 
 import pytest
 
 import litestar_auth
 import litestar_auth._plugin as plugin_internals
+import litestar_auth.authentication.strategy as strategy_module
 import litestar_auth.controllers as controllers_package
 import litestar_auth.controllers.auth as auth_controller_module
 import litestar_auth.controllers.reset as reset_controller_module
 import litestar_auth.controllers.totp as totp_controller_module
 import litestar_auth.controllers.verify as verify_controller_module
+import litestar_auth.models as models_module
+import litestar_auth.oauth as oauth_package_module
 import litestar_auth.payloads as payloads_module
 import litestar_auth.plugin as plugin_module
+import litestar_auth.ratelimit as ratelimit_module
 from litestar_auth import (
     AccessToken,
     AuthenticationBackend,
@@ -26,6 +32,7 @@ from litestar_auth import (
     BearerTransport,
     ConfigurationError,
     CookieTransport,
+    DatabaseTokenAuthConfig,
     DatabaseTokenStrategy,
     EndpointRateLimit,
     ErrorCode,
@@ -93,9 +100,14 @@ from litestar_auth import (
 )
 from litestar_auth.db import BaseUserStore
 from litestar_auth.db.sqlalchemy import SQLAlchemyUserDatabase
+from tests._helpers import ExampleUser
 from tests.conftest import project_version_from_pyproject
 
 pytestmark = [pytest.mark.unit, pytest.mark.imports]
+
+
+class _RootImportCoverageUserManager(BaseUserManager[ExampleUser, UUID]):
+    """Minimal manager type for public import coverage."""
 
 
 def test_root_package_reexports_public_api() -> None:
@@ -115,6 +127,7 @@ def test_root_package_reexports_public_api() -> None:
     assert BearerTransport is not None
     assert CookieTransport is not None
     assert JWTStrategy is not None
+    assert DatabaseTokenAuthConfig is not None
     assert DatabaseTokenStrategy is not None
     assert RedisTokenStrategy is not None
     assert InMemoryRateLimiter is not None
@@ -147,6 +160,67 @@ def test_root_package_reexports_public_api() -> None:
     assert ErrorCode is not None
 
 
+def test_root_package_exports_canonical_database_token_preset_entrypoint() -> None:
+    """The root package exposes the documented DB bearer preset entrypoint."""
+    config = LitestarAuthConfig[ExampleUser, UUID].with_database_token_auth(
+        database_token_auth=DatabaseTokenAuthConfig(token_hash_secret="x" * 40),
+        user_model=ExampleUser,
+        user_manager_class=_RootImportCoverageUserManager,
+        session_maker=cast("Any", object()),
+        user_db_factory=lambda _session: cast("Any", object()),
+        user_manager_kwargs={
+            "verification_token_secret": "x" * 32,
+            "reset_password_token_secret": "y" * 32,
+        },
+    )
+
+    preset = config.database_token_auth
+    assert preset is not None
+    assert preset.token_hash_secret == "x" * 40
+
+    backend = config.backends[0]
+    assert backend.name == "database"
+    assert isinstance(backend.transport, BearerTransport)
+    assert isinstance(backend.strategy, litestar_auth.DatabaseTokenStrategy)
+
+
+def test_models_and_strategy_modules_expose_documented_orm_setup_surface() -> None:
+    """The ORM docs point to a models-owned setup flow plus explicit strategy compatibility APIs."""
+    access_token_model, refresh_token_model = models_module.import_token_orm_models()
+    token_models = strategy_module.DatabaseTokenModels(
+        access_token_model=access_token_model,
+        refresh_token_model=refresh_token_model,
+    )
+
+    assert models_module.__all__ == (
+        "AccessTokenMixin",
+        "OAuthAccount",
+        "OAuthAccountMixin",
+        "RefreshTokenMixin",
+        "User",
+        "UserAuthRelationshipMixin",
+        "UserModelMixin",
+        "import_token_orm_models",
+    )
+    assert strategy_module.__all__ == (
+        "DatabaseTokenModels",
+        "DatabaseTokenStrategy",
+        "JWTStrategy",
+        "RedisTokenStrategy",
+        "RefreshableStrategy",
+        "Strategy",
+        "UserManagerProtocol",
+        "import_token_orm_models",
+    )
+    assert models_module.AccessTokenMixin.__name__ == "AccessTokenMixin"
+    assert models_module.OAuthAccountMixin.__name__ == "OAuthAccountMixin"
+    assert models_module.RefreshTokenMixin.__name__ == "RefreshTokenMixin"
+    assert models_module.UserAuthRelationshipMixin.__name__ == "UserAuthRelationshipMixin"
+    assert models_module.UserModelMixin.__name__ == "UserModelMixin"
+    assert strategy_module.import_token_orm_models() == (access_token_model, refresh_token_model)
+    assert token_models == strategy_module.DatabaseTokenModels()
+
+
 def test_root_package_reexports_controller_factories_and_payloads() -> None:
     """The package root exposes controller factories and their public payload structs."""
     assert LoginCredentials.__struct_fields__ == ("identifier", "password")
@@ -168,6 +242,49 @@ def test_root_package_reexports_controller_factories_and_payloads() -> None:
     assert callable(create_users_controller)
     assert callable(create_totp_controller)
     assert callable(create_oauth_controller)
+
+
+def test_oauth_package_exposes_canonical_login_helper_and_not_advanced_controller_factory() -> None:
+    """The OAuth package keeps the login helper canonical and custom controller factories elsewhere."""
+    assert oauth_package_module.__all__ == ("create_provider_oauth_controller", "load_httpx_oauth_client")
+    assert oauth_package_module.create_provider_oauth_controller is create_provider_oauth_controller
+    assert oauth_package_module.load_httpx_oauth_client is load_httpx_oauth_client
+    assert litestar_auth.create_provider_oauth_controller is oauth_package_module.create_provider_oauth_controller
+    assert litestar_auth.load_httpx_oauth_client is oauth_package_module.load_httpx_oauth_client
+    assert not hasattr(oauth_package_module, "create_oauth_controller")
+    assert controllers_package.create_oauth_controller is create_oauth_controller
+    assert controllers_package.create_oauth_associate_controller is create_oauth_associate_controller
+
+
+def test_ratelimit_module_exposes_canonical_shared_backend_builder() -> None:
+    """The public ratelimit module exposes the shared-backend builder entrypoint."""
+    current_config_class = ratelimit_module.AuthRateLimitConfig
+    current_endpoint_class = ratelimit_module.EndpointRateLimit
+    current_memory_limiter_class = ratelimit_module.InMemoryRateLimiter
+    current_redis_limiter_class = ratelimit_module.RedisRateLimiter
+    backend = current_memory_limiter_class(max_attempts=3, window_seconds=60)
+
+    config = current_config_class.from_shared_backend(
+        backend,
+        namespace_overrides={"login": "auth-login"},
+        disabled=("refresh",),
+    )
+
+    assert current_config_class.__name__ == AuthRateLimitConfig.__name__
+    assert current_endpoint_class.__name__ == EndpointRateLimit.__name__
+    assert current_memory_limiter_class.__name__ == InMemoryRateLimiter.__name__
+    assert current_redis_limiter_class.__name__ == RedisRateLimiter.__name__
+    assert "AuthRateLimitConfig" in ratelimit_module.__all__
+    assert "EndpointRateLimit" in ratelimit_module.__all__
+    assert "InMemoryRateLimiter" in ratelimit_module.__all__
+    assert "RedisRateLimiter" in ratelimit_module.__all__
+    assert config.login == current_endpoint_class(backend=backend, scope="ip_email", namespace="auth-login")
+    assert config.refresh is None
+    assert config.request_verify_token == current_endpoint_class(
+        backend=backend,
+        scope="ip_email",
+        namespace="request-verify-token",
+    )
 
 
 def test_payload_module_is_authoritative_boundary_with_compat_reexports() -> None:
@@ -301,6 +418,7 @@ def test_root_package_all_excludes_private_symbols() -> None:
     assert "create_oauth_controller" in __all__
     assert "OAuthAccountAlreadyLinkedError" in __all__
     assert "require_password_length" in __all__
+    assert "DatabaseTokenAuthConfig" in __all__
 
 
 def test_root_package_all_entries_resolve_to_attributes() -> None:

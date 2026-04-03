@@ -8,17 +8,17 @@ from typing import TYPE_CHECKING, Any, cast
 from uuid import uuid4
 
 import pytest
-from advanced_alchemy.base import UUIDBase
+from advanced_alchemy.base import UUIDBase, UUIDPrimaryKey, create_registry
 from advanced_alchemy.exceptions import NotFoundError
 from sqlalchemy import String, select
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 from sqlalchemy.orm import Session as SASession
 
 from litestar_auth.authentication.strategy.db_models import AccessToken
 from litestar_auth.db import BaseOAuthAccountStore, BaseUserStore
 from litestar_auth.db.sqlalchemy import SQLAlchemyUserDatabase, _build_oauth_repository, _build_user_repository
 from litestar_auth.exceptions import OAuthAccountAlreadyLinkedError
-from litestar_auth.models import OAuthAccount, User
+from litestar_auth.models import OAuthAccount, OAuthAccountMixin, User, UserAuthRelationshipMixin, UserModelMixin
 from litestar_auth.oauth_encryption import (
     clear_oauth_token_encryption_key,
     oauth_token_encryption_scope,
@@ -41,18 +41,45 @@ _ = AccessToken
 EXPECTED_TOTAL_USERS = 3
 
 
-class MyUser(UUIDBase):
+class MyUser(UserModelMixin, UUIDBase):
     """Custom user model with an extra profile field."""
 
     __tablename__ = "my_user"
 
-    email: Mapped[str] = mapped_column(String(length=320), unique=True, index=True)
-    hashed_password: Mapped[str] = mapped_column(String(length=255))
-    is_active: Mapped[bool] = mapped_column(default=True, nullable=False)
-    is_verified: Mapped[bool] = mapped_column(default=False, nullable=False)
-    is_superuser: Mapped[bool] = mapped_column(default=False, nullable=False)
-    totp_secret: Mapped[str | None] = mapped_column(String(length=255), default=None, nullable=True)
     bio: Mapped[str] = mapped_column(String(length=255), default="", nullable=False)
+
+
+class CustomAuthBase(DeclarativeBase):
+    """App-owned registry for mixin-composed auth models."""
+
+    registry = create_registry()
+    metadata = registry.metadata
+    __abstract__ = True
+
+
+class CustomUUIDBase(UUIDPrimaryKey, CustomAuthBase):
+    """UUID primary-key base bound to the app-owned auth registry."""
+
+    __abstract__ = True
+
+
+class MyOAuthUser(UserModelMixin, UserAuthRelationshipMixin, CustomUUIDBase):
+    """Custom user model composed for the OAuth-only mixin path."""
+
+    __tablename__ = "my_oauth_user"
+
+    auth_access_token_model = None
+    auth_refresh_token_model = None
+    auth_oauth_account_model = "MyOAuthAccount"
+
+
+class MyOAuthAccount(OAuthAccountMixin, CustomUUIDBase):
+    """Custom OAuth model composed from the supported library mixin."""
+
+    __tablename__ = "my_oauth_account"
+
+    auth_user_model = "MyOAuthUser"
+    auth_user_table = "my_oauth_user"
 
 
 class AsyncSessionAdapter:
@@ -146,7 +173,7 @@ def sqlalchemy_metadata() -> tuple[MetaData, ...]:
     Returns:
         Metadata collections that should be created for this module's session fixture.
     """
-    return User.metadata, MyUser.metadata
+    return User.metadata, MyUser.metadata, MyOAuthUser.metadata
 
 
 def create_database(
@@ -345,6 +372,46 @@ async def test_sqlalchemy_user_database_get_by_oauth_account(session: SASession)
     assert resolved_user is not None
     assert resolved_user.id == user.id
     assert await database.get_by_oauth_account("github", "missing") is None
+
+
+async def test_sqlalchemy_user_database_custom_oauth_model_mixin_contract(session: SASession) -> None:
+    """The adapter supports a custom OAuth model composed from the library mixin."""
+    database = create_database(session, user_model=MyOAuthUser, oauth_account_model=MyOAuthAccount)
+    user = await database.create(
+        {
+            "email": "custom-oauth@example.com",
+            "hashed_password": "hashed-password",
+        },
+    )
+    scope = object()
+    oauth_token_encryption_key = base64.urlsafe_b64encode(b"1" * 32).decode()
+    register_oauth_token_encryption_key(scope, oauth_token_encryption_key)
+    try:
+        with oauth_token_encryption_scope(scope):
+            await database.upsert_oauth_account(
+                user,
+                oauth_name="github",
+                account_id="custom-gh-1",
+                account_email=user.email,
+                access_token="custom-access-token",
+                expires_at=3_600,
+                refresh_token="custom-refresh-token",
+            )
+    finally:
+        clear_oauth_token_encryption_key(scope)
+
+    resolved_user = await database.get_by_oauth_account("github", "custom-gh-1")
+    assert resolved_user is not None
+    assert isinstance(resolved_user, MyOAuthUser)
+    assert resolved_user.id == user.id
+
+    oauth_accounts = list(session.execute(select(MyOAuthAccount)).scalars().all())
+    assert len(oauth_accounts) == 1
+    oauth_account = oauth_accounts[0]
+    assert isinstance(oauth_account, MyOAuthAccount)
+    assert oauth_account.user_id == user.id
+    assert oauth_account.user is user
+    assert list(user.oauth_accounts) == [oauth_account]
 
 
 async def test_sqlalchemy_user_database_upsert_oauth_account_create(session: SASession) -> None:

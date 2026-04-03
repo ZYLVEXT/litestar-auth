@@ -347,6 +347,39 @@ def test_append_oauth_associate_controllers_uses_explicit_redirect_base_url(
     ]
 
 
+def test_append_oauth_associate_controllers_ignores_oauth_login_provider_inventory(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Plugin OAuth route assembly reads only the associate-provider inventory."""
+    login_client = object()
+    associate_client = object()
+    config = _minimal_config(
+        oauth_config=OAuthConfig(
+            oauth_providers=[("github", login_client)],
+            include_oauth_associate=True,
+            oauth_associate_providers=[("gitlab", associate_client)],
+            oauth_cookie_secure=False,
+        ),
+    )
+    captured: list[dict[str, object]] = []
+
+    def _create_oauth_associate_controller(**kwargs: object) -> str:
+        captured.append(dict(kwargs))
+        return cast("str", kwargs["provider_name"])
+
+    monkeypatch.setattr(
+        controllers_module,
+        "create_oauth_associate_controller",
+        _create_oauth_associate_controller,
+    )
+
+    controllers: list[ControllerRouterHandler] = []
+    _append_oauth_associate_controllers(controllers=controllers, config=config)
+
+    assert controllers == ["gitlab"]
+    assert captured == [_oauth_call("gitlab", associate_client)]
+
+
 def _minimal_config(
     *,
     backends: list[AuthenticationBackend[ExampleUser, UUID]] | None = None,

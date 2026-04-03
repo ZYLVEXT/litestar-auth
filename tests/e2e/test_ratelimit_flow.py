@@ -4,12 +4,13 @@ from __future__ import annotations
 
 import sqlite3
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, cast
+from typing import Any, cast
 from uuid import UUID
 
 import pytest
 from cryptography.fernet import Fernet
 from litestar import Litestar
+from litestar.testing import AsyncTestClient
 from sqlalchemy import create_engine, event
 from sqlalchemy.orm import Session as SASession
 from sqlalchemy.pool import StaticPool
@@ -26,9 +27,6 @@ from litestar_auth.plugin import LitestarAuth, LitestarAuthConfig
 from litestar_auth.ratelimit import AuthRateLimitConfig, EndpointRateLimit, InMemoryRateLimiter
 from litestar_auth.totp import InMemoryUsedTotpCodeStore, _current_counter, _generate_totp_code
 from tests.e2e.conftest import SessionMaker
-
-if TYPE_CHECKING:
-    from litestar.testing import AsyncTestClient
 
 pytestmark = pytest.mark.e2e
 
@@ -57,7 +55,11 @@ class MutableClock:
         self.current_time += seconds
 
 
-def _build_app_with_trusted_proxy(*, trusted_proxy: bool) -> tuple[Litestar, MutableClock]:
+def _build_app_with_trusted_proxy(
+    *,
+    trusted_proxy: bool,
+    shared_backend: bool = False,
+) -> tuple[Litestar, MutableClock]:
     """Create a Litestar auth app with configurable trusted-proxy rate limiting.
 
     Returns:
@@ -94,6 +96,17 @@ def _build_app_with_trusted_proxy(*, trusted_proxy: bool) -> tuple[Litestar, Mut
         session.commit()
 
     clock = MutableClock()
+    shared_rate_limiter = InMemoryRateLimiter(max_attempts=2, window_seconds=60, clock=clock.now)
+    login_rate_limiter = (
+        shared_rate_limiter
+        if shared_backend
+        else InMemoryRateLimiter(max_attempts=2, window_seconds=60, clock=clock.now)
+    )
+    verify_rate_limiter = (
+        shared_rate_limiter
+        if shared_backend
+        else InMemoryRateLimiter(max_attempts=2, window_seconds=60, clock=clock.now)
+    )
     backend = AuthenticationBackend[User, UUID](
         name="bearer",
         transport=BearerTransport(),
@@ -102,18 +115,27 @@ def _build_app_with_trusted_proxy(*, trusted_proxy: bool) -> tuple[Litestar, Mut
             JWTStrategy[User, UUID](secret="jwt-bearer-secret-1234567890-extra", subject_decoder=UUID),
         ),
     )
-    rate_limit_config = AuthRateLimitConfig(
-        login=EndpointRateLimit(
-            backend=InMemoryRateLimiter(max_attempts=2, window_seconds=60, clock=clock.now),
-            scope="ip",
-            namespace="login",
+    rate_limit_config = (
+        AuthRateLimitConfig.from_shared_backend(
+            shared_rate_limiter,
+            enabled=("login", "totp_verify"),
+            scope_overrides=cast("Any", {"login": "ip"}),
             trusted_proxy=trusted_proxy,
-        ),
-        totp_verify=EndpointRateLimit(
-            backend=InMemoryRateLimiter(max_attempts=2, window_seconds=60, clock=clock.now),
-            scope="ip",
-            namespace="totp-verify",
-        ),
+        )
+        if shared_backend
+        else AuthRateLimitConfig(
+            login=EndpointRateLimit(
+                backend=login_rate_limiter,
+                scope="ip",
+                namespace="login",
+                trusted_proxy=trusted_proxy,
+            ),
+            totp_verify=EndpointRateLimit(
+                backend=verify_rate_limiter,
+                scope="ip",
+                namespace="totp-verify",
+            ),
+        )
     )
     config = LitestarAuthConfig[User, UUID](
         backends=[backend],
@@ -301,6 +323,67 @@ async def test_totp_verify_throttle_is_independent_from_enable_disable_failures(
     assert first_verify_failure.status_code == HTTP_BAD_REQUEST
     assert second_verify_failure.status_code == HTTP_BAD_REQUEST
     assert blocked_verify.status_code == HTTP_TOO_MANY_REQUESTS
+
+
+@pytest.mark.filterwarnings("ignore::litestar_auth.totp.SecurityWarning")
+async def test_plugin_shared_rate_limit_backend_keeps_login_and_totp_verify_namespaces_separate() -> None:
+    """A shared plugin-level limiter backend still preserves per-endpoint namespaces."""
+    app, _clock = _build_app_with_trusted_proxy(trusted_proxy=False, shared_backend=True)
+
+    async with AsyncTestClient(app=app, base_url="https://testserver.local") as test_client:
+        login_response = await test_client.post(
+            "/auth/login",
+            json={"identifier": "user@example.com", "password": "correct-password"},
+        )
+        assert login_response.status_code == HTTP_CREATED
+        access_token = login_response.json()["access_token"]
+
+        enable_response = await test_client.post(
+            "/auth/2fa/enable",
+            json={"password": "correct-password"},
+            headers={"Authorization": f"Bearer {access_token}"},
+        )
+        assert enable_response.status_code == HTTP_CREATED
+        enable_body = enable_response.json()
+
+        confirm_response = await test_client.post(
+            "/auth/2fa/enable/confirm",
+            json={
+                "enrollment_token": enable_body["enrollment_token"],
+                "code": _generate_totp_code(enable_body["secret"], _totp_mod._current_counter()),
+            },
+            headers={"Authorization": f"Bearer {access_token}"},
+        )
+        assert confirm_response.status_code == HTTP_CREATED
+
+        pending_response = await test_client.post(
+            "/auth/login",
+            json={"identifier": "user@example.com", "password": "correct-password"},
+        )
+        assert pending_response.status_code == HTTP_ACCEPTED
+        pending_token = pending_response.json()["pending_token"]
+
+        first_verify_failure = await test_client.post(
+            "/auth/2fa/verify",
+            json={"pending_token": pending_token, "code": "000000"},
+        )
+        second_verify_failure = await test_client.post(
+            "/auth/2fa/verify",
+            json={"pending_token": pending_token, "code": "000000"},
+        )
+        blocked_verify = await test_client.post(
+            "/auth/2fa/verify",
+            json={"pending_token": pending_token, "code": "000000"},
+        )
+        post_verify_login_failure = await test_client.post(
+            "/auth/login",
+            json={"identifier": "user@example.com", "password": "wrong-password"},
+        )
+
+    assert first_verify_failure.status_code == HTTP_BAD_REQUEST
+    assert second_verify_failure.status_code == HTTP_BAD_REQUEST
+    assert blocked_verify.status_code == HTTP_TOO_MANY_REQUESTS
+    assert post_verify_login_failure.status_code == HTTP_BAD_REQUEST
 
 
 async def test_login_rate_limit_ignores_forwarded_headers_when_trusted_proxy_disabled(

@@ -1609,9 +1609,10 @@ def test_associate_flow_uses_di_key_variant_and_clears_state_cookie() -> None:
 
 def test_associate_di_key_variant_preserves_dependency_injection_callback_signature() -> None:
     """DI-key variant keeps the injected manager callback parameter name."""
+    dependency_parameter_name = "custom_manager_key"
     controller = create_oauth_associate_controller(
         provider_name="github",
-        user_manager_dependency_key="litestar_auth_oauth_associate_user_manager",
+        user_manager_dependency_key=dependency_parameter_name,
         oauth_client=FakeOAuthClient(),
         redirect_base_url="http://testserver.local/auth/associate",
         path="/auth/associate",
@@ -1621,7 +1622,7 @@ def test_associate_di_key_variant_preserves_dependency_injection_callback_signat
     controller_type = cast("Any", controller)
     callback_handler = controller_type.callback.fn
     parameters = inspect.signature(callback_handler).parameters
-    assert "litestar_auth_oauth_associate_user_manager" in parameters
+    assert dependency_parameter_name in parameters
 
 
 def test_associate_direct_variant_omits_dependency_injection_callback_parameter() -> None:
@@ -1641,6 +1642,39 @@ def test_associate_direct_variant_omits_dependency_injection_callback_parameter(
     callback_handler = controller_type.callback.fn
     parameters = inspect.signature(callback_handler).parameters
     assert "litestar_auth_oauth_associate_user_manager" not in parameters
+
+
+async def test_provider_helper_mounts_login_routes_under_custom_auth_path() -> None:
+    """Canonical provider helper honors non-default auth_path values."""
+    password_helper = PasswordHelper()
+    user_db = InMemoryOAuthUserDatabase()
+    user_manager = TrackingUserManager(user_db, password_helper)
+    strategy = InMemoryTokenStrategy()
+    oauth_client = FakeOAuthClient()
+    backend = AuthenticationBackend[ExampleUser, UUID](
+        name="oauth-bearer",
+        transport=BearerTransport(),
+        strategy=cast("Any", strategy),
+    )
+    controller = create_provider_oauth_controller(
+        provider_name="github",
+        backend=backend,
+        user_manager=cast("Any", user_manager),
+        oauth_client=oauth_client,
+        redirect_base_url="http://testserver.local/identity/oauth",
+        auth_path="/identity",
+    )
+    app = Litestar(route_handlers=[controller])
+
+    async with AsyncTestClient(app=app) as client:
+        response = await client.get("/identity/oauth/github/authorize", follow_redirects=False)
+
+    assert response.status_code == HTTP_FOUND
+    assert len(oauth_client.authorization_calls) == 1
+    redirect_uri, _state, scopes = oauth_client.authorization_calls[0]
+    assert redirect_uri == "http://testserver.local/identity/oauth/github/callback"
+    assert scopes is None
+    assert "path=/identity/oauth/github" in response.headers["set-cookie"].lower()
 
 
 async def test_associate_di_key_variant_links_oauth() -> None:

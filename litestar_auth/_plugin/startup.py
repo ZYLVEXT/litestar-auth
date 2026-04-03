@@ -7,6 +7,7 @@ import warnings
 from typing import TYPE_CHECKING, Any, cast
 from urllib.parse import urlsplit
 
+from litestar_auth._plugin.config import _build_oauth_route_registration_contract
 from litestar_auth._plugin.middleware import get_cookie_transports
 from litestar_auth._plugin.rate_limit import iter_rate_limit_endpoints
 from litestar_auth.authentication.strategy.jwt import JWTStrategy
@@ -48,12 +49,12 @@ def warn_insecure_plugin_startup_defaults(config: LitestarAuthConfig[Any, Any]) 
     if is_testing():
         return
 
+    contract = _build_oauth_route_registration_contract(
+        auth_path=config.auth_path,
+        oauth_config=config.oauth_config,
+    )
     oauth_config = config.oauth_config
-    if (
-        oauth_config is not None
-        and has_configured_oauth_providers(config)
-        and not oauth_config.oauth_token_encryption_key
-    ):
+    if oauth_config is not None and contract.has_configured_providers and not oauth_config.oauth_token_encryption_key:
         warnings.warn(
             "OAuth providers are configured but oauth_token_encryption_key is not set; "
             "OAuth access and refresh tokens may be stored in plaintext at rest. "
@@ -100,17 +101,21 @@ def require_oauth_token_encryption_for_configured_providers(
     require_key: object,
 ) -> None:
     """Fail closed when configured OAuth providers would persist plaintext tokens."""
-    if not has_configured_oauth_providers(config):
+    contract = _build_oauth_route_registration_contract(
+        auth_path=config.auth_path,
+        oauth_config=config.oauth_config,
+    )
+    if not contract.has_configured_providers:
         return
     cast("Any", require_key)(context="OAuth providers are configured")
 
 
 def has_configured_oauth_providers(config: LitestarAuthConfig[Any, Any]) -> bool:
     """Return whether this plugin config includes any OAuth provider integration."""
-    oauth_config = config.oauth_config
-    if oauth_config is None:
-        return False
-    return has_configured_oauth_providers_for(oauth_config)
+    return _build_oauth_route_registration_contract(
+        auth_path=config.auth_path,
+        oauth_config=config.oauth_config,
+    ).has_configured_providers
 
 
 def has_configured_oauth_providers_for(oauth_config: OAuthConfig) -> bool:
@@ -127,14 +132,16 @@ def warn_if_insecure_oauth_redirect_in_production(
     if getattr(app_config, "debug", False):
         return
 
-    oauth_config = config.oauth_config
-    if oauth_config is None:
+    contract = _build_oauth_route_registration_contract(
+        auth_path=config.auth_path,
+        oauth_config=config.oauth_config,
+    )
+    if not contract.has_plugin_owned_associate_routes:
         return
-    if not (oauth_config.include_oauth_associate and oauth_config.oauth_associate_providers):
+    redirect_base_url = contract.associate_redirect_base_url
+    if redirect_base_url is None:  # pragma: no cover - contract guarantees this when routes exist
         return
 
-    associate_path = f"{config.auth_path.rstrip('/')}/associate"
-    redirect_base_url = oauth_config.oauth_associate_redirect_base_url or f"http://localhost{associate_path}"
     host = urlsplit(redirect_base_url).hostname
     if host not in {"localhost", "127.0.0.1", "::1"}:
         return

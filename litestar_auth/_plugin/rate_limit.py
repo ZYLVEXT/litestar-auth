@@ -17,6 +17,7 @@ class _RateLimitConfigProtocol(Protocol):
     forgot_password: EndpointRateLimit | None
     reset_password: EndpointRateLimit | None
     totp_enable: EndpointRateLimit | None
+    totp_confirm_enable: EndpointRateLimit | None
     totp_verify: EndpointRateLimit | None
     totp_disable: EndpointRateLimit | None
     verify_token: EndpointRateLimit | None
@@ -34,6 +35,7 @@ def iter_rate_limit_endpoints(
         rate_limit_config.forgot_password,
         rate_limit_config.reset_password,
         rate_limit_config.totp_enable,
+        rate_limit_config.totp_confirm_enable,
         rate_limit_config.totp_verify,
         rate_limit_config.totp_disable,
         rate_limit_config.verify_token,

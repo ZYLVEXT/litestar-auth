@@ -67,3 +67,151 @@ def test_import_plugin_public_module_does_not_load_models() -> None:
         "import sys\nimport litestar_auth.plugin\nassert 'litestar_auth.models' not in sys.modules\n",
     )
     assert proc.returncode == 0, proc.stdout + proc.stderr
+
+
+def test_import_models_package_keeps_user_and_oauth_submodules_lazy() -> None:
+    """Importing ``litestar_auth.models`` keeps both concrete ORM submodules deferred."""
+    proc = _run_isolated(
+        "import sys\n"
+        "import litestar_auth.models as models\n"
+        "assert models.__dir__() == [\n"
+        "    'AccessTokenMixin',\n"
+        "    'OAuthAccount',\n"
+        "    'OAuthAccountMixin',\n"
+        "    'RefreshTokenMixin',\n"
+        "    'User',\n"
+        "    'UserAuthRelationshipMixin',\n"
+        "    'UserModelMixin',\n"
+        "    'import_token_orm_models',\n"
+        "]\n"
+        "assert 'litestar_auth.models.user' not in sys.modules\n"
+        "assert 'litestar_auth.models.oauth' not in sys.modules\n",
+    )
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+
+
+def test_accessing_oauth_account_from_models_package_only_loads_oauth_submodule() -> None:
+    """Lazy ``OAuthAccount`` access loads ``models.oauth`` without importing the reference ``User`` model."""
+    proc = _run_isolated(
+        "import sys\n"
+        "import litestar_auth.models as models\n"
+        "oauth_model = models.OAuthAccount\n"
+        "assert oauth_model.__module__ == 'litestar_auth.models.oauth'\n"
+        "assert 'litestar_auth.models.oauth' in sys.modules\n"
+        "assert 'litestar_auth.models.user' not in sys.modules\n",
+    )
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+
+
+def test_models_package_token_registration_helper_keeps_user_and_oauth_submodules_lazy() -> None:
+    """The canonical models-layer token helper does not import ``models.user`` or ``models.oauth``."""
+    proc = _run_isolated(
+        "import sys\n"
+        "import litestar_auth.authentication.strategy as strategy\n"
+        "import litestar_auth.models as models\n"
+        "assert 'litestar_auth.models.user' not in sys.modules\n"
+        "assert 'litestar_auth.models.oauth' not in sys.modules\n"
+        "canonical_models = models.import_token_orm_models()\n"
+        "compatibility_models = strategy.import_token_orm_models()\n"
+        "assert canonical_models == compatibility_models\n"
+        "assert [model.__name__ for model in canonical_models] == ['AccessToken', 'RefreshToken']\n"
+        "assert [model.__module__ for model in canonical_models] == [\n"
+        "    'litestar_auth.authentication.strategy.db_models',\n"
+        "    'litestar_auth.authentication.strategy.db_models',\n"
+        "]\n"
+        "assert 'litestar_auth.models.user' not in sys.modules\n"
+        "assert 'litestar_auth.models.oauth' not in sys.modules\n",
+    )
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+
+
+def test_import_strategy_package_keeps_models_namespace_unloaded() -> None:
+    """Importing ``litestar_auth.authentication.strategy`` keeps the compatibility path model-lazy."""
+    proc = _run_isolated(
+        "import sys\n"
+        "import litestar_auth.authentication.strategy as strategy\n"
+        "assert 'litestar_auth.models' not in sys.modules\n"
+        "assert 'litestar_auth.models.oauth' not in sys.modules\n"
+        "assert 'litestar_auth.models.user' not in sys.modules\n"
+        "token_models = strategy.import_token_orm_models()\n"
+        "assert [model.__name__ for model in token_models] == ['AccessToken', 'RefreshToken']\n"
+        "assert [model.__module__ for model in token_models] == [\n"
+        "    'litestar_auth.authentication.strategy.db_models',\n"
+        "    'litestar_auth.authentication.strategy.db_models',\n"
+        "]\n"
+        "assert 'litestar_auth.authentication.strategy.db_models' in sys.modules\n"
+        "assert 'litestar_auth.models' not in sys.modules\n",
+    )
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+
+
+def test_canonical_db_bearer_plugin_setup_keeps_models_and_adapter_lazy() -> None:
+    """The common DB bearer stack stays import-lazy until the default DB factory is actually used."""
+    proc = _run_isolated(
+        "import sys\n"
+        "from typing import Any, cast\n"
+        "from litestar_auth import (\n"
+        "    AuthenticationBackend,\n"
+        "    BearerTransport,\n"
+        "    DatabaseTokenStrategy,\n"
+        "    LitestarAuth,\n"
+        "    LitestarAuthConfig,\n"
+        ")\n"
+        "class UserModel:\n"
+        "    email = 'user@example.com'\n"
+        "class UserManager:\n"
+        "    def __init__(self, user_db: object, **kwargs: object) -> None:\n"
+        "        self.user_db = user_db\n"
+        "        self.kwargs = kwargs\n"
+        "class DummySessionMaker:\n"
+        "    def __call__(self) -> object:\n"
+        "        return object()\n"
+        "backend = AuthenticationBackend(\n"
+        "    name='database',\n"
+        "    transport=BearerTransport(),\n"
+        "    strategy=cast(Any, DatabaseTokenStrategy(session=object(), token_hash_secret='x' * 40)),\n"
+        ")\n"
+        "config = LitestarAuthConfig(\n"
+        "    backends=[backend],\n"
+        "    user_model=UserModel,\n"
+        "    user_manager_class=cast(Any, UserManager),\n"
+        "    session_maker=cast(Any, DummySessionMaker()),\n"
+        "    user_manager_kwargs={},\n"
+        ")\n"
+        "LitestarAuth(config)\n"
+        "assert 'litestar_auth.models' not in sys.modules\n"
+        "assert 'litestar_auth.db.sqlalchemy' not in sys.modules\n",
+    )
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+
+
+def test_db_bearer_preset_builder_keeps_models_and_adapter_lazy() -> None:
+    """The plugin-owned DB bearer preset does not eagerly import ORM models or the SQLAlchemy adapter."""
+    proc = _run_isolated(
+        "import sys\n"
+        "from typing import Any, cast\n"
+        "from litestar_auth import LitestarAuth, LitestarAuthConfig\n"
+        "from litestar_auth._plugin.config import DatabaseTokenAuthConfig\n"
+        "class UserModel:\n"
+        "    email = 'user@example.com'\n"
+        "class UserManager:\n"
+        "    def __init__(self, user_db: object, **kwargs: object) -> None:\n"
+        "        self.user_db = user_db\n"
+        "        self.kwargs = kwargs\n"
+        "class DummySessionMaker:\n"
+        "    def __call__(self) -> object:\n"
+        "        return object()\n"
+        "config = LitestarAuthConfig.with_database_token_auth(\n"
+        "    database_token_auth=DatabaseTokenAuthConfig(\n"
+        "        token_hash_secret='x' * 40,\n"
+        "    ),\n"
+        "    user_model=UserModel,\n"
+        "    user_manager_class=cast(Any, UserManager),\n"
+        "    session_maker=cast(Any, DummySessionMaker()),\n"
+        "    user_manager_kwargs={},\n"
+        ")\n"
+        "LitestarAuth(config)\n"
+        "assert 'litestar_auth.models' not in sys.modules\n"
+        "assert 'litestar_auth.db.sqlalchemy' not in sys.modules\n",
+    )
+    assert proc.returncode == 0, proc.stdout + proc.stderr

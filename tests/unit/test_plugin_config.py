@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import importlib
+from datetime import timedelta
+from functools import partial
 from typing import Any, Literal, cast
 from uuid import UUID
 
@@ -10,6 +12,7 @@ import pytest
 
 import litestar_auth._plugin.config as plugin_config_module
 from litestar_auth._plugin.config import (
+    DatabaseTokenAuthConfig,
     OAuthConfig,
     TotpConfig,
     build_user_manager,
@@ -42,6 +45,7 @@ def test_plugin_config_module_executes_under_coverage() -> None:
     reloaded_module = importlib.reload(plugin_config_module)
 
     assert reloaded_module.LitestarAuthConfig.__name__ == LitestarAuthConfig.__name__
+    assert reloaded_module.DatabaseTokenAuthConfig.__name__ == DatabaseTokenAuthConfig.__name__
     assert reloaded_module.OAuthConfig.__name__ == OAuthConfig.__name__
 
 
@@ -149,6 +153,91 @@ def test_oauth_config_defaults_match_expected_values() -> None:
     assert config.oauth_associate_providers is None
     assert not config.oauth_associate_redirect_base_url
     assert config.oauth_token_encryption_key is None
+
+
+def test_litestar_auth_config_database_token_auth_defaults_to_none() -> None:
+    """Manual backend configs expose no DB bearer preset metadata by default."""
+    config = _minimal_config()
+
+    assert config.database_token_auth is None
+
+
+def test_with_database_token_auth_builds_canonical_db_bearer_backend() -> None:
+    """The preset builder creates the canonical bearer + database-token backend without a startup session."""
+    configured_token_bytes = 48
+    config = LitestarAuthConfig[ExampleUser, UUID].with_database_token_auth(
+        database_token_auth=DatabaseTokenAuthConfig(
+            token_hash_secret="x" * 40,
+            max_age=timedelta(minutes=5),
+            refresh_max_age=timedelta(hours=12),
+            token_bytes=configured_token_bytes,
+            accept_legacy_plaintext_tokens=True,
+        ),
+        user_model=ExampleUser,
+        user_manager_class=PluginUserManager,
+        session_maker=cast("Any", DummySessionMaker()),
+        user_db_factory=lambda _session: InMemoryUserDatabase([]),
+        user_manager_kwargs={
+            "verification_token_secret": "x" * 32,
+            "reset_password_token_secret": "y" * 32,
+        },
+    )
+
+    preset = config.database_token_auth
+    assert preset is not None
+    assert not hasattr(preset, "session")
+    assert preset.token_hash_secret == "x" * 40
+    assert preset.max_age == timedelta(minutes=5)
+    assert preset.refresh_max_age == timedelta(hours=12)
+    assert preset.token_bytes == configured_token_bytes
+    assert preset.accept_legacy_plaintext_tokens is True
+
+    backend = config.backends[0]
+    assert backend.name == "database"
+    assert isinstance(backend.transport, BearerTransport)
+    current_strategy_module = importlib.import_module("litestar_auth.authentication.strategy")
+    assert isinstance(backend.strategy, current_strategy_module.DatabaseTokenStrategy)
+    assert backend.strategy.max_age == timedelta(minutes=5)
+    assert backend.strategy.refresh_max_age == timedelta(hours=12)
+    assert backend.strategy.token_bytes == configured_token_bytes
+    assert backend.strategy.accept_legacy_plaintext_tokens is True
+
+
+def test_request_scoped_database_token_session_proxy_requires_bound_session() -> None:
+    """DB-token preset session proxy fails closed until LitestarAuth binds a request session."""
+    reset_token = plugin_config_module._DATABASE_TOKEN_REQUEST_SESSION.set(None)
+    try:
+        proxy_session = plugin_config_module.resolve_database_token_strategy_session()
+
+        with pytest.raises(RuntimeError, match="requires a LitestarAuth-managed request session"):
+            _ = cast("Any", proxy_session).marker
+    finally:
+        plugin_config_module._DATABASE_TOKEN_REQUEST_SESSION.reset(reset_token)
+
+
+def test_with_database_token_auth_rejects_manual_backends() -> None:
+    """The preset builder and manual backends are mutually exclusive."""
+    backend = AuthenticationBackend[ExampleUser, UUID](
+        name="primary",
+        transport=BearerTransport(),
+        strategy=cast("Any", InMemoryTokenStrategy(token_prefix="plugin-config")),
+    )
+
+    with pytest.raises(ValueError, match=r"use either this builder or pass backends"):
+        LitestarAuthConfig[ExampleUser, UUID].with_database_token_auth(
+            database_token_auth=DatabaseTokenAuthConfig(
+                token_hash_secret="x" * 40,
+            ),
+            backends=[backend],
+            user_model=ExampleUser,
+            user_manager_class=PluginUserManager,
+            session_maker=cast("Any", DummySessionMaker()),
+            user_db_factory=lambda _session: InMemoryUserDatabase([]),
+            user_manager_kwargs={
+                "verification_token_secret": "x" * 32,
+                "reset_password_token_secret": "y" * 32,
+            },
+        )
 
 
 def test_user_manager_accepts_password_validator_prefers_explicit_class_attribute() -> None:
@@ -330,6 +419,29 @@ def test_require_session_maker_returns_configured_session_maker() -> None:
     config = _minimal_config()
 
     assert require_session_maker(config) is config.session_maker
+
+
+def test_litestar_auth_config_builds_deferred_default_user_db_factory() -> None:
+    """Omitting user_db_factory stores the lazy SQLAlchemy-builder partial without importing the adapter."""
+    default_backend = AuthenticationBackend[ExampleUser, UUID](
+        name="primary",
+        transport=BearerTransport(),
+        strategy=cast("Any", InMemoryTokenStrategy(token_prefix="plugin-config")),
+    )
+    config = LitestarAuthConfig[ExampleUser, UUID](
+        backends=[default_backend],
+        user_model=ExampleUser,
+        user_manager_class=PluginUserManager,
+        session_maker=cast("Any", DummySessionMaker()),
+        user_manager_kwargs={
+            "verification_token_secret": "x" * 32,
+            "reset_password_token_secret": "y" * 32,
+        },
+    )
+
+    assert isinstance(config.user_db_factory, partial)
+    assert config.user_db_factory.func is plugin_config_module._build_default_user_db
+    assert config.user_db_factory.keywords == {"user_model": ExampleUser}
 
 
 def test_resolve_user_manager_factory_returns_explicit_factory_when_configured() -> None:

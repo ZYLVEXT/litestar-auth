@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import base64
 import sqlite3
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Any, cast
 from uuid import UUID
 
@@ -43,6 +43,7 @@ pytestmark = pytest.mark.e2e
 HTTP_BAD_REQUEST = 400
 HTTP_CREATED = 201
 HTTP_FOUND = 302
+HTTP_NOT_FOUND = 404
 HTTP_OK = 200
 HTTP_UNAUTHORIZED = 401
 
@@ -269,6 +270,7 @@ def build_app(
     oauth_client: FakeOAuthClient | None = None,
     associate_by_email: bool = False,
     include_associate_controller: bool = False,
+    plugin_oauth_config: OAuthConfig | None = None,
 ) -> tuple[Litestar, AppState]:
     """Create a Litestar app wired with the auth plugin and OAuth controller.
 
@@ -298,6 +300,12 @@ def build_app(
     session_maker = SessionMaker(engine)
     jwt_secret = "oauth-jwt-secret-1234567890-extra"
     oauth_token_encryption_key = base64.urlsafe_b64encode(b"0" * 32).decode()
+    configured_plugin_oauth = plugin_oauth_config or OAuthConfig()
+    if configured_plugin_oauth.oauth_token_encryption_key is None:
+        configured_plugin_oauth = replace(
+            configured_plugin_oauth,
+            oauth_token_encryption_key=oauth_token_encryption_key,
+        )
     backend = AuthenticationBackend[User, UUID](
         name="bearer",
         transport=BearerTransport(),
@@ -309,13 +317,18 @@ def build_app(
         user_model=User,
         user_manager_class=OAuthUserManager,
         allow_nondurable_jwt_revocation=True,
+        user_db_factory=lambda session: SQLAlchemyUserDatabase(
+            session,
+            user_model=User,
+            oauth_account_model=OAuthAccount,
+        ),
         user_manager_kwargs={
             "password_helper": password_helper,
             "verification_token_secret": "verify-secret-1234567890-1234567890",
             "reset_password_token_secret": "reset-secret-1234567890-1234567890",
             "id_parser": UUID,
         },
-        oauth_config=OAuthConfig(oauth_token_encryption_key=oauth_token_encryption_key),
+        oauth_config=configured_plugin_oauth,
         include_register=False,
         include_verify=False,
         include_reset_password=False,
@@ -688,4 +701,90 @@ async def test_oauth_associate_links_provider_to_authenticated_user() -> None:
         result = cast("Any", await session.execute(select(User)))
         users = list(result.scalars())
     assert len(users) == 1
+    state.engine.dispose()
+
+
+async def test_plugin_managed_oauth_associate_routes_link_provider_to_authenticated_user() -> None:
+    """Plugin-owned associate routes preserve the documented prefix and linking flow."""
+    oauth_client = FakeOAuthClient(account_id="plugin-associate-provider-id", email="provider@example.com")
+    app, state = build_app(
+        oauth_client=oauth_client,
+        plugin_oauth_config=OAuthConfig(
+            include_oauth_associate=True,
+            oauth_associate_providers=[("github", oauth_client)],
+            oauth_associate_redirect_base_url="https://testserver.local/auth/associate",
+        ),
+    )
+    existing_user = await create_local_user(
+        state,
+        email="linked@example.com",
+        password="existing-password",
+    )
+
+    async with AsyncTestClient(app=app, base_url="https://testserver.local") as client:
+        login_response = await client.post(
+            "/auth/login",
+            json={"identifier": "linked@example.com", "password": "existing-password"},
+        )
+        assert login_response.status_code == HTTP_CREATED
+        access_token = login_response.json()["access_token"]
+
+        authorize_response = await client.get(
+            "/auth/associate/github/authorize",
+            headers={"Authorization": f"Bearer {access_token}"},
+            follow_redirects=False,
+        )
+        assert authorize_response.status_code == HTTP_FOUND
+        state_cookie = authorize_response.cookies.get("__oauth_associate_state_github")
+        assert state_cookie is not None
+        assert "path=/auth/associate/github" in authorize_response.headers["set-cookie"].lower()
+
+        callback_response = await client.get(
+            "/auth/associate/github/callback",
+            params={"code": "provider-code", "state": state_cookie},
+            headers={"Authorization": f"Bearer {access_token}"},
+        )
+        assert callback_response.status_code == HTTP_OK
+        assert callback_response.json() == {"linked": True}
+
+    oauth_account = await get_oauth_account(state, "github", "plugin-associate-provider-id")
+    assert oauth_account is not None
+    assert oauth_account.user_id == existing_user.id
+    state.engine.dispose()
+
+
+async def test_plugin_oauth_provider_inventory_keeps_login_route_registration_explicit() -> None:
+    """OAuthConfig login providers do not auto-mount associate routes or alter explicit login helper paths."""
+    oauth_client = FakeOAuthClient(account_id="provider-user-login-only", email="oauth@example.com")
+    app, state = build_app(
+        oauth_client=oauth_client,
+        plugin_oauth_config=OAuthConfig(
+            oauth_providers=[("github", oauth_client)],
+        ),
+    )
+
+    async with AsyncTestClient(app=app, base_url="https://testserver.local") as client:
+        login_authorize = await client.get("/auth/oauth/github/authorize", follow_redirects=False)
+        assert login_authorize.status_code == HTTP_FOUND
+        login_state = login_authorize.cookies.get("__oauth_state_github")
+        assert login_state is not None
+
+        missing_associate_route = await client.get(
+            "/auth/associate/github/authorize",
+            follow_redirects=False,
+        )
+        assert missing_associate_route.status_code == HTTP_NOT_FOUND
+
+        callback_response = await client.get(
+            "/auth/oauth/github/callback",
+            params={"code": "provider-code", "state": login_state},
+        )
+        assert callback_response.status_code == HTTP_OK
+
+    assert state.oauth_client.authorization_calls == [
+        ("https://testserver.local/auth/oauth/github/callback", login_state, None),
+    ]
+    assert "path=/auth/oauth/github" in login_authorize.headers["set-cookie"].lower()
+    oauth_account = await get_oauth_account(state, "github", "provider-user-login-only")
+    assert oauth_account is not None
     state.engine.dispose()

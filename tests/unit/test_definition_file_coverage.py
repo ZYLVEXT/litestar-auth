@@ -14,16 +14,29 @@ from typing import TYPE_CHECKING, get_args
 from uuid import uuid4
 
 import pytest
-from sqlalchemy import Uuid
+from sqlalchemy import Uuid, inspect
 from sqlalchemy.exc import SAWarning
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
+import litestar_auth._auth_model_mixins as auth_model_mixins_module
 import litestar_auth._manager._protocols as manager_protocols_module
 import litestar_auth.authentication.strategy.base as strategy_base_module
 import litestar_auth.authentication.transport.base as transport_base_module
 import litestar_auth.db.base as db_base_module
+import litestar_auth.models.mixins as model_mixins_module
+import litestar_auth.models.user_relationships as user_relationships_module
 import litestar_auth.schemas as schemas_module
 import litestar_auth.types as types_module
+from litestar_auth.authentication.strategy.db_models import AccessToken as ModelsAccessToken
+from litestar_auth.authentication.strategy.db_models import RefreshToken as ModelsRefreshToken
+from litestar_auth.models.mixins import (
+    AccessTokenMixin,
+    OAuthAccountMixin,
+    RefreshTokenMixin,
+    UserAuthRelationshipMixin,
+    UserModelMixin,
+)
+from litestar_auth.models.oauth import OAuthAccount as ModelsOAuthAccount
 from litestar_auth.models.user import User as ModelsUser
 from tests._helpers import ExampleUser
 
@@ -207,7 +220,10 @@ def test_models_oauth_module_reload_executes_under_coverage(monkeypatch: pytest.
     assert set(reloaded_module.OAuthAccount.__table__.c.keys()).issuperset(
         {"access_token", "account_email", "account_id", "expires_at", "id", "oauth_name", "refresh_token", "user_id"},
     )
-    assert sorted(reloaded_module.OAuthAccount.__annotations__) == [
+    assert issubclass(reloaded_module.OAuthAccount, OAuthAccountMixin)
+    assert sorted(
+        name for name in reloaded_module.OAuthAccountMixin.__annotations__ if not name.startswith("auth_")
+    ) == [
         "access_token",
         "account_email",
         "account_id",
@@ -225,23 +241,206 @@ def test_models_oauth_module_reload_executes_under_coverage(monkeypatch: pytest.
     assert reloaded_module.OAuthAccount.__table__.c.user_id.foreign_keys
 
 
-def test_models_user_module_columns_and_relationships() -> None:
-    """Reference ``User`` model (real package) keeps expected columns and OAuth inverse."""
-    assert ModelsUser.__tablename__ == "user"
-    assert set(ModelsUser.__table__.c.keys()).issuperset(
-        {"email", "hashed_password", "id", "is_active", "is_superuser", "is_verified", "totp_secret"},
+def test_models_mixins_module_reload_preserves_contract_exports() -> None:
+    """Reload the side-effect-free auth mixin module and verify its export surface."""
+    reloaded_module = _reload_module(model_mixins_module)
+
+    assert reloaded_module.__all__ == (
+        "AccessTokenMixin",
+        "OAuthAccountMixin",
+        "RefreshTokenMixin",
+        "UserAuthRelationshipMixin",
+        "UserModelMixin",
     )
-    assert sorted(ModelsUser.__annotations__) == [
-        "access_tokens",
+    assert hasattr(reloaded_module.UserModelMixin, "email")
+    assert hasattr(reloaded_module.OAuthAccountMixin, "access_token")
+    assert "user" in reloaded_module._TokenModelMixin.__dict__
+    assert "user_id" in reloaded_module._TokenModelMixin.__dict__
+    assert issubclass(ModelsUser, UserModelMixin)
+    assert issubclass(ModelsOAuthAccount, OAuthAccountMixin)
+    assert issubclass(ModelsAccessToken, AccessTokenMixin)
+    assert issubclass(ModelsRefreshToken, RefreshTokenMixin)
+
+
+def test_internal_auth_model_mixins_module_reload_preserves_contract_exports(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Reload the internal auth mixin module and verify its reusable contracts stay stable."""
+    reloaded_module = _load_reloaded_alias(
+        alias_name="_coverage_alias_auth_model_mixins",
+        source_path=REPO_ROOT / "litestar_auth" / "_auth_model_mixins.py",
+        monkeypatch=monkeypatch,
+    )
+
+    assert reloaded_module.__all__ == (
+        "AccessTokenMixin",
+        "RefreshTokenMixin",
+        "UserAuthRelationshipMixin",
+        "UserModelMixin",
+        "_TokenModelMixin",
+    )
+    assert reloaded_module._USER_RELATIONSHIP_NAME == "user"
+    assert sorted(reloaded_module.UserModelMixin.__annotations__) == [
         "email",
         "hashed_password",
         "is_active",
         "is_superuser",
         "is_verified",
-        "oauth_accounts",
-        "refresh_tokens",
         "totp_secret",
     ]
+    assert reloaded_module.AccessTokenMixin.auth_user_back_populates == "access_tokens"
+    assert reloaded_module.RefreshTokenMixin.auth_user_back_populates == "refresh_tokens"
+    assert reloaded_module.AccessTokenMixin.__mro__[1].__name__ == "_TokenModelMixin"
+    assert reloaded_module.RefreshTokenMixin.__mro__[1].__name__ == "_TokenModelMixin"
+    assert reloaded_module._TokenModelMixin.__annotations__["user_id"] == "Mapped[uuid.UUID]"
+    assert reloaded_module._TokenModelMixin.__annotations__["user"] == "Mapped[Any]"
+
+
+def test_auth_model_mixins_cover_full_and_partial_relationship_contracts() -> None:
+    """Internal and public auth mixins support both fully wired and intentionally partial model families."""
+
+    class FullCoverageBase(DeclarativeBase):
+        """Declarative registry for full-relationship mixin coverage."""
+
+    class FullCoverageUUIDBase(FullCoverageBase):
+        """UUID primary-key base for full-relationship mixin coverage."""
+
+        __abstract__ = True
+
+        id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
+
+    class FullCoverageUser(
+        auth_model_mixins_module.UserModelMixin,
+        auth_model_mixins_module.UserAuthRelationshipMixin,
+        FullCoverageUUIDBase,
+    ):
+        """User model that composes every supported auth relationship branch."""
+
+        __tablename__ = "coverage_full_user"
+
+        auth_access_token_model = "FullCoverageAccessToken"
+        auth_refresh_token_model = "FullCoverageRefreshToken"
+        auth_oauth_account_model = "FullCoverageOAuthAccount"
+
+    class FullCoverageAccessToken(auth_model_mixins_module.AccessTokenMixin, FullCoverageBase):
+        """Access-token model bound to the full coverage user."""
+
+        __tablename__ = "coverage_full_access_token"
+
+        auth_user_model = "FullCoverageUser"
+        auth_user_table = "coverage_full_user"
+
+    class FullCoverageRefreshToken(auth_model_mixins_module.RefreshTokenMixin, FullCoverageBase):
+        """Refresh-token model bound to the full coverage user."""
+
+        __tablename__ = "coverage_full_refresh_token"
+
+        auth_user_model = "FullCoverageUser"
+        auth_user_table = "coverage_full_user"
+
+    class FullCoverageOAuthAccount(OAuthAccountMixin, FullCoverageUUIDBase):
+        """OAuth-account model bound to the full coverage user."""
+
+        __tablename__ = "coverage_full_oauth_account"
+
+        auth_user_model = "FullCoverageUser"
+        auth_user_table = "coverage_full_user"
+        auth_provider_identity_constraint_name = "uq_coverage_full_oauth_identity"
+
+    full_relationships = inspect(FullCoverageUser).relationships
+
+    assert sorted(full_relationships.keys()) == ["access_tokens", "oauth_accounts", "refresh_tokens"]
+    assert full_relationships["access_tokens"].mapper.class_ is FullCoverageAccessToken
+    assert full_relationships["refresh_tokens"].mapper.class_ is FullCoverageRefreshToken
+    assert full_relationships["oauth_accounts"].mapper.class_ is FullCoverageOAuthAccount
+    assert inspect(FullCoverageAccessToken).relationships["user"].back_populates == "access_tokens"
+    assert inspect(FullCoverageRefreshToken).relationships["user"].back_populates == "refresh_tokens"
+    assert inspect(FullCoverageOAuthAccount).relationships["user"].back_populates == "oauth_accounts"
+    assert (
+        next(iter(FullCoverageAccessToken.__table__.c.user_id.foreign_keys)).target_fullname == "coverage_full_user.id"
+    )
+    assert (
+        next(iter(FullCoverageRefreshToken.__table__.c.user_id.foreign_keys)).target_fullname == "coverage_full_user.id"
+    )
+    assert next(iter(FullCoverageOAuthAccount.__table__.c.user_id.foreign_keys)).target_fullname == (
+        "coverage_full_user.id"
+    )
+    assert {
+        constraint.name for constraint in FullCoverageOAuthAccount.__table__.constraints if constraint.name is not None
+    } == {"uq_coverage_full_oauth_identity"}
+
+    class PartialCoverageBase(DeclarativeBase):
+        """Declarative registry for partial-relationship mixin coverage."""
+
+    class PartialCoverageUUIDBase(PartialCoverageBase):
+        """UUID primary-key base for partial-relationship mixin coverage."""
+
+        __abstract__ = True
+
+        id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
+
+    class PartialCoverageUser(
+        auth_model_mixins_module.UserModelMixin,
+        auth_model_mixins_module.UserAuthRelationshipMixin,
+        PartialCoverageUUIDBase,
+    ):
+        """User model that intentionally disables every optional auth relationship."""
+
+        __tablename__ = "coverage_partial_user"
+
+        auth_access_token_model = None
+        auth_refresh_token_model = None
+        auth_oauth_account_model = None
+
+    partial_relationships = inspect(PartialCoverageUser).relationships
+
+    assert PartialCoverageUser.access_tokens is None
+    assert PartialCoverageUser.refresh_tokens is None
+    assert PartialCoverageUser.oauth_accounts is None
+    assert list(partial_relationships.keys()) == []
+
+
+def test_models_user_relationships_module_reload_preserves_contract_exports() -> None:
+    """Reload the shared user-relationship contract module and verify its declarative surface."""
+    reloaded_module = _reload_module(user_relationships_module)
+
+    assert reloaded_module.__all__ == ("UserAuthRelationshipMixin",)
+    assert sorted(
+        name
+        for name in ("access_tokens", "oauth_accounts", "refresh_tokens")
+        if name in reloaded_module.UserAuthRelationshipMixin.__dict__
+    ) == ["access_tokens", "oauth_accounts", "refresh_tokens"]
+    assert issubclass(ModelsUser, UserAuthRelationshipMixin)
+
+
+def test_models_user_module_columns_and_relationships() -> None:
+    """Reference ``User`` model (real package) keeps expected columns and OAuth inverse."""
+    user_relationships = inspect(ModelsUser).relationships
+
+    assert issubclass(ModelsUser, UserModelMixin)
+    assert issubclass(ModelsUser, UserAuthRelationshipMixin)
+    assert issubclass(ModelsOAuthAccount, OAuthAccountMixin)
+    assert issubclass(ModelsAccessToken, AccessTokenMixin)
+    assert issubclass(ModelsRefreshToken, RefreshTokenMixin)
+    assert ModelsUser.__tablename__ == "user"
+    assert set(ModelsUser.__table__.c.keys()).issuperset(
+        {"email", "hashed_password", "id", "is_active", "is_superuser", "is_verified", "totp_secret"},
+    )
+    assert sorted(UserModelMixin.__annotations__) == [
+        "email",
+        "hashed_password",
+        "is_active",
+        "is_superuser",
+        "is_verified",
+        "totp_secret",
+    ]
+    assert sorted(user_relationships.keys()) == ["access_tokens", "oauth_accounts", "refresh_tokens"]
+    assert user_relationships["access_tokens"].mapper.class_.__name__ == "AccessToken"
+    assert user_relationships["access_tokens"].back_populates == "user"
+    assert user_relationships["refresh_tokens"].mapper.class_.__name__ == "RefreshToken"
+    assert user_relationships["refresh_tokens"].back_populates == "user"
+    assert user_relationships["oauth_accounts"].mapper.class_.__name__ == "OAuthAccount"
+    assert user_relationships["oauth_accounts"].back_populates == "user"
 
 
 def test_db_models_module_reload_executes_under_coverage(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -258,5 +457,9 @@ def test_db_models_module_reload_executes_under_coverage(monkeypatch: pytest.Mon
     assert reloaded_module.RefreshToken.__tablename__ == "refresh_token"
     assert set(reloaded_module.AccessToken.__table__.c.keys()).issuperset({"created_at", "token", "user_id"})
     assert set(reloaded_module.RefreshToken.__table__.c.keys()).issuperset({"created_at", "token", "user_id"})
-    assert sorted(reloaded_module.AccessToken.__annotations__) == ["created_at", "token", "user", "user_id"]
-    assert sorted(reloaded_module.RefreshToken.__annotations__) == ["created_at", "token", "user", "user_id"]
+    assert issubclass(reloaded_module.AccessToken, AccessTokenMixin)
+    assert issubclass(reloaded_module.RefreshToken, RefreshTokenMixin)
+    assert reloaded_module.import_token_orm_models() == (
+        reloaded_module.AccessToken,
+        reloaded_module.RefreshToken,
+    )

@@ -8,6 +8,7 @@ from uuid import UUID, uuid4
 
 import pytest
 
+from litestar_auth._plugin.config import DatabaseTokenAuthConfig
 from litestar_auth.authentication.backend import AuthenticationBackend
 from litestar_auth.authentication.strategy.base import SessionBindable
 from litestar_auth.authentication.strategy.db import DatabaseTokenStrategy
@@ -244,6 +245,30 @@ def test_plugin_allows_legacy_plaintext_tokens_with_explicit_rollout_flag(
     config = _minimal_plugin_config(
         backend=backend,
         allow_legacy_plaintext_tokens=True,
+    )
+
+    plugin = LitestarAuth(config)
+    assert plugin is not None
+
+
+def test_plugin_allows_database_token_preset_legacy_plaintext_tokens_without_top_level_rollout_flag(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The canonical DB-token preset no longer requires a duplicate top-level rollout flag."""
+    monkeypatch.delenv("LITESTAR_AUTH_TESTING", raising=False)
+    config = LitestarAuthConfig[ExampleUser, UUID].with_database_token_auth(
+        database_token_auth=DatabaseTokenAuthConfig(
+            token_hash_secret="test-token-hash-secret-1234567890-1234567890",
+            accept_legacy_plaintext_tokens=True,
+        ),
+        user_model=ExampleUser,
+        user_manager_class=PluginUserManager,
+        session_maker=cast("Any", DummySessionMaker()),
+        user_db_factory=lambda _session: InMemoryUserDatabase([]),
+        user_manager_kwargs={
+            "verification_token_secret": "x" * 32,
+            "reset_password_token_secret": "y" * 32,
+        },
     )
 
     plugin = LitestarAuth(config)

@@ -8,6 +8,7 @@ from uuid import UUID, uuid4
 
 import pytest
 from litestar.middleware import DefineMiddleware
+from litestar.testing import AsyncTestClient
 
 import litestar_auth.totp as _totp_mod
 from litestar_auth._plugin.config import DEFAULT_USER_MANAGER_DEPENDENCY_KEY
@@ -31,7 +32,6 @@ from tests.integration.conftest import DummySessionMaker, ExampleUser, InMemoryT
 if TYPE_CHECKING:
     from httpx import Response
     from litestar import Litestar
-    from litestar.testing import AsyncTestClient
 
 pytestmark = pytest.mark.integration
 
@@ -73,7 +73,21 @@ def build_rate_limit_config() -> AuthRateLimitConfig:
     )
 
 
-def build_app() -> Litestar:
+def build_shared_backend_rate_limit_config() -> AuthRateLimitConfig:
+    """Create the current shared-backend auth recipe used by downstream apps.
+
+    Returns:
+        Shared endpoint rules backed by a single limiter instance.
+    """
+    shared_backend = InMemoryRateLimiter(max_attempts=2, window_seconds=60)
+    return AuthRateLimitConfig.from_shared_backend(
+        shared_backend,
+        enabled=("login", "register", "forgot_password", "totp_verify"),
+        scope_overrides=cast("Any", {"forgot_password": "ip"}),
+    )
+
+
+def build_app(*, rate_limit_config: AuthRateLimitConfig | None = None) -> Litestar:
     """Create an application wired with auth rate limiting.
 
     Returns:
@@ -99,7 +113,7 @@ def build_app() -> Litestar:
         transport=BearerTransport(),
         strategy=cast("Any", InMemoryTokenStrategy()),
     )
-    rate_limit_config = build_rate_limit_config()
+    rate_limit_config = rate_limit_config if rate_limit_config is not None else build_rate_limit_config()
 
     handlers = [
         create_auth_controller(
@@ -254,6 +268,96 @@ async def test_totp_verify_rate_limit_returns_429_after_invalid_codes(
     assert first_response.status_code == HTTP_BAD_REQUEST
     assert second_response.status_code == HTTP_BAD_REQUEST
     assert_rate_limited(blocked_response)
+
+
+@pytest.mark.filterwarnings("ignore::litestar_auth.totp.SecurityWarning")
+async def test_shared_backend_recipe_preserves_login_and_totp_verify_reset_contract() -> None:
+    """Shared limiter backends keep login and TOTP verify counters separated by slot."""
+    app = build_app(rate_limit_config=build_shared_backend_rate_limit_config())
+
+    async with AsyncTestClient(app=app) as client:
+        initial_login_failure = await client.post(
+            "/auth/login",
+            json={"identifier": "user@example.com", "password": "wrong-password"},
+        )
+        assert initial_login_failure.status_code == HTTP_BAD_REQUEST
+
+        initial_login_success = await client.post(
+            "/auth/login",
+            json={"identifier": "user@example.com", "password": "correct-password"},
+        )
+        assert initial_login_success.status_code == HTTP_CREATED
+        access_token = initial_login_success.json()["access_token"]
+
+        enable_response = await client.post(
+            "/auth/2fa/enable",
+            headers={"Authorization": f"Bearer {access_token}"},
+        )
+        assert enable_response.status_code == HTTP_CREATED
+        enable_body = enable_response.json()
+
+        confirm_response = await client.post(
+            "/auth/2fa/enable/confirm",
+            json={
+                "enrollment_token": enable_body["enrollment_token"],
+                "code": _generate_totp_code(enable_body["secret"], _totp_mod._current_counter()),
+            },
+            headers={"Authorization": f"Bearer {access_token}"},
+        )
+        assert confirm_response.status_code == HTTP_CREATED
+
+        pending_for_reset = await client.post(
+            "/auth/login",
+            json={"identifier": "user@example.com", "password": "correct-password"},
+        )
+        assert pending_for_reset.status_code == HTTP_ACCEPTED
+        first_verify_failure = await client.post(
+            "/auth/2fa/verify",
+            json={"pending_token": pending_for_reset.json()["pending_token"], "code": "000000"},
+        )
+        assert first_verify_failure.status_code == HTTP_BAD_REQUEST
+
+        pending_for_success = await client.post(
+            "/auth/login",
+            json={"identifier": "user@example.com", "password": "correct-password"},
+        )
+        assert pending_for_success.status_code == HTTP_ACCEPTED
+        verify_success = await client.post(
+            "/auth/2fa/verify",
+            json={
+                "pending_token": pending_for_success.json()["pending_token"],
+                "code": _generate_totp_code(enable_body["secret"], _totp_mod._current_counter()),
+            },
+        )
+        assert verify_success.status_code == HTTP_CREATED
+
+        post_verify_login_failure = await client.post(
+            "/auth/login",
+            json={"identifier": "user@example.com", "password": "wrong-password"},
+        )
+        assert post_verify_login_failure.status_code == HTTP_BAD_REQUEST
+
+        pending_for_block = await client.post(
+            "/auth/login",
+            json={"identifier": "user@example.com", "password": "correct-password"},
+        )
+        assert pending_for_block.status_code == HTTP_ACCEPTED
+        second_verify_failure = await client.post(
+            "/auth/2fa/verify",
+            json={"pending_token": pending_for_block.json()["pending_token"], "code": "000000"},
+        )
+        third_verify_failure = await client.post(
+            "/auth/2fa/verify",
+            json={"pending_token": pending_for_block.json()["pending_token"], "code": "000000"},
+        )
+        blocked_verify = await client.post(
+            "/auth/2fa/verify",
+            json={"pending_token": pending_for_block.json()["pending_token"], "code": "000000"},
+        )
+
+    assert second_verify_failure.status_code == HTTP_BAD_REQUEST
+    assert third_verify_failure.status_code == HTTP_BAD_REQUEST
+    assert_rate_limited(blocked_verify)
 
 
 @pytest.mark.filterwarnings("ignore::litestar_auth.totp.SecurityWarning")

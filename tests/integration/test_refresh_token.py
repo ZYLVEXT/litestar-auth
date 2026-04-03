@@ -231,6 +231,11 @@ async def test_login_and_refresh_rotate_refresh_tokens(
     ).hexdigest()
     assert session.scalar(select(RefreshToken).where(RefreshToken.token == first_refresh_digest)) is not None
     assert session.scalar(select(AccessToken).where(AccessToken.token == access_digest)) is not None
+    session.expire_all()
+    user_after_login = session.scalar(select(User).where(User.email == "user@example.com"))
+    assert user_after_login is not None
+    assert [token.token for token in user_after_login.access_tokens] == [access_digest]
+    assert [token.token for token in user_after_login.refresh_tokens] == [first_refresh_digest]
 
     refresh_response = await test_client.post("/auth/refresh", json={"refresh_token": first_refresh_token})
 
@@ -255,6 +260,10 @@ async def test_login_and_refresh_rotate_refresh_tokens(
         )
         is not None
     )
+    session.expire_all()
+    user_after_refresh = session.scalar(select(User).where(User.email == "user@example.com"))
+    assert user_after_refresh is not None
+    assert first_refresh_digest not in {token.token for token in user_after_refresh.refresh_tokens}
 
     replay_response = await test_client.post("/auth/refresh", json={"refresh_token": first_refresh_token})
 

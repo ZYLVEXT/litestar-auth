@@ -1,4 +1,14 @@
-"""OAuth package."""
+"""Stable public OAuth helpers.
+
+Use ``create_provider_oauth_controller`` from this package for the canonical
+provider-login route-registration path, typically with
+``auth_path=config.auth_path``. ``OAuthConfig.oauth_providers`` remains
+declarative inventory only; the plugin never auto-mounts login routes from it.
+Plugin-owned OAuth auto-mounting is limited to associate routes configured with
+``include_oauth_associate=True`` plus ``oauth_associate_providers``.
+
+Advanced custom route tables still use ``litestar_auth.controllers`` directly.
+"""
 
 from __future__ import annotations
 

@@ -5,7 +5,7 @@ Use this when moving from local development to production, especially for **secr
 ## Process topology
 
 - **Single worker / dev** — in-memory JWT denylist, in-memory rate limiting, and in-memory TOTP replay cache are acceptable for local testing only.
-- **Multiple workers or restarts that matter** — use **Redis** (or equivalent shared stores) for: JWT `jti` denylist, `AuthRateLimitConfig` backend, `totp_used_tokens_store`, and TOTP pending-token JTI store if you mount a custom controller with a shared store (see [TOTP guide](guides/totp.md)).
+- **Multiple workers or restarts that matter** — use **Redis** (or equivalent shared stores) for: JWT `jti` denylist, the `AuthRateLimitConfig.from_shared_backend()` backend, `totp_used_tokens_store`, and TOTP pending-token JTI store if you mount a custom controller with a shared store (see [TOTP guide](guides/totp.md)).
 
 ## Secrets and keys
 
@@ -21,8 +21,20 @@ Use this when moving from local development to production, especially for **secr
 Use Redis-backed components when you run multiple workers or need durability:
 
 - **JWT denylist** — `RedisJWTDenylistStore` instead of in-memory.
-- **Rate limiting** — `RedisRateLimiter` via `AuthRateLimitConfig` (see [Rate limiting](api/ratelimit.md)).
+- **Rate limiting** — prefer one `RedisRateLimiter` passed to `AuthRateLimitConfig.from_shared_backend(...)` so all standard auth endpoints share Redis-backed counters with package-owned default scopes and namespace tokens (see [Rate limiting](guides/rate_limiting.md)).
 - **TOTP replay store** — `RedisUsedTotpCodeStore` for `totp_config.totp_used_tokens_store`.
+
+Canonical shared-backend recipe:
+
+```python
+from litestar_auth.ratelimit import AuthRateLimitConfig, RedisRateLimiter
+
+rate_limit_config = AuthRateLimitConfig.from_shared_backend(
+    RedisRateLimiter(redis=redis_client, max_attempts=5, window_seconds=60),
+)
+```
+
+If you are migrating from an older manual recipe, keep existing key-space choices with `namespace_overrides` and `scope_overrides`. Reserve direct `EndpointRateLimit(...)` assembly for advanced per-endpoint exceptions.
 
 The in-memory rate limiter and in-memory denylist are **not** sufficient across processes. The plugin may log startup warnings when in-memory rate limiting is detected outside tests.
 

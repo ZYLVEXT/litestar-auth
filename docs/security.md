@@ -11,7 +11,7 @@ This page summarizes protections and **conscious trade-offs** shipped by the lib
 - **Cookie auth** — secure defaults (`HttpOnly`, `Secure`, `SameSite`); CSRF for unsafe methods when wired (see [Guides — Security](guides/security.md)).
 - **TOTP** — replay protection when a `totp_used_tokens_store` is configured; fail-fast in production without a store when replay protection is required.
 - **OAuth** — state in `HttpOnly` cookie; strict validation; optional encryption at rest for provider tokens (`oauth_token_encryption_key`); guarded associate-by-email rules (`trust_provider_email_verified`, `oauth_associate_by_email`).
-- **Opaque DB tokens** — keyed digest at rest; **`allow_legacy_plaintext_tokens`** is migration-only and unsafe for production.
+- **Opaque DB tokens** — keyed digest at rest; the canonical plugin path is `DatabaseTokenAuthConfig` + `LitestarAuthConfig.with_database_token_auth()`, and legacy plaintext acceptance is migration-only and unsafe for production.
 - **Rate limiting** — optional per-endpoint limits; in-memory backend is single-process only.
 
 ## Configuration flags (downgrade / compatibility)
@@ -21,9 +21,11 @@ Treat these as **explicit opt-in** to weaker behavior:
 | Flag | Risk |
 | ---- | ---- |
 | `allow_nondurable_jwt_revocation=True` | In-memory JWT denylist does not survive restarts or scale horizontally. |
-| `allow_legacy_plaintext_tokens=True` | Accepts legacy plaintext opaque tokens in DB. |
+| `allow_legacy_plaintext_tokens=True` | Accepts legacy plaintext opaque tokens in DB for manual `DatabaseTokenStrategy` setups. For the canonical preset, set `DatabaseTokenAuthConfig.accept_legacy_plaintext_tokens=True` instead. |
 | `totp_enable_requires_password=False` | Weakens step-up for TOTP enrollment. |
 | `csrf_secret` unset with cookie auth | CSRF middleware may not protect unsafe methods — see validation warnings at startup. |
+
+If you are migrating from a hand-assembled DB bearer backend, move that setup to `LitestarAuthConfig.with_database_token_auth(...)` and keep plaintext compatibility enabled only for the shortest migration window possible.
 
 ## Limitations (by design)
 

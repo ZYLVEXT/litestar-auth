@@ -12,16 +12,20 @@ OAuthConfig(
     oauth_associate_providers=[("github", oauth_client), ...],
     oauth_associate_redirect_base_url="https://your.app/auth/associate",
     oauth_token_encryption_key="...",  # required when OAuth is on
-    oauth_associate_by_email=False,  # safe default
 )
 ```
 
-Routes are mounted under `{auth_path}/associate/{provider}`.
+The plugin mounts:
+
+- `GET {auth_path}/associate/{provider}/authorize`
+- `GET {auth_path}/associate/{provider}/callback`
+
+This cookbook covers the plugin-owned associate flow only. OAuth login routes remain an explicit helper path mounted separately with `litestar_auth.oauth.create_provider_oauth_controller(...)`.
 
 ## Security defaults
 
-- **`oauth_associate_by_email=False`** avoids implicitly binding users by email alone.
-- If you enable associate-by-email, you must pair it with **`trust_provider_email_verified=True`** only for providers that assert verified email in the token response; otherwise the callback returns **400** (`OAUTH_EMAIL_NOT_VERIFIED`).
+- Associate routes require an authenticated `request.user`; they do not use `oauth_associate_by_email`.
+- Keep **`oauth_token_encryption_key`** configured in production so stored provider tokens are encrypted at rest.
 
 ## See also
 

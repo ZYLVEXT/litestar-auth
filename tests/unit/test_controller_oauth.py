@@ -530,6 +530,59 @@ def test_oauth_module_reload_preserves_public_helpers() -> None:
     )
 
 
+def test_shared_oauth_controller_assembly_uses_direct_manager_binding_and_provider_scoped_paths() -> None:
+    """Shared assembly keeps login controllers on the direct-manager provider-scoped contract."""
+    manager = MagicMock()
+
+    assembly = oauth_module._build_oauth_controller_assembly(
+        provider_name="github",
+        oauth_client=object(),
+        redirect_base_url="https://app.example/auth/oauth",
+        path="/auth/oauth",
+        cookie_secure=True,
+        state_cookie_prefix=oauth_module.STATE_COOKIE_PREFIX,
+        controller_name_suffix="OAuthController",
+        user_manager_binding=oauth_module._build_direct_user_manager_binding(cast("Any", manager)),
+        associate_by_email=True,
+        trust_provider_email_verified=True,
+    )
+
+    assert assembly.controller_name == "GithubOAuthController"
+    assert assembly.controller_path == "/auth/oauth/github"
+    assert assembly.callback_url == "https://app.example/auth/oauth/github/callback"
+    assert assembly.cookie_name == "__oauth_state_github"
+    assert assembly.cookie_path == "/auth/oauth/github"
+    assert assembly.cookie_secure is True
+    assert assembly.user_manager_binding.user_manager is manager
+    assert assembly.user_manager_binding.dependency_parameter_name is None
+
+
+def test_shared_oauth_controller_assembly_uses_dependency_binding_for_associate_routes() -> None:
+    """Shared assembly keeps associate DI bindings on the provider-scoped cookie and callback contract."""
+    assembly = oauth_module._build_oauth_controller_assembly(
+        provider_name="github",
+        oauth_client=object(),
+        redirect_base_url="https://app.example/auth/associate",
+        path="/auth/associate",
+        cookie_secure=False,
+        state_cookie_prefix=oauth_module.ASSOCIATE_STATE_COOKIE_PREFIX,
+        controller_name_suffix="OAuthAssociateController",
+        user_manager_binding=oauth_module._build_associate_user_manager_binding(
+            user_manager=None,
+            user_manager_dependency_key="litestar_auth_oauth_associate_user_manager",
+        ),
+    )
+
+    assert assembly.controller_name == "GithubOAuthAssociateController"
+    assert assembly.controller_path == "/auth/associate/github"
+    assert assembly.callback_url == "https://app.example/auth/associate/github/callback"
+    assert assembly.cookie_name == "__oauth_associate_state_github"
+    assert assembly.cookie_path == "/auth/associate/github"
+    assert assembly.cookie_secure is False
+    assert assembly.user_manager_binding.user_manager is None
+    assert assembly.user_manager_binding.dependency_parameter_name == "litestar_auth_oauth_associate_user_manager"
+
+
 async def test_oauth_associate_authorize_sets_state_cookie_and_redirects(monkeypatch: pytest.MonkeyPatch) -> None:
     """Associate authorize returns the provider redirect and sets the provider-scoped state cookie."""
     seen: dict[str, object] = {}
@@ -581,6 +634,17 @@ def test_create_oauth_associate_controller_requires_exactly_one_manager_input() 
             provider_name="github",
             user_manager=cast("Any", MagicMock()),
             user_manager_dependency_key="litestar_auth_oauth_associate_user_manager",
+            oauth_client=object(),
+            redirect_base_url="https://app.example/auth/associate",
+        )
+
+
+def test_create_oauth_associate_controller_rejects_invalid_dependency_parameter_name() -> None:
+    """Associate controller factory fails fast for invalid DI parameter names."""
+    with pytest.raises(ConfigurationError, match="valid Python identifier"):
+        create_oauth_associate_controller(
+            provider_name="github",
+            user_manager_dependency_key="not-a-valid-identifier",
             oauth_client=object(),
             redirect_base_url="https://app.example/auth/associate",
         )
@@ -688,6 +752,7 @@ async def test_oauth_associate_callback_propagates_already_linked_error(
 
 async def test_oauth_associate_di_callback_uses_injected_manager(monkeypatch: pytest.MonkeyPatch) -> None:
     """DI-key associate callback passes the injected manager through to the service layer."""
+    dependency_parameter_name = "custom_manager_key"
     injected_manager = MagicMock()
     seen: dict[str, object] = {}
 
@@ -706,7 +771,7 @@ async def test_oauth_associate_di_callback_uses_injected_manager(monkeypatch: py
     monkeypatch.setattr("litestar_auth.controllers.oauth.OAuthService.associate_account", fake_associate_account)
     controller_class = create_oauth_associate_controller(
         provider_name="github",
-        user_manager_dependency_key="litestar_auth_oauth_associate_user_manager",
+        user_manager_dependency_key=dependency_parameter_name,
         oauth_client=object(),
         redirect_base_url="https://app.example/auth/associate",
         path="/auth/associate",
@@ -723,10 +788,49 @@ async def test_oauth_associate_di_callback_uses_injected_manager(monkeypatch: py
         request,
         code="provider-code",
         oauth_state="associate-state",
-        litestar_auth_oauth_associate_user_manager=injected_manager,
+        **{dependency_parameter_name: injected_manager},
     )
 
     assert seen == {"user_manager": injected_manager}
+
+
+async def test_oauth_associate_di_callback_raises_when_injected_manager_missing() -> None:
+    """DI-key associate callback fails fast when Litestar does not inject the configured manager."""
+    controller_class = create_oauth_associate_controller(
+        provider_name="github",
+        user_manager_dependency_key="custom_manager_key",
+        oauth_client=object(),
+        redirect_base_url="https://app.example/auth/associate",
+        path="/auth/associate",
+        cookie_secure=True,
+    )
+    controller = cast("Any", controller_class(owner=Router(path="/", route_handlers=[])))
+    request = cast(
+        "Any",
+        SimpleNamespace(cookies={"__oauth_associate_state_github": "associate-state"}, user=object()),
+    )
+
+    with pytest.raises(TypeError, match="missing 1 required keyword argument: 'custom_manager_key'"):
+        await controller.callback.fn(
+            controller,
+            request,
+            code="provider-code",
+            oauth_state="associate-state",
+        )
+
+
+def test_set_dependency_parameter_signature_requires_oauth_state_and_var_keyword() -> None:
+    """Signature adaptation fails fast when the handler shape is incompatible."""
+
+    def invalid_callback(self: object, request: object, code: str) -> Response[Any]:
+        del self, request, code
+        return Response(content=None)
+
+    with pytest.raises(TypeError, match=r"must declare oauth_state and \*\*dependencies"):
+        oauth_module._set_dependency_parameter_signature(
+            invalid_callback,
+            parameter_name="custom_manager_key",
+        )
 
 
 async def test_oauth_login_authorize_sets_state_cookie_and_redirects(monkeypatch: pytest.MonkeyPatch) -> None:

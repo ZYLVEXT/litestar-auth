@@ -27,7 +27,8 @@ def create_provider_oauth_controller[UP: UserProtocol[Any], ID](  # noqa: PLR091
     oauth_client_class: str | None = None,
     oauth_client_kwargs: Mapping[str, object] | None = None,
     redirect_base_url: str,
-    path: str = "/auth/oauth",
+    auth_path: str = "/auth",
+    path: str | None = None,
     cookie_secure: bool = True,
     associate_by_email: bool = False,
     trust_provider_email_verified: bool = False,
@@ -49,17 +50,25 @@ def create_provider_oauth_controller[UP: UserProtocol[Any], ID](  # noqa: PLR091
         msg = "Provide oauth_client, oauth_client_factory, or oauth_client_class."
         raise ConfigurationError(msg)
 
+    resolved_path = path if path is not None else _build_oauth_login_path(auth_path)
+
     return create_oauth_controller(
         provider_name=provider_name,
         backend=backend,
         user_manager=user_manager,
         oauth_client=client,
         redirect_base_url=redirect_base_url,
-        path=path,
+        path=resolved_path,
         cookie_secure=cookie_secure,
         associate_by_email=associate_by_email,
         trust_provider_email_verified=trust_provider_email_verified,
     )
+
+
+def _build_oauth_login_path(auth_path: str) -> str:
+    """Return the canonical login-controller prefix for a given auth base path."""
+    base_path = auth_path.rstrip("/") or "/"
+    return f"{base_path}/oauth" if base_path != "/" else "/oauth"
 
 
 def load_httpx_oauth_client(oauth_client_class: str, /, **client_kwargs: object) -> object:

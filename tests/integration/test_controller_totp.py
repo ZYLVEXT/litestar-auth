@@ -688,7 +688,9 @@ async def test_enable_2fa_checks_step_up_before_already_enabled(async_test_clien
 
 async def test_enable_2fa_rejects_invalid_payload_shape() -> None:
     """Enable returns 422 and the payload-invalid code when the body fails msgspec validation."""
-    rate_limit_config, enable_backend, verify_backend, disable_backend = _build_totp_all_endpoint_rate_limiters()
+    rate_limit_config, enable_backend, _confirm_backend, verify_backend, disable_backend = (
+        _build_totp_all_endpoint_rate_limiters()
+    )
     app, _, _, _ = build_app(rate_limit_config=rate_limit_config, totp_enable_requires_password=True)
 
     async with AsyncTestClient(app=app) as client:
@@ -716,7 +718,9 @@ async def test_enable_2fa_rejects_invalid_payload_shape() -> None:
 
 async def test_enable_2fa_rejects_malformed_json_body() -> None:
     """Enable returns 400 and the request-body-invalid code for malformed JSON."""
-    rate_limit_config, enable_backend, verify_backend, disable_backend = _build_totp_all_endpoint_rate_limiters()
+    rate_limit_config, enable_backend, _confirm_backend, verify_backend, disable_backend = (
+        _build_totp_all_endpoint_rate_limiters()
+    )
     app, _, _, _ = build_app(rate_limit_config=rate_limit_config, totp_enable_requires_password=True)
 
     async with AsyncTestClient(app=app) as client:
@@ -1594,10 +1598,13 @@ def _build_totp_verify_rate_limiter() -> tuple[AuthRateLimitConfig, AsyncMock]:
     return config, backend
 
 
-def _build_totp_all_endpoint_rate_limiters() -> tuple[AuthRateLimitConfig, AsyncMock, AsyncMock, AsyncMock]:
+def _build_totp_all_endpoint_rate_limiters() -> tuple[AuthRateLimitConfig, AsyncMock, AsyncMock, AsyncMock, AsyncMock]:
     enable_backend = AsyncMock()
     enable_backend.check.return_value = True
     enable_backend.retry_after.return_value = 0
+    confirm_backend = AsyncMock()
+    confirm_backend.check.return_value = True
+    confirm_backend.retry_after.return_value = 0
     verify_backend = AsyncMock()
     verify_backend.check.return_value = True
     verify_backend.retry_after.return_value = 0
@@ -1606,10 +1613,15 @@ def _build_totp_all_endpoint_rate_limiters() -> tuple[AuthRateLimitConfig, Async
     disable_backend.retry_after.return_value = 0
     config = AuthRateLimitConfig(
         totp_enable=EndpointRateLimit(backend=enable_backend, scope="ip", namespace="totp-enable"),
+        totp_confirm_enable=EndpointRateLimit(
+            backend=confirm_backend,
+            scope="ip",
+            namespace="totp-confirm-enable",
+        ),
         totp_verify=EndpointRateLimit(backend=verify_backend, scope="ip", namespace="totp-verify"),
         totp_disable=EndpointRateLimit(backend=disable_backend, scope="ip", namespace="totp-disable"),
     )
-    return config, enable_backend, verify_backend, disable_backend
+    return config, enable_backend, confirm_backend, verify_backend, disable_backend
 
 
 def _mint_pending_token(*, secret: str, payload: dict[str, Any]) -> str:
@@ -2141,7 +2153,9 @@ async def test_disable_invalid_code_does_not_increment_verify_rate_limit() -> No
 
 async def test_enable_failures_and_success_use_enable_rate_limit_backend() -> None:
     """Enable endpoint uses its own configured rate-limit backend."""
-    rate_limit_config, enable_backend, verify_backend, disable_backend = _build_totp_all_endpoint_rate_limiters()
+    rate_limit_config, enable_backend, _confirm_backend, verify_backend, disable_backend = (
+        _build_totp_all_endpoint_rate_limiters()
+    )
     app, _, _, _ = build_app(rate_limit_config=rate_limit_config, totp_enable_requires_password=True)
 
     async with AsyncTestClient(app=app) as client:
@@ -2173,11 +2187,65 @@ async def test_enable_failures_and_success_use_enable_rate_limit_backend() -> No
     assert disable_backend.increment.await_count == 0
 
 
+async def test_confirm_enable_failures_and_success_use_confirm_enable_rate_limit_backend(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Confirm-enable uses its own configured backend, separate from enable/verify/disable."""
+    rate_limit_config, enable_backend, confirm_backend, verify_backend, disable_backend = (
+        _build_totp_all_endpoint_rate_limiters()
+    )
+    app, _, _, _ = build_app(rate_limit_config=rate_limit_config, totp_enable_requires_password=True)
+    fixed_counter = 123_456
+    monkeypatch.setattr("litestar_auth.totp._current_counter", lambda: fixed_counter)
+
+    async with AsyncTestClient(app=app) as client:
+        login_resp = await client.post(
+            "/auth/login",
+            json={"identifier": "user@example.com", "password": "correct-password"},
+        )
+        assert login_resp.status_code == HTTP_CREATED
+        access_token = login_resp.json()["access_token"]
+
+        enable_resp = await client.post(
+            "/auth/2fa/enable",
+            json={"password": "correct-password"},
+            headers={"Authorization": f"Bearer {access_token}"},
+        )
+        assert enable_resp.status_code == HTTP_CREATED
+        enable_body = enable_resp.json()
+
+        wrong_code_resp = await client.post(
+            "/auth/2fa/enable/confirm",
+            json={"enrollment_token": enable_body["enrollment_token"], "code": "000000"},
+            headers={"Authorization": f"Bearer {access_token}"},
+        )
+        assert wrong_code_resp.status_code == HTTP_BAD_REQUEST
+
+        valid_code_resp = await client.post(
+            "/auth/2fa/enable/confirm",
+            json={
+                "enrollment_token": enable_body["enrollment_token"],
+                "code": _generate_totp_code(enable_body["secret"], fixed_counter),
+            },
+            headers={"Authorization": f"Bearer {access_token}"},
+        )
+        assert valid_code_resp.status_code == HTTP_CREATED
+
+    assert confirm_backend.check.await_count == TWO_CALLS
+    assert confirm_backend.increment.await_count == 1
+    assert confirm_backend.reset.await_count == 1
+    assert enable_backend.reset.await_count == 1
+    assert verify_backend.increment.await_count == 0
+    assert disable_backend.increment.await_count == 0
+
+
 async def test_disable_failures_and_success_use_disable_rate_limit_backend(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Disable endpoint uses its own configured rate-limit backend."""
-    rate_limit_config, enable_backend, verify_backend, disable_backend = _build_totp_all_endpoint_rate_limiters()
+    rate_limit_config, enable_backend, _confirm_backend, verify_backend, disable_backend = (
+        _build_totp_all_endpoint_rate_limiters()
+    )
     app, _, _, _ = build_app(rate_limit_config=rate_limit_config)
     fixed_counter = 123_456
     monkeypatch.setattr("litestar_auth.totp._current_counter", lambda: fixed_counter)

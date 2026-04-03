@@ -10,6 +10,7 @@ from litestar_auth._plugin.config import (
     DEFAULT_USER_MANAGER_DEPENDENCY_KEY,
     OAUTH_ASSOCIATE_USER_MANAGER_DEPENDENCY_KEY,
     LitestarAuthConfig,
+    _build_oauth_route_registration_contract,
     require_session_maker,
 )
 from litestar_auth.controllers import (
@@ -138,23 +139,25 @@ def _append_oauth_associate_controllers[UP: UserProtocol[Any], ID](
     config: LitestarAuthConfig[UP, ID],
 ) -> None:
     """Append OAuth-associate controllers for configured providers."""
-    oauth_config = config.oauth_config
-    if oauth_config is None:
-        return
-    if not (oauth_config.include_oauth_associate and oauth_config.oauth_associate_providers):
+    contract = _build_oauth_route_registration_contract(
+        auth_path=config.auth_path,
+        oauth_config=config.oauth_config,
+    )
+    if not contract.plugin_associate_providers:
         return
 
-    associate_path = f"{config.auth_path.rstrip('/')}/associate"
-    redirect_base_url = oauth_config.oauth_associate_redirect_base_url or f"http://localhost{associate_path}"
-    for provider_name, oauth_client in oauth_config.oauth_associate_providers:
+    redirect_base_url = contract.associate_redirect_base_url
+    if redirect_base_url is None:  # pragma: no cover - contract guarantees this when providers exist
+        return
+    for provider_name, oauth_client in contract.plugin_associate_providers:
         controllers.append(
             create_oauth_associate_controller(
                 provider_name=provider_name,
                 user_manager_dependency_key=OAUTH_ASSOCIATE_USER_MANAGER_DEPENDENCY_KEY,
                 oauth_client=oauth_client,
                 redirect_base_url=redirect_base_url,
-                path=associate_path,
-                cookie_secure=oauth_config.oauth_cookie_secure,
+                path=contract.associate_path,
+                cookie_secure=contract.oauth_cookie_secure,
             ),
         )
 

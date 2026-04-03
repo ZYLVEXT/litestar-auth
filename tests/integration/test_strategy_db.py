@@ -7,15 +7,24 @@ from datetime import UTC, datetime, timedelta, timezone, tzinfo
 from typing import TYPE_CHECKING, Any
 
 import pytest
+from advanced_alchemy.base import UUIDPrimaryKey, create_registry
 from sqlalchemy import select
+from sqlalchemy.orm import DeclarativeBase
 
 import litestar_auth.authentication.strategy.db as db_strategy_module
+from litestar_auth.authentication.strategy import DatabaseTokenModels
 from litestar_auth.authentication.strategy._opaque_tokens import digest_opaque_token
 from litestar_auth.authentication.strategy.base import RefreshableStrategy, Strategy
 from litestar_auth.authentication.strategy.db import DatabaseTokenStrategy
 from litestar_auth.authentication.strategy.db_models import AccessToken, RefreshToken
 from litestar_auth.exceptions import ConfigurationError
-from litestar_auth.models import User
+from litestar_auth.models import (
+    AccessTokenMixin,
+    RefreshTokenMixin,
+    User,
+    UserAuthRelationshipMixin,
+    UserModelMixin,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Iterable, Mapping, Sequence
@@ -25,11 +34,64 @@ if TYPE_CHECKING:
     from sqlalchemy.orm import Session
     from sqlalchemy.orm import Session as SASession
     from sqlalchemy.orm.session import ForUpdateParameter
+    from sqlalchemy.schema import MetaData
     from sqlalchemy.sql.base import Executable
 
 pytestmark = pytest.mark.integration
 EXPECTED_CLEANUP_DELETIONS = 2
 _TOKEN_HASH_SECRET = "test-token-hash-secret-1234567890-1234567890"
+
+
+class CustomTokenBase(DeclarativeBase):
+    """App-owned registry for custom DB-token strategy models."""
+
+    registry = create_registry()
+    metadata = registry.metadata
+    __abstract__ = True
+
+
+class CustomTokenUUIDBase(UUIDPrimaryKey, CustomTokenBase):
+    """UUID primary-key base bound to the custom DB-token registry."""
+
+    __abstract__ = True
+
+
+class CustomTokenUser(UserModelMixin, UserAuthRelationshipMixin, CustomTokenUUIDBase):
+    """Custom user model wired to custom access-token and refresh-token tables."""
+
+    __tablename__ = "custom_token_user"
+
+    auth_access_token_model = "CustomAccessToken"
+    auth_refresh_token_model = "CustomRefreshToken"
+    auth_oauth_account_model = None
+
+
+class CustomAccessToken(AccessTokenMixin, CustomTokenBase):
+    """Custom access-token model for DB-token strategy integration coverage."""
+
+    __tablename__ = "custom_access_token"
+
+    auth_user_model = "CustomTokenUser"
+    auth_user_table = "custom_token_user"
+
+
+class CustomRefreshToken(RefreshTokenMixin, CustomTokenBase):
+    """Custom refresh-token model for DB-token strategy integration coverage."""
+
+    __tablename__ = "custom_refresh_token"
+
+    auth_user_model = "CustomTokenUser"
+    auth_user_table = "custom_token_user"
+
+
+@pytest.fixture
+def sqlalchemy_metadata() -> tuple[MetaData, ...]:
+    """Create the bundled and custom DB-token metadata for this module's session fixture.
+
+    Returns:
+        Metadata collections created for this module's SQLite session fixture.
+    """
+    return User.metadata, CustomTokenUser.metadata
 
 
 class AsyncSessionAdapter:
@@ -131,6 +193,20 @@ class UnusedUserManager:
         return None
 
 
+class UnusedCustomUserManager:
+    """Placeholder user manager for custom-user strategy tests."""
+
+    @staticmethod
+    async def get(user_id: object) -> CustomTokenUser | None:
+        """Return ``None`` because the DB strategy resolves custom users directly.
+
+        Returns:
+            Always ``None``.
+        """
+        del user_id
+        return None
+
+
 def _create_user(session: Session, *, email: str) -> User:
     """Persist a user for token strategy tests.
 
@@ -138,6 +214,19 @@ def _create_user(session: Session, *, email: str) -> User:
         Stored user instance.
     """
     user = User(email=email, hashed_password="hashed-password")
+    session.add(user)
+    session.commit()
+    session.refresh(user)
+    return user
+
+
+def _create_custom_token_user(session: Session, *, email: str) -> CustomTokenUser:
+    """Persist a custom user for token-strategy tests that swap token ORM models.
+
+    Returns:
+        Stored custom user instance.
+    """
+    user = CustomTokenUser(email=email, hashed_password="hashed-password")
     session.add(user)
     session.commit()
     session.refresh(user)
@@ -211,8 +300,110 @@ async def test_database_token_strategy_initializes_defaults_and_rebinds_session(
     assert rebound_strategy.refresh_max_age == strategy.refresh_max_age
     assert rebound_strategy.token_bytes == strategy.token_bytes
     assert rebound_strategy.accept_legacy_plaintext_tokens is False
+    assert rebound_strategy.token_models == strategy.token_models
     assert resolved_user is not None
     assert resolved_user.id == user.id
+
+
+async def test_database_token_strategy_supports_custom_token_model_contract(session: Session) -> None:
+    """Custom mixin-composed token models can back the DB token strategy without bundled token tables."""
+    user = _create_custom_token_user(session, email="custom-token-contract@example.com")
+    token_models = DatabaseTokenModels(
+        access_token_model=CustomAccessToken,
+        refresh_token_model=CustomRefreshToken,
+    )
+    strategy = DatabaseTokenStrategy(
+        session=_strategy_session(session),
+        token_hash_secret=_TOKEN_HASH_SECRET,
+        token_models=token_models,
+    )
+
+    access_token = await strategy.write_token(user)
+    refresh_token = await strategy.write_refresh_token(user)
+    resolved_user = await strategy.read_token(access_token, UnusedCustomUserManager())
+    rotation = await strategy.rotate_refresh_token(refresh_token, UnusedCustomUserManager())
+    await strategy.destroy_token(access_token, user)
+
+    persisted_access_tokens = session.scalars(
+        select(CustomAccessToken).where(CustomAccessToken.user_id == user.id),
+    ).all()
+    persisted_refresh_tokens = session.scalars(
+        select(CustomRefreshToken).where(CustomRefreshToken.user_id == user.id),
+    ).all()
+
+    assert session.scalar(select(AccessToken).where(AccessToken.user_id == user.id)) is None
+    assert session.scalar(select(RefreshToken).where(RefreshToken.user_id == user.id)) is None
+    assert resolved_user is not None
+    assert resolved_user.id == user.id
+    assert rotation is not None
+    rotated_user, rotated_refresh_token = rotation
+    assert rotated_user.id == user.id
+    assert rotated_refresh_token != refresh_token
+    assert persisted_access_tokens == []
+    assert len(persisted_refresh_tokens) == 1
+    assert persisted_refresh_tokens[0].token not in {refresh_token, rotated_refresh_token}
+
+
+async def test_database_token_strategy_cleanup_expired_tokens_supports_custom_token_models(session: Session) -> None:
+    """Expired-token cleanup targets custom token tables when the strategy contract is overridden."""
+    user = _create_custom_token_user(session, email="custom-token-cleanup@example.com")
+    now = datetime.now(tz=UTC)
+    session.add_all(
+        [
+            CustomAccessToken(
+                token="expired-custom-access-token",
+                user_id=user.id,
+                created_at=now - timedelta(minutes=10),
+            ),
+            CustomAccessToken(
+                token="fresh-custom-access-token",
+                user_id=user.id,
+                created_at=now - timedelta(minutes=2),
+            ),
+            CustomRefreshToken(
+                token="expired-custom-refresh-token",
+                user_id=user.id,
+                created_at=now - timedelta(days=40),
+            ),
+            CustomRefreshToken(
+                token="fresh-custom-refresh-token",
+                user_id=user.id,
+                created_at=now - timedelta(days=5),
+            ),
+        ],
+    )
+    session.commit()
+
+    strategy = DatabaseTokenStrategy(
+        session=_strategy_session(session),
+        token_hash_secret=_TOKEN_HASH_SECRET,
+        token_models=DatabaseTokenModels(
+            access_token_model=CustomAccessToken,
+            refresh_token_model=CustomRefreshToken,
+        ),
+        max_age=timedelta(minutes=5),
+        refresh_max_age=timedelta(days=30),
+    )
+
+    deleted_count = await strategy.cleanup_expired_tokens(_strategy_session(session))
+
+    assert deleted_count == EXPECTED_CLEANUP_DELETIONS
+    assert (
+        session.scalar(select(CustomAccessToken).where(CustomAccessToken.token == "expired-custom-access-token"))
+        is None
+    )
+    assert (
+        session.scalar(select(CustomRefreshToken).where(CustomRefreshToken.token == "expired-custom-refresh-token"))
+        is None
+    )
+    assert (
+        session.scalar(select(CustomAccessToken).where(CustomAccessToken.token == "fresh-custom-access-token"))
+        is not None
+    )
+    assert (
+        session.scalar(select(CustomRefreshToken).where(CustomRefreshToken.token == "fresh-custom-refresh-token"))
+        is not None
+    )
 
 
 async def test_database_token_strategy_accepts_legacy_plaintext_mode_when_enabled(session: Session) -> None:
@@ -233,6 +424,36 @@ async def test_database_token_strategy_accepts_legacy_plaintext_mode_when_enable
     assert strategy.accept_legacy_plaintext_tokens is True
     assert resolved_user is not None
     assert resolved_user.id == user.id
+
+
+async def test_database_token_strategy_rejects_legacy_plaintext_access_tokens_by_default(session: Session) -> None:
+    """Digest-only mode does not authenticate legacy plaintext access-token rows."""
+    user = _create_user(session, email="legacy-default-access@example.com")
+    legacy_token = "legacy-default-access-token"
+    session.add(AccessToken(token=legacy_token, user_id=user.id))
+    session.commit()
+
+    strategy = DatabaseTokenStrategy(
+        session=_strategy_session(session),
+        token_hash_secret=_TOKEN_HASH_SECRET,
+    )
+
+    assert await strategy.read_token(legacy_token, UnusedUserManager()) is None
+
+
+async def test_database_token_strategy_rejects_legacy_plaintext_refresh_tokens_by_default(session: Session) -> None:
+    """Digest-only mode does not rotate legacy plaintext refresh-token rows."""
+    user = _create_user(session, email="legacy-default-refresh@example.com")
+    legacy_refresh_token = "legacy-default-refresh-token"
+    session.add(RefreshToken(token=legacy_refresh_token, user_id=user.id))
+    session.commit()
+
+    strategy = DatabaseTokenStrategy(
+        session=_strategy_session(session),
+        token_hash_secret=_TOKEN_HASH_SECRET,
+    )
+
+    assert await strategy.rotate_refresh_token(legacy_refresh_token, UnusedUserManager()) is None
 
 
 async def test_database_token_strategy_destroy_token_removes_row(session: Session) -> None:

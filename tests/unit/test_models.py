@@ -15,9 +15,24 @@ from sqlalchemy.orm import Session
 from sqlalchemy.pool import StaticPool
 
 import litestar_auth.models as litestar_auth_models
-from litestar_auth.authentication.strategy import import_token_orm_models
-from litestar_auth.authentication.strategy.db_models import AccessToken, RefreshToken
-from litestar_auth.models import OAuthAccount, User
+from litestar_auth.authentication.strategy import (
+    DatabaseTokenModels as DatabaseTokenModelsFromStrategy,
+)
+from litestar_auth.authentication.strategy import import_token_orm_models as import_token_orm_models_from_strategy
+from litestar_auth.authentication.strategy.db_models import AccessToken, DatabaseTokenModels, RefreshToken
+from litestar_auth.exceptions import ConfigurationError
+from litestar_auth.models import (
+    AccessTokenMixin,
+    OAuthAccount,
+    OAuthAccountMixin,
+    RefreshTokenMixin,
+    User,
+    UserAuthRelationshipMixin,
+    UserModelMixin,
+)
+from litestar_auth.models import (
+    import_token_orm_models as import_token_orm_models_from_models,
+)
 
 if TYPE_CHECKING:
     from sqlalchemy.engine import Engine
@@ -25,6 +40,7 @@ if TYPE_CHECKING:
 pytestmark = pytest.mark.unit
 
 
+@pytest.mark.imports
 def test_oauth_submodule_import_does_not_load_reference_user_module() -> None:
     """Importing only ``litestar_auth.models.oauth`` must not execute ``models.user`` (no library ``User`` mapper)."""
     code = (
@@ -50,8 +66,48 @@ def test_models_package_getattr_unknown_name_raises() -> None:
 
 
 def test_models_package_dir_lists_lazy_exports() -> None:
-    """``__dir__`` advertises ``User`` and ``OAuthAccount`` for tab-completion / introspection."""
-    assert litestar_auth_models.__dir__() == ["OAuthAccount", "User"]  # noqa: PLC2801
+    """``__dir__`` advertises the public model exports for tab-completion / introspection."""
+    assert litestar_auth_models.__dir__() == [  # noqa: PLC2801
+        "AccessTokenMixin",
+        "OAuthAccount",
+        "OAuthAccountMixin",
+        "RefreshTokenMixin",
+        "User",
+        "UserAuthRelationshipMixin",
+        "UserModelMixin",
+        "import_token_orm_models",
+    ]
+
+
+@pytest.mark.imports
+def test_models_package_mixins_do_not_load_reference_model_modules() -> None:
+    """Importing mixins from ``litestar_auth.models`` keeps the concrete ORM modules deferred."""
+    code = (
+        "import sys\n"
+        "from litestar_auth.models import (\n"
+        "    AccessTokenMixin,\n"
+        "    OAuthAccountMixin,\n"
+        "    RefreshTokenMixin,\n"
+        "    UserAuthRelationshipMixin,\n"
+        "    UserModelMixin,\n"
+        ")\n"
+        "assert AccessTokenMixin.__name__ == 'AccessTokenMixin'\n"
+        "assert OAuthAccountMixin.__name__ == 'OAuthAccountMixin'\n"
+        "assert RefreshTokenMixin.__name__ == 'RefreshTokenMixin'\n"
+        "assert UserAuthRelationshipMixin.__name__ == 'UserAuthRelationshipMixin'\n"
+        "assert UserModelMixin.__name__ == 'UserModelMixin'\n"
+        'assert "litestar_auth.models.user" not in sys.modules\n'
+        'assert "litestar_auth.models.oauth" not in sys.modules\n'
+    )
+    result = subprocess.run(
+        [sys.executable, "-c", code],
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+
+    assert result.returncode == 0, (result.stdout, result.stderr)
 
 
 def create_test_engine() -> Engine:
@@ -250,9 +306,292 @@ def test_access_token_model_creates_schema_and_relationship() -> None:
         engine.dispose()
 
 
-def test_import_token_orm_models_returns_token_model_classes() -> None:
-    """The explicit token registration helper returns the mapped token model classes."""
-    assert import_token_orm_models() == (AccessToken, RefreshToken)
+def test_models_package_import_token_orm_models_returns_token_model_classes() -> None:
+    """The canonical models-layer helper returns the mapped token model classes."""
+    assert import_token_orm_models_from_models() == (AccessToken, RefreshToken)
+    assert import_token_orm_models_from_strategy() == import_token_orm_models_from_models()
+
+
+def test_database_token_models_default_to_bundled_token_model_classes() -> None:
+    """The explicit DB-token model contract defaults to the bundled ORM classes."""
+    token_models = DatabaseTokenModels()
+
+    assert DatabaseTokenModelsFromStrategy is DatabaseTokenModels
+    assert token_models.access_token_model is AccessToken
+    assert token_models.refresh_token_model is RefreshToken
+
+
+@pytest.mark.parametrize(
+    ("field_name", "access_token_model", "refresh_token_model", "missing_attribute"),
+    [
+        pytest.param(
+            "access_token_model",
+            type("BadAccessToken", (), {}),
+            RefreshToken,
+            "token",
+            id="invalid-access-token-model",
+        ),
+        pytest.param(
+            "refresh_token_model",
+            AccessToken,
+            type("BadRefreshToken", (), {}),
+            "token",
+            id="invalid-refresh-token-model",
+        ),
+    ],
+)
+def test_database_token_models_reject_invalid_model_contracts(
+    field_name: str,
+    access_token_model: type[object],
+    refresh_token_model: type[object],
+    missing_attribute: str,
+) -> None:
+    """Invalid token-model classes fail fast with a stable configuration error."""
+    with pytest.raises(ConfigurationError, match=rf"{field_name}.*{missing_attribute}"):
+        DatabaseTokenModels(
+            access_token_model=access_token_model,
+            refresh_token_model=refresh_token_model,
+        )
+
+
+@pytest.mark.imports
+def test_user_relationship_mixin_supports_custom_user_contract_without_reference_user_module() -> None:
+    """Custom user models can compose the shared user mixins without importing the bundled ``User``."""
+    code = (
+        "import sys\n"
+        "from advanced_alchemy.base import UUIDBase\n"
+        "from sqlalchemy import inspect\n"
+        "from litestar_auth.authentication.strategy.db_models import AccessToken, RefreshToken\n"
+        "from litestar_auth.models.oauth import OAuthAccount\n"
+        "from litestar_auth.models import UserAuthRelationshipMixin, UserModelMixin\n"
+        "assert 'litestar_auth.models.user' not in sys.modules\n"
+        "class User(UserModelMixin, UserAuthRelationshipMixin, UUIDBase):\n"
+        "    __tablename__ = 'user'\n"
+        "user_relationships = inspect(User).relationships\n"
+        "assert sorted(user_relationships.keys()) == ['access_tokens', 'oauth_accounts', 'refresh_tokens']\n"
+        "assert user_relationships['access_tokens'].mapper.class_ is AccessToken\n"
+        "assert user_relationships['refresh_tokens'].mapper.class_ is RefreshToken\n"
+        "assert user_relationships['oauth_accounts'].mapper.class_ is OAuthAccount\n"
+        "assert inspect(AccessToken).relationships['user'].mapper.class_ is User\n"
+        "assert inspect(RefreshToken).relationships['user'].mapper.class_ is User\n"
+        "assert inspect(OAuthAccount).relationships['user'].mapper.class_ is User\n"
+    )
+    result = subprocess.run(
+        [sys.executable, "-c", code],
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+
+    assert result.returncode == 0, (result.stdout, result.stderr)
+
+
+@pytest.mark.imports
+def test_database_token_models_support_custom_mixin_token_contract_without_reference_models() -> None:
+    """The public token-model contract can point at mixin-composed custom token models."""
+    code = (
+        "import sys\n"
+        "from sqlalchemy.orm import DeclarativeBase\n"
+        "from advanced_alchemy.base import UUIDPrimaryKey, create_registry\n"
+        "from litestar_auth.authentication.strategy import DatabaseTokenModels\n"
+        "from litestar_auth.models import AccessTokenMixin, RefreshTokenMixin, UserAuthRelationshipMixin, UserModelMixin\n"
+        "assert 'litestar_auth.models.user' not in sys.modules\n"
+        "class AppBase(DeclarativeBase):\n"
+        "    registry = create_registry()\n"
+        "    metadata = registry.metadata\n"
+        "    __abstract__ = True\n"
+        "class AppUUIDBase(UUIDPrimaryKey, AppBase):\n"
+        "    __abstract__ = True\n"
+        "class MyUser(UserModelMixin, UserAuthRelationshipMixin, AppUUIDBase):\n"
+        "    __tablename__ = 'my_user'\n"
+        "    auth_access_token_model = 'MyAccessToken'\n"
+        "    auth_refresh_token_model = 'MyRefreshToken'\n"
+        "    auth_oauth_account_model = None\n"
+        "class MyAccessToken(AccessTokenMixin, AppBase):\n"
+        "    __tablename__ = 'my_access_token'\n"
+        "    auth_user_model = 'MyUser'\n"
+        "    auth_user_table = 'my_user'\n"
+        "class MyRefreshToken(RefreshTokenMixin, AppBase):\n"
+        "    __tablename__ = 'my_refresh_token'\n"
+        "    auth_user_model = 'MyUser'\n"
+        "    auth_user_table = 'my_user'\n"
+        "token_models = DatabaseTokenModels(access_token_model=MyAccessToken, refresh_token_model=MyRefreshToken)\n"
+        "assert token_models.access_token_model is MyAccessToken\n"
+        "assert token_models.refresh_token_model is MyRefreshToken\n"
+        "assert 'litestar_auth.models.user' not in sys.modules\n"
+    )
+    result = subprocess.run(
+        [sys.executable, "-c", code],
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+
+    assert result.returncode == 0, (result.stdout, result.stderr)
+
+
+@pytest.mark.imports
+def test_optional_model_mixins_support_custom_auth_family_contract_without_reference_models() -> None:
+    """Custom user, token, and OAuth models can compose the supported mixins without bundled model imports."""
+    code = (
+        "import sys\n"
+        "from sqlalchemy import inspect\n"
+        "from sqlalchemy.orm import DeclarativeBase\n"
+        "from advanced_alchemy.base import UUIDPrimaryKey, create_registry\n"
+        "from litestar_auth.models import (\n"
+        "    AccessTokenMixin,\n"
+        "    OAuthAccountMixin,\n"
+        "    RefreshTokenMixin,\n"
+        "    UserAuthRelationshipMixin,\n"
+        "    UserModelMixin,\n"
+        ")\n"
+        "assert 'litestar_auth.models.user' not in sys.modules\n"
+        "assert 'litestar_auth.models.oauth' not in sys.modules\n"
+        "class AppBase(DeclarativeBase):\n"
+        "    registry = create_registry()\n"
+        "    metadata = registry.metadata\n"
+        "    __abstract__ = True\n"
+        "class AppUUIDBase(UUIDPrimaryKey, AppBase):\n"
+        "    __abstract__ = True\n"
+        "class MyUser(UserModelMixin, UserAuthRelationshipMixin, AppUUIDBase):\n"
+        "    __tablename__ = 'my_user'\n"
+        "    auth_access_token_model = 'MyAccessToken'\n"
+        "    auth_refresh_token_model = 'MyRefreshToken'\n"
+        "    auth_oauth_account_model = 'MyOAuthAccount'\n"
+        "class MyAccessToken(AccessTokenMixin, AppBase):\n"
+        "    __tablename__ = 'my_access_token'\n"
+        "    auth_user_model = 'MyUser'\n"
+        "    auth_user_table = 'my_user'\n"
+        "class MyRefreshToken(RefreshTokenMixin, AppBase):\n"
+        "    __tablename__ = 'my_refresh_token'\n"
+        "    auth_user_model = 'MyUser'\n"
+        "    auth_user_table = 'my_user'\n"
+        "class MyOAuthAccount(OAuthAccountMixin, AppUUIDBase):\n"
+        "    __tablename__ = 'my_oauth_account'\n"
+        "    auth_user_model = 'MyUser'\n"
+        "    auth_user_table = 'my_user'\n"
+        "user_relationships = inspect(MyUser).relationships\n"
+        "assert user_relationships['access_tokens'].mapper.class_ is MyAccessToken\n"
+        "assert user_relationships['refresh_tokens'].mapper.class_ is MyRefreshToken\n"
+        "assert user_relationships['oauth_accounts'].mapper.class_ is MyOAuthAccount\n"
+        "assert inspect(MyAccessToken).relationships['user'].mapper.class_ is MyUser\n"
+        "assert inspect(MyRefreshToken).relationships['user'].mapper.class_ is MyUser\n"
+        "assert inspect(MyOAuthAccount).relationships['user'].mapper.class_ is MyUser\n"
+        "assert next(iter(MyAccessToken.__table__.c.user_id.foreign_keys)).target_fullname == 'my_user.id'\n"
+        "assert next(iter(MyRefreshToken.__table__.c.user_id.foreign_keys)).target_fullname == 'my_user.id'\n"
+        "assert next(iter(MyOAuthAccount.__table__.c.user_id.foreign_keys)).target_fullname == 'my_user.id'\n"
+    )
+    result = subprocess.run(
+        [sys.executable, "-c", code],
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+
+    assert result.returncode == 0, (result.stdout, result.stderr)
+
+
+@pytest.mark.imports
+def test_optional_model_mixins_support_partial_oauth_customization() -> None:
+    """Custom users can compose only the OAuth branch of the auth model family."""
+    code = (
+        "from sqlalchemy import inspect\n"
+        "from sqlalchemy.orm import DeclarativeBase\n"
+        "from advanced_alchemy.base import UUIDPrimaryKey, create_registry\n"
+        "from litestar_auth.models import OAuthAccountMixin, UserAuthRelationshipMixin, UserModelMixin\n"
+        "class AppBase(DeclarativeBase):\n"
+        "    registry = create_registry()\n"
+        "    metadata = registry.metadata\n"
+        "    __abstract__ = True\n"
+        "class AppUUIDBase(UUIDPrimaryKey, AppBase):\n"
+        "    __abstract__ = True\n"
+        "class MyUser(UserModelMixin, UserAuthRelationshipMixin, AppUUIDBase):\n"
+        "    __tablename__ = 'my_user'\n"
+        "    auth_access_token_model = None\n"
+        "    auth_refresh_token_model = None\n"
+        "    auth_oauth_account_model = 'MyOAuthAccount'\n"
+        "class MyOAuthAccount(OAuthAccountMixin, AppUUIDBase):\n"
+        "    __tablename__ = 'my_oauth_account'\n"
+        "    auth_user_model = 'MyUser'\n"
+        "    auth_user_table = 'my_user'\n"
+        "user_relationships = inspect(MyUser).relationships\n"
+        "assert sorted(user_relationships.keys()) == ['oauth_accounts']\n"
+        "assert MyUser.access_tokens is None\n"
+        "assert MyUser.refresh_tokens is None\n"
+        "assert user_relationships['oauth_accounts'].mapper.class_ is MyOAuthAccount\n"
+        "assert inspect(MyOAuthAccount).relationships['user'].mapper.class_ is MyUser\n"
+        "assert next(iter(MyOAuthAccount.__table__.c.user_id.foreign_keys)).target_fullname == 'my_user.id'\n"
+    )
+    result = subprocess.run(
+        [sys.executable, "-c", code],
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+
+    assert result.returncode == 0, (result.stdout, result.stderr)
+
+
+@pytest.mark.imports
+def test_models_package_import_token_orm_models_keeps_user_relationship_unresolved_until_user_model_exists() -> None:
+    """Token registration via ``litestar_auth.models`` stays lazy until a ``User`` mapper exists."""
+    code = (
+        "import sys\n"
+        "from sqlalchemy.exc import InvalidRequestError\n"
+        "from litestar_auth.authentication.strategy import import_token_orm_models as strategy_import_token_orm_models\n"
+        "from litestar_auth.models import import_token_orm_models\n"
+        "AccessToken, RefreshToken = import_token_orm_models()\n"
+        "assert strategy_import_token_orm_models() == (AccessToken, RefreshToken)\n"
+        'assert "litestar_auth.models.user" not in sys.modules\n'
+        'assert "litestar_auth.models.oauth" not in sys.modules\n'
+        "assert (AccessToken.__name__, RefreshToken.__name__) == ('AccessToken', 'RefreshToken')\n"
+        "try:\n"
+        "    _ = AccessToken.user.property\n"
+        "except InvalidRequestError as exc:\n"
+        "    assert \"expression 'User' failed to locate a name\" in str(exc)\n"
+        "else:\n"
+        "    raise AssertionError('AccessToken.user unexpectedly resolved without a User mapper')\n"
+    )
+    result = subprocess.run(
+        [sys.executable, "-c", code],
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+
+    assert result.returncode == 0, (result.stdout, result.stderr)
+
+
+def test_reference_user_model_inverse_relationship_contracts_are_stable() -> None:
+    """The bundled ``User`` model keeps token and OAuth inverse relationships wired to the current classes."""
+    user_relationships = inspect(User).relationships
+
+    assert issubclass(User, UserModelMixin)
+    assert issubclass(User, UserAuthRelationshipMixin)
+    assert issubclass(OAuthAccount, OAuthAccountMixin)
+    assert issubclass(AccessToken, AccessTokenMixin)
+    assert issubclass(RefreshToken, RefreshTokenMixin)
+    assert sorted(user_relationships.keys()) == ["access_tokens", "oauth_accounts", "refresh_tokens"]
+    assert user_relationships["access_tokens"].mapper.class_ is AccessToken
+    assert user_relationships["access_tokens"].back_populates == "user"
+    assert user_relationships["access_tokens"].uselist is True
+    assert user_relationships["refresh_tokens"].mapper.class_ is RefreshToken
+    assert user_relationships["refresh_tokens"].back_populates == "user"
+    assert user_relationships["refresh_tokens"].uselist is True
+    assert user_relationships["oauth_accounts"].mapper.class_ is OAuthAccount
+    assert user_relationships["oauth_accounts"].back_populates == "user"
+    assert user_relationships["oauth_accounts"].uselist is True
+    assert inspect(AccessToken).relationships["user"].mapper.class_ is User
+    assert inspect(AccessToken).relationships["user"].back_populates == "access_tokens"
+    assert inspect(RefreshToken).relationships["user"].mapper.class_ is User
+    assert inspect(RefreshToken).relationships["user"].back_populates == "refresh_tokens"
+    assert inspect(OAuthAccount).relationships["user"].mapper.class_ is User
+    assert inspect(OAuthAccount).relationships["user"].back_populates == "oauth_accounts"
 
 
 def test_access_token_model_enforces_foreign_key_constraint() -> None:
@@ -328,14 +667,47 @@ def test_refresh_token_model_enforces_foreign_key_constraint() -> None:
         engine.dispose()
 
 
+@pytest.mark.imports
+def test_models_package_import_token_orm_models_resolves_to_reference_user_relationships_after_user_import() -> None:
+    """After the bundled ``User`` model loads, the helper-returned token classes bind correctly."""
+    code = (
+        "from sqlalchemy import inspect\n"
+        "from litestar_auth.authentication.strategy import import_token_orm_models as strategy_import_token_orm_models\n"
+        "from litestar_auth.models import import_token_orm_models\n"
+        "AccessToken, RefreshToken = import_token_orm_models()\n"
+        "assert strategy_import_token_orm_models() == (AccessToken, RefreshToken)\n"
+        "from litestar_auth.models import User\n"
+        "from litestar_auth.models.oauth import OAuthAccount\n"
+        "user_relationships = inspect(User).relationships\n"
+        "assert user_relationships['access_tokens'].mapper.class_ is AccessToken\n"
+        "assert user_relationships['access_tokens'].back_populates == 'user'\n"
+        "assert user_relationships['refresh_tokens'].mapper.class_ is RefreshToken\n"
+        "assert user_relationships['refresh_tokens'].back_populates == 'user'\n"
+        "assert user_relationships['oauth_accounts'].mapper.class_ is OAuthAccount\n"
+        "assert user_relationships['oauth_accounts'].back_populates == 'user'\n"
+    )
+    result = subprocess.run(
+        [sys.executable, "-c", code],
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+
+    assert result.returncode == 0, (result.stdout, result.stderr)
+
+
+@pytest.mark.imports
 def test_db_models_side_effect_import_still_exposes_token_registration_helper() -> None:
     """Importing the db-models module for mapper registration still works in isolation."""
     code = (
         "from importlib import import_module\n"
         "db_models = import_module('litestar_auth.authentication.strategy.db_models')\n"
         "from litestar_auth.authentication.strategy import import_token_orm_models\n"
+        "from litestar_auth.models import import_token_orm_models as import_token_orm_models_from_models\n"
         "assert db_models.import_token_orm_models() == (db_models.AccessToken, db_models.RefreshToken)\n"
         "assert import_token_orm_models() == (db_models.AccessToken, db_models.RefreshToken)\n"
+        "assert import_token_orm_models_from_models() == (db_models.AccessToken, db_models.RefreshToken)\n"
     )
     result = subprocess.run(
         [sys.executable, "-c", code],

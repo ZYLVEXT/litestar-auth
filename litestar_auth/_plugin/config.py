@@ -6,9 +6,11 @@ import importlib
 import inspect
 import keyword
 from collections.abc import Callable
+from contextvars import ContextVar
 from dataclasses import dataclass, field
+from datetime import timedelta
 from functools import partial
-from typing import TYPE_CHECKING, Any, Protocol, cast
+from typing import TYPE_CHECKING, Any, Protocol, Self, cast
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -38,6 +40,72 @@ DEFAULT_USER_MODEL_DEPENDENCY_KEY = "litestar_auth_user_model"
 DEFAULT_DB_SESSION_DEPENDENCY_KEY = "db_session"
 DEFAULT_CSRF_COOKIE_NAME = "litestar_auth_csrf"
 OAUTH_ASSOCIATE_USER_MANAGER_DEPENDENCY_KEY = "litestar_auth_oauth_associate_user_manager"
+DEFAULT_DATABASE_TOKEN_BACKEND_NAME = "database"  # noqa: S105
+DEFAULT_DATABASE_TOKEN_MAX_AGE = timedelta(hours=1)
+DEFAULT_DATABASE_TOKEN_REFRESH_MAX_AGE = timedelta(days=30)
+DEFAULT_DATABASE_TOKEN_BYTES = 32
+_DATABASE_TOKEN_REQUEST_SESSION: ContextVar[AsyncSession | None] = ContextVar(
+    "litestar_auth_database_token_request_session",
+    default=None,
+)
+
+
+class _RequestScopedDatabaseTokenSessionProxy:
+    """Resolve the active DB session lazily from the current request context."""
+
+    @staticmethod
+    def _session() -> AsyncSession:
+        """Return the current request-local session for DB-token preset operations.
+
+        Returns:
+            The current request-local SQLAlchemy session.
+
+        Raises:
+            RuntimeError: When no request-local session has been bound yet.
+        """
+        session = _DATABASE_TOKEN_REQUEST_SESSION.get()
+        if session is not None:
+            return session
+
+        msg = (
+            "DatabaseTokenAuthConfig requires a LitestarAuth-managed request session at runtime. "
+            "Configure session_maker on LitestarAuthConfig or provide the DB session dependency externally."
+        )
+        raise RuntimeError(msg)
+
+    def __getattr__(self, name: str) -> object:
+        """Forward session attribute access to the current request-local session.
+
+        Returns:
+            The requested attribute resolved from the active request-local session.
+        """
+        return getattr(self._session(), name)
+
+
+_REQUEST_SCOPED_DATABASE_TOKEN_SESSION = _RequestScopedDatabaseTokenSessionProxy()
+
+
+def bind_database_token_request_session(session: AsyncSession) -> None:
+    """Record the current request-local session for DB-token preset backends."""
+    _DATABASE_TOKEN_REQUEST_SESSION.set(session)
+
+
+def resolve_database_token_strategy_session(session: AsyncSession | None = None) -> AsyncSession:
+    """Return the explicit request session or the preset's request-scoped session proxy."""
+    return session if session is not None else cast("AsyncSession", _REQUEST_SCOPED_DATABASE_TOKEN_SESSION)
+
+
+def build_database_token_backend[UP: UserProtocol[Any], ID](
+    database_token_auth: DatabaseTokenAuthConfig,
+    *,
+    session: AsyncSession | None = None,
+) -> AuthenticationBackend[UP, ID]:
+    """Return the canonical DB-token backend for the provided request session.
+
+    Returns:
+        Authentication backend configured for the canonical DB bearer path.
+    """
+    return _build_database_token_backend(database_token_auth, session=session)
 
 
 def _build_default_user_db(session: AsyncSession, *, user_model: type[Any]) -> BaseUserStore[Any, Any]:
@@ -52,6 +120,40 @@ def _build_default_user_db(session: AsyncSession, *, user_model: type[Any]) -> B
     """
     mod = importlib.import_module("litestar_auth.db.sqlalchemy")
     return mod.SQLAlchemyUserDatabase(session, user_model=user_model)
+
+
+def _build_database_token_backend[UP: UserProtocol[Any], ID](
+    database_token_auth: DatabaseTokenAuthConfig,
+    *,
+    session: AsyncSession | None = None,
+) -> AuthenticationBackend[UP, ID]:
+    """Build the canonical bearer + database-token backend lazily.
+
+    Imports the backend, transport, and strategy only when the preset builder is used so
+    importing ``litestar_auth._plugin.config`` keeps the current lazy-import contract.
+
+    Returns:
+        Authentication backend configured for the canonical DB bearer path.
+    """
+    authentication_package = importlib.import_module("litestar_auth.authentication")
+    strategy_package = importlib.import_module("litestar_auth.authentication.strategy")
+    transport_package = importlib.import_module("litestar_auth.authentication.transport")
+
+    return authentication_package.AuthenticationBackend[UP, ID](
+        name=database_token_auth.backend_name,
+        transport=transport_package.BearerTransport(),
+        strategy=cast(
+            "Any",
+            strategy_package.DatabaseTokenStrategy(
+                session=resolve_database_token_strategy_session(session),
+                token_hash_secret=database_token_auth.token_hash_secret,
+                max_age=database_token_auth.max_age,
+                refresh_max_age=database_token_auth.refresh_max_age,
+                token_bytes=database_token_auth.token_bytes,
+                accept_legacy_plaintext_tokens=database_token_auth.accept_legacy_plaintext_tokens,
+            ),
+        ),
+    )
 
 
 _VALID_LOGIN_IDENTIFIERS: frozenset[LoginIdentifier] = frozenset({"email", "username"})
@@ -225,6 +327,94 @@ class OAuthConfig:
     oauth_token_encryption_key: str | None = None
 
 
+@dataclass(frozen=True, slots=True)
+class _OAuthRouteRegistrationContract:
+    """Internal contract describing declared and plugin-owned OAuth routes."""
+
+    login_providers: tuple[OAuthProviderConfig, ...]
+    declared_associate_providers: tuple[OAuthProviderConfig, ...]
+    plugin_associate_providers: tuple[OAuthProviderConfig, ...]
+    include_oauth_associate: bool
+    oauth_cookie_secure: bool
+    oauth_associate_by_email: bool
+    associate_path: str
+    associate_redirect_base_url: str | None
+
+    @property
+    def has_configured_providers(self) -> bool:
+        """Return whether any OAuth provider inventory was declared."""
+        return bool(self.login_providers or self.declared_associate_providers)
+
+    @property
+    def has_plugin_owned_associate_routes(self) -> bool:
+        """Return whether the plugin will auto-mount associate routes."""
+        return bool(self.plugin_associate_providers)
+
+
+def _normalize_oauth_provider_inventory(
+    providers: Sequence[OAuthProviderConfig] | None,
+) -> tuple[OAuthProviderConfig, ...]:
+    """Return a stable tuple view of an OAuth provider inventory."""
+    return tuple(providers or ())
+
+
+def _build_oauth_route_registration_contract(
+    *,
+    auth_path: str,
+    oauth_config: OAuthConfig | None,
+) -> _OAuthRouteRegistrationContract:
+    """Return the deterministic plugin OAuth route-registration contract.
+
+    The current contract keeps OAuth login controller registration explicit even when
+    ``oauth_providers`` is declared on ``OAuthConfig``. The plugin auto-mounts only
+    associate routes, and only when ``include_oauth_associate=True`` plus a non-empty
+    ``oauth_associate_providers`` inventory are both present.
+    """
+    associate_path = f"{auth_path.rstrip('/')}/associate"
+    if oauth_config is None:
+        return _OAuthRouteRegistrationContract(
+            login_providers=(),
+            declared_associate_providers=(),
+            plugin_associate_providers=(),
+            include_oauth_associate=False,
+            oauth_cookie_secure=True,
+            oauth_associate_by_email=False,
+            associate_path=associate_path,
+            associate_redirect_base_url=None,
+        )
+
+    login_providers = _normalize_oauth_provider_inventory(oauth_config.oauth_providers)
+    declared_associate_providers = _normalize_oauth_provider_inventory(oauth_config.oauth_associate_providers)
+    plugin_associate_providers = declared_associate_providers if oauth_config.include_oauth_associate else ()
+    associate_redirect_base_url = None
+    if plugin_associate_providers:
+        associate_redirect_base_url = (
+            oauth_config.oauth_associate_redirect_base_url or f"http://localhost{associate_path}"
+        )
+    return _OAuthRouteRegistrationContract(
+        login_providers=login_providers,
+        declared_associate_providers=declared_associate_providers,
+        plugin_associate_providers=plugin_associate_providers,
+        include_oauth_associate=oauth_config.include_oauth_associate,
+        oauth_cookie_secure=oauth_config.oauth_cookie_secure,
+        oauth_associate_by_email=oauth_config.oauth_associate_by_email,
+        associate_path=associate_path,
+        associate_redirect_base_url=associate_redirect_base_url,
+    )
+
+
+@dataclass(slots=True)
+class DatabaseTokenAuthConfig:
+    """Canonical DB bearer preset settings owned by ``LitestarAuthConfig``."""
+
+    token_hash_secret: str
+    backend_name: str = DEFAULT_DATABASE_TOKEN_BACKEND_NAME
+    max_age: timedelta = DEFAULT_DATABASE_TOKEN_MAX_AGE
+    refresh_max_age: timedelta = DEFAULT_DATABASE_TOKEN_REFRESH_MAX_AGE
+    token_bytes: int = DEFAULT_DATABASE_TOKEN_BYTES
+    accept_legacy_plaintext_tokens: bool = False
+
+
 @dataclass(slots=True)
 class LitestarAuthConfig[UP: UserProtocol[Any], ID]:
     """Configuration for the :class:`~litestar_auth.plugin.LitestarAuth` plugin.
@@ -287,6 +477,143 @@ class LitestarAuthConfig[UP: UserProtocol[Any], ID]:
     db_session_dependency_key: str = DEFAULT_DB_SESSION_DEPENDENCY_KEY
     db_session_dependency_provided_externally: bool = False
     login_identifier: LoginIdentifier = "email"
+    _database_token_auth: DatabaseTokenAuthConfig | None = field(
+        default=None,
+        init=False,
+        repr=False,
+        compare=False,
+    )
+
+    @property
+    def database_token_auth(self) -> DatabaseTokenAuthConfig | None:
+        """Return DB bearer preset metadata when built via ``with_database_token_auth()``."""
+        return self._database_token_auth
+
+    @classmethod
+    def with_database_token_auth(  # noqa: PLR0913
+        cls: type[Self],
+        *,
+        database_token_auth: DatabaseTokenAuthConfig,
+        backends: Sequence[AuthenticationBackend[UP, ID]] | None = None,
+        user_model: type[UP],
+        user_manager_class: type[BaseUserManager[UP, ID]],
+        session_maker: async_sessionmaker[AsyncSession] | None = None,
+        user_db_factory: UserDatabaseFactory[UP, ID] | None = None,
+        user_manager_kwargs: dict[str, Any] | None = None,
+        password_validator_factory: PasswordValidatorFactory[UP, ID] | None = None,
+        user_manager_factory: UserManagerFactory[UP, ID] | None = None,
+        rate_limit_config: AuthRateLimitConfig | None = None,
+        auth_path: str = "/auth",
+        users_path: str = "/users",
+        include_register: bool = True,
+        include_verify: bool = True,
+        include_reset_password: bool = True,
+        include_users: bool = False,
+        enable_refresh: bool = False,
+        requires_verification: bool = False,
+        hard_delete: bool = False,
+        totp_config: TotpConfig | None = None,
+        oauth_config: OAuthConfig | None = None,
+        csrf_secret: str | None = None,
+        csrf_header_name: str = "X-CSRF-Token",
+        allow_legacy_plaintext_tokens: bool = False,
+        allow_nondurable_jwt_revocation: bool = False,
+        id_parser: Callable[[str], ID] | None = None,
+        user_read_schema: type[msgspec.Struct] | None = None,
+        user_create_schema: type[msgspec.Struct] | None = None,
+        user_update_schema: type[msgspec.Struct] | None = None,
+        db_session_dependency_key: str = DEFAULT_DB_SESSION_DEPENDENCY_KEY,
+        db_session_dependency_provided_externally: bool = False,
+        login_identifier: LoginIdentifier = "email",
+    ) -> Self:
+        """Build config for the canonical bearer + database-token plugin path.
+
+        Args:
+            database_token_auth: Settings object for the canonical DB bearer preset.
+            backends: Must be omitted. This preset builds the canonical backend itself.
+            user_model: User ORM or protocol model.
+            user_manager_class: User manager implementation for the plugin.
+            session_maker: Optional session factory used by the plugin runtime.
+            user_db_factory: Optional user database factory override.
+            user_manager_kwargs: Additional user manager constructor kwargs.
+            password_validator_factory: Optional password validator factory override.
+            user_manager_factory: Optional request-scoped user manager factory override.
+            rate_limit_config: Optional rate-limit configuration.
+            auth_path: Auth controller base path.
+            users_path: Users controller base path.
+            include_register: Include register endpoint.
+            include_verify: Include verify endpoint.
+            include_reset_password: Include reset-password endpoints.
+            include_users: Include user-management endpoints.
+            enable_refresh: Enable refresh-token endpoints.
+            requires_verification: Require verified users for login.
+            hard_delete: Hard-delete users instead of soft-delete behavior.
+            totp_config: Optional TOTP configuration.
+            oauth_config: Optional OAuth configuration.
+            csrf_secret: Optional CSRF secret.
+            csrf_header_name: CSRF header name.
+            allow_legacy_plaintext_tokens: Allow the top-level migration acknowledgement for
+                manual DB strategies. The canonical DB-token preset normalizes this from
+                ``database_token_auth.accept_legacy_plaintext_tokens`` automatically.
+            allow_nondurable_jwt_revocation: Allow in-memory JWT revocation in production.
+            id_parser: Optional user-id parser.
+            user_read_schema: Optional read schema override.
+            user_create_schema: Optional create schema override.
+            user_update_schema: Optional update schema override.
+            db_session_dependency_key: Dependency key for injected DB sessions.
+            db_session_dependency_provided_externally: Whether the session dependency is external.
+            login_identifier: Credential lookup field for login.
+
+        Returns:
+            Configured plugin settings for the canonical DB bearer path.
+
+        Raises:
+            ValueError: If ``backends`` is also provided.
+        """
+        if backends is not None:
+            msg = (
+                "LitestarAuthConfig.with_database_token_auth() builds the canonical DB bearer backend "
+                "automatically; use either this builder or pass backends=... to LitestarAuthConfig(...), not both."
+            )
+            raise ValueError(msg)
+        normalized_allow_legacy_plaintext_tokens = (
+            allow_legacy_plaintext_tokens or database_token_auth.accept_legacy_plaintext_tokens
+        )
+        config = cls(
+            backends=[_build_database_token_backend(database_token_auth)],
+            user_model=user_model,
+            user_manager_class=user_manager_class,
+            session_maker=session_maker,
+            user_db_factory=user_db_factory,
+            user_manager_kwargs={} if user_manager_kwargs is None else dict(user_manager_kwargs),
+            password_validator_factory=password_validator_factory,
+            user_manager_factory=user_manager_factory,
+            rate_limit_config=rate_limit_config,
+            auth_path=auth_path,
+            users_path=users_path,
+            include_register=include_register,
+            include_verify=include_verify,
+            include_reset_password=include_reset_password,
+            include_users=include_users,
+            enable_refresh=enable_refresh,
+            requires_verification=requires_verification,
+            hard_delete=hard_delete,
+            totp_config=totp_config,
+            oauth_config=oauth_config,
+            csrf_secret=csrf_secret,
+            csrf_header_name=csrf_header_name,
+            allow_legacy_plaintext_tokens=normalized_allow_legacy_plaintext_tokens,
+            allow_nondurable_jwt_revocation=allow_nondurable_jwt_revocation,
+            id_parser=id_parser,
+            user_read_schema=user_read_schema,
+            user_create_schema=user_create_schema,
+            user_update_schema=user_update_schema,
+            db_session_dependency_key=db_session_dependency_key,
+            db_session_dependency_provided_externally=db_session_dependency_provided_externally,
+            login_identifier=login_identifier,
+        )
+        config._database_token_auth = database_token_auth
+        return config
 
     def __post_init__(self) -> None:
         """Validate configuration fields and build defaults that depend on other fields.

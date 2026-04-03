@@ -6,6 +6,7 @@ import asyncio
 import importlib
 import warnings
 from dataclasses import dataclass
+from datetime import timedelta
 from functools import partial
 from typing import Any, Literal, cast
 from unittest.mock import AsyncMock, patch
@@ -29,6 +30,7 @@ from litestar_auth._plugin import (
 from litestar_auth._plugin.dependencies import DependencyProviders, register_dependencies
 from litestar_auth.authentication import Authenticator, LitestarAuthMiddleware
 from litestar_auth.authentication.backend import AuthenticationBackend
+from litestar_auth.authentication.strategy.db import DatabaseTokenStrategy
 from litestar_auth.authentication.strategy.jwt import JWTStrategy
 from litestar_auth.authentication.transport.bearer import BearerTransport
 from litestar_auth.authentication.transport.cookie import CookieTransport
@@ -386,9 +388,10 @@ def test_register_dependencies_delegates_with_bound_provider_methods() -> None:
     assert config_arg is plugin.config
     assert cast("Any", providers.config)() is plugin.config
     assert providers.user_manager is plugin._provide_user_manager
-    assert cast("Any", providers.backends)() is plugin.config.backends
+    assert providers.backends is plugin._provide_request_backends
     assert cast("Any", providers.user_model)() is plugin.config.user_model
     assert providers.oauth_associate_user_manager is plugin._provide_oauth_associate_user_manager
+    assert providers.oauth_associate_user_manager is not providers.user_manager
 
 
 def test_register_dependencies_registers_db_session_when_using_builtin_session_maker() -> None:
@@ -699,6 +702,88 @@ def test_session_bound_backends_rebinds_each_backend_to_current_session() -> Non
     assert second_backend.seen_sessions == [session]
 
 
+def test_session_bound_backends_rebinds_database_token_backends_in_order_and_preserves_names() -> None:
+    """Canonical DB bearer backends keep public names/order while rebinding strategies per request."""
+    first_backend = AuthenticationBackend[ExampleUser, UUID](
+        name="primary",
+        transport=BearerTransport(),
+        strategy=cast(
+            "Any",
+            DatabaseTokenStrategy(
+                session=cast("Any", object()),
+                token_hash_secret="a" * 40,
+                max_age=timedelta(minutes=10),
+            ),
+        ),
+    )
+    second_strategy = DatabaseTokenStrategy(
+        session=cast("Any", object()),
+        token_hash_secret="b" * 40,
+        refresh_max_age=timedelta(days=14),
+        accept_legacy_plaintext_tokens=True,
+    )
+    second_backend = AuthenticationBackend[ExampleUser, UUID](
+        name="secondary",
+        transport=BearerTransport(),
+        strategy=cast("Any", second_strategy),
+    )
+    config = _minimal_config(backends=[first_backend, second_backend])
+    config.allow_legacy_plaintext_tokens = True
+    plugin = LitestarAuth(config)
+    active_session = object()
+
+    rebound_backends = plugin._session_bound_backends(cast("Any", active_session))
+
+    assert [backend.name for backend in rebound_backends] == ["primary", "secondary"]
+    assert rebound_backends[0] is not first_backend
+    assert rebound_backends[1] is not second_backend
+    assert rebound_backends[0].transport is first_backend.transport
+    assert rebound_backends[1].transport is second_backend.transport
+    assert isinstance(rebound_backends[0].strategy, DatabaseTokenStrategy)
+    assert isinstance(rebound_backends[1].strategy, DatabaseTokenStrategy)
+    assert rebound_backends[0].strategy.session is active_session
+    assert rebound_backends[1].strategy.session is active_session
+    assert rebound_backends[1].strategy.refresh_max_age == second_strategy.refresh_max_age
+    assert rebound_backends[1].strategy.accept_legacy_plaintext_tokens is True
+
+
+def test_session_bound_backends_realizes_database_token_preset_from_request_session() -> None:
+    """The DB bearer preset resolves request-scoped backends without a startup session template."""
+    config = LitestarAuthConfig[ExampleUser, UUID].with_database_token_auth(
+        database_token_auth=plugin_module._plugin_config.DatabaseTokenAuthConfig(
+            token_hash_secret="a" * 40,
+            max_age=timedelta(minutes=10),
+            refresh_max_age=timedelta(days=14),
+            accept_legacy_plaintext_tokens=True,
+        ),
+        user_model=ExampleUser,
+        user_manager_class=PluginUserManager,
+        session_maker=cast("Any", DummySessionMaker()),
+        user_db_factory=lambda _session: InMemoryUserDatabase([]),
+        user_manager_kwargs={
+            "verification_token_secret": "x" * 32,
+            "reset_password_token_secret": "y" * 32,
+        },
+        enable_refresh=True,
+    )
+    config.allow_legacy_plaintext_tokens = True
+    plugin = LitestarAuth(config)
+    active_session = type("_ActiveSession", (), {"marker": "request-session"})()
+
+    rebound_backends = plugin._session_bound_backends(cast("Any", active_session))
+    template_backend = config.backends[0]
+    template_strategy = cast("Any", template_backend.strategy)
+    rebound_strategy = cast("Any", rebound_backends[0].strategy)
+
+    assert [backend.name for backend in rebound_backends] == ["database"]
+    assert rebound_backends[0] is not template_backend
+    assert type(rebound_strategy) is type(template_strategy)
+    assert rebound_strategy.session is active_session
+    assert template_strategy.session.marker == "request-session"
+    assert rebound_strategy.refresh_max_age == timedelta(days=14)
+    assert rebound_strategy.accept_legacy_plaintext_tokens is True
+
+
 def test_build_authenticator_uses_session_bound_backends_and_manager(monkeypatch: pytest.MonkeyPatch) -> None:
     """Authenticator construction reuses the session-bound backends and manager instance."""
     plugin = LitestarAuth(_minimal_config())
@@ -784,6 +869,101 @@ async def test_provide_user_manager_respects_custom_db_session_key() -> None:
         assert manager is not None
     finally:
         await gen.aclose()
+
+
+def test_provide_request_backends_respects_custom_db_session_key() -> None:
+    """Backends DI resolves request-scoped backends through the configured session key."""
+
+    @dataclass(slots=True)
+    class _BackendRecorder:
+        seen_sessions: list[object]
+
+        def with_session(self, session: object) -> str:
+            self.seen_sessions.append(session)
+            return f"bound-{id(session)}"
+
+    recorder = _BackendRecorder(seen_sessions=[])
+    config = _minimal_config(backends=cast("Any", [recorder]))
+    config.db_session_dependency_key = "custom_db"
+    plugin = LitestarAuth(config)
+    session = object()
+
+    rebound_backends = cast("Any", plugin._provide_request_backends)(custom_db=session)
+
+    assert rebound_backends == [f"bound-{id(session)}"]
+    assert recorder.seen_sessions == [session]
+
+
+def test_provide_request_backends_accepts_positional_session_argument() -> None:
+    """Backends DI also supports the direct positional session-provider path."""
+
+    @dataclass(slots=True)
+    class _BackendRecorder:
+        seen_sessions: list[object]
+
+        def with_session(self, session: object) -> str:
+            self.seen_sessions.append(session)
+            return f"bound-{id(session)}"
+
+    recorder = _BackendRecorder(seen_sessions=[])
+    plugin = LitestarAuth(_minimal_config(backends=cast("Any", [recorder])))
+    session = object()
+
+    rebound_backends = cast("Any", plugin._provide_request_backends)(session)
+
+    assert rebound_backends == [f"bound-{id(session)}"]
+    assert recorder.seen_sessions == [session]
+
+
+def test_provide_request_backends_rejects_positional_and_keyword_session() -> None:
+    """Backends DI fails closed when both positional and keyword session inputs are provided."""
+    plugin = LitestarAuth(_minimal_config())
+    session = object()
+
+    with pytest.raises(TypeError, match="got multiple values for argument 'db_session'"):
+        cast("Any", plugin._provide_request_backends)(session, db_session=session)
+
+
+def test_provide_request_backends_validates_dependency_inputs() -> None:
+    """Backends DI rejects missing or unexpected dependency arguments before building backends."""
+    plugin = LitestarAuth(_minimal_config())
+
+    with pytest.raises(TypeError, match="missing 1 required argument: 'db_session'"):
+        cast("Any", plugin._provide_request_backends)()
+
+    with pytest.raises(TypeError, match=r"got unexpected keyword argument\(s\): 'other'"):
+        cast("Any", plugin._provide_request_backends)(other=object())
+
+
+def test_provide_request_backends_realizes_database_token_preset_from_request_session() -> None:
+    """Preset backends DI returns a backend bound to the active request-local session."""
+    config = LitestarAuthConfig[ExampleUser, UUID].with_database_token_auth(
+        database_token_auth=plugin_module._plugin_config.DatabaseTokenAuthConfig(
+            token_hash_secret="a" * 40,
+            max_age=timedelta(minutes=10),
+            refresh_max_age=timedelta(days=14),
+            accept_legacy_plaintext_tokens=True,
+        ),
+        user_model=ExampleUser,
+        user_manager_class=PluginUserManager,
+        session_maker=cast("Any", DummySessionMaker()),
+        user_db_factory=lambda _session: InMemoryUserDatabase([]),
+        user_manager_kwargs={
+            "verification_token_secret": "x" * 32,
+            "reset_password_token_secret": "y" * 32,
+        },
+        enable_refresh=True,
+    )
+    config.allow_legacy_plaintext_tokens = True
+    plugin = LitestarAuth(config)
+    active_session = type("_ActiveSession", (), {"marker": "request-session"})()
+    template_backend = config.backends[0]
+
+    rebound_backends = cast("Any", plugin._provide_request_backends)(db_session=active_session)
+
+    assert [backend.name for backend in rebound_backends] == ["database"]
+    assert type(rebound_backends[0].strategy) is type(template_backend.strategy)
+    assert rebound_backends[0].strategy.session is active_session
 
 
 @pytest.mark.asyncio

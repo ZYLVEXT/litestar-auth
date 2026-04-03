@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 import hmac
+import inspect
+import keyword
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, cast
 
 from litestar import Controller, Request, get
@@ -32,13 +35,37 @@ from litestar_auth.oauth.service import (
 from litestar_auth.types import UserProtocol
 
 if TYPE_CHECKING:
-    from collections.abc import Mapping
+    from collections.abc import Mapping, Sequence
+
+    from litestar.types import Guard
 
     from litestar_auth.authentication.backend import AuthenticationBackend
 
 STATE_COOKIE_PREFIX = "__oauth_state_"
 ASSOCIATE_STATE_COOKIE_PREFIX = "__oauth_associate_state_"
 STATE_COOKIE_MAX_AGE = 300
+
+
+@dataclass(frozen=True, slots=True)
+class _OAuthUserManagerBinding[UP: UserProtocol[Any], ID]:
+    """Manager binding used by generated OAuth callback handlers."""
+
+    user_manager: OAuthControllerUserManagerProtocol[UP, ID] | None
+    dependency_parameter_name: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class _OAuthControllerAssembly[UP: UserProtocol[Any], ID]:
+    """Shared provider-scoped controller assembly details."""
+
+    controller_name: str
+    controller_path: str
+    callback_url: str
+    cookie_name: str
+    cookie_path: str
+    cookie_secure: bool
+    oauth_service: OAuthService[UP, ID]
+    user_manager_binding: _OAuthUserManagerBinding[UP, ID]
 
 
 def _build_callback_url_from_base(redirect_base_url: str, provider_name: str) -> str:
@@ -48,6 +75,325 @@ def _build_callback_url_from_base(redirect_base_url: str, provider_name: str) ->
         redirect_base_url with trailing slash stripped, plus /{provider_name}/callback.
     """
     return f"{redirect_base_url.rstrip('/')}/{provider_name}/callback"
+
+
+def _build_direct_user_manager_binding[UP: UserProtocol[Any], ID](
+    user_manager: OAuthControllerUserManagerProtocol[UP, ID],
+) -> _OAuthUserManagerBinding[UP, ID]:
+    """Return a binding for a directly supplied user manager."""
+    return _OAuthUserManagerBinding(user_manager=user_manager)
+
+
+def _build_associate_user_manager_binding[UP: UserProtocol[Any], ID](
+    *,
+    user_manager: OAuthControllerUserManagerProtocol[UP, ID] | None,
+    user_manager_dependency_key: str | None,
+) -> _OAuthUserManagerBinding[UP, ID]:
+    """Return the manager binding for OAuth account-association controllers.
+
+    Raises:
+        ConfigurationError: If neither or both user-manager inputs are provided.
+    """
+    if (user_manager is None) == (user_manager_dependency_key is None):
+        msg = "Provide exactly one of user_manager or user_manager_dependency_key."
+        raise ConfigurationError(msg)
+
+    if user_manager is not None:
+        return _OAuthUserManagerBinding(user_manager=user_manager)
+
+    dependency_parameter_name = cast("str", user_manager_dependency_key)
+    if not dependency_parameter_name.isidentifier() or keyword.iskeyword(dependency_parameter_name):
+        msg = (
+            "user_manager_dependency_key must be a valid Python identifier because it becomes the generated "
+            "callback parameter name."
+        )
+        raise ConfigurationError(msg)
+
+    return _OAuthUserManagerBinding(
+        user_manager=None,
+        dependency_parameter_name=dependency_parameter_name,
+    )
+
+
+def _build_oauth_controller_assembly[UP: UserProtocol[Any], ID](  # noqa: PLR0913
+    *,
+    provider_name: str,
+    oauth_client: object,
+    redirect_base_url: str,
+    path: str,
+    cookie_secure: bool,
+    state_cookie_prefix: str,
+    controller_name_suffix: str,
+    user_manager_binding: _OAuthUserManagerBinding[UP, ID],
+    associate_by_email: bool = False,
+    trust_provider_email_verified: bool = False,
+) -> _OAuthControllerAssembly[UP, ID]:
+    """Build the shared provider-scoped OAuth controller assembly state.
+
+    Returns:
+        Shared controller metadata, callback details, cookie scope, and manager binding.
+    """
+    controller_path = _build_cookie_path(path=path, provider_name=provider_name)
+    return _OAuthControllerAssembly(
+        controller_name=f"{_build_controller_name(provider_name)}{controller_name_suffix}",
+        controller_path=controller_path,
+        callback_url=_build_callback_url_from_base(redirect_base_url, provider_name),
+        cookie_name=f"{state_cookie_prefix}{provider_name}",
+        cookie_path=controller_path,
+        cookie_secure=cookie_secure,
+        oauth_service=OAuthService(
+            provider_name=provider_name,
+            client=OAuthClientAdapter(oauth_client),
+            associate_by_email=associate_by_email,
+            trust_provider_email_verified=trust_provider_email_verified,
+        ),
+        user_manager_binding=user_manager_binding,
+    )
+
+
+def _create_oauth_controller_type(
+    *,
+    assembly: _OAuthControllerAssembly[Any, Any],
+    authorize_handler: object,
+    callback_handler: object,
+    docstring: str,
+) -> type[Controller]:
+    """Materialize the final provider-specific controller subclass.
+
+    Returns:
+        Generated controller type with provider-scoped metadata and handlers attached.
+    """
+
+    class OAuthController(Controller):
+        """Generated OAuth controller."""
+
+        authorize = authorize_handler
+        callback = callback_handler
+
+    OAuthController.__doc__ = docstring
+    OAuthController.__name__ = assembly.controller_name
+    OAuthController.__qualname__ = assembly.controller_name
+    OAuthController.path = assembly.controller_path
+    return OAuthController
+
+
+def _create_authorize_handler[UP: UserProtocol[Any], ID](
+    *,
+    assembly: _OAuthControllerAssembly[UP, ID],
+    guards: Sequence[Guard] | None = None,
+    allow_scopes: bool,
+) -> object:
+    """Create the authorize route handler for a provider-scoped OAuth controller.
+
+    Returns:
+        Decorated Litestar route handler for the provider authorize endpoint.
+    """
+    if allow_scopes:
+
+        @get("/authorize", guards=guards)
+        async def authorize(
+            self: object,
+            request: Request[Any, Any, Any],
+            scopes: list[str] | None = Parameter(query="scopes", default=None),  # noqa: B008
+        ) -> Redirect:
+            del self, request
+            authorization = await assembly.oauth_service.authorize(
+                redirect_uri=assembly.callback_url,
+                scopes=scopes,
+            )
+            response = Redirect(authorization.authorization_url)
+            _set_state_cookie(
+                response,
+                cookie_name=assembly.cookie_name,
+                state=authorization.state,
+                cookie_path=assembly.cookie_path,
+                cookie_secure=assembly.cookie_secure,
+            )
+            return response
+
+        return authorize
+
+    @get("/authorize", guards=guards)
+    async def authorize(
+        self: object,
+        request: Request[Any, Any, Any],
+    ) -> Redirect:
+        del self, request
+        authorization = await assembly.oauth_service.authorize(redirect_uri=assembly.callback_url)
+        response = Redirect(authorization.authorization_url)
+        _set_state_cookie(
+            response,
+            cookie_name=assembly.cookie_name,
+            state=authorization.state,
+            cookie_path=assembly.cookie_path,
+            cookie_secure=assembly.cookie_secure,
+        )
+        return response
+
+    return authorize
+
+
+async def _complete_login_callback[UP: UserProtocol[Any], ID](  # noqa: PLR0913
+    *,
+    assembly: _OAuthControllerAssembly[UP, ID],
+    request: Request[Any, Any, Any],
+    code: str,
+    oauth_state: str,
+    user_manager: OAuthControllerUserManagerProtocol[UP, ID],
+    backend: AuthenticationBackend[UP, ID],
+) -> Response[Any]:
+    """Complete the OAuth login callback using the shared assembly state.
+
+    Returns:
+        Login response produced by the configured local authentication backend.
+    """
+    _validate_state(request.cookies.get(assembly.cookie_name), oauth_state)
+    user = await assembly.oauth_service.complete_login(
+        code=code,
+        redirect_uri=assembly.callback_url,
+        user_manager=user_manager,
+    )
+    response = await backend.login(user)
+    await user_manager.on_after_login(user)
+    _clear_state_cookie(
+        response,
+        cookie_name=assembly.cookie_name,
+        cookie_path=assembly.cookie_path,
+        cookie_secure=assembly.cookie_secure,
+    )
+    return response
+
+
+def _create_login_callback_handler[UP: UserProtocol[Any], ID](
+    *,
+    assembly: _OAuthControllerAssembly[UP, ID],
+    backend: AuthenticationBackend[UP, ID],
+) -> object:
+    """Create the callback route handler for OAuth login controllers.
+
+    Returns:
+        Decorated Litestar route handler for the provider callback endpoint.
+    """
+    user_manager = cast(
+        "OAuthControllerUserManagerProtocol[UP, ID]",
+        assembly.user_manager_binding.user_manager,
+    )
+
+    @get("/callback")
+    async def callback(
+        self: object,
+        request: Request[Any, Any, Any],
+        code: str,
+        oauth_state: str = Parameter(query="state"),
+    ) -> Response[Any]:
+        del self
+        return await _complete_login_callback(
+            assembly=assembly,
+            request=request,
+            code=code,
+            oauth_state=oauth_state,
+            user_manager=user_manager,
+            backend=backend,
+        )
+
+    return callback
+
+
+async def _complete_associate_callback[UP: UserProtocol[Any], ID](
+    *,
+    assembly: _OAuthControllerAssembly[UP, ID],
+    request: Request[Any, Any, Any],
+    code: str,
+    oauth_state: str,
+    user_manager: OAuthControllerUserManagerProtocol[UP, ID],
+) -> Response[Any]:
+    """Complete the OAuth associate callback using the shared assembly state.
+
+    Returns:
+        JSON response confirming the authenticated account link completed.
+    """
+    _validate_state(request.cookies.get(assembly.cookie_name), oauth_state)
+    # Litestar does not narrow ``Request.user`` to ``UP``; associate routes use ``is_authenticated``.
+    user = cast("UP", request.user)
+    await assembly.oauth_service.associate_account(
+        user=user,
+        code=code,
+        redirect_uri=assembly.callback_url,
+        user_manager=user_manager,
+    )
+    response = Response(
+        content={"linked": True},
+        media_type=MediaType.JSON,
+    )
+    _clear_state_cookie(
+        response,
+        cookie_name=assembly.cookie_name,
+        cookie_path=assembly.cookie_path,
+        cookie_secure=assembly.cookie_secure,
+    )
+    return response
+
+
+def _create_associate_callback_handler[UP: UserProtocol[Any], ID](
+    *,
+    assembly: _OAuthControllerAssembly[UP, ID],
+) -> object:
+    """Create the callback route handler for OAuth account-association controllers.
+
+    Returns:
+        Decorated Litestar route handler for the provider associate callback endpoint.
+    """
+    dependency_parameter_name = assembly.user_manager_binding.dependency_parameter_name
+    if dependency_parameter_name is not None:
+
+        @get("/callback", guards=[is_authenticated])
+        async def callback(
+            self: object,
+            request: Request[Any, Any, Any],
+            code: str,
+            oauth_state: str = Parameter(query="state"),
+            **dependencies: object,
+        ) -> Response[Any]:
+            del self
+            if dependency_parameter_name not in dependencies:
+                msg = f"callback() missing 1 required keyword argument: {dependency_parameter_name!r}"
+                raise TypeError(msg)
+            return await _complete_associate_callback(
+                assembly=assembly,
+                request=request,
+                code=code,
+                oauth_state=oauth_state,
+                user_manager=cast(
+                    "OAuthControllerUserManagerProtocol[UP, ID]",
+                    dependencies[dependency_parameter_name],
+                ),
+            )
+
+        _set_dependency_parameter_signature(callback, parameter_name=dependency_parameter_name)
+        return callback
+
+    user_manager = cast(
+        "OAuthControllerUserManagerProtocol[UP, ID]",
+        assembly.user_manager_binding.user_manager,
+    )
+
+    @get("/callback", guards=[is_authenticated])
+    async def callback(
+        self: object,
+        request: Request[Any, Any, Any],
+        code: str,
+        oauth_state: str = Parameter(query="state"),
+    ) -> Response[Any]:
+        del self
+        return await _complete_associate_callback(
+            assembly=assembly,
+            request=request,
+            code=code,
+            oauth_state=oauth_state,
+            user_manager=user_manager,
+        )
+
+    return callback
 
 
 def create_oauth_controller[UP: UserProtocol[Any], ID](  # noqa: PLR0913
@@ -67,78 +413,30 @@ def create_oauth_controller[UP: UserProtocol[Any], ID](  # noqa: PLR0913
     Returns:
         Generated controller class mounted under the provider-specific path.
     """
-    client_adapter = OAuthClientAdapter(oauth_client)
-    oauth_service = OAuthService(
+    assembly = _build_oauth_controller_assembly(
         provider_name=provider_name,
-        client=client_adapter,
+        oauth_client=oauth_client,
+        redirect_base_url=redirect_base_url,
+        path=path,
+        cookie_secure=cookie_secure,
+        state_cookie_prefix=STATE_COOKIE_PREFIX,
+        controller_name_suffix="OAuthController",
+        user_manager_binding=_build_direct_user_manager_binding(user_manager),
         associate_by_email=associate_by_email,
         trust_provider_email_verified=trust_provider_email_verified,
     )
-    state_cookie_name = f"{STATE_COOKIE_PREFIX}{provider_name}"
-    callback_url = _build_callback_url_from_base(redirect_base_url, provider_name)
-    cookie_path = _build_cookie_path(path=path, provider_name=provider_name)
-
-    class OAuthController(Controller):
-        """Provider-specific OAuth authorize/callback endpoints."""
-
-        @get("/authorize")
-        async def authorize(  # noqa: PLR6301
-            self,
-            request: Request[Any, Any, Any],  # noqa: ARG002
-            scopes: list[str] | None = Parameter(query="scopes", default=None),  # noqa: B008
-        ) -> Redirect:
-            """Redirect the user to the upstream OAuth provider.
-
-            Optional query parameter ``scopes``: list of scope strings to request
-            from the provider (e.g. ``?scopes=openid&scopes=email``).
-
-            Returns:
-                Redirect response with the provider authorization URL and a secure state cookie.
-            """
-            authorization = await oauth_service.authorize(redirect_uri=callback_url, scopes=scopes)
-            response = Redirect(authorization.authorization_url)
-            _set_state_cookie(
-                response,
-                cookie_name=state_cookie_name,
-                state=authorization.state,
-                cookie_path=cookie_path,
-                cookie_secure=cookie_secure,
-            )
-            return response
-
-        @get("/callback")
-        async def callback(  # noqa: PLR6301
-            self,
-            request: Request[Any, Any, Any],
-            code: str,
-            oauth_state: str = Parameter(query="state"),
-        ) -> Response[Any]:
-            """Exchange the authorization code, resolve the user, and issue a local token.
-
-            Returns:
-                Login response from the configured local authentication backend.
-
-            """
-            _validate_state(request.cookies.get(state_cookie_name), oauth_state)
-            user = await oauth_service.complete_login(
-                code=code,
-                redirect_uri=callback_url,
-                user_manager=user_manager,
-            )
-            response = await backend.login(user)
-            await user_manager.on_after_login(user)
-            _clear_state_cookie(
-                response,
-                cookie_name=state_cookie_name,
-                cookie_path=cookie_path,
-                cookie_secure=cookie_secure,
-            )
-            return response
-
-    OAuthController.__name__ = f"{_build_controller_name(provider_name)}OAuthController"
-    OAuthController.__qualname__ = OAuthController.__name__
-    OAuthController.path = f"{path.rstrip('/')}/{provider_name}"
-    return OAuthController
+    return _create_oauth_controller_type(
+        assembly=assembly,
+        authorize_handler=_create_authorize_handler(
+            assembly=assembly,
+            allow_scopes=True,
+        ),
+        callback_handler=_create_login_callback_handler(
+            assembly=assembly,
+            backend=backend,
+        ),
+        docstring="Provider-specific OAuth authorize/callback endpoints.",
+    )
 
 
 def create_oauth_associate_controller[UP: UserProtocol[Any], ID](  # noqa: PLR0913
@@ -162,116 +460,30 @@ def create_oauth_associate_controller[UP: UserProtocol[Any], ID](  # noqa: PLR09
     Returns:
         Generated controller class mounted under the provider-specific path.
 
-    Raises:
-        ConfigurationError: If neither or both user-manager inputs are provided.
-
     """
-    if (user_manager is None) == (user_manager_dependency_key is None):
-        msg = "Provide exactly one of user_manager or user_manager_dependency_key."
-        raise ConfigurationError(msg)
-
-    state_cookie_name = f"{ASSOCIATE_STATE_COOKIE_PREFIX}{provider_name}"
-    associate_callback_url = _build_callback_url_from_base(redirect_base_url, provider_name)
-    cookie_path = _build_cookie_path(path=path, provider_name=provider_name)
-    client_adapter = OAuthClientAdapter(oauth_client)
-    oauth_service = OAuthService(
+    assembly = _build_oauth_controller_assembly(
         provider_name=provider_name,
-        client=client_adapter,
+        oauth_client=oauth_client,
+        redirect_base_url=redirect_base_url,
+        path=path,
+        cookie_secure=cookie_secure,
+        state_cookie_prefix=ASSOCIATE_STATE_COOKIE_PREFIX,
+        controller_name_suffix="OAuthAssociateController",
+        user_manager_binding=_build_associate_user_manager_binding(
+            user_manager=user_manager,
+            user_manager_dependency_key=user_manager_dependency_key,
+        ),
     )
-
-    async def _callback_impl(
-        request: Request[Any, Any, Any],
-        code: str,
-        oauth_state: str,
-        manager: OAuthControllerUserManagerProtocol[UP, ID],
-    ) -> Response[Any]:
-        _validate_state(request.cookies.get(state_cookie_name), oauth_state)
-        # Litestar does not narrow ``Request.user`` to ``UP``; associate routes use ``is_authenticated``.
-        user = cast("UP", request.user)
-        await oauth_service.associate_account(
-            user=user,
-            code=code,
-            redirect_uri=associate_callback_url,
-            user_manager=manager,
-        )
-        response = Response(
-            content={"linked": True},
-            media_type=MediaType.JSON,
-        )
-        _clear_state_cookie(
-            response,
-            cookie_name=state_cookie_name,
-            cookie_path=cookie_path,
-            cookie_secure=cookie_secure,
-        )
-        return response
-
-    @get("/authorize", guards=[is_authenticated])
-    async def _authorize(
-        self: object,
-        request: Request[Any, Any, Any],
-    ) -> Redirect:
-        del self, request
-        authorization = await oauth_service.authorize(redirect_uri=associate_callback_url)
-        response = Redirect(authorization.authorization_url)
-        _set_state_cookie(
-            response,
-            cookie_name=state_cookie_name,
-            state=authorization.state,
-            cookie_path=cookie_path,
-            cookie_secure=cookie_secure,
-        )
-        return response
-
-    if user_manager_dependency_key is not None:
-
-        @get("/callback", guards=[is_authenticated])
-        async def _callback(
-            self: object,
-            request: Request[Any, Any, Any],
-            code: str,
-            litestar_auth_oauth_associate_user_manager: OAuthControllerUserManagerProtocol[
-                UP,
-                ID,
-            ],
-            oauth_state: str = Parameter(query="state"),
-        ) -> Response[Any]:
-            del self
-            return await _callback_impl(
-                request,
-                code,
-                oauth_state,
-                litestar_auth_oauth_associate_user_manager,
-            )
-
-    else:
-        bound_manager = cast("OAuthControllerUserManagerProtocol[UP, ID]", user_manager)
-
-        @get("/callback", guards=[is_authenticated])
-        async def _callback(
-            self: object,
-            request: Request[Any, Any, Any],
-            code: str,
-            oauth_state: str = Parameter(query="state"),
-        ) -> Response[Any]:
-            del self
-            return await _callback_impl(
-                request,
-                code,
-                oauth_state,
-                bound_manager,
-            )
-
-    class OAuthAssociateController(Controller):
-        """Provider-specific OAuth associate authorize/callback endpoints."""
-
-        authorize = _authorize
-        callback = _callback
-
-    OAuthAssociateController.__name__ = f"{_build_controller_name(provider_name)}OAuthAssociateController"
-    OAuthAssociateController.__qualname__ = OAuthAssociateController.__name__
-    OAuthAssociateController.path = f"{path.rstrip('/')}/{provider_name}"
-    return OAuthAssociateController
+    return _create_oauth_controller_type(
+        assembly=assembly,
+        authorize_handler=_create_authorize_handler(
+            assembly=assembly,
+            guards=[is_authenticated],
+            allow_scopes=False,
+        ),
+        callback_handler=_create_associate_callback_handler(assembly=assembly),
+        docstring="Provider-specific OAuth associate authorize/callback endpoints.",
+    )
 
 
 def _build_cookie_path(*, path: str, provider_name: str) -> str:
@@ -281,6 +493,56 @@ def _build_cookie_path(*, path: str, provider_name: str) -> str:
         Provider-specific cookie path used for OAuth state cookies.
     """
     return f"{path.rstrip('/')}/{provider_name}"
+
+
+def _set_dependency_parameter_signature(
+    handler_fn: object,
+    *,
+    parameter_name: str,
+) -> None:
+    """Expose the generated DI parameter name on a handler's public signature.
+
+    Raises:
+        TypeError: If the handler does not declare ``oauth_state`` and ``**dependencies``.
+    """
+    target = cast("Any", getattr(handler_fn, "fn", handler_fn))
+    signature = inspect.signature(target)
+    parameters: list[inspect.Parameter] = []
+    has_oauth_state_parameter = False
+    has_var_keyword_parameter = False
+
+    for parameter in signature.parameters.values():
+        if parameter.name == "oauth_state":
+            parameters.extend(
+                (
+                    inspect.Parameter(
+                        parameter_name,
+                        kind=inspect.Parameter.POSITIONAL_OR_KEYWORD,
+                        annotation=object,
+                    ),
+                    parameter,
+                ),
+            )
+            has_oauth_state_parameter = True
+            continue
+        if parameter.kind is inspect.Parameter.VAR_KEYWORD:
+            has_var_keyword_parameter = True
+            continue
+        parameters.append(parameter)
+
+    if not has_oauth_state_parameter or not has_var_keyword_parameter:
+        msg = "OAuth associate callback handlers must declare oauth_state and **dependencies."
+        raise TypeError(msg)
+
+    adapted_handler = target
+    adapted_handler.__signature__ = inspect.Signature(
+        parameters=parameters,
+        return_annotation=signature.return_annotation,
+    )
+    adapted_handler.__annotations__ = {
+        **getattr(adapted_handler, "__annotations__", {}),
+        parameter_name: object,
+    }
 
 
 def _set_state_cookie(

@@ -1,51 +1,85 @@
-"""Database-backed authentication strategy models."""
+"""Database-backed authentication strategy models and model contracts.
+
+The concrete token ORM classes still live here, but the canonical public registration helper now
+hangs off :mod:`litestar_auth.models` so mapper discovery stays with the models boundary.
+"""
 
 from __future__ import annotations
 
-import uuid  # noqa: TC003 - SQLAlchemy resolves mapped annotations at runtime.
-from datetime import datetime  # noqa: TC003 - SQLAlchemy resolves mapped annotations at runtime.
-from typing import TYPE_CHECKING
+from dataclasses import dataclass
+from inspect import getattr_static
+from typing import Any
 
 from advanced_alchemy.base import DefaultBase
-from sqlalchemy import DateTime, ForeignKey, String, func
-from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-if TYPE_CHECKING:
-    # Type-only import; forms a static cycle with litestar_auth.models
-    # but is intentionally confined to TYPE_CHECKING.
-    from litestar_auth.models import User
+from litestar_auth._auth_model_mixins import AccessTokenMixin, RefreshTokenMixin
+from litestar_auth.exceptions import ConfigurationError
+
+_MISSING = object()
+_REQUIRED_TOKEN_MODEL_ATTRIBUTES = ("token", "created_at", "user_id", "user")
 
 
-class AccessToken(DefaultBase):
-    """Persistent access token linked to a user."""
+def _validate_token_model_contract(model: type[Any], *, field_name: str) -> None:
+    """Validate that a token model exposes the minimum strategy contract.
+
+    Args:
+        model: Access-token or refresh-token ORM class supplied to the public contract.
+        field_name: Dataclass field name used in error messages.
+
+    Raises:
+        ConfigurationError: If the supplied model does not expose the required attributes.
+    """
+    missing_attributes = [
+        attribute_name
+        for attribute_name in _REQUIRED_TOKEN_MODEL_ATTRIBUTES
+        if getattr_static(model, attribute_name, _MISSING) is _MISSING
+    ]
+    if not missing_attributes:
+        return
+
+    missing_display = ", ".join(missing_attributes)
+    required_display = ", ".join(_REQUIRED_TOKEN_MODEL_ATTRIBUTES)
+    msg = (
+        f"DatabaseTokenModels.{field_name} must define mapped attributes {required_display}; "
+        f"missing: {missing_display}."
+    )
+    raise ConfigurationError(msg)
+
+
+class AccessToken(AccessTokenMixin, DefaultBase):
+    """Persistent access token linked to a user via the shared auth relationship contract."""
 
     __tablename__ = "access_token"
 
-    token: Mapped[str] = mapped_column(String(length=255), primary_key=True)
-    user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("user.id"), nullable=False)
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True),
-        server_default=func.now(),
-        nullable=False,
-    )
-    user: Mapped[User] = relationship(back_populates="access_tokens")
 
-
-class RefreshToken(DefaultBase):
-    """Persistent refresh token linked to a user."""
+class RefreshToken(RefreshTokenMixin, DefaultBase):
+    """Persistent refresh token linked to a user via the shared auth relationship contract."""
 
     __tablename__ = "refresh_token"
 
-    token: Mapped[str] = mapped_column(String(length=255), primary_key=True)
-    user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("user.id"), nullable=False)
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True),
-        server_default=func.now(),
-        nullable=False,
-    )
-    user: Mapped[User] = relationship(back_populates="refresh_tokens")
+
+@dataclass(frozen=True, slots=True)
+class DatabaseTokenModels:
+    """Explicit access-token and refresh-token ORM contract for ``DatabaseTokenStrategy``.
+
+    The supplied models must expose mapped ``token``, ``created_at``, ``user_id``, and ``user``
+    attributes compatible with the persistence operations performed by the DB token strategy.
+    Defaults preserve the bundled ``AccessToken`` / ``RefreshToken`` behavior.
+    """
+
+    access_token_model: type[Any] = AccessToken
+    refresh_token_model: type[Any] = RefreshToken
+
+    def __post_init__(self) -> None:
+        """Validate the supplied token-model classes eagerly."""
+        _validate_token_model_contract(self.access_token_model, field_name="access_token_model")
+        _validate_token_model_contract(self.refresh_token_model, field_name="refresh_token_model")
 
 
 def import_token_orm_models() -> tuple[type[AccessToken], type[RefreshToken]]:
-    """Return the token ORM models to make mapper registration explicit for consumers."""
+    """Return the token ORM models for explicit mapper registration.
+
+    Prefer ``litestar_auth.models.import_token_orm_models()`` for new public call sites. This
+    module-level helper remains available for lower-level imports and compatibility surfaces.
+    """
     return AccessToken, RefreshToken

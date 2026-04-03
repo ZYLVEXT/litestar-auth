@@ -6,6 +6,7 @@ import importlib
 import logging
 import warnings
 from dataclasses import dataclass
+from datetime import timedelta
 from typing import Any, cast
 from uuid import UUID
 
@@ -17,7 +18,13 @@ import litestar_auth._plugin.rate_limit as rate_limit_module
 import litestar_auth._plugin.startup as startup_module
 import litestar_auth._plugin.validation as validation_module
 import litestar_auth.authentication.strategy.jwt as jwt_strategy_module
-from litestar_auth._plugin.config import DEFAULT_CSRF_COOKIE_NAME, LitestarAuthConfig, OAuthConfig, TotpConfig
+from litestar_auth._plugin.config import (
+    DEFAULT_CSRF_COOKIE_NAME,
+    DatabaseTokenAuthConfig,
+    LitestarAuthConfig,
+    OAuthConfig,
+    TotpConfig,
+)
 from litestar_auth._plugin.middleware import build_csrf_config, get_cookie_transports
 from litestar_auth._plugin.rate_limit import iter_rate_limit_endpoints
 from litestar_auth._plugin.startup import (
@@ -355,6 +362,60 @@ def test_validate_backend_strategy_security_allows_explicit_plaintext_token_over
     _validate_backend_strategy_security(config)
 
 
+def test_validate_backend_strategy_security_allows_database_token_preset_legacy_mode_without_top_level_override(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The canonical DB-token preset uses its nested settings as the rollout source of truth."""
+    monkeypatch.setattr(validation_module, "is_testing", lambda: False)
+    config = LitestarAuthConfig[ExampleUser, UUID].with_database_token_auth(
+        database_token_auth=DatabaseTokenAuthConfig(
+            token_hash_secret=TOKEN_HASH_SECRET,
+            accept_legacy_plaintext_tokens=True,
+        ),
+        user_model=ExampleUser,
+        user_manager_class=PluginUserManager,
+        session_maker=cast("Any", DummySessionMaker()),
+        user_db_factory=lambda _session: InMemoryUserDatabase([]),
+        user_manager_kwargs={
+            "verification_token_secret": "v" * 32,
+            "reset_password_token_secret": "r" * 32,
+        },
+    )
+
+    _validate_backend_strategy_security(config)
+
+
+def test_validate_backend_strategy_security_uses_database_token_preset_rollout_hint(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Preset validation errors point callers to the nested DB-token settings object."""
+    monkeypatch.setattr(validation_module, "is_testing", lambda: False)
+    config = LitestarAuthConfig[ExampleUser, UUID].with_database_token_auth(
+        database_token_auth=DatabaseTokenAuthConfig(
+            token_hash_secret=TOKEN_HASH_SECRET,
+        ),
+        user_model=ExampleUser,
+        user_manager_class=PluginUserManager,
+        session_maker=cast("Any", DummySessionMaker()),
+        user_db_factory=lambda _session: InMemoryUserDatabase([]),
+        user_manager_kwargs={
+            "verification_token_secret": "v" * 32,
+            "reset_password_token_secret": "r" * 32,
+        },
+    )
+    config.backends[0].strategy = cast(
+        "Any",
+        validation_module.DatabaseTokenStrategy(
+            session=cast("Any", object()),
+            token_hash_secret=TOKEN_HASH_SECRET,
+            accept_legacy_plaintext_tokens=True,
+        ),
+    )
+
+    with pytest.raises(ValueError, match=r"DatabaseTokenAuthConfig\.accept_legacy_plaintext_tokens=True"):
+        _validate_backend_strategy_security(config)
+
+
 def test_validate_backend_strategy_security_rejects_nondurable_jwt_revocation(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -532,6 +593,19 @@ def test_iter_rate_limit_endpoints_includes_request_verify_token() -> None:
     assert endpoints[-1] is rate_limit
 
 
+def test_iter_rate_limit_endpoints_includes_totp_confirm_enable() -> None:
+    """The shared iterator covers the TOTP confirm-enrollment endpoint."""
+    rate_limit = EndpointRateLimit(
+        backend=InMemoryRateLimiter(max_attempts=5, window_seconds=60),
+        scope="ip",
+        namespace="totp-confirm-enable",
+    )
+
+    endpoints = iter_rate_limit_endpoints(AuthRateLimitConfig(totp_confirm_enable=rate_limit))
+
+    assert rate_limit in endpoints
+
+
 def test_warn_insecure_plugin_startup_defaults_warns_for_request_verify_token_inmemory_backend(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -554,6 +628,28 @@ def test_warn_insecure_plugin_startup_defaults_warns_for_request_verify_token_in
     assert any("process-local in-memory backend" in str(record.message) for record in records)
 
 
+def test_warn_insecure_plugin_startup_defaults_warns_for_totp_confirm_enable_inmemory_backend(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Startup warnings still inspect TOTP confirm-enrollment rate-limit settings."""
+    monkeypatch.setattr(startup_module, "is_testing", lambda: False)
+    config = _minimal_config(
+        rate_limit_config=AuthRateLimitConfig(
+            totp_confirm_enable=EndpointRateLimit(
+                backend=InMemoryRateLimiter(max_attempts=5, window_seconds=60),
+                scope="ip",
+                namespace="totp-confirm-enable",
+            ),
+        ),
+    )
+
+    with warnings.catch_warnings(record=True) as records:
+        warnings.simplefilter("always")
+        warn_insecure_plugin_startup_defaults(config)
+
+    assert any("process-local in-memory backend" in str(record.message) for record in records)
+
+
 def test_validate_rate_limit_config_rejects_invalid_request_verify_token_trusted_proxy() -> None:
     """Trusted-proxy validation still inspects non-login endpoint rate-limit settings."""
     rate_limit = EndpointRateLimit(
@@ -565,6 +661,20 @@ def test_validate_rate_limit_config_rejects_invalid_request_verify_token_trusted
 
     with pytest.raises(Exception, match="trusted_proxy must be a boolean") as exc_info:
         validate_rate_limit_config(AuthRateLimitConfig(request_verify_token=rate_limit))
+    assert type(exc_info.value).__name__ == "ConfigurationError"
+
+
+def test_validate_rate_limit_config_rejects_invalid_totp_confirm_enable_trusted_proxy() -> None:
+    """Trusted-proxy validation still inspects TOTP confirm-enrollment settings."""
+    rate_limit = EndpointRateLimit(
+        backend=InMemoryRateLimiter(max_attempts=5, window_seconds=60),
+        scope="ip",
+        namespace="totp-confirm-enable",
+        trusted_proxy=cast("bool", "yes"),
+    )
+
+    with pytest.raises(Exception, match="trusted_proxy must be a boolean") as exc_info:
+        validate_rate_limit_config(AuthRateLimitConfig(totp_confirm_enable=rate_limit))
     assert type(exc_info.value).__name__ == "ConfigurationError"
 
 
@@ -811,9 +921,35 @@ def test_build_csrf_config_returns_expected_cookie_settings() -> None:
     assert csrf_config.cookie_samesite == "strict"
 
 
-def test_require_oauth_token_encryption_for_configured_providers_calls_require_key() -> None:
-    """Configured OAuth providers invoke the fail-closed key requirement callback."""
-    config = _minimal_config(oauth_config=OAuthConfig(oauth_providers=[("github", object())]))
+@pytest.mark.parametrize(
+    "oauth_config",
+    [
+        pytest.param(
+            OAuthConfig(oauth_providers=[("github", object())]),
+            id="login-providers",
+        ),
+        pytest.param(
+            OAuthConfig(
+                include_oauth_associate=True,
+                oauth_associate_providers=[("github", object())],
+            ),
+            id="associate-providers",
+        ),
+        pytest.param(
+            OAuthConfig(
+                oauth_providers=[("github", object())],
+                include_oauth_associate=True,
+                oauth_associate_providers=[("gitlab", object())],
+            ),
+            id="mixed-providers",
+        ),
+    ],
+)
+def test_require_oauth_token_encryption_for_configured_providers_calls_require_key(
+    oauth_config: OAuthConfig,
+) -> None:
+    """Either configured OAuth provider inventory triggers the fail-closed key requirement."""
+    config = _minimal_config(oauth_config=oauth_config)
     seen: list[str] = []
 
     def _require_key(*, context: str) -> None:
@@ -839,11 +975,41 @@ def test_require_oauth_token_encryption_for_configured_providers_skips_unconfigu
 def test_has_configured_oauth_provider_helpers_report_expected_state() -> None:
     """Both provider helper variants agree on configured and unconfigured OAuth state."""
     empty_config = OAuthConfig()
-    configured_config = OAuthConfig(oauth_associate_providers=[("github", object())])
+    login_only_config = OAuthConfig(oauth_providers=[("github", object())])
+    associate_only_config = OAuthConfig(
+        include_oauth_associate=True,
+        oauth_associate_providers=[("github", object())],
+    )
+    mixed_config = OAuthConfig(
+        oauth_providers=[("github", object())],
+        include_oauth_associate=True,
+        oauth_associate_providers=[("gitlab", object())],
+    )
 
     assert has_configured_oauth_providers(_minimal_config(oauth_config=None)) is False
+    assert has_configured_oauth_providers(_minimal_config(oauth_config=login_only_config)) is True
+    assert has_configured_oauth_providers(_minimal_config(oauth_config=associate_only_config)) is True
+    assert has_configured_oauth_providers(_minimal_config(oauth_config=mixed_config)) is True
     assert has_configured_oauth_providers_for(empty_config) is False
-    assert has_configured_oauth_providers_for(configured_config) is True
+    assert has_configured_oauth_providers_for(login_only_config) is True
+    assert has_configured_oauth_providers_for(associate_only_config) is True
+    assert has_configured_oauth_providers_for(mixed_config) is True
+
+
+def test_warn_if_insecure_oauth_redirect_in_production_skips_login_only_inventory(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Login-provider inventory alone does not trigger the associate-route localhost warning."""
+    config = _minimal_config(
+        oauth_config=OAuthConfig(
+            oauth_providers=[("github", object())],
+        ),
+    )
+
+    with caplog.at_level(logging.WARNING, logger="litestar_auth.plugin"):
+        warn_if_insecure_oauth_redirect_in_production(config=config, app_config=AppConfig(debug=False))
+
+    assert not caplog.text
 
 
 def test_warn_if_insecure_oauth_redirect_in_production_logs_localhost_default(
@@ -899,10 +1065,116 @@ def test_warn_if_insecure_oauth_redirect_in_production_skips_debug_mode(
     assert not caplog.text
 
 
+def test_validate_config_rejects_associate_inventory_without_plugin_route_flag() -> None:
+    """Associate-provider inventory without the plugin route flag is rejected explicitly."""
+    config = _minimal_config(
+        oauth_config=OAuthConfig(
+            oauth_associate_providers=[("github", object())],
+            oauth_token_encryption_key="a" * 44,
+        ),
+    )
+
+    with pytest.raises(ValueError, match="include_oauth_associate=True or remove oauth_associate_providers"):
+        validate_config(config)
+
+
+def test_validate_config_rejects_empty_plugin_associate_inventory() -> None:
+    """include_oauth_associate=True requires a concrete provider inventory."""
+    config = _minimal_config(
+        oauth_config=OAuthConfig(
+            include_oauth_associate=True,
+            oauth_token_encryption_key="a" * 44,
+        ),
+    )
+
+    with pytest.raises(ValueError, match="include_oauth_associate=True requires oauth_associate_providers"):
+        validate_config(config)
+
+
+def test_validate_config_rejects_orphan_associate_redirect_base_url() -> None:
+    """Associate redirect-base settings must correspond to plugin-owned associate routes."""
+    config = _minimal_config(
+        oauth_config=OAuthConfig(
+            oauth_providers=[("github", object())],
+            oauth_associate_redirect_base_url="https://app.example.com/auth/associate",
+            oauth_token_encryption_key="a" * 44,
+        ),
+    )
+
+    with pytest.raises(ValueError, match="oauth_associate_redirect_base_url requires include_oauth_associate=True"):
+        validate_config(config)
+
+
+def test_validate_config_rejects_duplicate_login_provider_names() -> None:
+    """Duplicate login-provider names would make explicit route ownership ambiguous."""
+    config = _minimal_config(
+        oauth_config=OAuthConfig(
+            oauth_providers=[("github", object()), ("github", object())],
+            oauth_token_encryption_key="a" * 44,
+        ),
+    )
+
+    with pytest.raises(ValueError, match=r"oauth_providers must not contain duplicate provider names: github"):
+        validate_config(config)
+
+
+def test_validate_config_rejects_duplicate_associate_provider_names() -> None:
+    """Duplicate associate-provider names are rejected before plugin route assembly."""
+    config = _minimal_config(
+        oauth_config=OAuthConfig(
+            include_oauth_associate=True,
+            oauth_associate_providers=[("github", object()), ("github", object())],
+            oauth_token_encryption_key="a" * 44,
+        ),
+    )
+
+    with pytest.raises(
+        ValueError,
+        match=r"oauth_associate_providers must not contain duplicate provider names: github",
+    ):
+        validate_config(config)
+
+
+def test_validate_config_rejects_oauth_associate_by_email_without_login_provider_inventory() -> None:
+    """Associate-by-email cannot be declared without explicit login-provider registration metadata."""
+    config = _minimal_config(
+        oauth_config=OAuthConfig(
+            oauth_associate_by_email=True,
+            oauth_token_encryption_key="a" * 44,
+        ),
+    )
+
+    with pytest.raises(ValueError, match="oauth_associate_by_email only affects explicitly mounted OAuth login"):
+        validate_config(config)
+
+
 def test_validate_config_runs_happy_path(monkeypatch: pytest.MonkeyPatch) -> None:
     """The top-level validator exercises the expected startup validation sequence."""
     monkeypatch.setattr(validation_module, "validate_testing_mode_for_startup", lambda: None)
     config = _minimal_config()
+
+    validate_config(config)
+
+
+def test_validate_config_runs_happy_path_for_database_token_preset(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The DB bearer preset flows through the same top-level validator path as manual backends."""
+    monkeypatch.setattr(validation_module, "validate_testing_mode_for_startup", lambda: None)
+    config = LitestarAuthConfig[ExampleUser, UUID].with_database_token_auth(
+        database_token_auth=DatabaseTokenAuthConfig(
+            token_hash_secret=TOKEN_HASH_SECRET,
+            max_age=timedelta(minutes=10),
+        ),
+        user_model=ExampleUser,
+        user_manager_class=PluginUserManager,
+        session_maker=cast("Any", DummySessionMaker()),
+        user_db_factory=lambda _session: InMemoryUserDatabase([]),
+        user_manager_kwargs={
+            "verification_token_secret": "v" * 32,
+            "reset_password_token_secret": "r" * 32,
+        },
+    )
 
     validate_config(config)
 
@@ -945,6 +1217,27 @@ def test_validate_config_reports_missing_backends_before_later_errors(
     config.user_manager_class = cast("type[Any]", _ManagerWithoutListUsers)
 
     with pytest.raises(ValueError, match="at least one authentication backend"):
+        validate_config(config)
+
+
+def test_validate_config_preserves_session_prerequisite_for_database_token_preset(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The DB bearer preset still requires the same session source as the manual backend path."""
+    monkeypatch.setattr(validation_module, "validate_testing_mode_for_startup", lambda: None)
+    config = LitestarAuthConfig[ExampleUser, UUID].with_database_token_auth(
+        database_token_auth=DatabaseTokenAuthConfig(
+            token_hash_secret=TOKEN_HASH_SECRET,
+        ),
+        user_model=ExampleUser,
+        user_manager_class=PluginUserManager,
+        user_manager_kwargs={
+            "verification_token_secret": "v" * 32,
+            "reset_password_token_secret": "r" * 32,
+        },
+    )
+
+    with pytest.raises(ValueError, match=r"requires session_maker or db_session_dependency_provided_externally"):
         validate_config(config)
 
 

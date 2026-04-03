@@ -1,15 +1,18 @@
 # Models
 
-Package `litestar_auth.models` exposes the reference **`User`** and **`OAuthAccount`** ORM models. Names `User` and `OAuthAccount` are loaded lazily (PEP 562) when accessed on the package.
+Package `litestar_auth.models` exposes the reference **`User`** and **`OAuthAccount`** ORM models plus the side-effect-free mixins behind the bundled model family. Names are loaded lazily (PEP 562) when accessed on the package.
 
 ## Import paths
 
 | Goal | Import |
 |------|--------|
+| Shared auth-model mixins without registering reference mappers | `from litestar_auth.models import UserModelMixin, UserAuthRelationshipMixin, OAuthAccountMixin, AccessTokenMixin, RefreshTokenMixin` |
 | OAuth table contract **without** loading reference `User` | `from litestar_auth.models.oauth import OAuthAccount` |
 | Reference `User` (and typical tests / quickstarts) | `from litestar_auth.models import User` or `from litestar_auth.models.user import User` |
 
 Avoid `from litestar_auth.models import User` (or `user` submodule) in apps that already map table `user` to a custom model — it registers a second mapper and conflicts.
+
+For custom SQLAlchemy models, prefer composing the mixins on your own declarative base instead of copying columns or relationship wiring from the reference classes. See [Configuration](../configuration.md#custom-sqlalchemy-user-and-token-models) and [Custom user + OAuth cookbook](../cookbook/custom_user_oauth.md).
 
 ## Canonical `oauth_account` shape
 

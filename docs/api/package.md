@@ -7,34 +7,52 @@ from litestar_auth.models import User, OAuthAccount
 from litestar_auth.db.sqlalchemy import SQLAlchemyUserDatabase
 ```
 
-Typical plugin wiring:
+The canonical opaque DB-token entrypoint is also exported from the root package as `DatabaseTokenAuthConfig`.
+
+For OAuth, treat root-package re-exports as compatibility aliases. The canonical login-helper import is `litestar_auth.oauth.create_provider_oauth_controller`, while `litestar_auth.controllers.create_oauth_controller` and `create_oauth_associate_controller` are the advanced escape hatch for custom route tables.
+
+Canonical opaque DB-token wiring:
 
 ```python
+from uuid import UUID
+
 from litestar_auth import (
+    DatabaseTokenAuthConfig,
     LitestarAuth,
     LitestarAuthConfig,
-    AuthenticationBackend,
-    JWTStrategy,
-    BearerTransport,
-    BaseUserManager,
 )
 from litestar_auth.models import User
-from litestar_auth.db.sqlalchemy import SQLAlchemyUserDatabase
+
+config = LitestarAuthConfig[User, UUID].with_database_token_auth(
+    database_token_auth=DatabaseTokenAuthConfig(
+        token_hash_secret="replace-with-32+-char-db-token-secret",
+    ),
+    user_model=User,
+    user_manager_class=YourUserManager,
+    session_maker=session_maker,
+    user_manager_kwargs={
+        "verification_token_secret": "replace-with-32+-char-secret",
+        "reset_password_token_secret": "replace-with-32+-char-secret",
+    },
+)
+app = Litestar(plugins=[LitestarAuth(config)])
 ```
+
+If you previously built the DB bearer backend by hand with `AuthenticationBackend(..., BearerTransport(), DatabaseTokenStrategy(...))`, migrate to the preset above. Keep manual backends for multi-backend or custom-transport cases.
 
 ## Public surface (high level)
 
 | Area | Types / functions |
 | ---- | ----------------- |
-| Plugin | `LitestarAuth`, `LitestarAuthConfig`, `OAuthConfig`, `TotpConfig` |
+| Plugin | `LitestarAuth`, `LitestarAuthConfig`, `DatabaseTokenAuthConfig`, `OAuthConfig`, `TotpConfig` |
 | Backends | `AuthenticationBackend`, `BearerTransport`, `CookieTransport`, `JWTStrategy`, `DatabaseTokenStrategy`, `RedisTokenStrategy`, … |
 | Manager | `BaseUserManager`, `require_password_length`, `PasswordHelper` |
 | Persistence | `User`, `OAuthAccount` (from `litestar_auth.models`), `AccessToken`, `RefreshToken`, `SQLAlchemyUserDatabase` (from `litestar_auth.db.sqlalchemy`) |
 | Guards | `is_authenticated`, `is_active`, `is_verified`, `is_superuser` |
 | Errors | `ErrorCode`, `LitestarAuthError`, typed subclasses |
 | Protocols | `UserProtocol`, `GuardedUserProtocol`, `TotpUserProtocol` — [Types](types.md) |
-| Controllers (advanced) | `create_*_controller` factories — [Controllers API](controllers.md) |
-| OAuth helpers | `create_provider_oauth_controller`, `load_httpx_oauth_client` |
+| Controllers (advanced) | `create_*_controller` factories for custom route tables — [Controllers API](controllers.md) |
+| OAuth helpers | Canonical login helper: `litestar_auth.oauth.create_provider_oauth_controller`; lazy client loader: `load_httpx_oauth_client` |
 | TOTP | `generate_totp_secret`, `generate_totp_uri`, `verify_totp`, stores, … |
 | Rate limit | `AuthRateLimitConfig`, `EndpointRateLimit`, `InMemoryRateLimiter`, `RedisRateLimiter` |
 

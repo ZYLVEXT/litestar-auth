@@ -30,11 +30,35 @@ flowchart LR
 
 Constructors and options are documented under [Python API — Strategies](../api/strategies.md).
 
+## Canonical opaque DB-token setup
+
+For the common bearer + database-token plugin flow, prefer the plugin-owned preset instead of hand-assembling the backend:
+
+```python
+from litestar_auth import DatabaseTokenAuthConfig, LitestarAuthConfig
+
+config = LitestarAuthConfig.with_database_token_auth(
+    database_token_auth=DatabaseTokenAuthConfig(
+        token_hash_secret="replace-with-32+-char-db-token-secret",
+    ),
+    user_model=YourUserModel,
+    user_manager_class=YourUserManager,
+    session_maker=session_maker,
+    user_manager_kwargs={
+        "verification_token_secret": "...",
+        "reset_password_token_secret": "...",
+    },
+)
+```
+
+At runtime this still becomes a normal `AuthenticationBackend`, but the preset keeps request-session binding and migration-only rollout flags on the plugin side.
+
 ## Order and multiple backends
 
 - Middleware tries backends **in order**; the first that yields a user wins.
 - The **first** backend is exposed under the configured `auth_path` (default `/auth`).
 - **Additional** backends are mounted under `/auth/{backend-name}/...` so paths do not collide.
+- Manual `AuthenticationBackend(...)` assembly remains the advanced escape hatch for multi-backend or custom transport setups.
 
 Name backends explicitly when you have more than one:
 
@@ -47,6 +71,6 @@ AuthenticationBackend(name="mobile", transport=BearerTransport(), strategy=db_st
 
 - **Public API / microservice:** often `BearerTransport` + `JWTStrategy` with a durable denylist in production if you rely on revocation.
 - **Same-site browser app:** `CookieTransport` + strategy of your choice; enable CSRF for state-changing requests.
-- **Central session store:** `DatabaseTokenStrategy` or `RedisTokenStrategy` for server-side invalidation without JWT denylists.
+- **Central session store:** use `LitestarAuthConfig.with_database_token_auth(...)` for the canonical bearer + DB-token path, or `RedisTokenStrategy` when Redis is your session store. Drop to manual `DatabaseTokenStrategy` assembly only when you need a non-canonical transport or multiple backends.
 
 See also [Request lifecycle](request_lifecycle.md).

@@ -11,11 +11,15 @@ from sqlalchemy import inspect as sa_inspect
 from litestar_auth._plugin.config import (
     LitestarAuthConfig,
     TotpConfig,
+    _build_oauth_route_registration_contract,
     user_manager_accepts_password_validator,
 )
 from litestar_auth._plugin.middleware import get_cookie_transports
 from litestar_auth._plugin.rate_limit import iter_rate_limit_endpoints
-from litestar_auth.authentication.strategy.db import DatabaseTokenStrategy
+from litestar_auth.authentication.strategy.db import (
+    DatabaseTokenStrategy,
+    build_legacy_plaintext_tokens_validation_message,
+)
 from litestar_auth.authentication.strategy.jwt import JWTStrategy
 from litestar_auth.config import (
     MINIMUM_SECRET_LENGTH,
@@ -121,6 +125,57 @@ def validate_request_security_config[UP: UserProtocol[Any], ID](config: Litestar
     validate_cookie_auth_config(config)
 
 
+def validate_oauth_route_registration_config[UP: UserProtocol[Any], ID](config: LitestarAuthConfig[UP, ID]) -> None:
+    """Validate the deterministic plugin OAuth route-registration contract.
+
+    Raises:
+        ValueError: If declared OAuth inventories imply ambiguous or no-op route ownership.
+    """
+    oauth_config = config.oauth_config
+    if oauth_config is None:
+        return
+
+    contract = _build_oauth_route_registration_contract(
+        auth_path=config.auth_path,
+        oauth_config=oauth_config,
+    )
+    _validate_unique_oauth_provider_names(
+        providers=contract.login_providers,
+        field_name="oauth_providers",
+    )
+    _validate_unique_oauth_provider_names(
+        providers=contract.declared_associate_providers,
+        field_name="oauth_associate_providers",
+    )
+
+    if contract.declared_associate_providers and not contract.include_oauth_associate:
+        msg = (
+            "oauth_associate_providers are configured but include_oauth_associate=False, so the plugin would "
+            "not mount any /associate/{provider}/... routes. Set include_oauth_associate=True or remove "
+            "oauth_associate_providers."
+        )
+        raise ValueError(msg)
+
+    if contract.include_oauth_associate and not contract.declared_associate_providers:
+        msg = "include_oauth_associate=True requires oauth_associate_providers to be configured."
+        raise ValueError(msg)
+
+    if oauth_config.oauth_associate_redirect_base_url and not contract.has_plugin_owned_associate_routes:
+        msg = (
+            "oauth_associate_redirect_base_url requires include_oauth_associate=True with "
+            "oauth_associate_providers configured."
+        )
+        raise ValueError(msg)
+
+    if contract.oauth_associate_by_email and not contract.login_providers:
+        msg = (
+            "oauth_associate_by_email only affects explicitly mounted OAuth login controllers. Configure "
+            "oauth_providers and mount create_provider_oauth_controller(...) explicitly, or leave "
+            "oauth_associate_by_email=False."
+        )
+        raise ValueError(msg)
+
+
 def validate_totp_secret_config[UP: UserProtocol[Any], ID](config: LitestarAuthConfig[UP, ID]) -> None:
     """Validate TOTP secret-material and algorithm requirements."""
     _validate_totp_pending_secret_config(config)
@@ -143,6 +198,7 @@ def validate_config[UP: UserProtocol[Any], ID](config: LitestarAuthConfig[UP, ID
         validate_credential_config,
         validate_totp_domain_config,
         validate_request_security_config,
+        validate_oauth_route_registration_config,
         validate_totp_secret_config,
         validate_backend_security_config,
         validate_totp_encryption_config,
@@ -219,18 +275,34 @@ def _validate_database_strategy_legacy_mode[UP: UserProtocol[Any], ID](
     if not (
         isinstance(strategy, DatabaseTokenStrategy)
         and strategy.accept_legacy_plaintext_tokens
-        and not config.allow_legacy_plaintext_tokens
+        and not _database_strategy_legacy_rollout_enabled(config)
         and not is_testing()
     ):
         return
 
-    msg = (
-        "DatabaseTokenStrategy accept_legacy_plaintext_tokens=True is migration-only and disabled by "
-        "default in production. To explicitly accept temporary plaintext-token compatibility during a "
-        "controlled rollout, set LitestarAuthConfig.allow_legacy_plaintext_tokens=True and remove it "
-        "after rotating sessions and purging legacy rows."
+    msg = build_legacy_plaintext_tokens_validation_message(
+        rollout_setting=_database_strategy_legacy_rollout_setting_hint(config),
     )
     raise ValueError(msg)
+
+
+def _database_strategy_legacy_rollout_enabled[UP: UserProtocol[Any], ID](
+    config: LitestarAuthConfig[UP, ID],
+) -> bool:
+    """Return whether DB-token legacy plaintext rollout mode is explicitly enabled."""
+    database_token_auth = config.database_token_auth
+    if database_token_auth is not None:
+        return database_token_auth.accept_legacy_plaintext_tokens
+    return config.allow_legacy_plaintext_tokens
+
+
+def _database_strategy_legacy_rollout_setting_hint[UP: UserProtocol[Any], ID](
+    config: LitestarAuthConfig[UP, ID],
+) -> str:
+    """Return the config knob that controls DB-token legacy plaintext rollout."""
+    if config.database_token_auth is not None:
+        return "DatabaseTokenAuthConfig.accept_legacy_plaintext_tokens=True"
+    return "LitestarAuthConfig.allow_legacy_plaintext_tokens=True"
 
 
 def _validate_jwt_strategy_revocation[UP: UserProtocol[Any], ID](
@@ -301,6 +373,31 @@ def validate_password_validator_config[UP: UserProtocol[Any], ID](config: Litest
         "user_manager_factory to build the manager explicitly."
     )
     raise ValueError(msg)
+
+
+def _validate_unique_oauth_provider_names(
+    *,
+    providers: tuple[tuple[str, object], ...],
+    field_name: str,
+) -> None:
+    """Reject duplicate provider names within one declared OAuth inventory.
+
+    Raises:
+        ValueError: If a provider name appears more than once in the same inventory.
+    """
+    seen: set[str] = set()
+    duplicates: list[str] = []
+    for provider in providers:
+        provider_name = provider[0]
+        if provider_name in seen and provider_name not in duplicates:
+            duplicates.append(provider_name)
+            continue
+        seen.add(provider_name)
+
+    if duplicates:
+        duplicate_names = ", ".join(sorted(duplicates))
+        msg = f"{field_name} must not contain duplicate provider names: {duplicate_names}."
+        raise ValueError(msg)
 
 
 def validate_rate_limit_config(rate_limit_config: object) -> None:

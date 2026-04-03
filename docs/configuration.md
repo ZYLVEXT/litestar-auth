@@ -5,27 +5,168 @@ The plugin is driven by **`LitestarAuthConfig`** (import from `litestar_auth` or
 ORM models and the SQLAlchemy adapter are imported from their own modules — the root package does not re-export them:
 
 ```python
-from litestar_auth.plugin import LitestarAuth, LitestarAuthConfig
+from litestar_auth import DatabaseTokenAuthConfig, LitestarAuth, LitestarAuthConfig
 from litestar_auth.models import User  # or your own model
 from litestar_auth.db.sqlalchemy import SQLAlchemyUserDatabase
 ```
+
+## Canonical opaque DB-token preset
+
+Use `DatabaseTokenAuthConfig` plus `LitestarAuthConfig.with_database_token_auth()` for the common bearer + database-token flow. This is the documented entrypoint for opaque DB tokens; it builds the `AuthenticationBackend`, `BearerTransport`, and `DatabaseTokenStrategy` for you.
+
+```python
+from uuid import UUID
+
+from litestar_auth import DatabaseTokenAuthConfig, LitestarAuth, LitestarAuthConfig
+from litestar_auth.models import User
+
+config = LitestarAuthConfig[User, UUID].with_database_token_auth(
+    database_token_auth=DatabaseTokenAuthConfig(
+        token_hash_secret="replace-with-32+-char-db-token-secret",
+    ),
+    user_model=User,
+    user_manager_class=UserManager,
+    session_maker=session_maker,
+    user_manager_kwargs={
+        "verification_token_secret": "replace-with-32+-char-secret",
+        "reset_password_token_secret": "replace-with-32+-char-secret",
+    },
+)
+app = Litestar(plugins=[LitestarAuth(config)])
+```
+
+If you previously hand-assembled `AuthenticationBackend(..., transport=BearerTransport(), strategy=DatabaseTokenStrategy(...))`, migrate that setup to the preset above. Keep manual `backends=` assembly only when you need multiple backends, custom token models, or another non-canonical transport/strategy mix.
 
 ## Custom SQLAlchemy `User` and token models
 
 `LitestarAuthConfig.user_model` must satisfy **`UserProtocol`** (see [Types](types.md)): at minimum the fields and behaviors your chosen `BaseUserManager` and strategies use (`id`, `email`, `hashed_password`, `is_active`, `is_verified`, `is_superuser`, `totp_secret` as applicable).
 
-**Database-backed JWT / refresh** (`DatabaseTokenStrategy`): if you use the library’s `AccessToken` and `RefreshToken` from `litestar_auth.authentication.strategy.db_models`, your user class should declare relationships compatible with theirs:
+Treat the ORM setup as three explicit layers instead of one implicit reference-model recipe:
+
+1. `from litestar_auth.models import import_token_orm_models` is the canonical mapper-registration helper for the bundled `AccessToken` / `RefreshToken` tables.
+2. `UserModelMixin`, `UserAuthRelationshipMixin`, `AccessTokenMixin`, `RefreshTokenMixin`, and `OAuthAccountMixin` are the canonical customization path when your application owns the mapped classes.
+3. `DatabaseTokenModels(...)` is the strategy-side bridge only when `DatabaseTokenStrategy` should persist to custom token tables instead of the bundled defaults.
+
+Migration note:
+
+```python
+# Canonical mapper-registration import
+from litestar_auth.models import import_token_orm_models
+
+# Compatibility-only legacy import for existing call sites
+from litestar_auth.authentication.strategy import import_token_orm_models
+```
+
+**Database-backed JWT / refresh** (`DatabaseTokenStrategy`): the canonical explicit mapper-registration entrypoint for the library token models now lives under `litestar_auth.models`:
+
+```python
+from litestar_auth.models import import_token_orm_models
+
+AccessToken, RefreshToken = import_token_orm_models()
+```
+
+Use that helper for metadata registration or Alembic-style autogenerate setup so token model discovery stays with the models boundary. The older `from litestar_auth.authentication.strategy import import_token_orm_models` path remains supported only as a compatibility import while existing code migrates. If you use the library `AccessToken` and `RefreshToken` models, your user class should declare relationships compatible with them instead of copying mapper wiring from the reference `User` class:
 
 - Table names: `access_token`, `refresh_token`; `user_id` foreign keys target **`user.id`** (your user model’s table must be named `user`, or you must align FKs and relationships with your schema).
-- Match the default wiring in `litestar_auth.models.User`: `access_tokens` and `refresh_tokens` relationships with `back_populates="user"` pointing at those token classes. Diverging names or missing relationships can break mapper configuration or strategy code.
+- Compose the side-effect-free model mixins from `litestar_auth.models` when you want the bundled field and relationship contract without copying boilerplate from the reference ORM classes:
 
-**OAuth persistence**: `SQLAlchemyUserDatabase` requires **`user_model`** and accepts optional **`oauth_account_model`**. If you use OAuth methods (`get_by_oauth_account`, `upsert_oauth_account`) without providing `oauth_account_model`, a `TypeError` is raised. A custom OAuth class should keep the same columns and uniqueness as the library model (`oauth_name`, `account_id`, encrypted token fields, `user_id` FK to your user table’s primary key). If your user table is not `user`, supply an OAuth model whose foreign keys match your schema. If you map `user` yourself, import **`OAuthAccount` from `litestar_auth.models.oauth`** so the reference `User` mapper is never registered — see [Custom user + OAuth](cookbook/custom_user_oauth.md).
+```python
+from advanced_alchemy.base import UUIDBase
+
+from litestar_auth.models import UserAuthRelationshipMixin, UserModelMixin
+
+
+class User(UserModelMixin, UserAuthRelationshipMixin, UUIDBase):
+    __tablename__ = "user"
+```
+
+`UserModelMixin` provides the bundled email / password / account-state columns, while `UserAuthRelationshipMixin` provides the `access_tokens`, `refresh_tokens`, and `oauth_accounts` relationships with the `back_populates="user"` wiring expected by the bundled models. Set any `auth_*_model` hook to `None` when a custom user only composes part of the auth model family instead of all three relationships.
+
+If you need custom token or OAuth classes instead of the bundled `AccessToken`, `RefreshToken`, and `OAuthAccount`, compose their sibling mixins on your application's own declarative base / registry and override the class-name / table-name hooks instead of copying relationship code:
+
+```python
+from advanced_alchemy.base import UUIDPrimaryKey, create_registry
+from sqlalchemy.orm import DeclarativeBase
+
+from litestar_auth.models import (
+    AccessTokenMixin,
+    OAuthAccountMixin,
+    RefreshTokenMixin,
+    UserAuthRelationshipMixin,
+    UserModelMixin,
+)
+
+
+class AppBase(DeclarativeBase):
+    registry = create_registry()
+    metadata = registry.metadata
+    __abstract__ = True
+
+
+class AppUUIDBase(UUIDPrimaryKey, AppBase):
+    __abstract__ = True
+
+
+class MyUser(UserModelMixin, UserAuthRelationshipMixin, AppUUIDBase):
+    __tablename__ = "my_user"
+
+    auth_access_token_model = "MyAccessToken"
+    auth_refresh_token_model = "MyRefreshToken"
+    auth_oauth_account_model = "MyOAuthAccount"
+
+
+class MyAccessToken(AccessTokenMixin, AppBase):
+    __tablename__ = "my_access_token"
+
+    auth_user_model = "MyUser"
+    auth_user_table = "my_user"
+
+
+class MyRefreshToken(RefreshTokenMixin, AppBase):
+    __tablename__ = "my_refresh_token"
+
+    auth_user_model = "MyUser"
+    auth_user_table = "my_user"
+
+
+class MyOAuthAccount(OAuthAccountMixin, AppUUIDBase):
+    __tablename__ = "my_oauth_account"
+
+    auth_user_model = "MyUser"
+    auth_user_table = "my_user"
+```
+
+When those custom token classes back `DatabaseTokenStrategy`, pass them explicitly via `DatabaseTokenModels` so the strategy binds repositories, refresh rotation, logout cleanup, and expired-token cleanup to your tables instead of the bundled defaults. Model registration still starts in `litestar_auth.models`; `DatabaseTokenModels` only tells the strategy which mapped token classes to use at runtime:
+
+```python
+from litestar_auth.authentication import AuthenticationBackend
+from litestar_auth.authentication.strategy import DatabaseTokenModels, DatabaseTokenStrategy
+from litestar_auth.authentication.transport import BearerTransport
+
+token_models = DatabaseTokenModels(
+    access_token_model=MyAccessToken,
+    refresh_token_model=MyRefreshToken,
+)
+backend = AuthenticationBackend(
+    name="database",
+    transport=BearerTransport(),
+    strategy=DatabaseTokenStrategy(
+        session=session,
+        token_hash_secret="replace-with-32+-char-db-token-secret",
+        token_models=token_models,
+    ),
+)
+```
+
+`DatabaseTokenAuthConfig` / `LitestarAuthConfig.with_database_token_auth()` remains the canonical shortcut for the bundled `AccessToken` / `RefreshToken` tables. Use the manual backend assembly above only when you intentionally replace the token ORM classes or need another non-canonical transport/strategy combination.
+
+**OAuth persistence**: `SQLAlchemyUserDatabase` requires **`user_model`** and accepts optional **`oauth_account_model`**. If you use OAuth methods (`get_by_oauth_account`, `upsert_oauth_account`) without providing `oauth_account_model`, a `TypeError` is raised. A custom OAuth class can be composed from `OAuthAccountMixin` so the bundled column set, uniqueness rule, and `user` relationship stay aligned without inheriting the reference `OAuthAccount` class directly. Pair it with `UserAuthRelationshipMixin` on the user side, point `auth_oauth_account_model` at the custom class, and set the unused token hooks to `None` when you are not also composing custom token models. If your app still reuses the bundled `oauth_account` table on `user.id`, importing **`OAuthAccount` from `litestar_auth.models.oauth`** remains supported; otherwise prefer a mixin-based custom OAuth model whose `auth_user_model` / `auth_user_table` settings match your schema. See [Custom user + OAuth](cookbook/custom_user_oauth.md).
 
 ## Required (at runtime)
 
 | Field | Role |
 | ----- | ---- |
-| `backends` | Non-empty sequence of `AuthenticationBackend` (transport + strategy). |
+| `backends` | Non-empty sequence of `AuthenticationBackend` when calling `LitestarAuthConfig(...)` directly. The canonical DB bearer preset builds this automatically via `with_database_token_auth()`. |
 | `user_model` | User ORM type (e.g. subclass of `litestar_auth.models.User`). |
 | `user_manager_class` | Concrete subclass of `BaseUserManager`. |
 | `session_maker` | `async_sessionmaker[AsyncSession]` for scoped DB access. |
@@ -40,7 +181,7 @@ On the `LitestarAuthConfig` dataclass, `session_maker` is typed as optional for 
 | `user_manager_kwargs` | `{}` | Passed to `user_manager_class` (e.g. `password_helper`, token secrets). |
 | `password_validator_factory` | `None` | Build custom password policy; else default length validator when manager accepts it. |
 | `user_manager_factory` | `None` | Full control over request-scoped manager construction (`UserManagerFactory`). |
-| `rate_limit_config` | `None` | `AuthRateLimitConfig` for auth endpoint throttling. |
+| `rate_limit_config` | `None` | `AuthRateLimitConfig` for auth endpoint throttling. For the common shared-backend recipe, build it with `AuthRateLimitConfig.from_shared_backend()`. |
 
 ## Paths and HTTP feature flags
 
@@ -74,6 +215,20 @@ The generated controllers do not use one universal credential field. `login_iden
 
 By default, built-in TOTP routes publish `TotpEnableRequest`, `TotpConfirmEnableRequest`, `TotpVerifyRequest`, and `TotpDisableRequest`. The built-in TOTP flow still uses `user.email` for the otpauth URI and password step-up, even when `login_identifier="username"`.
 
+## Canonical shared-backend rate limiting
+
+For the usual Redis deployment, pass one shared backend to `AuthRateLimitConfig.from_shared_backend()` and let the library fill in the standard auth endpoint slots:
+
+```python
+from litestar_auth.ratelimit import AuthRateLimitConfig, RedisRateLimiter
+
+rate_limit_config = AuthRateLimitConfig.from_shared_backend(
+    RedisRateLimiter(redis=redis_client, max_attempts=5, window_seconds=60),
+)
+```
+
+The builder keeps package-owned scope and namespace defaults aligned with the documented auth routes. If you already depend on custom key names or scope choices, preserve them with `namespace_overrides` and `scope_overrides`. Keep direct `EndpointRateLimit(...)` assembly only for advanced per-endpoint exceptions.
+
 ## TOTP — `totp_config: TotpConfig | None`
 
 | Field | Default | Meaning |
@@ -96,14 +251,20 @@ Routes: `{auth_path}/2fa/...`. See [TOTP guide](guides/totp.md).
 | Field | Default | Meaning |
 | ----- | ------- | ------- |
 | `oauth_cookie_secure` | `True` | Secure flag for OAuth cookies. |
-| `oauth_providers` | `None` | Sequence of `(name, httpx_oauth_client)` for login. |
-| `oauth_associate_by_email` | `False` | Allow linking by email (unsafe without provider guarantees). |
-| `include_oauth_associate` | `False` | Enable associate flow routes. |
-| `oauth_associate_providers` | `None` | Providers for logged-in linking. |
-| `oauth_associate_redirect_base_url` | `""` | Redirect base for associate callbacks. |
-| `oauth_token_encryption_key` | `None` | **Required** for configured providers in production — encrypts tokens at rest. |
+| `oauth_providers` | `None` | Declared login-provider inventory for explicit login-controller registration. The canonical helper mounts `GET {auth_path}/oauth/{provider}/authorize` and `GET {auth_path}/oauth/{provider}/callback` when you pass `auth_path=config.auth_path`; the plugin does **not** auto-mount those routes from this field. |
+| `oauth_associate_by_email` | `False` | Login-controller policy for explicit OAuth login helpers. Only meaningful when `oauth_providers` is declared and you mount login controllers explicitly. It does not affect plugin-owned associate routes. |
+| `include_oauth_associate` | `False` | Enable plugin-owned associate flow routes. |
+| `oauth_associate_providers` | `None` | Providers auto-mounted by the plugin under `GET {auth_path}/associate/{provider}/authorize` and `GET {auth_path}/associate/{provider}/callback` when `include_oauth_associate=True`. |
+| `oauth_associate_redirect_base_url` | `""` | Public redirect base for plugin-owned associate callbacks. Invalid unless the plugin owns associate routes. |
+| `oauth_token_encryption_key` | `None` | **Required** for any declared provider inventory in production — encrypts OAuth tokens at rest. |
 
-Provider controllers may take **`trust_provider_email_verified`** (see [OAuth guide](guides/oauth.md)).
+Explicit login controllers may take **`trust_provider_email_verified`** (see [OAuth guide](guides/oauth.md)).
+
+Route-registration contract:
+
+- `oauth_providers` declares login-provider inventory only; mount login controllers explicitly with `litestar_auth.oauth.create_provider_oauth_controller(..., auth_path=config.auth_path)`.
+- `include_oauth_associate=True` plus non-empty `oauth_associate_providers` is the plugin-owned OAuth auto-mount path for `{auth_path}/associate/{provider}/...`.
+- Ambiguous associate-only no-op configs now fail during plugin construction instead of silently producing no routes.
 
 ## Security and token policy
 
@@ -111,7 +272,7 @@ Provider controllers may take **`trust_provider_email_verified`** (see [OAuth gu
 | ----- | ------- | ------- |
 | `csrf_secret` | `None` | Enables Litestar CSRF config when cookie transports are used. |
 | `csrf_header_name` | `"X-CSRF-Token"` | Header Litestar expects for CSRF token. |
-| `allow_legacy_plaintext_tokens` | `False` | **Migration only** — accept legacy plaintext DB tokens. |
+| `allow_legacy_plaintext_tokens` | `False` | **Migration only** — accept legacy plaintext DB tokens for manual `DatabaseTokenStrategy` setups. The canonical preset derives this from `DatabaseTokenAuthConfig.accept_legacy_plaintext_tokens`. |
 | `allow_nondurable_jwt_revocation` | `False` | Opt-in to in-memory JWT denylist semantics. |
 | `id_parser` | `None` | Parse path/query user ids (e.g. `UUID`). |
 

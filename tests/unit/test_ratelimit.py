@@ -5,8 +5,11 @@ from __future__ import annotations
 import asyncio
 import importlib
 import logging
+import sys
 from collections import deque
-from dataclasses import dataclass
+from dataclasses import dataclass, fields
+from pathlib import Path
+from types import ModuleType as RuntimeModuleType
 from typing import TYPE_CHECKING, Any, cast
 from unittest.mock import AsyncMock, call
 
@@ -15,10 +18,12 @@ from litestar.connection import Request
 from litestar.exceptions import TooManyRequestsException
 
 import litestar_auth.ratelimit as ratelimit_module
+import litestar_auth.ratelimit._config as ratelimit_config_module
 from litestar_auth.authentication.strategy.redis import RedisTokenStrategy
 from litestar_auth.exceptions import ConfigurationError
 from litestar_auth.ratelimit import (
     DEFAULT_KEY_PREFIX,
+    AuthRateLimitConfig,
     EndpointRateLimit,
     InMemoryRateLimiter,
     RateLimiterBackend,
@@ -138,6 +143,297 @@ async def test_ratelimit_module_reload_preserves_public_api() -> None:
     )
     assert await reloaded_module._extract_email(request) == "Reloaded@Example.com"
     await orchestrator.on_success("verify", request)
+
+
+def test_auth_rate_limit_config_exposes_stable_endpoint_slots() -> None:
+    """AuthRateLimitConfig keeps the current per-endpoint field inventory."""
+    assert tuple(field.name for field in fields(ratelimit_module.AuthRateLimitConfig)) == (
+        "login",
+        "refresh",
+        "register",
+        "forgot_password",
+        "reset_password",
+        "totp_enable",
+        "totp_confirm_enable",
+        "totp_verify",
+        "totp_disable",
+        "verify_token",
+        "request_verify_token",
+    )
+    assert all(field.default is None for field in fields(ratelimit_module.AuthRateLimitConfig))
+
+
+def test_auth_rate_limit_catalog_covers_supported_slots_scopes_groups_and_namespaces() -> None:
+    """The private catalog is the single slot inventory for auth rate-limit defaults."""
+    recipes = ratelimit_config_module._AUTH_RATE_LIMIT_ENDPOINT_RECIPES
+
+    assert tuple(recipe.slot for recipe in recipes) == tuple(field.name for field in fields(AuthRateLimitConfig))
+    assert tuple(ratelimit_config_module._AUTH_RATE_LIMIT_ENDPOINT_RECIPES_BY_SLOT) == tuple(
+        field.name for field in fields(AuthRateLimitConfig)
+    )
+    assert {recipe.slot: recipe.default_scope for recipe in recipes} == {
+        "login": "ip_email",
+        "refresh": "ip",
+        "register": "ip",
+        "forgot_password": "ip_email",
+        "reset_password": "ip",
+        "totp_enable": "ip",
+        "totp_confirm_enable": "ip",
+        "totp_verify": "ip",
+        "totp_disable": "ip",
+        "verify_token": "ip",
+        "request_verify_token": "ip_email",
+    }
+    assert {recipe.slot: recipe.default_namespace for recipe in recipes} == {
+        "login": "login",
+        "refresh": "refresh",
+        "register": "register",
+        "forgot_password": "forgot-password",
+        "reset_password": "reset-password",
+        "totp_enable": "totp-enable",
+        "totp_confirm_enable": "totp-confirm-enable",
+        "totp_verify": "totp-verify",
+        "totp_disable": "totp-disable",
+        "verify_token": "verify-token",
+        "request_verify_token": "request-verify-token",
+    }
+    assert {recipe.slot: recipe.group for recipe in recipes} == {
+        "login": "login",
+        "refresh": "refresh",
+        "register": "register",
+        "forgot_password": "password_reset",
+        "reset_password": "password_reset",
+        "totp_enable": "totp",
+        "totp_confirm_enable": "totp",
+        "totp_verify": "totp",
+        "totp_disable": "totp",
+        "verify_token": "verification",
+        "request_verify_token": "verification",
+    }
+
+
+def test_auth_rate_limit_config_manual_construction_remains_plain_dataclass() -> None:
+    """Direct AuthRateLimitConfig construction remains unchanged after catalog extraction."""
+    shared_backend = InMemoryRateLimiter(max_attempts=2, window_seconds=10)
+    login_rate_limit = EndpointRateLimit(backend=shared_backend, scope="ip_email", namespace="login")
+    verify_rate_limit = EndpointRateLimit(backend=shared_backend, scope="ip", namespace="verify-token")
+    config = AuthRateLimitConfig(login=login_rate_limit, verify_token=verify_rate_limit)
+
+    assert config == AuthRateLimitConfig(login=login_rate_limit, verify_token=verify_rate_limit)
+    assert config.login is login_rate_limit
+    assert config.verify_token is verify_rate_limit
+    assert config.request_verify_token is None
+
+
+def test_auth_rate_limit_config_from_shared_backend_uses_catalog_defaults() -> None:
+    """The shared-backend builder materializes the full private endpoint catalog by default."""
+    shared_backend = InMemoryRateLimiter(max_attempts=2, window_seconds=10)
+    config = AuthRateLimitConfig.from_shared_backend(shared_backend, trusted_proxy=True)
+
+    for recipe in ratelimit_config_module._AUTH_RATE_LIMIT_ENDPOINT_RECIPES:
+        limiter = getattr(config, recipe.slot)
+
+        assert limiter is not None
+        assert limiter.backend is shared_backend
+        assert limiter.scope == recipe.default_scope
+        assert limiter.namespace == recipe.default_namespace
+        assert limiter.trusted_proxy is True
+        assert limiter.identity_fields == ("identifier", "username", "email")
+        assert limiter.trusted_headers == ratelimit_config_module._DEFAULT_TRUSTED_HEADERS
+
+
+def test_auth_rate_limit_config_from_shared_backend_supports_partial_enablement_and_disabled_slots() -> None:
+    """The shared-backend builder can leave individual slots unset."""
+    shared_backend = InMemoryRateLimiter(max_attempts=2, window_seconds=10)
+    config = AuthRateLimitConfig.from_shared_backend(
+        shared_backend,
+        enabled=("login", "refresh", "totp_verify"),
+        disabled=("refresh",),
+    )
+
+    assert config.login is not None
+    assert config.totp_verify is not None
+    assert config.refresh is None
+    assert config.register is None
+    assert config.forgot_password is None
+    assert config.reset_password is None
+    assert config.totp_enable is None
+    assert config.totp_confirm_enable is None
+    assert config.totp_disable is None
+    assert config.verify_token is None
+    assert config.request_verify_token is None
+
+
+def test_auth_rate_limit_config_from_shared_backend_applies_group_and_slot_overrides() -> None:
+    """The builder applies group backends first and slot overrides last."""
+    shared_backend = InMemoryRateLimiter(max_attempts=2, window_seconds=10)
+    totp_backend = InMemoryRateLimiter(max_attempts=5, window_seconds=30)
+    confirm_enable_override = EndpointRateLimit(
+        backend=shared_backend,
+        scope="ip_email",
+        namespace="totp-confirm-shared",
+    )
+    config = AuthRateLimitConfig.from_shared_backend(
+        shared_backend,
+        enabled=("forgot_password", "totp_enable", "totp_confirm_enable", "totp_verify", "request_verify_token"),
+        group_backends={"totp": totp_backend},
+        scope_overrides=cast("Any", {"forgot_password": "ip"}),
+        namespace_overrides={"request_verify_token": "verify-request"},
+        endpoint_overrides={
+            "totp_enable": None,
+            "totp_confirm_enable": confirm_enable_override,
+        },
+        trusted_proxy=True,
+    )
+
+    assert config.totp_enable is None
+    assert config.totp_confirm_enable is confirm_enable_override
+    assert config.forgot_password is not None
+    assert config.forgot_password.backend is shared_backend
+    assert config.forgot_password.scope == "ip"
+    assert config.forgot_password.namespace == "forgot-password"
+    assert config.forgot_password.trusted_proxy is True
+    assert config.totp_verify is not None
+    assert config.totp_verify.backend is totp_backend
+    assert config.totp_verify.scope == "ip"
+    assert config.totp_verify.namespace == "totp-verify"
+    assert config.totp_verify.trusted_proxy is True
+    assert config.request_verify_token is not None
+    assert config.request_verify_token.backend is shared_backend
+    assert config.request_verify_token.scope == "ip_email"
+    assert config.request_verify_token.namespace == "verify-request"
+    assert config.request_verify_token.trusted_proxy is True
+
+
+def test_auth_rate_limit_config_from_shared_backend_rejects_unknown_enabled_slot() -> None:
+    """The shared-backend builder validates enabled slot names."""
+    shared_backend = InMemoryRateLimiter(max_attempts=2, window_seconds=10)
+
+    with pytest.raises(ValueError, match="enabled contains unsupported auth rate-limit slots: bogus-slot"):
+        AuthRateLimitConfig.from_shared_backend(shared_backend, enabled=("login", "bogus-slot"))
+
+
+def test_auth_rate_limit_config_from_shared_backend_rejects_unknown_group_name() -> None:
+    """The shared-backend builder validates group override names."""
+    shared_backend = InMemoryRateLimiter(max_attempts=2, window_seconds=10)
+
+    with pytest.raises(ValueError, match="group_backends contains unsupported auth rate-limit groups: bogus-group"):
+        AuthRateLimitConfig.from_shared_backend(
+            shared_backend,
+            group_backends={"bogus-group": InMemoryRateLimiter(max_attempts=1, window_seconds=10)},
+        )
+
+
+def test_auth_rate_limit_recipe_index_rejects_duplicate_slots(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The private recipe index guard rejects accidental duplicate slot entries."""
+    duplicate_recipe = ratelimit_config_module._AuthRateLimitEndpointRecipe(
+        slot="login",
+        default_scope="ip_email",
+        default_namespace="login",
+        group="login",
+    )
+    monkeypatch.setattr(
+        ratelimit_config_module,
+        "_AUTH_RATE_LIMIT_ENDPOINT_RECIPES",
+        (
+            duplicate_recipe,
+            ratelimit_config_module._AuthRateLimitEndpointRecipe(
+                slot="login",
+                default_scope="ip",
+                default_namespace="login-second-copy",
+                group="login",
+            ),
+        ),
+    )
+
+    with pytest.raises(RuntimeError, match="must not contain duplicate slots"):
+        ratelimit_config_module._build_auth_rate_limit_recipe_index()
+
+
+def test_auth_rate_limit_config_import_check_rejects_slot_alignment_drift() -> None:
+    """Reloading `_config` fails fast when dataclass fields drift from the private catalog."""
+    field_stub = type("FieldStub", (), {"name": "unexpected_slot"})()
+    module_name = "litestar_auth.ratelimit._config_alignment_guard_test"
+    source_path = Path(ratelimit_config_module.__file__).resolve()
+    source = source_path.read_text()
+    patched_source = source.replace(
+        "from dataclasses import dataclass, fields",
+        "from dataclasses import dataclass; fields = _mismatched_fields",
+        1,
+    )
+
+    def _mismatched_fields(_cls: type[object]) -> tuple[object, ...]:
+        return (field_stub,)
+
+    module = RuntimeModuleType(module_name)
+    module.__file__ = str(source_path)
+    module.__package__ = "litestar_auth.ratelimit"
+    module.__dict__["_mismatched_fields"] = _mismatched_fields
+    sys.modules[module_name] = module
+
+    try:
+        with pytest.raises(
+            RuntimeError,
+            match="fields must stay aligned with the private auth rate-limit endpoint catalog",
+        ):
+            exec(compile(patched_source, str(source_path), "exec"), module.__dict__)
+    finally:
+        sys.modules.pop(module_name, None)
+
+
+def test_private_auth_rate_limit_catalog_does_not_leak_from_public_module() -> None:
+    """Private recipe helpers stay internal to ``litestar_auth.ratelimit._config``."""
+    assert hasattr(ratelimit_config_module, "_AUTH_RATE_LIMIT_ENDPOINT_RECIPES")
+    assert hasattr(ratelimit_config_module, "_AUTH_RATE_LIMIT_ENDPOINT_RECIPES_BY_SLOT")
+    assert "_AUTH_RATE_LIMIT_ENDPOINT_RECIPES" not in ratelimit_module.__all__
+    assert "_AUTH_RATE_LIMIT_ENDPOINT_RECIPES_BY_SLOT" not in ratelimit_module.__all__
+    assert not hasattr(ratelimit_module, "_AUTH_RATE_LIMIT_ENDPOINT_RECIPES")
+    assert not hasattr(ratelimit_module, "_AUTH_RATE_LIMIT_ENDPOINT_RECIPES_BY_SLOT")
+
+
+async def test_endpoint_rate_limit_shared_backend_preserves_namespace_and_scope_per_slot() -> None:
+    """Shared backends stay endpoint-specific through namespace and scope choices."""
+    shared_backend = InMemoryRateLimiter(max_attempts=2, window_seconds=10)
+    config = AuthRateLimitConfig(
+        login=EndpointRateLimit(backend=shared_backend, scope="ip_email", namespace="login"),
+        refresh=EndpointRateLimit(backend=shared_backend, scope="ip_email", namespace="refresh"),
+        totp_confirm_enable=EndpointRateLimit(
+            backend=shared_backend,
+            scope="ip",
+            namespace="totp-confirm-enable",
+        ),
+        totp_verify=EndpointRateLimit(backend=shared_backend, scope="ip", namespace="totp-verify"),
+    )
+    request = cast(
+        "Request[Any, Any, Any]",
+        JsonRequestStub(
+            payload={"identifier": "User@Example.com"},
+            client=ClientStub(host="10.0.0.1"),
+        ),
+    )
+    login_rate_limit = config.login
+    refresh_rate_limit = config.refresh
+    confirm_enable_rate_limit = config.totp_confirm_enable
+    verify_rate_limit = config.totp_verify
+
+    assert login_rate_limit is not None
+    assert refresh_rate_limit is not None
+    assert confirm_enable_rate_limit is not None
+    assert verify_rate_limit is not None
+    assert login_rate_limit.backend is shared_backend
+    assert refresh_rate_limit.backend is shared_backend
+    assert confirm_enable_rate_limit.backend is shared_backend
+    assert verify_rate_limit.backend is shared_backend
+    assert await login_rate_limit.build_key(request) == (
+        f"login:{ratelimit_module._safe_key_part('10.0.0.1')}:{ratelimit_module._safe_key_part('user@example.com')}"
+    )
+    assert await refresh_rate_limit.build_key(request) == (
+        f"refresh:{ratelimit_module._safe_key_part('10.0.0.1')}:{ratelimit_module._safe_key_part('user@example.com')}"
+    )
+    assert await confirm_enable_rate_limit.build_key(request) == (
+        f"totp-confirm-enable:{ratelimit_module._safe_key_part('10.0.0.1')}"
+    )
+    assert await verify_rate_limit.build_key(request) == f"totp-verify:{ratelimit_module._safe_key_part('10.0.0.1')}"
 
 
 @pytest.mark.parametrize(

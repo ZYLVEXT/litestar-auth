@@ -21,7 +21,7 @@ from litestar_auth._plugin import (
     DEFAULT_USER_MODEL_DEPENDENCY_KEY,
     OAUTH_ASSOCIATE_USER_MANAGER_DEPENDENCY_KEY,
 )
-from litestar_auth._plugin.config import OAuthConfig, TotpConfig
+from litestar_auth._plugin.config import DatabaseTokenAuthConfig, OAuthConfig, TotpConfig
 from litestar_auth.authentication.backend import AuthenticationBackend
 from litestar_auth.authentication.transport.bearer import BearerTransport
 from litestar_auth.authentication.transport.cookie import CookieTransport
@@ -32,6 +32,7 @@ from litestar_auth.plugin import LitestarAuth, LitestarAuthConfig
 from .test_orchestrator import (
     DummySessionMaker,
     ExampleUser,
+    InMemoryRefreshTokenStrategy,
     InMemoryTokenStrategy,
     InMemoryUserDatabase,
     PluginUserManager,
@@ -219,6 +220,20 @@ def test_oauth_associate_dependency_registered_when_enabled() -> None:
     assert OAUTH_ASSOCIATE_USER_MANAGER_DEPENDENCY_KEY in result_config.dependencies
 
 
+def test_oauth_login_inventory_does_not_register_associate_dependency() -> None:
+    """OAuth login-provider config alone does not register the associate-only DI key."""
+    config = _minimal_litestar_auth_config()
+    config.oauth_config = OAuthConfig(
+        oauth_providers=[("example", object())],
+        oauth_token_encryption_key="a" * 44,
+    )
+    plugin = LitestarAuth(config)
+
+    result_config = plugin.on_app_init(AppConfig())
+
+    assert OAUTH_ASSOCIATE_USER_MANAGER_DEPENDENCY_KEY not in result_config.dependencies
+
+
 def test_oauth_associate_requires_encryption_key_at_startup() -> None:
     """OAuth associate startup fails closed when token encryption is not configured."""
     config = _minimal_litestar_auth_config()
@@ -230,6 +245,99 @@ def test_oauth_associate_requires_encryption_key_at_startup() -> None:
 
     with pytest.raises(ConfigurationError, match=r"oauth_token_encryption_key is required"):
         plugin.on_app_init(AppConfig())
+
+
+@pytest.mark.parametrize(
+    ("oauth_config", "message"),
+    [
+        pytest.param(
+            OAuthConfig(
+                oauth_associate_providers=[("github", object())],
+                oauth_token_encryption_key="a" * 44,
+            ),
+            "include_oauth_associate=True or remove oauth_associate_providers",
+            id="associate-providers-without-flag",
+        ),
+        pytest.param(
+            OAuthConfig(
+                include_oauth_associate=True,
+                oauth_token_encryption_key="a" * 44,
+            ),
+            "include_oauth_associate=True requires oauth_associate_providers",
+            id="associate-flag-without-providers",
+        ),
+        pytest.param(
+            OAuthConfig(
+                oauth_providers=[("github", object())],
+                oauth_associate_redirect_base_url="https://app.example.com/auth/associate",
+                oauth_token_encryption_key="a" * 44,
+            ),
+            "oauth_associate_redirect_base_url requires include_oauth_associate=True",
+            id="associate-redirect-without-plugin-routes",
+        ),
+    ],
+)
+def test_plugin_rejects_ambiguous_oauth_route_registration_contracts(
+    oauth_config: OAuthConfig,
+    message: str,
+) -> None:
+    """Ambiguous OAuth inventories fail at plugin construction before app init."""
+    config = _minimal_litestar_auth_config()
+    config.oauth_config = oauth_config
+
+    with pytest.raises(ValueError, match=message):
+        LitestarAuth(config)
+
+
+@pytest.mark.parametrize(
+    ("oauth_config", "expected_associate_path"),
+    [
+        pytest.param(
+            OAuthConfig(
+                oauth_providers=[("github", object())],
+                oauth_token_encryption_key="a" * 44,
+            ),
+            None,
+            id="login-only",
+        ),
+        pytest.param(
+            OAuthConfig(
+                include_oauth_associate=True,
+                oauth_associate_providers=[("github", object())],
+                oauth_associate_redirect_base_url="https://app.example.com/auth/associate",
+                oauth_token_encryption_key="a" * 44,
+            ),
+            "/auth/associate/github",
+            id="associate-only",
+        ),
+        pytest.param(
+            OAuthConfig(
+                oauth_providers=[("github", object())],
+                include_oauth_associate=True,
+                oauth_associate_providers=[("github", object())],
+                oauth_associate_redirect_base_url="https://app.example.com/auth/associate",
+                oauth_token_encryption_key="a" * 44,
+            ),
+            "/auth/associate/github",
+            id="mixed",
+        ),
+    ],
+)
+def test_plugin_preserves_current_oauth_route_registration_split(
+    oauth_config: OAuthConfig,
+    expected_associate_path: str | None,
+) -> None:
+    """Plugin OAuth config auto-mounts associate routes only; login OAuth remains explicit."""
+    config = _minimal_litestar_auth_config()
+    config.oauth_config = oauth_config
+    result_config = LitestarAuth(config).on_app_init(AppConfig())
+    mounted_paths = {getattr(route_handler, "path", None) for route_handler in result_config.route_handlers}
+
+    assert "/auth/oauth/github" not in mounted_paths
+    if expected_associate_path is None:
+        assert "/auth/associate/github" not in mounted_paths
+    else:
+        assert expected_associate_path in mounted_paths
 
 
 async def test_plugin_respects_public_mount_paths_and_dependency_keys() -> None:
@@ -421,3 +529,112 @@ def test_totp_backend_unknown_name_raises_value_error() -> None:
 
     with pytest.raises(ValueError, match="unknown-backend"):
         plugin._totp_backend()
+
+
+def test_refresh_enabled_bearer_backends_mount_refresh_routes_in_backend_order() -> None:
+    """Refresh-enabled bearer backends keep primary/secondary route names and ordering stable."""
+    primary_backend = AuthenticationBackend[ExampleUser, UUID](
+        name="primary",
+        transport=BearerTransport(),
+        strategy=cast("Any", InMemoryRefreshTokenStrategy(token_prefix="primary")),
+    )
+    secondary_backend = AuthenticationBackend[ExampleUser, UUID](
+        name="secondary",
+        transport=BearerTransport(),
+        strategy=cast("Any", InMemoryRefreshTokenStrategy(token_prefix="secondary")),
+    )
+    config = _minimal_litestar_auth_config(backends=[primary_backend, secondary_backend])
+    config.enable_refresh = True
+    config.include_register = False
+    config.include_verify = False
+    config.include_reset_password = False
+
+    app = Litestar(plugins=[LitestarAuth(config)])
+    auth_route_paths = [route.path_format for route in app.routes if route.path_format.startswith("/auth")]
+
+    assert auth_route_paths == [
+        "/auth/login",
+        "/auth/logout",
+        "/auth/refresh",
+        "/auth/secondary/login",
+        "/auth/secondary/logout",
+        "/auth/secondary/refresh",
+    ]
+
+
+def test_database_token_preset_mounts_primary_auth_routes_without_startup_session() -> None:
+    """The preset keeps primary auth paths stable without requiring a startup AsyncSession."""
+    config = LitestarAuthConfig[ExampleUser, UUID].with_database_token_auth(
+        database_token_auth=DatabaseTokenAuthConfig(
+            token_hash_secret="x" * 40,
+            backend_name="opaque-db",
+        ),
+        user_model=ExampleUser,
+        user_manager_class=PluginUserManager,
+        session_maker=cast("async_sessionmaker[AsyncSession]", DummySessionMaker()),
+        user_db_factory=lambda _session: InMemoryUserDatabase([]),
+        user_manager_kwargs={
+            "verification_token_secret": "verify-secret-12345678901234567890",
+            "reset_password_token_secret": "reset-secret-123456789012345678901",
+            "id_parser": UUID,
+        },
+        enable_refresh=True,
+        include_register=False,
+        include_verify=False,
+        include_reset_password=False,
+    )
+
+    app = Litestar(plugins=[LitestarAuth(config)])
+    auth_route_paths = [route.path_format for route in app.routes if route.path_format.startswith("/auth")]
+
+    assert auth_route_paths == [
+        "/auth/login",
+        "/auth/logout",
+        "/auth/refresh",
+    ]
+
+
+async def test_database_token_preset_backends_dependency_uses_request_session() -> None:
+    """The backends dependency exposes request-scoped preset backends bound to the active session."""
+
+    @get("/preset-backends-probe", sync_to_thread=False)
+    def preset_backends_probe(
+        db_session: object,
+        litestar_auth_backends: object,
+    ) -> dict[str, object]:
+        backends = cast("list[AuthenticationBackend[ExampleUser, UUID]]", litestar_auth_backends)
+        backend = backends[0]
+        return {
+            "backend_names": [configured_backend.name for configured_backend in backends],
+            "strategy_session_is_db_session": getattr(backend.strategy, "session", None) is db_session,
+        }
+
+    config = LitestarAuthConfig[ExampleUser, UUID].with_database_token_auth(
+        database_token_auth=DatabaseTokenAuthConfig(
+            token_hash_secret="x" * 40,
+            backend_name="opaque-db",
+        ),
+        user_model=ExampleUser,
+        user_manager_class=PluginUserManager,
+        session_maker=cast("async_sessionmaker[AsyncSession]", DummySessionMaker()),
+        user_db_factory=lambda _session: InMemoryUserDatabase([]),
+        user_manager_kwargs={
+            "verification_token_secret": "verify-secret-12345678901234567890",
+            "reset_password_token_secret": "reset-secret-123456789012345678901",
+            "id_parser": UUID,
+        },
+        enable_refresh=True,
+        include_register=False,
+        include_verify=False,
+        include_reset_password=False,
+    )
+    app = Litestar(route_handlers=[preset_backends_probe], plugins=[LitestarAuth(config)])
+
+    async with AsyncTestClient(app=app) as client:
+        response = await client.get("/preset-backends-probe")
+
+    assert response.status_code == HTTP_OK
+    assert response.json() == {
+        "backend_names": ["opaque-db"],
+        "strategy_session_is_db_session": True,
+    }

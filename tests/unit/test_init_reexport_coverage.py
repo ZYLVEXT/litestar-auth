@@ -16,6 +16,8 @@ import litestar_auth.authentication.transport as transport_module
 import litestar_auth.controllers as controllers_module
 import litestar_auth.db as db_module
 import litestar_auth.guards as guards_module
+import litestar_auth.models as models_module
+from litestar_auth.authentication.strategy.db_models import AccessToken, DatabaseTokenModels, RefreshToken
 from tests.conftest import project_version_from_pyproject
 
 pytestmark = [pytest.mark.unit, pytest.mark.imports]
@@ -67,6 +69,7 @@ def _assert_exported_symbols(module: ModuleType, *, expected_names: Iterable[str
         pytest.param(
             strategy_module,
             (
+                "DatabaseTokenModels",
                 "DatabaseTokenStrategy",
                 "JWTStrategy",
                 "RedisTokenStrategy",
@@ -151,3 +154,31 @@ def test_root_reexport_module_executes_under_coverage(monkeypatch: pytest.Monkey
     )
     assert len(capturing_logger.handlers) == 1
     assert isinstance(capturing_logger.handlers[0], logging.NullHandler)
+
+
+def test_models_and_strategy_token_registration_helpers_share_the_same_db_models() -> None:
+    """The canonical models helper and strategy compatibility helper resolve to the same classes."""
+    assert models_module.__all__ == (
+        "AccessTokenMixin",
+        "OAuthAccount",
+        "OAuthAccountMixin",
+        "RefreshTokenMixin",
+        "User",
+        "UserAuthRelationshipMixin",
+        "UserModelMixin",
+        "import_token_orm_models",
+    )
+    assert strategy_module.__all__ == (
+        "DatabaseTokenModels",
+        "DatabaseTokenStrategy",
+        "JWTStrategy",
+        "RedisTokenStrategy",
+        "RefreshableStrategy",
+        "Strategy",
+        "UserManagerProtocol",
+        "import_token_orm_models",
+    )
+    assert strategy_module.DatabaseTokenModels is DatabaseTokenModels
+    assert models_module.import_token_orm_models() == (AccessToken, RefreshToken)
+    assert strategy_module.import_token_orm_models() == (AccessToken, RefreshToken)
+    assert strategy_module.import_token_orm_models() == models_module.import_token_orm_models()

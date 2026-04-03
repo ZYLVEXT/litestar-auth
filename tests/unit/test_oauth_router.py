@@ -142,6 +142,45 @@ def test_create_provider_oauth_controller_uses_factory_client(
     )
 
 
+def test_create_provider_oauth_controller_derives_path_from_auth_path(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Canonical helper derives the login route prefix from ``auth_path`` when ``path`` is omitted."""
+
+    class _User(UserProtocol[object]):
+        id: object
+
+    backend = AuthenticationBackend(name="test", transport=object(), strategy=object())  # ty: ignore[invalid-argument-type]
+    user_manager: OAuthControllerUserManagerProtocol[_User, object]
+    user_manager = object()  # ty: ignore[invalid-assignment]
+    oauth_client = object()
+    controller = cast("type[Any]", object())
+    create_controller = Mock(return_value=controller)
+    monkeypatch.setattr(router_module, "create_oauth_controller", create_controller)
+
+    created_controller = router_module.create_provider_oauth_controller(
+        provider_name="example",
+        backend=backend,
+        user_manager=user_manager,
+        oauth_client=oauth_client,
+        redirect_base_url="https://example.test/identity/oauth",
+        auth_path="/identity",
+    )
+
+    assert created_controller is controller
+    create_controller.assert_called_once_with(
+        provider_name="example",
+        backend=backend,
+        user_manager=user_manager,
+        oauth_client=oauth_client,
+        redirect_base_url="https://example.test/identity/oauth",
+        path="/identity/oauth",
+        cookie_secure=True,
+        associate_by_email=False,
+        trust_provider_email_verified=False,
+    )
+
+
 def test_create_provider_oauth_controller_loads_client_from_class_path(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

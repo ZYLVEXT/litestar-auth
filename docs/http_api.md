@@ -48,21 +48,23 @@ The built-in TOTP flow remains email-oriented internally: the otpauth URI and de
 
 ## OAuth2 login
 
-Provider-specific controllers are usually mounted at `{auth}/oauth/{provider}` (authorize + callback). Exact path prefix depends on how you register `create_provider_oauth_controller` / plugin wiring; see [OAuth guide](guides/oauth.md).
+Login routes are the explicit-helper path: declaring `oauth_providers` on `OAuthConfig` does **not** make the plugin auto-mount them. The canonical helper is `litestar_auth.oauth.create_provider_oauth_controller(..., auth_path=config.auth_path)`, which uses the `{auth}/oauth/{provider}` prefix.
 
 | Method | Path pattern | Description |
 | ------ | ------------ | ----------- |
-| GET | `.../authorize` | Redirect to provider. |
-| GET | `.../callback` | Provider redirect; creates session or links user. |
+| GET | `{auth}/oauth/{provider}/authorize` | Redirect to provider. |
+| GET | `{auth}/oauth/{provider}/callback` | Provider redirect; completes the explicit OAuth login flow. |
+
+If you mount `create_oauth_controller()` directly for a custom route table, the prefix may differ from `{auth}/oauth/{provider}`.
 
 ## OAuth account linking (associate)
 
-When `oauth_config.include_oauth_associate=True` and `oauth_associate_providers` is non-empty, associate routes live under `{auth}/associate/{provider}`.
+When `oauth_config.include_oauth_associate=True` and `oauth_associate_providers` is non-empty, the plugin auto-mounts associate routes under `{auth}/associate/{provider}`.
 
 | Method | Path pattern | Description |
 | ------ | ------------ | ----------- |
-| GET | `.../authorize` | Authenticated user starts linking. |
-| GET | `.../callback` | Completes linking for `request.user`. |
+| GET | `{auth}/associate/{provider}/authorize` | Authenticated user starts linking. |
+| GET | `{auth}/associate/{provider}/callback` | Completes linking for `request.user`. |
 
 ## Users CRUD
 

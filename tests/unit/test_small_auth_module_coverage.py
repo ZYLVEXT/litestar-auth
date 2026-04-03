@@ -6,6 +6,7 @@ import importlib
 
 import pytest
 
+import litestar_auth as root_package
 import litestar_auth._schema_fields as schema_fields_module
 import litestar_auth.authentication.strategy._opaque_tokens as opaque_tokens_module
 import litestar_auth.oauth as oauth_module
@@ -61,6 +62,11 @@ def test_oauth_init_module_executes_under_coverage() -> None:
     assert exported_names == ("create_provider_oauth_controller", "load_httpx_oauth_client")
     assert reloaded_module.create_provider_oauth_controller is getattr(oauth_module, exported_names[0])
     assert reloaded_module.load_httpx_oauth_client is getattr(oauth_module, exported_names[1])
+    assert (
+        root_package.create_provider_oauth_controller.__name__
+        == reloaded_module.create_provider_oauth_controller.__name__
+    )
+    assert root_package.load_httpx_oauth_client.__name__ == reloaded_module.load_httpx_oauth_client.__name__
     assert reloaded_module.create_provider_oauth_controller.__name__ == create_provider_oauth_controller.__name__
     assert reloaded_module.load_httpx_oauth_client.__name__ == load_httpx_oauth_client.__name__
 
@@ -71,6 +77,12 @@ def test_oauth_init_unknown_export_raises_attribute_error() -> None:
 
     with pytest.raises(AttributeError, match="does_not_exist"):
         getattr(oauth_module, missing_name)
+
+
+def test_oauth_init_does_not_reexport_advanced_controller_factory() -> None:
+    """The advanced OAuth controller factory stays on ``litestar_auth.controllers``."""
+    with pytest.raises(AttributeError, match="create_oauth_controller"):
+        _ = oauth_module.create_oauth_controller
 
 
 def test_payloads_module_executes_under_coverage() -> None:
