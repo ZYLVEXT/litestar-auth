@@ -22,6 +22,23 @@ if TYPE_CHECKING:
 logger = logging.getLogger("litestar_auth.plugin")
 
 
+def _is_jwt_strategy_instance(strategy: object) -> bool:
+    """Return whether ``strategy`` is a JWT strategy, even across module reloads.
+
+    Tests reload strategy modules to record module-body coverage. After a reload,
+    the current ``JWTStrategy`` class object differs from older imports held by
+    this module, so a strict ``isinstance()`` check can miss the intended
+    strategy type. Matching on the stable module path and class name keeps the
+    startup warning logic consistent without broadening it to unrelated classes.
+    """
+    strategy_type = type(strategy)
+    return isinstance(strategy, JWTStrategy) or (
+        strategy_type.__name__ == JWTStrategy.__name__
+        and strategy_type.__module__ == JWTStrategy.__module__
+        and hasattr(strategy, "revocation_is_durable")
+    )
+
+
 def warn_insecure_plugin_startup_defaults(config: LitestarAuthConfig[Any, Any]) -> None:
     """Emit ``SecurityWarning`` for insecure production defaults.
 
@@ -47,7 +64,7 @@ def warn_insecure_plugin_startup_defaults(config: LitestarAuthConfig[Any, Any]) 
 
     for backend in config.backends:
         strategy = getattr(backend, "strategy", None)
-        if isinstance(strategy, JWTStrategy) and not strategy.revocation_is_durable:
+        if _is_jwt_strategy_instance(strategy) and not getattr(strategy, "revocation_is_durable", True):
             warnings.warn(
                 "JWTStrategy is configured with a process-local in-memory denylist. "
                 "Revoked tokens are not visible across workers; use RedisJWTDenylistStore or "

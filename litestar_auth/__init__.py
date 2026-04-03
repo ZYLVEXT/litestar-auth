@@ -31,18 +31,7 @@ from litestar_auth.authentication.strategy.jwt import (
 )
 from litestar_auth.authentication.transport import BearerTransport, CookieTransport, Transport
 from litestar_auth.controllers import (
-    ForgotPassword,
-    LoginCredentials,
-    RefreshTokenRequest,
-    RequestVerifyToken,
-    ResetPassword,
-    TotpConfirmEnableRequest,
-    TotpConfirmEnableResponse,
-    TotpDisableRequest,
-    TotpEnableResponse,
     TotpUserManagerProtocol,
-    TotpVerifyRequest,
-    VerifyToken,
     create_auth_controller,
     create_oauth_associate_controller,
     create_oauth_controller,
@@ -72,6 +61,22 @@ from litestar_auth.guards import is_active, is_authenticated, is_superuser, is_v
 from litestar_auth.manager import BaseUserManager, require_password_length
 from litestar_auth.oauth import create_provider_oauth_controller, load_httpx_oauth_client
 from litestar_auth.password import PasswordHelper
+from litestar_auth.payloads import (
+    ForgotPassword,
+    LoginCredentials,
+    RefreshTokenRequest,
+    RequestVerifyToken,
+    ResetPassword,
+    TotpConfirmEnableRequest,
+    TotpConfirmEnableResponse,
+    TotpDisableRequest,
+    TotpEnableResponse,
+    TotpVerifyRequest,
+    UserCreate,
+    UserRead,
+    UserUpdate,
+    VerifyToken,
+)
 from litestar_auth.plugin import LitestarAuth, LitestarAuthConfig, OAuthConfig, TotpConfig
 from litestar_auth.ratelimit import (
     AuthRateLimitConfig,
@@ -79,7 +84,6 @@ from litestar_auth.ratelimit import (
     InMemoryRateLimiter,
     RedisRateLimiter,
 )
-from litestar_auth.schemas import UserCreate, UserRead, UserUpdate
 from litestar_auth.totp import (
     InMemoryUsedTotpCodeStore,
     RedisUsedTotpCodeStore,

@@ -10,8 +10,9 @@ import warnings
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any, Literal, cast
 from unittest.mock import AsyncMock
+from urllib.parse import unquote
 from uuid import UUID, uuid4
 
 import jwt
@@ -80,7 +81,7 @@ _DEFAULT_PENDING_JTI_STORE = object()
 class TrackingUserManager(BaseUserManager[ExampleUser, UUID]):
     """Concrete manager that records completed login hooks."""
 
-    def __init__(
+    def __init__(  # noqa: PLR0913
         self,
         user_db: BaseUserStore[ExampleUser, UUID],
         password_helper: PasswordHelper,
@@ -88,6 +89,7 @@ class TrackingUserManager(BaseUserManager[ExampleUser, UUID]):
         reset_password_token_secret: str = "reset-secret-1234567890-1234567890",
         *,
         backends: tuple[object, ...] = (),
+        login_identifier: Literal["email", "username"] = "email",
     ) -> None:
         """Initialize the manager with deterministic hook tracking."""
         super().__init__(
@@ -96,6 +98,7 @@ class TrackingUserManager(BaseUserManager[ExampleUser, UUID]):
             verification_token_secret=verification_token_secret,
             reset_password_token_secret=reset_password_token_secret,
             backends=backends,
+            login_identifier=login_identifier,
         )
         self.logged_in_users: list[ExampleUser] = []
 
@@ -137,6 +140,7 @@ def build_app(  # noqa: PLR0913
     rate_limit_config: AuthRateLimitConfig | None = None,
     totp_enable_requires_password: bool = True,
     account_state: AccountState | None = None,
+    login_identifier: Literal["email", "username"] = "email",
 ) -> tuple[Litestar, InMemoryUserDatabase, InMemoryTokenStrategy, TrackingUserManager]:
     """Create a test application with optional 2FA support.
 
@@ -152,12 +156,13 @@ def build_app(  # noqa: PLR0913
     user = ExampleUser(
         id=uuid4(),
         email="user@example.com",
+        username="totp-user" if login_identifier == "username" else "",
         hashed_password=password_helper.hash("correct-password"),
         is_active=initial_is_active,
         is_verified=initial_is_verified,
     )
     user_db = InMemoryUserDatabase([user])
-    user_manager = TrackingUserManager(user_db, password_helper)
+    user_manager = TrackingUserManager(user_db, password_helper, login_identifier=login_identifier)
     strategy = InMemoryTokenStrategy()
     backend = AuthenticationBackend[ExampleUser, UUID](
         name="memory-bearer",
@@ -172,6 +177,7 @@ def build_app(  # noqa: PLR0913
         backend=backend,
         totp_pending_secret=pending_secret,
         requires_verification=requires_verification,
+        login_identifier=login_identifier,
     )
     totp_controller = create_totp_controller(
         backend=backend,
@@ -355,6 +361,35 @@ async def test_enable_2fa_returns_secret_and_uri(
     # secret persisted after confirmation
     stored_user = next(iter(user_db.users_by_id.values()))
     assert stored_user.totp_secret == body["secret"]
+
+
+async def test_enable_2fa_keeps_email_in_the_otpauth_uri_under_username_login_mode(
+    async_test_client_factory: Any,  # noqa: ANN401
+) -> None:
+    """Username-mode login does not change TOTP enrollment's email-based URI."""
+    app_value = build_app(login_identifier="username")
+    async with async_test_client_factory(app_value) as client_and_db:
+        client, user_db, _strategy, user_manager = client_and_db
+        user = next(iter(user_db.users_by_id.values()))
+
+        login_resp = await client.post(
+            "/auth/login",
+            json={"identifier": user.username, "password": "correct-password"},
+        )
+        assert login_resp.status_code == HTTP_CREATED
+        token = login_resp.json()["access_token"]
+
+        enable_resp = await client.post(
+            "/auth/2fa/enable",
+            json={"password": "correct-password"},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+
+    assert user_manager.login_identifier == "username"
+    assert enable_resp.status_code == HTTP_CREATED
+    decoded_uri = unquote(enable_resp.json()["uri"])
+    assert user.email in decoded_uri
+    assert user.username not in decoded_uri
 
 
 def test_sign_and_decode_enrollment_token_round_trip() -> None:

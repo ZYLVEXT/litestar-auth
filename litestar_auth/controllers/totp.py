@@ -6,10 +6,10 @@ import logging
 import secrets
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from typing import TYPE_CHECKING, Annotated, Any, Never, Protocol, cast
+from typing import TYPE_CHECKING, Any, Never, Protocol, cast
 
 import jwt
-import msgspec
+import msgspec  # noqa: TC002
 from jwt import ExpiredSignatureError, InvalidTokenError
 from litestar import Controller, Request, post
 from litestar.exceptions import ClientException, NotAuthorizedException
@@ -25,6 +25,14 @@ from litestar_auth.controllers._utils import (
 from litestar_auth.controllers.auth import INVALID_CREDENTIALS_DETAIL
 from litestar_auth.exceptions import ConfigurationError, ErrorCode
 from litestar_auth.guards import is_authenticated
+from litestar_auth.payloads import (
+    TotpConfirmEnableRequest,
+    TotpConfirmEnableResponse,
+    TotpDisableRequest,
+    TotpEnableRequest,
+    TotpEnableResponse,
+    TotpVerifyRequest,
+)
 from litestar_auth.totp import (
     TotpAlgorithm,
     UsedTotpCodeStore,
@@ -76,50 +84,6 @@ class TotpUserManagerProtocol[UP: UserProtocol[Any], ID](AccountStateValidatorPr
         login_identifier: LoginIdentifier | None = None,
     ) -> UP | None:
         """Re-authenticate the current user (e.g. password step-up for /enable)."""
-
-
-class TotpEnableResponse(msgspec.Struct):
-    """Response returned when 2FA enrollment is initiated (phase 1).
-
-    The secret is not yet persisted — the client must confirm enrollment
-    via ``/enable/confirm`` with a valid TOTP code to activate 2FA.
-    """
-
-    secret: str
-    uri: str
-    enrollment_token: str
-
-
-class TotpEnableRequest(msgspec.Struct):
-    """Optional step-up payload for enabling 2FA."""
-
-    password: Annotated[str, msgspec.Meta(min_length=1, max_length=128)]
-
-
-class TotpVerifyRequest(msgspec.Struct):
-    """Payload for completing 2FA login verification."""
-
-    pending_token: Annotated[str, msgspec.Meta(min_length=1, max_length=2048)]
-    code: Annotated[str, msgspec.Meta(min_length=6, max_length=6)]
-
-
-class TotpConfirmEnableRequest(msgspec.Struct):
-    """Payload for confirming TOTP enrollment (phase 2)."""
-
-    enrollment_token: Annotated[str, msgspec.Meta(min_length=1, max_length=2048)]
-    code: Annotated[str, msgspec.Meta(min_length=6, max_length=6)]
-
-
-class TotpConfirmEnableResponse(msgspec.Struct):
-    """Response returned when 2FA is successfully confirmed and persisted."""
-
-    enabled: bool
-
-
-class TotpDisableRequest(msgspec.Struct):
-    """Payload for disabling 2FA."""
-
-    code: Annotated[str, msgspec.Meta(min_length=6, max_length=6)]
 
 
 @dataclass(slots=True)

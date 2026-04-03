@@ -55,9 +55,24 @@ On the `LitestarAuthConfig` dataclass, `session_maker` is typed as optional for 
 | `enable_refresh` | `False` | `POST .../refresh` |
 | `requires_verification` | `False` | Stricter login / TOTP-verify policy |
 | `hard_delete` | `False` | Physical vs soft delete semantics for user delete |
-| `login_identifier` | `"email"` | `"email"` or `"username"` for credential lookup |
+| `login_identifier` | `"email"` | `"email"` or `"username"` for `POST {auth_path}/login` credential lookup |
 
 **Multiple backends:** first backend → `{auth_path}`; others → `{auth_path}/{backend-name}/...`.
+
+## Built-in auth payload boundary
+
+The generated controllers do not use one universal credential field. `login_identifier` only changes how `LoginCredentials.identifier` is interpreted on `POST {auth_path}/login`.
+
+| Route | Built-in request schema | Published fields |
+| ----- | ---------------------- | ---------------- |
+| `POST {auth_path}/login` | `LoginCredentials` | `identifier`, `password` |
+| `POST {auth_path}/register` | `UserCreate` | `email`, `password` |
+| `POST {auth_path}/request-verify-token` | `RequestVerifyToken` | `email` |
+| `POST {auth_path}/verify` | `VerifyToken` | `token` |
+| `POST {auth_path}/forgot-password` | `ForgotPassword` | `email` |
+| `POST {auth_path}/reset-password` | `ResetPassword` | `token`, `password` |
+
+By default, built-in TOTP routes publish `TotpEnableRequest`, `TotpConfirmEnableRequest`, `TotpVerifyRequest`, and `TotpDisableRequest`. The built-in TOTP flow still uses `user.email` for the otpauth URI and password step-up, even when `login_identifier="username"`.
 
 ## TOTP — `totp_config: TotpConfig | None`
 
@@ -104,11 +119,13 @@ Provider controllers may take **`trust_provider_email_verified`** (see [OAuth gu
 
 | Field | Default | Meaning |
 | ----- | ------- | ------- |
-| `user_read_schema` | `None` | msgspec struct for safe user responses. |
-| `user_create_schema` | `None` | msgspec struct for registration/create. |
-| `user_update_schema` | `None` | msgspec struct for PATCH bodies. |
+| `user_read_schema` | `None` | msgspec struct for safe user responses returned by register/verify/reset/users flows. |
+| `user_create_schema` | `None` | msgspec struct for registration/create request bodies; built-in registration defaults to `UserCreate`. |
+| `user_update_schema` | `None` | msgspec struct for user PATCH bodies. |
 | `db_session_dependency_key` | `"db_session"` | Litestar DI key for `AsyncSession`. |
 | `db_session_dependency_provided_externally` | `False` | Skip plugin session provider when your app already registers the key. |
+
+`user_*_schema` customizes registration and user CRUD surfaces. It does not rename the built-in auth lifecycle request structs: `LoginCredentials`, `RefreshTokenRequest`, `RequestVerifyToken`, `VerifyToken`, `ForgotPassword`, `ResetPassword`, or the TOTP payloads.
 
 ## Dependency keys (constants)
 

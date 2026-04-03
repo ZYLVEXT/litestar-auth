@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Annotated, Any, Protocol
+from typing import TYPE_CHECKING, Any, Protocol
 
-import msgspec
+import msgspec  # noqa: TC002
 from litestar import Controller, Request, post
 from litestar.status_codes import HTTP_200_OK, HTTP_202_ACCEPTED
 
@@ -17,30 +17,12 @@ from litestar_auth.controllers._utils import (
     _to_user_schema,
 )
 from litestar_auth.exceptions import ErrorCode, InvalidPasswordError, InvalidResetPasswordTokenError
+from litestar_auth.payloads import ForgotPassword, ResetPassword
 from litestar_auth.schemas import UserRead
 from litestar_auth.types import UserProtocol
 
 if TYPE_CHECKING:
     from litestar_auth.ratelimit import AuthRateLimitConfig
-
-
-class ForgotPassword(msgspec.Struct):
-    """Payload used to request a reset-password token."""
-
-    email: Annotated[
-        str,
-        msgspec.Meta(
-            max_length=320,
-            pattern=r"^[^@\s]+@[^@\s]+\.[^@\s]+$",
-        ),
-    ]
-
-
-class ResetPassword(msgspec.Struct):
-    """Payload used to reset a password with a previously issued token."""
-
-    token: Annotated[str, msgspec.Meta(min_length=1, max_length=2048)]
-    password: Annotated[str, msgspec.Meta(min_length=1, max_length=128)]
 
 
 class ResetPasswordControllerUserProtocol[ID](UserProtocol[ID], Protocol):

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import replace
 from datetime import timedelta
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any, Literal, cast
 from unittest.mock import AsyncMock
 from uuid import UUID, uuid4
 
@@ -50,6 +50,7 @@ class TrackingUserManager(BaseUserManager[ExampleUser, UUID]):
         *,
         verification_token_lifetime: timedelta = timedelta(hours=1),
         backends: tuple[object, ...] = (),
+        login_identifier: Literal["email", "username"] = "email",
     ) -> None:
         """Initialize the tracking manager with predictable verification settings."""
         super().__init__(
@@ -60,6 +61,7 @@ class TrackingUserManager(BaseUserManager[ExampleUser, UUID]):
             verification_token_lifetime=verification_token_lifetime,
             id_parser=UUID,
             backends=backends,
+            login_identifier=login_identifier,
         )
         self.request_verify_events: list[tuple[ExampleUser, str]] = []
 
@@ -72,6 +74,7 @@ def build_app(
     *,
     verification_token_lifetime: timedelta = timedelta(hours=1),
     rate_limit_config: AuthRateLimitConfig | None = None,
+    login_identifier: Literal["email", "username"] = "email",
 ) -> tuple[Litestar, InMemoryUserDatabase, TrackingUserManager]:
     """Create an application wired with the generated verify controller.
 
@@ -84,6 +87,7 @@ def build_app(
         user_db,
         password_helper,
         verification_token_lifetime=verification_token_lifetime,
+        login_identifier=login_identifier,
     )
     controller = create_verify_controller(rate_limit_config=rate_limit_config)
     app = litestar_app_with_user_manager(user_manager, controller)
@@ -232,6 +236,30 @@ async def test_request_verify_token_calls_hook_for_existing_unverified_user(
     event_user, token = user_manager.request_verify_events[0]
     assert event_user is user
     assert isinstance(token, str)
+
+
+async def test_verify_flows_stay_email_and_token_based_under_username_login_mode() -> None:
+    """Username-mode login configuration does not change verify email/token contracts."""
+    app, user_db, user_manager = build_app(login_identifier="username")
+    user = ExampleUser(
+        id=uuid4(),
+        email="username-verify@example.com",
+        username="verifyuser",
+        hashed_password=PasswordHelper().hash("plain-password"),
+    )
+    user_db.users_by_id[user.id] = user
+    user_db.user_ids_by_email[user.email] = user.id
+
+    async with AsyncTestClient(app=app) as client:
+        request_response = await client.post("/auth/request-verify-token", json={"email": user.email})
+        verify_token = user_manager.request_verify_events[0][1]
+        verify_response = await client.post("/auth/verify", json={"token": verify_token})
+
+    assert user_manager.login_identifier == "username"
+    assert request_response.status_code == HTTP_ACCEPTED
+    assert verify_response.status_code == HTTP_OK
+    assert verify_response.json()["email"] == user.email
+    assert verify_response.json()["is_verified"] is True
 
 
 async def test_verify_supports_custom_user_read_schema() -> None:

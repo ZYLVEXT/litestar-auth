@@ -33,6 +33,8 @@ pytestmark = pytest.mark.e2e
 AUTH_COOKIE_NAME = "auth-cookie"
 HTTP_CREATED = 201
 HTTP_OK = 200
+HTTP_BAD_REQUEST = 400
+HTTP_UNPROCESSABLE_ENTITY = 422
 HTTP_UNAUTHORIZED = 401
 
 
@@ -237,3 +239,47 @@ async def test_register_verify_login_logout_flow(
 
     post_logout_response = await test_client.get("/protected")
     assert post_logout_response.status_code == HTTP_UNAUTHORIZED
+
+
+async def test_register_and_verify_keep_email_and_token_payload_boundaries(
+    client: tuple[AsyncTestClient[Litestar], VerificationTracker],
+) -> None:
+    """Registration stays email-based and verification stays token-based."""
+    test_client, verification_tracker = client
+    unauthorized_response = await test_client.get("/protected")
+    csrf_token = unauthorized_response.cookies.get("litestar_auth_csrf")
+    assert csrf_token is not None
+    csrf_headers = {"X-CSRF-Token": csrf_token}
+
+    register_invalid = await test_client.post(
+        "/auth/register",
+        json={"identifier": "boundary@example.com", "password": "correct horse battery staple"},
+        headers=csrf_headers,
+    )
+    assert register_invalid.status_code == HTTP_UNPROCESSABLE_ENTITY
+
+    email = "boundary@example.com"
+    password = "correct horse battery staple"
+    register_response = await test_client.post(
+        "/auth/register",
+        json={"email": email, "password": password},
+        headers=csrf_headers,
+    )
+    assert register_response.status_code == HTTP_CREATED
+    assert email in verification_tracker.tokens_by_email
+
+    verify_invalid = await test_client.post(
+        "/auth/verify",
+        json={"email": email},
+        headers=csrf_headers,
+    )
+    assert verify_invalid.status_code == HTTP_BAD_REQUEST
+
+    verify_response = await test_client.post(
+        "/auth/verify",
+        json={"token": verification_tracker.tokens_by_email[email]},
+        headers=csrf_headers,
+    )
+    assert verify_response.status_code == HTTP_OK
+    assert verify_response.json()["email"] == email
+    assert verify_response.json()["is_verified"] is True

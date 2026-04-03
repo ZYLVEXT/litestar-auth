@@ -462,6 +462,23 @@ async def test_login_username_mode_accepts_whitespace_and_case_variations() -> N
     assert list(strategy.tokens) == ["token-1"]
 
 
+async def test_login_username_mode_does_not_fallback_to_email_lookup() -> None:
+    """Username-mode login treats email-shaped identifiers as bad credentials."""
+    app, strategy, _ = build_app(login_identifier="username")
+
+    async with AsyncTestClient(app=app) as client:
+        response = await client.post(
+            "/auth/login",
+            json={"identifier": _LOGIN_TEST_EMAIL, "password": "correct-password"},
+        )
+
+    assert response.status_code == HTTP_BAD_REQUEST
+    data = response.json()
+    code = data.get("code") or (data.get("extra") or {}).get("code")
+    assert code == ErrorCode.LOGIN_BAD_CREDENTIALS
+    assert strategy.tokens == {}
+
+
 async def test_login_and_refresh_rotate_refresh_tokens_in_auth_controller() -> None:
     """Refresh-enabled auth controller rotates refresh tokens and rejects replay."""
     app, strategy, _ = build_app(enable_refresh=True)

@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Annotated, Any, Protocol, cast
+from typing import TYPE_CHECKING, Any, Protocol, cast
 
-import msgspec
+import msgspec  # noqa: TC002
 from litestar import Controller, Request, post
 from litestar.exceptions import ClientException
 from litestar.status_codes import HTTP_200_OK, HTTP_202_ACCEPTED
@@ -16,26 +16,12 @@ from litestar_auth.controllers._utils import (
     _to_user_schema,
 )
 from litestar_auth.exceptions import ErrorCode, InvalidVerifyTokenError
+from litestar_auth.payloads import RequestVerifyToken, VerifyToken  # noqa: TC001
 from litestar_auth.schemas import UserRead
 from litestar_auth.types import UserProtocol
 
 if TYPE_CHECKING:
     from litestar_auth.ratelimit import AuthRateLimitConfig
-
-
-class VerifyToken(msgspec.Struct):
-    """Payload used to complete an email-verification flow."""
-
-    token: Annotated[str, msgspec.Meta(min_length=1, max_length=2048)]
-
-
-class RequestVerifyToken(msgspec.Struct):
-    """Payload used to request a fresh email-verification token."""
-
-    email: Annotated[
-        str,
-        msgspec.Meta(max_length=320, pattern=r"^[^@\s]+@[^@\s]+\.[^@\s]+$"),
-    ]
 
 
 class VerifyControllerUserProtocol[ID](UserProtocol[ID], Protocol):

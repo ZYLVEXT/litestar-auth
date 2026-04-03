@@ -41,12 +41,14 @@ env:
   VENV_PRECOMMIT_CACHE_VERSION: v1
 
 jobs:
-  pre-commit:
+  prek:
     if: github.event.repository.fork == false
-    name: Pre-commit
+    name: Prek
     runs-on: ubuntu-latest
     env:
       UV_PYTHON_PREFERENCE: only-managed
+      # Same as pre-commit: skip hooks that are CI-inappropriate on default branch / shared runners.
+      SKIP: detect-aws-credentials,no-commit-to-branch
     steps:
       - name: Check out repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -62,35 +64,37 @@ jobs:
           cache-python: true
           github-token: ${{ secrets.GITHUB_TOKEN }}
 
-      # Cache key unique per run to avoid "another job may be creating this cache" when
-      # multiple runs or steps evaluate hashFiles differently (e.g. after uv sync).
-      # restore-keys restores the latest cache for this prefix; uv sync fixes deps if needed.
+      # Local hooks use `uv run` (language: system); cache .venv like the former pre-commit job.
+      # prek-action also caches the prek hook environment (default cache: true).
+      # Key includes run_id + run_attempt so "Re-run jobs" does not try to save the same
+      # cache key twice (GitHub: "another job may be creating this cache").
+      # restore-keys restores any prior attempt for this OS/Python; uv sync fixes deps if needed.
       # See: https://github.com/actions/cache/blob/main/tips-and-workarounds.md#update-a-cache
-      - name: Restore .venv cache (pre-commit)
+      - name: Restore .venv cache (prek / uv run hooks)
         uses: actions/cache/restore@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
         with:
           path: .venv
-          key: venv-precommit-${{ env.VENV_PRECOMMIT_CACHE_VERSION }}-${{ runner.os }}-3.12-${{ github.run_id }}
+          key: venv-precommit-${{ env.VENV_PRECOMMIT_CACHE_VERSION }}-${{ runner.os }}-3.12-${{ github.run_id }}-${{ github.run_attempt }}
           restore-keys: |
             venv-precommit-${{ env.VENV_PRECOMMIT_CACHE_VERSION }}-${{ runner.os }}-3.12-
 
       - name: Install the project
         run: uv sync --frozen --all-extras --group dev
 
-      - name: Save .venv cache (pre-commit)
+      - name: Save .venv cache (prek / uv run hooks)
         uses: actions/cache/save@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
         with:
           path: .venv
-          key: venv-precommit-${{ env.VENV_PRECOMMIT_CACHE_VERSION }}-${{ runner.os }}-3.12-${{ github.run_id }}
+          key: venv-precommit-${{ env.VENV_PRECOMMIT_CACHE_VERSION }}-${{ runner.os }}-3.12-${{ github.run_id }}-${{ github.run_attempt }}
 
-      - name: Run pre-commit (uv-managed)
-        run: uv run --no-sync pre-commit run --show-diff-on-failure --color=always --all-files
-        env:
-          SKIP: "detect-aws-credentials,no-commit-to-branch"
+      - name: Run prek
+        uses: j178/prek-action@53276d8b0d10f8b6672aa85b4588c6921d0370cc # v2.0.1
+        with:
+          cache: true
 
   test:
     name: Test (${{ matrix.python-version }} on ${{ matrix.os }})
-    needs: [pre-commit]
+    needs: [prek]
     runs-on: ${{ matrix.os }}
     if: github.event.repository.fork == false
     permissions:

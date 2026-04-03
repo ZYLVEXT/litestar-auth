@@ -8,39 +8,43 @@ Placeholders:
 - `{users}` — `users_path`.
 - `{provider}` — OAuth provider name from your controller factory.
 
+Generated OpenAPI publishes the built-in request/response payload names from `litestar_auth.payloads`. `login_identifier` only changes how `LoginCredentials.identifier` is resolved during login; it does not rename the email/token fields used by the built-in registration, verification, reset-password, refresh, or TOTP routes.
+
 ## Auth core
 
-| Method | Path | Enabled when | Description |
-| ------ | ---- | -------------- | ----------- |
-| POST | `{auth}/login` | Always (auth controller) | Credentials → tokens / session. |
-| POST | `{auth}/logout` | Always | Authenticated; clears session per strategy. |
-| POST | `{auth}/refresh` | `enable_refresh=True` | New access token from refresh token / cookie. |
+| Method | Path | Request body | Enabled when | Description |
+| ------ | ---- | ------------ | ------------ | ----------- |
+| POST | `{auth}/login` | `LoginCredentials` (`identifier`, `password`) | Always (auth controller) | Credentials → tokens / session. |
+| POST | `{auth}/logout` | None | Always | Authenticated; clears session per strategy. |
+| POST | `{auth}/refresh` | `RefreshTokenRequest` (`refresh_token`) | `enable_refresh=True` | New access token from refresh token / cookie. |
 
 ## Registration and email
 
-| Method | Path | Enabled when | Description |
-| ------ | ---- | -------------- | ----------- |
-| POST | `{auth}/register` | `include_register=True` | Create user; triggers hooks (e.g. send verification email). |
-| POST | `{auth}/verify` | `include_verify=True` | Confirm email with token. |
-| POST | `{auth}/request-verify-token` | `include_verify=True` | Re-issue verification token. |
+| Method | Path | Request body | Enabled when | Description |
+| ------ | ---- | ------------ | ------------ | ----------- |
+| POST | `{auth}/register` | `UserCreate` (`email`, `password`) | `include_register=True` | Create user; triggers hooks (e.g. send verification email). |
+| POST | `{auth}/verify` | `VerifyToken` (`token`) | `include_verify=True` | Confirm email with token. |
+| POST | `{auth}/request-verify-token` | `RequestVerifyToken` (`email`) | `include_verify=True` | Re-issue verification token. |
 
 ## Password reset
 
-| Method | Path | Enabled when | Description |
-| ------ | ---- | -------------- | ----------- |
-| POST | `{auth}/forgot-password` | `include_reset_password=True` | Always returns 202; enumeration-safe. |
-| POST | `{auth}/reset-password` | `include_reset_password=True` | Apply new password with reset token. |
+| Method | Path | Request body | Enabled when | Description |
+| ------ | ---- | ------------ | ------------ | ----------- |
+| POST | `{auth}/forgot-password` | `ForgotPassword` (`email`) | `include_reset_password=True` | Always returns 202; enumeration-safe. |
+| POST | `{auth}/reset-password` | `ResetPassword` (`token`, `password`) | `include_reset_password=True` | Apply new password with reset token. |
 
 ## TOTP (2FA)
 
 Mounted under `{auth}/2fa/...` when `totp_config` is set.
 
-| Method | Path | Notes |
-| ------ | ---- | ----- |
-| POST | `{auth}/2fa/enable` | Authenticated; starts enrollment. |
-| POST | `{auth}/2fa/enable/confirm` | Authenticated; confirms enrollment. |
-| POST | `{auth}/2fa/verify` | Completes login when TOTP is enabled (pending token). |
-| POST | `{auth}/2fa/disable` | Authenticated; disables TOTP. |
+| Method | Path | Request body | Notes |
+| ------ | ---- | ------------ | ----- |
+| POST | `{auth}/2fa/enable` | `TotpEnableRequest` (`password`) by default; no body when `totp_enable_requires_password=False` | Authenticated; starts enrollment. |
+| POST | `{auth}/2fa/enable/confirm` | `TotpConfirmEnableRequest` (`enrollment_token`, `code`) | Authenticated; confirms enrollment. |
+| POST | `{auth}/2fa/verify` | `TotpVerifyRequest` (`pending_token`, `code`) | Completes login when TOTP is enabled (pending token). |
+| POST | `{auth}/2fa/disable` | `TotpDisableRequest` (`code`) | Authenticated; disables TOTP. |
+
+The built-in TOTP flow remains email-oriented internally: the otpauth URI and default password step-up for `POST {auth}/2fa/enable` use `request.user.email`, not `login_identifier`.
 
 ## OAuth2 login
 

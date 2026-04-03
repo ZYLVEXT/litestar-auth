@@ -8,6 +8,12 @@ import pytest
 
 import litestar_auth
 import litestar_auth._plugin as plugin_internals
+import litestar_auth.controllers as controllers_package
+import litestar_auth.controllers.auth as auth_controller_module
+import litestar_auth.controllers.reset as reset_controller_module
+import litestar_auth.controllers.totp as totp_controller_module
+import litestar_auth.controllers.verify as verify_controller_module
+import litestar_auth.payloads as payloads_module
 import litestar_auth.plugin as plugin_module
 from litestar_auth import (
     AccessToken,
@@ -48,6 +54,8 @@ from litestar_auth import (
     ResetPassword,
     Strategy,
     TokenError,
+    TotpConfirmEnableRequest,
+    TotpConfirmEnableResponse,
     TotpDisableRequest,
     TotpEnableResponse,
     TotpUserManagerProtocol,
@@ -147,6 +155,8 @@ def test_root_package_reexports_controller_factories_and_payloads() -> None:
     assert ResetPassword.__struct_fields__ == ("token", "password")
     assert VerifyToken.__struct_fields__ == ("token",)
     assert RequestVerifyToken.__struct_fields__ == ("email",)
+    assert TotpConfirmEnableRequest.__struct_fields__ == ("enrollment_token", "code")
+    assert TotpConfirmEnableResponse.__struct_fields__ == ("enabled",)
     assert TotpEnableResponse.__struct_fields__ == ("secret", "uri", "enrollment_token")
     assert TotpVerifyRequest.__struct_fields__ == ("pending_token", "code")
     assert TotpDisableRequest.__struct_fields__ == ("code",)
@@ -158,6 +168,76 @@ def test_root_package_reexports_controller_factories_and_payloads() -> None:
     assert callable(create_users_controller)
     assert callable(create_totp_controller)
     assert callable(create_oauth_controller)
+
+
+def test_payload_module_is_authoritative_boundary_with_compat_reexports() -> None:
+    """Payloads resolve from the dedicated module and stay aliased from compatibility paths."""
+    assert controllers_package.__all__ == (
+        "ForgotPassword",
+        "LoginCredentials",
+        "RefreshTokenRequest",
+        "RequestVerifyToken",
+        "ResetPassword",
+        "TotpConfirmEnableRequest",
+        "TotpConfirmEnableResponse",
+        "TotpDisableRequest",
+        "TotpEnableResponse",
+        "TotpUserManagerProtocol",
+        "TotpVerifyRequest",
+        "VerifyToken",
+        "create_auth_controller",
+        "create_oauth_associate_controller",
+        "create_oauth_controller",
+        "create_register_controller",
+        "create_reset_password_controller",
+        "create_totp_controller",
+        "create_users_controller",
+        "create_verify_controller",
+    )
+    assert payloads_module.__all__ == (
+        "ForgotPassword",
+        "LoginCredentials",
+        "RefreshTokenRequest",
+        "RequestVerifyToken",
+        "ResetPassword",
+        "TotpConfirmEnableRequest",
+        "TotpConfirmEnableResponse",
+        "TotpDisableRequest",
+        "TotpEnableRequest",
+        "TotpEnableResponse",
+        "TotpVerifyRequest",
+        "UserCreate",
+        "UserRead",
+        "UserUpdate",
+        "VerifyToken",
+    )
+    assert payloads_module.UserCreate is UserCreate
+    assert payloads_module.UserRead is UserRead
+    assert payloads_module.UserUpdate is UserUpdate
+    assert payloads_module.LoginCredentials is LoginCredentials
+    assert payloads_module.LoginCredentials is controllers_package.LoginCredentials
+    assert payloads_module.LoginCredentials is auth_controller_module.LoginCredentials
+    assert payloads_module.RefreshTokenRequest is controllers_package.RefreshTokenRequest
+    assert payloads_module.RefreshTokenRequest is auth_controller_module.RefreshTokenRequest
+    assert payloads_module.ForgotPassword is controllers_package.ForgotPassword
+    assert payloads_module.ForgotPassword is reset_controller_module.ForgotPassword
+    assert payloads_module.ResetPassword is controllers_package.ResetPassword
+    assert payloads_module.ResetPassword is reset_controller_module.ResetPassword
+    assert payloads_module.VerifyToken is controllers_package.VerifyToken
+    assert payloads_module.VerifyToken is verify_controller_module.VerifyToken
+    assert payloads_module.RequestVerifyToken is controllers_package.RequestVerifyToken
+    assert payloads_module.RequestVerifyToken is verify_controller_module.RequestVerifyToken
+    assert payloads_module.TotpConfirmEnableRequest is controllers_package.TotpConfirmEnableRequest
+    assert payloads_module.TotpEnableRequest is totp_controller_module.TotpEnableRequest
+    assert payloads_module.TotpConfirmEnableRequest is TotpConfirmEnableRequest
+    assert payloads_module.TotpConfirmEnableResponse is controllers_package.TotpConfirmEnableResponse
+    assert payloads_module.TotpConfirmEnableResponse is TotpConfirmEnableResponse
+    assert payloads_module.TotpEnableResponse is controllers_package.TotpEnableResponse
+    assert payloads_module.TotpEnableResponse is TotpEnableResponse
+    assert payloads_module.TotpVerifyRequest is controllers_package.TotpVerifyRequest
+    assert payloads_module.TotpVerifyRequest is TotpVerifyRequest
+    assert payloads_module.TotpDisableRequest is controllers_package.TotpDisableRequest
+    assert payloads_module.TotpDisableRequest is TotpDisableRequest
 
 
 def test_root_package_reexports_exception_hierarchy() -> None:
@@ -206,6 +286,8 @@ def test_root_package_all_excludes_private_symbols() -> None:
     assert "ResetPassword" in __all__
     assert "VerifyToken" in __all__
     assert "RequestVerifyToken" in __all__
+    assert "TotpConfirmEnableRequest" in __all__
+    assert "TotpConfirmEnableResponse" in __all__
     assert "TotpEnableResponse" in __all__
     assert "TotpVerifyRequest" in __all__
     assert "TotpDisableRequest" in __all__

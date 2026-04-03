@@ -6,14 +6,14 @@ import re
 from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import timedelta
-from typing import TYPE_CHECKING, Annotated, Any, Protocol, cast
+from typing import TYPE_CHECKING, Any, Protocol, cast
 
-import msgspec
 from litestar import Controller, Request, post
 from litestar.enums import MediaType
 from litestar.exceptions import ClientException, NotAuthorizedException
 from litestar.response import Response
 
+import litestar_auth._schema_fields as schema_fields
 from litestar_auth.authentication.strategy.base import (
     RefreshableStrategy,
     TokenInvalidationCapable,
@@ -32,6 +32,7 @@ from litestar_auth.controllers._utils import (
 )
 from litestar_auth.exceptions import ConfigurationError, ErrorCode
 from litestar_auth.guards import is_authenticated
+from litestar_auth.payloads import LoginCredentials, RefreshTokenRequest  # noqa: TC001
 from litestar_auth.totp_flow import TOTP_PENDING_AUDIENCE as _TOTP_PENDING_AUDIENCE
 from litestar_auth.totp_flow import TotpFlowUserManagerProtocol, TotpLoginFlowService
 from litestar_auth.types import LoginIdentifier, TotpUserProtocol, UserProtocol
@@ -44,22 +45,9 @@ INVALID_CREDENTIALS_DETAIL = "Invalid credentials."
 INVALID_REFRESH_TOKEN_DETAIL = "The refresh token is invalid."  # noqa: S105
 TOTP_PENDING_AUDIENCE = _TOTP_PENDING_AUDIENCE
 _DEFAULT_PENDING_TOKEN_LIFETIME = timedelta(minutes=5)
-_LOGIN_EMAIL_MAX_LENGTH = 320
+_LOGIN_EMAIL_MAX_LENGTH = schema_fields.LOGIN_IDENTIFIER_MAX_LENGTH
 _LOGIN_USERNAME_MAX_LENGTH = 150
-_EMAIL_PATTERN = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
-
-
-class LoginCredentials(msgspec.Struct):
-    """Login payload accepted by the auth controller."""
-
-    identifier: Annotated[str, msgspec.Meta(min_length=1, max_length=_LOGIN_EMAIL_MAX_LENGTH)]
-    password: Annotated[str, msgspec.Meta(min_length=1, max_length=128)]
-
-
-class RefreshTokenRequest(msgspec.Struct):
-    """Refresh payload accepted by the auth controller."""
-
-    refresh_token: Annotated[str, msgspec.Meta(min_length=1, max_length=512)]
+_EMAIL_PATTERN = re.compile(schema_fields.EMAIL_PATTERN)
 
 
 class AuthControllerUserManagerProtocol[UP: UserProtocol[Any], ID](

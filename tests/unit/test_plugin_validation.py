@@ -16,6 +16,7 @@ import litestar_auth._plugin.middleware as middleware_module
 import litestar_auth._plugin.rate_limit as rate_limit_module
 import litestar_auth._plugin.startup as startup_module
 import litestar_auth._plugin.validation as validation_module
+import litestar_auth.authentication.strategy.jwt as jwt_strategy_module
 from litestar_auth._plugin.config import DEFAULT_CSRF_COOKIE_NAME, LitestarAuthConfig, OAuthConfig, TotpConfig
 from litestar_auth._plugin.middleware import build_csrf_config, get_cookie_transports
 from litestar_auth._plugin.rate_limit import iter_rate_limit_endpoints
@@ -155,6 +156,30 @@ def test_warn_insecure_plugin_startup_defaults_emits_all_expected_security_warni
     assert any("process-local in-memory backend" in message for message in messages)
     assert any("InMemoryUsedTotpCodeStore" in message for message in messages)
     assert any("refresh_max_age is not set" in message for message in messages)
+
+
+def test_warn_insecure_plugin_startup_defaults_warns_for_reloaded_jwt_strategy(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """JWT denylist warnings survive strategy-module reloads used in coverage tests."""
+    monkeypatch.setattr(startup_module, "is_testing", lambda: False)
+    reloaded_jwt_module = importlib.reload(jwt_strategy_module)
+    config = _minimal_config(
+        backends=[
+            AuthenticationBackend[ExampleUser, UUID](
+                name="jwt",
+                transport=BearerTransport(),
+                strategy=reloaded_jwt_module.JWTStrategy(secret=JWT_SECRET),
+            ),
+        ],
+    )
+
+    with warnings.catch_warnings(record=True) as records:
+        warnings.simplefilter("always")
+        warn_insecure_plugin_startup_defaults(config)
+
+    messages = [str(record.message) for record in records]
+    assert any("process-local in-memory denylist" in message for message in messages)
 
 
 def test_warn_insecure_plugin_startup_defaults_is_silent_in_testing(
