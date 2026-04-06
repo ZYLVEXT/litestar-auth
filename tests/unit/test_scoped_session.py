@@ -15,9 +15,11 @@ from litestar_auth._plugin.scoped_session import (
     _get_aa_namespace,
     get_or_create_scoped_session,
 )
+from tests.e2e.conftest import assert_structural_session_factory
 
 if TYPE_CHECKING:
     from litestar.types import Scope
+    from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 pytestmark = pytest.mark.unit
 
@@ -75,10 +77,10 @@ def _scope_dict(scope: Scope) -> dict[str, Any]:
 
 def test_get_or_create_scoped_session_creates_session_for_empty_scope() -> None:
     """It creates one request-scoped session when scope has no session yet."""
-    session_maker = DummySessionMaker()
+    session_maker = assert_structural_session_factory(DummySessionMaker())
     scope = _build_scope()
 
-    session = get_or_create_scoped_session(State(), scope, cast("Any", session_maker))
+    session = get_or_create_scoped_session(State(), scope, cast("async_sessionmaker[AsyncSession]", session_maker))
 
     assert isinstance(session, DummySession)
     assert session_maker.call_count == 1
@@ -86,13 +88,13 @@ def test_get_or_create_scoped_session_creates_session_for_empty_scope() -> None:
 
 
 def test_get_or_create_scoped_session_reuses_existing_scoped_session() -> None:
-    """It reuses the same request-scoped session across repeated calls."""
-    session_maker = DummySessionMaker()
+    """It reuses the same request-scoped session across repeated calls for structural factories."""
+    session_maker = assert_structural_session_factory(DummySessionMaker())
     scope = _build_scope()
     state = State()
 
-    first = get_or_create_scoped_session(state, scope, cast("Any", session_maker))
-    second = get_or_create_scoped_session(state, scope, cast("Any", session_maker))
+    first = get_or_create_scoped_session(state, scope, cast("async_sessionmaker[AsyncSession]", session_maker))
+    second = get_or_create_scoped_session(state, scope, cast("async_sessionmaker[AsyncSession]", session_maker))
 
     assert first is second
     assert session_maker.call_count == 1

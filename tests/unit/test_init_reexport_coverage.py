@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import importlib
 import logging
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, get_args
 
 import pytest
 
@@ -17,7 +17,10 @@ import litestar_auth.controllers as controllers_module
 import litestar_auth.db as db_module
 import litestar_auth.guards as guards_module
 import litestar_auth.models as models_module
+import litestar_auth.ratelimit as ratelimit_module
+import litestar_auth.ratelimit._config as ratelimit_config_module
 from litestar_auth.authentication.strategy.db_models import AccessToken, DatabaseTokenModels, RefreshToken
+from litestar_auth.ratelimit import AuthRateLimitEndpointGroup, AuthRateLimitEndpointSlot
 from tests.conftest import project_version_from_pyproject
 
 pytestmark = [pytest.mark.unit, pytest.mark.imports]
@@ -178,7 +181,45 @@ def test_models_and_strategy_token_registration_helpers_share_the_same_db_models
         "UserManagerProtocol",
         "import_token_orm_models",
     )
+    assert models_module.import_token_orm_models.__module__ == "litestar_auth.models.tokens"
+    assert strategy_module.import_token_orm_models.__module__ == "litestar_auth.authentication.strategy.db_models"
+    assert not hasattr(litestar_auth_module, "import_token_orm_models")
     assert strategy_module.DatabaseTokenModels is DatabaseTokenModels
     assert models_module.import_token_orm_models() == (AccessToken, RefreshToken)
     assert strategy_module.import_token_orm_models() == (AccessToken, RefreshToken)
     assert strategy_module.import_token_orm_models() == models_module.import_token_orm_models()
+
+
+def test_ratelimit_reexport_module_exposes_identifier_aliases_and_keeps_catalog_internal() -> None:
+    """The public ratelimit module exports identifier aliases without leaking the private catalog."""
+    reloaded_module = importlib.reload(ratelimit_module)
+
+    assert reloaded_module is ratelimit_module
+    _assert_exported_symbols(
+        reloaded_module,
+        expected_names=(
+            "AuthRateLimitConfig",
+            "AuthRateLimitEndpointGroup",
+            "AuthRateLimitEndpointSlot",
+            "EndpointRateLimit",
+            "InMemoryRateLimiter",
+            "RateLimitScope",
+            "RedisRateLimiter",
+            "TotpRateLimitOrchestrator",
+            "TotpSensitiveEndpoint",
+        ),
+    )
+    assert hasattr(ratelimit_config_module, "_AUTH_RATE_LIMIT_ENDPOINT_RECIPES")
+    assert hasattr(ratelimit_config_module, "_AUTH_RATE_LIMIT_ENDPOINT_RECIPES_BY_SLOT")
+    assert hasattr(ratelimit_config_module, "_AUTH_RATE_LIMIT_ENDPOINT_SLOTS")
+    assert hasattr(ratelimit_config_module, "_AUTH_RATE_LIMIT_ENDPOINT_GROUPS")
+    assert get_args(reloaded_module.AuthRateLimitEndpointSlot.__value__) == get_args(
+        AuthRateLimitEndpointSlot.__value__,
+    )
+    assert get_args(reloaded_module.AuthRateLimitEndpointGroup.__value__) == get_args(
+        AuthRateLimitEndpointGroup.__value__,
+    )
+    assert not hasattr(reloaded_module, "_AUTH_RATE_LIMIT_ENDPOINT_RECIPES")
+    assert not hasattr(reloaded_module, "_AUTH_RATE_LIMIT_ENDPOINT_RECIPES_BY_SLOT")
+    assert not hasattr(reloaded_module, "_AUTH_RATE_LIMIT_ENDPOINT_SLOTS")
+    assert not hasattr(reloaded_module, "_AUTH_RATE_LIMIT_ENDPOINT_GROUPS")

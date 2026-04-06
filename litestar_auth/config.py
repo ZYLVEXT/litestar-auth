@@ -78,8 +78,8 @@ def require_password_length(
 ) -> None:
     """Raise when a password falls outside the configured length bounds.
 
-    The default ``minimum_length`` matches ``LitestarAuth``'s built-in password
-    policy.
+    The default ``minimum_length`` matches the password-length metadata exposed
+    for app-owned user schemas via ``litestar_auth.schemas.UserPasswordField``.
 
     Raises:
         ValueError: If ``password`` exceeds ``maximum_length`` or is shorter

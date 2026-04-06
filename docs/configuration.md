@@ -17,6 +17,8 @@ Use `DatabaseTokenAuthConfig` plus `LitestarAuthConfig.with_database_token_auth(
 ```python
 from uuid import UUID
 
+from litestar import Litestar
+
 from litestar_auth import DatabaseTokenAuthConfig, LitestarAuth, LitestarAuthConfig
 from litestar_auth.models import User
 
@@ -34,6 +36,8 @@ config = LitestarAuthConfig[User, UUID].with_database_token_auth(
 )
 app = Litestar(plugins=[LitestarAuth(config)])
 ```
+
+Here, `session_maker` means a callable session factory the plugin can invoke as `session_maker()` to obtain the request-local `AsyncSession`. `async_sessionmaker(...)` is the most common implementation, but any factory with that runtime contract is supported.
 
 If you previously hand-assembled `AuthenticationBackend(..., transport=BearerTransport(), strategy=DatabaseTokenStrategy(...))`, migrate that setup to the preset above. Keep manual `backends=` assembly only when you need multiple backends, custom token models, or another non-canonical transport/strategy mix.
 
@@ -54,7 +58,9 @@ Migration note:
 from litestar_auth.models import import_token_orm_models
 
 # Compatibility-only legacy import for existing call sites
-from litestar_auth.authentication.strategy import import_token_orm_models
+from litestar_auth.authentication.strategy import (
+    import_token_orm_models as import_token_orm_models_compat,
+)
 ```
 
 **Database-backed JWT / refresh** (`DatabaseTokenStrategy`): the canonical explicit mapper-registration entrypoint for the library token models now lives under `litestar_auth.models`:
@@ -65,7 +71,7 @@ from litestar_auth.models import import_token_orm_models
 AccessToken, RefreshToken = import_token_orm_models()
 ```
 
-Use that helper for metadata registration or Alembic-style autogenerate setup so token model discovery stays with the models boundary. The older `from litestar_auth.authentication.strategy import import_token_orm_models` path remains supported only as a compatibility import while existing code migrates. If you use the library `AccessToken` and `RefreshToken` models, your user class should declare relationships compatible with them instead of copying mapper wiring from the reference `User` class:
+Call that helper yourself during metadata registration or Alembic-style autogenerate setup so token model discovery stays with the models boundary. Neither the plugin nor `DatabaseTokenStrategy` auto-registers the bundled token mappers for you. The older `from litestar_auth.authentication.strategy import import_token_orm_models` path remains supported only as a compatibility import while existing code migrates. If you use the library `AccessToken` and `RefreshToken` models, your user class should declare relationships compatible with them instead of copying mapper wiring from the reference `User` class:
 
 - Table names: `access_token`, `refresh_token`; `user_id` foreign keys target **`user.id`** (your user model’s table must be named `user`, or you must align FKs and relationships with your schema).
 - Compose the side-effect-free model mixins from `litestar_auth.models` when you want the bundled field and relationship contract without copying boilerplate from the reference ORM classes:
@@ -80,7 +86,7 @@ class User(UserModelMixin, UserAuthRelationshipMixin, UUIDBase):
     __tablename__ = "user"
 ```
 
-`UserModelMixin` provides the bundled email / password / account-state columns, while `UserAuthRelationshipMixin` provides the `access_tokens`, `refresh_tokens`, and `oauth_accounts` relationships with the `back_populates="user"` wiring expected by the bundled models. Set any `auth_*_model` hook to `None` when a custom user only composes part of the auth model family instead of all three relationships.
+`UserModelMixin` provides the bundled email / password / account-state columns, while `UserAuthRelationshipMixin` provides the `access_tokens`, `refresh_tokens`, and `oauth_accounts` relationships with the same `back_populates="user"` wiring the bundled models expect. Leave its relationship-option hooks unset to keep the default contract: SQLAlchemy's normal loader behavior plus inferred foreign-key linkage for `oauth_accounts`. Set any `auth_*_model` hook to `None` when a custom user only composes part of the auth model family instead of all three relationships.
 
 If you need custom token or OAuth classes instead of the bundled `AccessToken`, `RefreshToken`, and `OAuthAccount`, compose their sibling mixins on your application's own declarative base / registry and override the class-name / table-name hooks instead of copying relationship code:
 
@@ -113,6 +119,9 @@ class MyUser(UserModelMixin, UserAuthRelationshipMixin, AppUUIDBase):
     auth_access_token_model = "MyAccessToken"
     auth_refresh_token_model = "MyRefreshToken"
     auth_oauth_account_model = "MyOAuthAccount"
+    auth_token_relationship_lazy = "noload"
+    auth_oauth_account_relationship_lazy = "selectin"
+    auth_oauth_account_relationship_foreign_keys = "MyOAuthAccount.user_id"
 
 
 class MyAccessToken(AccessTokenMixin, AppBase):
@@ -135,6 +144,8 @@ class MyOAuthAccount(OAuthAccountMixin, AppUUIDBase):
     auth_user_model = "MyUser"
     auth_user_table = "my_user"
 ```
+
+`auth_token_relationship_lazy` applies the same `lazy=` option to both token collections, while `auth_oauth_account_relationship_lazy` and `auth_oauth_account_relationship_foreign_keys` only affect `oauth_accounts`. Those hooks are intentionally narrow: use them for the documented loader-strategy or explicit-foreign-key cases, and keep app-owned relationship definitions only when you truly need behavior beyond that contract.
 
 When those custom token classes back `DatabaseTokenStrategy`, pass them explicitly via `DatabaseTokenModels` so the strategy binds repositories, refresh rotation, logout cleanup, and expired-token cleanup to your tables instead of the bundled defaults. Model registration still starts in `litestar_auth.models`; `DatabaseTokenModels` only tells the strategy which mapped token classes to use at runtime:
 
@@ -160,7 +171,7 @@ backend = AuthenticationBackend(
 
 `DatabaseTokenAuthConfig` / `LitestarAuthConfig.with_database_token_auth()` remains the canonical shortcut for the bundled `AccessToken` / `RefreshToken` tables. Use the manual backend assembly above only when you intentionally replace the token ORM classes or need another non-canonical transport/strategy combination.
 
-**OAuth persistence**: `SQLAlchemyUserDatabase` requires **`user_model`** and accepts optional **`oauth_account_model`**. If you use OAuth methods (`get_by_oauth_account`, `upsert_oauth_account`) without providing `oauth_account_model`, a `TypeError` is raised. A custom OAuth class can be composed from `OAuthAccountMixin` so the bundled column set, uniqueness rule, and `user` relationship stay aligned without inheriting the reference `OAuthAccount` class directly. Pair it with `UserAuthRelationshipMixin` on the user side, point `auth_oauth_account_model` at the custom class, and set the unused token hooks to `None` when you are not also composing custom token models. If your app still reuses the bundled `oauth_account` table on `user.id`, importing **`OAuthAccount` from `litestar_auth.models.oauth`** remains supported; otherwise prefer a mixin-based custom OAuth model whose `auth_user_model` / `auth_user_table` settings match your schema. See [Custom user + OAuth](cookbook/custom_user_oauth.md).
+**OAuth persistence**: `SQLAlchemyUserDatabase` requires **`user_model`** and accepts optional **`oauth_account_model`**. If you use OAuth methods (`get_by_oauth_account`, `upsert_oauth_account`) without providing `oauth_account_model`, a `TypeError` is raised. A custom OAuth class can be composed from `OAuthAccountMixin` so the bundled column set, uniqueness rule, and `user` relationship stay aligned without inheriting the reference `OAuthAccount` class directly. Pair it with `UserAuthRelationshipMixin` on the user side, point `auth_oauth_account_model` at the custom class, and set the unused token hooks to `None` when you are not also composing custom token models. If that custom user also needs a non-default loader strategy for `oauth_accounts`, set `auth_oauth_account_relationship_lazy` and, only when SQLAlchemy needs an explicit hint, `auth_oauth_account_relationship_foreign_keys`. If your app still reuses the bundled `oauth_account` table on `user.id`, importing **`OAuthAccount` from `litestar_auth.models.oauth`** remains supported; otherwise prefer a mixin-based custom OAuth model whose `auth_user_model` / `auth_user_table` settings match your schema. See [Custom user + OAuth](cookbook/custom_user_oauth.md).
 
 ## Required (at runtime)
 
@@ -169,9 +180,9 @@ backend = AuthenticationBackend(
 | `backends` | Non-empty sequence of `AuthenticationBackend` when calling `LitestarAuthConfig(...)` directly. The canonical DB bearer preset builds this automatically via `with_database_token_auth()`. |
 | `user_model` | User ORM type (e.g. subclass of `litestar_auth.models.User`). |
 | `user_manager_class` | Concrete subclass of `BaseUserManager`. |
-| `session_maker` | `async_sessionmaker[AsyncSession]` for scoped DB access. |
+| `session_maker` | Callable request-session factory for scoped DB access (`session_maker() -> AsyncSession`). `async_sessionmaker(...)` is the common implementation. |
 
-On the `LitestarAuthConfig` dataclass, `session_maker` is typed as optional for advanced construction flows, but **`LitestarAuth` raises if it is missing** when the plugin is instantiated. Treat it as required for normal apps.
+On the `LitestarAuthConfig` dataclass, `session_maker` is typed as optional for advanced construction flows, but **`LitestarAuth` raises if it is missing** when the plugin is instantiated. Treat a compatible session factory as required for normal apps.
 
 ## Core wiring
 
@@ -227,7 +238,67 @@ rate_limit_config = AuthRateLimitConfig.from_shared_backend(
 )
 ```
 
-The builder keeps package-owned scope and namespace defaults aligned with the documented auth routes. If you already depend on custom key names or scope choices, preserve them with `namespace_overrides` and `scope_overrides`. Keep direct `EndpointRateLimit(...)` assembly only for advanced per-endpoint exceptions.
+`from_shared_backend()` exposes typed public builder identifiers from `litestar_auth.ratelimit`:
+
+```python
+from litestar_auth.ratelimit import AuthRateLimitEndpointGroup, AuthRateLimitEndpointSlot
+```
+
+- `AuthRateLimitEndpointSlot` names the per-endpoint keys accepted by `enabled`, `disabled`, `scope_overrides`, `namespace_overrides`, and `endpoint_overrides`.
+- `AuthRateLimitEndpointGroup` names the shared-backend keys accepted by `group_backends`.
+
+The private catalog that stores these defaults remains internal, but the values below are the supported builder surface:
+
+| `AuthRateLimitEndpointSlot` value | `AuthRateLimitEndpointGroup` value | Default scope | Default namespace token |
+| --------------------------------- | ---------------------------------- | ------------- | ----------------------- |
+| `login` | `login` | `ip_email` | `login` |
+| `refresh` | `refresh` | `ip` | `refresh` |
+| `register` | `register` | `ip` | `register` |
+| `forgot_password` | `password_reset` | `ip_email` | `forgot-password` |
+| `reset_password` | `password_reset` | `ip` | `reset-password` |
+| `totp_enable` | `totp` | `ip` | `totp-enable` |
+| `totp_confirm_enable` | `totp` | `ip` | `totp-confirm-enable` |
+| `totp_verify` | `totp` | `ip` | `totp-verify` |
+| `totp_disable` | `totp` | `ip` | `totp-disable` |
+| `verify_token` | `verification` | `ip` | `verify-token` |
+| `request_verify_token` | `verification` | `ip_email` | `request-verify-token` |
+
+Accepted `AuthRateLimitEndpointGroup` values are exactly `login`, `refresh`, `register`, `password_reset`, `totp`, and `verification`.
+
+Builder precedence is:
+
+1. `endpoint_overrides` wins per slot and can replace the limiter or set it to `None`.
+2. Otherwise, only slots enabled by `enabled` (defaults to every supported slot) and not listed in `disabled` are materialized.
+3. Generated limiters start from `backend`, then `group_backends` can swap the backend for the slot's group.
+4. `scope_overrides` and `namespace_overrides` adjust the generated limiter for that slot.
+
+If you already depend on custom key names or scope choices, preserve them with `namespace_overrides` and `scope_overrides`. Use `disabled` to leave unused slots such as `verify_token` or `request_verify_token` unset. Keep direct `EndpointRateLimit(...)` assembly only for advanced per-endpoint exceptions.
+
+Migration example for an older Redis recipe: this keeps login, register, and password-reset style routes on one backend, splits out refresh and TOTP budgets, preserves legacy underscore namespaces, and leaves verification slots unset. It uses only the current shared-builder arguments; it is not a separate preset.
+
+```python
+from litestar_auth.ratelimit import AuthRateLimitConfig, RedisRateLimiter
+
+credential_backend = RedisRateLimiter(redis=redis_client, max_attempts=5, window_seconds=60)
+refresh_backend = RedisRateLimiter(redis=redis_client, max_attempts=10, window_seconds=300)
+totp_backend = RedisRateLimiter(redis=redis_client, max_attempts=5, window_seconds=300)
+
+rate_limit_config = AuthRateLimitConfig.from_shared_backend(
+    credential_backend,
+    group_backends={"refresh": refresh_backend, "totp": totp_backend},
+    disabled={"verify_token", "request_verify_token"},
+    namespace_overrides={
+        "forgot_password": "forgot_password",
+        "reset_password": "reset_password",
+        "totp_enable": "totp_enable",
+        "totp_confirm_enable": "totp_confirm_enable",
+        "totp_verify": "totp_verify",
+        "totp_disable": "totp_disable",
+    },
+)
+```
+
+Add `scope_overrides` only when an existing key shape also depends on a non-default scope for a specific slot.
 
 ## TOTP — `totp_config: TotpConfig | None`
 
@@ -287,6 +358,26 @@ Route-registration contract:
 | `db_session_dependency_provided_externally` | `False` | Skip plugin session provider when your app already registers the key. |
 
 `user_*_schema` customizes registration and user CRUD surfaces. It does not rename the built-in auth lifecycle request structs: `LoginCredentials`, `RefreshTokenRequest`, `RequestVerifyToken`, `VerifyToken`, `ForgotPassword`, `ResetPassword`, or the TOTP payloads.
+
+When app-owned `user_create_schema` or `user_update_schema` structs keep a `password` field, import `UserPasswordField` from `litestar_auth.schemas` instead of copying raw `12` / `128` limits into local `msgspec.Meta(...)` annotations:
+
+```python
+import msgspec
+
+from litestar_auth.schemas import UserPasswordField
+
+
+class AppUserCreate(msgspec.Struct):
+    email: str
+    password: UserPasswordField
+    display_name: str
+
+
+class AppUserUpdate(msgspec.Struct, omit_defaults=True):
+    password: UserPasswordField | None = None
+```
+
+That alias keeps schema metadata aligned with the built-in `UserCreate` and `UserUpdate` structs. Runtime validation still flows through `require_password_length` when the plugin uses its default `password_validator_factory`, so schema metadata does not replace the manager-side password validator.
 
 ## Dependency keys (constants)
 

@@ -1,4 +1,8 @@
-"""Internal msgspec field aliases shared across auth payload schemas."""
+"""Internal msgspec field aliases shared across auth payload schemas.
+
+Public code should import ``UserPasswordField`` from ``litestar_auth.schemas``
+when custom user create/update payloads need the built-in password policy.
+"""
 
 from __future__ import annotations
 

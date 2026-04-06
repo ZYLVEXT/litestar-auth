@@ -25,6 +25,8 @@ Pending login JWTs use a JTI denylist internally. The plugin-built TOTP controll
 
 Production deployments should configure **`totp_used_tokens_store`** so codes cannot be reused. Without it, the library fails fast outside testing mode.
 
+For pytest-driven plugin tests, see the [testing guide](testing.md). Under **`LITESTAR_AUTH_TESTING=1`**, the plugin can run without **`totp_used_tokens_store`**, but that is a single-process testing convenience rather than a production-safe replay-protection setup.
+
 Algorithm defaults to **SHA256** (`totp_algorithm`).
 
 ## Related
@@ -32,3 +34,4 @@ Algorithm defaults to **SHA256** (`totp_algorithm`).
 - [Configuration](../configuration.md) — `TotpConfig`.
 - [TOTP API](../api/totp.md) — helpers and types.
 - [Manager API](../api/manager.md) — manager hooks for secrets and lifecycle.
+- [Testing plugin-backed apps](testing.md) — pytest-only testing mode, request-scoped sessions, and store-isolation boundaries.

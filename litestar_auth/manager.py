@@ -54,6 +54,8 @@ SAFE_FIELDS = _CANONICAL_SAFE_FIELDS
 _PRIVILEGED_FIELDS = _CANONICAL_PRIVILEGED_FIELDS
 ENCRYPTED_TOTP_SECRET_PREFIX = "fernet:"  # noqa: S105
 _MASKED = "**********"
+# Compatibility re-exports for runtime validation. Custom msgspec user schemas
+# should import ``UserPasswordField`` from ``litestar_auth.schemas``.
 MAX_PASSWORD_LENGTH = _config.MAX_PASSWORD_LENGTH
 require_password_length = _config.require_password_length
 

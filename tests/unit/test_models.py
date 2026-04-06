@@ -5,7 +5,7 @@ from __future__ import annotations
 import sqlite3
 import subprocess
 import sys
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, get_type_hints
 from uuid import UUID
 
 import pytest
@@ -312,6 +312,26 @@ def test_models_package_import_token_orm_models_returns_token_model_classes() ->
     assert import_token_orm_models_from_strategy() == import_token_orm_models_from_models()
 
 
+def test_models_package_import_token_orm_models_matches_database_token_models_defaults() -> None:
+    """The canonical models helper stays aligned with the explicit DB-token model contract."""
+    access_token_model, refresh_token_model = import_token_orm_models_from_models()
+    token_models = DatabaseTokenModels()
+
+    assert import_token_orm_models_from_models.__module__ == "litestar_auth.models.tokens"
+    assert import_token_orm_models_from_strategy.__module__ == "litestar_auth.authentication.strategy.db_models"
+    assert (token_models.access_token_model, token_models.refresh_token_model) == (
+        access_token_model,
+        refresh_token_model,
+    )
+
+
+def test_models_package_import_token_orm_models_annotations_are_runtime_resolvable() -> None:
+    """The canonical models helper keeps runtime-resolvable token-model annotations."""
+    hints = get_type_hints(import_token_orm_models_from_models)
+
+    assert hints["return"] == tuple[type[AccessToken], type[RefreshToken]]
+
+
 def test_database_token_models_default_to_bundled_token_model_classes() -> None:
     """The explicit DB-token model contract defaults to the bundled ORM classes."""
     token_models = DatabaseTokenModels()
@@ -579,12 +599,27 @@ def test_reference_user_model_inverse_relationship_contracts_are_stable() -> Non
     assert sorted(user_relationships.keys()) == ["access_tokens", "oauth_accounts", "refresh_tokens"]
     assert user_relationships["access_tokens"].mapper.class_ is AccessToken
     assert user_relationships["access_tokens"].back_populates == "user"
+    assert user_relationships["access_tokens"].lazy == "select"
+    assert user_relationships["access_tokens"]._user_defined_foreign_keys == set()
+    assert [(left.key, right.key) for left, right in user_relationships["access_tokens"].synchronize_pairs] == [
+        ("id", "user_id"),
+    ]
     assert user_relationships["access_tokens"].uselist is True
     assert user_relationships["refresh_tokens"].mapper.class_ is RefreshToken
     assert user_relationships["refresh_tokens"].back_populates == "user"
+    assert user_relationships["refresh_tokens"].lazy == "select"
+    assert user_relationships["refresh_tokens"]._user_defined_foreign_keys == set()
+    assert [(left.key, right.key) for left, right in user_relationships["refresh_tokens"].synchronize_pairs] == [
+        ("id", "user_id"),
+    ]
     assert user_relationships["refresh_tokens"].uselist is True
     assert user_relationships["oauth_accounts"].mapper.class_ is OAuthAccount
     assert user_relationships["oauth_accounts"].back_populates == "user"
+    assert user_relationships["oauth_accounts"].lazy == "select"
+    assert user_relationships["oauth_accounts"]._user_defined_foreign_keys == set()
+    assert [(left.key, right.key) for left, right in user_relationships["oauth_accounts"].synchronize_pairs] == [
+        ("id", "user_id"),
+    ]
     assert user_relationships["oauth_accounts"].uselist is True
     assert inspect(AccessToken).relationships["user"].mapper.class_ is User
     assert inspect(AccessToken).relationships["user"].back_populates == "access_tokens"
@@ -592,6 +627,81 @@ def test_reference_user_model_inverse_relationship_contracts_are_stable() -> Non
     assert inspect(RefreshToken).relationships["user"].back_populates == "refresh_tokens"
     assert inspect(OAuthAccount).relationships["user"].mapper.class_ is User
     assert inspect(OAuthAccount).relationships["user"].back_populates == "oauth_accounts"
+
+
+@pytest.mark.imports
+def test_user_relationship_mixin_supports_relationship_option_overrides() -> None:
+    """Custom user models can override supported relationship options without changing inverse wiring."""
+    code = (
+        "from sqlalchemy import inspect\n"
+        "from sqlalchemy.orm import DeclarativeBase\n"
+        "from advanced_alchemy.base import UUIDPrimaryKey, create_registry\n"
+        "from litestar_auth.models import (\n"
+        "    AccessTokenMixin,\n"
+        "    OAuthAccountMixin,\n"
+        "    RefreshTokenMixin,\n"
+        "    UserAuthRelationshipMixin,\n"
+        "    UserModelMixin,\n"
+        ")\n"
+        "class AppBase(DeclarativeBase):\n"
+        "    registry = create_registry()\n"
+        "    metadata = registry.metadata\n"
+        "    __abstract__ = True\n"
+        "class AppUUIDBase(UUIDPrimaryKey, AppBase):\n"
+        "    __abstract__ = True\n"
+        "class ConfiguredUser(UserModelMixin, UserAuthRelationshipMixin, AppUUIDBase):\n"
+        "    __tablename__ = 'configured_user'\n"
+        "    auth_access_token_model = 'ConfiguredAccessToken'\n"
+        "    auth_refresh_token_model = 'ConfiguredRefreshToken'\n"
+        "    auth_oauth_account_model = 'ConfiguredOAuthAccount'\n"
+        "    auth_token_relationship_lazy = 'noload'\n"
+        "    auth_oauth_account_relationship_lazy = 'selectin'\n"
+        "    auth_oauth_account_relationship_foreign_keys = 'ConfiguredOAuthAccount.user_id'\n"
+        "class ConfiguredAccessToken(AccessTokenMixin, AppBase):\n"
+        "    __tablename__ = 'configured_access_token'\n"
+        "    auth_user_model = 'ConfiguredUser'\n"
+        "    auth_user_table = 'configured_user'\n"
+        "class ConfiguredRefreshToken(RefreshTokenMixin, AppBase):\n"
+        "    __tablename__ = 'configured_refresh_token'\n"
+        "    auth_user_model = 'ConfiguredUser'\n"
+        "    auth_user_table = 'configured_user'\n"
+        "class ConfiguredOAuthAccount(OAuthAccountMixin, AppUUIDBase):\n"
+        "    __tablename__ = 'configured_oauth_account'\n"
+        "    auth_user_model = 'ConfiguredUser'\n"
+        "    auth_user_table = 'configured_user'\n"
+        "relationships = inspect(ConfiguredUser).relationships\n"
+        "assert sorted(relationships.keys()) == ['access_tokens', 'oauth_accounts', 'refresh_tokens']\n"
+        "assert relationships['access_tokens'].mapper.class_ is ConfiguredAccessToken\n"
+        "assert relationships['access_tokens'].lazy == 'noload'\n"
+        "assert relationships['access_tokens']._user_defined_foreign_keys == set()\n"
+        "assert [(left.key, right.key) for left, right in relationships['access_tokens'].synchronize_pairs] == [\n"
+        "    ('id', 'user_id')\n"
+        "]\n"
+        "assert relationships['refresh_tokens'].mapper.class_ is ConfiguredRefreshToken\n"
+        "assert relationships['refresh_tokens'].lazy == 'noload'\n"
+        "assert relationships['refresh_tokens']._user_defined_foreign_keys == set()\n"
+        "assert [(left.key, right.key) for left, right in relationships['refresh_tokens'].synchronize_pairs] == [\n"
+        "    ('id', 'user_id')\n"
+        "]\n"
+        "assert relationships['oauth_accounts'].mapper.class_ is ConfiguredOAuthAccount\n"
+        "assert relationships['oauth_accounts'].lazy == 'selectin'\n"
+        "assert relationships['oauth_accounts']._user_defined_foreign_keys == {ConfiguredOAuthAccount.__table__.c.user_id}\n"
+        "assert [(left.key, right.key) for left, right in relationships['oauth_accounts'].synchronize_pairs] == [\n"
+        "    ('id', 'user_id')\n"
+        "]\n"
+        "assert inspect(ConfiguredAccessToken).relationships['user'].mapper.class_ is ConfiguredUser\n"
+        "assert inspect(ConfiguredRefreshToken).relationships['user'].mapper.class_ is ConfiguredUser\n"
+        "assert inspect(ConfiguredOAuthAccount).relationships['user'].mapper.class_ is ConfiguredUser\n"
+    )
+    result = subprocess.run(
+        [sys.executable, "-c", code],
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+
+    assert result.returncode == 0, (result.stdout, result.stderr)
 
 
 def test_access_token_model_enforces_foreign_key_constraint() -> None:

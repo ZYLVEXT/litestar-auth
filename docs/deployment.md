@@ -21,7 +21,7 @@ Use this when moving from local development to production, especially for **secr
 Use Redis-backed components when you run multiple workers or need durability:
 
 - **JWT denylist** — `RedisJWTDenylistStore` instead of in-memory.
-- **Rate limiting** — prefer one `RedisRateLimiter` passed to `AuthRateLimitConfig.from_shared_backend(...)` so all standard auth endpoints share Redis-backed counters with package-owned default scopes and namespace tokens (see [Rate limiting](guides/rate_limiting.md)).
+- **Rate limiting** — prefer one `RedisRateLimiter` passed to `AuthRateLimitConfig.from_shared_backend(...)` so all standard auth endpoints share Redis-backed counters with the documented stable slot names, group names, scopes, and namespace tokens (see [Rate limiting](guides/rate_limiting.md)).
 - **TOTP replay store** — `RedisUsedTotpCodeStore` for `totp_config.totp_used_tokens_store`.
 
 Canonical shared-backend recipe:
@@ -34,7 +34,42 @@ rate_limit_config = AuthRateLimitConfig.from_shared_backend(
 )
 ```
 
-If you are migrating from an older manual recipe, keep existing key-space choices with `namespace_overrides` and `scope_overrides`. Reserve direct `EndpointRateLimit(...)` assembly for advanced per-endpoint exceptions.
+`from_shared_backend()` uses these stable builder identifiers:
+
+- Slots: `login`, `refresh`, `register`, `forgot_password`, `reset_password`, `totp_enable`, `totp_confirm_enable`, `totp_verify`, `totp_disable`, `verify_token`, `request_verify_token`
+- `group_backends` groups: `login`, `refresh`, `register`, `password_reset`, `totp`, `verification`
+- Default `ip_email` scopes: `login`, `forgot_password`, `request_verify_token`
+- Default `ip` scopes: every other supported slot
+
+Default namespace tokens are `login`, `refresh`, `register`, `forgot-password`, `reset-password`, `totp-enable`, `totp-confirm-enable`, `totp-verify`, `totp-disable`, `verify-token`, and `request-verify-token`.
+
+If you are migrating from an older manual recipe, keep existing key-space choices with `namespace_overrides` and `scope_overrides`, and use `disabled` for slots such as `verify_token` or `request_verify_token` when your deployed surface does not expose them.
+
+Example migration pattern for a Redis deployment with separate credential, refresh, and TOTP budgets:
+
+```python
+from litestar_auth.ratelimit import AuthRateLimitConfig, RedisRateLimiter
+
+credential_backend = RedisRateLimiter(redis=redis_client, max_attempts=5, window_seconds=60)
+refresh_backend = RedisRateLimiter(redis=redis_client, max_attempts=10, window_seconds=300)
+totp_backend = RedisRateLimiter(redis=redis_client, max_attempts=5, window_seconds=300)
+
+rate_limit_config = AuthRateLimitConfig.from_shared_backend(
+    credential_backend,
+    group_backends={"refresh": refresh_backend, "totp": totp_backend},
+    disabled={"verify_token", "request_verify_token"},
+    namespace_overrides={
+        "forgot_password": "forgot_password",
+        "reset_password": "reset_password",
+        "totp_enable": "totp_enable",
+        "totp_confirm_enable": "totp_confirm_enable",
+        "totp_verify": "totp_verify",
+        "totp_disable": "totp_disable",
+    },
+)
+```
+
+This keeps the credential-oriented slots on `credential_backend`, moves `refresh` and `totp_*` to their own backends, preserves the legacy underscore namespaces, and leaves the verification slots unset. Reserve direct `EndpointRateLimit(...)` assembly for advanced per-endpoint exceptions, or `endpoint_overrides` when a single slot needs a custom limiter while staying inside the shared-builder contract.
 
 The in-memory rate limiter and in-memory denylist are **not** sufficient across processes. The plugin may log startup warnings when in-memory rate limiting is detected outside tests.
 
@@ -60,7 +95,10 @@ When `rate_limit_config` is set, throttled endpoints return **429** with **`Retr
 
 ## Testing vs production
 
+- See the [testing guide](guides/testing.md) for the canonical plugin-backed pytest recipe.
 - `LITESTAR_AUTH_TESTING=1` is **only** for automated tests; the library rejects non-pytest use at startup.
+- Request-scoped DB-session sharing is still per HTTP request in tests. Separate login, refresh, authenticated, and logout requests each get their own request-local session.
+- Single-process testing conveniences such as in-memory JWT revocation, in-memory rate limiting, and relaxed TOTP store requirements do not become production-safe because testing mode is enabled.
 
 ## Documentation builds
 

@@ -18,9 +18,17 @@ from litestar_auth.controllers.totp import (
     TotpVerifyRequest,
 )
 from litestar_auth.controllers.verify import RequestVerifyToken, VerifyToken
-from litestar_auth.schemas import UserCreate, UserRead, UserUpdate
+from litestar_auth.schemas import UserCreate, UserPasswordField, UserRead, UserUpdate
 
 pytestmark = pytest.mark.unit
+
+
+class CustomRegistrationSchema(msgspec.Struct):
+    """Custom registration payload reusing the canonical public password field."""
+
+    email: str
+    password: UserPasswordField
+    display_name: str
 
 
 def _field_meta(schema_type: type[msgspec.Struct], field_name: str) -> msgspec.Meta:
@@ -106,6 +114,59 @@ def test_user_create_rejects_password_shorter_than_config_default_minimum() -> N
         )
 
 
+def test_custom_registration_schema_reuses_public_password_bounds() -> None:
+    """Custom registration schemas can reuse the canonical public password field alias."""
+    payload = msgspec.json.decode(
+        msgspec.json.encode(
+            {
+                "email": "creator@example.com",
+                "password": "p" * DEFAULT_MINIMUM_PASSWORD_LENGTH,
+                "display_name": "Creator",
+            },
+        ),
+        type=CustomRegistrationSchema,
+    )
+
+    assert payload.password == "p" * DEFAULT_MINIMUM_PASSWORD_LENGTH
+
+    max_payload = msgspec.json.decode(
+        msgspec.json.encode(
+            {
+                "email": "creator@example.com",
+                "password": "p" * MAX_PASSWORD_LENGTH,
+                "display_name": "Creator",
+            },
+        ),
+        type=CustomRegistrationSchema,
+    )
+
+    assert max_payload.password == "p" * MAX_PASSWORD_LENGTH
+
+    with pytest.raises(msgspec.ValidationError):
+        msgspec.json.decode(
+            msgspec.json.encode(
+                {
+                    "email": "creator@example.com",
+                    "password": "p" * (DEFAULT_MINIMUM_PASSWORD_LENGTH - 1),
+                    "display_name": "Creator",
+                },
+            ),
+            type=CustomRegistrationSchema,
+        )
+
+    with pytest.raises(msgspec.ValidationError):
+        msgspec.json.decode(
+            msgspec.json.encode(
+                {
+                    "email": "creator@example.com",
+                    "password": "p" * (MAX_PASSWORD_LENGTH + 1),
+                    "display_name": "Creator",
+                },
+            ),
+            type=CustomRegistrationSchema,
+        )
+
+
 def test_user_update_omits_unset_optional_fields() -> None:
     """UserUpdate excludes defaulted optional fields from serialized output."""
     payload = UserUpdate(email="updated@example.com", is_verified=True)
@@ -159,6 +220,7 @@ def test_login_credentials_preserve_identifier_length_limits() -> None:
     [
         (UserCreate, "password", DEFAULT_MINIMUM_PASSWORD_LENGTH),
         (UserUpdate, "password", DEFAULT_MINIMUM_PASSWORD_LENGTH),
+        (CustomRegistrationSchema, "password", DEFAULT_MINIMUM_PASSWORD_LENGTH),
         (LoginCredentials, "password", 1),
         (ResetPassword, "password", 1),
         (TotpEnableRequest, "password", 1),

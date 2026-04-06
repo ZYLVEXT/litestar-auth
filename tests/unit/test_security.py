@@ -6,10 +6,11 @@ import logging
 import secrets
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
-from typing import cast
+from typing import Annotated, cast, get_args, get_origin, get_type_hints
 from unittest.mock import AsyncMock, patch
 
 import jwt
+import msgspec
 import pytest
 
 import litestar_auth.config as config_module
@@ -17,10 +18,18 @@ from litestar_auth.exceptions import InvalidResetPasswordTokenError, InvalidVeri
 from litestar_auth.manager import MAX_PASSWORD_LENGTH, RESET_PASSWORD_TOKEN_AUDIENCE, require_password_length
 from litestar_auth.manager import logger as manager_logger
 from litestar_auth.password import PasswordHelper
+from litestar_auth.schemas import UserCreate, UserPasswordField, UserUpdate
 from litestar_auth.totp import verify_totp
 from tests.unit.test_manager import TrackingUserManager, _build_user
 
 pytestmark = pytest.mark.unit
+
+
+class CustomRegistrationSchema(msgspec.Struct):
+    """Custom registration payload reusing the canonical public password field."""
+
+    email: str
+    password: UserPasswordField
 
 
 def _full_claims(**overrides: object) -> dict[str, object]:
@@ -38,6 +47,26 @@ def _full_claims(**overrides: object) -> dict[str, object]:
     }
     base.update(overrides)
     return base
+
+
+def _field_meta(schema_type: type[msgspec.Struct], field_name: str) -> msgspec.Meta:
+    """Return the msgspec metadata attached to a struct field annotation.
+
+    Raises:
+        AssertionError: If the field annotation does not expose ``msgspec.Meta``.
+    """
+    annotation = get_type_hints(schema_type, include_extras=True)[field_name]
+
+    for candidate in (annotation, *get_args(annotation)):
+        value = getattr(candidate, "__value__", candidate)
+        if get_origin(value) is not Annotated:
+            continue
+
+        _, meta = get_args(value)
+        return meta
+
+    msg = f"{schema_type.__name__}.{field_name} is missing msgspec metadata."
+    raise AssertionError(msg)
 
 
 @pytest.mark.parametrize(
@@ -125,6 +154,25 @@ def test_password_length_exports_share_config_implementation() -> None:
     assert require_password_length.__module__ == config_module.require_password_length.__module__
     assert require_password_length.__defaults__ == config_module.require_password_length.__defaults__
     assert require_password_length.__kwdefaults__ == config_module.require_password_length.__kwdefaults__
+
+
+@pytest.mark.parametrize("schema_type", [UserCreate, UserUpdate, CustomRegistrationSchema])
+def test_default_password_validator_matches_registration_schema_bounds(
+    schema_type: type[msgspec.Struct],
+) -> None:
+    """The default runtime validator stays aligned with registration-schema metadata."""
+    metadata = _field_meta(schema_type, "password")
+    minimum_length = cast("int", metadata.min_length)
+    maximum_length = cast("int", metadata.max_length)
+
+    require_password_length("p" * minimum_length)
+    require_password_length("p" * maximum_length)
+
+    with pytest.raises(ValueError, match=rf"at least {minimum_length}"):
+        require_password_length("p" * (minimum_length - 1))
+
+    with pytest.raises(ValueError, match=rf"at most {maximum_length}"):
+        require_password_length("p" * (maximum_length + 1))
 
 
 @pytest.mark.parametrize(

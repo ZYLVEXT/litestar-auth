@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, Self, cast
+from typing import TYPE_CHECKING, Any, Protocol, Self, cast
 
 from sqlalchemy.orm import Session as SASession
 
@@ -14,6 +14,35 @@ if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
     from sqlalchemy.orm.session import ForUpdateParameter
     from sqlalchemy.sql.base import Executable
+
+
+class SupportsRequestSessionLifecycle(Protocol):
+    """Structural contract for request-managed session objects used by the plugin."""
+
+    async def commit(self) -> None:
+        """Commit the current request-scoped unit of work."""
+
+    async def rollback(self) -> None:
+        """Roll back the current request-scoped unit of work."""
+
+    async def close(self) -> None:
+        """Release request-scoped session resources."""
+
+
+class SupportsRequestSessionFactory(Protocol):
+    """Structural contract for plugin-compatible request session factories."""
+
+    def __call__(self) -> SupportsRequestSessionLifecycle:
+        """Return a request-scoped session object."""
+
+
+def assert_structural_session_factory[T: SupportsRequestSessionFactory](factory: T) -> T:
+    """Preserve a concrete factory type while asserting the plugin's runtime contract.
+
+    Returns:
+        The same factory, narrowed only by the structural compatibility check.
+    """
+    return factory
 
 
 class AsyncSessionAdapter:

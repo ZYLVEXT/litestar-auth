@@ -7,6 +7,16 @@ from litestar_auth.models import User, OAuthAccount
 from litestar_auth.db.sqlalchemy import SQLAlchemyUserDatabase
 ```
 
+For the bundled `AccessToken` / `RefreshToken` ORM tables, keep mapper registration under the models package:
+
+```python
+from litestar_auth.models import import_token_orm_models
+
+AccessToken, RefreshToken = import_token_orm_models()
+```
+
+Call that helper explicitly during metadata bootstrap or Alembic-style autogenerate setup when your app uses the bundled token tables. The older `from litestar_auth.authentication.strategy import import_token_orm_models` path remains supported only as a compatibility import for existing code, and the helper is intentionally not re-exported from `litestar_auth`.
+
 The canonical opaque DB-token entrypoint is also exported from the root package as `DatabaseTokenAuthConfig`.
 
 For OAuth, treat root-package re-exports as compatibility aliases. The canonical login-helper import is `litestar_auth.oauth.create_provider_oauth_controller`, while `litestar_auth.controllers.create_oauth_controller` and `create_oauth_associate_controller` are the advanced escape hatch for custom route tables.
@@ -15,6 +25,8 @@ Canonical opaque DB-token wiring:
 
 ```python
 from uuid import UUID
+
+from litestar import Litestar
 
 from litestar_auth import (
     DatabaseTokenAuthConfig,
@@ -37,6 +49,8 @@ config = LitestarAuthConfig[User, UUID].with_database_token_auth(
 )
 app = Litestar(plugins=[LitestarAuth(config)])
 ```
+
+In that example, `session_maker` is any compatible request-session factory callable (`session_maker() -> AsyncSession`). `async_sessionmaker(...)` is a common implementation, but not a requirement.
 
 If you previously built the DB bearer backend by hand with `AuthenticationBackend(..., BearerTransport(), DatabaseTokenStrategy(...))`, migrate to the preset above. Keep manual backends for multi-backend or custom-transport cases.
 

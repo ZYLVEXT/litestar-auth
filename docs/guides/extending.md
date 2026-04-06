@@ -26,6 +26,22 @@ Factory functions such as `create_auth_controller` live in `litestar_auth.contro
 - Provide custom **msgspec** schemas via [`litestar_auth.schemas`](../api/schemas.md#user-crud-schemas) or your own structs wired through `user_create_schema`, `user_update_schema`, and `user_read_schema` for registration and user CRUD surfaces.
 - Fork behavior inside your manager rather than replacing controllers first.
 
+If an app-owned `user_create_schema` or `user_update_schema` keeps a `password` field, import `UserPasswordField` from `litestar_auth.schemas` instead of duplicating `msgspec.Meta(min_length=12, max_length=128)` locally:
+
+```python
+import msgspec
+
+from litestar_auth.schemas import UserPasswordField
+
+
+class ExtendedUserCreate(msgspec.Struct):
+    email: str
+    password: UserPasswordField
+    display_name: str
+```
+
+That alias only keeps the schema metadata aligned with the built-in `UserCreate` and `UserUpdate` structs. The default runtime validator still enforces password length through `require_password_length`, and `password_validator_factory` remains the extension point for stricter runtime policy.
+
 `user_create_schema`, `user_update_schema`, and `user_read_schema` do not replace the built-in login, verification, reset-password, refresh, or TOTP request payloads. If you need different field names for those routes, mount or wrap the relevant controller factory instead of expecting `login_identifier` or `user_*_schema` to rename `identifier`, `email`, `token`, `refresh_token`, `pending_token`, or `code`.
 
 ## Multiple backends

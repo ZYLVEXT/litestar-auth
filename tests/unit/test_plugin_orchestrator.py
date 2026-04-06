@@ -373,6 +373,50 @@ def test_on_app_init_allows_missing_oauth_token_encryption_key_in_testing(
     assert not any(issubclass(record.category, SecurityWarning) for record in records)
 
 
+def test_on_app_init_testing_recipe_suppresses_single_process_security_warnings(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Pytest-only testing mode keeps the documented single-process recipe warning-free."""
+    monkeypatch.setenv("LITESTAR_AUTH_TESTING", "1")
+    monkeypatch.setenv("PYTEST_CURRENT_TEST", "tests/unit/test_plugin_orchestrator.py::test_example")
+    config = _minimal_config(
+        backends=[
+            AuthenticationBackend[ExampleUser, UUID](
+                name="cookie",
+                transport=CookieTransport(secure=False),
+                strategy=cast("Any", InMemoryTokenStrategy(token_prefix="cookie-testing")),
+            ),
+            AuthenticationBackend[ExampleUser, UUID](
+                name="jwt",
+                transport=BearerTransport(),
+                strategy=cast("Any", JWTStrategy(secret="a" * 32, algorithm="HS256")),
+            ),
+        ],
+    )
+    config.csrf_secret = "c" * 32
+    config.oauth_config = OAuthConfig(oauth_providers=[("github", object())])
+    config.rate_limit_config = AuthRateLimitConfig(
+        login=EndpointRateLimit(
+            backend=InMemoryRateLimiter(max_attempts=3, window_seconds=60),
+            scope="ip",
+            namespace="login",
+        ),
+    )
+    config.totp_config = TotpConfig(
+        totp_pending_secret="x" * 32,
+        totp_used_tokens_store=InMemoryUsedTotpCodeStore(),
+    )
+    config.user_manager_kwargs["totp_secret_key"] = Fernet.generate_key().decode()
+    plugin = LitestarAuth(config)
+
+    with warnings.catch_warnings(record=True) as records:
+        warnings.simplefilter("always")
+        result = plugin.on_app_init(AppConfig())
+
+    assert result is not None
+    assert not any(issubclass(record.category, SecurityWarning) for record in records)
+
+
 def test_register_dependencies_delegates_with_bound_provider_methods() -> None:
     """Dependency registration passes the plugin's bound provider methods through unchanged."""
     plugin = LitestarAuth(_minimal_config())

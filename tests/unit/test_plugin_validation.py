@@ -448,6 +448,16 @@ def test_validate_backend_strategy_security_allows_nondurable_jwt_override(
     _validate_backend_strategy_security(config)
 
 
+def test_validate_backend_strategy_security_allows_nondurable_jwt_revocation_in_testing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Pytest-only testing mode preserves the single-process JWT denylist branch."""
+    monkeypatch.setattr(validation_module, "is_testing", lambda: True)
+    config = _minimal_config(backends=[_jwt_backend()])
+
+    _validate_backend_strategy_security(config)
+
+
 def test_validate_session_maker_or_external_db_session_requires_one_source() -> None:
     """Startup requires either a session factory or an external session dependency."""
     config = _minimal_config()

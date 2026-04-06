@@ -13,9 +13,12 @@ from litestar_auth.authentication.authenticator import Authenticator
 from litestar_auth.authentication.backend import AuthenticationBackend
 from litestar_auth.authentication.middleware import LitestarAuthMiddleware
 from litestar_auth.authentication.transport.bearer import BearerTransport
+from litestar_auth.config import DEFAULT_MINIMUM_PASSWORD_LENGTH, MAX_PASSWORD_LENGTH
 from litestar_auth.controllers import create_register_controller, create_users_controller
+from litestar_auth.exceptions import ErrorCode
 from litestar_auth.manager import BaseUserManager
 from litestar_auth.password import PasswordHelper
+from litestar_auth.schemas import UserPasswordField  # noqa: TC001
 from tests._helpers import auth_middleware_get_request_session, litestar_app_with_user_manager
 from tests.integration.conftest import (
     DummySessionMaker,
@@ -31,6 +34,7 @@ if TYPE_CHECKING:
 pytestmark = pytest.mark.integration
 HTTP_CREATED = 201
 HTTP_OK = 200
+HTTP_UNPROCESSABLE_ENTITY = 422
 VERIFICATION_TOKEN_SECRET = "verify-secret-1234567890-1234567890"
 
 
@@ -38,7 +42,7 @@ class ExtendedUserCreate(msgspec.Struct):
     """Custom registration payload with an extra profile field."""
 
     email: str
-    password: str
+    password: UserPasswordField
     bio: str
 
 
@@ -57,7 +61,7 @@ class ExtendedUserUpdate(msgspec.Struct, omit_defaults=True):
     """Custom partial-update payload with an extra profile field."""
 
     email: str | None = None
-    password: str | None = None
+    password: UserPasswordField | None = None
     is_active: bool | None = None
     is_verified: bool | None = None
     is_superuser: bool | None = None
@@ -170,11 +174,14 @@ def test_custom_msgspec_schemas_publish_request_bodies_in_openapi(
     assert register_request_body is not None
     assert update_me_request_body is not None
     assert update_user_request_body is not None
+    assert register_schema.properties is not None
     assert next(iter(register_request_body.content.values())).schema.ref == "#/components/schemas/ExtendedUserCreate"
     assert next(iter(update_me_request_body.content.values())).schema.ref == "#/components/schemas/ExtendedUserUpdate"
     assert next(iter(update_user_request_body.content.values())).schema.ref == "#/components/schemas/ExtendedUserUpdate"
     assert "bio" in (register_schema.properties or {})
     assert "bio" in (update_schema.properties or {})
+    assert register_schema.properties["password"].min_length == DEFAULT_MINIMUM_PASSWORD_LENGTH
+    assert register_schema.properties["password"].max_length == MAX_PASSWORD_LENGTH
 
 
 async def test_custom_msgspec_schemas_extend_register_and_users_responses(
@@ -237,6 +244,89 @@ async def test_custom_msgspec_schemas_extend_register_and_users_responses(
     list_response = await test_client.get("/users", headers={"Authorization": f"Bearer {admin_token}"})
     assert list_response.status_code == HTTP_OK
     assert list_response.json()["items"][1]["bio"] == "updated-bio"
+
+
+async def test_custom_registration_schema_reuses_builtin_password_bounds(
+    client: tuple[
+        AsyncTestClient[Litestar],
+        InMemoryUserDatabase,
+        UsersControllerManager,
+        InMemoryTokenStrategy,
+        ExampleUser,
+    ],
+) -> None:
+    """Custom registration schemas can reuse the built-in password-length contract."""
+    test_client, user_db, *_ = client
+    minimum_password = "p" * DEFAULT_MINIMUM_PASSWORD_LENGTH
+    maximum_password = "p" * MAX_PASSWORD_LENGTH
+
+    minimum_response = await test_client.post(
+        "/auth/register",
+        json={"email": "minimum@example.com", "password": minimum_password, "bio": "minimum"},
+    )
+    maximum_response = await test_client.post(
+        "/auth/register",
+        json={"email": "maximum@example.com", "password": maximum_password, "bio": "maximum"},
+    )
+    short_response = await test_client.post(
+        "/auth/register",
+        json={
+            "email": "short@example.com",
+            "password": "p" * (DEFAULT_MINIMUM_PASSWORD_LENGTH - 1),
+            "bio": "short",
+        },
+    )
+    long_response = await test_client.post(
+        "/auth/register",
+        json={"email": "long@example.com", "password": "p" * (MAX_PASSWORD_LENGTH + 1), "bio": "long"},
+    )
+
+    assert minimum_response.status_code == HTTP_CREATED
+    assert maximum_response.status_code == HTTP_CREATED
+    assert short_response.status_code == HTTP_UNPROCESSABLE_ENTITY
+    assert long_response.status_code == HTTP_UNPROCESSABLE_ENTITY
+    assert short_response.json()["extra"]["code"] == ErrorCode.REQUEST_BODY_INVALID
+    assert long_response.json()["extra"]["code"] == ErrorCode.REQUEST_BODY_INVALID
+    assert await user_db.get_by_email("minimum@example.com") is not None
+    assert await user_db.get_by_email("maximum@example.com") is not None
+    assert await user_db.get_by_email("short@example.com") is None
+    assert await user_db.get_by_email("long@example.com") is None
+
+
+async def test_custom_update_schema_reuses_builtin_password_bounds(
+    client: tuple[
+        AsyncTestClient[Litestar],
+        InMemoryUserDatabase,
+        UsersControllerManager,
+        InMemoryTokenStrategy,
+        ExampleUser,
+    ],
+) -> None:
+    """Custom update schemas can reuse the built-in password-length contract."""
+    test_client, _, _, strategy, admin_user = client
+    token = await strategy.write_token(admin_user)
+    headers = {"Authorization": f"Bearer {token}"}
+    minimum_response = await test_client.patch(
+        "/users/me",
+        headers=headers,
+        json={"password": "p" * DEFAULT_MINIMUM_PASSWORD_LENGTH},
+    )
+    short_response = await test_client.patch(
+        "/users/me",
+        headers=headers,
+        json={"password": "p" * (DEFAULT_MINIMUM_PASSWORD_LENGTH - 1)},
+    )
+    long_response = await test_client.patch(
+        "/users/me",
+        headers=headers,
+        json={"password": "p" * (MAX_PASSWORD_LENGTH + 1)},
+    )
+
+    assert minimum_response.status_code == HTTP_OK
+    assert short_response.status_code == HTTP_UNPROCESSABLE_ENTITY
+    assert long_response.status_code == HTTP_UNPROCESSABLE_ENTITY
+    assert short_response.json()["extra"]["code"] == ErrorCode.REQUEST_BODY_INVALID
+    assert long_response.json()["extra"]["code"] == ErrorCode.REQUEST_BODY_INVALID
 
 
 def test_controllers_reject_non_msgspec_custom_schemas() -> None:

@@ -24,7 +24,7 @@ Examples:
             ),
             user_model=User,
             user_manager_class=YourUserManager,
-            session_maker=async_session_factory,
+            session_maker=session_maker,  # e.g. async_sessionmaker(...)
             user_manager_kwargs={
                 "verification_token_secret": "replace-with-32+-char-secret",
                 "reset_password_token_secret": "replace-with-32+-char-secret",

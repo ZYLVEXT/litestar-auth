@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import importlib
+from collections.abc import Sequence
 from datetime import timedelta
 from functools import partial
-from typing import Any, Literal, cast
+from typing import TYPE_CHECKING, Any, Literal, cast, get_type_hints
 from uuid import UUID
 
+import msgspec
 import pytest
 
 import litestar_auth._plugin.config as plugin_config_module
@@ -23,11 +25,14 @@ from litestar_auth._plugin.config import (
     user_manager_accepts_login_identifier,
     user_manager_accepts_password_validator,
 )
+from litestar_auth._plugin.scoped_session import SessionFactory
 from litestar_auth.authentication.backend import AuthenticationBackend
 from litestar_auth.authentication.transport.bearer import BearerTransport
 from litestar_auth.config import DEFAULT_MINIMUM_PASSWORD_LENGTH
-from litestar_auth.manager import require_password_length
+from litestar_auth.manager import BaseUserManager, require_password_length
 from litestar_auth.plugin import LitestarAuthConfig
+from litestar_auth.ratelimit import AuthRateLimitConfig
+from tests.e2e.conftest import assert_structural_session_factory
 from tests.integration.test_orchestrator import (
     DummySession,
     DummySessionMaker,
@@ -36,6 +41,9 @@ from tests.integration.test_orchestrator import (
     InMemoryUserDatabase,
     PluginUserManager,
 )
+
+if TYPE_CHECKING:
+    from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 pytestmark = pytest.mark.unit
 
@@ -73,7 +81,10 @@ def _minimal_config(
         backends=strategies,
         user_model=ExampleUser,
         user_manager_class=user_manager_class or PluginUserManager,
-        session_maker=cast("Any", DummySessionMaker()),
+        session_maker=cast(
+            "async_sessionmaker[AsyncSession]",
+            assert_structural_session_factory(DummySessionMaker()),
+        ),
         user_db_factory=lambda _session: user_db,
         user_manager_kwargs={
             "verification_token_secret": "x" * 32,
@@ -165,6 +176,7 @@ def test_litestar_auth_config_database_token_auth_defaults_to_none() -> None:
 def test_with_database_token_auth_builds_canonical_db_bearer_backend() -> None:
     """The preset builder creates the canonical bearer + database-token backend without a startup session."""
     configured_token_bytes = 48
+    session_maker = assert_structural_session_factory(DummySessionMaker())
     config = LitestarAuthConfig[ExampleUser, UUID].with_database_token_auth(
         database_token_auth=DatabaseTokenAuthConfig(
             token_hash_secret="x" * 40,
@@ -175,7 +187,7 @@ def test_with_database_token_auth_builds_canonical_db_bearer_backend() -> None:
         ),
         user_model=ExampleUser,
         user_manager_class=PluginUserManager,
-        session_maker=cast("Any", DummySessionMaker()),
+        session_maker=cast("async_sessionmaker[AsyncSession]", session_maker),
         user_db_factory=lambda _session: InMemoryUserDatabase([]),
         user_manager_kwargs={
             "verification_token_secret": "x" * 32,
@@ -201,6 +213,7 @@ def test_with_database_token_auth_builds_canonical_db_bearer_backend() -> None:
     assert backend.strategy.refresh_max_age == timedelta(hours=12)
     assert backend.strategy.token_bytes == configured_token_bytes
     assert backend.strategy.accept_legacy_plaintext_tokens is True
+    assert require_session_maker(config) is session_maker
 
 
 def test_request_scoped_database_token_session_proxy_requires_bound_session() -> None:
@@ -231,7 +244,10 @@ def test_with_database_token_auth_rejects_manual_backends() -> None:
             backends=[backend],
             user_model=ExampleUser,
             user_manager_class=PluginUserManager,
-            session_maker=cast("Any", DummySessionMaker()),
+            session_maker=cast(
+                "async_sessionmaker[AsyncSession]",
+                assert_structural_session_factory(DummySessionMaker()),
+            ),
             user_db_factory=lambda _session: InMemoryUserDatabase([]),
             user_manager_kwargs={
                 "verification_token_secret": "x" * 32,
@@ -415,10 +431,33 @@ def test_build_user_manager_skips_login_identifier_for_legacy_manager_without_su
 
 
 def test_require_session_maker_returns_configured_session_maker() -> None:
-    """require_session_maker returns the configured factory unchanged on the success path."""
+    """require_session_maker returns a structurally compatible configured factory unchanged."""
     config = _minimal_config()
 
     assert require_session_maker(config) is config.session_maker
+
+
+def test_require_session_maker_annotations_are_runtime_resolvable() -> None:
+    """Runtime type-hint resolution for require_session_maker keeps the structural contract intact."""
+    hints = get_type_hints(require_session_maker)
+
+    assert hints["return"] is SessionFactory
+
+
+def test_litestar_auth_config_session_maker_annotation_is_runtime_resolvable() -> None:
+    """Runtime type-hint resolution for LitestarAuthConfig includes SessionFactory."""
+    hints = get_type_hints(
+        LitestarAuthConfig,
+        localns={
+            "Sequence": Sequence,
+            "AuthenticationBackend": AuthenticationBackend,
+            "BaseUserManager": BaseUserManager,
+            "AuthRateLimitConfig": AuthRateLimitConfig,
+            "msgspec": msgspec,
+        },
+    )
+
+    assert hints["session_maker"] == SessionFactory | None
 
 
 def test_litestar_auth_config_builds_deferred_default_user_db_factory() -> None:
@@ -432,7 +471,10 @@ def test_litestar_auth_config_builds_deferred_default_user_db_factory() -> None:
         backends=[default_backend],
         user_model=ExampleUser,
         user_manager_class=PluginUserManager,
-        session_maker=cast("Any", DummySessionMaker()),
+        session_maker=cast(
+            "async_sessionmaker[AsyncSession]",
+            assert_structural_session_factory(DummySessionMaker()),
+        ),
         user_manager_kwargs={
             "verification_token_secret": "x" * 32,
             "reset_password_token_secret": "y" * 32,
@@ -476,7 +518,10 @@ def _invalid_db_session_config_kwargs(invalid_db_session_key: str) -> dict[str, 
         "backends": [default_backend],
         "user_model": ExampleUser,
         "user_manager_class": PluginUserManager,
-        "session_maker": cast("Any", DummySessionMaker()),
+        "session_maker": cast(
+            "async_sessionmaker[AsyncSession]",
+            assert_structural_session_factory(DummySessionMaker()),
+        ),
         "user_db_factory": lambda _session: user_db,
         "user_manager_kwargs": {
             "verification_token_secret": "x" * 32,
@@ -511,7 +556,10 @@ def test_litestar_auth_config_rejects_invalid_login_identifier() -> None:
             backends=[default_backend],
             user_model=ExampleUser,
             user_manager_class=PluginUserManager,
-            session_maker=cast("Any", DummySessionMaker()),
+            session_maker=cast(
+                "async_sessionmaker[AsyncSession]",
+                assert_structural_session_factory(DummySessionMaker()),
+            ),
             user_db_factory=lambda _session: user_db,
             user_manager_kwargs={
                 "verification_token_secret": "x" * 32,

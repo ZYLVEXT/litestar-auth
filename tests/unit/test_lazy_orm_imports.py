@@ -125,6 +125,32 @@ def test_models_package_token_registration_helper_keeps_user_and_oauth_submodule
     assert proc.returncode == 0, proc.stdout + proc.stderr
 
 
+def test_models_package_token_registration_helper_stays_lazy_until_reference_mappers_are_loaded() -> None:
+    """The canonical token helper stays lazy until the reference ORM submodules are imported explicitly."""
+    proc = _run_isolated(
+        "import sys\n"
+        "from sqlalchemy import inspect\n"
+        "import litestar_auth.authentication.strategy as strategy\n"
+        "import litestar_auth.models as models\n"
+        "access_token_model, refresh_token_model = models.import_token_orm_models()\n"
+        "assert strategy.import_token_orm_models() == (access_token_model, refresh_token_model)\n"
+        "assert 'litestar_auth.models.oauth' not in sys.modules\n"
+        "assert 'litestar_auth.models.user' not in sys.modules\n"
+        "from litestar_auth.models.oauth import OAuthAccount\n"
+        "assert OAuthAccount.__module__ == 'litestar_auth.models.oauth'\n"
+        "assert 'litestar_auth.models.oauth' in sys.modules\n"
+        "assert 'litestar_auth.models.user' not in sys.modules\n"
+        "from litestar_auth.models import User\n"
+        "relationships = inspect(User).relationships\n"
+        "assert 'litestar_auth.models.user' in sys.modules\n"
+        "assert relationships['access_tokens'].mapper.class_ is access_token_model\n"
+        "assert relationships['refresh_tokens'].mapper.class_ is refresh_token_model\n"
+        "assert relationships['oauth_accounts'].mapper.class_ is OAuthAccount\n"
+        "assert strategy.import_token_orm_models() == (access_token_model, refresh_token_model)\n",
+    )
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+
+
 def test_import_strategy_package_keeps_models_namespace_unloaded() -> None:
     """Importing ``litestar_auth.authentication.strategy`` keeps the compatibility path model-lazy."""
     proc = _run_isolated(

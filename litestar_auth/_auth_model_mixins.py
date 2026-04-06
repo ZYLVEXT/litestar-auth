@@ -36,13 +36,41 @@ class UserAuthRelationshipMixin:
 
     Override the ``auth_*_model`` class variables when a custom user model needs
     to point at custom token or OAuth classes instead of the bundled defaults.
-    Set a hook to ``None`` when the custom user only composes part of the auth
-    model family and should omit that inverse relationship entirely.
+    Configure the supported relationship-option hooks when a custom user model
+    needs non-default loader strategies or an explicit OAuth ``foreign_keys``
+    setting without redefining the ``declared_attr`` methods. Set a model hook
+    to ``None`` when the custom user only composes part of the auth model family
+    and should omit that inverse relationship entirely.
     """
 
     auth_access_token_model: ClassVar[str | None] = "AccessToken"  # noqa: S105
     auth_refresh_token_model: ClassVar[str | None] = "RefreshToken"  # noqa: S105
     auth_oauth_account_model: ClassVar[str | None] = "OAuthAccount"
+    auth_token_relationship_lazy: ClassVar[str | None] = None
+    auth_oauth_account_relationship_lazy: ClassVar[str | None] = None
+    auth_oauth_account_relationship_foreign_keys: ClassVar[str | None] = None
+
+    @staticmethod
+    def _relationship(
+        target: str | None,
+        *,
+        lazy: str | None = None,
+        foreign_keys: str | None = None,
+    ) -> object | None:
+        """Build a configured user-side relationship when the target is enabled.
+
+        Returns:
+            The relationship descriptor, or ``None`` when the target is disabled.
+        """
+        if target is None:
+            return None
+
+        relationship_kwargs: dict[str, Any] = {"back_populates": _USER_RELATIONSHIP_NAME}
+        if lazy is not None:
+            relationship_kwargs["lazy"] = lazy
+        if foreign_keys is not None:
+            relationship_kwargs["foreign_keys"] = foreign_keys
+        return relationship(target, **relationship_kwargs)
 
     @declared_attr
     def access_tokens(cls):  # noqa: ANN202, N805
@@ -51,10 +79,10 @@ class UserAuthRelationshipMixin:
         Returns:
             The relationship descriptor, or ``None`` when access-token integration is disabled.
         """
-        if cls.auth_access_token_model is None:
-            return None
-
-        return relationship(cls.auth_access_token_model, back_populates=_USER_RELATIONSHIP_NAME)
+        return cls._relationship(
+            cls.auth_access_token_model,
+            lazy=cls.auth_token_relationship_lazy,
+        )
 
     @declared_attr
     def refresh_tokens(cls):  # noqa: ANN202, N805
@@ -63,10 +91,10 @@ class UserAuthRelationshipMixin:
         Returns:
             The relationship descriptor, or ``None`` when refresh-token integration is disabled.
         """
-        if cls.auth_refresh_token_model is None:
-            return None
-
-        return relationship(cls.auth_refresh_token_model, back_populates=_USER_RELATIONSHIP_NAME)
+        return cls._relationship(
+            cls.auth_refresh_token_model,
+            lazy=cls.auth_token_relationship_lazy,
+        )
 
     @declared_attr
     def oauth_accounts(cls):  # noqa: ANN202, N805
@@ -75,10 +103,11 @@ class UserAuthRelationshipMixin:
         Returns:
             The relationship descriptor, or ``None`` when OAuth-account integration is disabled.
         """
-        if cls.auth_oauth_account_model is None:
-            return None
-
-        return relationship(cls.auth_oauth_account_model, back_populates=_USER_RELATIONSHIP_NAME)
+        return cls._relationship(
+            cls.auth_oauth_account_model,
+            lazy=cls.auth_oauth_account_relationship_lazy,
+            foreign_keys=cls.auth_oauth_account_relationship_foreign_keys,
+        )
 
 
 class _TokenModelMixin:

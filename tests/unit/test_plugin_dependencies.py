@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import importlib
 import inspect
-from typing import Any, cast
+from typing import TYPE_CHECKING, Any, cast, get_type_hints
 from uuid import UUID
 
 import pytest
@@ -33,8 +33,10 @@ from litestar_auth._plugin.dependencies import (
     register_dependencies,
     register_exception_handlers,
 )
+from litestar_auth._plugin.scoped_session import SessionFactory
 from litestar_auth.authentication.backend import AuthenticationBackend
 from litestar_auth.authentication.transport.bearer import BearerTransport
+from tests.e2e.conftest import assert_structural_session_factory
 from tests.integration.test_orchestrator import (
     DummySessionMaker,
     ExampleUser,
@@ -42,6 +44,9 @@ from tests.integration.test_orchestrator import (
     InMemoryUserDatabase,
     PluginUserManager,
 )
+
+if TYPE_CHECKING:
+    from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 pytestmark = pytest.mark.unit
 HTTP_IM_A_TEAPOT = 418
@@ -70,7 +75,10 @@ def _minimal_config() -> LitestarAuthConfig[ExampleUser, UUID]:
                 strategy=cast("Any", InMemoryTokenStrategy(token_prefix="plugin-dependencies")),
             ),
         ],
-        session_maker=cast("Any", DummySessionMaker()),
+        session_maker=cast(
+            "async_sessionmaker[AsyncSession]",
+            assert_structural_session_factory(DummySessionMaker()),
+        ),
         user_model=ExampleUser,
         user_manager_class=PluginUserManager,
         user_db_factory=lambda _session: user_db,
@@ -154,9 +162,9 @@ def test_register_exception_handlers_preserves_existing_handlers() -> None:
 
 
 def test_make_db_session_provide_reuses_scoped_session_within_scope() -> None:
-    """The generated sync provider matches request-scoped session reuse semantics."""
-    session_maker = DummySessionMaker()
-    provider = _make_db_session_provide(cast("Any", session_maker))
+    """The generated sync provider reuses sessions for structurally compatible factories."""
+    session_maker = assert_structural_session_factory(DummySessionMaker())
+    provider = _make_db_session_provide(cast("async_sessionmaker[AsyncSession]", session_maker))
     state = State()
     scope: dict[str, object] = {}
 
@@ -166,6 +174,13 @@ def test_make_db_session_provide_reuses_scoped_session_within_scope() -> None:
 
     assert first_session is second_session
     assert other_scope_session is not first_session
+
+
+def test_make_db_session_provide_annotations_are_runtime_resolvable() -> None:
+    """Runtime type-hint resolution for the DB-session provider keeps SessionFactory available."""
+    hints = get_type_hints(_make_db_session_provide)
+
+    assert hints["session_maker"] is SessionFactory
 
 
 async def test_make_user_manager_dependency_provider_uses_configured_di_key() -> None:

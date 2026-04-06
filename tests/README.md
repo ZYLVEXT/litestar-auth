@@ -1,5 +1,10 @@
 ## Test suite structure
 
+This README is for contributors working in this repository.
+
+- For the canonical app-level recipe when testing a Litestar app that mounts `LitestarAuth`, start with [Testing plugin-backed apps](../docs/guides/testing.md).
+- For the mandatory release-quality verification block before claiming completion or opening a PR, use [Contributing](../docs/contributing.md).
+
 This repository keeps a strict test pyramid by convention **and** by pytest markers.
 
 ### Test levels
@@ -28,7 +33,10 @@ This repository keeps a strict test pyramid by convention **and** by pytest mark
 uv run pytest -m unit
 uv run pytest -m integration
 uv run pytest -m e2e
+uv run pytest -m imports
 ```
+
+For whole-repo verification, run the full command block in [Contributing](../docs/contributing.md).
 
 ### CI intent
 

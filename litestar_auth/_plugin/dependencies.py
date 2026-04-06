@@ -4,17 +4,18 @@ from __future__ import annotations
 
 import asyncio
 import inspect
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, cast
 
 from advanced_alchemy.extensions.litestar import async_autocommit_handler_maker
-from litestar.datastructures.state import State  # noqa: TC002
+from litestar.datastructures.state import State
 from litestar.di import Provide
 from litestar.enums import MediaType
 from litestar.exceptions import ClientException
 from litestar.response import Response
-from litestar.types import Scope  # noqa: TC002
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker  # noqa: TC002
+from litestar.types import Scope
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from litestar_auth._plugin.config import (
     DEFAULT_BACKENDS_DEPENDENCY_KEY,
@@ -24,14 +25,17 @@ from litestar_auth._plugin.config import (
     OAUTH_ASSOCIATE_USER_MANAGER_DEPENDENCY_KEY,
     LitestarAuthConfig,
 )
-from litestar_auth._plugin.scoped_session import get_or_create_scoped_session
+from litestar_auth._plugin.scoped_session import SessionFactory, get_or_create_scoped_session
 from litestar_auth.types import UserProtocol
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncGenerator, Callable
+    from collections.abc import AsyncGenerator
 
     from litestar.config.app import AppConfig
     from litestar.connection import Request
+
+
+type DbSessionProvider = Callable[[State, Scope], AsyncSession]
 
 
 @dataclass(frozen=True, slots=True)
@@ -72,8 +76,8 @@ def register_exception_handlers(app_config: AppConfig) -> None:
 
 
 def _make_db_session_provide(
-    session_maker: async_sessionmaker[AsyncSession],
-) -> Callable[[State, Scope], AsyncSession]:
+    session_maker: SessionFactory,
+) -> DbSessionProvider:
     """Build a sync dependency callable matching Advanced Alchemy ``provide_session`` semantics.
 
     Returns:

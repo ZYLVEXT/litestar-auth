@@ -77,13 +77,23 @@ def build_shared_backend_rate_limit_config() -> AuthRateLimitConfig:
     """Create the current shared-backend auth recipe used by downstream apps.
 
     Returns:
-        Shared endpoint rules backed by a single limiter instance.
+        Shared endpoint rules matching the downstream migration recipe.
     """
-    shared_backend = InMemoryRateLimiter(max_attempts=2, window_seconds=60)
+    credential_backend = InMemoryRateLimiter(max_attempts=2, window_seconds=60)
+    refresh_backend = InMemoryRateLimiter(max_attempts=3, window_seconds=90)
+    totp_backend = InMemoryRateLimiter(max_attempts=2, window_seconds=60)
     return AuthRateLimitConfig.from_shared_backend(
-        shared_backend,
-        enabled=("login", "register", "forgot_password", "totp_verify"),
-        scope_overrides=cast("Any", {"forgot_password": "ip"}),
+        credential_backend,
+        group_backends={"totp": totp_backend, "refresh": refresh_backend},
+        disabled={"verify_token", "request_verify_token"},
+        namespace_overrides={
+            "forgot_password": "forgot_password",
+            "reset_password": "reset_password",
+            "totp_enable": "totp_enable",
+            "totp_confirm_enable": "totp_confirm_enable",
+            "totp_verify": "totp_verify",
+            "totp_disable": "totp_disable",
+        },
     )
 
 
@@ -143,6 +153,36 @@ def build_app(*, rate_limit_config: AuthRateLimitConfig | None = None) -> Litest
         authenticator_factory=lambda _session: Authenticator([backend], user_manager),
     )
     return litestar_app_with_user_manager(user_manager, *handlers, middleware=[middleware])
+
+
+def test_shared_backend_rate_limit_config_matches_downstream_migration_recipe() -> None:
+    """The middleware helper preserves downstream slot routing and legacy namespaces."""
+    config = build_shared_backend_rate_limit_config()
+
+    assert config.login is not None
+    assert config.refresh is not None
+    assert config.register is not None
+    assert config.forgot_password is not None
+    assert config.reset_password is not None
+    assert config.totp_enable is not None
+    assert config.totp_confirm_enable is not None
+    assert config.totp_verify is not None
+    assert config.totp_disable is not None
+    assert config.verify_token is None
+    assert config.request_verify_token is None
+    assert config.login.backend is config.register.backend
+    assert config.login.backend is config.forgot_password.backend
+    assert config.login.backend is config.reset_password.backend
+    assert config.refresh.backend is not config.login.backend
+    assert config.totp_enable.backend is config.totp_verify.backend
+    assert config.totp_confirm_enable.backend is config.totp_verify.backend
+    assert config.totp_disable.backend is config.totp_verify.backend
+    assert config.forgot_password.namespace == "forgot_password"
+    assert config.reset_password.namespace == "reset_password"
+    assert config.totp_enable.namespace == "totp_enable"
+    assert config.totp_confirm_enable.namespace == "totp_confirm_enable"
+    assert config.totp_verify.namespace == "totp_verify"
+    assert config.totp_disable.namespace == "totp_disable"
 
 
 @pytest.fixture

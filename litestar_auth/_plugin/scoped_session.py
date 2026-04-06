@@ -2,14 +2,21 @@
 
 from __future__ import annotations
 
-from typing import Any, cast
+from typing import Any, Protocol, cast
 
 from litestar.datastructures.state import State  # noqa: TC002
 from litestar.types import Scope  # noqa: TC002
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker  # noqa: TC002
+from sqlalchemy.ext.asyncio import AsyncSession  # noqa: TC002
 
 _AA_SCOPE_NAMESPACE: str = "_aa_connection_state"
 SESSION_SCOPE_KEY: str = "_sqlalchemy_db_session"
+
+
+class SessionFactory(Protocol):
+    """Structural contract for plugin-compatible request session factories."""
+
+    def __call__(self) -> AsyncSession:
+        """Return the request-local AsyncSession instance."""
 
 
 def _get_aa_namespace(scope: Scope) -> dict[str, Any]:
@@ -22,7 +29,7 @@ def _get_aa_namespace(scope: Scope) -> dict[str, Any]:
 def get_or_create_scoped_session(
     state: State,
     scope: Scope,
-    session_maker: async_sessionmaker[AsyncSession],
+    session_maker: SessionFactory,
 ) -> AsyncSession:
     """Return the request-scoped session, matching Advanced Alchemy ``provide_session`` semantics.
 
@@ -36,7 +43,7 @@ def get_or_create_scoped_session(
         state: Application state (reserved for parity with ``provide_session``; unused when the
             factory is supplied via closure).
         scope: ASGI connection scope.
-        session_maker: Async SQLAlchemy session factory.
+        session_maker: Callable request-session factory returning an AsyncSession-compatible object.
 
     Returns:
         The shared ``AsyncSession`` for this request.

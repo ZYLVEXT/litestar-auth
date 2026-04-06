@@ -6,12 +6,15 @@ from typing import TYPE_CHECKING, Any, cast
 from uuid import UUID, uuid4
 
 import pytest
+from advanced_alchemy.extensions.litestar import SQLAlchemyAsyncConfig
 from cryptography.fernet import Fernet
 from litestar import Litestar, get
 from litestar.config.app import AppConfig
 from litestar.config.csrf import CSRFConfig
 from litestar.di import Provide
 from litestar.testing import AsyncTestClient
+from sqlalchemy import create_engine
+from sqlalchemy.pool import StaticPool
 
 from litestar_auth._plugin import (
     DEFAULT_BACKENDS_DEPENDENCY_KEY,
@@ -28,6 +31,8 @@ from litestar_auth.authentication.transport.cookie import CookieTransport
 from litestar_auth.exceptions import ConfigurationError
 from litestar_auth.password import PasswordHelper
 from litestar_auth.plugin import LitestarAuth, LitestarAuthConfig
+from tests.e2e.conftest import SessionMaker as E2ESessionMaker
+from tests.e2e.conftest import assert_structural_session_factory
 
 from .test_orchestrator import (
     DummySessionMaker,
@@ -63,7 +68,10 @@ def _minimal_litestar_auth_config(
     ]
     return LitestarAuthConfig[ExampleUser, UUID](
         backends=strategies,
-        session_maker=cast("async_sessionmaker[AsyncSession]", DummySessionMaker()),
+        session_maker=cast(
+            "async_sessionmaker[AsyncSession]",
+            assert_structural_session_factory(DummySessionMaker()),
+        ),
         user_model=ExampleUser,
         user_manager_class=PluginUserManager,
         user_db_factory=lambda _session: user_db,
@@ -138,7 +146,10 @@ def test_validate_config_include_users_requires_list_users() -> None:
 
     config = LitestarAuthConfig[ExampleUser, UUID](
         backends=_minimal_litestar_auth_config().backends,
-        session_maker=cast("async_sessionmaker[AsyncSession]", DummySessionMaker()),
+        session_maker=cast(
+            "async_sessionmaker[AsyncSession]",
+            assert_structural_session_factory(DummySessionMaker()),
+        ),
         user_model=ExampleUser,
         user_manager_class=cast("type[BaseUserManager[ExampleUser, UUID]]", _UserManagerWithoutListUsers),
         user_db_factory=lambda _session: user_db,
@@ -177,7 +188,10 @@ async def test_plugin_propagates_login_identifier_username_to_auth_login() -> No
     )
     config = LitestarAuthConfig[ExampleUser, UUID](
         backends=[backend],
-        session_maker=cast("async_sessionmaker[AsyncSession]", DummySessionMaker()),
+        session_maker=cast(
+            "async_sessionmaker[AsyncSession]",
+            assert_structural_session_factory(DummySessionMaker()),
+        ),
         user_model=ExampleUser,
         user_manager_class=PluginUserManager,
         user_db_factory=lambda _session: user_db,
@@ -387,7 +401,10 @@ async def test_plugin_respects_public_mount_paths_and_dependency_keys() -> None:
     )
     config = LitestarAuthConfig[ExampleUser, UUID](
         backends=[backend],
-        session_maker=cast("async_sessionmaker[AsyncSession]", DummySessionMaker()),
+        session_maker=cast(
+            "async_sessionmaker[AsyncSession]",
+            assert_structural_session_factory(DummySessionMaker()),
+        ),
         user_model=ExampleUser,
         user_manager_class=PluginUserManager,
         user_db_factory=lambda _session: user_db,
@@ -564,6 +581,7 @@ def test_refresh_enabled_bearer_backends_mount_refresh_routes_in_backend_order()
 
 def test_database_token_preset_mounts_primary_auth_routes_without_startup_session() -> None:
     """The preset keeps primary auth paths stable without requiring a startup AsyncSession."""
+    session_maker = assert_structural_session_factory(DummySessionMaker())
     config = LitestarAuthConfig[ExampleUser, UUID].with_database_token_auth(
         database_token_auth=DatabaseTokenAuthConfig(
             token_hash_secret="x" * 40,
@@ -571,7 +589,7 @@ def test_database_token_preset_mounts_primary_auth_routes_without_startup_sessio
         ),
         user_model=ExampleUser,
         user_manager_class=PluginUserManager,
-        session_maker=cast("async_sessionmaker[AsyncSession]", DummySessionMaker()),
+        session_maker=cast("async_sessionmaker[AsyncSession]", session_maker),
         user_db_factory=lambda _session: InMemoryUserDatabase([]),
         user_manager_kwargs={
             "verification_token_secret": "verify-secret-12345678901234567890",
@@ -595,7 +613,7 @@ def test_database_token_preset_mounts_primary_auth_routes_without_startup_sessio
 
 
 async def test_database_token_preset_backends_dependency_uses_request_session() -> None:
-    """The backends dependency exposes request-scoped preset backends bound to the active session."""
+    """The preset backends DI path accepts a SessionMaker-style adapter and binds the request session."""
 
     @get("/preset-backends-probe", sync_to_thread=False)
     def preset_backends_probe(
@@ -609,29 +627,98 @@ async def test_database_token_preset_backends_dependency_uses_request_session() 
             "strategy_session_is_db_session": getattr(backend.strategy, "session", None) is db_session,
         }
 
-    config = LitestarAuthConfig[ExampleUser, UUID].with_database_token_auth(
-        database_token_auth=DatabaseTokenAuthConfig(
-            token_hash_secret="x" * 40,
-            backend_name="opaque-db",
-        ),
-        user_model=ExampleUser,
-        user_manager_class=PluginUserManager,
-        session_maker=cast("async_sessionmaker[AsyncSession]", DummySessionMaker()),
-        user_db_factory=lambda _session: InMemoryUserDatabase([]),
-        user_manager_kwargs={
-            "verification_token_secret": "verify-secret-12345678901234567890",
-            "reset_password_token_secret": "reset-secret-123456789012345678901",
-            "id_parser": UUID,
-        },
-        enable_refresh=True,
-        include_register=False,
-        include_verify=False,
-        include_reset_password=False,
+    engine = create_engine(
+        "sqlite+pysqlite:///:memory:",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
     )
-    app = Litestar(route_handlers=[preset_backends_probe], plugins=[LitestarAuth(config)])
+    try:
+        session_maker = assert_structural_session_factory(E2ESessionMaker(engine))
+        config = LitestarAuthConfig[ExampleUser, UUID].with_database_token_auth(
+            database_token_auth=DatabaseTokenAuthConfig(
+                token_hash_secret="x" * 40,
+                backend_name="opaque-db",
+            ),
+            user_model=ExampleUser,
+            user_manager_class=PluginUserManager,
+            session_maker=session_maker,
+            user_db_factory=lambda _session: InMemoryUserDatabase([]),
+            user_manager_kwargs={
+                "verification_token_secret": "verify-secret-12345678901234567890",
+                "reset_password_token_secret": "reset-secret-123456789012345678901",
+                "id_parser": UUID,
+            },
+            enable_refresh=True,
+            include_register=False,
+            include_verify=False,
+            include_reset_password=False,
+        )
+        app = Litestar(route_handlers=[preset_backends_probe], plugins=[LitestarAuth(config)])
 
-    async with AsyncTestClient(app=app) as client:
-        response = await client.get("/preset-backends-probe")
+        async with AsyncTestClient(app=app) as client:
+            response = await client.get("/preset-backends-probe")
+    finally:
+        engine.dispose()
+
+    assert response.status_code == HTTP_OK
+    assert response.json() == {
+        "backend_names": ["opaque-db"],
+        "strategy_session_is_db_session": True,
+    }
+
+
+async def test_database_token_preset_accepts_advanced_alchemy_session_maker() -> None:
+    """The preset accepts ``SQLAlchemyAsyncConfig.session_maker`` without an adapter cast."""
+
+    @get("/preset-aa-session-maker-probe", sync_to_thread=False)
+    def preset_backends_probe(
+        db_session: object,
+        litestar_auth_backends: object,
+    ) -> dict[str, object]:
+        backends = cast("list[AuthenticationBackend[ExampleUser, UUID]]", litestar_auth_backends)
+        backend = backends[0]
+        return {
+            "backend_names": [configured_backend.name for configured_backend in backends],
+            "strategy_session_is_db_session": getattr(backend.strategy, "session", None) is db_session,
+        }
+
+    engine = create_engine(
+        "sqlite+pysqlite:///:memory:",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
+    try:
+        alchemy = SQLAlchemyAsyncConfig(session_maker=E2ESessionMaker(engine))
+        session_maker = alchemy.session_maker
+        assert session_maker is not None
+
+        config = LitestarAuthConfig[ExampleUser, UUID].with_database_token_auth(
+            database_token_auth=DatabaseTokenAuthConfig(
+                token_hash_secret="x" * 40,
+                backend_name="opaque-db",
+            ),
+            user_model=ExampleUser,
+            user_manager_class=PluginUserManager,
+            session_maker=session_maker,
+            user_db_factory=lambda _session: InMemoryUserDatabase([]),
+            user_manager_kwargs={
+                "verification_token_secret": "verify-secret-12345678901234567890",
+                "reset_password_token_secret": "reset-secret-123456789012345678901",
+                "id_parser": UUID,
+            },
+            enable_refresh=True,
+            include_register=False,
+            include_verify=False,
+            include_reset_password=False,
+        )
+        assert config.session_maker is session_maker
+
+        app = Litestar(route_handlers=[preset_backends_probe], plugins=[LitestarAuth(config)])
+
+        async with AsyncTestClient(app=app) as client:
+            response = await client.get("/preset-aa-session-maker-probe")
+    finally:
+        engine.dispose()
 
     assert response.status_code == HTTP_OK
     assert response.json() == {

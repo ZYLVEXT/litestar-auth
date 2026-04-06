@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING, Any, Protocol, Self, cast
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from litestar_auth._plugin.scoped_session import SessionFactory
 from litestar_auth.config import DEFAULT_MINIMUM_PASSWORD_LENGTH, require_password_length
 from litestar_auth.db.base import BaseUserStore
 from litestar_auth.exceptions import ConfigurationError
@@ -23,7 +24,6 @@ if TYPE_CHECKING:
     from collections.abc import Sequence
 
     import msgspec
-    from sqlalchemy.ext.asyncio import async_sessionmaker
 
     from litestar_auth.authentication.backend import AuthenticationBackend
     from litestar_auth.config import OAuthProviderConfig
@@ -32,6 +32,7 @@ if TYPE_CHECKING:
     from litestar_auth.totp import TotpAlgorithm, UsedTotpCodeStore
 
 type UserDatabaseFactory[UP: UserProtocol[Any], ID] = Callable[[AsyncSession], BaseUserStore[UP, ID]]
+_SESSION_FACTORY_CONTRACT = SessionFactory
 
 DEFAULT_CONFIG_DEPENDENCY_KEY = "litestar_auth_config"
 DEFAULT_USER_MANAGER_DEPENDENCY_KEY = "litestar_auth_user_manager"
@@ -275,7 +276,7 @@ def resolve_password_validator[UP: UserProtocol[Any], ID](
 
 def require_session_maker[UP: UserProtocol[Any], ID](
     config: LitestarAuthConfig[UP, ID],
-) -> async_sessionmaker[AsyncSession]:
+) -> SessionFactory:
     """Return the configured session factory or fail when it is omitted.
 
     Raises:
@@ -449,7 +450,7 @@ class LitestarAuthConfig[UP: UserProtocol[Any], ID]:
     backends: Sequence[AuthenticationBackend[UP, ID]]
     user_model: type[UP]
     user_manager_class: type[BaseUserManager[UP, ID]]
-    session_maker: async_sessionmaker[AsyncSession] | None = None
+    session_maker: SessionFactory | None = None
     user_db_factory: UserDatabaseFactory[UP, ID] | None = None
     user_manager_kwargs: dict[str, Any] = field(default_factory=dict)
     password_validator_factory: PasswordValidatorFactory[UP, ID] | None = None
@@ -497,7 +498,7 @@ class LitestarAuthConfig[UP: UserProtocol[Any], ID]:
         backends: Sequence[AuthenticationBackend[UP, ID]] | None = None,
         user_model: type[UP],
         user_manager_class: type[BaseUserManager[UP, ID]],
-        session_maker: async_sessionmaker[AsyncSession] | None = None,
+        session_maker: SessionFactory | None = None,
         user_db_factory: UserDatabaseFactory[UP, ID] | None = None,
         user_manager_kwargs: dict[str, Any] | None = None,
         password_validator_factory: PasswordValidatorFactory[UP, ID] | None = None,

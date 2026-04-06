@@ -21,15 +21,15 @@ Teams building on [Litestar](https://litestar.dev/) who need registration, login
 | Install & extras | [Installation](install.md) |
 | First working app | [Quickstart](quickstart.md) |
 | Mental model | [Architecture](concepts/architecture.md), [Backends](concepts/backends.md), [Request lifecycle](concepts/request_lifecycle.md) |
-| How-to guides | [Security](guides/security.md), [Registration](guides/registration.md), [OAuth](guides/oauth.md), [TOTP](guides/totp.md), [Rate limiting](guides/rate_limiting.md), [Hooks](guides/hooks.md), [Extending](guides/extending.md) |
+| How-to guides | [Security](guides/security.md), [Registration](guides/registration.md), [OAuth](guides/oauth.md), [TOTP](guides/totp.md), [Rate limiting](guides/rate_limiting.md), [Testing plugin-backed apps](guides/testing.md), [Hooks](guides/hooks.md), [Extending](guides/extending.md) |
 | Moving from fastapi-users | [Concept mapping](guides/from_fastapi_users.md) (optional) |
 | HTTP reference | [HTTP API](http_api.md), [Errors](errors.md) |
 | Config & ops | [Configuration](configuration.md), [Security overview](security.md), [Deployment](deployment.md) |
 | Python API | [Package](api/package.md) and subpages under **Python API** in the nav |
-| Project | [Roadmap](roadmap.md), [Contributing](contributing.md) |
+| Project | [Roadmap](roadmap.md), [Contributing](contributing.md), [Test suite README](https://github.com/ZYLVEXT/litestar-auth/blob/main/tests/README.md) |
 
 !!! note "Tooling and AI agents"
-    Stable entry points for navigation and API surface: this page (documentation map), [HTTP API](http_api.md), [Package overview](api/package.md), and the authoritative `__all__` in `litestar_auth/__init__.py` on your installed version. Maintainer workflows and verification commands are in [Contributing](contributing.md).
+    Stable entry points for navigation and API surface: this page (documentation map), [HTTP API](http_api.md), [Package overview](api/package.md), and the authoritative `__all__` in `litestar_auth/__init__.py` on your installed version. Maintainer workflows and verification commands are in [Contributing](contributing.md); the repo-internal test pyramid and marker guide lives in the [test suite README](https://github.com/ZYLVEXT/litestar-auth/blob/main/tests/README.md).
 
 !!! note "Email and UI"
     The library does not send email or ship a UI. Use hooks on `BaseUserManager` to trigger your mailer or jobs.

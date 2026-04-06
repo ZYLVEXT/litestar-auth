@@ -1,7 +1,9 @@
 """Database-backed authentication strategy models and model contracts.
 
-The concrete token ORM classes still live here, but the canonical public registration helper now
-hangs off :mod:`litestar_auth.models` so mapper discovery stays with the models boundary.
+The concrete token ORM classes still live here because ``DatabaseTokenStrategy`` persists them, but
+the canonical public bootstrap helper lives at
+``litestar_auth.models.import_token_orm_models()`` so explicit mapper registration stays with the
+models boundary.
 """
 
 from __future__ import annotations
@@ -77,9 +79,9 @@ class DatabaseTokenModels:
 
 
 def import_token_orm_models() -> tuple[type[AccessToken], type[RefreshToken]]:
-    """Return the token ORM models for explicit mapper registration.
+    """Return the bundled token ORM models for compatibility and low-level imports.
 
-    Prefer ``litestar_auth.models.import_token_orm_models()`` for new public call sites. This
-    module-level helper remains available for lower-level imports and compatibility surfaces.
+    Prefer ``litestar_auth.models.import_token_orm_models()`` for public explicit mapper
+    registration. This module-level helper remains available for strategy-layer compatibility.
     """
     return AccessToken, RefreshToken

@@ -351,8 +351,14 @@ def test_auth_model_mixins_cover_full_and_partial_relationship_contracts() -> No
 
     assert sorted(full_relationships.keys()) == ["access_tokens", "oauth_accounts", "refresh_tokens"]
     assert full_relationships["access_tokens"].mapper.class_ is FullCoverageAccessToken
+    assert full_relationships["access_tokens"].lazy == "select"
+    assert full_relationships["access_tokens"]._user_defined_foreign_keys == set()
     assert full_relationships["refresh_tokens"].mapper.class_ is FullCoverageRefreshToken
+    assert full_relationships["refresh_tokens"].lazy == "select"
+    assert full_relationships["refresh_tokens"]._user_defined_foreign_keys == set()
     assert full_relationships["oauth_accounts"].mapper.class_ is FullCoverageOAuthAccount
+    assert full_relationships["oauth_accounts"].lazy == "select"
+    assert full_relationships["oauth_accounts"]._user_defined_foreign_keys == set()
     assert inspect(FullCoverageAccessToken).relationships["user"].back_populates == "access_tokens"
     assert inspect(FullCoverageRefreshToken).relationships["user"].back_populates == "refresh_tokens"
     assert inspect(FullCoverageOAuthAccount).relationships["user"].back_populates == "oauth_accounts"
@@ -398,6 +404,95 @@ def test_auth_model_mixins_cover_full_and_partial_relationship_contracts() -> No
     assert PartialCoverageUser.refresh_tokens is None
     assert PartialCoverageUser.oauth_accounts is None
     assert list(partial_relationships.keys()) == []
+
+
+def test_auth_model_mixins_cover_relationship_option_override_contracts() -> None:
+    """Internal auth mixins support relationship-option overrides while preserving mapper wiring."""
+
+    class ConfiguredCoverageBase(DeclarativeBase):
+        """Declarative registry for relationship-option override coverage."""
+
+    class ConfiguredCoverageUUIDBase(ConfiguredCoverageBase):
+        """UUID primary-key base for relationship-option override coverage."""
+
+        __abstract__ = True
+
+        id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
+
+    class ConfiguredCoverageUser(
+        auth_model_mixins_module.UserModelMixin,
+        auth_model_mixins_module.UserAuthRelationshipMixin,
+        ConfiguredCoverageUUIDBase,
+    ):
+        """User model that overrides supported relationship options through class hooks."""
+
+        __tablename__ = "coverage_configured_user"
+
+        auth_access_token_model = "ConfiguredCoverageAccessToken"
+        auth_refresh_token_model = "ConfiguredCoverageRefreshToken"
+        auth_oauth_account_model = "ConfiguredCoverageOAuthAccount"
+        auth_token_relationship_lazy = "noload"
+        auth_oauth_account_relationship_lazy = "selectin"
+        auth_oauth_account_relationship_foreign_keys = "ConfiguredCoverageOAuthAccount.user_id"
+
+    class ConfiguredCoverageAccessToken(auth_model_mixins_module.AccessTokenMixin, ConfiguredCoverageBase):
+        """Access-token model bound to the configured-relationship coverage user."""
+
+        __tablename__ = "coverage_configured_access_token"
+
+        auth_user_model = "ConfiguredCoverageUser"
+        auth_user_table = "coverage_configured_user"
+
+    class ConfiguredCoverageRefreshToken(auth_model_mixins_module.RefreshTokenMixin, ConfiguredCoverageBase):
+        """Refresh-token model bound to the configured-relationship coverage user."""
+
+        __tablename__ = "coverage_configured_refresh_token"
+
+        auth_user_model = "ConfiguredCoverageUser"
+        auth_user_table = "coverage_configured_user"
+
+    class ConfiguredCoverageOAuthAccount(OAuthAccountMixin, ConfiguredCoverageUUIDBase):
+        """OAuth-account model bound to the configured-relationship coverage user."""
+
+        __tablename__ = "coverage_configured_oauth_account"
+
+        auth_user_model = "ConfiguredCoverageUser"
+        auth_user_table = "coverage_configured_user"
+        auth_provider_identity_constraint_name = "uq_coverage_configured_oauth_identity"
+
+    configured_relationships = inspect(ConfiguredCoverageUser).relationships
+
+    assert sorted(configured_relationships.keys()) == ["access_tokens", "oauth_accounts", "refresh_tokens"]
+    assert configured_relationships["access_tokens"].mapper.class_ is ConfiguredCoverageAccessToken
+    assert configured_relationships["access_tokens"].lazy == "noload"
+    assert configured_relationships["access_tokens"]._user_defined_foreign_keys == set()
+    assert configured_relationships["refresh_tokens"].mapper.class_ is ConfiguredCoverageRefreshToken
+    assert configured_relationships["refresh_tokens"].lazy == "noload"
+    assert configured_relationships["refresh_tokens"]._user_defined_foreign_keys == set()
+    assert configured_relationships["oauth_accounts"].mapper.class_ is ConfiguredCoverageOAuthAccount
+    assert configured_relationships["oauth_accounts"].lazy == "selectin"
+    assert configured_relationships["oauth_accounts"]._user_defined_foreign_keys == {
+        ConfiguredCoverageOAuthAccount.__table__.c.user_id,
+    }
+    assert inspect(ConfiguredCoverageAccessToken).relationships["user"].back_populates == "access_tokens"
+    assert inspect(ConfiguredCoverageRefreshToken).relationships["user"].back_populates == "refresh_tokens"
+    assert inspect(ConfiguredCoverageOAuthAccount).relationships["user"].back_populates == "oauth_accounts"
+    assert (
+        next(iter(ConfiguredCoverageAccessToken.__table__.c.user_id.foreign_keys)).target_fullname
+        == "coverage_configured_user.id"
+    )
+    assert (
+        next(iter(ConfiguredCoverageRefreshToken.__table__.c.user_id.foreign_keys)).target_fullname
+        == "coverage_configured_user.id"
+    )
+    assert next(iter(ConfiguredCoverageOAuthAccount.__table__.c.user_id.foreign_keys)).target_fullname == (
+        "coverage_configured_user.id"
+    )
+    assert {
+        constraint.name
+        for constraint in ConfiguredCoverageOAuthAccount.__table__.constraints
+        if constraint.name is not None
+    } == {"uq_coverage_configured_oauth_identity"}
 
 
 def test_models_user_relationships_module_reload_preserves_contract_exports() -> None:

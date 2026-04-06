@@ -26,6 +26,8 @@ Generated OpenAPI publishes the built-in request/response payload names from `li
 | POST | `{auth}/verify` | `VerifyToken` (`token`) | `include_verify=True` | Confirm email with token. |
 | POST | `{auth}/request-verify-token` | `RequestVerifyToken` (`email`) | `include_verify=True` | Re-issue verification token. |
 
+When you replace the built-in `UserCreate` request body with `user_create_schema`, reuse `litestar_auth.schemas.UserPasswordField` for the `password` field to keep the documented min/max password metadata aligned. The default runtime validator still enforces length through `require_password_length`.
+
 ## Password reset
 
 | Method | Path | Request body | Enabled when | Description |

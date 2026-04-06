@@ -1,17 +1,20 @@
 """ORM models package.
 
-Import :mod:`litestar_auth.models.oauth` when you need :class:`~litestar_auth.models.oauth.OAuthAccount`
-without registering the library :class:`~litestar_auth.models.user.User` (e.g. custom ``user`` table).
+Use :func:`import_token_orm_models` from this package as the canonical explicit bootstrap helper
+for the bundled token tables so mapper discovery stays under the models boundary. The strategy
+layer still exposes the same helper only as a compatibility re-export for existing imports.
 
-For explicit mapper registration of the bundled token tables, use
-:func:`import_token_orm_models` from this package so discovery stays under the models boundary
-instead of depending on strategy imports. For custom user, token, or OAuth classes, compose the
-side-effect-free ORM mixins exposed here on your own registry instead of copying fields or
-relationships from the reference models. When those custom token tables back
-:class:`~litestar_auth.authentication.strategy.DatabaseTokenStrategy`, pair them with
-:class:`~litestar_auth.authentication.strategy.DatabaseTokenModels`. The package still supports
-``from litestar_auth.models import User, OAuthAccount`` via lazy attributes (PEP 562). Static type
-checkers use the ``TYPE_CHECKING`` imports below.
+Import :mod:`litestar_auth.models.oauth` when you need
+:class:`~litestar_auth.models.oauth.OAuthAccount` without registering the library
+:class:`~litestar_auth.models.user.User` (for example, with a custom ``user`` table).
+
+For custom user, token, or OAuth classes, compose the side-effect-free ORM mixins exposed here on
+your own registry instead of copying fields or relationships from the reference models. When those
+custom token tables back :class:`~litestar_auth.authentication.strategy.DatabaseTokenStrategy`,
+pair them with :class:`~litestar_auth.authentication.strategy.DatabaseTokenModels`.
+
+The package still supports ``from litestar_auth.models import User, OAuthAccount`` via lazy
+attributes (PEP 562). Static type checkers use the ``TYPE_CHECKING`` imports below.
 """
 
 from __future__ import annotations

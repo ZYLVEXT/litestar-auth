@@ -58,7 +58,7 @@ class MutableClock:
 def _build_app_with_trusted_proxy(
     *,
     trusted_proxy: bool,
-    shared_backend: bool = False,
+    shared_builder_recipe: bool = False,
 ) -> tuple[Litestar, MutableClock]:
     """Create a Litestar auth app with configurable trusted-proxy rate limiting.
 
@@ -96,15 +96,17 @@ def _build_app_with_trusted_proxy(
         session.commit()
 
     clock = MutableClock()
-    shared_rate_limiter = InMemoryRateLimiter(max_attempts=2, window_seconds=60, clock=clock.now)
+    credential_rate_limiter = InMemoryRateLimiter(max_attempts=2, window_seconds=60, clock=clock.now)
+    refresh_rate_limiter = InMemoryRateLimiter(max_attempts=3, window_seconds=90, clock=clock.now)
+    totp_rate_limiter = InMemoryRateLimiter(max_attempts=2, window_seconds=60, clock=clock.now)
     login_rate_limiter = (
-        shared_rate_limiter
-        if shared_backend
+        credential_rate_limiter
+        if shared_builder_recipe
         else InMemoryRateLimiter(max_attempts=2, window_seconds=60, clock=clock.now)
     )
     verify_rate_limiter = (
-        shared_rate_limiter
-        if shared_backend
+        totp_rate_limiter
+        if shared_builder_recipe
         else InMemoryRateLimiter(max_attempts=2, window_seconds=60, clock=clock.now)
     )
     backend = AuthenticationBackend[User, UUID](
@@ -117,12 +119,20 @@ def _build_app_with_trusted_proxy(
     )
     rate_limit_config = (
         AuthRateLimitConfig.from_shared_backend(
-            shared_rate_limiter,
-            enabled=("login", "totp_verify"),
-            scope_overrides=cast("Any", {"login": "ip"}),
+            credential_rate_limiter,
+            group_backends={"totp": totp_rate_limiter, "refresh": refresh_rate_limiter},
+            disabled={"verify_token", "request_verify_token"},
+            namespace_overrides={
+                "forgot_password": "forgot_password",
+                "reset_password": "reset_password",
+                "totp_enable": "totp_enable",
+                "totp_confirm_enable": "totp_confirm_enable",
+                "totp_verify": "totp_verify",
+                "totp_disable": "totp_disable",
+            },
             trusted_proxy=trusted_proxy,
         )
-        if shared_backend
+        if shared_builder_recipe
         else AuthRateLimitConfig(
             login=EndpointRateLimit(
                 backend=login_rate_limiter,
@@ -326,9 +336,9 @@ async def test_totp_verify_throttle_is_independent_from_enable_disable_failures(
 
 
 @pytest.mark.filterwarnings("ignore::litestar_auth.totp.SecurityWarning")
-async def test_plugin_shared_rate_limit_backend_keeps_login_and_totp_verify_namespaces_separate() -> None:
-    """A shared plugin-level limiter backend still preserves per-endpoint namespaces."""
-    app, _clock = _build_app_with_trusted_proxy(trusted_proxy=False, shared_backend=True)
+async def test_plugin_shared_builder_migration_recipe_keeps_login_and_totp_verify_namespaces_separate() -> None:
+    """The plugin shared-builder migration recipe keeps login and TOTP verify counters separate."""
+    app, _clock = _build_app_with_trusted_proxy(trusted_proxy=False, shared_builder_recipe=True)
 
     async with AsyncTestClient(app=app, base_url="https://testserver.local") as test_client:
         login_response = await test_client.post(

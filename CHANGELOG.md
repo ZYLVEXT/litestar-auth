@@ -1,3 +1,29 @@
+## Unreleased
+
+### Added
+
+- **Public password-policy reuse alias for custom msgspec schemas** — `litestar_auth.schemas.UserPasswordField` is now the canonical public field alias for app-owned `msgspec.Struct` registration and update payloads that should share the built-in password-length contract.
+- **Typed public identifiers for the shared rate-limit builder** — `AuthRateLimitEndpointSlot` and `AuthRateLimitEndpointGroup` are exported from `litestar_auth.ratelimit` so `AuthRateLimitConfig.from_shared_backend(...)` overrides can target a documented, typed contract instead of private string sets.
+- **Testing guide for plugin-backed applications** — the docs now include a dedicated guide for `LITESTAR_AUTH_TESTING=1`, request-scoped DB-session sharing, process-local auth state isolation, and the boundary between single-process test conveniences and Redis-backed production stores.
+
+### Changed
+
+- **Database-token preset session factories now use a structural contract** — the DB-token preset and plugin session-sharing path accept Advanced Alchemy-compatible async session factories via a structural callable contract, reducing integration friction around `SQLAlchemyAsyncConfig.session_maker`.
+- **`UserAuthRelationshipMixin` is configurable instead of override-heavy** — custom user models can now set class variables for token relationship `lazy` loading and OAuth `lazy` / `foreign_keys` wiring instead of re-implementing the inverse `declared_attr` methods for common custom-user-table setups.
+- **Shared-backend rate-limit defaults are now treated as a documented public contract** — the supported slot names, group names, default scopes, default namespace tokens, and override precedence for `AuthRateLimitConfig.from_shared_backend(...)` are now documented and regression-covered, including the migration pattern for legacy underscore namespaces and disabled verification endpoints.
+- **Password-policy reuse is consolidated around `litestar_auth.schemas`** — built-in user schemas and app-owned custom registration/update DTOs now align on one canonical password-field surface derived from `DEFAULT_MINIMUM_PASSWORD_LENGTH` and `MAX_PASSWORD_LENGTH`.
+- **Testing and deployment docs now describe the real plugin session and isolation model** — request-local DB session reuse, pytest-only testing mode, and the split between in-memory test helpers and Redis-backed production stores are now spelled out across the testing, deployment, configuration, and related guides.
+- **Token ORM bootstrap guidance is stricter and more explicit** — docs, import coverage, and compatibility wording now consistently point consumers to `litestar_auth.models.import_token_orm_models()` as the canonical explicit mapper-registration helper, while the strategy-layer import is documented only as a compatibility path.
+- **Regression coverage is broader across the new public surfaces** — import-isolation, plugin wiring, scoped-session sharing, schema metadata, SQLAlchemy relationship hooks, rate-limit builder contracts, and documentation-facing examples are now more tightly locked to the intended behavior.
+
+### Migration
+
+- Replace duplicated password metadata such as `msgspec.Meta(min_length=12, max_length=128)` with `litestar_auth.schemas.UserPasswordField` when custom app schemas should track the built-in password policy.
+- For custom user models, configure `UserAuthRelationshipMixin` through its class-variable hooks before re-implementing `declared_attr` relationships for token or OAuth wiring.
+- Treat `AuthRateLimitConfig.from_shared_backend(...)` string keys as the documented stable slot/group contract and preserve older key-space shapes with `disabled`, `group_backends`, `scope_overrides`, and `namespace_overrides`.
+- Keep `litestar_auth.models.import_token_orm_models()` as the canonical explicit token-model bootstrap helper; use the strategy-layer helper only as a compatibility shim while migrating imports.
+- Follow the new testing guide for plugin-backed apps: enable `LITESTAR_AUTH_TESTING=1` only under pytest, keep one shared DB session per request, and isolate in-memory auth state per test when counters or denylist state must not leak.
+
 ## 1.1.0 (2026-04-03)
 
 ### Changed

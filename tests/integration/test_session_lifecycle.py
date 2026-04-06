@@ -7,7 +7,7 @@ from typing import Any, Self, cast
 from uuid import UUID, uuid4
 
 import pytest
-from litestar import Litestar
+from litestar import Litestar, Request, get
 from litestar.testing import AsyncTestClient
 
 import litestar_auth._plugin.config as plugin_config_module
@@ -29,6 +29,33 @@ pytestmark = pytest.mark.integration
 
 HTTP_CREATED = 201
 HTTP_OK = 200
+
+
+@get("/testing-session-contract", sync_to_thread=False)
+def session_contract_route(
+    request: Request[Any, Any, Any],
+    db_session: object,
+    litestar_auth_backends: object,
+    litestar_auth_user_manager: object,
+) -> dict[str, int | str | None]:
+    """Expose same-request session bindings across middleware and handler DI.
+
+    Returns:
+        Authenticated user email plus the session identifiers seen by handler dependencies.
+    """
+    user = cast("ExampleUser | None", request.user)
+    backends = cast("list[Any]", litestar_auth_backends)
+    user_manager = cast("Any", litestar_auth_user_manager)
+    backend_strategy = backends[0].strategy
+    manager_backend_strategy = user_manager.backends[0].strategy
+    session = cast("Any", db_session)
+    session_id = cast("int", session.session_id)
+    return {
+        "email": user.email if user is not None else None,
+        "db_session_id": session_id,
+        "backend_session_id": cast("int", backend_strategy._session.session_id),
+        "manager_session_id": cast("int", manager_backend_strategy._session.session_id),
+    }
 
 
 @dataclass(slots=True)
@@ -361,7 +388,7 @@ def _build_database_token_preset_app(
         include_users=False,
     )
     plugin = LitestarAuth(config)
-    app = Litestar(route_handlers=[auth_state], plugins=[plugin])
+    app = Litestar(route_handlers=[auth_state, session_contract_route], plugins=[plugin])
     return app, counting, states[id(database_token_auth)]
 
 
@@ -463,6 +490,43 @@ async def test_database_token_preset_login_authenticate_logout_use_one_session_e
     assert state.read_session_ids == [2, 3]
     assert state.invalidate_session_ids == [3]
     assert state.destroy_session_ids == [3]
+
+
+@pytest.mark.asyncio
+async def test_database_token_preset_shares_same_session_across_middleware_and_handler_di(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """One authenticated request reuses the same session across middleware and handler DI."""
+    app, counting, state = _build_database_token_preset_app(monkeypatch)
+
+    assert counting.call_count == 0
+
+    async with AsyncTestClient(app=app) as client:
+        login_response = await client.post(
+            "/auth/login",
+            json={"identifier": "user@example.com", "password": "user-password"},
+        )
+
+        assert login_response.status_code == HTTP_CREATED
+        token = login_response.json()["access_token"]
+
+        before_contract = counting.call_count
+        contract_response = await client.get(
+            "/testing-session-contract",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        contract_sessions = counting.call_count - before_contract
+
+    payload = contract_response.json()
+
+    assert contract_response.status_code == HTTP_OK
+    assert state.write_session_ids == [1]
+    assert state.read_session_ids == [cast("int", payload["db_session_id"])]
+    assert counting.call_count == len(state.write_session_ids) + len(state.read_session_ids)
+    assert contract_sessions == 1
+    assert payload["email"] == "user@example.com"
+    assert payload["backend_session_id"] == payload["db_session_id"]
+    assert payload["manager_session_id"] == payload["db_session_id"]
 
 
 @pytest.mark.asyncio

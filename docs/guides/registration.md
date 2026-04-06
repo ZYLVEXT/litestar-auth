@@ -39,7 +39,23 @@ Reset tokens are tied to a password fingerprint so they invalidate after a succe
 
 ## Password limits
 
-Schemas enforce a **maximum password length** (OWASP-style mitigation for hash DoS). The default minimum length is enforced via `require_password_length` when using the default password validator.
+Built-in `UserCreate` and `UserUpdate` use the public `litestar_auth.schemas.UserPasswordField` alias for their password metadata. Reuse that same alias in app-owned `user_create_schema` / `user_update_schema` structs when you want the documented password bounds without copying raw `12` / `128` literals:
+
+```python
+import msgspec
+
+from litestar_auth.schemas import UserPasswordField
+
+
+class RegistrationSchema(msgspec.Struct):
+    email: str
+    password: UserPasswordField
+    display_name: str
+```
+
+That schema metadata catches obviously too-short or too-long passwords during payload decoding and keeps custom structs aligned with the built-in registration surface.
+
+Runtime validation still flows through `require_password_length` when the plugin uses its default password validator. Schema metadata alone is not the whole password policy; use `password_validator_factory` when your application needs stricter runtime checks than the shared length bounds.
 
 ## Related
 

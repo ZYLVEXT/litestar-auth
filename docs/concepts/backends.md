@@ -51,6 +51,8 @@ config = LitestarAuthConfig.with_database_token_auth(
 )
 ```
 
+`session_maker` here is any callable object compatible with `session_maker() -> AsyncSession`; `async_sessionmaker(...)` is the usual implementation, not the only supported one.
+
 At runtime this still becomes a normal `AuthenticationBackend`, but the preset keeps request-session binding and migration-only rollout flags on the plugin side.
 
 ## Order and multiple backends

@@ -26,6 +26,7 @@ The following matches the pattern used in the test suite: build a `LitestarAuthC
 
 ## 4. Provide a database session
 
+- `session_maker` is a callable factory the plugin invokes as `session_maker()` to obtain the shared request-local `AsyncSession`. The snippet uses `async_sessionmaker(...)`, which is the common implementation.
 - **`session_maker` set** (as in the snippet above): the plugin registers a request-scoped `AsyncSession` provider under `LitestarAuthConfig.db_session_dependency_key` (default `db_session`). You do not need to wire that dependency yourself.
 - **Your app already provides a session**: set `db_session_dependency_provided_externally=True` and ensure something else injects `AsyncSession` under the same key (or change the key with `db_session_dependency_key`).
 - **Custom dependency name only**: keep `session_maker` and set `db_session_dependency_key` to match your handlers’ parameter name.

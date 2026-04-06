@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from typing import Any, cast
+from typing import TYPE_CHECKING, Annotated, Any, cast, get_args, get_origin, get_type_hints
 from uuid import UUID
 
 import pytest
@@ -11,6 +11,7 @@ import pytest
 import litestar_auth
 import litestar_auth._plugin as plugin_internals
 import litestar_auth.authentication.strategy as strategy_module
+import litestar_auth.config as config_module
 import litestar_auth.controllers as controllers_package
 import litestar_auth.controllers.auth as auth_controller_module
 import litestar_auth.controllers.reset as reset_controller_module
@@ -21,6 +22,7 @@ import litestar_auth.oauth as oauth_package_module
 import litestar_auth.payloads as payloads_module
 import litestar_auth.plugin as plugin_module
 import litestar_auth.ratelimit as ratelimit_module
+import litestar_auth.schemas as schemas_module
 from litestar_auth import (
     AccessToken,
     AuthenticationBackend,
@@ -46,6 +48,7 @@ from litestar_auth import (
     InvalidVerifyTokenError,
     JWTDenylistStore,
     JWTStrategy,
+    LitestarAuth,
     LitestarAuthConfig,
     LitestarAuthError,
     LoginCredentials,
@@ -100,19 +103,66 @@ from litestar_auth import (
 )
 from litestar_auth.db import BaseUserStore
 from litestar_auth.db.sqlalchemy import SQLAlchemyUserDatabase
+from litestar_auth.ratelimit import AuthRateLimitEndpointGroup, AuthRateLimitEndpointSlot
 from tests._helpers import ExampleUser
 from tests.conftest import project_version_from_pyproject
 
+if TYPE_CHECKING:
+    import msgspec
+    from sqlalchemy.ext.asyncio import AsyncSession
+
 pytestmark = [pytest.mark.unit, pytest.mark.imports]
+
+
+def _field_meta(schema_type: type[msgspec.Struct], field_name: str) -> msgspec.Meta:
+    """Return the ``msgspec.Meta`` attached to a struct field annotation.
+
+    Raises:
+        AssertionError: If the field annotation does not expose ``msgspec.Meta``.
+    """
+    annotation = get_type_hints(schema_type, include_extras=True)[field_name]
+
+    for candidate in (annotation, *get_args(annotation)):
+        value = getattr(candidate, "__value__", candidate)
+        if get_origin(value) is not Annotated:
+            continue
+
+        _, meta = get_args(value)
+        return meta
+
+    msg = f"{schema_type.__name__}.{field_name} is missing msgspec metadata."
+    raise AssertionError(msg)
 
 
 class _RootImportCoverageUserManager(BaseUserManager[ExampleUser, UUID]):
     """Minimal manager type for public import coverage."""
 
 
+class _RootImportCoverageSession:
+    """Minimal request-scoped session stub for preset import coverage."""
+
+    async def commit(self) -> None:
+        """No-op commit for request lifecycle parity."""
+
+    async def rollback(self) -> None:
+        """No-op rollback for request lifecycle parity."""
+
+    async def close(self) -> None:
+        """No-op close for request lifecycle parity."""
+
+
+class _RootImportCoverageSessionFactory:
+    """Callable session factory matching the documented plugin contract."""
+
+    def __call__(self) -> AsyncSession:
+        """Return a request-scoped session stub."""
+        return cast("AsyncSession", _RootImportCoverageSession())
+
+
 def test_root_package_reexports_public_api() -> None:
     """The package root exposes the documented public auth API."""
     assert __version__ == project_version_from_pyproject()
+    assert LitestarAuth is not None
     assert LitestarAuthConfig is not None
     assert AccessToken is not None
     assert RefreshToken is not None
@@ -162,11 +212,12 @@ def test_root_package_reexports_public_api() -> None:
 
 def test_root_package_exports_canonical_database_token_preset_entrypoint() -> None:
     """The root package exposes the documented DB bearer preset entrypoint."""
+    session_maker = _RootImportCoverageSessionFactory()
     config = LitestarAuthConfig[ExampleUser, UUID].with_database_token_auth(
         database_token_auth=DatabaseTokenAuthConfig(token_hash_secret="x" * 40),
         user_model=ExampleUser,
         user_manager_class=_RootImportCoverageUserManager,
-        session_maker=cast("Any", object()),
+        session_maker=session_maker,
         user_db_factory=lambda _session: cast("Any", object()),
         user_manager_kwargs={
             "verification_token_secret": "x" * 32,
@@ -177,11 +228,27 @@ def test_root_package_exports_canonical_database_token_preset_entrypoint() -> No
     preset = config.database_token_auth
     assert preset is not None
     assert preset.token_hash_secret == "x" * 40
+    assert config.session_maker is session_maker
 
     backend = config.backends[0]
     assert backend.name == "database"
     assert isinstance(backend.transport, BearerTransport)
     assert isinstance(backend.strategy, litestar_auth.DatabaseTokenStrategy)
+
+
+def test_public_password_policy_reuse_surface_stays_importable() -> None:
+    """Custom-schema password policy stays on the dedicated public schemas module."""
+    user_create_meta = _field_meta(UserCreate, "password")
+    user_update_meta = _field_meta(UserUpdate, "password")
+
+    assert schemas_module.__all__ == ("UserCreate", "UserPasswordField", "UserRead", "UserUpdate")
+    assert schemas_module.UserPasswordField is not None
+    assert not hasattr(litestar_auth, "UserPasswordField")
+    assert user_create_meta.min_length == config_module.DEFAULT_MINIMUM_PASSWORD_LENGTH
+    assert user_update_meta.min_length == config_module.DEFAULT_MINIMUM_PASSWORD_LENGTH
+    assert user_create_meta.max_length == config_module.MAX_PASSWORD_LENGTH
+    assert user_update_meta.max_length == config_module.MAX_PASSWORD_LENGTH
+    assert litestar_auth.require_password_length is config_module.require_password_length
 
 
 def test_models_and_strategy_modules_expose_documented_orm_setup_surface() -> None:
@@ -217,8 +284,18 @@ def test_models_and_strategy_modules_expose_documented_orm_setup_surface() -> No
     assert models_module.RefreshTokenMixin.__name__ == "RefreshTokenMixin"
     assert models_module.UserAuthRelationshipMixin.__name__ == "UserAuthRelationshipMixin"
     assert models_module.UserModelMixin.__name__ == "UserModelMixin"
+    assert models_module.import_token_orm_models.__module__ == "litestar_auth.models.tokens"
+    assert strategy_module.import_token_orm_models.__module__ == "litestar_auth.authentication.strategy.db_models"
     assert strategy_module.import_token_orm_models() == (access_token_model, refresh_token_model)
     assert token_models == strategy_module.DatabaseTokenModels()
+
+
+def test_root_package_does_not_promote_token_orm_bootstrap_helper() -> None:
+    """The canonical token bootstrap helper stays on ``litestar_auth.models`` rather than the root package."""
+    assert "import_token_orm_models" not in __all__
+    assert not hasattr(litestar_auth, "import_token_orm_models")
+    assert "import_token_orm_models" in models_module.__all__
+    assert "import_token_orm_models" in strategy_module.__all__
 
 
 def test_root_package_reexports_controller_factories_and_payloads() -> None:
@@ -262,12 +339,27 @@ def test_ratelimit_module_exposes_canonical_shared_backend_builder() -> None:
     current_endpoint_class = ratelimit_module.EndpointRateLimit
     current_memory_limiter_class = ratelimit_module.InMemoryRateLimiter
     current_redis_limiter_class = ratelimit_module.RedisRateLimiter
-    backend = current_memory_limiter_class(max_attempts=3, window_seconds=60)
+    credential_backend = current_memory_limiter_class(max_attempts=3, window_seconds=60)
+    refresh_backend = current_memory_limiter_class(max_attempts=4, window_seconds=90)
+    totp_backend = current_memory_limiter_class(max_attempts=5, window_seconds=120)
+    group_backends: dict[AuthRateLimitEndpointGroup, InMemoryRateLimiter] = {
+        "totp": totp_backend,
+        "refresh": refresh_backend,
+    }
+    disabled_slots: tuple[AuthRateLimitEndpointSlot, ...] = ("verify_token", "request_verify_token")
 
     config = current_config_class.from_shared_backend(
-        backend,
-        namespace_overrides={"login": "auth-login"},
-        disabled=("refresh",),
+        credential_backend,
+        group_backends=group_backends,
+        disabled=disabled_slots,
+        namespace_overrides={
+            "forgot_password": "forgot_password",
+            "reset_password": "reset_password",
+            "totp_enable": "totp_enable",
+            "totp_confirm_enable": "totp_confirm_enable",
+            "totp_verify": "totp_verify",
+            "totp_disable": "totp_disable",
+        },
     )
 
     assert current_config_class.__name__ == AuthRateLimitConfig.__name__
@@ -278,13 +370,59 @@ def test_ratelimit_module_exposes_canonical_shared_backend_builder() -> None:
     assert "EndpointRateLimit" in ratelimit_module.__all__
     assert "InMemoryRateLimiter" in ratelimit_module.__all__
     assert "RedisRateLimiter" in ratelimit_module.__all__
-    assert config.login == current_endpoint_class(backend=backend, scope="ip_email", namespace="auth-login")
-    assert config.refresh is None
-    assert config.request_verify_token == current_endpoint_class(
-        backend=backend,
+    assert config.login == current_endpoint_class(backend=credential_backend, scope="ip_email", namespace="login")
+    assert config.refresh == current_endpoint_class(backend=refresh_backend, scope="ip", namespace="refresh")
+    assert config.forgot_password == current_endpoint_class(
+        backend=credential_backend,
         scope="ip_email",
-        namespace="request-verify-token",
+        namespace="forgot_password",
     )
+    assert config.totp_verify == current_endpoint_class(backend=totp_backend, scope="ip", namespace="totp_verify")
+    assert config.verify_token is None
+    assert config.request_verify_token is None
+    assert config.totp_disable == current_endpoint_class(
+        backend=totp_backend,
+        scope="ip",
+        namespace="totp_disable",
+    )
+
+
+def test_ratelimit_identifier_contract_stays_on_the_public_ratelimit_module() -> None:
+    """Rate-limit typing stays on the ratelimit module without leaking onto the package root."""
+    assert ratelimit_module.AuthRateLimitEndpointSlot is AuthRateLimitEndpointSlot
+    assert ratelimit_module.AuthRateLimitEndpointGroup is AuthRateLimitEndpointGroup
+    assert get_args(ratelimit_module.RateLimitScope.__value__) == ("ip", "ip_email")
+    assert get_args(ratelimit_module.AuthRateLimitEndpointSlot.__value__) == (
+        "login",
+        "refresh",
+        "register",
+        "forgot_password",
+        "reset_password",
+        "totp_enable",
+        "totp_confirm_enable",
+        "totp_verify",
+        "totp_disable",
+        "verify_token",
+        "request_verify_token",
+    )
+    assert get_args(ratelimit_module.AuthRateLimitEndpointGroup.__value__) == (
+        "login",
+        "password_reset",
+        "refresh",
+        "register",
+        "totp",
+        "verification",
+    )
+    assert "AuthRateLimitEndpointSlot" in ratelimit_module.__all__
+    assert "AuthRateLimitEndpointGroup" in ratelimit_module.__all__
+    assert "RateLimitScope" in ratelimit_module.__all__
+    assert not hasattr(ratelimit_module, "_AUTH_RATE_LIMIT_ENDPOINT_RECIPES")
+    assert not hasattr(ratelimit_module, "_AUTH_RATE_LIMIT_ENDPOINT_RECIPES_BY_SLOT")
+    assert not hasattr(litestar_auth, "RateLimitScope")
+    assert not hasattr(litestar_auth, "AuthRateLimitEndpointSlot")
+    assert not hasattr(litestar_auth, "AuthRateLimitEndpointGroup")
+    assert "AuthRateLimitEndpointSlot" not in __all__
+    assert "AuthRateLimitEndpointGroup" not in __all__
 
 
 def test_payload_module_is_authoritative_boundary_with_compat_reexports() -> None:
@@ -418,6 +556,7 @@ def test_root_package_all_excludes_private_symbols() -> None:
     assert "create_oauth_controller" in __all__
     assert "OAuthAccountAlreadyLinkedError" in __all__
     assert "require_password_length" in __all__
+    assert "LitestarAuth" in __all__
     assert "DatabaseTokenAuthConfig" in __all__
 
 

@@ -10,7 +10,7 @@ from uuid import uuid4
 import pytest
 from advanced_alchemy.base import UUIDBase, UUIDPrimaryKey, create_registry
 from advanced_alchemy.exceptions import NotFoundError
-from sqlalchemy import String, select
+from sqlalchemy import String, inspect, select
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 from sqlalchemy.orm import Session as SASession
 
@@ -18,7 +18,15 @@ from litestar_auth.authentication.strategy.db_models import AccessToken
 from litestar_auth.db import BaseOAuthAccountStore, BaseUserStore
 from litestar_auth.db.sqlalchemy import SQLAlchemyUserDatabase, _build_oauth_repository, _build_user_repository
 from litestar_auth.exceptions import OAuthAccountAlreadyLinkedError
-from litestar_auth.models import OAuthAccount, OAuthAccountMixin, User, UserAuthRelationshipMixin, UserModelMixin
+from litestar_auth.models import (
+    AccessTokenMixin,
+    OAuthAccount,
+    OAuthAccountMixin,
+    RefreshTokenMixin,
+    User,
+    UserAuthRelationshipMixin,
+    UserModelMixin,
+)
 from litestar_auth.oauth_encryption import (
     clear_oauth_token_encryption_key,
     oauth_token_encryption_scope,
@@ -80,6 +88,46 @@ class MyOAuthAccount(OAuthAccountMixin, CustomUUIDBase):
 
     auth_user_model = "MyOAuthUser"
     auth_user_table = "my_oauth_user"
+
+
+class ConfiguredUser(UserModelMixin, UserAuthRelationshipMixin, CustomUUIDBase):
+    """Custom user model that exercises relationship-option overrides without replacing inverse wiring."""
+
+    __tablename__ = "configured_user"
+
+    auth_access_token_model = "ConfiguredAccessToken"
+    auth_refresh_token_model = "ConfiguredRefreshToken"
+    auth_oauth_account_model = "ConfiguredOAuthAccount"
+    auth_token_relationship_lazy = "noload"
+    auth_oauth_account_relationship_lazy = "selectin"
+    auth_oauth_account_relationship_foreign_keys = "ConfiguredOAuthAccount.user_id"
+
+
+class ConfiguredAccessToken(AccessTokenMixin, CustomAuthBase):
+    """Access-token model bound to the configured relationship-override user."""
+
+    __tablename__ = "configured_access_token"
+
+    auth_user_model = "ConfiguredUser"
+    auth_user_table = "configured_user"
+
+
+class ConfiguredRefreshToken(RefreshTokenMixin, CustomAuthBase):
+    """Refresh-token model bound to the configured relationship-override user."""
+
+    __tablename__ = "configured_refresh_token"
+
+    auth_user_model = "ConfiguredUser"
+    auth_user_table = "configured_user"
+
+
+class ConfiguredOAuthAccount(OAuthAccountMixin, CustomUUIDBase):
+    """OAuth-account model bound to the configured relationship-override user."""
+
+    __tablename__ = "configured_oauth_account"
+
+    auth_user_model = "ConfiguredUser"
+    auth_user_table = "configured_user"
 
 
 class AsyncSessionAdapter:
@@ -221,6 +269,27 @@ def test_build_oauth_repository_returns_cached_repository_type() -> None:
 
     assert oauth_repository is _build_oauth_repository(OAuthAccount)
     assert oauth_repository.model_type is OAuthAccount
+
+
+def test_custom_user_relationship_option_overrides_keep_mapper_contract_stable() -> None:
+    """Custom relationship overrides keep inverse mapper wiring intact while exposing explicit relationship options."""
+    configured_relationships = inspect(ConfiguredUser).relationships
+
+    assert sorted(configured_relationships.keys()) == ["access_tokens", "oauth_accounts", "refresh_tokens"]
+    assert configured_relationships["access_tokens"].mapper.class_ is ConfiguredAccessToken
+    assert configured_relationships["access_tokens"].lazy == "noload"
+    assert configured_relationships["access_tokens"]._user_defined_foreign_keys == set()
+    assert configured_relationships["refresh_tokens"].mapper.class_ is ConfiguredRefreshToken
+    assert configured_relationships["refresh_tokens"].lazy == "noload"
+    assert configured_relationships["refresh_tokens"]._user_defined_foreign_keys == set()
+    assert configured_relationships["oauth_accounts"].mapper.class_ is ConfiguredOAuthAccount
+    assert configured_relationships["oauth_accounts"].lazy == "selectin"
+    assert configured_relationships["oauth_accounts"]._user_defined_foreign_keys == {
+        ConfiguredOAuthAccount.__table__.c.user_id,
+    }
+    assert inspect(ConfiguredAccessToken).relationships["user"].mapper.class_ is ConfiguredUser
+    assert inspect(ConfiguredRefreshToken).relationships["user"].mapper.class_ is ConfiguredUser
+    assert inspect(ConfiguredOAuthAccount).relationships["user"].mapper.class_ is ConfiguredUser
 
 
 def test_sqlalchemy_module_reload_preserves_repository_factory_contract() -> None:
@@ -412,6 +481,58 @@ async def test_sqlalchemy_user_database_custom_oauth_model_mixin_contract(sessio
     assert oauth_account.user_id == user.id
     assert oauth_account.user is user
     assert list(user.oauth_accounts) == [oauth_account]
+
+
+async def test_sqlalchemy_user_database_supports_relationship_option_override_models(session: SASession) -> None:
+    """The adapter supports custom user models that override relationship loader options and OAuth foreign keys."""
+    configured_relationships = inspect(ConfiguredUser).relationships
+
+    assert configured_relationships["access_tokens"].lazy == "noload"
+    assert configured_relationships["refresh_tokens"].lazy == "noload"
+    assert configured_relationships["oauth_accounts"].lazy == "selectin"
+    assert configured_relationships["oauth_accounts"]._user_defined_foreign_keys == {
+        ConfiguredOAuthAccount.__table__.c.user_id,
+    }
+
+    database = create_database(
+        session,
+        user_model=ConfiguredUser,
+        oauth_account_model=ConfiguredOAuthAccount,
+    )
+    user = await database.create(
+        {
+            "email": "configured-oauth@example.com",
+            "hashed_password": "hashed-password",
+        },
+    )
+    scope = object()
+    oauth_token_encryption_key = base64.urlsafe_b64encode(b"2" * 32).decode()
+    register_oauth_token_encryption_key(scope, oauth_token_encryption_key)
+    try:
+        with oauth_token_encryption_scope(scope):
+            await database.upsert_oauth_account(
+                user,
+                oauth_name="github",
+                account_id="configured-gh-1",
+                account_email=user.email,
+                access_token="configured-access-token",
+                expires_at=7_200,
+                refresh_token="configured-refresh-token",
+            )
+    finally:
+        clear_oauth_token_encryption_key(scope)
+
+    resolved_user = await database.get_by_oauth_account("github", "configured-gh-1")
+    assert resolved_user is not None
+    assert isinstance(resolved_user, ConfiguredUser)
+    assert resolved_user.id == user.id
+
+    oauth_accounts = list(session.execute(select(ConfiguredOAuthAccount)).scalars().all())
+    assert len(oauth_accounts) == 1
+    oauth_account = oauth_accounts[0]
+    assert isinstance(oauth_account, ConfiguredOAuthAccount)
+    assert oauth_account.user_id == user.id
+    assert oauth_account.user is user
 
 
 async def test_sqlalchemy_user_database_upsert_oauth_account_create(session: SASession) -> None:

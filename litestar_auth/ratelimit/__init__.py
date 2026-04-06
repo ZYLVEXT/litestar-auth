@@ -18,7 +18,13 @@ Examples:
 
 from __future__ import annotations
 
-from ._config import AuthRateLimitConfig, EndpointRateLimit, RateLimitScope
+from ._config import (
+    AuthRateLimitConfig,
+    AuthRateLimitEndpointGroup,
+    AuthRateLimitEndpointSlot,
+    EndpointRateLimit,
+    RateLimitScope,
+)
 from ._helpers import (
     _DEFAULT_TRUSTED_HEADERS,
     DEFAULT_KEY_PREFIX,
@@ -41,6 +47,8 @@ __all__ = (
     "DEFAULT_KEY_PREFIX",
     "_DEFAULT_TRUSTED_HEADERS",
     "AuthRateLimitConfig",
+    "AuthRateLimitEndpointGroup",
+    "AuthRateLimitEndpointSlot",
     "EndpointRateLimit",
     "InMemoryRateLimiter",
     "RateLimitScope",
