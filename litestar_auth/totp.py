@@ -17,6 +17,7 @@ from typing import TYPE_CHECKING, Any, Literal, Protocol, runtime_checkable
 from urllib.parse import quote, urlencode
 
 from litestar_auth._compat import _load_redis_asyncio as _load_redis_asyncio_compat
+from litestar_auth._redis_protocols import RedisConditionalSetClient
 from litestar_auth.config import is_testing
 from litestar_auth.exceptions import ConfigurationError
 
@@ -71,26 +72,16 @@ class UsedTotpCodeStore(Protocol):
         """
 
 
-class RedisUsedTotpCodeStoreClient(Protocol):
+class RedisUsedTotpCodeStoreClient(RedisConditionalSetClient, Protocol):
     """Minimal Redis client interface for TOTP replay store (SET key value NX PX ttl_ms)."""
-
-    async def set(
-        self,
-        name: str,
-        value: str,
-        *,
-        nx: bool = False,
-        px: int | None = None,
-    ) -> bool | None:
-        """Set a key; with ``nx=True`` only set if not exists; ``px`` is TTL in milliseconds.
-
-        Returns:
-            ``True`` when the key was set, ``False`` when ``nx=True`` and key already existed.
-        """
 
 
 class RedisUsedTotpCodeStore:
-    """Redis-backed replay store for TOTP codes; safe for multi-worker and multi-pod deployments."""
+    """Redis-backed replay store for TOTP codes; safe for multi-worker and multi-pod deployments.
+
+    For the higher-level shared-client Redis preset that can also derive
+    ``AuthRateLimitConfig``, see ``litestar_auth.contrib.redis.RedisAuthPreset``.
+    """
 
     def __init__(
         self,

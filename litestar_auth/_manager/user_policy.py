@@ -10,11 +10,10 @@ from typing import TYPE_CHECKING, Any
 from litestar_auth._manager._coercions import _account_state_user
 from litestar_auth.config import DEFAULT_MINIMUM_PASSWORD_LENGTH, require_password_length
 from litestar_auth.exceptions import InactiveUserError, InvalidPasswordError, UnverifiedUserError
+from litestar_auth.password import PasswordHelper
 
 if TYPE_CHECKING:
     from collections.abc import Callable
-
-    from litestar_auth.password import PasswordHelper
 
 EMAIL_MAX_LENGTH = 320
 _EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
@@ -31,10 +30,10 @@ class UserPolicy:
     def __init__(
         self,
         *,
-        password_helper: PasswordHelper,
+        password_helper: PasswordHelper | None = None,
         password_validator: Callable[[str], None] | None = None,
     ) -> None:
-        self.password_helper = password_helper
+        self.password_helper = password_helper or PasswordHelper()
         self.password_validator = password_validator
 
     @staticmethod

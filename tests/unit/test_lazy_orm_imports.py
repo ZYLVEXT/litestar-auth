@@ -42,6 +42,18 @@ def test_import_db_package_does_not_load_sqlalchemy_adapter() -> None:
     assert proc.returncode == 0, proc.stdout + proc.stderr
 
 
+def test_import_db_package_exposes_only_base_store_types() -> None:
+    """The public ``litestar_auth.db`` package stops short of the SQLAlchemy adapter."""
+    proc = _run_isolated(
+        "import sys\n"
+        "import litestar_auth.db as auth_db\n"
+        "assert auth_db.__all__ == ('BaseOAuthAccountStore', 'BaseUserStore')\n"
+        "assert not hasattr(auth_db, 'SQLAlchemyUserDatabase')\n"
+        "assert 'litestar_auth.db.sqlalchemy' not in sys.modules\n",
+    )
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+
+
 def test_import_db_sqlalchemy_module_does_not_load_models() -> None:
     """Loading the adapter module does not import default ORM classes."""
     proc = _run_isolated(
@@ -211,6 +223,39 @@ def test_canonical_db_bearer_plugin_setup_keeps_models_and_adapter_lazy() -> Non
     assert proc.returncode == 0, proc.stdout + proc.stderr
 
 
+def test_default_user_db_factory_imports_adapter_only_when_called() -> None:
+    """The plugin's default ``user_db_factory`` keeps the adapter deferred until first use."""
+    proc = _run_isolated(
+        "import sys\n"
+        "from typing import Any, cast\n"
+        "from litestar_auth import AuthenticationBackend, BearerTransport, DatabaseTokenStrategy, LitestarAuthConfig\n"
+        "class UserModel:\n"
+        "    email = 'user@example.com'\n"
+        "class UserManager:\n"
+        "    def __init__(self, user_db: object, **kwargs: object) -> None:\n"
+        "        self.user_db = user_db\n"
+        "        self.kwargs = kwargs\n"
+        "backend = AuthenticationBackend(\n"
+        "    name='database',\n"
+        "    transport=BearerTransport(),\n"
+        "    strategy=cast(Any, DatabaseTokenStrategy(session=object(), token_hash_secret='x' * 40)),\n"
+        ")\n"
+        "config = LitestarAuthConfig(\n"
+        "    backends=[backend],\n"
+        "    user_model=UserModel,\n"
+        "    user_manager_class=cast(Any, UserManager),\n"
+        ")\n"
+        "assert 'litestar_auth.db.sqlalchemy' not in sys.modules\n"
+        "assert 'litestar_auth.models' not in sys.modules\n"
+        "database = config.user_db_factory(object())\n"
+        "assert database.__class__.__name__ == 'SQLAlchemyUserDatabase'\n"
+        "assert database.user_model is UserModel\n"
+        "assert 'litestar_auth.db.sqlalchemy' in sys.modules\n"
+        "assert 'litestar_auth.models' not in sys.modules\n",
+    )
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+
+
 def test_db_bearer_preset_builder_keeps_models_and_adapter_lazy() -> None:
     """The plugin-owned DB bearer preset does not eagerly import ORM models or the SQLAlchemy adapter."""
     proc = _run_isolated(
@@ -239,5 +284,45 @@ def test_db_bearer_preset_builder_keeps_models_and_adapter_lazy() -> None:
         "LitestarAuth(config)\n"
         "assert 'litestar_auth.models' not in sys.modules\n"
         "assert 'litestar_auth.db.sqlalchemy' not in sys.modules\n",
+    )
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+
+
+def test_db_bearer_plugin_runtime_bootstrap_loads_models_package_without_reference_mappers() -> None:
+    """DB-token plugin startup loads the canonical models helper without importing reference ORM modules."""
+    proc = _run_isolated(
+        "import sys\n"
+        "from typing import Any, cast\n"
+        "from litestar.config.app import AppConfig\n"
+        "from litestar_auth.plugin import LitestarAuth, LitestarAuthConfig\n"
+        "from litestar_auth._plugin.config import DatabaseTokenAuthConfig\n"
+        "class UserModel:\n"
+        "    email = 'user@example.com'\n"
+        "class UserManager:\n"
+        "    def __init__(self, user_db: object, **kwargs: object) -> None:\n"
+        "        self.user_db = user_db\n"
+        "        self.kwargs = kwargs\n"
+        "class DummySessionMaker:\n"
+        "    def __call__(self) -> object:\n"
+        "        return object()\n"
+        "config = LitestarAuthConfig.with_database_token_auth(\n"
+        "    database_token_auth=DatabaseTokenAuthConfig(token_hash_secret='x' * 40),\n"
+        "    user_model=UserModel,\n"
+        "    user_manager_class=cast(Any, UserManager),\n"
+        "    session_maker=cast(Any, DummySessionMaker()),\n"
+        "    user_manager_kwargs={\n"
+        "        'verification_token_secret': 'y' * 32,\n"
+        "        'reset_password_token_secret': 'z' * 32,\n"
+        "    },\n"
+        ")\n"
+        "assert 'litestar_auth.models' not in sys.modules\n"
+        "assert 'litestar_auth.models.user' not in sys.modules\n"
+        "assert 'litestar_auth.models.oauth' not in sys.modules\n"
+        "plugin = LitestarAuth(config)\n"
+        "assert 'litestar_auth.models' not in sys.modules\n"
+        "plugin.on_app_init(AppConfig())\n"
+        "assert 'litestar_auth.models' in sys.modules\n"
+        "assert 'litestar_auth.models.user' not in sys.modules\n"
+        "assert 'litestar_auth.models.oauth' not in sys.modules\n",
     )
     assert proc.returncode == 0, proc.stdout + proc.stderr

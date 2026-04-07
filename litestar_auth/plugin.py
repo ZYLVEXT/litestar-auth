@@ -29,12 +29,14 @@ from litestar_auth._plugin.session_binding import (
     _ScopedUserDatabaseProxy as ScopedUserDatabaseProxyImpl,
 )
 from litestar_auth._plugin.startup import (
+    bootstrap_bundled_token_orm_models,
     require_oauth_token_encryption_for_configured_providers,
     warn_if_insecure_oauth_redirect_in_production,
     warn_insecure_plugin_startup_defaults,
 )
 from litestar_auth._plugin.validation import validate_config
 from litestar_auth.authentication import Authenticator, LitestarAuthMiddleware
+from litestar_auth.config import plugin_secret_role_warning_owner
 from litestar_auth.oauth_encryption import (
     register_oauth_token_encryption_key,
     require_oauth_token_encryption_key,
@@ -108,6 +110,7 @@ class LitestarAuth[UP: UserProtocol[Any], ID](InitPlugin):
             require_key=partial(require_oauth_token_encryption_key, self),
         )
         warn_if_insecure_oauth_redirect_in_production(config=self.config, app_config=app_config)
+        bootstrap_bundled_token_orm_models(self.config)
         self._register_dependencies(app_config)
         self._register_middleware(app_config)
         self._register_controllers(app_config)
@@ -140,13 +143,25 @@ class LitestarAuth[UP: UserProtocol[Any], ID](InitPlugin):
             msg = "user_db_factory must be set (filled by __post_init__)"
             raise TypeError(msg)
         user_db = ScopedUserDatabaseProxyImpl(user_db_factory(session), oauth_scope=self)
-        bound_backends = tuple(backends or self._session_bound_backends(session))
-        return self._user_manager_factory(
-            session=session,
-            user_db=user_db,
-            config=self.config,
-            backends=bound_backends,
+        manager_inputs = _plugin_config.ManagerConstructorInputs(
+            manager_kwargs=self.config.user_manager_kwargs,
+            manager_security=self.config.user_manager_security,
         )
+        secret_inputs = manager_inputs.secret_inputs
+        bound_backends = tuple(backends or self._session_bound_backends(session))
+        # Plugin validation owns the config-managed warning baseline; manager construction
+        # should only add a warning if a custom factory diverges from that secret surface.
+        with plugin_secret_role_warning_owner(
+            verification_token_secret=secret_inputs.verification_token_secret,
+            reset_password_token_secret=secret_inputs.reset_password_token_secret,
+            totp_secret_key=secret_inputs.totp_secret_key,
+        ):
+            return self._user_manager_factory(
+                session=session,
+                user_db=user_db,
+                config=self.config,
+                backends=bound_backends,
+            )
 
     def _build_authenticator(self, session: AsyncSession) -> Authenticator[UP, ID]:
         backends = self._session_bound_backends(session)

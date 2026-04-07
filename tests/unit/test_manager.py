@@ -13,6 +13,7 @@ from uuid import UUID, uuid4
 
 import jwt
 import pytest
+from pwdlib.hashers.bcrypt import BcryptHasher
 
 import litestar_auth.manager as manager_module
 from litestar_auth._manager._coercions import _account_state_user, _as_dict, _managed_user, _require_str
@@ -33,6 +34,7 @@ from litestar_auth.manager import (
     _PRIVILEGED_FIELDS,
     RESET_PASSWORD_TOKEN_AUDIENCE,
     BaseUserManager,
+    UserManagerSecurity,
     _get_dummy_hash,
     _SecretValue,
     require_password_length,
@@ -65,6 +67,27 @@ def test_manager_reexports_canonical_lifecycle_constants() -> None:
     """Manager-level compatibility constants stay aligned with the lifecycle service."""
     assert manager_module.SAFE_FIELDS is SAFE_FIELDS
     assert manager_module._PRIVILEGED_FIELDS is PRIVILEGED_FIELDS
+
+
+def test_base_user_manager_declares_security_constructor_support() -> None:
+    """The default manager advertises support for the typed security constructor kwarg."""
+    assert BaseUserManager.accepts_security is True
+
+
+def test_base_user_manager_capability_flags_remain_inheritable_class_metadata() -> None:
+    """Capability flags remain ordinary inheritable class attributes for custom manager families."""
+
+    class _IntermediateManager(BaseUserManager[ExampleUser, UUID]):
+        accepts_security = False
+        accepts_id_parser = False
+
+    class _ConcreteManager(_IntermediateManager):
+        pass
+
+    assert "accepts_security" not in _ConcreteManager.__dict__
+    assert "accepts_id_parser" not in _ConcreteManager.__dict__
+    assert _ConcreteManager.accepts_security is False
+    assert _ConcreteManager.accepts_id_parser is False
 
 
 class TrackingUserManager(BaseUserManager[ExampleUser, UUID]):
@@ -274,6 +297,118 @@ def test_manager_init_requires_explicit_secrets_outside_testing() -> None:
         )
 
 
+def test_user_manager_security_masks_secret_repr() -> None:
+    """The typed security contract must not leak secrets in repr/str output."""
+    security = UserManagerSecurity[UUID](
+        verification_token_secret="verify-secret-1234567890-1234567890",
+        reset_password_token_secret="reset-secret-1234567890-1234567890",
+        totp_secret_key="a" * 32,
+        id_parser=UUID,
+    )
+
+    rendered = repr(security)
+
+    assert "verify-secret-1234567890-1234567890" not in rendered
+    assert "reset-secret-1234567890-1234567890" not in rendered
+    assert "a" * 32 not in rendered
+    assert "**********" in rendered
+    assert "UUID" in rendered
+    assert str(security) == rendered
+
+
+def test_manager_init_accepts_typed_security_contract() -> None:
+    """The public security dataclass wires manager secrets and id parsing in one bundle."""
+    user_db = AsyncMock()
+    password_helper = PasswordHelper()
+    security = UserManagerSecurity[UUID](
+        verification_token_secret="verify-secret-1234567890-1234567890",
+        reset_password_token_secret="reset-secret-1234567890-1234567890",
+        totp_secret_key="a" * 32,
+        id_parser=UUID,
+    )
+
+    manager = BaseUserManager(
+        user_db,
+        password_helper=password_helper,
+        security=security,
+    )
+
+    assert manager.verification_token_secret.get_secret_value() == security.verification_token_secret
+    assert manager.reset_password_token_secret.get_secret_value() == security.reset_password_token_secret
+    assert manager.totp_secret_key == security.totp_secret_key
+    assert manager.id_parser is UUID
+
+
+def test_manager_init_warns_when_typed_secret_roles_are_reused_in_production(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Direct manager construction warns instead of failing when roles reuse one value."""
+    monkeypatch.setattr(manager_module._config, "is_testing", lambda: False)
+    user_db = AsyncMock()
+    password_helper = PasswordHelper()
+    shared_secret = "shared-manager-secret-role-1234567890"
+
+    with pytest.warns(manager_module.SecurityWarning, match="supported production posture") as records:
+        manager = BaseUserManager(
+            user_db,
+            password_helper=password_helper,
+            security=UserManagerSecurity[UUID](
+                verification_token_secret=shared_secret,
+                reset_password_token_secret=shared_secret,
+                totp_secret_key=shared_secret,
+            ),
+        )
+
+    assert len(records) == 1
+    message = str(records[0].message)
+    assert "verification_token_secret" in message
+    assert "reset_password_token_secret" in message
+    assert "totp_secret_key" in message
+    assert manager_module.VERIFY_TOKEN_AUDIENCE in message
+    assert RESET_PASSWORD_TOKEN_AUDIENCE in message
+    assert "no JWT audience" in message
+    assert manager.verification_token_secret.get_secret_value() == shared_secret
+    assert manager.reset_password_token_secret.get_secret_value() == shared_secret
+    assert manager.totp_secret_key == shared_secret
+
+
+def test_manager_init_rejects_mixed_typed_security_and_legacy_secret_kwargs() -> None:
+    """The typed security contract is authoritative when it is used."""
+    user_db = AsyncMock()
+    password_helper = PasswordHelper()
+
+    with pytest.raises(ConfigurationError, match="Configure manager secrets via security=UserManagerSecurity"):
+        BaseUserManager(
+            user_db,
+            password_helper=password_helper,
+            security=UserManagerSecurity[UUID](
+                verification_token_secret="verify-secret-1234567890-1234567890",
+                reset_password_token_secret="reset-secret-1234567890-1234567890",
+            ),
+            verification_token_secret="other-verify-secret-1234567890",
+        )
+
+
+def test_manager_init_security_contract_allows_testing_fallback_under_testing_env(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Testing-mode fallback still works when callers use the typed security bundle."""
+    monkeypatch.setenv("LITESTAR_AUTH_TESTING", "1")
+    user_db = AsyncMock()
+    password_helper = PasswordHelper()
+
+    with pytest.warns(UserWarning, match=r"LITESTAR_AUTH_TESTING=1") as warnings:
+        manager = BaseUserManager(
+            user_db,
+            password_helper=password_helper,
+            security=UserManagerSecurity[UUID](),
+        )
+
+    assert len(warnings) == EXPECTED_SECRET_FALLBACK_WARNINGS
+    assert manager.verification_token_secret
+    assert manager.reset_password_token_secret
+
+
 def test_manager_init_allows_insecure_fallback_under_testing_env(monkeypatch: pytest.MonkeyPatch) -> None:
     """Missing secrets are allowed only when LITESTAR_AUTH_TESTING=1 is set."""
     monkeypatch.setenv("LITESTAR_AUTH_TESTING", "1")
@@ -443,6 +578,8 @@ def test_manager_init_wires_services_and_configuration() -> None:
     """Manager initialization should preserve config and wire service collaborators once."""
     user_db = AsyncMock()
     password_helper = PasswordHelper()
+    verification_secret = "verify-secret-1234567890-1234567890"
+    reset_secret = "reset-secret-1234567890-1234567890"
     verification_lifetime = manager_module.DEFAULT_VERIFY_TOKEN_LIFETIME * 2
     reset_lifetime = manager_module.DEFAULT_RESET_PASSWORD_TOKEN_LIFETIME * 3
     password_validator = require_password_length
@@ -493,8 +630,8 @@ def test_manager_init_wires_services_and_configuration() -> None:
             user_db,
             oauth_account_store=oauth_account_store,
             password_helper=password_helper,
-            verification_token_secret="verify-secret-1234567890-1234567890",
-            reset_password_token_secret="reset-secret-1234567890-1234567890",
+            verification_token_secret=verification_secret,
+            reset_password_token_secret=reset_secret,
             verification_token_lifetime=verification_lifetime,
             reset_password_token_lifetime=reset_lifetime,
             id_parser=UUID,
@@ -508,6 +645,10 @@ def test_manager_init_wires_services_and_configuration() -> None:
     assert manager.user_db is user_db
     assert manager.oauth_account_store is oauth_account_store
     assert manager.password_helper is password_helper
+    assert manager.verification_token_secret.get_secret_value() == verification_secret
+    assert manager.reset_password_token_secret.get_secret_value() == reset_secret
+    assert manager.account_token_secrets.verification_token_secret is manager.verification_token_secret
+    assert manager.account_token_secrets.reset_password_token_secret is manager.reset_password_token_secret
     assert manager.verification_token_lifetime == verification_lifetime
     assert manager.reset_password_token_lifetime == reset_lifetime
     assert manager.id_parser is UUID
@@ -536,6 +677,48 @@ def test_manager_init_wires_services_and_configuration() -> None:
         logger=manager_logger,
     )
     totp_secrets.assert_called_once_with(manager, prefix=manager_module.ENCRYPTED_TOTP_SECRET_PREFIX)
+
+
+def test_manager_init_without_explicit_password_helper_uses_current_default_helper() -> None:
+    """Omitting password_helper still yields the current Argon2+bcrypt helper surface."""
+    manager = BaseUserManager(
+        AsyncMock(),
+        verification_token_secret="verify-secret-1234567890-1234567890",
+        reset_password_token_secret="reset-secret-1234567890-1234567890",
+    )
+
+    assert manager.password_helper is manager.policy.password_helper
+    assert manager.password_helper.password_hash.hashers[0].__class__.__name__ == "Argon2Hasher"
+    assert manager.password_helper.password_hash.hashers[1].__class__.__name__ == "BcryptHasher"
+
+    bcrypt_hash = BcryptHasher().hash("legacy-password")
+
+    assert manager.password_helper.verify("legacy-password", bcrypt_hash) is True
+
+
+def test_manager_init_without_explicit_password_helper_uses_named_default_factory(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The manager default helper path goes through ``PasswordHelper.from_defaults()``."""
+    helper = PasswordHelper()
+
+    def build_default(_cls: type[PasswordHelper]) -> PasswordHelper:
+        return helper
+
+    monkeypatch.setattr(
+        manager_module.PasswordHelper,
+        "from_defaults",
+        classmethod(build_default),
+    )
+
+    manager = BaseUserManager(
+        AsyncMock(),
+        verification_token_secret="verify-secret-1234567890-1234567890",
+        reset_password_token_secret="reset-secret-1234567890-1234567890",
+    )
+
+    assert manager.password_helper is helper
+    assert manager.policy.password_helper is helper
 
 
 async def test_create_password_validation_success_and_failure() -> None:

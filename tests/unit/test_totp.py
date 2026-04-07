@@ -7,11 +7,13 @@ import binascii
 import importlib
 import logging
 import warnings
+from unittest.mock import AsyncMock
 from urllib.parse import parse_qs, urlparse
 
 import pytest
 
 from litestar_auth import totp
+from litestar_auth.contrib.redis import RedisAuthPreset
 
 pytestmark = pytest.mark.unit
 
@@ -449,6 +451,19 @@ async def test_redis_used_totp_code_store_first_call_true_second_false() -> None
     assert await store.mark_used("user-1", 42, ttl_seconds) is False
 
 
+def test_redis_used_totp_code_store_preserves_lazy_dependency_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The replay store defers the optional Redis import until construction."""
+
+    def fail_load_redis() -> object:
+        msg = "Install litestar-auth[redis] to use RedisUsedTotpCodeStore"
+        raise ImportError(msg)
+
+    monkeypatch.setattr(totp, "_load_redis_asyncio", fail_load_redis)
+
+    with pytest.raises(ImportError, match="Install litestar-auth\\[redis\\] to use RedisUsedTotpCodeStore"):
+        totp.RedisUsedTotpCodeStore(redis=AsyncMock())
+
+
 async def test_redis_used_totp_code_store_uses_custom_prefix_and_none_result() -> None:
     """Custom prefixes are applied and a missing Redis write is treated as replay."""
     calls: list[tuple[str, str, bool, int | None]] = []
@@ -470,6 +485,45 @@ async def test_redis_used_totp_code_store_uses_custom_prefix_and_none_result() -
     assert store._key("user-1", 7) == "custom:user-1:7"
     assert await store.mark_used("user-1", 7, 1.25) is False
     assert calls == [("custom:user-1:7", "1", True, 1250)]
+
+
+async def test_contrib_redis_preset_builds_totp_store_with_prefix_override(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The contrib preset derives the replay store and lets per-call prefixes win."""
+
+    def load_optional_redis() -> object:
+        return object()
+
+    monkeypatch.setattr(totp, "_load_redis_asyncio", load_optional_redis)
+    calls: list[tuple[str, str, bool, int | None]] = []
+
+    class FakeRedis:
+        async def delete(self, *names: str) -> int:
+            """Return a successful delete count for preset protocol compatibility."""
+            del names
+            return 1
+
+        async def eval(self, script: str, numkeys: int, *keys_and_args: object) -> int:
+            """Return a neutral Lua result for preset protocol compatibility."""
+            del script, numkeys, keys_and_args
+            return 0
+
+        async def set(
+            self,
+            name: str,
+            value: str,
+            *,
+            nx: bool = False,
+            px: int | None = None,
+        ) -> bool | None:
+            calls.append((name, value, nx, px))
+            return True
+
+    preset = RedisAuthPreset(redis=FakeRedis(), totp_used_tokens_key_prefix="preset:")
+    store = preset.build_totp_used_tokens_store(key_prefix="override:")
+
+    assert store._key("user-1", 7) == "override:user-1:7"
+    assert await store.mark_used("user-1", 7, 1.25) is True
+    assert calls == [("override:user-1:7", "1", True, 1250)]
 
 
 def test_current_counter_uses_time_step(monkeypatch: pytest.MonkeyPatch) -> None:

@@ -1,3 +1,33 @@
+## Unreleased
+
+### Added
+
+- **Canonical high-level Redis auth preset surface** — `litestar_auth.contrib.redis.RedisAuthPreset` and `RedisAuthRateLimitTier` now provide the preferred one-client path for auth rate limiting plus TOTP replay protection, while keeping the lower-level Redis builders available for bespoke wiring.
+- **Public Redis helper and typing surface for auth throttling** — `namespace_style`, the `AUTH_RATE_LIMIT_*` slot-set helpers, and a shared Redis protocol vocabulary now formalize the supported Redis-backed auth contract instead of leaving consumers on copied literals and `Any`-based wiring.
+- **Typed manager/password reuse surfaces** — `UserManagerSecurity` is the canonical plugin-managed secret contract, `litestar_auth.schemas.UserEmailField` complements `UserPasswordField` for app-owned `msgspec.Struct` schemas, and `PasswordHelper.from_defaults()` plus `LitestarAuthConfig.build_password_helper()` provide a named shared password-helper path outside `BaseUserManager`.
+- **Plugin-owned bundled token ORM bootstrap** — plugin-managed DB-token integrations can now register bundled `AccessToken` / `RefreshToken` mappers during app startup instead of relying on import-time side effects for runtime correctness.
+- **Official password-hash column customization hook** — app-owned user models can now keep the `hashed_password` attribute contract while mapping it to a legacy column name such as `password_hash` through `auth_hashed_password_column_name`.
+- **Repository-enforced 100% branch-aware coverage gate** — the repo configuration now fails verification when `pytest-cov` drops below 100.0% coverage for `litestar_auth`.
+
+### Changed
+
+- **Redis-backed auth is now organized around two clear layers** — `litestar_auth.contrib.redis` is the higher-level convenience boundary, `litestar_auth.ratelimit` remains the lower-level builder layer, and both are documented against one canonical Redis integration story.
+- **Preferred Redis preset typing now matches the low-level builders it wraps** — the `RedisAuthPreset(redis=...)` client contract is typed against the combined `RedisRateLimiter` + `RedisUsedTotpCodeStore` operations instead of `object` plus internal `Any` casts, so strict consumers no longer need to weaken typing around the documented one-client path.
+- **User-manager construction is typed end-to-end** — the default plugin builder now forwards `security=UserManagerSecurity(...)` when supported, preserves legacy explicit-secret kwargs for compatibility, and keeps deterministic precedence between typed security, legacy kwargs, `id_parser`, `login_identifier`, and password-validator injection.
+- **Capability flags on custom manager families are now treated as real inheritable compatibility metadata** — plugin-side detection honors inherited `accepts_security`, `accepts_id_parser`, `accepts_login_identifier`, and `accepts_password_validator` declarations before falling back to constructor introspection.
+- **Secret-role warning ownership is aligned across plugin-managed and manual manager construction** — plugin validation owns the config-managed warning baseline, direct `BaseUserManager(...)` construction still warns on manager-owned roles, and custom `user_manager_factory` integrations only surface an extra warning when they diverge from the validated secret surface.
+- **Schema metadata and password-policy reuse are consolidated** — built-in and app-owned schemas share one canonical email/password metadata source, and plugin-managed password flows plus app-owned domain or CLI code can now share the same default helper construction path intentionally instead of by convention.
+- **ORM integration is less override-heavy and less side-effect driven** — bundled token bootstrap, custom password-hash column mapping, and `SQLAlchemyUserDatabase` custom-model validation are all more explicit while preserving lazy import boundaries.
+- **Documentation now converges on canonical Redis, manager/password, and ORM integration guides** — configuration, deployment, API, and cookbook pages now describe one maintained contract per surface instead of duplicating drifting setup recipes.
+
+### Migration
+
+- Prefer `litestar_auth.contrib.redis.RedisAuthPreset` for one-client Redis deployments, and use `namespace_style` plus the `AUTH_RATE_LIMIT_*` helper exports instead of repeating literal slot sets or per-slot namespace overrides when the built-in helper surface fits.
+- Move plugin-managed secret wiring to `LitestarAuthConfig.user_manager_security`; keep `user_manager_kwargs` for non-security dependencies and legacy compatibility-only secret keys.
+- For custom kwargs-only manager wrappers that forward `security` or deliberately opt out of injected kwargs, declare capability flags such as `accepts_security` or `accepts_id_parser` on your custom manager family base so the inheritance-aware builder logic stays explicit.
+- Replace copied email/password `msgspec` metadata with `litestar_auth.schemas.UserEmailField` and `litestar_auth.schemas.UserPasswordField`, and use `config.build_password_helper()` or `PasswordHelper.from_defaults()` when app-owned code should share the library's default hashing policy.
+- For bundled DB-token models, rely on plugin startup bootstrap for normal runtime initialization and keep `litestar_auth.models.import_token_orm_models()` for explicit metadata/Alembic flows; for legacy user tables, prefer `auth_hashed_password_column_name` over re-declaring `hashed_password = mapped_column(...)` by hand.
+
 ## 1.1.1 (2026-04-06)
 
 ### Added

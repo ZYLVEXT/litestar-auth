@@ -18,6 +18,7 @@ from litestar_auth._manager.account_tokens import (
     AccountTokensService,
     _AccountTokensManagerProtocol,
 )
+from litestar_auth._manager.construction import AccountTokenSecrets, ManagerSecretInputs
 from litestar_auth._manager.totp_secrets import TotpSecretsService, _TotpSecretsManagerProtocol
 from litestar_auth._manager.user_lifecycle import (
     PRIVILEGED_FIELDS as _CANONICAL_PRIVILEGED_FIELDS,
@@ -30,13 +31,10 @@ from litestar_auth._manager.user_lifecycle import (
     _UserLifecycleManagerProtocol,
 )
 from litestar_auth._manager.user_policy import UserPolicy
-from litestar_auth.config import (
-    RESET_PASSWORD_TOKEN_AUDIENCE,
-    VERIFY_TOKEN_AUDIENCE,
-    _resolve_token_secret,
-)
+from litestar_auth.config import RESET_PASSWORD_TOKEN_AUDIENCE, VERIFY_TOKEN_AUDIENCE
 from litestar_auth.db.base import BaseOAuthAccountStore
 from litestar_auth.password import PasswordHelper
+from litestar_auth.totp import SecurityWarning
 from litestar_auth.types import LoginIdentifier, UserProtocol
 
 if TYPE_CHECKING:
@@ -55,9 +53,37 @@ _PRIVILEGED_FIELDS = _CANONICAL_PRIVILEGED_FIELDS
 ENCRYPTED_TOTP_SECRET_PREFIX = "fernet:"  # noqa: S105
 _MASKED = "**********"
 # Compatibility re-exports for runtime validation. Custom msgspec user schemas
-# should import ``UserPasswordField`` from ``litestar_auth.schemas``.
+# should import ``UserEmailField`` / ``UserPasswordField`` from
+# ``litestar_auth.schemas``.
 MAX_PASSWORD_LENGTH = _config.MAX_PASSWORD_LENGTH
 require_password_length = _config.require_password_length
+
+
+@dataclasses.dataclass(frozen=True, slots=True)
+class UserManagerSecurity[ID]:
+    """Typed public contract for manager secrets and related security inputs.
+
+    Production deployments should keep verification, reset-password, and TOTP
+    secret roles separate even though distinct JWT audiences already scope each
+    token flow independently.
+    """
+
+    verification_token_secret: str | None = dataclasses.field(default=None, repr=False)
+    reset_password_token_secret: str | None = dataclasses.field(default=None, repr=False)
+    totp_secret_key: str | None = dataclasses.field(default=None, repr=False)
+    id_parser: Callable[[str], ID] | None = dataclasses.field(default=None, repr=False)
+
+    def __repr__(self) -> str:
+        """Return a repr that masks configured secret material."""
+        return (
+            "UserManagerSecurity("
+            f"verification_token_secret={_mask_optional_secret(self.verification_token_secret)!r}, "
+            f"reset_password_token_secret={_mask_optional_secret(self.reset_password_token_secret)!r}, "
+            f"totp_secret_key={_mask_optional_secret(self.totp_secret_key)!r}, "
+            f"id_parser={self.id_parser!r})"
+        )
+
+    __str__ = __repr__
 
 
 @dataclasses.dataclass(frozen=True, eq=False)
@@ -88,7 +114,7 @@ class _SecretValue:
 EMAIL_MAX_LENGTH = 320
 _EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 logger = logging.getLogger(__name__)
-_DUMMY_PASSWORD_HASH = PasswordHelper().hash(secrets.token_urlsafe(32))
+_DUMMY_PASSWORD_HASH = PasswordHelper.from_defaults().hash(secrets.token_urlsafe(32))
 UserManagerUserProtocol = _manager_protocols.ManagedUserProtocol
 AccountStateUserProtocol = _manager_protocols.AccountStateUserProtocol
 
@@ -96,6 +122,11 @@ AccountStateUserProtocol = _manager_protocols.AccountStateUserProtocol
 def _get_dummy_hash() -> str:
     """Return the precomputed dummy password hash for timing-equalized auth checks."""
     return _DUMMY_PASSWORD_HASH
+
+
+def _mask_optional_secret(secret: str | None) -> str | None:
+    """Return the standard masked placeholder when a secret is configured."""
+    return _MASKED if secret is not None else None
 
 
 def _resolve_oauth_account_store[UP: UserProtocol[Any], ID](
@@ -115,8 +146,10 @@ class BaseUserManager[UP: UserProtocol[Any], ID](  # noqa: PLR0904
 ):
     """Coordinate user persistence, password hashing, and account tokens."""
 
+    accepts_security: bool = True
     accepts_password_validator: bool = True
     accepts_login_identifier: bool = True
+    accepts_id_parser: bool = True
 
     @staticmethod
     def _normalize_email(email: str) -> str:
@@ -142,6 +175,7 @@ class BaseUserManager[UP: UserProtocol[Any], ID](  # noqa: PLR0904
         *,
         oauth_account_store: BaseOAuthAccountStore[UP, ID] | None = None,
         password_helper: PasswordHelper | None = None,
+        security: UserManagerSecurity[ID] | None = None,
         verification_token_secret: str | None = None,
         reset_password_token_secret: str | None = None,
         verification_token_lifetime: timedelta = DEFAULT_VERIFY_TOKEN_LIFETIME,
@@ -159,6 +193,11 @@ class BaseUserManager[UP: UserProtocol[Any], ID](  # noqa: PLR0904
             user_db: Persistence backend used to load and update users.
             oauth_account_store: Optional persistence backend used for linked OAuth accounts.
             password_helper: Password hasher/verifier implementation.
+            security: Typed manager-security bundle for verification/reset secrets, TOTP
+                secret encryption, and JWT subject parsing. Do not combine it with the
+                legacy explicit secret or ``id_parser`` kwargs. In production, use
+                dedicated values per secret role instead of reusing one value across
+                verification, reset-password, and TOTP flows.
             verification_token_secret: Secret used to sign email-verification tokens.
                 If omitted, ``ConfigurationError`` is raised unless ``LITESTAR_AUTH_TESTING=1``.
             reset_password_token_secret: Secret used to sign password-reset tokens.
@@ -175,34 +214,79 @@ class BaseUserManager[UP: UserProtocol[Any], ID](  # noqa: PLR0904
             login_identifier: Which field ``authenticate`` uses for credential lookup by default
                 when ``login_identifier`` is not passed explicitly to ``authenticate``.
 
+        Raises:
+            ConfigurationError: If the typed ``security`` bundle is combined with explicit
+                secret kwargs, or if required secrets are omitted outside testing mode.
+
         """
-        verification_token_secret = _resolve_token_secret(
+        if security is not None:
+            if any(
+                value is not None
+                for value in (
+                    verification_token_secret,
+                    reset_password_token_secret,
+                    id_parser,
+                    totp_secret_key,
+                )
+            ):
+                msg = (
+                    "Configure manager secrets via security=UserManagerSecurity(...) or the explicit "
+                    "verification_token_secret/reset_password_token_secret/totp_secret_key/id_parser kwargs, "
+                    "not both."
+                )
+                raise _config.ConfigurationError(msg)
+            verification_token_secret = security.verification_token_secret
+            reset_password_token_secret = security.reset_password_token_secret
+            id_parser = security.id_parser
+            totp_secret_key = security.totp_secret_key
+        resolved_secret_inputs = ManagerSecretInputs(
             verification_token_secret,
-            label="verification_token_secret",
-            warning_stacklevel=3,
-        )
-        reset_password_token_secret = _resolve_token_secret(
             reset_password_token_secret,
-            label="reset_password_token_secret",
-            warning_stacklevel=3,
+            totp_secret_key,
+        ).resolve(
+            secret_factory=_SecretValue,
+            warning_stacklevel=4,
         )
+        resolved_verification_token_secret = (
+            resolved_secret_inputs.account_token_secrets.verification_token_secret.get_secret_value()
+        )
+        resolved_reset_password_token_secret = (
+            resolved_secret_inputs.account_token_secrets.reset_password_token_secret.get_secret_value()
+        )
+        if not _config.is_testing():
+            should_warn_about_reused_secret_roles = True
+            if _config.plugin_owns_secret_role_reuse_warning():
+                should_warn_about_reused_secret_roles = not _config.plugin_secret_role_warning_matches_manager_surface(
+                    verification_token_secret=resolved_verification_token_secret,
+                    reset_password_token_secret=resolved_reset_password_token_secret,
+                    totp_secret_key=resolved_secret_inputs.totp_secret_key,
+                )
+            if should_warn_about_reused_secret_roles:
+                _config.warn_if_secret_roles_are_reused(
+                    verification_token_secret=resolved_verification_token_secret,
+                    reset_password_token_secret=resolved_reset_password_token_secret,
+                    totp_secret_key=resolved_secret_inputs.totp_secret_key,
+                    warning_options=(SecurityWarning, 4),
+                )
         self.user_db = user_db
         self.oauth_account_store = oauth_account_store or _resolve_oauth_account_store(user_db)
-        self.password_helper = password_helper or PasswordHelper()
-        self.verification_token_secret = _SecretValue(verification_token_secret)
-        self.reset_password_token_secret = _SecretValue(reset_password_token_secret)
+        self._account_token_secrets = resolved_secret_inputs.account_token_secrets
+        self.verification_token_secret = self._account_token_secrets.verification_token_secret
+        self.reset_password_token_secret = self._account_token_secrets.reset_password_token_secret
         self.verification_token_lifetime = verification_token_lifetime
         self.reset_password_token_lifetime = reset_password_token_lifetime
         self.id_parser = id_parser
         self.password_validator = password_validator
         self.reset_verification_on_email_change = reset_verification_on_email_change
-        self.totp_secret_key = totp_secret_key
+        self.totp_secret_key = resolved_secret_inputs.totp_secret_key
         self.backends: tuple[object, ...] = backends
         self.login_identifier: LoginIdentifier = login_identifier
+        resolved_password_helper = password_helper or PasswordHelper.from_defaults()
         self.policy = UserPolicy(
-            password_helper=self.password_helper,
+            password_helper=resolved_password_helper,
             password_validator=self.password_validator,
         )
+        self.password_helper = self.policy.password_helper
         self._user_lifecycle = UserLifecycleService(self, policy=self.policy)
         self._account_token_security = AccountTokenSecurityService(
             self,
@@ -217,6 +301,11 @@ class BaseUserManager[UP: UserProtocol[Any], ID](  # noqa: PLR0904
             logger=logger,
         )
         self._totp_secrets = TotpSecretsService(self, prefix=ENCRYPTED_TOTP_SECRET_PREFIX)
+
+    @property
+    def account_token_secrets(self) -> AccountTokenSecrets:
+        """Return the resolved verify/reset secret bundle used by account-token services."""
+        return self._account_token_secrets
 
     async def get(self, user_id: ID) -> UP | None:
         """Return a user by identifier.

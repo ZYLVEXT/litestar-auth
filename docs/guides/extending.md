@@ -16,7 +16,17 @@ If your manager needs **`password_validator`** or **`login_identifier`**, either
 
 ### Custom factory
 
-Set `user_manager_factory` on `LitestarAuthConfig` for full control over manager construction (must match the `UserManagerFactory` contract).
+Set `user_manager_factory` on `LitestarAuthConfig` for full control over manager construction (must
+match the `UserManagerFactory` contract).
+
+Plugin-managed manager construction inherits the plugin-owned secret-role reuse baseline. If your
+custom factory instantiates `BaseUserManager` (or a subclass) with the same
+verification/reset/TOTP secrets that were already validated during `LitestarAuth(config)`, manager
+construction suppresses the duplicate warning. If the custom factory diverges from that
+config-owned surface, the manager constructor surfaces the additional warning for the manager-owned
+roles it actually wires. Keep custom factories aligned with `user_manager_security` / legacy
+config-owned secret kwargs unless you intentionally want the factory-built manager to carry that
+additional warning.
 
 ## Controllers and DTOs
 
@@ -26,21 +36,31 @@ Factory functions such as `create_auth_controller` live in `litestar_auth.contro
 - Provide custom **msgspec** schemas via [`litestar_auth.schemas`](../api/schemas.md#user-crud-schemas) or your own structs wired through `user_create_schema`, `user_update_schema`, and `user_read_schema` for registration and user CRUD surfaces.
 - Fork behavior inside your manager rather than replacing controllers first.
 
-If an app-owned `user_create_schema` or `user_update_schema` keeps a `password` field, import `UserPasswordField` from `litestar_auth.schemas` instead of duplicating `msgspec.Meta(min_length=12, max_length=128)` locally:
+If an app-owned `user_create_schema` or `user_update_schema` keeps `email` and `password` fields, import
+`UserEmailField` and `UserPasswordField` from `litestar_auth.schemas` instead of duplicating the built-in email regex
+or `msgspec.Meta(min_length=12, max_length=128)` locally:
 
 ```python
 import msgspec
 
-from litestar_auth.schemas import UserPasswordField
+from litestar_auth.schemas import UserEmailField, UserPasswordField
 
 
 class ExtendedUserCreate(msgspec.Struct):
-    email: str
+    email: UserEmailField
     password: UserPasswordField
     display_name: str
 ```
 
-That alias only keeps the schema metadata aligned with the built-in `UserCreate` and `UserUpdate` structs. The default runtime validator still enforces password length through `require_password_length`, and `password_validator_factory` remains the extension point for stricter runtime policy.
+If you already use `UserPasswordField`, keep that import and switch only the `email` annotation from `str` to
+`UserEmailField` when you want the built-in email validation contract. Those aliases only keep schema metadata aligned
+with the built-in `UserCreate` and `UserUpdate` structs. Runtime password policy still lives on the manager side
+through `password_validator_factory` or the default `require_password_length` validator.
+
+If app-owned services, background jobs, or CLI commands also hash or verify passwords directly, call
+`config.build_password_helper()` once after constructing `LitestarAuthConfig(...)` and reuse the returned helper
+instead of building a separate default `PasswordHelper` instance in each call site. See
+[Configuration](../configuration.md#canonical-manager-password-surface) for the combined secret/helper/schema contract.
 
 `user_create_schema`, `user_update_schema`, and `user_read_schema` do not replace the built-in login, verification, reset-password, refresh, or TOTP request payloads. If you need different field names for those routes, mount or wrap the relevant controller factory instead of expecting `login_identifier` or `user_*_schema` to rename `identifier`, `email`, `token`, `refresh_token`, `pending_token`, or `code`.
 

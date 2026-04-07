@@ -8,6 +8,7 @@ from typing import Any, cast
 
 from sqlalchemy import inspect as sa_inspect
 
+from litestar_auth._manager.construction import ManagerConstructorInputs
 from litestar_auth._plugin.config import (
     LitestarAuthConfig,
     TotpConfig,
@@ -27,6 +28,7 @@ from litestar_auth.config import (
     resolve_trusted_proxy_setting,
     validate_secret_length,
     validate_testing_mode_for_startup,
+    warn_if_secret_roles_are_reused,
 )
 from litestar_auth.exceptions import ConfigurationError
 from litestar_auth.totp import SecurityWarning
@@ -106,6 +108,7 @@ def validate_credential_config[UP: UserProtocol[Any], ID](config: LitestarAuthCo
     Raises:
         ValueError: If user-listing support is requested without ``list_users()``.
     """
+    validate_user_manager_security_config(config)
     validate_password_validator_config(config)
     validate_user_model_login_identifier_fields(config)
 
@@ -336,13 +339,63 @@ def _validate_totp_encryption_key[UP: UserProtocol[Any], ID](config: LitestarAut
     """
     if config.totp_config is None or is_testing():
         return
-    if not config.user_manager_kwargs.get("totp_secret_key"):
+    manager_inputs = ManagerConstructorInputs(
+        manager_kwargs=config.user_manager_kwargs,
+        manager_security=config.user_manager_security,
+    )
+    if not manager_inputs.secret_inputs.totp_secret_key:
         msg = (
             "totp_secret_key is required in production when TOTP is enabled. "
             "TOTP secrets must be encrypted at rest. Generate a Fernet key with: "
             'python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"'
         )
         raise ConfigurationError(msg)
+
+
+def validate_user_manager_security_config[UP: UserProtocol[Any], ID](config: LitestarAuthConfig[UP, ID]) -> None:
+    """Validate manager secret wiring and the supported production secret posture.
+
+    Raises:
+        ConfigurationError: If the typed contract overlaps with legacy kwargs or an
+            incompatible top-level ``id_parser`` declaration.
+    """
+    manager_inputs = ManagerConstructorInputs(
+        manager_kwargs=config.user_manager_kwargs,
+        manager_security=config.user_manager_security,
+    )
+    manager_security = config.user_manager_security
+    if manager_security is not None:
+        if manager_inputs.security_overlap_keys:
+            overlap = ", ".join(manager_inputs.security_overlap_keys)
+            msg = (
+                "user_manager_security is the canonical plugin-managed path for manager secrets and id_parser. "
+                "Remove the overlapping legacy entries from user_manager_kwargs: "
+                f"{overlap}."
+            )
+            raise ConfigurationError(msg)
+
+        if (
+            config.id_parser is not None
+            and manager_security.id_parser is not None
+            and config.id_parser is not manager_security.id_parser
+        ):
+            msg = (
+                "Configure id_parser via user_manager_security.id_parser or LitestarAuthConfig.id_parser, "
+                "not both with different values."
+            )
+            raise ConfigurationError(msg)
+
+    if is_testing():
+        return
+
+    secret_inputs = manager_inputs.secret_inputs
+    warn_if_secret_roles_are_reused(
+        verification_token_secret=secret_inputs.verification_token_secret,
+        reset_password_token_secret=secret_inputs.reset_password_token_secret,
+        totp_secret_key=secret_inputs.totp_secret_key,
+        totp_pending_secret=config.totp_config.totp_pending_secret if config.totp_config is not None else None,
+        warning_options=(SecurityWarning, 2),
+    )
 
 
 def validate_password_validator_config[UP: UserProtocol[Any], ID](config: LitestarAuthConfig[UP, ID]) -> None:
@@ -355,7 +408,8 @@ def validate_password_validator_config[UP: UserProtocol[Any], ID](config: Litest
     if config.password_validator_factory is None:
         return
 
-    if "password_validator" in config.user_manager_kwargs:
+    manager_inputs = ManagerConstructorInputs(manager_kwargs=config.user_manager_kwargs)
+    if manager_inputs.has_explicit_password_validator:
         msg = (
             "Configure password validation via password_validator_factory or "
             "user_manager_kwargs['password_validator'], not both."

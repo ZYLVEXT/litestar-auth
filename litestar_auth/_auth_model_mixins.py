@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import uuid  # noqa: TC003 - SQLAlchemy resolves mapped annotations at runtime.
 from datetime import datetime  # noqa: TC003 - SQLAlchemy resolves mapped annotations at runtime.
-from typing import Any, ClassVar
+from typing import TYPE_CHECKING, Any, ClassVar
 
 from sqlalchemy import DateTime, ForeignKey, String, func
 from sqlalchemy.orm import Mapped, declared_attr, mapped_column, relationship
@@ -21,14 +21,36 @@ _USER_RELATIONSHIP_NAME = "user"
 
 
 class UserModelMixin:
-    """Shared non-primary-key columns used by the bundled ``User`` model."""
+    """Shared non-primary-key columns used by the bundled ``User`` model.
+
+    Set ``auth_hashed_password_column_name`` on a subclass to keep the public
+    ``hashed_password`` attribute while mapping it to a different SQL column
+    name such as ``password_hash``.
+    """
+
+    if TYPE_CHECKING:
+        auth_hashed_password_column_name: ClassVar[str]
+
+    auth_hashed_password_column_name = "hashed_password"  # noqa: S105
 
     email: Mapped[str] = mapped_column(String(length=320), unique=True, index=True)
-    hashed_password: Mapped[str] = mapped_column(String(length=255))
+    hashed_password: Mapped[str]
     is_active: Mapped[bool] = mapped_column(default=True, nullable=False)
     is_verified: Mapped[bool] = mapped_column(default=False, nullable=False)
     is_superuser: Mapped[bool] = mapped_column(default=False, nullable=False)
     totp_secret: Mapped[str | None] = mapped_column(String(length=255), default=None, nullable=True)
+
+    @declared_attr
+    def hashed_password(cls) -> Mapped[str]:  # noqa: N805
+        """Map the password-hash attribute to the configured SQL column name.
+
+        Returns:
+            The mapped ``hashed_password`` column.
+        """
+        column_name = cls.auth_hashed_password_column_name
+        if column_name == "hashed_password":
+            return mapped_column(String(length=255))
+        return mapped_column(column_name, String(length=255))
 
 
 class UserAuthRelationshipMixin:

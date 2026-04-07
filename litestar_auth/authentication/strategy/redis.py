@@ -7,9 +7,18 @@ import logging
 import secrets
 from datetime import timedelta
 from functools import partial
-from typing import TYPE_CHECKING, Any, Protocol, cast, override
+from typing import TYPE_CHECKING, Protocol, cast, override
 
 from litestar_auth._compat import _load_redis_asyncio as _load_redis_asyncio_compat
+from litestar_auth._redis_protocols import (
+    RedisDeleteClient,
+    RedisExpiringValueWriteClient,
+    RedisKeyExpiryClient,
+    RedisScanClient,
+    RedisSetMembershipClient,
+    RedisStoredValue,
+    RedisValueReadClient,
+)
 from litestar_auth.authentication.strategy._opaque_tokens import build_opaque_token_key
 from litestar_auth.authentication.strategy.base import Strategy, UserManagerProtocol
 from litestar_auth.config import validate_secret_length
@@ -17,9 +26,7 @@ from litestar_auth.exceptions import ConfigurationError
 from litestar_auth.types import ID, UP
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncIterator, Callable
-
-    from redis.typing import PatternT
+    from collections.abc import Callable
 
 DEFAULT_KEY_PREFIX = "litestar_auth:token:"
 DEFAULT_LIFETIME = timedelta(hours=1)
@@ -32,38 +39,16 @@ _load_redis_asyncio = partial(_load_redis_asyncio_compat, feature_name="RedisTok
 importlib = _importlib
 
 
-class RedisClientProtocol(Protocol):
+class RedisClientProtocol(
+    RedisValueReadClient,
+    RedisExpiringValueWriteClient,
+    RedisDeleteClient,
+    RedisSetMembershipClient,
+    RedisKeyExpiryClient,
+    RedisScanClient,
+    Protocol,
+):
     """Minimal async Redis client interface used by the token strategy."""
-
-    async def get(self, name: str, /) -> bytes | str | None:
-        """Return the stored value for a Redis key."""
-
-    async def setex(self, name: str, time: int, value: str, /) -> object:
-        """Store a Redis value with an expiration time in seconds."""
-
-    async def delete(self, *names: str) -> int:
-        """Delete one or more Redis keys."""
-
-    async def sadd(self, name: str, *values: str) -> int:
-        """Add one or more values to a Redis set."""
-
-    async def srem(self, name: str, *values: str) -> int:
-        """Remove one or more values from a Redis set."""
-
-    async def smembers(self, name: str) -> set[bytes] | set[str]:
-        """Return all members of a Redis set."""
-
-    async def expire(self, name: str, time: int) -> bool:
-        """Set the TTL for a key in seconds."""
-
-    def scan_iter(
-        self,
-        match: PatternT | None = None,
-        count: int | None = None,
-        _type: str | None = None,
-        **kwargs: Any,  # noqa: ANN401
-    ) -> AsyncIterator[str]:
-        """Iterate over Redis keys matching a pattern."""
 
 
 class RedisTokenStrategy(Strategy[UP, ID]):
@@ -123,7 +108,7 @@ class RedisTokenStrategy(Strategy[UP, ID]):
         return f"{self.key_prefix}user:{user_id}"
 
     @staticmethod
-    def _decode_user_id(value: bytes | str) -> str:
+    def _decode_user_id(value: RedisStoredValue) -> str:
         """Normalize Redis payloads to text identifiers.
 
         Returns:

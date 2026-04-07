@@ -44,6 +44,42 @@ def test_default_initialization_uses_argon2_and_bcrypt() -> None:
     assert helper.password_hash.hashers[1].__class__.__name__ == "BcryptHasher"
 
 
+def test_default_initialization_uses_internal_default_password_hash_builder(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Default initialization routes through the module-level default hash builder."""
+    sentinel_password_hash = object()
+    build_calls = 0
+
+    def build_default_password_hash() -> object:
+        nonlocal build_calls
+        build_calls += 1
+        return sentinel_password_hash
+
+    monkeypatch.setattr(password_module, "_build_default_password_hash", build_default_password_hash)
+
+    helper = _password_helper_cls()()
+
+    assert helper.password_hash is sentinel_password_hash
+    assert build_calls == 1
+
+
+def test_from_defaults_uses_internal_default_password_hash_builder(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The named default factory routes through the shared module-level hash builder."""
+    sentinel_password_hash = object()
+    build_calls = 0
+
+    def build_default_password_hash() -> object:
+        nonlocal build_calls
+        build_calls += 1
+        return sentinel_password_hash
+
+    monkeypatch.setattr(password_module, "_build_default_password_hash", build_default_password_hash)
+
+    helper = _password_helper_cls().from_defaults()
+
+    assert helper.password_hash is sentinel_password_hash
+    assert build_calls == 1
+
+
 def test_hash_returns_argon2_hash_and_uses_unique_salt() -> None:
     """Hashes use Argon2 by default and produce unique salted outputs."""
     helper = _password_helper_cls()()

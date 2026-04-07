@@ -1,7 +1,8 @@
 """Internal msgspec field aliases shared across auth payload schemas.
 
-Public code should import ``UserPasswordField`` from ``litestar_auth.schemas``
-when custom user create/update payloads need the built-in password policy.
+Public code should import ``UserEmailField`` / ``UserPasswordField`` from
+``litestar_auth.schemas`` when custom user create/update payloads need the
+built-in user-schema contract.
 """
 
 from __future__ import annotations
@@ -19,11 +20,14 @@ REFRESH_TOKEN_MAX_LENGTH = 512
 LONG_LIVED_TOKEN_MAX_LENGTH = 2048
 TOTP_CODE_LENGTH = 6
 
-type EmailField = Annotated[str, msgspec.Meta(max_length=EMAIL_MAX_LENGTH, pattern=EMAIL_PATTERN)]
-type UserPasswordField = Annotated[
-    str,
-    msgspec.Meta(min_length=DEFAULT_MINIMUM_PASSWORD_LENGTH, max_length=MAX_PASSWORD_LENGTH),
-]
+EMAIL_FIELD_META = msgspec.Meta(max_length=EMAIL_MAX_LENGTH, pattern=EMAIL_PATTERN)
+USER_PASSWORD_FIELD_META = msgspec.Meta(
+    min_length=DEFAULT_MINIMUM_PASSWORD_LENGTH,
+    max_length=MAX_PASSWORD_LENGTH,
+)
+
+type EmailField = Annotated[str, EMAIL_FIELD_META]
+type UserPasswordField = Annotated[str, USER_PASSWORD_FIELD_META]
 type PasswordField = Annotated[str, msgspec.Meta(min_length=1, max_length=MAX_PASSWORD_LENGTH)]
 type LoginIdentifierField = Annotated[str, msgspec.Meta(min_length=1, max_length=LOGIN_IDENTIFIER_MAX_LENGTH)]
 type RefreshTokenField = Annotated[str, msgspec.Meta(min_length=1, max_length=REFRESH_TOKEN_MAX_LENGTH)]

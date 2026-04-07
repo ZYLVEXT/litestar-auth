@@ -228,7 +228,7 @@ def create_database(
     session: SASession,
     *,
     user_model: type[Any] = User,
-    oauth_account_model: type[Any] | None = OAuthAccount,
+    oauth_account_model: type[Any] | None = None,
 ) -> SQLAlchemyUserDatabase[Any]:
     """Create a SQLAlchemyUserDatabase backed by the adapter session.
 
@@ -236,7 +236,14 @@ def create_database(
         Configured SQLAlchemy user database adapter.
     """
     adapter = cast("AsyncSession", AsyncSessionAdapter(session))
-    return SQLAlchemyUserDatabase(session=adapter, user_model=user_model, oauth_account_model=oauth_account_model)
+    resolved_oauth_account_model = oauth_account_model
+    if resolved_oauth_account_model is None and user_model is User:
+        resolved_oauth_account_model = OAuthAccount
+    return SQLAlchemyUserDatabase(
+        session=adapter,
+        user_model=user_model,
+        oauth_account_model=resolved_oauth_account_model,
+    )
 
 
 def test_sqlalchemy_user_database_reuses_repository_type_per_model(session: SASession) -> None:
@@ -481,6 +488,12 @@ async def test_sqlalchemy_user_database_custom_oauth_model_mixin_contract(sessio
     assert oauth_account.user_id == user.id
     assert oauth_account.user is user
     assert list(user.oauth_accounts) == [oauth_account]
+
+
+def test_sqlalchemy_user_database_rejects_mismatched_oauth_model_contract(session: SASession) -> None:
+    """The adapter fails fast when bundled OAuth wiring targets a different custom user contract."""
+    with pytest.raises(TypeError, match="oauth_account_model does not match user_model"):
+        create_database(session, user_model=MyUser, oauth_account_model=OAuthAccount)
 
 
 async def test_sqlalchemy_user_database_supports_relationship_option_override_models(session: SASession) -> None:

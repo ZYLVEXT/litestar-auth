@@ -8,6 +8,7 @@ from typing import Annotated, Any, cast, get_args, get_origin, get_type_hints
 import msgspec
 import pytest
 
+import litestar_auth._schema_fields as schema_fields_module
 from litestar_auth.config import DEFAULT_MINIMUM_PASSWORD_LENGTH, MAX_PASSWORD_LENGTH
 from litestar_auth.controllers.auth import _LOGIN_EMAIL_MAX_LENGTH, LoginCredentials, RefreshTokenRequest
 from litestar_auth.controllers.reset import ForgotPassword, ResetPassword
@@ -18,27 +19,25 @@ from litestar_auth.controllers.totp import (
     TotpVerifyRequest,
 )
 from litestar_auth.controllers.verify import RequestVerifyToken, VerifyToken
-from litestar_auth.schemas import UserCreate, UserPasswordField, UserRead, UserUpdate
+from litestar_auth.schemas import UserCreate, UserEmailField, UserPasswordField, UserRead, UserUpdate
 
 pytestmark = pytest.mark.unit
 
 
 class CustomRegistrationSchema(msgspec.Struct):
-    """Custom registration payload reusing the canonical public password field."""
+    """Custom registration payload reusing the canonical public user schema helpers."""
 
-    email: str
+    email: UserEmailField
     password: UserPasswordField
     display_name: str
 
 
-def _field_meta(schema_type: type[msgspec.Struct], field_name: str) -> msgspec.Meta:
-    """Return the ``msgspec.Meta`` attached to a struct field annotation.
+def _annotation_meta(annotation: object, *, label: str) -> msgspec.Meta:
+    """Return the ``msgspec.Meta`` attached to an annotation or type alias.
 
     Raises:
-        AssertionError: If the field annotation does not expose ``msgspec.Meta``.
+        AssertionError: If the annotation does not expose ``msgspec.Meta``.
     """
-    annotation = get_type_hints(schema_type, include_extras=True)[field_name]
-
     for candidate in (annotation, *get_args(annotation)):
         value = getattr(candidate, "__value__", candidate)
         if get_origin(value) is not Annotated:
@@ -47,8 +46,16 @@ def _field_meta(schema_type: type[msgspec.Struct], field_name: str) -> msgspec.M
         _, meta = get_args(value)
         return meta
 
-    msg = f"{schema_type.__name__}.{field_name} is missing msgspec metadata."
+    msg = f"{label} is missing msgspec metadata."
     raise AssertionError(msg)
+
+
+def _field_meta(schema_type: type[msgspec.Struct], field_name: str) -> msgspec.Meta:
+    """Return the ``msgspec.Meta`` attached to a struct field annotation."""
+    return _annotation_meta(
+        get_type_hints(schema_type, include_extras=True)[field_name],
+        label=f"{schema_type.__name__}.{field_name}",
+    )
 
 
 def test_user_read_round_trips_without_sensitive_fields() -> None:
@@ -114,8 +121,8 @@ def test_user_create_rejects_password_shorter_than_config_default_minimum() -> N
         )
 
 
-def test_custom_registration_schema_reuses_public_password_bounds() -> None:
-    """Custom registration schemas can reuse the canonical public password field alias."""
+def test_custom_registration_schema_reuses_public_email_and_password_contract() -> None:
+    """Custom registration schemas can reuse the canonical public user field aliases."""
     payload = msgspec.json.decode(
         msgspec.json.encode(
             {
@@ -146,6 +153,18 @@ def test_custom_registration_schema_reuses_public_password_bounds() -> None:
         msgspec.json.decode(
             msgspec.json.encode(
                 {
+                    "email": "not-an-email",
+                    "password": "p" * DEFAULT_MINIMUM_PASSWORD_LENGTH,
+                    "display_name": "Creator",
+                },
+            ),
+            type=CustomRegistrationSchema,
+        )
+
+    with pytest.raises(msgspec.ValidationError):
+        msgspec.json.decode(
+            msgspec.json.encode(
+                {
                     "email": "creator@example.com",
                     "password": "p" * (DEFAULT_MINIMUM_PASSWORD_LENGTH - 1),
                     "display_name": "Creator",
@@ -165,6 +184,54 @@ def test_custom_registration_schema_reuses_public_password_bounds() -> None:
             ),
             type=CustomRegistrationSchema,
         )
+
+
+def test_builtin_and_custom_password_fields_reuse_public_alias() -> None:
+    """Built-in and app-owned schemas reuse the same public password field alias."""
+    create_annotation = get_type_hints(UserCreate, include_extras=True)["password"]
+    update_annotation = get_type_hints(UserUpdate, include_extras=True)["password"]
+    custom_annotation = get_type_hints(CustomRegistrationSchema, include_extras=True)["password"]
+    password_field_value = getattr(UserPasswordField, "__value__", UserPasswordField)
+
+    assert getattr(create_annotation, "__value__", create_annotation) == password_field_value
+    assert getattr(custom_annotation, "__value__", custom_annotation) == password_field_value
+    assert getattr(get_args(update_annotation)[0], "__value__", get_args(update_annotation)[0]) == password_field_value
+    assert get_args(update_annotation)[1] is type(None)
+
+
+def test_builtin_and_custom_email_fields_reuse_public_alias() -> None:
+    """Built-in and app-owned schemas reuse the same public email field alias."""
+    create_annotation = get_type_hints(UserCreate, include_extras=True)["email"]
+    update_annotation = get_type_hints(UserUpdate, include_extras=True)["email"]
+    custom_annotation = get_type_hints(CustomRegistrationSchema, include_extras=True)["email"]
+    email_field_value = getattr(UserEmailField, "__value__", UserEmailField)
+
+    assert getattr(create_annotation, "__value__", create_annotation) == email_field_value
+    assert getattr(custom_annotation, "__value__", custom_annotation) == email_field_value
+    assert getattr(get_args(update_annotation)[0], "__value__", get_args(update_annotation)[0]) == email_field_value
+    assert get_args(update_annotation)[1] is type(None)
+
+
+def test_public_password_alias_reuses_internal_metadata_source() -> None:
+    """The public password alias keeps the shared internal ``msgspec.Meta`` contract."""
+    public_meta = _annotation_meta(UserPasswordField, label="UserPasswordField")
+    internal_meta = _annotation_meta(
+        schema_fields_module.UserPasswordField,
+        label="litestar_auth._schema_fields.UserPasswordField",
+    )
+
+    assert public_meta is internal_meta
+
+
+def test_public_email_alias_reuses_internal_metadata_source() -> None:
+    """The public email alias keeps the shared internal ``msgspec.Meta`` contract."""
+    public_meta = _annotation_meta(UserEmailField, label="UserEmailField")
+    internal_meta = _annotation_meta(
+        schema_fields_module.EmailField,
+        label="litestar_auth._schema_fields.EmailField",
+    )
+
+    assert public_meta is internal_meta
 
 
 def test_user_update_omits_unset_optional_fields() -> None:

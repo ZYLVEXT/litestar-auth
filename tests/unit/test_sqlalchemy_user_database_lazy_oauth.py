@@ -34,6 +34,38 @@ def test_oauth_account_model_returned_when_set() -> None:
     assert database._require_oauth_account_model() is OAuthAccount
 
 
+def test_oauth_account_model_without_declared_user_contract_is_allowed() -> None:
+    """Contract validation skips OAuth models that do not declare user/table hooks yet."""
+
+    class OpaqueOAuthAccount:
+        pass
+
+    session = MagicMock()
+    database = SQLAlchemyUserDatabase(
+        session=session,
+        user_model=User,
+        oauth_account_model=OpaqueOAuthAccount,
+    )
+
+    assert database._require_oauth_account_model() is OpaqueOAuthAccount
+
+
+def test_oauth_account_model_rejects_different_declarative_registry() -> None:
+    """Matching user/table names are insufficient when registries differ."""
+
+    class RegistryMismatchOAuthAccount:
+        auth_user_model = "User"
+        auth_user_table = "user"
+        registry = object()
+
+    with pytest.raises(TypeError, match="different declarative registries"):
+        SQLAlchemyUserDatabase(
+            session=MagicMock(),
+            user_model=User,
+            oauth_account_model=RegistryMismatchOAuthAccount,
+        )
+
+
 @pytest.mark.imports
 def test_user_relationship_mixin_can_pair_custom_user_with_library_oauth_account() -> None:
     """Custom users can adopt the shared relationship contract and still wire the library OAuth model."""
@@ -75,22 +107,93 @@ def test_user_relationship_mixin_can_pair_custom_user_with_library_oauth_account
 
 
 @pytest.mark.imports
-def test_oauth_submodule_model_can_configure_adapter_without_loading_reference_user() -> None:
-    """The adapter accepts ``models.oauth.OAuthAccount`` without importing the bundled ``User`` model."""
+def test_oauth_submodule_model_rejects_incompatible_custom_user_without_loading_reference_user() -> None:
+    """The adapter rejects bundled OAuth wiring that targets a different custom user contract."""
     code = (
         "import sys\n"
         "from unittest.mock import MagicMock\n"
+        "from advanced_alchemy.base import UUIDPrimaryKey, create_registry\n"
+        "from sqlalchemy.orm import DeclarativeBase\n"
         "from litestar_auth.db.sqlalchemy import SQLAlchemyUserDatabase\n"
+        "from litestar_auth.models import UserAuthRelationshipMixin, UserModelMixin\n"
         "from litestar_auth.models.oauth import OAuthAccount\n"
-        "class CustomUserModel:\n"
-        "    pass\n"
+        "assert 'litestar_auth.models.user' not in sys.modules\n"
+        "class AppBase(DeclarativeBase):\n"
+        "    registry = create_registry()\n"
+        "    metadata = registry.metadata\n"
+        "    __abstract__ = True\n"
+        "class AppUUIDBase(UUIDPrimaryKey, AppBase):\n"
+        "    __abstract__ = True\n"
+        "class CustomUser(UserModelMixin, UserAuthRelationshipMixin, AppUUIDBase):\n"
+        "    __tablename__ = 'custom_user'\n"
+        "    auth_access_token_model = None\n"
+        "    auth_refresh_token_model = None\n"
+        "    auth_oauth_account_model = None\n"
+        "try:\n"
+        "    SQLAlchemyUserDatabase(\n"
+        "        session=MagicMock(),\n"
+        "        user_model=CustomUser,\n"
+        "        oauth_account_model=OAuthAccount,\n"
+        "    )\n"
+        "except TypeError as exc:\n"
+        "    message = str(exc)\n"
+        "else:\n"
+        "    raise AssertionError('Expected TypeError for mismatched OAuth model contract')\n"
+        "assert 'oauth_account_model does not match user_model' in message\n"
+        "assert \"same-registry User mapped to the 'user' table\" in message\n"
+        'assert "litestar_auth.models.user" not in sys.modules\n'
+    )
+    result = subprocess.run(
+        [sys.executable, "-c", code],
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+
+    assert result.returncode == 0, (result.stdout, result.stderr)
+
+
+@pytest.mark.imports
+def test_sqlalchemy_user_database_supports_password_column_name_hook_without_reference_models() -> None:
+    """The adapter accepts the supported password-column hook without loading reference models."""
+    code = (
+        "import sys\n"
+        "from unittest.mock import MagicMock\n"
+        "from advanced_alchemy.base import UUIDPrimaryKey, create_registry\n"
+        "from sqlalchemy import inspect\n"
+        "from sqlalchemy.orm import DeclarativeBase\n"
+        "from litestar_auth.db.sqlalchemy import SQLAlchemyUserDatabase\n"
+        "from litestar_auth.models import OAuthAccountMixin, UserAuthRelationshipMixin, UserModelMixin\n"
+        "assert 'litestar_auth.models.user' not in sys.modules\n"
+        "assert 'litestar_auth.models.oauth' not in sys.modules\n"
+        "class AppBase(DeclarativeBase):\n"
+        "    registry = create_registry()\n"
+        "    metadata = registry.metadata\n"
+        "    __abstract__ = True\n"
+        "class AppUUIDBase(UUIDPrimaryKey, AppBase):\n"
+        "    __abstract__ = True\n"
+        "class LegacyUser(UserModelMixin, UserAuthRelationshipMixin, AppUUIDBase):\n"
+        "    __tablename__ = 'legacy_user'\n"
+        "    auth_access_token_model = None\n"
+        "    auth_refresh_token_model = None\n"
+        "    auth_oauth_account_model = 'LegacyOAuthAccount'\n"
+        "    auth_hashed_password_column_name = 'password_hash'\n"
+        "class LegacyOAuthAccount(OAuthAccountMixin, AppUUIDBase):\n"
+        "    __tablename__ = 'legacy_oauth_account'\n"
+        "    auth_user_model = 'LegacyUser'\n"
+        "    auth_user_table = 'legacy_user'\n"
         "database = SQLAlchemyUserDatabase(\n"
         "    session=MagicMock(),\n"
-        "    user_model=CustomUserModel,\n"
-        "    oauth_account_model=OAuthAccount,\n"
+        "    user_model=LegacyUser,\n"
+        "    oauth_account_model=LegacyOAuthAccount,\n"
         ")\n"
-        "assert database._require_oauth_account_model() is OAuthAccount\n"
-        'assert "litestar_auth.models.user" not in sys.modules\n'
+        "assert database.user_model is LegacyUser\n"
+        "assert database._require_oauth_account_model() is LegacyOAuthAccount\n"
+        "assert inspect(LegacyUser).attrs.hashed_password.columns[0].name == 'password_hash'\n"
+        "assert inspect(LegacyOAuthAccount).relationships['user'].mapper.class_ is LegacyUser\n"
+        "assert 'litestar_auth.models.user' not in sys.modules\n"
+        "assert 'litestar_auth.models.oauth' not in sys.modules\n"
     )
     result = subprocess.run(
         [sys.executable, "-c", code],

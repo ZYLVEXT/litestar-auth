@@ -2,18 +2,30 @@
 
 from __future__ import annotations
 
+from typing import Self
+
 from pwdlib import PasswordHash
 from pwdlib.exceptions import UnknownHashError
 from pwdlib.hashers.argon2 import Argon2Hasher
 from pwdlib.hashers.bcrypt import BcryptHasher
 
 
+def _build_default_password_hash() -> PasswordHash:
+    """Return the library's default password-hashing pipeline."""
+    return PasswordHash((Argon2Hasher(), BcryptHasher()))
+
+
 class PasswordHelper:
     """Hash and verify passwords with Argon2 and bcrypt support."""
 
+    @classmethod
+    def from_defaults(cls) -> Self:
+        """Return a helper configured with the library's canonical hasher policy."""
+        return cls(password_hash=_build_default_password_hash())
+
     def __init__(self, password_hash: PasswordHash | None = None) -> None:
-        """Initialize the helper with Argon2 as primary and bcrypt as fallback."""
-        self.password_hash = password_hash or PasswordHash((Argon2Hasher(), BcryptHasher()))
+        """Initialize the helper with the provided pwdlib hash pipeline."""
+        self.password_hash = password_hash or _build_default_password_hash()
 
     def hash(self, password: str) -> str:
         """Return a salted password hash."""

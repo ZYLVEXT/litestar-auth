@@ -5,10 +5,11 @@ from __future__ import annotations
 import asyncio
 import importlib
 import warnings
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import timedelta
 from functools import partial
-from typing import Any, Literal, cast
+from typing import TYPE_CHECKING, Any, Literal, cast
 from unittest.mock import AsyncMock, patch
 from uuid import UUID, uuid4
 
@@ -19,6 +20,7 @@ from litestar.config.csrf import CSRFConfig
 from litestar.exceptions import ClientException
 from litestar.middleware import DefineMiddleware
 
+import litestar_auth._plugin.startup as startup_module
 import litestar_auth.plugin as plugin_module
 from litestar_auth._plugin import (
     DEFAULT_BACKENDS_DEPENDENCY_KEY,
@@ -34,7 +36,7 @@ from litestar_auth.authentication.strategy.db import DatabaseTokenStrategy
 from litestar_auth.authentication.strategy.jwt import JWTStrategy
 from litestar_auth.authentication.transport.bearer import BearerTransport
 from litestar_auth.authentication.transport.cookie import CookieTransport
-from litestar_auth.manager import require_password_length
+from litestar_auth.manager import UserManagerSecurity, require_password_length
 from litestar_auth.oauth_encryption import get_oauth_encryption_key_callable, oauth_token_encryption_scope
 from litestar_auth.password import PasswordHelper
 from litestar_auth.plugin import LitestarAuth, LitestarAuthConfig, OAuthConfig, TotpConfig
@@ -48,6 +50,9 @@ from tests.integration.test_orchestrator import (
     InMemoryUserDatabase,
     PluginUserManager,
 )
+
+if TYPE_CHECKING:
+    from collections.abc import Iterator
 
 pytestmark = pytest.mark.unit
 
@@ -125,6 +130,10 @@ def test_on_app_init_runs_lifecycle_steps_in_order(monkeypatch: pytest.MonkeyPat
         "litestar_auth.plugin.warn_if_insecure_oauth_redirect_in_production",
         lambda **_kwargs: calls.append("warn-oauth-redirect"),
     )
+    monkeypatch.setattr(
+        "litestar_auth.plugin.bootstrap_bundled_token_orm_models",
+        lambda _config: calls.append("bootstrap-token-models"),
+    )
     monkeypatch.setattr(plugin, "_register_dependencies", lambda _app_config: calls.append("dependencies"))
     monkeypatch.setattr(plugin, "_register_middleware", lambda _app_config: calls.append("middleware"))
     monkeypatch.setattr(plugin, "_register_controllers", lambda _app_config: calls.append("controllers"))
@@ -137,6 +146,7 @@ def test_on_app_init_runs_lifecycle_steps_in_order(monkeypatch: pytest.MonkeyPat
         "warn",
         "require-oauth-key",
         "warn-oauth-redirect",
+        "bootstrap-token-models",
         "dependencies",
         "middleware",
         "controllers",
@@ -181,6 +191,86 @@ def test_on_app_init_registers_middleware_controllers_dependencies_and_exception
     session_getter = middleware.kwargs["get_request_session"]
     assert isinstance(session_getter, partial)
     assert session_getter.func.__name__ == "get_or_create_scoped_session"
+
+
+def test_on_app_init_bootstraps_bundled_token_models_for_db_token_preset(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """App init uses the models-layer token bootstrap hook for the canonical DB-token preset."""
+    config = LitestarAuthConfig[ExampleUser, UUID].with_database_token_auth(
+        database_token_auth=plugin_module._plugin_config.DatabaseTokenAuthConfig(
+            token_hash_secret="a" * 40,
+        ),
+        user_model=ExampleUser,
+        user_manager_class=PluginUserManager,
+        session_maker=cast("Any", DummySessionMaker()),
+        user_db_factory=lambda _session: InMemoryUserDatabase([]),
+        user_manager_kwargs={
+            "verification_token_secret": "x" * 32,
+            "reset_password_token_secret": "y" * 32,
+        },
+    )
+    plugin = LitestarAuth(config)
+    bootstrap_calls: list[object] = []
+
+    def _record_bootstrap(configured_config: object) -> None:
+        bootstrap_calls.append(configured_config)
+
+    monkeypatch.setattr("litestar_auth.plugin.bootstrap_bundled_token_orm_models", _record_bootstrap)
+
+    plugin.on_app_init(AppConfig())
+
+    assert bootstrap_calls == [config]
+
+
+def test_bundled_token_bootstrap_loader_is_cached(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The startup loader only resolves the models-layer bootstrap helper once per process."""
+
+    class _ModelsModule:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def import_token_orm_models(self) -> tuple[type[object], type[object]]:
+            self.calls += 1
+            return object, object
+
+    models_module = _ModelsModule()
+    startup_module._load_bundled_token_orm_models.cache_clear()
+    monkeypatch.setattr(startup_module.importlib, "import_module", lambda _name: models_module)
+
+    first_result = startup_module._load_bundled_token_orm_models()
+    second_result = startup_module._load_bundled_token_orm_models()
+
+    assert first_result == (object, object)
+    assert second_result == first_result
+    assert models_module.calls == 1
+    startup_module._load_bundled_token_orm_models.cache_clear()
+
+
+def test_bundled_token_bootstrap_detection_skips_custom_token_models() -> None:
+    """Startup bootstrap detection skips app-owned token model contracts."""
+
+    class AppAccessToken:
+        pass
+
+    class AppRefreshToken:
+        pass
+
+    @dataclass(slots=True)
+    class DatabaseTokenStrategy:
+        access_token_model: type[object] = AppAccessToken
+        refresh_token_model: type[object] = AppRefreshToken
+
+    DatabaseTokenStrategy.__module__ = "litestar_auth.authentication.strategy.db"
+
+    backend = AuthenticationBackend[ExampleUser, UUID](
+        name="database",
+        transport=BearerTransport(),
+        strategy=cast("Any", DatabaseTokenStrategy()),
+    )
+    config = _minimal_config(backends=[backend])
+
+    assert plugin_module._plugin_config._uses_bundled_database_token_models(config) is False
 
 
 def test_on_app_init_warns_for_nondurable_jwt_strategy_when_acknowledged() -> None:
@@ -629,6 +719,111 @@ def test_build_user_manager_passes_login_identifier_from_config() -> None:
     assert manager.login_identifier == "username"
 
 
+def test_build_user_manager_uses_plugin_warning_owner_for_default_builder(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The bundled manager builder runs inside the plugin-owned warning scope with the config baseline."""
+    plugin = LitestarAuth(_minimal_config())
+    captured: list[tuple[str | None, str | None, str | None]] = []
+
+    @contextmanager
+    def _record_owner(
+        *,
+        verification_token_secret: str | None = None,
+        reset_password_token_secret: str | None = None,
+        totp_secret_key: str | None = None,
+    ) -> Iterator[None]:
+        captured.append((verification_token_secret, reset_password_token_secret, totp_secret_key))
+        yield
+
+    monkeypatch.setattr(plugin_module, "plugin_secret_role_warning_owner", _record_owner)
+
+    plugin._build_user_manager(cast("Any", DummySession()))
+
+    assert captured == [("verify-secret-12345678901234567890", "reset-secret-123456789012345678901", None)]
+
+
+def test_build_user_manager_uses_plugin_warning_owner_baseline_for_custom_factory(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Custom factories inherit the config-owned baseline so aligned managers do not duplicate warnings."""
+    plugin = LitestarAuth(_minimal_config())
+    captured: list[tuple[str | None, str | None, str | None]] = []
+
+    @contextmanager
+    def _record_owner(
+        *,
+        verification_token_secret: str | None = None,
+        reset_password_token_secret: str | None = None,
+        totp_secret_key: str | None = None,
+    ) -> Iterator[None]:
+        captured.append((verification_token_secret, reset_password_token_secret, totp_secret_key))
+        yield
+
+    monkeypatch.setattr(plugin_module, "plugin_secret_role_warning_owner", _record_owner)
+    plugin._user_manager_factory = lambda **_kwargs: cast("Any", "manager")
+
+    manager = plugin._build_user_manager(cast("Any", DummySession()))
+
+    assert manager == "manager"
+    assert captured == [("verify-secret-12345678901234567890", "reset-secret-123456789012345678901", None)]
+
+
+def test_build_user_manager_passes_typed_security_to_security_only_manager() -> None:
+    """Plugin-owned construction forwards the typed security bundle end-to-end when supported."""
+
+    class _SecurityOnlyManager(PluginUserManager):
+        def __init__(  # noqa: PLR0913
+            self,
+            user_db: object,
+            *,
+            password_helper: PasswordHelper | None = None,
+            security: UserManagerSecurity[UUID],
+            password_validator: object | None = None,
+            backends: tuple[object, ...] = (),
+            login_identifier: Literal["email", "username"] = "email",
+        ) -> None:
+            self.received_security = security
+            super().__init__(
+                cast("Any", user_db),
+                password_helper=password_helper,
+                security=security,
+                password_validator=cast("Any", password_validator),
+                backends=backends,
+                login_identifier=login_identifier,
+            )
+
+    backend = _FakeSessionBoundBackend(strategy=object())
+    config = LitestarAuthConfig[ExampleUser, UUID](
+        backends=[cast("AuthenticationBackend[ExampleUser, UUID]", backend)],
+        session_maker=cast("Any", DummySessionMaker()),
+        user_model=ExampleUser,
+        user_manager_class=_SecurityOnlyManager,
+        user_db_factory=lambda _session: InMemoryUserDatabase([]),
+        user_manager_security=UserManagerSecurity[UUID](
+            verification_token_secret="verify-secret-12345678901234567890",
+            reset_password_token_secret="reset-secret-123456789012345678901",
+        ),
+        user_manager_kwargs={"password_helper": PasswordHelper()},
+        id_parser=UUID,
+        login_identifier="username",
+    )
+    plugin = LitestarAuth(config)
+    session = object()
+
+    manager = plugin._build_user_manager(cast("Any", session))
+    typed_manager = cast("Any", manager)
+
+    assert typed_manager.received_security.verification_token_secret == "verify-secret-12345678901234567890"
+    assert typed_manager.received_security.reset_password_token_secret == "reset-secret-123456789012345678901"
+    assert typed_manager.received_security.id_parser is UUID
+    assert manager.id_parser is UUID
+    assert manager.login_identifier == "username"
+    assert len(manager.backends) == 1
+    assert manager.backends[0] is cast("Any", backend)
+    assert backend.bound_session is session
+
+
 def test_build_user_manager_uses_explicit_password_validator_factory() -> None:
     """Session-bound manager construction respects explicit password-validator factories."""
     config = _minimal_config()
@@ -668,6 +863,31 @@ def test_build_user_manager_preserves_legacy_manager_without_password_validator_
 
     assert isinstance(manager, LegacyManagerWithoutPasswordValidator)
     assert manager.password_validator is None
+
+
+def test_build_user_manager_skips_legacy_id_parser_for_inherited_opt_out() -> None:
+    """Inherited id_parser opt-outs should suppress legacy kwargs injection in the plugin path."""
+
+    class _IntermediateIdParserOptOutManager(PluginUserManager):
+        accepts_id_parser = False
+
+        def __init__(self, user_db: object, **kwargs: object) -> None:
+            self.received_manager_kwargs = dict(kwargs)
+            super().__init__(cast("Any", user_db), **cast("Any", self.received_manager_kwargs))
+
+    class _ConcreteIdParserOptOutManager(_IntermediateIdParserOptOutManager):
+        pass
+
+    config = _minimal_config(user_manager_class=_ConcreteIdParserOptOutManager)
+    config.user_manager_kwargs.pop("id_parser")
+    config.id_parser = UUID
+    plugin = LitestarAuth(config)
+
+    manager = plugin._build_user_manager(cast("Any", DummySession()))
+    typed_manager = cast("Any", manager)
+
+    assert "id_parser" not in typed_manager.received_manager_kwargs
+    assert manager.id_parser is None
 
 
 @pytest.mark.asyncio

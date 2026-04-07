@@ -45,15 +45,26 @@ from litestar_auth._plugin.validation import (
     validate_session_maker_or_external_db_session,
     validate_totp_config,
     validate_totp_sub_config,
+    validate_user_manager_security_config,
     validate_user_model_login_identifier_fields,
 )
 from litestar_auth.authentication.backend import AuthenticationBackend
 from litestar_auth.authentication.transport.bearer import BearerTransport
 from litestar_auth.authentication.transport.cookie import CookieTransport
+from litestar_auth.config import (
+    RESET_PASSWORD_TOKEN_AUDIENCE,
+    TOTP_ENROLL_AUDIENCE,
+    TOTP_PENDING_AUDIENCE,
+    VERIFY_TOKEN_AUDIENCE,
+)
+from litestar_auth.manager import UserManagerSecurity
 from litestar_auth.models import User as OrmUser
+from litestar_auth.password import PasswordHelper
+from litestar_auth.plugin import LitestarAuth
 from litestar_auth.ratelimit import AuthRateLimitConfig, EndpointRateLimit, InMemoryRateLimiter, RateLimiterBackend
 from litestar_auth.totp import InMemoryUsedTotpCodeStore
 from tests.integration.test_orchestrator import (
+    DummySession,
     DummySessionMaker,
     ExampleUser,
     InMemoryTokenStrategy,
@@ -547,6 +558,16 @@ def test_validate_password_validator_config_rejects_mixed_configuration() -> Non
         validate_password_validator_config(config)
 
 
+def test_validate_password_validator_config_rejects_none_placeholder_configuration() -> None:
+    """A placeholder ``password_validator=None`` still counts as legacy kwargs wiring."""
+    config = _minimal_config()
+    config.password_validator_factory = lambda _config: None
+    config.user_manager_kwargs["password_validator"] = None
+
+    with pytest.raises(ValueError, match="not both"):
+        validate_password_validator_config(config)
+
+
 def test_validate_password_validator_config_allows_explicit_user_manager_factory() -> None:
     """A custom builder may own password-validator injection itself."""
     config = _minimal_config()
@@ -770,6 +791,226 @@ def test_validate_totp_encryption_key_allows_configured_secret_in_production(
     config.user_manager_kwargs["totp_secret_key"] = TOTP_SECRET_KEY
 
     _validate_totp_encryption_key(config)
+
+
+def test_validate_totp_encryption_key_allows_typed_security_secret_in_production(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The canonical typed security bundle satisfies the production TOTP requirement."""
+    monkeypatch.setattr(validation_module, "is_testing", lambda: False)
+    config = _minimal_config(
+        totp_config=TotpConfig(totp_pending_secret="p" * 32),
+        user_manager_security=UserManagerSecurity[UUID](totp_secret_key=TOTP_SECRET_KEY),
+    )
+    config.user_manager_kwargs = {
+        "password_helper": object(),
+    }
+
+    _validate_totp_encryption_key(config)
+
+
+def test_validate_totp_encryption_key_rejects_empty_secret_in_production(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An empty legacy TOTP secret still fails the production encryption check."""
+    monkeypatch.setattr(validation_module, "is_testing", lambda: False)
+    config = _minimal_config(totp_config=TotpConfig(totp_pending_secret="p" * 32))
+    config.user_manager_kwargs["totp_secret_key"] = ""
+
+    with pytest.raises(validation_module.ConfigurationError, match="totp_secret_key is required in production"):
+        _validate_totp_encryption_key(config)
+
+
+def test_validate_user_manager_security_config_rejects_legacy_secret_overlap() -> None:
+    """The typed security contract cannot overlap with legacy secret kwargs."""
+    config = _minimal_config(
+        user_manager_security=UserManagerSecurity[UUID](
+            verification_token_secret="s" * 32,
+            reset_password_token_secret="r" * 32,
+        ),
+    )
+
+    with pytest.raises(validation_module.ConfigurationError, match="overlapping legacy entries"):
+        validate_user_manager_security_config(config)
+
+
+def test_validate_user_manager_security_config_rejects_mismatched_top_level_id_parser() -> None:
+    """Top-level and typed id_parser declarations must agree."""
+
+    def _parse_uuid(raw: str) -> UUID:
+        return UUID(raw)
+
+    config = _minimal_config(
+        user_manager_security=UserManagerSecurity[UUID](id_parser=UUID),
+        id_parser=_parse_uuid,
+    )
+    config.user_manager_kwargs = {"password_helper": object()}
+
+    with pytest.raises(validation_module.ConfigurationError, match="Configure id_parser via"):
+        validate_user_manager_security_config(config)
+
+
+def test_validate_config_accepts_typed_user_manager_security_contract() -> None:
+    """Plugin validation accepts the canonical typed security path without legacy overlap."""
+    config = _minimal_config(
+        user_manager_security=UserManagerSecurity[UUID](
+            verification_token_secret="s" * 32,
+            reset_password_token_secret="r" * 32,
+            totp_secret_key=TOTP_SECRET_KEY,
+            id_parser=UUID,
+        ),
+        id_parser=UUID,
+        totp_config=TotpConfig(
+            totp_pending_secret="p" * 32,
+            totp_used_tokens_store=cast("Any", InMemoryUsedTotpCodeStore()),
+        ),
+    )
+    config.user_manager_kwargs = {"password_helper": object()}
+
+    validate_user_manager_security_config(config)
+
+
+def test_validate_user_manager_security_config_warns_when_secret_roles_share_one_value(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Production validation warns when verify/reset/TOTP roles reuse one value."""
+    monkeypatch.setattr(validation_module, "is_testing", lambda: False)
+    shared_secret = "shared-secret-role-value-1234567890"
+    config = _minimal_config(
+        user_manager_security=UserManagerSecurity[UUID](
+            verification_token_secret=shared_secret,
+            reset_password_token_secret=shared_secret,
+            totp_secret_key=shared_secret,
+        ),
+        totp_config=TotpConfig(
+            totp_pending_secret=shared_secret,
+            totp_used_tokens_store=cast("Any", InMemoryUsedTotpCodeStore()),
+        ),
+    )
+    config.user_manager_kwargs = {"password_helper": PasswordHelper()}
+
+    with pytest.warns(validation_module.SecurityWarning, match="supported production posture") as records:
+        validate_user_manager_security_config(config)
+
+    assert len(records) == 1
+    message = str(records[0].message)
+    assert "verification_token_secret" in message
+    assert "reset_password_token_secret" in message
+    assert "totp_secret_key" in message
+    assert "totp_pending_secret" in message
+    assert VERIFY_TOKEN_AUDIENCE in message
+    assert RESET_PASSWORD_TOKEN_AUDIENCE in message
+    assert TOTP_PENDING_AUDIENCE in message
+    assert TOTP_ENROLL_AUDIENCE in message
+
+
+def test_plugin_managed_secret_role_reuse_warning_is_owned_by_validation() -> None:
+    """Plugin-managed configs warn once during validation, not again during manager construction."""
+    shared_secret = "shared-plugin-secret-role-value-1234567890"
+    config = _minimal_config(
+        user_manager_security=UserManagerSecurity[UUID](
+            verification_token_secret=shared_secret,
+            reset_password_token_secret=shared_secret,
+            totp_secret_key=shared_secret,
+        ),
+        totp_config=TotpConfig(
+            totp_pending_secret=shared_secret,
+            totp_used_tokens_store=cast("Any", InMemoryUsedTotpCodeStore()),
+        ),
+    )
+    config.user_manager_kwargs = {"password_helper": PasswordHelper()}
+
+    def _build_plugin_managed_manager() -> None:
+        plugin = LitestarAuth(config)
+        plugin._build_user_manager(cast("Any", DummySession()))
+
+    with pytest.warns(validation_module.SecurityWarning, match="supported production posture") as records:
+        _build_plugin_managed_manager()
+
+    assert len(records) == 1
+    message = str(records[0].message)
+    assert "totp_pending_secret" in message
+    assert TOTP_PENDING_AUDIENCE in message
+    assert TOTP_ENROLL_AUDIENCE in message
+
+
+def test_custom_user_manager_factory_does_not_duplicate_aligned_secret_role_warning() -> None:
+    """Aligned custom factories inherit the validated secret baseline without duplicating the warning."""
+    shared_secret = "shared-aligned-custom-factory-secret"
+    config = _minimal_config(
+        user_manager_security=UserManagerSecurity[UUID](
+            verification_token_secret=shared_secret,
+            reset_password_token_secret=shared_secret,
+            totp_secret_key=shared_secret,
+        ),
+        totp_config=TotpConfig(
+            totp_pending_secret=shared_secret,
+            totp_used_tokens_store=cast("Any", InMemoryUsedTotpCodeStore()),
+        ),
+    )
+    config.user_manager_kwargs = {"password_helper": PasswordHelper()}
+
+    def _factory(**kwargs: object) -> PluginUserManager:
+        return PluginUserManager(
+            cast("Any", kwargs["user_db"]),
+            password_helper=PasswordHelper(),
+            security=cast("UserManagerSecurity[UUID]", config.user_manager_security),
+            backends=cast("tuple[object, ...]", kwargs["backends"]),
+        )
+
+    def _build_aligned_custom_manager() -> None:
+        plugin = LitestarAuth(config)
+        plugin._build_user_manager(cast("Any", DummySession()))
+
+    config.user_manager_factory = _factory
+
+    with pytest.warns(validation_module.SecurityWarning, match="supported production posture") as records:
+        _build_aligned_custom_manager()
+
+    assert len(records) == 1
+    message = str(records[0].message)
+    assert "totp_pending_secret" in message
+    assert TOTP_PENDING_AUDIENCE in message
+    assert TOTP_ENROLL_AUDIENCE in message
+
+
+def test_custom_user_manager_factory_surfaces_divergent_manager_secret_role_warning() -> None:
+    """Custom factories cannot silence manager-owned warnings by diverging from config-owned secrets."""
+    shared_secret = "shared-custom-factory-secret-role-12"
+    config = _minimal_config(
+        user_manager_security=UserManagerSecurity[UUID](
+            verification_token_secret="verify-custom-config-secret-123456",
+            reset_password_token_secret="reset-custom-config-secret-1234567",
+            totp_secret_key=TOTP_SECRET_KEY,
+        ),
+    )
+    config.user_manager_kwargs = {"password_helper": PasswordHelper()}
+
+    def _factory(**kwargs: object) -> PluginUserManager:
+        return PluginUserManager(
+            cast("Any", kwargs["user_db"]),
+            password_helper=PasswordHelper(),
+            security=UserManagerSecurity[UUID](
+                verification_token_secret=shared_secret,
+                reset_password_token_secret=shared_secret,
+                totp_secret_key=shared_secret,
+            ),
+            backends=cast("tuple[object, ...]", kwargs["backends"]),
+        )
+
+    config.user_manager_factory = _factory
+    plugin = LitestarAuth(config)
+
+    with pytest.warns(validation_module.SecurityWarning, match="supported production posture") as records:
+        plugin._build_user_manager(cast("Any", DummySession()))
+
+    assert len(records) == 1
+    message = str(records[0].message)
+    assert "verification_token_secret" in message
+    assert "reset_password_token_secret" in message
+    assert "totp_secret_key" in message
+    assert VERIFY_TOKEN_AUDIENCE in message
+    assert RESET_PASSWORD_TOKEN_AUDIENCE in message
 
 
 def test_validate_totp_config_warns_for_insecure_cookie_transport(
@@ -1319,12 +1560,14 @@ def test_validate_request_security_config_checks_rate_limit_before_cookie_auth(
     ]
 
 
-def _minimal_config(
+def _minimal_config(  # noqa: PLR0913
     *,
     backends: list[AuthenticationBackend[ExampleUser, UUID]] | None = None,
     oauth_config: OAuthConfig | None = None,
     rate_limit_config: AuthRateLimitConfig | None = None,
     totp_config: TotpConfig | None = None,
+    user_manager_security: UserManagerSecurity[UUID] | None = None,
+    id_parser: object | None = None,
 ) -> LitestarAuthConfig[ExampleUser, UUID]:
     """Build a minimal plugin config for validation-focused unit tests.
 
@@ -1349,10 +1592,12 @@ def _minimal_config(
         user_model=ExampleUser,
         user_manager_class=PluginUserManager,
         user_db_factory=lambda _session: user_db,
+        user_manager_security=user_manager_security,
         user_manager_kwargs={
             "verification_token_secret": "v" * 32,
             "reset_password_token_secret": "r" * 32,
         },
+        id_parser=cast("Any", id_parser),
         oauth_config=oauth_config,
         rate_limit_config=rate_limit_config,
         totp_config=totp_config,

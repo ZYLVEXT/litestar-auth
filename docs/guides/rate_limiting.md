@@ -1,49 +1,53 @@
 # Rate limiting
 
-Optional **per-endpoint** limits protect login, registration, token flows, and TOTP surfaces from brute force and abuse. Configure **`AuthRateLimitConfig`** on **`LitestarAuthConfig.rate_limit_config`**. For the common Redis-backed setup, use **`AuthRateLimitConfig.from_shared_backend()`** and let the library materialize the standard auth endpoint slots for you.
+Optional **per-endpoint** limits protect login, registration, token flows, and TOTP surfaces from
+brute force and abuse. Configure **`AuthRateLimitConfig`** on
+**`LitestarAuthConfig.rate_limit_config`**. For the current Redis-backed contract, including the
+stable slot and group inventory, migration recipe, and `RedisUsedTotpCodeStore` pairing, use
+[Configuration](../configuration.md#canonical-redis-backed-auth-surface) as the maintained source
+of truth. This guide focuses on how the rate-limit surface maps onto the HTTP routes you expose.
 
 ## Canonical shared-backend setup
 
 ```python
-from litestar_auth.ratelimit import AuthRateLimitConfig, RedisRateLimiter
+from litestar_auth import TotpConfig
+from litestar_auth.contrib.redis import RedisAuthPreset, RedisAuthRateLimitTier
+from litestar_auth.ratelimit import AUTH_RATE_LIMIT_VERIFICATION_SLOTS
 
-rate_limit_config = AuthRateLimitConfig.from_shared_backend(
-    RedisRateLimiter(
-        redis=redis_client,
-        max_attempts=5,
-        window_seconds=60,
-    ),
+redis_auth = RedisAuthPreset(
+    redis=redis_client,
+    rate_limit_tier=RedisAuthRateLimitTier(max_attempts=5, window_seconds=60),
+    group_rate_limit_tiers={
+        "refresh": RedisAuthRateLimitTier(max_attempts=10, window_seconds=300),
+        "totp": RedisAuthRateLimitTier(max_attempts=5, window_seconds=300),
+    },
+)
+rate_limit_config = redis_auth.build_rate_limit_config(
+    disabled=AUTH_RATE_LIMIT_VERIFICATION_SLOTS,
+    namespace_style="snake_case",
+)
+totp_config = TotpConfig(
+    totp_pending_secret="replace-with-32+-char-secret",
+    totp_used_tokens_store=redis_auth.build_totp_used_tokens_store(),
 )
 ```
 
-The shared-backend builder keeps the package defaults for scopes and namespace tokens:
+`RedisAuthPreset` is the preferred one-client Redis path when auth rate limiting and the TOTP
+replay store should share the same async Redis client. Keep
+`AuthRateLimitConfig.from_shared_backend()` plus direct `RedisRateLimiter(...)` /
+`RedisUsedTotpCodeStore(...)` construction as the advanced escape hatch for applications that need
+separate backends or deeper per-slot customization. For the exact slot names, groups, default
+scopes, namespace families, helper exports, override precedence, and migration recipe, follow
+[Configuration](../configuration.md#canonical-redis-backed-auth-surface).
 
-- `login`, `forgot_password`, and `request_verify_token` use `ip_email`.
-- The remaining auth slots use `ip`.
-- Namespace tokens follow the route-oriented defaults such as `login`, `forgot-password`, and `totp-verify`.
-
-`from_shared_backend()` exposes typed public builder identifiers from `litestar_auth.ratelimit`:
-
-```python
-from litestar_auth.ratelimit import AuthRateLimitEndpointGroup, AuthRateLimitEndpointSlot
-```
-
-- `AuthRateLimitEndpointSlot` names the per-endpoint keys accepted by `enabled`, `disabled`, `scope_overrides`, `namespace_overrides`, and `endpoint_overrides`.
-- `AuthRateLimitEndpointGroup` names the shared-backend keys accepted by `group_backends`.
-
-The private recipe catalog that stores these defaults is still internal, but the supported builder contract is:
-
-- Supported `AuthRateLimitEndpointSlot` values: `login`, `refresh`, `register`, `forgot_password`, `reset_password`, `totp_enable`, `totp_confirm_enable`, `totp_verify`, `totp_disable`, `verify_token`, `request_verify_token`
-- Supported `AuthRateLimitEndpointGroup` values: `login`, `refresh`, `register`, `password_reset`, `totp`, `verification`
-
-Override precedence is:
-
-1. `endpoint_overrides` wins per slot and can replace the limiter or set it to `None`.
-2. Otherwise, only slots enabled by `enabled` (defaults to all supported slots) and not listed in `disabled` are generated.
-3. Generated limiters start from `backend`, then `group_backends` can swap the backend for the slot's group.
-4. `scope_overrides` and `namespace_overrides` adjust the generated limiter for that slot.
-
-When migrating from an existing manual recipe, preserve established key shapes with `scope_overrides` and `namespace_overrides`, and use `disabled` for slots you intentionally leave unset. There is no separate migration preset or namespace switch beyond these current builder arguments.
+`enabled` and `disabled` remain the underlying builder inputs. When app code needs the supported
+slot inventory directly, import `AUTH_RATE_LIMIT_ENDPOINT_SLOTS`,
+`AUTH_RATE_LIMIT_ENDPOINT_SLOTS_BY_GROUP`, or `AUTH_RATE_LIMIT_VERIFICATION_SLOTS` from
+`litestar_auth.ratelimit` instead of repeating literal frozensets. Use
+`AUTH_RATE_LIMIT_ENDPOINT_SLOTS` for explicit `enabled=...` calls, and use either
+`AUTH_RATE_LIMIT_VERIFICATION_SLOTS` or
+`AUTH_RATE_LIMIT_ENDPOINT_SLOTS_BY_GROUP["verification"]` for `disabled=...` when the built-in
+verification routes stay off.
 
 ## Behavior
 
@@ -54,6 +58,10 @@ When migrating from an existing manual recipe, preserve established key shapes w
 ## Config fields → HTTP surface
 
 Each field accepts an **`EndpointRateLimit`** (or `None` to disable that bucket). Map them to routes you expose:
+
+`AUTH_RATE_LIMIT_ENDPOINT_SLOTS` exposes this same ordered slot inventory, and
+`AUTH_RATE_LIMIT_ENDPOINT_SLOTS_BY_GROUP["verification"]` is the group-level equivalent of
+`AUTH_RATE_LIMIT_VERIFICATION_SLOTS`.
 
 | `AuthRateLimitConfig` field / `AuthRateLimitEndpointSlot` value | `AuthRateLimitEndpointGroup` value | Default scope | Default namespace token | Typical route / action |
 | -------------------------------------------------------------- | ---------------------------------- | ------------- | ----------------------- | ---------------------- |
@@ -74,35 +82,16 @@ The plugin turns these `totp_*` limiters into an internal orchestrator so **`tot
 !!! note "Reset password counter"
     For **`reset_password`**, failed attempts (invalid token or password) can still consume budget; success may reset the window — see implementation notes in `litestar_auth.ratelimit`.
 
-## Migration recipe for existing Redis key shapes
+## Migration from existing Redis key shapes
 
-If an older app already depends on separate credential, refresh, and TOTP budgets plus underscore namespaces, preserve that behavior with the current builder surface. This is a migration pattern built from the existing builder knobs, not a separate preset:
-
-```python
-from litestar_auth.ratelimit import AuthRateLimitConfig, RedisRateLimiter
-
-credential_backend = RedisRateLimiter(redis=redis_client, max_attempts=5, window_seconds=60)
-refresh_backend = RedisRateLimiter(redis=redis_client, max_attempts=10, window_seconds=300)
-totp_backend = RedisRateLimiter(redis=redis_client, max_attempts=5, window_seconds=300)
-
-rate_limit_config = AuthRateLimitConfig.from_shared_backend(
-    credential_backend,
-    group_backends={"refresh": refresh_backend, "totp": totp_backend},
-    disabled={"verify_token", "request_verify_token"},
-    namespace_overrides={
-        "forgot_password": "forgot_password",
-        "reset_password": "reset_password",
-        "totp_enable": "totp_enable",
-        "totp_confirm_enable": "totp_confirm_enable",
-        "totp_verify": "totp_verify",
-        "totp_disable": "totp_disable",
-    },
-)
-```
-
-In that example, `login`, `register`, `forgot_password`, and `reset_password` stay on `credential_backend`, the `refresh` group moves to `refresh_backend`, the `totp_*` slots move to `totp_backend`, and the verification slots stay unset.
-
-Add `scope_overrides` only when an existing key shape depends on a non-default scope for a specific slot. Keep direct `AuthRateLimitConfig(..., EndpointRateLimit(...))` assembly for cases where a slot needs a wholly custom limiter instead of the shared builder.
+If an older app already depends on separate credential, refresh, and TOTP budgets or underscore
+namespaces, follow the migration recipe in
+[Configuration](../configuration.md#canonical-redis-backed-auth-surface). Start with
+`namespace_style="snake_case"` when your deployed keys already use slot-aligned underscore names,
+keep `namespace_overrides` only for bespoke exceptions, use
+`AUTH_RATE_LIMIT_VERIFICATION_SLOTS` when the built-in verification routes stay disabled, and
+reserve `scope_overrides`, `group_backends`, or `endpoint_overrides` for cases where the preset or
+shared builder still does not match the existing key shape.
 
 ## Advanced manual wiring
 
@@ -121,4 +110,5 @@ rate_limit_config = AuthRateLimitConfig(
 
 - [Python API — Rate limiting](../api/ratelimit.md) — mkdocstrings for the public rate-limit entrypoints and advanced types.
 - [Security guide](security.md) — when to prefer Redis.
-- [Configuration](../configuration.md) — `rate_limit_config` field.
+- [Configuration](../configuration.md#canonical-redis-backed-auth-surface) — canonical Redis-backed
+  auth contract, migration recipe, and replay-store guidance.

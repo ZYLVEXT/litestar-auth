@@ -9,9 +9,10 @@ from typing import TYPE_CHECKING, get_type_hints
 from uuid import UUID
 
 import pytest
-from sqlalchemy import create_engine, event, inspect
+from advanced_alchemy.base import UUIDPrimaryKey, create_registry
+from sqlalchemy import String, create_engine, event, inspect, select
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column
 from sqlalchemy.pool import StaticPool
 
 import litestar_auth.models as litestar_auth_models
@@ -514,6 +515,127 @@ def test_optional_model_mixins_support_custom_auth_family_contract_without_refer
     assert result.returncode == 0, (result.stdout, result.stderr)
 
 
+def test_custom_user_model_can_map_hashed_password_to_legacy_column_via_supported_hook() -> None:
+    """Custom users can map ``hashed_password`` to ``password_hash`` via the mixin hook."""
+
+    class LegacyAuthBase(DeclarativeBase):
+        """App-owned registry for the legacy password-column contract."""
+
+        registry = create_registry()
+        metadata = registry.metadata
+        __abstract__ = True
+
+    class LegacyUUIDBase(UUIDPrimaryKey, LegacyAuthBase):
+        """UUID primary-key base for the legacy password-column contract."""
+
+        __abstract__ = True
+
+    class LegacyUser(UserModelMixin, UserAuthRelationshipMixin, LegacyUUIDBase):
+        """Custom user model that keeps the ``hashed_password`` attribute on a legacy column."""
+
+        __tablename__ = "legacy_user"
+
+        auth_access_token_model = "LegacyAccessToken"
+        auth_refresh_token_model = "LegacyRefreshToken"
+        auth_oauth_account_model = "LegacyOAuthAccount"
+        auth_hashed_password_column_name = "password_hash"
+
+    class LegacyAccessToken(AccessTokenMixin, LegacyAuthBase):
+        """Custom access-token model paired with the legacy password-column user."""
+
+        __tablename__ = "legacy_access_token"
+
+        auth_user_model = "LegacyUser"
+        auth_user_table = "legacy_user"
+
+    class LegacyRefreshToken(RefreshTokenMixin, LegacyAuthBase):
+        """Custom refresh-token model paired with the legacy password-column user."""
+
+        __tablename__ = "legacy_refresh_token"
+
+        auth_user_model = "LegacyUser"
+        auth_user_table = "legacy_user"
+
+    class LegacyOAuthAccount(OAuthAccountMixin, LegacyUUIDBase):
+        """Custom OAuth-account model paired with the legacy password-column user."""
+
+        __tablename__ = "legacy_oauth_account"
+
+        auth_user_model = "LegacyUser"
+        auth_user_table = "legacy_user"
+
+    engine = create_test_engine()
+    try:
+        LegacyUser.metadata.create_all(engine)
+
+        inspector = inspect(engine)
+        user_columns = {column["name"] for column in inspector.get_columns("legacy_user")}
+
+        assert "password_hash" in user_columns
+        assert "hashed_password" not in user_columns
+        assert LegacyUser.__mapper__.attrs["hashed_password"].columns[0].name == "password_hash"
+        legacy_relationships = inspect(LegacyUser).relationships
+        assert legacy_relationships["access_tokens"].mapper.class_ is LegacyAccessToken
+        assert legacy_relationships["refresh_tokens"].mapper.class_ is LegacyRefreshToken
+        assert legacy_relationships["oauth_accounts"].mapper.class_ is LegacyOAuthAccount
+
+        with Session(engine) as session:
+            user = LegacyUser(email="legacy-password-column@example.com", hashed_password="legacy-hash")
+            session.add(user)
+            session.commit()
+
+            stored_hash = session.execute(select(LegacyUser.__table__.c.password_hash)).scalar_one()
+
+        assert stored_hash == "legacy-hash"
+    finally:
+        engine.dispose()
+
+
+def test_explicit_hashed_password_column_override_remains_supported_for_compatibility() -> None:
+    """Explicit ``hashed_password = mapped_column(...)`` overrides still work for older custom models."""
+
+    class LegacyCompatibilityBase(DeclarativeBase):
+        """App-owned registry for compatibility coverage."""
+
+        registry = create_registry()
+        metadata = registry.metadata
+        __abstract__ = True
+
+    class LegacyCompatibilityUUIDBase(UUIDPrimaryKey, LegacyCompatibilityBase):
+        """UUID primary-key base for compatibility coverage."""
+
+        __abstract__ = True
+
+    class LegacyCompatibilityUser(UserModelMixin, LegacyCompatibilityUUIDBase):
+        """Compatibility model that keeps the legacy explicit field override."""
+
+        __tablename__ = "legacy_compatibility_user"
+
+        hashed_password: Mapped[str] = mapped_column("password_hash", String(length=255))
+
+    engine = create_test_engine()
+    try:
+        LegacyCompatibilityUser.metadata.create_all(engine)
+
+        inspector = inspect(engine)
+        user_columns = {column["name"] for column in inspector.get_columns("legacy_compatibility_user")}
+
+        assert "password_hash" in user_columns
+        assert "hashed_password" not in user_columns
+        assert LegacyCompatibilityUser.__mapper__.attrs["hashed_password"].columns[0].name == "password_hash"
+
+        with Session(engine) as session:
+            user = LegacyCompatibilityUser(email="compatibility@example.com", hashed_password="compatibility-hash")
+            session.add(user)
+            session.commit()
+
+            stored_hash = session.execute(select(LegacyCompatibilityUser.__table__.c.password_hash)).scalar_one()
+
+        assert stored_hash == "compatibility-hash"
+    finally:
+        engine.dispose()
+
+
 @pytest.mark.imports
 def test_optional_model_mixins_support_partial_oauth_customization() -> None:
     """Custom users can compose only the OAuth branch of the auth model family."""
@@ -818,6 +940,55 @@ def test_db_models_side_effect_import_still_exposes_token_registration_helper() 
         "assert db_models.import_token_orm_models() == (db_models.AccessToken, db_models.RefreshToken)\n"
         "assert import_token_orm_models() == (db_models.AccessToken, db_models.RefreshToken)\n"
         "assert import_token_orm_models_from_models() == (db_models.AccessToken, db_models.RefreshToken)\n"
+    )
+    result = subprocess.run(
+        [sys.executable, "-c", code],
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+
+    assert result.returncode == 0, (result.stdout, result.stderr)
+
+
+@pytest.mark.imports
+def test_plugin_runtime_bootstrap_is_idempotent_with_models_helper() -> None:
+    """Plugin runtime bootstrap and the explicit models helper share one bundled token registration path."""
+    code = (
+        "import sys\n"
+        "from typing import Any, cast\n"
+        "from litestar.config.app import AppConfig\n"
+        "from litestar_auth.plugin import LitestarAuth, LitestarAuthConfig\n"
+        "from litestar_auth._plugin.config import DatabaseTokenAuthConfig\n"
+        "class UserModel:\n"
+        "    email = 'user@example.com'\n"
+        "class UserManager:\n"
+        "    def __init__(self, user_db: object, **kwargs: object) -> None:\n"
+        "        self.user_db = user_db\n"
+        "        self.kwargs = kwargs\n"
+        "class DummySessionMaker:\n"
+        "    def __call__(self) -> object:\n"
+        "        return object()\n"
+        "config = LitestarAuthConfig.with_database_token_auth(\n"
+        "    database_token_auth=DatabaseTokenAuthConfig(token_hash_secret='x' * 40),\n"
+        "    user_model=UserModel,\n"
+        "    user_manager_class=cast(Any, UserManager),\n"
+        "    session_maker=cast(Any, DummySessionMaker()),\n"
+        "    user_manager_kwargs={\n"
+        "        'verification_token_secret': 'y' * 32,\n"
+        "        'reset_password_token_secret': 'z' * 32,\n"
+        "    },\n"
+        ")\n"
+        "plugin = LitestarAuth(config)\n"
+        "plugin.on_app_init(AppConfig())\n"
+        "from litestar_auth.models import import_token_orm_models\n"
+        "first = import_token_orm_models()\n"
+        "second = import_token_orm_models()\n"
+        "assert first == second\n"
+        "assert [model.__name__ for model in first] == ['AccessToken', 'RefreshToken']\n"
+        "assert 'litestar_auth.models.user' not in sys.modules\n"
+        "assert 'litestar_auth.models.oauth' not in sys.modules\n"
     )
     result = subprocess.run(
         [sys.executable, "-c", code],

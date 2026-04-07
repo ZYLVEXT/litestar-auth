@@ -2,9 +2,11 @@
 
 Use this when your application maps auth tables to **your own** SQLAlchemy models (same Advanced Alchemy / declarative registry as the rest of the app) and you want to reuse the **library OAuth account contract** without copying mapper wiring from the reference models.
 
+This page focuses on the custom user + OAuth pair and adapter wiring. For the bundled token bootstrap lifecycle, `DatabaseTokenModels(...)`, and the supported password-column hook, use [Configuration](../configuration.md#custom-sqlalchemy-user-and-token-models).
+
 ## Supported paths
 
-- If your app keeps the default `user` table and the mapped class name `User`, importing **`OAuthAccount` from `litestar_auth.models.oauth`** still works.
+- If your app keeps the default `user` table, the mapped class name `User`, and the same declarative registry, importing **`OAuthAccount` from `litestar_auth.models.oauth`** still works.
 - If your user class name or table name changes, prefer a custom pair built from **`UserAuthRelationshipMixin`** and **`OAuthAccountMixin`** so you can point both sides of the relationship at your schema without hand-copying the bundled mapper definition.
 
 ```python
@@ -39,6 +41,20 @@ class MyOAuthAccount(OAuthAccountMixin, AppUUIDBase):
     auth_user_table = "my_user"
 ```
 
+If the same custom user keeps a legacy password-hash column name, leave the runtime attribute as `hashed_password` and set the supported hook instead of redefining the field:
+
+```python
+class MyUser(UserModelMixin, UserAuthRelationshipMixin, AppUUIDBase):
+    __tablename__ = "my_user"
+
+    auth_access_token_model = None
+    auth_refresh_token_model = None
+    auth_oauth_account_model = "MyOAuthAccount"
+    auth_hashed_password_column_name = "password_hash"
+```
+
+That keeps `BaseUserManager`, `SQLAlchemyUserDatabase`, and JWT fingerprinting on the normal `user.hashed_password` contract while the SQL column remains `password_hash`.
+
 `from litestar_auth.models import User` (or `from litestar_auth.models.user import User`) loads the bundled reference `User` and registers a mapper for table `user`, which **conflicts** with your app model when you already map that table yourself.
 
 The mixins exposed from `litestar_auth.models` are side-effect free: importing them does **not** register the bundled `User` or `OAuthAccount` mappers.
@@ -51,7 +67,7 @@ from litestar_auth.models import import_token_orm_models
 AccessToken, RefreshToken = import_token_orm_models()
 ```
 
-Call that helper explicitly during metadata registration or Alembic setup when this app reuses the library `AccessToken` / `RefreshToken` models. Neither `LitestarAuthConfig` nor `DatabaseTokenStrategy` auto-registers those bundled token mappers. The older `from litestar_auth.authentication.strategy import import_token_orm_models` path remains compatibility-only for existing imports.
+Call that helper explicitly during metadata registration or Alembic setup when this app reuses the library `AccessToken` / `RefreshToken` models. `LitestarAuth.on_app_init()` now handles the matching plugin-runtime bootstrap path lazily when the configured DB-token strategy still uses the library classes, so no extra import side effect is needed only for runtime correctness.
 
 ## Plugin and user database
 
@@ -71,16 +87,14 @@ def user_db_factory(session):
 
 Wire that factory in `LitestarAuthConfig(user_model=MyUser, user_db_factory=user_db_factory, oauth_config=...)`.
 
+`SQLAlchemyUserDatabase` now validates that `oauth_account_model` points back at the same user contract. If you previously paired `litestar_auth.models.oauth.OAuthAccount` with a renamed user class, a non-`user` table, or a different declarative registry, that setup now fails fast with `TypeError`; replace it with an `OAuthAccountMixin` subclass whose `auth_user_model` / `auth_user_table` settings match `MyUser`.
+
 ## If you later add DB token tables
 
-Keep the same models-owned workflow:
+Keep the same models-owned workflow described in [Configuration](../configuration.md#custom-sqlalchemy-user-and-token-models):
 
-- Reuse the bundled token tables with `from litestar_auth.models import import_token_orm_models`, and call it explicitly during metadata registration or Alembic setup.
+- Reuse the bundled token tables with `from litestar_auth.models import import_token_orm_models`, keeping that helper for metadata registration and Alembic setup while plugin startup handles the runtime bootstrap path.
 - Map your own token tables with `AccessTokenMixin` / `RefreshTokenMixin`, then pass `DatabaseTokenModels(...)` to `DatabaseTokenStrategy` so login, refresh rotation, logout cleanup, and expired-token cleanup target those classes.
-
-Existing code can keep `from litestar_auth.authentication.strategy import import_token_orm_models` temporarily while migrating, but new examples should use the models-layer helper above.
-
-The full custom-token example lives in [Configuration](../configuration.md#custom-sqlalchemy-user-and-token-models).
 
 ## Token encryption
 

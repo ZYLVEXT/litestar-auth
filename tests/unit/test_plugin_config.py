@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import importlib
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from datetime import timedelta
 from functools import partial
 from typing import TYPE_CHECKING, Any, Literal, cast, get_type_hints
@@ -22,16 +22,23 @@ from litestar_auth._plugin.config import (
     require_session_maker,
     resolve_password_validator,
     resolve_user_manager_factory,
+    user_manager_accepts_id_parser,
     user_manager_accepts_login_identifier,
     user_manager_accepts_password_validator,
+    user_manager_accepts_security,
 )
 from litestar_auth._plugin.scoped_session import SessionFactory
 from litestar_auth.authentication.backend import AuthenticationBackend
+from litestar_auth.authentication.strategy.db_models import AccessToken, RefreshToken
 from litestar_auth.authentication.transport.bearer import BearerTransport
 from litestar_auth.config import DEFAULT_MINIMUM_PASSWORD_LENGTH
-from litestar_auth.manager import BaseUserManager, require_password_length
+from litestar_auth.exceptions import InvalidPasswordError
+from litestar_auth.manager import BaseUserManager, UserManagerSecurity, require_password_length
+from litestar_auth.password import PasswordHelper
 from litestar_auth.plugin import LitestarAuthConfig
 from litestar_auth.ratelimit import AuthRateLimitConfig
+from litestar_auth.schemas import UserCreate
+from litestar_auth.totp import SecurityWarning
 from tests.e2e.conftest import assert_structural_session_factory
 from tests.integration.test_orchestrator import (
     DummySession,
@@ -57,12 +64,14 @@ def test_plugin_config_module_executes_under_coverage() -> None:
     assert reloaded_module.OAuthConfig.__name__ == OAuthConfig.__name__
 
 
-def _minimal_config(
+def _minimal_config(  # noqa: PLR0913
     *,
     backends: list[AuthenticationBackend[ExampleUser, UUID]] | None = None,
     include_users: bool = False,
     totp_config: TotpConfig | None = None,
+    user_manager_security: UserManagerSecurity[UUID] | None = None,
     user_manager_class: type[Any] | None = None,
+    id_parser: type[UUID] | None = None,
     login_identifier: Literal["email", "username"] = "email",
 ) -> LitestarAuthConfig[ExampleUser, UUID]:
     """Build a minimal config for plugin tests.
@@ -86,11 +95,13 @@ def _minimal_config(
             assert_structural_session_factory(DummySessionMaker()),
         ),
         user_db_factory=lambda _session: user_db,
+        user_manager_security=user_manager_security,
         user_manager_kwargs={
             "verification_token_secret": "x" * 32,
             "reset_password_token_secret": "y" * 32,
         },
         include_users=include_users,
+        id_parser=id_parser,
         totp_config=totp_config,
         login_identifier=login_identifier,
     )
@@ -109,6 +120,13 @@ def test_litestar_auth_config_declares_password_validator_factory_fields() -> No
 
     assert "password_validator_factory" in dataclass_fields
     assert "user_manager_factory" in dataclass_fields
+
+
+def test_litestar_auth_config_declares_user_manager_security_field() -> None:
+    """The plugin config exposes the typed manager-security contract explicitly."""
+    dataclass_fields = LitestarAuthConfig.__dataclass_fields__
+
+    assert "user_manager_security" in dataclass_fields
 
 
 def test_litestar_auth_config_declares_db_session_dependency_fields() -> None:
@@ -132,6 +150,28 @@ def test_litestar_auth_config_login_identifier_defaults_to_email() -> None:
     config = _minimal_config()
 
     assert config.login_identifier == "email"
+
+
+def test_litestar_auth_config_build_password_helper_memoizes_default_helper() -> None:
+    """Config exposes one memoized helper for plugin and app-owned password work."""
+    config = _minimal_config()
+
+    first = config.build_password_helper()
+    second = config.build_password_helper()
+
+    assert first is second
+    assert config.user_manager_kwargs["password_helper"] is first
+    assert first.password_hash.hashers[0].__class__.__name__ == "Argon2Hasher"
+    assert first.password_hash.hashers[1].__class__.__name__ == "BcryptHasher"
+
+
+def test_litestar_auth_config_build_password_helper_preserves_explicit_helper_override() -> None:
+    """Config-level helper resolution keeps deliberate custom helper injection unchanged."""
+    explicit_password_helper = PasswordHelper()
+    config = _minimal_config()
+    config.user_manager_kwargs["password_helper"] = explicit_password_helper
+
+    assert config.build_password_helper() is explicit_password_helper
 
 
 def test_litestar_auth_config_accepts_login_identifier_username() -> None:
@@ -278,6 +318,21 @@ def test_user_manager_accepts_password_validator_detects_kwargs_fallback() -> No
     assert user_manager_accepts_password_validator(cast("Any", _ManagerWithKwargs)) is True
 
 
+def test_user_manager_accepts_password_validator_inherits_explicit_class_attribute_from_intermediate_base() -> None:
+    """Inherited password-validator opt-outs should outrank kwargs-only signature fallback."""
+
+    class _IntermediatePasswordValidatorOptOutManager(PluginUserManager):
+        accepts_password_validator = False
+
+        def __init__(self, user_db: object, **kwargs: object) -> None:
+            super().__init__(cast("Any", user_db), **cast("Any", kwargs))
+
+    class _ConcretePasswordValidatorOptOutManager(_IntermediatePasswordValidatorOptOutManager):
+        pass
+
+    assert user_manager_accepts_password_validator(_ConcretePasswordValidatorOptOutManager) is False
+
+
 def test_user_manager_accepts_login_identifier_prefers_explicit_class_attribute() -> None:
     """Explicit subclass metadata overrides constructor introspection for login identifiers."""
 
@@ -290,6 +345,21 @@ def test_user_manager_accepts_login_identifier_prefers_explicit_class_attribute(
     assert user_manager_accepts_login_identifier(_ManagerWithExplicitFlag) is False
 
 
+def test_user_manager_accepts_login_identifier_inherits_explicit_class_attribute_from_intermediate_base() -> None:
+    """Inherited login-identifier opt-outs should outrank kwargs-only signature fallback."""
+
+    class _IntermediateLoginIdentifierOptOutManager(PluginUserManager):
+        accepts_login_identifier = False
+
+        def __init__(self, user_db: object, **kwargs: object) -> None:
+            super().__init__(cast("Any", user_db), **cast("Any", kwargs))
+
+    class _ConcreteLoginIdentifierOptOutManager(_IntermediateLoginIdentifierOptOutManager):
+        pass
+
+    assert user_manager_accepts_login_identifier(_ConcreteLoginIdentifierOptOutManager) is False
+
+
 def test_user_manager_accepts_login_identifier_detects_kwargs_fallback() -> None:
     """Legacy managers using ``**kwargs`` still opt into login_identifier injection."""
 
@@ -298,6 +368,100 @@ def test_user_manager_accepts_login_identifier_detects_kwargs_fallback() -> None
             del user_db, kwargs
 
     assert user_manager_accepts_login_identifier(cast("Any", _ManagerWithKwargs)) is True
+
+
+def test_user_manager_accepts_security_detects_constructor_parameter() -> None:
+    """Managers with an explicit ``security`` parameter opt into the typed contract."""
+
+    class _ManagerWithSecurity:
+        def __init__(self, user_db: object, *, security: object | None = None) -> None:
+            del user_db, security
+
+    assert user_manager_accepts_security(cast("Any", _ManagerWithSecurity)) is True
+
+
+def test_user_manager_accepts_security_prefers_explicit_class_attribute() -> None:
+    """Explicit subclass metadata overrides constructor introspection for ``security`` support."""
+
+    class _ManagerWithExplicitFlag(PluginUserManager):
+        accepts_security = True
+
+        def __init__(self, user_db: object, **kwargs: object) -> None:
+            del user_db, kwargs
+
+    assert user_manager_accepts_security(_ManagerWithExplicitFlag) is True
+
+
+def test_user_manager_accepts_security_inherits_explicit_class_attribute_from_intermediate_base() -> None:
+    """Inherited explicit security metadata should outrank kwargs-only signature fallback."""
+
+    class _IntermediateSecurityOptInManager(PluginUserManager):
+        accepts_security = True
+
+        def __init__(self, user_db: object, **kwargs: object) -> None:
+            super().__init__(cast("Any", user_db), **cast("Any", kwargs))
+
+    class _ConcreteSecurityOptInManager(_IntermediateSecurityOptInManager):
+        pass
+
+    assert user_manager_accepts_security(_ConcreteSecurityOptInManager) is True
+
+
+def test_user_manager_accepts_security_ignores_base_user_manager_default_for_kwargs_only_subclass() -> None:
+    """Kwargs-only wrappers still need an explicit family-level security opt-in."""
+
+    class _KwargsOnlyManager(PluginUserManager):
+        def __init__(self, user_db: object, **kwargs: object) -> None:
+            super().__init__(cast("Any", user_db), **cast("Any", kwargs))
+
+    assert user_manager_accepts_security(_KwargsOnlyManager) is False
+
+
+def test_user_manager_accepts_security_requires_explicit_opt_in_for_kwargs_only() -> None:
+    """Kwargs-only managers stay on the legacy compatibility path unless they opt in."""
+
+    class _ManagerWithKwargs:
+        def __init__(self, user_db: object, **kwargs: object) -> None:
+            del user_db, kwargs
+
+    assert user_manager_accepts_security(cast("Any", _ManagerWithKwargs)) is False
+
+
+def test_user_manager_accepts_id_parser_prefers_explicit_class_attribute() -> None:
+    """Explicit subclass metadata overrides constructor introspection for id_parser."""
+
+    class _ManagerWithExplicitFlag(PluginUserManager):
+        accepts_id_parser = False
+
+        def __init__(self, user_db: object, **kwargs: object) -> None:
+            del user_db, kwargs
+
+    assert user_manager_accepts_id_parser(_ManagerWithExplicitFlag) is False
+
+
+def test_user_manager_accepts_id_parser_inherits_explicit_class_attribute_from_intermediate_base() -> None:
+    """Inherited id_parser opt-outs should outrank kwargs-only signature fallback."""
+
+    class _IntermediateIdParserOptOutManager(PluginUserManager):
+        accepts_id_parser = False
+
+        def __init__(self, user_db: object, **kwargs: object) -> None:
+            super().__init__(cast("Any", user_db), **cast("Any", kwargs))
+
+    class _ConcreteIdParserOptOutManager(_IntermediateIdParserOptOutManager):
+        pass
+
+    assert user_manager_accepts_id_parser(_ConcreteIdParserOptOutManager) is False
+
+
+def test_user_manager_accepts_id_parser_detects_kwargs_fallback() -> None:
+    """Legacy managers using ``**kwargs`` still opt into id_parser injection."""
+
+    class _ManagerWithKwargs:
+        def __init__(self, user_db: object, **kwargs: object) -> None:
+            del user_db, kwargs
+
+    assert user_manager_accepts_id_parser(cast("Any", _ManagerWithKwargs)) is True
 
 
 def test_resolve_password_validator_prefers_explicit_validator_over_factory() -> None:
@@ -362,6 +526,23 @@ def test_resolve_password_validator_returns_none_for_legacy_manager_without_supp
     assert resolve_password_validator(config) is None
 
 
+def test_resolve_password_validator_respects_inherited_opt_out() -> None:
+    """Inherited password-validator opt-outs suppress the plugin default validator."""
+
+    class _IntermediatePasswordValidatorOptOutManager(PluginUserManager):
+        accepts_password_validator = False
+
+        def __init__(self, user_db: object, **kwargs: object) -> None:
+            super().__init__(cast("Any", user_db), **cast("Any", kwargs))
+
+    class _ConcretePasswordValidatorOptOutManager(_IntermediatePasswordValidatorOptOutManager):
+        pass
+
+    config = _minimal_config(user_manager_class=_ConcretePasswordValidatorOptOutManager)
+
+    assert resolve_password_validator(config) is None
+
+
 def test_default_password_validator_factory_enforces_repository_default_length() -> None:
     """The default factory uses the shared minimum-password constant."""
     validator = default_password_validator_factory(_minimal_config())
@@ -391,6 +572,376 @@ def test_build_user_manager_respects_existing_password_validator_and_login_ident
     assert manager.password_validator is explicit_password_validator
     assert manager.login_identifier == "email"
     assert manager.backends == ("bound-backend",)
+
+
+async def test_build_user_manager_preserves_explicit_none_password_validator_override() -> None:
+    """A legacy ``password_validator=None`` entry still suppresses injected validators."""
+
+    def generated_validator(password: str) -> None:
+        require_password_length(password, DEFAULT_MINIMUM_PASSWORD_LENGTH + 4)
+
+    config = _minimal_config()
+    config.password_validator_factory = lambda _config: generated_validator
+    config.user_manager_kwargs["password_validator"] = None
+
+    manager = build_user_manager(
+        session=cast("Any", DummySession()),
+        user_db=InMemoryUserDatabase([]),
+        config=config,
+    )
+
+    assert manager.password_validator is None
+
+    created_user = await manager.create(
+        UserCreate(
+            email="legacy-none@example.com",
+            password="p" * DEFAULT_MINIMUM_PASSWORD_LENGTH,
+        ),
+    )
+
+    assert manager.password_helper.verify("p" * DEFAULT_MINIMUM_PASSWORD_LENGTH, created_user.hashed_password) is True
+
+
+async def test_build_user_manager_applies_current_password_surface_from_config() -> None:
+    """The default manager builder preserves the documented password-surface inputs."""
+    verification_secret = "v" * 32
+    reset_secret = "r" * 32
+    minimum_length = DEFAULT_MINIMUM_PASSWORD_LENGTH + 4
+
+    config = _minimal_config(login_identifier="username")
+    password_helper = config.build_password_helper()
+
+    def factory(config: LitestarAuthConfig[ExampleUser, UUID]) -> Callable[[str], None]:
+        assert config.user_manager_kwargs["password_helper"] is password_helper
+        assert config.user_manager_kwargs["verification_token_secret"] == verification_secret
+        assert config.user_manager_kwargs["reset_password_token_secret"] == reset_secret
+        return partial(require_password_length, minimum_length=minimum_length)
+
+    config.user_manager_kwargs.update(
+        {
+            "verification_token_secret": verification_secret,
+            "reset_password_token_secret": reset_secret,
+        },
+    )
+    config.password_validator_factory = factory
+
+    manager = build_user_manager(
+        session=cast("Any", DummySession()),
+        user_db=InMemoryUserDatabase([]),
+        config=config,
+        backends=("bound-backend",),
+    )
+
+    assert manager.password_helper is password_helper
+    assert manager.verification_token_secret.get_secret_value() == verification_secret
+    assert manager.reset_password_token_secret.get_secret_value() == reset_secret
+    assert manager.login_identifier == "username"
+    assert manager.backends == ("bound-backend",)
+
+    with pytest.raises(InvalidPasswordError, match=rf"at least {minimum_length}"):
+        await manager.create(
+            UserCreate(
+                email="consumer@example.com",
+                password="p" * DEFAULT_MINIMUM_PASSWORD_LENGTH,
+            ),
+        )
+
+    created_user = await manager.create(
+        UserCreate(
+            email="consumer@example.com",
+            password="p" * minimum_length,
+        ),
+    )
+
+    assert password_helper.verify("p" * minimum_length, created_user.hashed_password) is True
+
+
+async def test_build_user_manager_prefers_typed_manager_security_contract() -> None:
+    """The canonical typed security bundle feeds manager secret and parser wiring."""
+    password_helper = PasswordHelper()
+    verification_secret = "v" * 32
+    reset_secret = "r" * 32
+    totp_secret_key = "t" * 32
+    minimum_length = DEFAULT_MINIMUM_PASSWORD_LENGTH + 4
+
+    def factory(config: LitestarAuthConfig[ExampleUser, UUID]) -> Callable[[str], None]:
+        assert config.user_manager_security is not None
+        assert config.user_manager_security.verification_token_secret == verification_secret
+        assert config.user_manager_security.reset_password_token_secret == reset_secret
+        assert config.user_manager_security.totp_secret_key == totp_secret_key
+        assert config.id_parser is UUID
+        return partial(require_password_length, minimum_length=minimum_length)
+
+    config = LitestarAuthConfig[ExampleUser, UUID](
+        backends=_minimal_config().backends,
+        user_model=ExampleUser,
+        user_manager_class=PluginUserManager,
+        session_maker=cast(
+            "async_sessionmaker[AsyncSession]",
+            assert_structural_session_factory(DummySessionMaker()),
+        ),
+        user_db_factory=lambda _session: InMemoryUserDatabase([]),
+        user_manager_security=UserManagerSecurity[UUID](
+            verification_token_secret=verification_secret,
+            reset_password_token_secret=reset_secret,
+            totp_secret_key=totp_secret_key,
+            id_parser=UUID,
+        ),
+        user_manager_kwargs={"password_helper": password_helper},
+        password_validator_factory=factory,
+        login_identifier="username",
+    )
+
+    manager = build_user_manager(
+        session=cast("Any", DummySession()),
+        user_db=InMemoryUserDatabase([]),
+        config=config,
+        backends=("bound-backend",),
+    )
+
+    assert manager.password_helper is password_helper
+    assert manager.verification_token_secret.get_secret_value() == verification_secret
+    assert manager.reset_password_token_secret.get_secret_value() == reset_secret
+    assert manager.totp_secret_key == totp_secret_key
+    assert manager.id_parser is UUID
+    assert manager.login_identifier == "username"
+    assert manager.backends == ("bound-backend",)
+
+    with pytest.raises(InvalidPasswordError, match=rf"at least {minimum_length}"):
+        await manager.create(
+            UserCreate(
+                email="consumer@example.com",
+                password="p" * DEFAULT_MINIMUM_PASSWORD_LENGTH,
+            ),
+        )
+
+    created_user = await manager.create(
+        UserCreate(
+            email="consumer@example.com",
+            password="p" * minimum_length,
+        ),
+    )
+
+    assert password_helper.verify("p" * minimum_length, created_user.hashed_password) is True
+
+
+def test_build_user_manager_uses_inherited_accepts_security_for_kwargs_only_manager() -> None:
+    """Inherited explicit security support should switch kwargs-only managers to ``security=...``."""
+
+    class _IntermediateSecurityOptInManager(PluginUserManager):
+        accepts_security = True
+
+        def __init__(self, user_db: object, **kwargs: object) -> None:
+            self.received_manager_kwargs = dict(kwargs)
+            super().__init__(cast("Any", user_db), **cast("Any", self.received_manager_kwargs))
+
+    class _ConcreteSecurityOptInManager(_IntermediateSecurityOptInManager):
+        pass
+
+    verification_secret = "v" * 32
+    reset_secret = "r" * 32
+    totp_secret_key = "t" * 32
+    config = LitestarAuthConfig[ExampleUser, UUID](
+        backends=_minimal_config().backends,
+        user_model=ExampleUser,
+        user_manager_class=_ConcreteSecurityOptInManager,
+        session_maker=cast(
+            "async_sessionmaker[AsyncSession]",
+            assert_structural_session_factory(DummySessionMaker()),
+        ),
+        user_db_factory=lambda _session: InMemoryUserDatabase([]),
+        user_manager_security=UserManagerSecurity[UUID](
+            verification_token_secret=verification_secret,
+            reset_password_token_secret=reset_secret,
+            totp_secret_key=totp_secret_key,
+            id_parser=UUID,
+        ),
+        user_manager_kwargs={"password_helper": PasswordHelper()},
+        login_identifier="username",
+    )
+
+    manager = build_user_manager(
+        session=cast("Any", DummySession()),
+        user_db=InMemoryUserDatabase([]),
+        config=config,
+        backends=("bound-backend",),
+    )
+    typed_manager = cast("Any", manager)
+
+    assert typed_manager.received_manager_kwargs["security"].verification_token_secret == verification_secret
+    assert typed_manager.received_manager_kwargs["security"].reset_password_token_secret == reset_secret
+    assert typed_manager.received_manager_kwargs["security"].totp_secret_key == totp_secret_key
+    assert typed_manager.received_manager_kwargs["security"].id_parser is UUID
+    assert "verification_token_secret" not in typed_manager.received_manager_kwargs
+    assert "reset_password_token_secret" not in typed_manager.received_manager_kwargs
+    assert "totp_secret_key" not in typed_manager.received_manager_kwargs
+    assert "id_parser" not in typed_manager.received_manager_kwargs
+    assert manager.id_parser is UUID
+    assert manager.login_identifier == "username"
+    assert manager.backends == ("bound-backend",)
+
+
+def test_build_user_manager_passes_typed_security_to_security_only_manager() -> None:
+    """Security-aware constructors receive the typed bundle without fallback kwargs."""
+
+    class _SecurityOnlyManager(PluginUserManager):
+        def __init__(  # noqa: PLR0913
+            self,
+            user_db: object,
+            *,
+            password_helper: PasswordHelper | None = None,
+            security: UserManagerSecurity[UUID],
+            password_validator: object | None = None,
+            backends: tuple[object, ...] = (),
+            login_identifier: Literal["email", "username"] = "email",
+        ) -> None:
+            self.received_security = security
+            super().__init__(
+                cast("Any", user_db),
+                password_helper=password_helper,
+                security=security,
+                password_validator=cast("Any", password_validator),
+                backends=backends,
+                login_identifier=login_identifier,
+            )
+
+    verification_secret = "v" * 32
+    reset_secret = "r" * 32
+    totp_secret_key = "t" * 32
+    config = LitestarAuthConfig[ExampleUser, UUID](
+        backends=_minimal_config().backends,
+        user_model=ExampleUser,
+        user_manager_class=_SecurityOnlyManager,
+        session_maker=cast(
+            "async_sessionmaker[AsyncSession]",
+            assert_structural_session_factory(DummySessionMaker()),
+        ),
+        user_db_factory=lambda _session: InMemoryUserDatabase([]),
+        user_manager_security=UserManagerSecurity[UUID](
+            verification_token_secret=verification_secret,
+            reset_password_token_secret=reset_secret,
+            totp_secret_key=totp_secret_key,
+        ),
+        user_manager_kwargs={"password_helper": PasswordHelper()},
+        id_parser=UUID,
+        login_identifier="username",
+    )
+
+    manager = build_user_manager(
+        session=cast("Any", DummySession()),
+        user_db=InMemoryUserDatabase([]),
+        config=config,
+        backends=("bound-backend",),
+    )
+    typed_manager = cast("Any", manager)
+
+    assert typed_manager.received_security.verification_token_secret == verification_secret
+    assert typed_manager.received_security.reset_password_token_secret == reset_secret
+    assert typed_manager.received_security.totp_secret_key == totp_secret_key
+    assert typed_manager.received_security.id_parser is UUID
+    assert manager.id_parser is UUID
+    assert manager.login_identifier == "username"
+    assert manager.backends == ("bound-backend",)
+
+
+def test_build_user_manager_falls_back_to_legacy_secret_kwargs_for_security_incompatible_manager() -> None:
+    """Managers without ``security`` support still receive the legacy compatibility kwargs."""
+
+    class _LegacyManagerWithoutSecurity(PluginUserManager):
+        def __init__(  # noqa: PLR0913
+            self,
+            user_db: object,
+            *,
+            password_helper: PasswordHelper | None = None,
+            password_validator: object | None = None,
+            verification_token_secret: str,
+            reset_password_token_secret: str,
+            totp_secret_key: str | None = None,
+            id_parser: type[UUID] | None = None,
+            backends: tuple[object, ...] = (),
+            login_identifier: Literal["email", "username"] = "email",
+        ) -> None:
+            self.received_legacy_inputs = {
+                "verification_token_secret": verification_token_secret,
+                "reset_password_token_secret": reset_password_token_secret,
+                "totp_secret_key": totp_secret_key,
+                "id_parser": id_parser,
+            }
+            super().__init__(
+                cast("Any", user_db),
+                password_helper=password_helper,
+                password_validator=cast("Any", password_validator),
+                verification_token_secret=verification_token_secret,
+                reset_password_token_secret=reset_password_token_secret,
+                totp_secret_key=totp_secret_key,
+                id_parser=id_parser,
+                backends=backends,
+                login_identifier=login_identifier,
+            )
+
+    verification_secret = "v" * 32
+    reset_secret = "r" * 32
+    totp_secret_key = "t" * 32
+    config = LitestarAuthConfig[ExampleUser, UUID](
+        backends=_minimal_config().backends,
+        user_model=ExampleUser,
+        user_manager_class=_LegacyManagerWithoutSecurity,
+        session_maker=cast(
+            "async_sessionmaker[AsyncSession]",
+            assert_structural_session_factory(DummySessionMaker()),
+        ),
+        user_db_factory=lambda _session: InMemoryUserDatabase([]),
+        user_manager_security=UserManagerSecurity[UUID](
+            verification_token_secret=verification_secret,
+            reset_password_token_secret=reset_secret,
+            totp_secret_key=totp_secret_key,
+        ),
+        user_manager_kwargs={"password_helper": PasswordHelper()},
+        id_parser=UUID,
+        login_identifier="username",
+    )
+
+    manager = build_user_manager(
+        session=cast("Any", DummySession()),
+        user_db=InMemoryUserDatabase([]),
+        config=config,
+        backends=("bound-backend",),
+    )
+    typed_manager = cast("Any", manager)
+
+    assert typed_manager.received_legacy_inputs == {
+        "verification_token_secret": verification_secret,
+        "reset_password_token_secret": reset_secret,
+        "totp_secret_key": totp_secret_key,
+        "id_parser": UUID,
+    }
+    assert manager.id_parser is UUID
+    assert manager.login_identifier == "username"
+    assert manager.backends == ("bound-backend",)
+
+
+def test_build_user_manager_warns_but_preserves_reused_legacy_secret_roles() -> None:
+    """Legacy reused secrets remain source-compatible while warning in production."""
+    shared_secret = "shared-plugin-manager-secret-1234567890"
+    config = _minimal_config()
+    config.user_manager_kwargs.update(
+        {
+            "verification_token_secret": shared_secret,
+            "reset_password_token_secret": shared_secret,
+            "totp_secret_key": shared_secret,
+        },
+    )
+
+    with pytest.warns(SecurityWarning, match="supported production posture"):
+        manager = build_user_manager(
+            session=cast("Any", DummySession()),
+            user_db=InMemoryUserDatabase([]),
+            config=config,
+        )
+
+    assert manager.verification_token_secret.get_secret_value() == shared_secret
+    assert manager.reset_password_token_secret.get_secret_value() == shared_secret
+    assert manager.totp_secret_key == shared_secret
 
 
 def test_build_user_manager_skips_login_identifier_for_legacy_manager_without_support() -> None:
@@ -430,6 +981,72 @@ def test_build_user_manager_skips_login_identifier_for_legacy_manager_without_su
     assert manager.login_identifier == "email"
 
 
+def test_build_user_manager_skips_login_identifier_for_inherited_opt_out() -> None:
+    """Inherited login-identifier opt-outs still suppress compatibility kwargs injection."""
+
+    class _IntermediateLoginIdentifierOptOutManager(PluginUserManager):
+        accepts_login_identifier = False
+
+        def __init__(self, user_db: object, **kwargs: object) -> None:
+            self.received_manager_kwargs = dict(kwargs)
+            super().__init__(cast("Any", user_db), **cast("Any", self.received_manager_kwargs))
+
+    class _ConcreteLoginIdentifierOptOutManager(_IntermediateLoginIdentifierOptOutManager):
+        pass
+
+    config = _minimal_config(
+        login_identifier="username",
+        user_manager_class=_ConcreteLoginIdentifierOptOutManager,
+    )
+
+    manager = build_user_manager(
+        session=cast("Any", DummySession()),
+        user_db=InMemoryUserDatabase([]),
+        config=config,
+    )
+    typed_manager = cast("Any", manager)
+
+    assert "login_identifier" not in typed_manager.received_manager_kwargs
+    assert manager.login_identifier == "email"
+
+
+def test_build_user_manager_skips_id_parser_for_legacy_manager_without_support() -> None:
+    """Compatibility builders do not inject id_parser into legacy manager constructors."""
+
+    class _LegacyManagerWithoutIdParser(PluginUserManager):
+        accepts_id_parser = False
+
+        def __init__(
+            self,
+            user_db: object,
+            *,
+            password_validator: object | None = None,
+            verification_token_secret: str,
+            reset_password_token_secret: str,
+            backends: tuple[object, ...] = (),
+        ) -> None:
+            super().__init__(
+                cast("Any", user_db),
+                password_validator=cast("Any", password_validator),
+                verification_token_secret=verification_token_secret,
+                reset_password_token_secret=reset_password_token_secret,
+                backends=backends,
+            )
+
+    config = _minimal_config(
+        id_parser=UUID,
+        user_manager_class=_LegacyManagerWithoutIdParser,
+    )
+
+    manager = build_user_manager(
+        session=cast("Any", DummySession()),
+        user_db=InMemoryUserDatabase([]),
+        config=config,
+    )
+
+    assert manager.id_parser is None
+
+
 def test_require_session_maker_returns_configured_session_maker() -> None:
     """require_session_maker returns a structurally compatible configured factory unchanged."""
     config = _minimal_config()
@@ -452,6 +1069,7 @@ def test_litestar_auth_config_session_maker_annotation_is_runtime_resolvable() -
             "Sequence": Sequence,
             "AuthenticationBackend": AuthenticationBackend,
             "BaseUserManager": BaseUserManager,
+            "UserManagerSecurity": UserManagerSecurity,
             "AuthRateLimitConfig": AuthRateLimitConfig,
             "msgspec": msgspec,
         },
@@ -484,6 +1102,25 @@ def test_litestar_auth_config_builds_deferred_default_user_db_factory() -> None:
     assert isinstance(config.user_db_factory, partial)
     assert config.user_db_factory.func is plugin_config_module._build_default_user_db
     assert config.user_db_factory.keywords == {"user_model": ExampleUser}
+
+
+def test_uses_bundled_database_token_models_detects_manual_db_backend_with_bundled_models() -> None:
+    """Bundled DB-token models still trigger startup bootstrap for manual backend assembly."""
+
+    class DatabaseTokenStrategy:
+        access_token_model = AccessToken
+        refresh_token_model = RefreshToken
+
+    DatabaseTokenStrategy.__module__ = "litestar_auth.authentication.strategy.db"
+
+    backend = AuthenticationBackend[ExampleUser, UUID](
+        name="database",
+        transport=BearerTransport(),
+        strategy=cast("Any", DatabaseTokenStrategy()),
+    )
+    config = _minimal_config(backends=[backend])
+
+    assert plugin_config_module._uses_bundled_database_token_models(config) is True
 
 
 def test_resolve_user_manager_factory_returns_explicit_factory_when_configured() -> None:

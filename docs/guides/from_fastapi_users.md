@@ -17,7 +17,7 @@ Optional reference: how ideas from [**fastapi-users**](https://fastapi-users.git
 ## API shape differences
 
 - **Framework** — Litestar `InitPlugin`, DI keys, and guards instead of FastAPI dependencies on routers.
-- **Validation** — Prefer **msgspec** structs (`user_read_schema`, `user_create_schema`, …), not Pydantic models inside the library (your app may still use either elsewhere). When an app-owned registration or update struct keeps a `password` field, import `UserPasswordField` from `litestar_auth.schemas` so the schema metadata stays aligned with the built-in password bounds while runtime validation still flows through `require_password_length`.
+- **Validation** — Prefer **msgspec** structs (`user_read_schema`, `user_create_schema`, …), not Pydantic models inside the library (your app may still use either elsewhere). When an app-owned registration or update struct keeps `email` / `password` fields, import `UserEmailField` / `UserPasswordField` from `litestar_auth.schemas` so the schema metadata stays aligned with the built-in email and password bounds while runtime password validation still flows through `require_password_length`.
 - **Email** — litestar-auth does not send mail; implement **`BaseUserManager` hooks** (see [Hooks](hooks.md)) to enqueue or send messages.
 - **SQLAlchemy** — Default user store is **`SQLAlchemyUserDatabase`** with Advanced Alchemy–friendly patterns; you still own migrations (Alembic / `create_all`).
 

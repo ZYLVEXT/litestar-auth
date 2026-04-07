@@ -37,25 +37,16 @@ Reset tokens are tied to a password fingerprint so they invalidate after a succe
 
 `login_identifier="username"` does not make the built-in 2FA flow username-based. TOTP enrollment and default password step-up still use `user.email`, and the enrollment response still returns an email-based otpauth URI.
 
-## Password limits
+## User schema helpers
 
-Built-in `UserCreate` and `UserUpdate` use the public `litestar_auth.schemas.UserPasswordField` alias for their password metadata. Reuse that same alias in app-owned `user_create_schema` / `user_update_schema` structs when you want the documented password bounds without copying raw `12` / `128` literals:
-
-```python
-import msgspec
-
-from litestar_auth.schemas import UserPasswordField
-
-
-class RegistrationSchema(msgspec.Struct):
-    email: str
-    password: UserPasswordField
-    display_name: str
-```
-
-That schema metadata catches obviously too-short or too-long passwords during payload decoding and keeps custom structs aligned with the built-in registration surface.
-
-Runtime validation still flows through `require_password_length` when the plugin uses its default password validator. Schema metadata alone is not the whole password policy; use `password_validator_factory` when your application needs stricter runtime checks than the shared length bounds.
+The canonical password-wiring contract now lives in
+[Configuration](../configuration.md#canonical-manager-password-surface). For custom registration
+DTOs, reuse `litestar_auth.schemas.UserEmailField` and `litestar_auth.schemas.UserPasswordField`
+when you want the built-in email/password metadata without copying local constraints. Existing
+`UserPasswordField` imports remain valid; add `UserEmailField` only when you also want the
+built-in email contract. Those aliases only affect schema validation and OpenAPI. Runtime password
+policy still comes from `password_validator_factory` or the manager's default
+`require_password_length` validator.
 
 ## Related
 

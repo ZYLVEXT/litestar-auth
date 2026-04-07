@@ -7,7 +7,7 @@ import hashlib
 import hmac
 import secrets
 from datetime import UTC, datetime, timedelta
-from typing import Any, Protocol, cast
+from typing import TYPE_CHECKING, Any, Protocol, cast
 
 import jwt
 
@@ -15,14 +15,17 @@ from litestar_auth._manager._coercions import _managed_user
 from litestar_auth._manager._protocols import PasswordManagedUserManagerProtocol
 from litestar_auth.exceptions import InvalidResetPasswordTokenError, InvalidVerifyTokenError, UserNotExistsError
 
+if TYPE_CHECKING:
+    from litestar_auth._manager.construction import AccountTokenSecrets
+
 type _InvalidTokenError = type[InvalidVerifyTokenError | InvalidResetPasswordTokenError]
 
 
 class _AccountTokenSecurityManagerProtocol[ID](Protocol):
     """Manager surface required by token security operations."""
 
+    account_token_secrets: AccountTokenSecrets
     id_parser: Any
-    reset_password_token_secret: Any
 
 
 class _AccountTokensManagerProtocol[UP, ID](
@@ -32,7 +35,6 @@ class _AccountTokensManagerProtocol[UP, ID](
 ):
     """Manager surface required by verify/reset token flows."""
 
-    verification_token_secret: Any
     verification_token_lifetime: timedelta
     reset_password_token_lifetime: timedelta
 
@@ -71,7 +73,7 @@ class AccountTokenSecurityService[UP, ID]:
     def password_fingerprint(self, hashed_password: str) -> str:
         """Compute the password fingerprint used by reset-password tokens."""
         return hmac.new(
-            self._manager.reset_password_token_secret.get_secret_value().encode(),
+            self._manager.account_token_secrets.reset_password_token_secret.get_secret_value().encode(),
             hashed_password.encode(),
             hashlib.sha256,
         ).hexdigest()
@@ -199,7 +201,7 @@ class AccountTokenSecurityService[UP, ID]:
         """Resolve the reset-password user plus the validated JWT payload."""
         payload = self.decode_token(
             token,
-            secret=self._manager.reset_password_token_secret.get_secret_value(),
+            secret=self._manager.account_token_secrets.reset_password_token_secret.get_secret_value(),
             audience=self._reset_password_token_audience,
             invalid_token_error=InvalidResetPasswordTokenError,
         )
@@ -248,7 +250,7 @@ class AccountTokensService[UP, ID]:
         user = await self._token_security.get_user_from_token(
             token,
             user_db=self._manager.user_db,
-            secret=self._manager.verification_token_secret.get_secret_value(),
+            secret=self._manager.account_token_secrets.verification_token_secret.get_secret_value(),
             audience=self._verify_token_audience,
             invalid_token_error=InvalidVerifyTokenError,
         )
@@ -322,7 +324,7 @@ class AccountTokensService[UP, ID]:
         """Sign a verification token for a user."""
         return self.write_user_token(
             user,
-            secret=self._manager.verification_token_secret.get_secret_value(),
+            secret=self._manager.account_token_secrets.verification_token_secret.get_secret_value(),
             audience=self._verify_token_audience,
             lifetime=self._manager.verification_token_lifetime,
         )
@@ -339,7 +341,7 @@ class AccountTokensService[UP, ID]:
 
         return self._token_security.write_token(
             subject=subject,
-            secret=self._manager.reset_password_token_secret.get_secret_value(),
+            secret=self._manager.account_token_secrets.reset_password_token_secret.get_secret_value(),
             audience=self._reset_password_token_audience,
             lifetime=self._manager.reset_password_token_lifetime,
             extra_claims=extra_claims,

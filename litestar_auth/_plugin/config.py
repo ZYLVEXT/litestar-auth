@@ -14,10 +14,12 @@ from typing import TYPE_CHECKING, Any, Protocol, Self, cast
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from litestar_auth._manager.construction import ManagerConstructorInputs
 from litestar_auth._plugin.scoped_session import SessionFactory
 from litestar_auth.config import DEFAULT_MINIMUM_PASSWORD_LENGTH, require_password_length
 from litestar_auth.db.base import BaseUserStore
 from litestar_auth.exceptions import ConfigurationError
+from litestar_auth.password import PasswordHelper
 from litestar_auth.types import LoginIdentifier, UserProtocol
 
 if TYPE_CHECKING:
@@ -27,7 +29,7 @@ if TYPE_CHECKING:
 
     from litestar_auth.authentication.backend import AuthenticationBackend
     from litestar_auth.config import OAuthProviderConfig
-    from litestar_auth.manager import BaseUserManager
+    from litestar_auth.manager import BaseUserManager, UserManagerSecurity
     from litestar_auth.ratelimit import AuthRateLimitConfig
     from litestar_auth.totp import TotpAlgorithm, UsedTotpCodeStore
 
@@ -171,7 +173,11 @@ class UserManagerFactory[UP: UserProtocol[Any], ID](Protocol):
 
     Implementations receive ``backends`` session-bound to the current request; pass them
     through to ``BaseUserManager`` (or equivalent) so credential changes revoke persisted
-    sessions consistently.
+    sessions consistently. Plugin validation remains authoritative for the config-owned
+    secret surface; if a custom factory constructs ``BaseUserManager`` with the same
+    verification/reset/TOTP secrets, manager construction suppresses the duplicate warning.
+    Factories that diverge from the validated config-owned secret surface still surface the
+    manager-owned warning for the secrets they actually wire.
     """
 
     def __call__(
@@ -198,31 +204,113 @@ def default_password_validator_factory[UP: UserProtocol[Any], ID](
 def user_manager_accepts_password_validator(user_manager_class: type[BaseUserManager[Any, Any]]) -> bool:
     """Return whether the manager constructor can accept ``password_validator``.
 
-    Checks the class-level ``accepts_password_validator`` attribute first,
-    but only when explicitly declared by the subclass (present in its own
-    ``__dict__``).  Falls back to ``inspect.signature`` introspection for
-    subclasses that inherit the base-class default or predate the attribute.
+    Checks explicit ``accepts_password_validator`` metadata declared on the
+    manager class or an intermediate custom base first. Falls back to
+    ``inspect.signature`` introspection when the custom manager family does not
+    override the canonical :class:`~litestar_auth.manager.BaseUserManager`
+    default.
     """
-    if "accepts_password_validator" in user_manager_class.__dict__:
-        return bool(user_manager_class.accepts_password_validator)
+    explicit_override = _resolve_user_manager_capability_override(
+        user_manager_class,
+        capability_name="accepts_password_validator",
+    )
+    if explicit_override is not None:
+        return explicit_override
     init_signature = inspect.signature(user_manager_class.__init__)
     accepts_kwargs = any(param.kind is inspect.Parameter.VAR_KEYWORD for param in init_signature.parameters.values())
     return accepts_kwargs or "password_validator" in init_signature.parameters
 
 
+def _resolve_user_manager_capability_override(
+    user_manager_class: type[BaseUserManager[Any, Any]],
+    *,
+    capability_name: str,
+) -> bool | None:
+    """Return an explicit capability flag declared on a custom manager family.
+
+    The plugin walks the manager MRO until ``BaseUserManager``. Flags declared
+    on the concrete manager or an intermediate custom base outrank constructor
+    introspection. The defaults declared on ``BaseUserManager`` itself are not
+    treated as explicit overrides so kwargs-only wrappers still rely on the
+    documented signature-based fallback rules unless that custom family
+    redeclares the flag.
+    """
+    for current_class in user_manager_class.__mro__:
+        if _is_base_user_manager_class(current_class):
+            return None
+        if capability_name in current_class.__dict__:
+            return bool(current_class.__dict__[capability_name])
+    return None
+
+
+def _is_base_user_manager_class(current_class: type[object]) -> bool:
+    """Return whether ``current_class`` is the canonical ``BaseUserManager`` type.
+
+    This stays reload-safe for tests that call ``importlib.reload`` on
+    ``litestar_auth.manager`` and would otherwise leave earlier imported class
+    objects stale inside this module.
+    """
+    return current_class.__module__ == "litestar_auth.manager" and current_class.__qualname__ == "BaseUserManager"
+
+
+def user_manager_accepts_security(user_manager_class: type[BaseUserManager[Any, Any]]) -> bool:
+    """Return whether the manager constructor can accept ``security``.
+
+    Checks explicit ``accepts_security`` metadata declared on the manager class
+    or an intermediate custom base first. Falls back to
+    ``inspect.signature`` introspection for constructors that declare an
+    explicit ``security`` parameter. Unlike the legacy keyword-argument
+    compatibility helpers, ``**kwargs`` alone does not imply support, and the
+    canonical ``BaseUserManager.accepts_security`` default does not auto-opt a
+    kwargs-only wrapper into the typed path unless that custom manager family
+    redeclares the flag.
+    """
+    explicit_override = _resolve_user_manager_capability_override(
+        user_manager_class,
+        capability_name="accepts_security",
+    )
+    if explicit_override is not None:
+        return explicit_override
+    init_signature = inspect.signature(user_manager_class.__init__)
+    return "security" in init_signature.parameters
+
+
 def user_manager_accepts_login_identifier(user_manager_class: type[BaseUserManager[Any, Any]]) -> bool:
     """Return whether the manager constructor can accept ``login_identifier``.
 
-    Checks the class-level ``accepts_login_identifier`` attribute first,
-    but only when explicitly declared by the subclass (present in its own
-    ``__dict__``).  Falls back to ``inspect.signature`` introspection for
-    subclasses that inherit the base-class default or predate the attribute.
+    Checks explicit ``accepts_login_identifier`` metadata declared on the
+    manager class or an intermediate custom base first. Falls back to
+    ``inspect.signature`` introspection when the custom manager family does not
+    override the canonical ``BaseUserManager`` default.
     """
-    if "accepts_login_identifier" in user_manager_class.__dict__:
-        return bool(user_manager_class.accepts_login_identifier)
+    explicit_override = _resolve_user_manager_capability_override(
+        user_manager_class,
+        capability_name="accepts_login_identifier",
+    )
+    if explicit_override is not None:
+        return explicit_override
     init_signature = inspect.signature(user_manager_class.__init__)
     accepts_kwargs = any(param.kind is inspect.Parameter.VAR_KEYWORD for param in init_signature.parameters.values())
     return accepts_kwargs or "login_identifier" in init_signature.parameters
+
+
+def user_manager_accepts_id_parser(user_manager_class: type[BaseUserManager[Any, Any]]) -> bool:
+    """Return whether the manager constructor can accept ``id_parser``.
+
+    Checks explicit ``accepts_id_parser`` metadata declared on the manager class
+    or an intermediate custom base first. Falls back to
+    ``inspect.signature`` introspection when the custom manager family does not
+    override the canonical ``BaseUserManager`` default.
+    """
+    explicit_override = _resolve_user_manager_capability_override(
+        user_manager_class,
+        capability_name="accepts_id_parser",
+    )
+    if explicit_override is not None:
+        return explicit_override
+    init_signature = inspect.signature(user_manager_class.__init__)
+    accepts_kwargs = any(param.kind is inspect.Parameter.VAR_KEYWORD for param in init_signature.parameters.values())
+    return accepts_kwargs or "id_parser" in init_signature.parameters
 
 
 def build_user_manager[UP: UserProtocol[Any], ID](
@@ -243,16 +331,25 @@ def build_user_manager[UP: UserProtocol[Any], ID](
             in ``user_manager_kwargs``).
 
     Returns:
-        A request-scoped user manager instance built from the plugin config.
+        A request-scoped user manager instance built from the plugin config. When
+        ``user_manager_class`` accepts ``security``, the typed
+        ``config.user_manager_security`` bundle is forwarded end-to-end; otherwise
+        the builder falls back to the legacy explicit secret kwargs.
     """
     del session
-    manager_kwargs = dict(config.user_manager_kwargs)
-    password_validator = resolve_password_validator(config)
-    if password_validator is not None and "password_validator" not in manager_kwargs:
-        manager_kwargs["password_validator"] = password_validator
-    manager_kwargs["backends"] = backends
-    if user_manager_accepts_login_identifier(config.user_manager_class) and "login_identifier" not in manager_kwargs:
-        manager_kwargs["login_identifier"] = config.login_identifier
+    manager_inputs = ManagerConstructorInputs(
+        manager_kwargs=config.user_manager_kwargs,
+        manager_security=config.user_manager_security,
+        password_validator=resolve_password_validator(config),
+        backends=backends,
+        login_identifier=config.login_identifier,
+        id_parser=config.id_parser,
+    )
+    manager_kwargs = manager_inputs.build_kwargs(
+        accepts_security=user_manager_accepts_security(config.user_manager_class),
+        accepts_id_parser=user_manager_accepts_id_parser(config.user_manager_class),
+        accepts_login_identifier=user_manager_accepts_login_identifier(config.user_manager_class),
+    )
     return config.user_manager_class(user_db, **manager_kwargs)
 
 
@@ -264,7 +361,8 @@ def resolve_password_validator[UP: UserProtocol[Any], ID](
     Returns:
         The configured password validator, or ``None`` when this manager should not receive one.
     """
-    explicit_validator = cast("Callable[[str], None] | None", config.user_manager_kwargs.get("password_validator"))
+    manager_inputs = ManagerConstructorInputs(manager_kwargs=config.user_manager_kwargs)
+    explicit_validator = manager_inputs.explicit_password_validator
     if explicit_validator is not None:
         return explicit_validator
     if config.password_validator_factory is not None:
@@ -425,8 +523,8 @@ class LitestarAuthConfig[UP: UserProtocol[Any], ID]:
 
     Core:
         ``backends``, ``user_model``, ``user_manager_class``, ``session_maker``,
-        ``user_db_factory``, ``user_manager_kwargs``, ``password_validator_factory``,
-        ``user_manager_factory``, ``rate_limit_config``.
+        ``user_db_factory``, ``user_manager_security``, ``user_manager_kwargs``,
+        ``password_validator_factory``, ``user_manager_factory``, ``rate_limit_config``.
     Paths and endpoint flags:
         ``auth_path``, ``users_path``, ``include_register``, ``include_verify``,
         ``include_reset_password``, ``include_users``, ``enable_refresh``,
@@ -452,6 +550,7 @@ class LitestarAuthConfig[UP: UserProtocol[Any], ID]:
     user_manager_class: type[BaseUserManager[UP, ID]]
     session_maker: SessionFactory | None = None
     user_db_factory: UserDatabaseFactory[UP, ID] | None = None
+    user_manager_security: UserManagerSecurity[ID] | None = None
     user_manager_kwargs: dict[str, Any] = field(default_factory=dict)
     password_validator_factory: PasswordValidatorFactory[UP, ID] | None = None
     user_manager_factory: UserManagerFactory[UP, ID] | None = None
@@ -490,6 +589,20 @@ class LitestarAuthConfig[UP: UserProtocol[Any], ID]:
         """Return DB bearer preset metadata when built via ``with_database_token_auth()``."""
         return self._database_token_auth
 
+    def build_password_helper(self) -> PasswordHelper:
+        """Return the helper aligned with this config and memoize default construction.
+
+        Returns:
+            The configured ``user_manager_kwargs["password_helper"]`` when present,
+            otherwise a shared default helper memoized back into ``user_manager_kwargs``.
+        """
+        configured_password_helper = cast("PasswordHelper | None", self.user_manager_kwargs.get("password_helper"))
+        if configured_password_helper is not None:
+            return configured_password_helper
+        password_helper = PasswordHelper.from_defaults()
+        self.user_manager_kwargs["password_helper"] = password_helper
+        return password_helper
+
     @classmethod
     def with_database_token_auth(  # noqa: PLR0913
         cls: type[Self],
@@ -500,6 +613,7 @@ class LitestarAuthConfig[UP: UserProtocol[Any], ID]:
         user_manager_class: type[BaseUserManager[UP, ID]],
         session_maker: SessionFactory | None = None,
         user_db_factory: UserDatabaseFactory[UP, ID] | None = None,
+        user_manager_security: UserManagerSecurity[ID] | None = None,
         user_manager_kwargs: dict[str, Any] | None = None,
         password_validator_factory: PasswordValidatorFactory[UP, ID] | None = None,
         user_manager_factory: UserManagerFactory[UP, ID] | None = None,
@@ -536,6 +650,8 @@ class LitestarAuthConfig[UP: UserProtocol[Any], ID]:
             user_manager_class: User manager implementation for the plugin.
             session_maker: Optional session factory used by the plugin runtime.
             user_db_factory: Optional user database factory override.
+            user_manager_security: Typed manager-security bundle for verification/reset
+                token secrets, optional TOTP encryption, and JWT subject parsing.
             user_manager_kwargs: Additional user manager constructor kwargs.
             password_validator_factory: Optional password validator factory override.
             user_manager_factory: Optional request-scoped user manager factory override.
@@ -586,6 +702,7 @@ class LitestarAuthConfig[UP: UserProtocol[Any], ID]:
             user_manager_class=user_manager_class,
             session_maker=session_maker,
             user_db_factory=user_db_factory,
+            user_manager_security=user_manager_security,
             user_manager_kwargs={} if user_manager_kwargs is None else dict(user_manager_kwargs),
             password_validator_factory=password_validator_factory,
             user_manager_factory=user_manager_factory,
@@ -629,9 +746,59 @@ class LitestarAuthConfig[UP: UserProtocol[Any], ID]:
                 "UserDatabaseFactory[UP, ID]",
                 partial(_build_default_user_db, user_model=self.user_model),
             )
+        if self.user_manager_security is not None and self.id_parser is None:
+            self.id_parser = self.user_manager_security.id_parser
         if self.login_identifier not in _VALID_LOGIN_IDENTIFIERS:
             msg = f"Invalid login_identifier {self.login_identifier!r}. Expected 'email' or 'username'."
             raise ConfigurationError(msg)
         if not self.db_session_dependency_key.isidentifier() or keyword.iskeyword(self.db_session_dependency_key):
             msg = f"db_session_dependency_key must be a valid Python identifier, got {self.db_session_dependency_key!r}"
             raise ValueError(msg)
+
+
+_DATABASE_TOKEN_STRATEGY_MODULE = "litestar_auth.authentication.strategy.db"  # noqa: S105
+_DATABASE_TOKEN_STRATEGY_NAME = "DatabaseTokenStrategy"  # noqa: S105
+_BUNDLED_TOKEN_MODEL_MODULE = "litestar_auth.authentication.strategy.db_models"  # noqa: S105
+_BUNDLED_ACCESS_TOKEN_MODEL_NAME = "AccessToken"  # noqa: S105
+_BUNDLED_REFRESH_TOKEN_MODEL_NAME = "RefreshToken"  # noqa: S105
+
+
+def _is_database_token_strategy_instance(strategy: object) -> bool:
+    """Return whether ``strategy`` is a DB-token strategy, even across reloads."""
+    strategy_type = type(strategy)
+    return (
+        strategy_type.__name__ == _DATABASE_TOKEN_STRATEGY_NAME
+        and strategy_type.__module__ == _DATABASE_TOKEN_STRATEGY_MODULE
+        and hasattr(strategy, "access_token_model")
+        and hasattr(strategy, "refresh_token_model")
+    )
+
+
+def _is_bundled_token_model(model: object, *, model_name: str) -> bool:
+    """Return whether ``model`` is one of the bundled DB-token ORM classes."""
+    return (
+        getattr(model, "__module__", None) == _BUNDLED_TOKEN_MODEL_MODULE
+        and getattr(model, "__name__", None) == model_name
+    )
+
+
+def _uses_bundled_database_token_models(config: LitestarAuthConfig[Any, Any]) -> bool:
+    """Return whether plugin startup should bootstrap the bundled DB-token ORM models."""
+    if config.database_token_auth is not None:
+        return True
+
+    for backend in config.backends:
+        strategy = getattr(backend, "strategy", None)
+        if not _is_database_token_strategy_instance(strategy):
+            continue
+
+        if _is_bundled_token_model(
+            getattr(strategy, "access_token_model", None),
+            model_name=_BUNDLED_ACCESS_TOKEN_MODEL_NAME,
+        ) and _is_bundled_token_model(
+            getattr(strategy, "refresh_token_model", None),
+            model_name=_BUNDLED_REFRESH_TOKEN_MODEL_NAME,
+        ):
+            return True
+
+    return False

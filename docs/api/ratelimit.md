@@ -1,49 +1,44 @@
 # Rate limiting
 
-`AuthRateLimitConfig.from_shared_backend()` is the canonical public entrypoint for the common shared-backend recipe. It materializes endpoint-specific `EndpointRateLimit` values from the private auth slot catalog while keeping manual `AuthRateLimitConfig(..., EndpointRateLimit(...))` assembly available as the advanced escape hatch.
+Use [Configuration](../configuration.md#canonical-redis-backed-auth-surface) as the canonical guide
+for the current Redis-backed auth contract: the preferred `RedisAuthPreset` flow, stable slot and
+group names, namespace families, helper exports, migration behavior, and the paired TOTP
+replay-store setup all live there. This page focuses on the public rate-limit types themselves.
 
-Import the builder aliases from `litestar_auth.ratelimit` when app code annotates shared-backend inputs:
+The higher-level one-client Redis preset lives in `litestar_auth.contrib.redis.RedisAuthPreset`.
+This module owns the lower-level shared builder plus the slot/group helper exports that feed
+`enabled=...` and `disabled=...`.
+
+Import the builder aliases and slot helpers from `litestar_auth.ratelimit` when app code annotates
+or reuses the shared-backend inventory:
 
 ```python
-from litestar_auth.ratelimit import AuthRateLimitEndpointGroup, AuthRateLimitEndpointSlot
+from litestar_auth.ratelimit import (
+    AUTH_RATE_LIMIT_ENDPOINT_SLOTS,
+    AUTH_RATE_LIMIT_ENDPOINT_SLOTS_BY_GROUP,
+    AUTH_RATE_LIMIT_VERIFICATION_SLOTS,
+    AuthRateLimitEndpointGroup,
+    AuthRateLimitEndpointSlot,
+    AuthRateLimitNamespaceStyle,
+)
 ```
 
 - `AuthRateLimitEndpointSlot` names the per-endpoint keys accepted by `enabled`, `disabled`, `scope_overrides`, `namespace_overrides`, and `endpoint_overrides`.
 - `AuthRateLimitEndpointGroup` names the shared-backend keys accepted by `group_backends`.
-
-Those aliases are the stable builder identifiers:
-
-| `AuthRateLimitEndpointSlot` value | `AuthRateLimitEndpointGroup` value | Default scope | Default namespace token |
-| --------------------------------- | ---------------------------------- | ------------- | ----------------------- |
-| `login` | `login` | `ip_email` | `login` |
-| `refresh` | `refresh` | `ip` | `refresh` |
-| `register` | `register` | `ip` | `register` |
-| `forgot_password` | `password_reset` | `ip_email` | `forgot-password` |
-| `reset_password` | `password_reset` | `ip` | `reset-password` |
-| `totp_enable` | `totp` | `ip` | `totp-enable` |
-| `totp_confirm_enable` | `totp` | `ip` | `totp-confirm-enable` |
-| `totp_verify` | `totp` | `ip` | `totp-verify` |
-| `totp_disable` | `totp` | `ip` | `totp-disable` |
-| `verify_token` | `verification` | `ip` | `verify-token` |
-| `request_verify_token` | `verification` | `ip_email` | `request-verify-token` |
-
-There is no extra preset or namespace-family mode behind those aliases. Use `group_backends`, `scope_overrides`,
-`namespace_overrides`, `disabled`, and `endpoint_overrides` directly when migrating existing key shapes.
-
-Override precedence is:
-
-1. `endpoint_overrides` wins per slot and can replace the limiter or set it to `None`.
-2. Otherwise, only slots enabled by `enabled` (defaults to all supported slots) and not listed in `disabled` are generated.
-3. Generated limiters start from `backend`, then `group_backends` can swap the backend for the slot's group.
-4. `scope_overrides` and `namespace_overrides` adjust the generated limiter for that slot.
-
-Those identifiers are the public builder contract. The private recipe objects that store them remain internal implementation details.
+- `AuthRateLimitNamespaceStyle` names the supported namespace families accepted by `namespace_style`.
+- `AUTH_RATE_LIMIT_ENDPOINT_SLOTS` exposes the ordered supported slot inventory derived from the package-owned catalog.
+- `AUTH_RATE_LIMIT_ENDPOINT_SLOTS_BY_GROUP` exposes read-only group-to-slot frozensets keyed by `AuthRateLimitEndpointGroup`.
+- `AUTH_RATE_LIMIT_VERIFICATION_SLOTS` is the convenience alias for `AUTH_RATE_LIMIT_ENDPOINT_SLOTS_BY_GROUP["verification"]`, which is useful for `disabled=...` when verification routes stay off.
 
 ::: litestar_auth.ratelimit
     options:
       members:
+        - AUTH_RATE_LIMIT_ENDPOINT_SLOTS
+        - AUTH_RATE_LIMIT_ENDPOINT_SLOTS_BY_GROUP
+        - AUTH_RATE_LIMIT_VERIFICATION_SLOTS
         - AuthRateLimitConfig
         - AuthRateLimitEndpointGroup
+        - AuthRateLimitNamespaceStyle
         - AuthRateLimitEndpointSlot
         - EndpointRateLimit
         - RateLimitScope

@@ -36,6 +36,7 @@ For the common bearer + database-token plugin flow, prefer the plugin-owned pres
 
 ```python
 from litestar_auth import DatabaseTokenAuthConfig, LitestarAuthConfig
+from litestar_auth.manager import UserManagerSecurity
 
 config = LitestarAuthConfig.with_database_token_auth(
     database_token_auth=DatabaseTokenAuthConfig(
@@ -44,14 +45,18 @@ config = LitestarAuthConfig.with_database_token_auth(
     user_model=YourUserModel,
     user_manager_class=YourUserManager,
     session_maker=session_maker,
-    user_manager_kwargs={
-        "verification_token_secret": "...",
-        "reset_password_token_secret": "...",
-    },
+    user_manager_security=UserManagerSecurity(
+        verification_token_secret="replace-with-32+-char-secret",
+        reset_password_token_secret="replace-with-32+-char-secret",
+    ),
 )
 ```
 
 `session_maker` here is any callable object compatible with `session_maker() -> AsyncSession`; `async_sessionmaker(...)` is the usual implementation, not the only supported one.
+Manager-scoped secrets, shared `PasswordHelper` injection, runtime password validation, and app-owned
+schema helper reuse still follow the same
+[canonical configuration contract](../configuration.md#canonical-manager-password-surface). Keep
+legacy `user_manager_kwargs` secret keys only for compatibility when migrating older setups.
 
 At runtime this still becomes a normal `AuthenticationBackend`, but the preset keeps request-session binding and migration-only rollout flags on the plugin side.
 

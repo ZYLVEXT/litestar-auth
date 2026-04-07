@@ -7,7 +7,9 @@ from litestar_auth.models import User, OAuthAccount
 from litestar_auth.db.sqlalchemy import SQLAlchemyUserDatabase
 ```
 
-For the bundled `AccessToken` / `RefreshToken` ORM tables, keep mapper registration under the models package:
+For the detailed ORM integration contract, use [Configuration](../configuration.md#custom-sqlalchemy-user-and-token-models) and the [Custom user + OAuth cookbook](../cookbook/custom_user_oauth.md). This page only names the stable import boundaries.
+
+For the bundled `AccessToken` / `RefreshToken` ORM tables, keep explicit mapper registration under the models package:
 
 ```python
 from litestar_auth.models import import_token_orm_models
@@ -15,7 +17,7 @@ from litestar_auth.models import import_token_orm_models
 AccessToken, RefreshToken = import_token_orm_models()
 ```
 
-Call that helper explicitly during metadata bootstrap or Alembic-style autogenerate setup when your app uses the bundled token tables. The older `from litestar_auth.authentication.strategy import import_token_orm_models` path remains supported only as a compatibility import for existing code, and the helper is intentionally not re-exported from `litestar_auth`.
+Call that helper explicitly during metadata bootstrap or Alembic-style autogenerate when your app uses the bundled token tables. For plugin-managed runtime, `LitestarAuth.on_app_init()` bootstraps the same bundled token mappers lazily when bundled DB-token models are active. The strategy-layer `import_token_orm_models()` re-export remains compatibility-only for existing imports, and the helper is intentionally not re-exported from `litestar_auth`.
 
 The canonical opaque DB-token entrypoint is also exported from the root package as `DatabaseTokenAuthConfig`.
 

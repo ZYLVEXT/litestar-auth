@@ -5,71 +5,56 @@ Use this when moving from local development to production, especially for **secr
 ## Process topology
 
 - **Single worker / dev** — in-memory JWT denylist, in-memory rate limiting, and in-memory TOTP replay cache are acceptable for local testing only.
-- **Multiple workers or restarts that matter** — use **Redis** (or equivalent shared stores) for: JWT `jti` denylist, the `AuthRateLimitConfig.from_shared_backend()` backend, `totp_used_tokens_store`, and TOTP pending-token JTI store if you mount a custom controller with a shared store (see [TOTP guide](guides/totp.md)).
+- **Multiple workers or restarts that matter** — use **Redis** (or equivalent shared stores) for: JWT `jti` denylist, the auth rate-limit config, `totp_used_tokens_store`, and TOTP pending-token JTI store if you mount a custom controller with a shared store (see [TOTP guide](guides/totp.md)). `litestar_auth.contrib.redis.RedisAuthPreset` is the preferred one-client path for the rate-limit config plus replay store pair.
 
 ## Secrets and keys
 
+- For the full manager/password contract, including `PasswordHelper` sharing,
+  `password_validator_factory`, and the `UserEmailField` / `UserPasswordField`
+  schema helpers, see
+  [Configuration](configuration.md#canonical-manager-password-surface). The checklist below only
+  calls out production consequences.
+- For plugin-managed apps, configure manager-scoped secrets via
+  `LitestarAuthConfig.user_manager_security`.
 - **JWT signing secret** (or private key) — high entropy; rotation plan.
-- **`verification_token_secret`** and **`reset_password_token_secret`** — at least the minimum length enforced by `validate_secret_length` (32+ characters by default).
+- **`verification_token_secret`** and **`reset_password_token_secret`** — configure both through
+  `user_manager_security`; each must satisfy the production minimum enforced by
+  `validate_secret_length` (32+ characters by default).
+- **`totp_secret_key`** — configure through `user_manager_security` when TOTP is enabled; required in
+  production because stored TOTP secrets must be encrypted at rest.
 - **`csrf_secret`** — required for meaningful CSRF protection when using cookie-based auth with the plugin’s CSRF wiring.
 - **`totp_pending_secret`** — required when TOTP is enabled; protects pending login payloads.
 - **`oauth_token_encryption_key`** — required when OAuth providers are configured (encrypts tokens at rest in the DB).
 - **`token_hash_secret`** (database opaque token strategy) — protects digest-at-rest storage for DB tokens.
+- Keep **`verification_token_secret`**, **`reset_password_token_secret`**,
+  **`totp_pending_secret`**, and **`totp_secret_key`** distinct. Current releases warn on reuse in
+  production to preserve compatibility. For plugin-managed apps the warning is emitted once during
+  `LitestarAuth(config)` validation; direct `BaseUserManager(...)` construction keeps its own
+  manager-scoped warning path. Distinct values are still the supported posture:
+  `litestar-auth:verify`, `litestar-auth:reset-password`, and
+  `litestar-auth:2fa-pending` / `litestar-auth:2fa-enroll` already separate JWT audiences, while
+  `totp_secret_key` should remain a dedicated encryption key with no JWT audience.
 
 ## Redis (recommended for scaled deployments)
 
 Use Redis-backed components when you run multiple workers or need durability:
 
 - **JWT denylist** — `RedisJWTDenylistStore` instead of in-memory.
-- **Rate limiting** — prefer one `RedisRateLimiter` passed to `AuthRateLimitConfig.from_shared_backend(...)` so all standard auth endpoints share Redis-backed counters with the documented stable slot names, group names, scopes, and namespace tokens (see [Rate limiting](guides/rate_limiting.md)).
-- **TOTP replay store** — `RedisUsedTotpCodeStore` for `totp_config.totp_used_tokens_store`.
+- **Shared auth surface** — use `litestar_auth.contrib.redis.RedisAuthPreset` when one async Redis
+  client should back both auth rate limiting and `totp_config.totp_used_tokens_store`. For strict
+  typing, that shared client only needs the combined `RedisRateLimiter` +
+  `RedisUsedTotpCodeStore` operations: `eval(...)`, `delete(...)`, and
+  `set(name, value, nx=True, px=ttl_ms)`.
+- **Low-level escape hatches** — keep `AuthRateLimitConfig.from_shared_backend(RedisRateLimiter(...))`
+  and direct `RedisUsedTotpCodeStore(...)` construction when you need separate backends or bespoke
+  key prefixes.
 
-Canonical shared-backend recipe:
-
-```python
-from litestar_auth.ratelimit import AuthRateLimitConfig, RedisRateLimiter
-
-rate_limit_config = AuthRateLimitConfig.from_shared_backend(
-    RedisRateLimiter(redis=redis_client, max_attempts=5, window_seconds=60),
-)
-```
-
-`from_shared_backend()` uses these stable builder identifiers:
-
-- Slots: `login`, `refresh`, `register`, `forgot_password`, `reset_password`, `totp_enable`, `totp_confirm_enable`, `totp_verify`, `totp_disable`, `verify_token`, `request_verify_token`
-- `group_backends` groups: `login`, `refresh`, `register`, `password_reset`, `totp`, `verification`
-- Default `ip_email` scopes: `login`, `forgot_password`, `request_verify_token`
-- Default `ip` scopes: every other supported slot
-
-Default namespace tokens are `login`, `refresh`, `register`, `forgot-password`, `reset-password`, `totp-enable`, `totp-confirm-enable`, `totp-verify`, `totp-disable`, `verify-token`, and `request-verify-token`.
-
-If you are migrating from an older manual recipe, keep existing key-space choices with `namespace_overrides` and `scope_overrides`, and use `disabled` for slots such as `verify_token` or `request_verify_token` when your deployed surface does not expose them.
-
-Example migration pattern for a Redis deployment with separate credential, refresh, and TOTP budgets:
-
-```python
-from litestar_auth.ratelimit import AuthRateLimitConfig, RedisRateLimiter
-
-credential_backend = RedisRateLimiter(redis=redis_client, max_attempts=5, window_seconds=60)
-refresh_backend = RedisRateLimiter(redis=redis_client, max_attempts=10, window_seconds=300)
-totp_backend = RedisRateLimiter(redis=redis_client, max_attempts=5, window_seconds=300)
-
-rate_limit_config = AuthRateLimitConfig.from_shared_backend(
-    credential_backend,
-    group_backends={"refresh": refresh_backend, "totp": totp_backend},
-    disabled={"verify_token", "request_verify_token"},
-    namespace_overrides={
-        "forgot_password": "forgot_password",
-        "reset_password": "reset_password",
-        "totp_enable": "totp_enable",
-        "totp_confirm_enable": "totp_confirm_enable",
-        "totp_verify": "totp_verify",
-        "totp_disable": "totp_disable",
-    },
-)
-```
-
-This keeps the credential-oriented slots on `credential_backend`, moves `refresh` and `totp_*` to their own backends, preserves the legacy underscore namespaces, and leaves the verification slots unset. Reserve direct `EndpointRateLimit(...)` assembly for advanced per-endpoint exceptions, or `endpoint_overrides` when a single slot needs a custom limiter while staying inside the shared-builder contract.
+Use [Configuration](configuration.md#canonical-redis-backed-auth-surface) as the maintained source
+for the preferred `RedisAuthPreset` flow, the `AUTH_RATE_LIMIT_*` helper exports,
+`namespace_style`, the migration recipe, the fallback low-level builder/store APIs, and the
+`litestar_auth.ratelimit` versus `litestar_auth.contrib.redis` import split.
+Deployment adds the production requirement: those Redis-backed stores are the supported path once
+multiple workers or restarts matter.
 
 The in-memory rate limiter and in-memory denylist are **not** sufficient across processes. The plugin may log startup warnings when in-memory rate limiting is detected outside tests.
 

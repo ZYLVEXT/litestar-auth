@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import importlib
 import logging
 import warnings
+from functools import cache
 from typing import TYPE_CHECKING, Any, cast
 from urllib.parse import urlsplit
 
-from litestar_auth._plugin.config import _build_oauth_route_registration_contract
+from litestar_auth._plugin.config import _build_oauth_route_registration_contract, _uses_bundled_database_token_models
 from litestar_auth._plugin.middleware import get_cookie_transports
 from litestar_auth._plugin.rate_limit import iter_rate_limit_endpoints
 from litestar_auth.authentication.strategy.jwt import JWTStrategy
@@ -21,6 +23,17 @@ if TYPE_CHECKING:
 
 
 logger = logging.getLogger("litestar_auth.plugin")
+
+
+@cache
+def _load_bundled_token_orm_models() -> tuple[object, object]:
+    """Load the canonical bundled DB-token ORM classes exactly once per process.
+
+    Returns:
+        The bundled access-token and refresh-token ORM classes.
+    """
+    models_module = importlib.import_module("litestar_auth.models")
+    return cast("Any", models_module).import_token_orm_models()
 
 
 def _is_jwt_strategy_instance(strategy: object) -> bool:
@@ -38,6 +51,12 @@ def _is_jwt_strategy_instance(strategy: object) -> bool:
         and strategy_type.__module__ == JWTStrategy.__module__
         and hasattr(strategy, "revocation_is_durable")
     )
+
+
+def bootstrap_bundled_token_orm_models(config: LitestarAuthConfig[Any, Any]) -> None:
+    """Load bundled token ORM models during plugin app init when runtime uses them."""
+    if _uses_bundled_database_token_models(config):
+        _load_bundled_token_orm_models()
 
 
 def warn_insecure_plugin_startup_defaults(config: LitestarAuthConfig[Any, Any]) -> None:

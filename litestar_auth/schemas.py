@@ -1,8 +1,9 @@
 """Public msgspec schemas and schema helpers for litestar-auth user payloads.
 
-Import ``UserPasswordField`` from this module when app-owned ``msgspec.Struct``
-user create/update schemas should share the same password-length metadata as the
-built-in ``UserCreate`` and ``UserUpdate`` payloads.
+Import ``UserEmailField`` and ``UserPasswordField`` from this module when
+app-owned ``msgspec.Struct`` user create/update schemas should share the same
+email and password metadata as the built-in ``UserCreate`` and ``UserUpdate``
+payloads.
 """
 
 from __future__ import annotations
@@ -12,12 +13,15 @@ from typing import Annotated
 
 import msgspec
 
-import litestar_auth._schema_fields as schema_fields  # noqa: TC001
-from litestar_auth.config import DEFAULT_MINIMUM_PASSWORD_LENGTH, MAX_PASSWORD_LENGTH
+import litestar_auth._schema_fields as schema_fields
 
+type UserEmailField = Annotated[
+    str,
+    schema_fields.EMAIL_FIELD_META,
+]
 type UserPasswordField = Annotated[
     str,
-    msgspec.Meta(min_length=DEFAULT_MINIMUM_PASSWORD_LENGTH, max_length=MAX_PASSWORD_LENGTH),
+    schema_fields.USER_PASSWORD_FIELD_META,
 ]
 
 
@@ -34,7 +38,7 @@ class UserRead(msgspec.Struct):
 class UserCreate(msgspec.Struct):
     """Payload used to create a new user."""
 
-    email: schema_fields.EmailField
+    email: UserEmailField
     password: UserPasswordField
 
 
@@ -42,10 +46,10 @@ class UserUpdate(msgspec.Struct, omit_defaults=True):
     """Partial user update payload."""
 
     password: UserPasswordField | None = None
-    email: schema_fields.EmailField | None = None
+    email: UserEmailField | None = None
     is_active: bool | None = None
     is_verified: bool | None = None
     is_superuser: bool | None = None
 
 
-__all__ = ("UserCreate", "UserPasswordField", "UserRead", "UserUpdate")
+__all__ = ("UserCreate", "UserEmailField", "UserPasswordField", "UserRead", "UserUpdate")

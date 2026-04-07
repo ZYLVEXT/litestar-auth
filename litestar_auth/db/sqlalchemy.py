@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from functools import cache
 from typing import TYPE_CHECKING, Any, Protocol, cast, override
 from uuid import UUID
@@ -32,10 +33,88 @@ class SQLAlchemyUserModelProtocol(ModelProtocol, UserProtocol[UUID], Protocol):
 type UserModelT[UP: SQLAlchemyUserModelProtocol] = type[UP]
 
 
+@dataclass(frozen=True, slots=True)
+class _UserModelContract:
+    """Minimal declarative contract used to validate OAuth/user model alignment."""
+
+    model_name: str | None
+    table_name: str | None
+    registry: object | None
+
+
+def _describe_user_model_contract(user_model: type[Any]) -> _UserModelContract:
+    """Return the user-model identity details that OAuth models point back to."""
+    return _UserModelContract(
+        model_name=cast("str | None", getattr(user_model, "__name__", None)),
+        table_name=cast("str | None", getattr(user_model, "__tablename__", None)),
+        registry=getattr(user_model, "registry", None),
+    )
+
+
+def _describe_oauth_user_contract(oauth_model: type[Any]) -> _UserModelContract | None:
+    """Return the declared user-side contract for an OAuth model when available."""
+    auth_user_model = getattr(oauth_model, "auth_user_model", None)
+    auth_user_table = getattr(oauth_model, "auth_user_table", None)
+    if not isinstance(auth_user_model, str) and not isinstance(auth_user_table, str):
+        return None
+    return _UserModelContract(
+        model_name=auth_user_model if isinstance(auth_user_model, str) else None,
+        table_name=auth_user_table if isinstance(auth_user_table, str) else None,
+        registry=getattr(oauth_model, "registry", None),
+    )
+
+
+def _validate_oauth_account_model_contract(
+    user_model: UserModelT[SQLAlchemyUserModelProtocol],
+    oauth_model: type[Any],
+) -> None:
+    """Reject OAuth models that point at a different user class, table, or registry.
+
+    The supported paths are:
+    - the bundled ``OAuthAccount`` with a same-registry ``User`` mapped to ``user``
+    - a custom ``OAuthAccountMixin`` subclass whose hooks target ``user_model``
+
+    Raises:
+        TypeError: When ``oauth_model`` points at a different user class, table,
+            or registry than ``user_model``.
+    """
+    expected_contract = _describe_oauth_user_contract(oauth_model)
+    if expected_contract is None:
+        return
+
+    actual_contract = _describe_user_model_contract(user_model)
+    mismatches: list[str] = []
+    if expected_contract.model_name is not None and actual_contract.model_name != expected_contract.model_name:
+        mismatches.append(
+            "auth_user_model="
+            f"{expected_contract.model_name!r} does not match user_model.__name__={actual_contract.model_name!r}",
+        )
+    if expected_contract.table_name is not None and actual_contract.table_name != expected_contract.table_name:
+        mismatches.append(
+            "auth_user_table="
+            f"{expected_contract.table_name!r} does not match user_model.__tablename__={actual_contract.table_name!r}",
+        )
+    if (
+        expected_contract.registry is not None
+        and actual_contract.registry is not None
+        and expected_contract.registry is not actual_contract.registry
+    ):
+        mismatches.append("oauth_account_model and user_model use different declarative registries")
+
+    if mismatches:
+        msg = (
+            "oauth_account_model does not match user_model: "
+            + "; ".join(mismatches)
+            + ". Use a matching OAuthAccountMixin subclass for custom users, or reuse "
+            "litestar_auth.models.oauth.OAuthAccount only with a same-registry User mapped to the 'user' table."
+        )
+        raise TypeError(msg)
+
+
 @cache
-def _build_user_repository(
-    user_model: type[SQLAlchemyUserModelProtocol],
-) -> type[SQLAlchemyAsyncRepository[Any]]:
+def _build_user_repository[UP: SQLAlchemyUserModelProtocol](
+    user_model: UserModelT[UP],
+) -> type[SQLAlchemyAsyncRepository[UP]]:
     """Create a repository type bound to the provided SQLAlchemy user model.
 
     Cached by ``user_model`` identity so repeated adapter construction does not
@@ -44,10 +123,13 @@ def _build_user_repository(
     Returns:
         Repository class configured for ``user_model``.
     """
-    return type(
-        f"{user_model.__name__}Repository",
-        (SQLAlchemyAsyncRepository,),
-        {"model_type": user_model},
+    return cast(
+        "type[SQLAlchemyAsyncRepository[UP]]",
+        type(
+            f"{user_model.__name__}Repository",
+            (SQLAlchemyAsyncRepository,),
+            {"model_type": user_model},
+        ),
     )
 
 
@@ -58,10 +140,13 @@ def _build_oauth_repository(oauth_model: type[Any]) -> type[SQLAlchemyAsyncRepos
     Returns:
         A cached Advanced Alchemy async repository subclass for ``oauth_model``.
     """
-    return type(
-        f"{oauth_model.__name__}OAuthRepository",
-        (SQLAlchemyAsyncRepository,),
-        {"model_type": oauth_model},
+    return cast(
+        "type[SQLAlchemyAsyncRepository[Any]]",
+        type(
+            f"{oauth_model.__name__}OAuthRepository",
+            (SQLAlchemyAsyncRepository,),
+            {"model_type": oauth_model},
+        ),
     )
 
 
@@ -82,9 +167,13 @@ class SQLAlchemyUserDatabase[UP: SQLAlchemyUserModelProtocol](BaseUserStore[UP, 
             user_model: SQLAlchemy user model used for repository operations.
             oauth_account_model: SQLAlchemy model for OAuth account rows. Required
                 when using OAuth methods (``get_by_oauth_account``, ``upsert_oauth_account``).
+                Models built from ``OAuthAccountMixin`` must point back to the
+                same user class, table, and registry as ``user_model``.
         """
         self.session = session
         self.user_model = user_model
+        if oauth_account_model is not None:
+            _validate_oauth_account_model_contract(user_model, oauth_account_model)
         self.oauth_account_model = oauth_account_model
         self._user_repository_type = _build_user_repository(self.user_model)
 
@@ -147,10 +236,11 @@ class SQLAlchemyUserDatabase[UP: SQLAlchemyUserModelProtocol](BaseUserStore[UP, 
     async def get_by_oauth_account(self, oauth_name: str, account_id: str) -> UP | None:
         """Return a user linked to the given OAuth account, if present."""
         oa = self._require_oauth_account_model()
-        statement = select(self.user_model).join(oa, oa.user_id == self.user_model.id)
+        oauth_model = cast("Any", oa)
+        statement = select(self.user_model).join(oa, oauth_model.user_id == self.user_model.id)
         return await self._repository(statement=statement).get_one_or_none(
-            oa.oauth_name == oauth_name,
-            oa.account_id == account_id,
+            oauth_model.oauth_name == oauth_name,
+            oauth_model.account_id == account_id,
         )
 
     async def upsert_oauth_account(  # noqa: PLR0913
@@ -178,10 +268,11 @@ class SQLAlchemyUserDatabase[UP: SQLAlchemyUserModelProtocol](BaseUserStore[UP, 
         require_oauth_token_encryption_key()
         oa_model = self._require_oauth_account_model()
         oauth_repo_type = _build_oauth_repository(oa_model)
+        oauth_model = cast("Any", oa_model)
         repository = oauth_repo_type(session=self.session, statement=select(oa_model))
         oauth_account = await repository.get_one_or_none(
-            oa_model.oauth_name == oauth_name,
-            oa_model.account_id == account_id,
+            oauth_model.oauth_name == oauth_name,
+            oauth_model.account_id == account_id,
         )
         if oauth_account is None:
             oauth_account = oa_model(

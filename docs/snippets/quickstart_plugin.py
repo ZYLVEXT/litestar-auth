@@ -16,12 +16,12 @@ from litestar_auth import (
     BaseUserManager,
     LitestarAuth,
     LitestarAuthConfig,
-    PasswordHelper,
-    SQLAlchemyUserDatabase,
 )
 from litestar_auth.authentication.backend import AuthenticationBackend
 from litestar_auth.authentication.strategy import JWTStrategy
 from litestar_auth.authentication.transport import BearerTransport
+from litestar_auth.db.sqlalchemy import SQLAlchemyUserDatabase
+from litestar_auth.manager import UserManagerSecurity
 from litestar_auth.models import User
 
 
@@ -51,11 +51,13 @@ def build_app() -> Litestar:
         user_model=User,
         user_manager_class=UserManager,
         user_db_factory=lambda session: SQLAlchemyUserDatabase(session, user_model=User),
-        user_manager_kwargs={
-            "password_helper": PasswordHelper(),
-            "verification_token_secret": "replace-with-32+-char-secret-for-verify",
-            "reset_password_token_secret": "replace-with-32+-char-secret-for-reset",
-        },
+        # Keep secrets on the typed contract; reserve user_manager_kwargs for non-secret deps.
+        user_manager_security=UserManagerSecurity(
+            verification_token_secret="replace-with-32+-char-secret-for-verify",
+            reset_password_token_secret="replace-with-32+-char-secret-for-reset",
+        ),
         include_users=False,
     )
+    # Optional: call this only if app-owned code also hashes or verifies passwords.
+    config.build_password_helper()
     return Litestar(plugins=[LitestarAuth(config)])

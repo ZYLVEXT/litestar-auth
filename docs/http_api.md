@@ -26,7 +26,13 @@ Generated OpenAPI publishes the built-in request/response payload names from `li
 | POST | `{auth}/verify` | `VerifyToken` (`token`) | `include_verify=True` | Confirm email with token. |
 | POST | `{auth}/request-verify-token` | `RequestVerifyToken` (`email`) | `include_verify=True` | Re-issue verification token. |
 
-When you replace the built-in `UserCreate` request body with `user_create_schema`, reuse `litestar_auth.schemas.UserPasswordField` for the `password` field to keep the documented min/max password metadata aligned. The default runtime validator still enforces length through `require_password_length`.
+When you replace the built-in `UserCreate` request body with `user_create_schema`, reuse
+`litestar_auth.schemas.UserEmailField` and `litestar_auth.schemas.UserPasswordField` for `email` / `password` when
+you want the documented built-in validation metadata. Existing `UserPasswordField` imports remain valid; add
+`UserEmailField` when you also want the built-in email regex and max length. The default runtime validator still
+enforces password length through `require_password_length`. See
+[Configuration](configuration.md#canonical-manager-password-surface) for the full schema-helper,
+password-validator, and shared-helper contract.
 
 ## Password reset
 

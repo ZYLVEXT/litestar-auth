@@ -18,7 +18,7 @@ from litestar_auth.controllers import create_register_controller, create_users_c
 from litestar_auth.exceptions import ErrorCode
 from litestar_auth.manager import BaseUserManager
 from litestar_auth.password import PasswordHelper
-from litestar_auth.schemas import UserPasswordField  # noqa: TC001
+from litestar_auth.schemas import UserEmailField, UserPasswordField  # noqa: TC001
 from tests._helpers import auth_middleware_get_request_session, litestar_app_with_user_manager
 from tests.integration.conftest import (
     DummySessionMaker,
@@ -36,12 +36,14 @@ HTTP_CREATED = 201
 HTTP_OK = 200
 HTTP_UNPROCESSABLE_ENTITY = 422
 VERIFICATION_TOKEN_SECRET = "verify-secret-1234567890-1234567890"
+EMAIL_PATTERN = r"^[^@\s]+@[^@\s]+\.[^@\s]+$"
+EMAIL_MAX_LENGTH = 320
 
 
 class ExtendedUserCreate(msgspec.Struct):
     """Custom registration payload with an extra profile field."""
 
-    email: str
+    email: UserEmailField
     password: UserPasswordField
     bio: str
 
@@ -60,7 +62,7 @@ class ExtendedUserRead(msgspec.Struct):
 class ExtendedUserUpdate(msgspec.Struct, omit_defaults=True):
     """Custom partial-update payload with an extra profile field."""
 
-    email: str | None = None
+    email: UserEmailField | None = None
     password: UserPasswordField | None = None
     is_active: bool | None = None
     is_verified: bool | None = None
@@ -175,13 +177,26 @@ def test_custom_msgspec_schemas_publish_request_bodies_in_openapi(
     assert update_me_request_body is not None
     assert update_user_request_body is not None
     assert register_schema.properties is not None
+    assert update_schema.properties is not None
+    register_email_schema = register_schema.properties["email"]
+    update_email_schema = update_schema.properties["email"]
+    update_password_schema = update_schema.properties["password"]
     assert next(iter(register_request_body.content.values())).schema.ref == "#/components/schemas/ExtendedUserCreate"
     assert next(iter(update_me_request_body.content.values())).schema.ref == "#/components/schemas/ExtendedUserUpdate"
     assert next(iter(update_user_request_body.content.values())).schema.ref == "#/components/schemas/ExtendedUserUpdate"
     assert "bio" in (register_schema.properties or {})
     assert "bio" in (update_schema.properties or {})
+    assert register_email_schema.max_length == EMAIL_MAX_LENGTH
+    assert register_email_schema.pattern == EMAIL_PATTERN
     assert register_schema.properties["password"].min_length == DEFAULT_MINIMUM_PASSWORD_LENGTH
     assert register_schema.properties["password"].max_length == MAX_PASSWORD_LENGTH
+    assert update_email_schema.one_of is not None
+    assert {getattr(candidate.type, "value", candidate.type) for candidate in update_email_schema.one_of} == {
+        "string",
+        "null",
+    }
+    assert update_password_schema.one_of is not None
+    assert {candidate.type.value for candidate in update_password_schema.one_of} == {"string", "null"}
 
 
 async def test_custom_msgspec_schemas_extend_register_and_users_responses(
@@ -246,7 +261,7 @@ async def test_custom_msgspec_schemas_extend_register_and_users_responses(
     assert list_response.json()["items"][1]["bio"] == "updated-bio"
 
 
-async def test_custom_registration_schema_reuses_builtin_password_bounds(
+async def test_custom_registration_schema_reuses_builtin_email_and_password_contract(
     client: tuple[
         AsyncTestClient[Litestar],
         InMemoryUserDatabase,
@@ -255,7 +270,7 @@ async def test_custom_registration_schema_reuses_builtin_password_bounds(
         ExampleUser,
     ],
 ) -> None:
-    """Custom registration schemas can reuse the built-in password-length contract."""
+    """Custom registration schemas can reuse the built-in email and password contract."""
     test_client, user_db, *_ = client
     minimum_password = "p" * DEFAULT_MINIMUM_PASSWORD_LENGTH
     maximum_password = "p" * MAX_PASSWORD_LENGTH
@@ -267,6 +282,10 @@ async def test_custom_registration_schema_reuses_builtin_password_bounds(
     maximum_response = await test_client.post(
         "/auth/register",
         json={"email": "maximum@example.com", "password": maximum_password, "bio": "maximum"},
+    )
+    invalid_email_response = await test_client.post(
+        "/auth/register",
+        json={"email": "not-an-email", "password": minimum_password, "bio": "invalid-email"},
     )
     short_response = await test_client.post(
         "/auth/register",
@@ -283,17 +302,20 @@ async def test_custom_registration_schema_reuses_builtin_password_bounds(
 
     assert minimum_response.status_code == HTTP_CREATED
     assert maximum_response.status_code == HTTP_CREATED
+    assert invalid_email_response.status_code == HTTP_UNPROCESSABLE_ENTITY
     assert short_response.status_code == HTTP_UNPROCESSABLE_ENTITY
     assert long_response.status_code == HTTP_UNPROCESSABLE_ENTITY
+    assert invalid_email_response.json()["extra"]["code"] == ErrorCode.REQUEST_BODY_INVALID
     assert short_response.json()["extra"]["code"] == ErrorCode.REQUEST_BODY_INVALID
     assert long_response.json()["extra"]["code"] == ErrorCode.REQUEST_BODY_INVALID
     assert await user_db.get_by_email("minimum@example.com") is not None
     assert await user_db.get_by_email("maximum@example.com") is not None
+    assert await user_db.get_by_email("not-an-email") is None
     assert await user_db.get_by_email("short@example.com") is None
     assert await user_db.get_by_email("long@example.com") is None
 
 
-async def test_custom_update_schema_reuses_builtin_password_bounds(
+async def test_custom_update_schema_reuses_builtin_email_and_password_contract(
     client: tuple[
         AsyncTestClient[Litestar],
         InMemoryUserDatabase,
@@ -302,7 +324,7 @@ async def test_custom_update_schema_reuses_builtin_password_bounds(
         ExampleUser,
     ],
 ) -> None:
-    """Custom update schemas can reuse the built-in password-length contract."""
+    """Custom update schemas can reuse the built-in email/password contract."""
     test_client, _, _, strategy, admin_user = client
     token = await strategy.write_token(admin_user)
     headers = {"Authorization": f"Bearer {token}"}
@@ -316,6 +338,11 @@ async def test_custom_update_schema_reuses_builtin_password_bounds(
         headers=headers,
         json={"password": "p" * (DEFAULT_MINIMUM_PASSWORD_LENGTH - 1)},
     )
+    invalid_email_response = await test_client.patch(
+        "/users/me",
+        headers=headers,
+        json={"email": "not-an-email"},
+    )
     long_response = await test_client.patch(
         "/users/me",
         headers=headers,
@@ -323,8 +350,10 @@ async def test_custom_update_schema_reuses_builtin_password_bounds(
     )
 
     assert minimum_response.status_code == HTTP_OK
+    assert invalid_email_response.status_code == HTTP_UNPROCESSABLE_ENTITY
     assert short_response.status_code == HTTP_UNPROCESSABLE_ENTITY
     assert long_response.status_code == HTTP_UNPROCESSABLE_ENTITY
+    assert invalid_email_response.json()["extra"]["code"] == ErrorCode.REQUEST_BODY_INVALID
     assert short_response.json()["extra"]["code"] == ErrorCode.REQUEST_BODY_INVALID
     assert long_response.json()["extra"]["code"] == ErrorCode.REQUEST_BODY_INVALID
 

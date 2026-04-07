@@ -4,10 +4,10 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any, Protocol, Self, runtime_checkable
 
+from litestar_auth._redis_protocols import RedisKey, RedisRateLimiterClient, RedisTTLSeconds
+
 if TYPE_CHECKING:
     from types import TracebackType
-
-    from ._helpers import RedisScriptResult
 
 
 class RedisPipelineProtocol(Protocol):
@@ -28,14 +28,14 @@ class RedisPipelineProtocol(Protocol):
     ) -> bool | None:
         """Exit the async pipeline context."""
 
-    def incr(self, name: str, amount: int = 1) -> Self:
+    def incr(self, name: RedisKey, amount: int = 1) -> Self:
         """Increment a Redis counter.
 
         Returns:
             The pipeline instance.
         """
 
-    def expire(self, name: str, time: int, *, nx: bool = False) -> Self:
+    def expire(self, name: RedisKey, time: RedisTTLSeconds, *, nx: bool = False) -> Self:
         """Set a TTL on a Redis key.
 
         Returns:
@@ -46,18 +46,8 @@ class RedisPipelineProtocol(Protocol):
         """Execute queued pipeline commands."""
 
 
-class RedisClientProtocol(Protocol):
+class RedisClientProtocol(RedisRateLimiterClient, Protocol):
     """Minimal async Redis client interface used by the rate limiter."""
-
-    async def delete(self, *names: str) -> int:
-        """Delete one or more Redis keys."""
-
-    async def eval(self, script: str, numkeys: int, *keys_and_args: object) -> RedisScriptResult:
-        """Execute a Lua script.
-
-        Returns:
-            The scalar result returned by Redis.
-        """
 
 
 @runtime_checkable
