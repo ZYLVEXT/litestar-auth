@@ -61,6 +61,7 @@ if TYPE_CHECKING:
 
     _ScopedUserDatabaseProxy = ScopedUserDatabaseProxyImpl
 
+DatabaseTokenAuthConfig = _plugin_config.DatabaseTokenAuthConfig
 LitestarAuthConfig = _plugin_config.LitestarAuthConfig
 OAuthConfig = _plugin_config.OAuthConfig
 TotpConfig = _plugin_config.TotpConfig
@@ -246,6 +247,7 @@ class LitestarAuth[UP: UserProtocol[Any], ID](InitPlugin):
 
 
 __all__ = (
+    "DatabaseTokenAuthConfig",
     "LitestarAuth",
     "LitestarAuthConfig",
     "OAuthConfig",

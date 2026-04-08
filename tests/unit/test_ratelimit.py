@@ -927,6 +927,22 @@ def test_ratelimit_submodules_expose_stable_import_paths(
     assert missing_symbols == []
 
 
+def test_public_ratelimit_all_lists_only_documented_exports() -> None:
+    """The public ratelimit module keeps helper internals out of ``__all__``."""
+    assert all(not symbol.startswith("_") for symbol in ratelimit_module.__all__)
+    for symbol in (
+        "_DEFAULT_TRUSTED_HEADERS",
+        "_client_host",
+        "_extract_email",
+        "_load_redis_asyncio",
+        "_safe_key_part",
+        "_validate_configuration",
+        "importlib",
+        "logger",
+    ):
+        assert symbol not in ratelimit_module.__all__
+
+
 async def test_ratelimit_protocol_stubs_behave_as_type_contracts() -> None:
     """Protocol stubs remain directly callable without adding runtime behavior."""
     protocol_module = _reload_module("litestar_auth.ratelimit._protocol")

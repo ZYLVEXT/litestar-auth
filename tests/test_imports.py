@@ -854,7 +854,14 @@ def test_root_package_does_not_export_compat_aliases() -> None:
 
 def test_plugin_module_public_exports_no_compat_shims() -> None:
     """Plugin module exposes ``LitestarAuth``, ``LitestarAuthConfig``, config dataclasses; legacy shims removed."""
-    assert plugin_module.__all__ == ("LitestarAuth", "LitestarAuthConfig", "OAuthConfig", "TotpConfig")
+    assert plugin_module.__all__ == (
+        "DatabaseTokenAuthConfig",
+        "LitestarAuth",
+        "LitestarAuthConfig",
+        "OAuthConfig",
+        "TotpConfig",
+    )
+    assert plugin_module.DatabaseTokenAuthConfig is DatabaseTokenAuthConfig
     assert plugin_module.LitestarAuthConfig is plugin_internals.LitestarAuthConfig
     assert "AuthPlugin" not in plugin_module.__all__
     assert not hasattr(plugin_module, "AuthPlugin")

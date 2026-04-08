@@ -19,7 +19,7 @@ AccessToken, RefreshToken = import_token_orm_models()
 
 Call that helper explicitly during metadata bootstrap or Alembic-style autogenerate when your app uses the bundled token tables. For plugin-managed runtime, `LitestarAuth.on_app_init()` bootstraps the same bundled token mappers lazily when bundled DB-token models are active. The strategy-layer `import_token_orm_models()` re-export remains compatibility-only for existing imports, and the helper is intentionally not re-exported from `litestar_auth`.
 
-The canonical opaque DB-token entrypoint is also exported from the root package as `DatabaseTokenAuthConfig`.
+The canonical opaque DB-token entrypoint is exported from both the root package and `litestar_auth.plugin` as `DatabaseTokenAuthConfig`.
 
 For OAuth, treat root-package re-exports as compatibility aliases. The canonical login-helper import is `litestar_auth.oauth.create_provider_oauth_controller`, while `litestar_auth.controllers.create_oauth_controller` and `create_oauth_associate_controller` are the advanced escape hatch for custom route tables.
 

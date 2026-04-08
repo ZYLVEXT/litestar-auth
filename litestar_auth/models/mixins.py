@@ -13,7 +13,6 @@ from litestar_auth._auth_model_mixins import (
     RefreshTokenMixin,
     UserAuthRelationshipMixin,
     UserModelMixin,
-    _TokenModelMixin,  # noqa: F401
 )
 from litestar_auth.models._oauth_encrypted_types import oauth_access_token_type, oauth_refresh_token_type
 

@@ -40,7 +40,7 @@ from litestar_auth.authentication.transport.cookie import CookieTransport
 from litestar_auth.manager import UserManagerSecurity, require_password_length
 from litestar_auth.oauth_encryption import get_oauth_encryption_key_callable, oauth_token_encryption_scope
 from litestar_auth.password import PasswordHelper
-from litestar_auth.plugin import LitestarAuth, LitestarAuthConfig, OAuthConfig, TotpConfig
+from litestar_auth.plugin import DatabaseTokenAuthConfig, LitestarAuth, LitestarAuthConfig, OAuthConfig, TotpConfig
 from litestar_auth.ratelimit import AuthRateLimitConfig, EndpointRateLimit, InMemoryRateLimiter, RedisRateLimiter
 from litestar_auth.totp import InMemoryUsedTotpCodeStore, SecurityWarning
 from tests.integration.test_orchestrator import (
@@ -62,9 +62,16 @@ def test_plugin_module_executes_under_coverage() -> None:
     """Reload the module in-test so coverage records the module body."""
     reloaded_module = importlib.reload(plugin_module)
 
+    assert reloaded_module.DatabaseTokenAuthConfig.__name__ == DatabaseTokenAuthConfig.__name__
     assert reloaded_module.LitestarAuth.__name__ == LitestarAuth.__name__
     assert reloaded_module.LitestarAuthConfig.__name__ == LitestarAuthConfig.__name__
-    assert reloaded_module.__all__ == ("LitestarAuth", "LitestarAuthConfig", "OAuthConfig", "TotpConfig")
+    assert reloaded_module.__all__ == (
+        "DatabaseTokenAuthConfig",
+        "LitestarAuth",
+        "LitestarAuthConfig",
+        "OAuthConfig",
+        "TotpConfig",
+    )
 
 
 def _minimal_config(

@@ -35,7 +35,6 @@ Examples:
 
 import logging
 
-from litestar_auth._plugin.config import DatabaseTokenAuthConfig
 from litestar_auth.authentication import AuthenticationBackend, Authenticator
 from litestar_auth.authentication.strategy import (
     DatabaseTokenStrategy,
@@ -97,7 +96,7 @@ from litestar_auth.payloads import (
     UserUpdate,
     VerifyToken,
 )
-from litestar_auth.plugin import LitestarAuth, LitestarAuthConfig, OAuthConfig, TotpConfig
+from litestar_auth.plugin import DatabaseTokenAuthConfig, LitestarAuth, LitestarAuthConfig, OAuthConfig, TotpConfig
 from litestar_auth.ratelimit import (
     AuthRateLimitConfig,
     EndpointRateLimit,

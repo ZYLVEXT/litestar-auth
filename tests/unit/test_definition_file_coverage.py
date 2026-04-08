@@ -282,8 +282,7 @@ def test_models_mixins_module_reload_preserves_contract_exports() -> None:
     )
     assert hasattr(reloaded_module.UserModelMixin, "email")
     assert hasattr(reloaded_module.OAuthAccountMixin, "access_token")
-    assert "user" in reloaded_module._TokenModelMixin.__dict__
-    assert "user_id" in reloaded_module._TokenModelMixin.__dict__
+    assert not hasattr(reloaded_module, "_TokenModelMixin")
     assert issubclass(ModelsUser, UserModelMixin)
     assert issubclass(ModelsOAuthAccount, OAuthAccountMixin)
     assert issubclass(ModelsAccessToken, AccessTokenMixin)
