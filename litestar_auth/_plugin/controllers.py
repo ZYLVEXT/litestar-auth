@@ -73,7 +73,7 @@ def _build_auth_controllers[UP: UserProtocol[Any], ID](
     """
     controllers: list[ControllerRouterHandler] = []
     require_session_maker(config)
-    for index, backend in enumerate(config.backends):
+    for index, backend in enumerate(config.resolve_backends()):
         totp_pending_secret = config.totp_config.totp_pending_secret if config.totp_config is not None else None
         controllers.append(
             create_auth_controller(
@@ -248,9 +248,9 @@ def totp_backend[UP: UserProtocol[Any], ID](
         ValueError: If ``totp_backend_name`` does not match any configured backend.
     """
     if config.totp_config is None or config.totp_config.totp_backend_name is None:
-        return config.backends[0]
+        return config.resolve_backends()[0]
 
-    for backend in config.backends:
+    for backend in config.resolve_backends():
         if backend.name == config.totp_config.totp_backend_name:
             return backend
 

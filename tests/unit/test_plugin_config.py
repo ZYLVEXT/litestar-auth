@@ -213,11 +213,11 @@ def test_litestar_auth_config_database_token_auth_defaults_to_none() -> None:
     assert config.database_token_auth is None
 
 
-def test_with_database_token_auth_builds_canonical_db_bearer_backend() -> None:
-    """The preset builder creates the canonical bearer + database-token backend without a startup session."""
+def test_database_token_auth_field_builds_canonical_db_bearer_backend() -> None:
+    """The DB-token config field builds the canonical bearer + database-token backend lazily."""
     configured_token_bytes = 48
     session_maker = assert_structural_session_factory(DummySessionMaker())
-    config = LitestarAuthConfig[ExampleUser, UUID].with_database_token_auth(
+    config = LitestarAuthConfig[ExampleUser, UUID](
         database_token_auth=DatabaseTokenAuthConfig(
             token_hash_secret="x" * 40,
             max_age=timedelta(minutes=5),
@@ -244,7 +244,7 @@ def test_with_database_token_auth_builds_canonical_db_bearer_backend() -> None:
     assert preset.token_bytes == configured_token_bytes
     assert preset.accept_legacy_plaintext_tokens is True
 
-    backend = config.backends[0]
+    backend = config.resolve_backends()[0]
     assert backend.name == "database"
     assert isinstance(backend.transport, BearerTransport)
     current_strategy_module = importlib.import_module("litestar_auth.authentication.strategy")
@@ -268,16 +268,16 @@ def test_request_scoped_database_token_session_proxy_requires_bound_session() ->
         plugin_config_module._DATABASE_TOKEN_REQUEST_SESSION.reset(reset_token)
 
 
-def test_with_database_token_auth_rejects_manual_backends() -> None:
-    """The preset builder and manual backends are mutually exclusive."""
+def test_database_token_auth_rejects_manual_backends() -> None:
+    """Explicit backends and the canonical DB-token preset are mutually exclusive."""
     backend = AuthenticationBackend[ExampleUser, UUID](
         name="primary",
         transport=BearerTransport(),
         strategy=cast("Any", InMemoryTokenStrategy(token_prefix="plugin-config")),
     )
 
-    with pytest.raises(ValueError, match=r"use either this builder or pass backends"):
-        LitestarAuthConfig[ExampleUser, UUID].with_database_token_auth(
+    with pytest.raises(ValueError, match=r"database_token_auth=\.\.\. or backends=\.\.\., not both"):
+        LitestarAuthConfig[ExampleUser, UUID](
             database_token_auth=DatabaseTokenAuthConfig(
                 token_hash_secret="x" * 40,
             ),
@@ -294,6 +294,36 @@ def test_with_database_token_auth_rejects_manual_backends() -> None:
                 "reset_password_token_secret": "y" * 32,
             },
         )
+
+
+def test_resolve_backends_rejects_post_init_mixing_of_preset_and_manual_backends() -> None:
+    """`resolve_backends()` fails closed if callers mutate the config into an invalid mixed state."""
+    config = LitestarAuthConfig[ExampleUser, UUID](
+        database_token_auth=DatabaseTokenAuthConfig(
+            token_hash_secret="x" * 40,
+        ),
+        user_model=ExampleUser,
+        user_manager_class=PluginUserManager,
+        session_maker=cast(
+            "async_sessionmaker[AsyncSession]",
+            assert_structural_session_factory(DummySessionMaker()),
+        ),
+        user_db_factory=lambda _session: InMemoryUserDatabase([]),
+        user_manager_kwargs={
+            "verification_token_secret": "x" * 32,
+            "reset_password_token_secret": "y" * 32,
+        },
+    )
+    config.backends = [
+        AuthenticationBackend[ExampleUser, UUID](
+            name="primary",
+            transport=BearerTransport(),
+            strategy=cast("Any", InMemoryTokenStrategy(token_prefix="plugin-config")),
+        ),
+    ]
+
+    with pytest.raises(ValueError, match=r"database_token_auth=\.\.\. or backends=\.\.\., not both"):
+        config.resolve_backends()
 
 
 def test_user_manager_accepts_password_validator_prefers_explicit_class_attribute() -> None:

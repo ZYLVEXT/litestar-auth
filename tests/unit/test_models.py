@@ -970,7 +970,7 @@ def test_plugin_runtime_bootstrap_is_idempotent_with_models_helper() -> None:
         "class DummySessionMaker:\n"
         "    def __call__(self) -> object:\n"
         "        return object()\n"
-        "config = LitestarAuthConfig.with_database_token_auth(\n"
+        "config = LitestarAuthConfig(\n"
         "    database_token_auth=DatabaseTokenAuthConfig(token_hash_secret='x' * 40),\n"
         "    user_model=UserModel,\n"
         "    user_manager_class=cast(Any, UserManager),\n"

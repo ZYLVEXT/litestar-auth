@@ -10,7 +10,7 @@ from contextvars import ContextVar
 from dataclasses import dataclass, field
 from datetime import timedelta
 from functools import partial
-from typing import TYPE_CHECKING, Any, Protocol, Self, cast
+from typing import TYPE_CHECKING, Any, Protocol, cast
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -114,7 +114,7 @@ def build_database_token_backend[UP: UserProtocol[Any], ID](
 def _build_default_user_db(session: AsyncSession, *, user_model: type[Any]) -> BaseUserStore[Any, Any]:
     """Build a ``SQLAlchemyUserDatabase`` with a deferred adapter import.
 
-    Used by ``LitestarAuthConfig.__post_init__`` via ``functools.partial`` so the
+    Used by :meth:`LitestarAuthConfig.resolve_user_db_factory` via ``functools.partial`` so the
     SQLAlchemy adapter module is loaded only at first request-scoped call, not at
     configuration time.
 
@@ -133,7 +133,7 @@ def _build_database_token_backend[UP: UserProtocol[Any], ID](
 ) -> AuthenticationBackend[UP, ID]:
     """Build the canonical bearer + database-token backend lazily.
 
-    Imports the backend, transport, and strategy only when the preset builder is used so
+    Imports the backend, transport, and strategy only when the ``database_token_auth`` path is used so
     importing ``litestar_auth._plugin.config`` keeps the current lazy-import contract
     without hiding first-party references behind string-based module lookups.
 
@@ -528,9 +528,10 @@ class LitestarAuthConfig[UP: UserProtocol[Any], ID]:
     navigation across a large surface area.
 
     Core:
-        ``backends``, ``user_model``, ``user_manager_class``, ``session_maker``,
-        ``user_db_factory``, ``user_manager_security``, ``user_manager_kwargs``,
-        ``password_validator_factory``, ``user_manager_factory``, ``rate_limit_config``.
+        ``user_model``, ``user_manager_class``, ``backends``, ``database_token_auth``,
+        ``session_maker``, ``user_db_factory``, ``user_manager_security``,
+        ``user_manager_kwargs``, ``password_validator_factory``, ``user_manager_factory``,
+        ``rate_limit_config``.
     Paths and endpoint flags:
         ``auth_path``, ``users_path``, ``include_register``, ``include_verify``,
         ``include_reset_password``, ``include_users``, ``enable_refresh``,
@@ -551,9 +552,10 @@ class LitestarAuthConfig[UP: UserProtocol[Any], ID]:
         field is used for credential lookup (default ``'email'``).
     """
 
-    backends: Sequence[AuthenticationBackend[UP, ID]]
     user_model: type[UP]
     user_manager_class: type[BaseUserManager[UP, ID]]
+    backends: Sequence[AuthenticationBackend[UP, ID]] = field(default_factory=tuple)
+    database_token_auth: DatabaseTokenAuthConfig | None = None
     session_maker: SessionFactory | None = None
     user_db_factory: UserDatabaseFactory[UP, ID] | None = None
     user_manager_security: UserManagerSecurity[ID] | None = None
@@ -583,12 +585,6 @@ class LitestarAuthConfig[UP: UserProtocol[Any], ID]:
     db_session_dependency_key: str = DEFAULT_DB_SESSION_DEPENDENCY_KEY
     db_session_dependency_provided_externally: bool = False
     login_identifier: LoginIdentifier = "email"
-    _database_token_auth: DatabaseTokenAuthConfig | None = field(
-        default=None,
-        init=False,
-        repr=False,
-        compare=False,
-    )
     _memoized_default_password_helper: PasswordHelper | None = field(
         default=None,
         init=False,
@@ -596,10 +592,36 @@ class LitestarAuthConfig[UP: UserProtocol[Any], ID]:
         compare=False,
     )
 
-    @property
-    def database_token_auth(self) -> DatabaseTokenAuthConfig | None:
-        """Return DB bearer preset metadata when built via ``with_database_token_auth()``."""
-        return self._database_token_auth
+    def resolve_backends(self) -> Sequence[AuthenticationBackend[UP, ID]]:
+        """Return the effective authentication backends for this config.
+
+        When ``database_token_auth`` is configured, this synthesizes the canonical
+        bearer + DB-token backend lazily. Otherwise the explicit ``backends``
+        sequence is returned as-is.
+
+        Returns:
+            Effective authentication backends for plugin setup and validation.
+
+        Raises:
+            ValueError: If both ``backends`` and ``database_token_auth`` are configured.
+        """
+        if self.database_token_auth is not None:
+            if self.backends:
+                msg = "Configure authentication backends via database_token_auth=... or backends=..., not both."
+                raise ValueError(msg)
+            return (_build_database_token_backend(self.database_token_auth),)
+        return self.backends
+
+    def bind_request_backends(self, session: AsyncSession) -> tuple[AuthenticationBackend[UP, ID], ...]:
+        """Return authentication backends bound to the current request session.
+
+        Returns:
+            Request-scoped backends aligned with the provided SQLAlchemy session.
+        """
+        if self.database_token_auth is not None:
+            bind_database_token_request_session(session)
+            return (build_database_token_backend(self.database_token_auth, session=session),)
+        return tuple(backend.with_session(session) for backend in self.resolve_backends())
 
     def build_password_helper(self) -> PasswordHelper:
         """Return the helper aligned with this config, memoizing default construction.
@@ -634,146 +656,19 @@ class LitestarAuthConfig[UP: UserProtocol[Any], ID]:
         """
         return self._memoized_default_password_helper
 
-    @classmethod
-    def with_database_token_auth(  # noqa: PLR0913
-        cls: type[Self],
-        *,
-        database_token_auth: DatabaseTokenAuthConfig,
-        backends: Sequence[AuthenticationBackend[UP, ID]] | None = None,
-        user_model: type[UP],
-        user_manager_class: type[BaseUserManager[UP, ID]],
-        session_maker: SessionFactory | None = None,
-        user_db_factory: UserDatabaseFactory[UP, ID] | None = None,
-        user_manager_security: UserManagerSecurity[ID] | None = None,
-        user_manager_kwargs: dict[str, Any] | None = None,
-        password_validator_factory: PasswordValidatorFactory[UP, ID] | None = None,
-        user_manager_factory: UserManagerFactory[UP, ID] | None = None,
-        rate_limit_config: AuthRateLimitConfig | None = None,
-        auth_path: str = "/auth",
-        users_path: str = "/users",
-        include_register: bool = True,
-        include_verify: bool = True,
-        include_reset_password: bool = True,
-        include_users: bool = False,
-        enable_refresh: bool = False,
-        requires_verification: bool = False,
-        hard_delete: bool = False,
-        totp_config: TotpConfig | None = None,
-        oauth_config: OAuthConfig | None = None,
-        csrf_secret: str | None = None,
-        csrf_header_name: str = "X-CSRF-Token",
-        allow_legacy_plaintext_tokens: bool = False,
-        allow_nondurable_jwt_revocation: bool = False,
-        id_parser: Callable[[str], ID] | None = None,
-        user_read_schema: type[msgspec.Struct] | None = None,
-        user_create_schema: type[msgspec.Struct] | None = None,
-        user_update_schema: type[msgspec.Struct] | None = None,
-        db_session_dependency_key: str = DEFAULT_DB_SESSION_DEPENDENCY_KEY,
-        db_session_dependency_provided_externally: bool = False,
-        login_identifier: LoginIdentifier = "email",
-    ) -> Self:
-        """Build config for the canonical bearer + database-token plugin path.
-
-        Args:
-            database_token_auth: Settings object for the canonical DB bearer preset.
-            backends: Must be omitted. This preset builds the canonical backend itself.
-            user_model: User ORM or protocol model.
-            user_manager_class: User manager implementation for the plugin.
-            session_maker: Optional session factory used by the plugin runtime.
-            user_db_factory: Optional user database factory override.
-            user_manager_security: Typed manager-security bundle for verification/reset
-                token secrets, optional TOTP encryption, and JWT subject parsing.
-            user_manager_kwargs: Additional user manager constructor kwargs.
-            password_validator_factory: Optional password validator factory override.
-            user_manager_factory: Optional request-scoped user manager factory override.
-            rate_limit_config: Optional rate-limit configuration.
-            auth_path: Auth controller base path.
-            users_path: Users controller base path.
-            include_register: Include register endpoint.
-            include_verify: Include verify endpoint.
-            include_reset_password: Include reset-password endpoints.
-            include_users: Include user-management endpoints.
-            enable_refresh: Enable refresh-token endpoints.
-            requires_verification: Require verified users for login.
-            hard_delete: Hard-delete users instead of soft-delete behavior.
-            totp_config: Optional TOTP configuration.
-            oauth_config: Optional OAuth configuration.
-            csrf_secret: Optional CSRF secret.
-            csrf_header_name: CSRF header name.
-            allow_legacy_plaintext_tokens: Allow the top-level migration acknowledgement for
-                manual DB strategies. The canonical DB-token preset normalizes this from
-                ``database_token_auth.accept_legacy_plaintext_tokens`` automatically.
-            allow_nondurable_jwt_revocation: Allow in-memory JWT revocation in production.
-            id_parser: Optional user-id parser.
-            user_read_schema: Optional read schema override.
-            user_create_schema: Optional create schema override.
-            user_update_schema: Optional update schema override.
-            db_session_dependency_key: Dependency key for injected DB sessions.
-            db_session_dependency_provided_externally: Whether the session dependency is external.
-            login_identifier: Credential lookup field for login.
-
-        Returns:
-            Configured plugin settings for the canonical DB bearer path.
-
-        Raises:
-            ValueError: If ``backends`` is also provided.
-        """
-        if backends is not None:
-            msg = (
-                "LitestarAuthConfig.with_database_token_auth() builds the canonical DB bearer backend "
-                "automatically; use either this builder or pass backends=... to LitestarAuthConfig(...), not both."
-            )
-            raise ValueError(msg)
-        normalized_allow_legacy_plaintext_tokens = (
-            allow_legacy_plaintext_tokens or database_token_auth.accept_legacy_plaintext_tokens
-        )
-        config = cls(
-            backends=[_build_database_token_backend(database_token_auth)],
-            user_model=user_model,
-            user_manager_class=user_manager_class,
-            session_maker=session_maker,
-            user_db_factory=user_db_factory,
-            user_manager_security=user_manager_security,
-            user_manager_kwargs={} if user_manager_kwargs is None else dict(user_manager_kwargs),
-            password_validator_factory=password_validator_factory,
-            user_manager_factory=user_manager_factory,
-            rate_limit_config=rate_limit_config,
-            auth_path=auth_path,
-            users_path=users_path,
-            include_register=include_register,
-            include_verify=include_verify,
-            include_reset_password=include_reset_password,
-            include_users=include_users,
-            enable_refresh=enable_refresh,
-            requires_verification=requires_verification,
-            hard_delete=hard_delete,
-            totp_config=totp_config,
-            oauth_config=oauth_config,
-            csrf_secret=csrf_secret,
-            csrf_header_name=csrf_header_name,
-            allow_legacy_plaintext_tokens=normalized_allow_legacy_plaintext_tokens,
-            allow_nondurable_jwt_revocation=allow_nondurable_jwt_revocation,
-            id_parser=id_parser,
-            user_read_schema=user_read_schema,
-            user_create_schema=user_create_schema,
-            user_update_schema=user_update_schema,
-            db_session_dependency_key=db_session_dependency_key,
-            db_session_dependency_provided_externally=db_session_dependency_provided_externally,
-            login_identifier=login_identifier,
-        )
-        config._database_token_auth = database_token_auth
-        return config
-
     def __post_init__(self) -> None:
         """Validate configuration fields and build defaults that depend on other fields.
 
         Raises:
             ConfigurationError: When ``login_identifier`` is not ``'email'`` or ``'username'``.
             ValueError: When ``db_session_dependency_key`` is not a valid Python identifier or is a
-                reserved keyword.
+                reserved keyword, or when ``backends`` and ``database_token_auth`` are both configured.
         """
         if self.user_manager_security is not None and self.id_parser is None:
             self.id_parser = self.user_manager_security.id_parser
+        if self.database_token_auth is not None and self.backends:
+            msg = "Configure authentication backends via database_token_auth=... or backends=..., not both."
+            raise ValueError(msg)
         if self.login_identifier not in _VALID_LOGIN_IDENTIFIERS:
             msg = f"Invalid login_identifier {self.login_identifier!r}. Expected 'email' or 'username'."
             raise ConfigurationError(msg)

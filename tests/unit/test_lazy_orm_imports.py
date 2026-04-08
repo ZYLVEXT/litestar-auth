@@ -256,8 +256,8 @@ def test_default_user_db_factory_imports_adapter_only_when_called() -> None:
     assert proc.returncode == 0, proc.stdout + proc.stderr
 
 
-def test_db_bearer_preset_builder_keeps_models_and_adapter_lazy() -> None:
-    """The plugin-owned DB bearer preset does not eagerly import ORM models or the SQLAlchemy adapter."""
+def test_db_bearer_preset_config_keeps_models_and_adapter_lazy() -> None:
+    """The DB-token config field does not eagerly import ORM models or the SQLAlchemy adapter."""
     proc = _run_isolated(
         "import sys\n"
         "from typing import Any, cast\n"
@@ -272,7 +272,7 @@ def test_db_bearer_preset_builder_keeps_models_and_adapter_lazy() -> None:
         "class DummySessionMaker:\n"
         "    def __call__(self) -> object:\n"
         "        return object()\n"
-        "config = LitestarAuthConfig.with_database_token_auth(\n"
+        "config = LitestarAuthConfig(\n"
         "    database_token_auth=DatabaseTokenAuthConfig(\n"
         "        token_hash_secret='x' * 40,\n"
         "    ),\n"
@@ -305,7 +305,7 @@ def test_db_bearer_plugin_runtime_bootstrap_loads_models_package_without_referen
         "class DummySessionMaker:\n"
         "    def __call__(self) -> object:\n"
         "        return object()\n"
-        "config = LitestarAuthConfig.with_database_token_auth(\n"
+        "config = LitestarAuthConfig(\n"
         "    database_token_auth=DatabaseTokenAuthConfig(token_hash_secret='x' * 40),\n"
         "    user_model=UserModel,\n"
         "    user_manager_class=cast(Any, UserManager),\n"

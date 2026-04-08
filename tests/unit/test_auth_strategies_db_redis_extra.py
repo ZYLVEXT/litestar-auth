@@ -256,7 +256,7 @@ def test_plugin_allows_database_token_preset_legacy_plaintext_tokens_without_top
 ) -> None:
     """The canonical DB-token preset no longer requires a duplicate top-level rollout flag."""
     monkeypatch.delenv("LITESTAR_AUTH_TESTING", raising=False)
-    config = LitestarAuthConfig[ExampleUser, UUID].with_database_token_auth(
+    config = LitestarAuthConfig[ExampleUser, UUID](
         database_token_auth=DatabaseTokenAuthConfig(
             token_hash_secret="test-token-hash-secret-1234567890-1234567890",
             accept_legacy_plaintext_tokens=True,

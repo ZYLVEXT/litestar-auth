@@ -124,14 +124,7 @@ class LitestarAuth[UP: UserProtocol[Any], ID](InitPlugin):
         Returns:
             Backends rebound to the provided request-local session.
         """
-        database_token_auth = self.config.database_token_auth
-        if database_token_auth is not None:
-            _plugin_config.bind_database_token_request_session(session)
-            return [
-                _plugin_config.build_database_token_backend(database_token_auth, session=session),
-            ]
-
-        return [backend.with_session(session) for backend in self.config.backends]
+        return list(self.config.bind_request_backends(session))
 
     def _build_user_manager(
         self,
@@ -213,7 +206,7 @@ class LitestarAuth[UP: UserProtocol[Any], ID](InitPlugin):
         )
 
     def _register_middleware(self, app_config: AppConfig) -> None:
-        cookie_transports = get_cookie_transports(self.config.backends)
+        cookie_transports = get_cookie_transports(self.config.resolve_backends())
         if cookie_transports:
             app_config.csrf_config = build_csrf_config(self.config, cookie_transports)
 
@@ -234,7 +227,7 @@ class LitestarAuth[UP: UserProtocol[Any], ID](InitPlugin):
         )
 
     def _provide_backends(self) -> object:
-        return self.config.backends
+        return self.config.resolve_backends()
 
     def _provide_config(self) -> object:
         return self.config

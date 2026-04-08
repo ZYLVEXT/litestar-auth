@@ -12,7 +12,7 @@ from litestar_auth.db.sqlalchemy import SQLAlchemyUserDatabase
 
 ## Canonical opaque DB-token preset
 
-Use `DatabaseTokenAuthConfig` plus `LitestarAuthConfig.with_database_token_auth()` for the common bearer + database-token flow. This is the documented entrypoint for opaque DB tokens; it builds the `AuthenticationBackend`, `BearerTransport`, and `DatabaseTokenStrategy` for you.
+Use `DatabaseTokenAuthConfig` plus `LitestarAuthConfig(..., database_token_auth=...)` for the common bearer + database-token flow. This is the documented entrypoint for opaque DB tokens; it builds the `AuthenticationBackend`, `BearerTransport`, and `DatabaseTokenStrategy` for you.
 
 ```python
 from uuid import UUID
@@ -23,7 +23,7 @@ from litestar_auth import DatabaseTokenAuthConfig, LitestarAuth, LitestarAuthCon
 from litestar_auth.manager import UserManagerSecurity
 from litestar_auth.models import User
 
-config = LitestarAuthConfig[User, UUID].with_database_token_auth(
+config = LitestarAuthConfig[User, UUID](
     database_token_auth=DatabaseTokenAuthConfig(
         token_hash_secret="replace-with-32+-char-db-token-secret",
     ),
@@ -40,7 +40,9 @@ app = Litestar(plugins=[LitestarAuth(config)])
 
 Here, `session_maker` means a callable session factory the plugin can invoke as `session_maker()` to obtain the request-local `AsyncSession`. `async_sessionmaker(...)` is the most common implementation, but any factory with that runtime contract is supported.
 
-If you previously hand-assembled `AuthenticationBackend(..., transport=BearerTransport(), strategy=DatabaseTokenStrategy(...))`, migrate that setup to the preset above. Keep manual `backends=` assembly only when you need multiple backends, custom token models, or another non-canonical transport/strategy mix.
+If you previously hand-assembled `AuthenticationBackend(..., transport=BearerTransport(), strategy=DatabaseTokenStrategy(...))`, migrate that setup to the direct `database_token_auth=DatabaseTokenAuthConfig(...)` form above. Keep manual `backends=` assembly only when you need multiple backends, custom token models, or another non-canonical transport/strategy mix.
+
+When you use `database_token_auth=...`, `config.backends` stays empty by design. Call `config.resolve_backends()` if you need the effective setup-time backend sequence, or `config.bind_request_backends(session)` when you need request-scoped backend instances bound to the active `AsyncSession`.
 
 ## Custom SQLAlchemy `User` and token models
 
@@ -51,7 +53,7 @@ This section is the canonical ORM integration guide for bundled token bootstrap,
 | Need | Canonical path | Notes |
 | ---- | -------------- | ----- |
 | Bundled token metadata bootstrap | `from litestar_auth.models import import_token_orm_models` | Explicit helper for metadata registration and Alembic-style autogenerate. |
-| Bundled token runtime bootstrap | `DatabaseTokenAuthConfig` / `LitestarAuthConfig.with_database_token_auth()` | `LitestarAuth.on_app_init()` calls the same helper lazily when bundled DB-token models are active. |
+| Bundled token runtime bootstrap | `DatabaseTokenAuthConfig` / `LitestarAuthConfig(..., database_token_auth=...)` | `LitestarAuth.on_app_init()` calls the same helper lazily when bundled DB-token models are active. |
 | App-owned ORM classes | `UserModelMixin`, `UserAuthRelationshipMixin`, `AccessTokenMixin`, `RefreshTokenMixin`, `OAuthAccountMixin` | Compose them on the application's own registry instead of copying mapper wiring. |
 | Custom token strategy tables | `DatabaseTokenModels(...)` | Only needed when `DatabaseTokenStrategy` should use custom token models at runtime. |
 | SQLAlchemy user store | `litestar_auth.db.sqlalchemy.SQLAlchemyUserDatabase` | `user_model` is required; `oauth_account_model` is optional unless OAuth methods are used. |
@@ -177,7 +179,7 @@ backend = AuthenticationBackend(
 )
 ```
 
-`DatabaseTokenAuthConfig` / `LitestarAuthConfig.with_database_token_auth()` remains the canonical shortcut for the bundled `AccessToken` / `RefreshToken` tables. The plugin bootstraps those bundled token mappers at `on_app_init()` for runtime use, but that does not replace the explicit helper for metadata bootstrap or Alembic autogenerate. Use the manual backend assembly above only when you intentionally replace the token ORM classes or need another non-canonical transport/strategy combination.
+`DatabaseTokenAuthConfig` / `LitestarAuthConfig(..., database_token_auth=...)` remains the canonical shortcut for the bundled `AccessToken` / `RefreshToken` tables. The plugin bootstraps those bundled token mappers at `on_app_init()` for runtime use, but that does not replace the explicit helper for metadata bootstrap or Alembic autogenerate. Use the manual backend assembly above only when you intentionally replace the token ORM classes or need another non-canonical transport/strategy combination.
 
 ### `SQLAlchemyUserDatabase` contract
 
@@ -230,7 +232,7 @@ class LegacyUser(UserModelMixin, UserAuthRelationshipMixin, AppUUIDBase):
 
 | Field | Role |
 | ----- | ---- |
-| `backends` | Non-empty sequence of `AuthenticationBackend` when calling `LitestarAuthConfig(...)` directly. The canonical DB bearer preset builds this automatically via `with_database_token_auth()`. |
+| `backends` | Explicit non-preset authentication backends. Leave empty when using `database_token_auth`. |
 | `user_model` | User ORM type (e.g. subclass of `litestar_auth.models.User`). |
 | `user_manager_class` | Concrete subclass of `BaseUserManager`. |
 | `session_maker` | Callable request-session factory for scoped DB access (`session_maker() -> AsyncSession`). `async_sessionmaker(...)` is the common implementation. |
@@ -670,7 +672,7 @@ Route-registration contract:
 | ----- | ------- | ------- |
 | `csrf_secret` | `None` | Enables Litestar CSRF config when cookie transports are used. |
 | `csrf_header_name` | `"X-CSRF-Token"` | Header Litestar expects for CSRF token. |
-| `allow_legacy_plaintext_tokens` | `False` | **Migration only** — accept legacy plaintext DB tokens for manual `DatabaseTokenStrategy` setups. The canonical preset derives this from `DatabaseTokenAuthConfig.accept_legacy_plaintext_tokens`. |
+| `allow_legacy_plaintext_tokens` | `False` | **Migration only** — accept legacy plaintext DB tokens for manual `DatabaseTokenStrategy` setups. The canonical preset reads this from `DatabaseTokenAuthConfig.accept_legacy_plaintext_tokens` instead. |
 | `allow_nondurable_jwt_revocation` | `False` | Opt-in to in-memory JWT denylist semantics. |
 | `id_parser` | `None` | Parse path/query user ids (e.g. `UUID`). Defaults from `user_manager_security.id_parser` when that typed contract is configured. |
 

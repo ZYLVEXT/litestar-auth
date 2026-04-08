@@ -18,7 +18,7 @@ Examples:
         from litestar_auth import DatabaseTokenAuthConfig, LitestarAuth, LitestarAuthConfig
         from litestar_auth.models import User
 
-        config = LitestarAuthConfig[User, UUID].with_database_token_auth(
+        config = LitestarAuthConfig[User, UUID](
             database_token_auth=DatabaseTokenAuthConfig(
                 token_hash_secret="replace-with-32+-char-db-token-secret",
             ),

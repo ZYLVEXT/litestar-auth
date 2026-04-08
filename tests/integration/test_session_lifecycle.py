@@ -372,7 +372,7 @@ def _build_database_token_preset_app(
     database_token_auth = DatabaseTokenAuthConfig(
         token_hash_secret="database-token-secret-12345678901234567890",
     )
-    config = LitestarAuthConfig[ExampleUser, UUID].with_database_token_auth(
+    config = LitestarAuthConfig[ExampleUser, UUID](
         database_token_auth=database_token_auth,
         session_maker=cast("Any", counting),
         user_model=ExampleUser,

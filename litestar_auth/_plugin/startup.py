@@ -82,7 +82,7 @@ def warn_insecure_plugin_startup_defaults(config: LitestarAuthConfig[Any, Any]) 
             stacklevel=2,
         )
 
-    for backend in config.backends:
+    for backend in config.resolve_backends():
         strategy = getattr(backend, "strategy", None)
         if _is_jwt_strategy_instance(strategy) and not getattr(strategy, "revocation_is_durable", True):
             warnings.warn(
@@ -199,7 +199,7 @@ def _warn_refresh_cookie_max_age_mismatch(config: LitestarAuthConfig[Any, Any]) 
     if not config.enable_refresh:
         return
 
-    cookie_transports = get_cookie_transports(config.backends)
+    cookie_transports = get_cookie_transports(config.resolve_backends())
     for transport in cookie_transports:
         if transport.refresh_max_age is None:
             warnings.warn(

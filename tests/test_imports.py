@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import importlib
 import inspect
 import logging
 from typing import (
@@ -279,7 +280,7 @@ def test_root_package_reexports_public_api() -> None:
 def test_root_package_exports_canonical_database_token_preset_entrypoint() -> None:
     """The root package exposes the documented DB bearer preset entrypoint."""
     session_maker = _RootImportCoverageSessionFactory()
-    config = LitestarAuthConfig[ExampleUser, UUID].with_database_token_auth(
+    config = LitestarAuthConfig[ExampleUser, UUID](
         database_token_auth=DatabaseTokenAuthConfig(token_hash_secret="x" * 40),
         user_model=ExampleUser,
         user_manager_class=_RootImportCoverageUserManager,
@@ -296,7 +297,7 @@ def test_root_package_exports_canonical_database_token_preset_entrypoint() -> No
     assert preset.token_hash_secret == "x" * 40
     assert config.session_maker is session_maker
 
-    backend = config.backends[0]
+    backend = config.resolve_backends()[0]
     assert backend.name == "database"
     assert isinstance(backend.transport, BearerTransport)
     assert isinstance(backend.strategy, litestar_auth.DatabaseTokenStrategy)
@@ -505,6 +506,8 @@ async def test_root_package_supports_documented_redis_migration_recipe_and_totp_
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Public imports remain sufficient for the documented Redis migration recipe."""
+    current_plugin_module = importlib.reload(plugin_module)
+    current_root_module = importlib.reload(litestar_auth)
 
     def load_optional_redis() -> object:
         return object()
@@ -530,7 +533,7 @@ async def test_root_package_supports_documented_redis_migration_recipe_and_totp_
         totp_used_tokens_store=used_tokens_store,
     )
 
-    assert TotpConfig is plugin_module.TotpConfig
+    assert current_root_module.TotpConfig is current_plugin_module.TotpConfig
     assert AuthRateLimitConfig.__name__ == ratelimit_module.AuthRateLimitConfig.__name__
     assert RedisUsedTotpCodeStore.__name__ == totp_module.RedisUsedTotpCodeStore.__name__
     assert rate_limit_config.login == current_endpoint_class(
@@ -854,6 +857,10 @@ def test_root_package_does_not_export_compat_aliases() -> None:
 
 def test_plugin_module_public_exports_no_compat_shims() -> None:
     """Plugin module exposes ``LitestarAuth``, ``LitestarAuthConfig``, config dataclasses; legacy shims removed."""
+    current_plugin_internals = importlib.reload(plugin_internals)
+    current_plugin_module = importlib.reload(plugin_module)
+    current_root_module = importlib.reload(litestar_auth)
+
     assert plugin_module.__all__ == (
         "DatabaseTokenAuthConfig",
         "LitestarAuth",
@@ -861,8 +868,8 @@ def test_plugin_module_public_exports_no_compat_shims() -> None:
         "OAuthConfig",
         "TotpConfig",
     )
-    assert plugin_module.DatabaseTokenAuthConfig is DatabaseTokenAuthConfig
-    assert plugin_module.LitestarAuthConfig is plugin_internals.LitestarAuthConfig
+    assert current_plugin_module.DatabaseTokenAuthConfig is current_root_module.DatabaseTokenAuthConfig
+    assert current_plugin_module.LitestarAuthConfig is current_plugin_internals.LitestarAuthConfig
     assert "AuthPlugin" not in plugin_module.__all__
     assert not hasattr(plugin_module, "AuthPlugin")
     for name in (

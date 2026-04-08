@@ -95,7 +95,7 @@ def validate_core_session_config[UP: UserProtocol[Any], ID](config: LitestarAuth
     """
     validate_testing_mode_for_startup()
 
-    if not config.backends:
+    if not config.resolve_backends():
         msg = "LitestarAuth requires at least one authentication backend."
         raise ValueError(msg)
 
@@ -237,13 +237,13 @@ def _validate_totp_pending_secret_config[UP: UserProtocol[Any], ID](config: Lite
 
 def _validate_backend_strategy_security[UP: UserProtocol[Any], ID](config: LitestarAuthConfig[UP, ID]) -> None:
     """Validate backend strategy security posture for non-test environments."""
-    for backend in config.backends:
+    for backend in config.resolve_backends():
         _warn_backend_name_strategy_mismatch(
             backend_name=getattr(backend, "name", None),
             strategy=getattr(backend, "strategy", None),
         )
 
-    for backend in config.backends:
+    for backend in config.resolve_backends():
         strategy = getattr(backend, "strategy", None)
         _validate_database_strategy_legacy_mode(config=config, strategy=strategy)
         if isinstance(strategy, JWTStrategy):
@@ -475,7 +475,7 @@ def validate_cookie_auth_config[UP: UserProtocol[Any], ID](config: LitestarAuthC
     Raises:
         ConfigurationError: If cookie auth is enabled without a safe CSRF configuration.
     """
-    cookie_transports = get_cookie_transports(config.backends)
+    cookie_transports = get_cookie_transports(config.resolve_backends())
     if not cookie_transports:
         return
 
@@ -504,7 +504,7 @@ def validate_totp_config[UP: UserProtocol[Any], ID](config: LitestarAuthConfig[U
         return
     validate_totp_sub_config(config.totp_config, user_manager_class=config.user_manager_class)
     if not is_testing():
-        cookie_transports = get_cookie_transports(config.backends)
+        cookie_transports = get_cookie_transports(config.resolve_backends())
         if cookie_transports and not all(t.secure for t in cookie_transports):
             warnings.warn(
                 "TOTP is enabled but CookieTransport.secure=False; TOTP secrets returned by "

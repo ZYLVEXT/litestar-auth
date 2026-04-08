@@ -37,7 +37,7 @@ from litestar_auth import (
 )
 from litestar_auth.models import User
 
-config = LitestarAuthConfig[User, UUID].with_database_token_auth(
+config = LitestarAuthConfig[User, UUID](
     database_token_auth=DatabaseTokenAuthConfig(
         token_hash_secret="replace-with-32+-char-db-token-secret",
     ),
@@ -54,7 +54,9 @@ app = Litestar(plugins=[LitestarAuth(config)])
 
 In that example, `session_maker` is any compatible request-session factory callable (`session_maker() -> AsyncSession`). `async_sessionmaker(...)` is a common implementation, but not a requirement.
 
-If you previously built the DB bearer backend by hand with `AuthenticationBackend(..., BearerTransport(), DatabaseTokenStrategy(...))`, migrate to the preset above. Keep manual backends for multi-backend or custom-transport cases.
+If you previously built the DB bearer backend by hand with `AuthenticationBackend(..., BearerTransport(), DatabaseTokenStrategy(...))`, migrate to the direct `database_token_auth=DatabaseTokenAuthConfig(...)` form above. Keep manual backends for multi-backend or custom-transport cases.
+
+`backends` remains the explicit manual-backend field. For the canonical `database_token_auth=...` path, call `config.resolve_backends()` when you need the effective setup-time backend sequence.
 
 ## Public surface (high level)
 

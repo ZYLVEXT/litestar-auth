@@ -13,6 +13,7 @@ from uuid import UUID
 import pytest
 from litestar.config.app import AppConfig
 
+import litestar_auth._plugin.config as plugin_config_module
 import litestar_auth._plugin.middleware as middleware_module
 import litestar_auth._plugin.rate_limit as rate_limit_module
 import litestar_auth._plugin.startup as startup_module
@@ -378,7 +379,7 @@ def test_validate_backend_strategy_security_allows_database_token_preset_legacy_
 ) -> None:
     """The canonical DB-token preset uses its nested settings as the rollout source of truth."""
     monkeypatch.setattr(validation_module, "is_testing", lambda: False)
-    config = LitestarAuthConfig[ExampleUser, UUID].with_database_token_auth(
+    config = LitestarAuthConfig[ExampleUser, UUID](
         database_token_auth=DatabaseTokenAuthConfig(
             token_hash_secret=TOKEN_HASH_SECRET,
             accept_legacy_plaintext_tokens=True,
@@ -401,7 +402,7 @@ def test_validate_backend_strategy_security_uses_database_token_preset_rollout_h
 ) -> None:
     """Preset validation errors point callers to the nested DB-token settings object."""
     monkeypatch.setattr(validation_module, "is_testing", lambda: False)
-    config = LitestarAuthConfig[ExampleUser, UUID].with_database_token_auth(
+    config = LitestarAuthConfig[ExampleUser, UUID](
         database_token_auth=DatabaseTokenAuthConfig(
             token_hash_secret=TOKEN_HASH_SECRET,
         ),
@@ -414,13 +415,32 @@ def test_validate_backend_strategy_security_uses_database_token_preset_rollout_h
             "reset_password_token_secret": "r" * 32,
         },
     )
-    config.backends[0].strategy = cast(
-        "Any",
-        validation_module.DatabaseTokenStrategy(
-            session=cast("Any", object()),
-            token_hash_secret=TOKEN_HASH_SECRET,
-            accept_legacy_plaintext_tokens=True,
+    legacy_backend = AuthenticationBackend[ExampleUser, UUID](
+        name="database",
+        transport=BearerTransport(),
+        strategy=cast(
+            "Any",
+            validation_module.DatabaseTokenStrategy(
+                session=cast("Any", object()),
+                token_hash_secret=TOKEN_HASH_SECRET,
+                accept_legacy_plaintext_tokens=True,
+            ),
         ),
+    )
+
+    def _build_legacy_backend(
+        _database_token_auth: DatabaseTokenAuthConfig,
+        *,
+        session: object | None = None,
+    ) -> AuthenticationBackend[ExampleUser, UUID]:
+        del _database_token_auth
+        del session
+        return legacy_backend
+
+    monkeypatch.setattr(
+        plugin_config_module,
+        "_build_database_token_backend",
+        _build_legacy_backend,
     )
 
     with pytest.raises(ValueError, match=r"DatabaseTokenAuthConfig\.accept_legacy_plaintext_tokens=True"):
@@ -1412,7 +1432,7 @@ def test_validate_config_runs_happy_path_for_database_token_preset(
 ) -> None:
     """The DB bearer preset flows through the same top-level validator path as manual backends."""
     monkeypatch.setattr(validation_module, "validate_testing_mode_for_startup", lambda: None)
-    config = LitestarAuthConfig[ExampleUser, UUID].with_database_token_auth(
+    config = LitestarAuthConfig[ExampleUser, UUID](
         database_token_auth=DatabaseTokenAuthConfig(
             token_hash_secret=TOKEN_HASH_SECRET,
             max_age=timedelta(minutes=10),
@@ -1476,7 +1496,7 @@ def test_validate_config_preserves_session_prerequisite_for_database_token_prese
 ) -> None:
     """The DB bearer preset still requires the same session source as the manual backend path."""
     monkeypatch.setattr(validation_module, "validate_testing_mode_for_startup", lambda: None)
-    config = LitestarAuthConfig[ExampleUser, UUID].with_database_token_auth(
+    config = LitestarAuthConfig[ExampleUser, UUID](
         database_token_auth=DatabaseTokenAuthConfig(
             token_hash_secret=TOKEN_HASH_SECRET,
         ),

@@ -205,7 +205,7 @@ def test_on_app_init_bootstraps_bundled_token_models_for_db_token_preset(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """App init uses the models-layer token bootstrap hook for the canonical DB-token preset."""
-    config = LitestarAuthConfig[ExampleUser, UUID].with_database_token_auth(
+    config = LitestarAuthConfig[ExampleUser, UUID](
         database_token_auth=plugin_module._plugin_config.DatabaseTokenAuthConfig(
             token_hash_secret="a" * 40,
         ),
@@ -1039,7 +1039,7 @@ def test_session_bound_backends_rebinds_database_token_backends_in_order_and_pre
 
 def test_session_bound_backends_realizes_database_token_preset_from_request_session() -> None:
     """The DB bearer preset resolves request-scoped backends without a startup session template."""
-    config = LitestarAuthConfig[ExampleUser, UUID].with_database_token_auth(
+    config = LitestarAuthConfig[ExampleUser, UUID](
         database_token_auth=plugin_module._plugin_config.DatabaseTokenAuthConfig(
             token_hash_secret="a" * 40,
             max_age=timedelta(minutes=10),
@@ -1061,7 +1061,7 @@ def test_session_bound_backends_realizes_database_token_preset_from_request_sess
     active_session = type("_ActiveSession", (), {"marker": "request-session"})()
 
     rebound_backends = plugin._session_bound_backends(cast("Any", active_session))
-    template_backend = config.backends[0]
+    template_backend = config.resolve_backends()[0]
     template_strategy = cast("Any", template_backend.strategy)
     rebound_strategy = cast("Any", rebound_backends[0].strategy)
 
@@ -1227,7 +1227,7 @@ def test_provide_request_backends_validates_dependency_inputs() -> None:
 
 def test_provide_request_backends_realizes_database_token_preset_from_request_session() -> None:
     """Preset backends DI returns a backend bound to the active request-local session."""
-    config = LitestarAuthConfig[ExampleUser, UUID].with_database_token_auth(
+    config = LitestarAuthConfig[ExampleUser, UUID](
         database_token_auth=plugin_module._plugin_config.DatabaseTokenAuthConfig(
             token_hash_secret="a" * 40,
             max_age=timedelta(minutes=10),
@@ -1247,7 +1247,7 @@ def test_provide_request_backends_realizes_database_token_preset_from_request_se
     config.allow_legacy_plaintext_tokens = True
     plugin = LitestarAuth(config)
     active_session = type("_ActiveSession", (), {"marker": "request-session"})()
-    template_backend = config.backends[0]
+    template_backend = config.resolve_backends()[0]
 
     rebound_backends = cast("Any", plugin._provide_request_backends)(db_session=active_session)
 

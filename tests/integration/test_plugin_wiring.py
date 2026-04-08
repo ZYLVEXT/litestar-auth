@@ -582,7 +582,7 @@ def test_refresh_enabled_bearer_backends_mount_refresh_routes_in_backend_order()
 def test_database_token_preset_mounts_primary_auth_routes_without_startup_session() -> None:
     """The preset keeps primary auth paths stable without requiring a startup AsyncSession."""
     session_maker = assert_structural_session_factory(DummySessionMaker())
-    config = LitestarAuthConfig[ExampleUser, UUID].with_database_token_auth(
+    config = LitestarAuthConfig[ExampleUser, UUID](
         database_token_auth=DatabaseTokenAuthConfig(
             token_hash_secret="x" * 40,
             backend_name="opaque-db",
@@ -634,7 +634,7 @@ async def test_database_token_preset_backends_dependency_uses_request_session() 
     )
     try:
         session_maker = assert_structural_session_factory(E2ESessionMaker(engine))
-        config = LitestarAuthConfig[ExampleUser, UUID].with_database_token_auth(
+        config = LitestarAuthConfig[ExampleUser, UUID](
             database_token_auth=DatabaseTokenAuthConfig(
                 token_hash_secret="x" * 40,
                 backend_name="opaque-db",
@@ -692,7 +692,7 @@ async def test_database_token_preset_accepts_advanced_alchemy_session_maker() ->
         session_maker = alchemy.session_maker
         assert session_maker is not None
 
-        config = LitestarAuthConfig[ExampleUser, UUID].with_database_token_auth(
+        config = LitestarAuthConfig[ExampleUser, UUID](
             database_token_auth=DatabaseTokenAuthConfig(
                 token_hash_secret="x" * 40,
                 backend_name="opaque-db",

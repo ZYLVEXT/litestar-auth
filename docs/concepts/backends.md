@@ -38,7 +38,7 @@ For the common bearer + database-token plugin flow, prefer the plugin-owned pres
 from litestar_auth import DatabaseTokenAuthConfig, LitestarAuthConfig
 from litestar_auth.manager import UserManagerSecurity
 
-config = LitestarAuthConfig.with_database_token_auth(
+config = LitestarAuthConfig(
     database_token_auth=DatabaseTokenAuthConfig(
         token_hash_secret="replace-with-32+-char-db-token-secret",
     ),
@@ -78,6 +78,6 @@ AuthenticationBackend(name="mobile", transport=BearerTransport(), strategy=db_st
 
 - **Public API / microservice:** often `BearerTransport` + `JWTStrategy` with a durable denylist in production if you rely on revocation.
 - **Same-site browser app:** `CookieTransport` + strategy of your choice; enable CSRF for state-changing requests.
-- **Central session store:** use `LitestarAuthConfig.with_database_token_auth(...)` for the canonical bearer + DB-token path, or `RedisTokenStrategy` when Redis is your session store. Drop to manual `DatabaseTokenStrategy` assembly only when you need a non-canonical transport or multiple backends.
+- **Central session store:** use `LitestarAuthConfig(..., database_token_auth=DatabaseTokenAuthConfig(...))` for the canonical bearer + DB-token path, or `RedisTokenStrategy` when Redis is your session store. Drop to manual `DatabaseTokenStrategy` assembly only when you need a non-canonical transport or multiple backends.
 
 See also [Request lifecycle](request_lifecycle.md).
