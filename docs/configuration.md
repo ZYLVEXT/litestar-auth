@@ -197,6 +197,8 @@ def user_db_factory(session):
 
 `SQLAlchemyUserDatabase` requires **`user_model`** and accepts optional **`oauth_account_model`**. If you use OAuth methods (`get_by_oauth_account`, `upsert_oauth_account`) without providing `oauth_account_model`, a `TypeError` is raised.
 
+`BaseUserStore` and `BaseOAuthAccountStore` are runtime-checkable `Protocol` contracts. Custom stores do not need to inherit from either symbol as long as they implement the documented async methods; explicit inheritance remains optional when you want to declare that compatibility on the class itself.
+
 When `oauth_account_model` is provided, the adapter validates that its declared user contract matches `user_model`:
 
 - Same declarative registry
