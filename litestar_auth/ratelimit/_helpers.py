@@ -9,7 +9,7 @@ from collections import deque
 from functools import partial
 from typing import TYPE_CHECKING, Any
 
-from litestar_auth._compat import _load_redis_asyncio as _load_redis_asyncio_compat
+from litestar_auth._optional_deps import _require_redis_asyncio
 from litestar_auth.config import resolve_trusted_proxy_setting
 
 if TYPE_CHECKING:
@@ -21,7 +21,7 @@ type RedisScriptResult = bytes | str | int | float
 DEFAULT_KEY_PREFIX = "litestar_auth:ratelimit:"
 logger = logging.getLogger("litestar_auth.ratelimit")
 
-_load_redis_asyncio = partial(_load_redis_asyncio_compat, feature_name="RedisRateLimiter")
+_load_redis_asyncio = partial(_require_redis_asyncio, feature_name="RedisRateLimiter")
 importlib = _importlib
 
 _DEFAULT_TRUSTED_HEADERS: tuple[str, ...] = ("X-Forwarded-For",)

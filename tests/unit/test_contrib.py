@@ -31,7 +31,6 @@ from litestar_auth.ratelimit import (
     AUTH_RATE_LIMIT_ENDPOINT_SLOTS_BY_GROUP,
     AUTH_RATE_LIMIT_VERIFICATION_SLOTS,
     AuthRateLimitEndpointGroup,
-    RedisRateLimiter,
 )
 from litestar_auth.totp import RedisUsedTotpCodeStore as BaseRedisUsedTotpCodeStore
 from tests._helpers import ExampleUser
@@ -221,7 +220,7 @@ async def test_contrib_redis_preset_builds_shared_client_auth_components(monkeyp
     store = preset.build_totp_used_tokens_store()
 
     assert config.login is not None
-    assert isinstance(config.login.backend, RedisRateLimiter)
+    assert isinstance(config.login.backend, ratelimit_module.RedisRateLimiter)
     assert config.login.backend.redis is redis_client
     assert config.login.backend.max_attempts == SHARED_MAX_ATTEMPTS
     assert config.login.backend.window_seconds == SHARED_WINDOW_SECONDS
@@ -229,7 +228,7 @@ async def test_contrib_redis_preset_builds_shared_client_auth_components(monkeyp
     assert config.login.identity_fields == ("username", "email")
     assert config.login.trusted_headers == ("X-Real-IP",)
     assert config.refresh is not None
-    assert isinstance(config.refresh.backend, RedisRateLimiter)
+    assert isinstance(config.refresh.backend, ratelimit_module.RedisRateLimiter)
     assert config.refresh.backend.redis is redis_client
     assert config.refresh.backend.max_attempts == REFRESH_MAX_ATTEMPTS
     assert config.refresh.backend.window_seconds == REFRESH_WINDOW_SECONDS
@@ -237,7 +236,7 @@ async def test_contrib_redis_preset_builds_shared_client_auth_components(monkeyp
     assert config.refresh.identity_fields == ("username", "email")
     assert config.refresh.trusted_headers == ("X-Real-IP",)
     assert config.totp_verify is not None
-    assert isinstance(config.totp_verify.backend, RedisRateLimiter)
+    assert isinstance(config.totp_verify.backend, ratelimit_module.RedisRateLimiter)
     assert config.totp_verify.backend.redis is redis_client
     assert config.totp_verify.backend.max_attempts == TOTP_MAX_ATTEMPTS
     assert config.totp_verify.backend.window_seconds == TOTP_WINDOW_SECONDS

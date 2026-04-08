@@ -16,7 +16,7 @@ from functools import partial
 from typing import TYPE_CHECKING, Any, Literal, Protocol, runtime_checkable
 from urllib.parse import quote, urlencode
 
-from litestar_auth._compat import _load_redis_asyncio as _load_redis_asyncio_compat
+from litestar_auth._optional_deps import _require_redis_asyncio
 from litestar_auth._redis_protocols import RedisConditionalSetClient
 from litestar_auth.config import is_testing
 from litestar_auth.exceptions import ConfigurationError
@@ -53,7 +53,7 @@ DEFAULT_TOTP_USED_KEY_PREFIX = "litestar_auth:totp:used:"
 
 logger = logging.getLogger(__name__)
 
-_load_redis_asyncio = partial(_load_redis_asyncio_compat, feature_name="RedisUsedTotpCodeStore")
+_load_redis_asyncio = partial(_require_redis_asyncio, feature_name="RedisUsedTotpCodeStore")
 
 
 class SecurityWarning(UserWarning):

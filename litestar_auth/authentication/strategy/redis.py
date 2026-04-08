@@ -9,7 +9,7 @@ from datetime import timedelta
 from functools import partial
 from typing import TYPE_CHECKING, Protocol, cast, override
 
-from litestar_auth._compat import _load_redis_asyncio as _load_redis_asyncio_compat
+from litestar_auth._optional_deps import _require_redis_asyncio
 from litestar_auth._redis_protocols import (
     RedisDeleteClient,
     RedisExpiringValueWriteClient,
@@ -35,7 +35,7 @@ DEFAULT_MAX_SCAN_KEYS = 10_000
 
 logger = logging.getLogger(__name__)
 
-_load_redis_asyncio = partial(_load_redis_asyncio_compat, feature_name="RedisTokenStrategy")
+_load_redis_asyncio = partial(_require_redis_asyncio, feature_name="RedisTokenStrategy")
 importlib = _importlib
 
 

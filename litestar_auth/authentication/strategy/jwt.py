@@ -14,14 +14,14 @@ from typing import TYPE_CHECKING, Protocol, cast, override
 import jwt
 from jwt import ExpiredSignatureError, InvalidTokenError
 
-from litestar_auth._compat import _load_redis_asyncio as _load_redis_asyncio_compat
+from litestar_auth._optional_deps import _require_redis_asyncio
 from litestar_auth.authentication.strategy.base import Strategy, UserManagerProtocol
 from litestar_auth.config import JWT_ACCESS_TOKEN_AUDIENCE, validate_secret_length
 from litestar_auth.types import ID, UP
 
 logger = logging.getLogger(__name__)
 
-_load_redis_asyncio = partial(_load_redis_asyncio_compat, feature_name="RedisJWTDenylistStore")
+_load_redis_asyncio = partial(_require_redis_asyncio, feature_name="RedisJWTDenylistStore")
 
 if TYPE_CHECKING:
     from collections.abc import Callable
