@@ -343,7 +343,7 @@ def _validate_totp_encryption_key[UP: UserProtocol[Any], ID](config: LitestarAut
         manager_kwargs=config.user_manager_kwargs,
         manager_security=config.user_manager_security,
     )
-    if not manager_inputs.secret_inputs.totp_secret_key:
+    if not manager_inputs.effective_security.totp_secret_key:
         msg = (
             "totp_secret_key is required in production when TOTP is enabled. "
             "TOTP secrets must be encrypted at rest. Generate a Fernet key with: "
@@ -388,11 +388,11 @@ def validate_user_manager_security_config[UP: UserProtocol[Any], ID](config: Lit
     if is_testing():
         return
 
-    secret_inputs = manager_inputs.secret_inputs
+    effective_security = manager_inputs.effective_security
     warn_if_secret_roles_are_reused(
-        verification_token_secret=secret_inputs.verification_token_secret,
-        reset_password_token_secret=secret_inputs.reset_password_token_secret,
-        totp_secret_key=secret_inputs.totp_secret_key,
+        verification_token_secret=effective_security.verification_token_secret,
+        reset_password_token_secret=effective_security.reset_password_token_secret,
+        totp_secret_key=effective_security.totp_secret_key,
         totp_pending_secret=config.totp_config.totp_pending_secret if config.totp_config is not None else None,
         warning_options=(SecurityWarning, 2),
     )

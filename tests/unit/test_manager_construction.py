@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import importlib
 from dataclasses import dataclass
+from typing import cast
 from uuid import UUID
 
 import pytest
@@ -11,8 +12,9 @@ import pytest
 import litestar_auth._manager.construction as construction_module
 from litestar_auth._manager.construction import (
     ManagerConstructorInputs,
-    ManagerSecretInputs,
-    ResolvedUserManagerSecurity,
+    SecretFactory,
+    resolve_account_token_secrets,
+    user_manager_security_from_mapping,
 )
 from litestar_auth.manager import UserManagerSecurity
 
@@ -30,35 +32,17 @@ class SecretWrapper:
         return self.value
 
 
-class SecurityContract:
-    """Non-dataclass security contract used to cover protocol adaptation."""
-
-    def __init__(
-        self,
-        *,
-        verification_token_secret: str | None = None,
-        reset_password_token_secret: str | None = None,
-        totp_secret_key: str | None = None,
-        id_parser: type[UUID] | None = None,
-    ) -> None:
-        """Store the configured security fields."""
-        self.verification_token_secret = verification_token_secret
-        self.reset_password_token_secret = reset_password_token_secret
-        self.totp_secret_key = totp_secret_key
-        self.id_parser = id_parser
-
-
 def test_manager_construction_module_executes_under_coverage() -> None:
     """Reload the module in-test so coverage records helper and dataclass execution."""
     reloaded_module = importlib.reload(construction_module)
 
     assert reloaded_module.ManagerConstructorInputs.__name__ == ManagerConstructorInputs.__name__
-    assert reloaded_module.ResolvedUserManagerSecurity.__name__ == ResolvedUserManagerSecurity.__name__
+    assert reloaded_module.user_manager_security_from_mapping.__name__ == user_manager_security_from_mapping.__name__
 
 
-def test_manager_secret_inputs_from_mapping_and_resolve_wraps_account_token_secrets() -> None:
-    """Raw manager secret mappings resolve into wrapped verify/reset secrets plus TOTP input."""
-    secret_inputs = ManagerSecretInputs.from_mapping(
+def test_user_manager_security_from_mapping_and_resolve_wraps_account_token_secrets() -> None:
+    """Legacy manager kwargs now flow through the canonical concrete security bundle."""
+    manager_security = user_manager_security_from_mapping(
         {
             "verification_token_secret": "v" * 32,
             "reset_password_token_secret": "r" * 32,
@@ -66,11 +50,18 @@ def test_manager_secret_inputs_from_mapping_and_resolve_wraps_account_token_secr
         },
     )
 
-    resolved = secret_inputs.resolve(secret_factory=SecretWrapper, warning_stacklevel=5)
+    resolved = resolve_account_token_secrets(
+        manager_security,
+        secret_factory=cast("SecretFactory", SecretWrapper),
+        warning_stacklevel=5,
+    )
 
-    assert resolved.account_token_secrets.verification_token_secret.get_secret_value() == "v" * 32
-    assert resolved.account_token_secrets.reset_password_token_secret.get_secret_value() == "r" * 32
-    assert resolved.totp_secret_key == "t" * 32
+    assert manager_security.verification_token_secret == "v" * 32
+    assert manager_security.reset_password_token_secret == "r" * 32
+    assert manager_security.totp_secret_key == "t" * 32
+    assert manager_security.id_parser is None
+    assert resolved.verification_token_secret.get_secret_value() == "v" * 32
+    assert resolved.reset_password_token_secret.get_secret_value() == "r" * 32
 
 
 def test_manager_constructor_inputs_preserve_explicit_kwargs_without_typed_security() -> None:
@@ -102,11 +93,11 @@ def test_manager_constructor_inputs_preserve_explicit_kwargs_without_typed_secur
     assert inputs.resolved_security_id_parser is None
     assert inputs.security_overlap_keys == ()
     assert inputs.build_manager_security() is None
-    assert inputs.secret_inputs == construction_module.ManagerSecretInputs(
-        verification_token_secret="v" * 32,
-        reset_password_token_secret="r" * 32,
-        totp_secret_key="t" * 32,
-    )
+    effective_security = inputs.effective_security
+    assert effective_security.verification_token_secret == "v" * 32
+    assert effective_security.reset_password_token_secret == "r" * 32
+    assert effective_security.totp_secret_key == "t" * 32
+    assert effective_security.id_parser is explicit_id_parser
     assert (
         inputs._build_manager_id_parser_kwargs(
             accepts_security=False,
@@ -147,6 +138,11 @@ def test_manager_constructor_inputs_inject_top_level_password_validator_and_id_p
         accepts_login_identifier=True,
     )
 
+    effective_security = inputs.effective_security
+    assert effective_security.verification_token_secret is None
+    assert effective_security.reset_password_token_secret is None
+    assert effective_security.totp_secret_key is None
+    assert effective_security.id_parser is UUID
     assert kwargs["password_validator"] is generated_password_validator
     assert kwargs["id_parser"] is UUID
     assert kwargs["login_identifier"] == "username"
@@ -199,6 +195,7 @@ def test_manager_constructor_inputs_fill_missing_parser_on_typed_dataclass_secur
         totp_secret_key="t" * 32,
         id_parser=UUID,
     )
+    assert inputs.effective_security == built_security
     assert inputs.security_overlap_keys == (
         "id_parser",
         "reset_password_token_secret",
@@ -221,9 +218,9 @@ def test_manager_constructor_inputs_fill_missing_parser_on_typed_dataclass_secur
     assert "totp_secret_key" not in kwargs
 
 
-def test_manager_constructor_inputs_adapt_non_dataclass_security_for_legacy_constructors() -> None:
-    """Protocol-compatible security objects adapt into legacy secret kwargs when needed."""
-    security = SecurityContract(
+def test_manager_constructor_inputs_build_legacy_security_kwargs_from_canonical_bundle() -> None:
+    """Legacy manager constructors still receive explicit kwargs from the canonical bundle."""
+    security = UserManagerSecurity[UUID](
         verification_token_secret="v" * 32,
         totp_secret_key="t" * 32,
     )
@@ -234,7 +231,8 @@ def test_manager_constructor_inputs_adapt_non_dataclass_security_for_legacy_cons
     )
 
     built_security = inputs.build_manager_security()
-    assert isinstance(built_security, construction_module.ResolvedUserManagerSecurity)
+    assert built_security is not None
+    assert isinstance(built_security, UserManagerSecurity)
     assert built_security.verification_token_secret == "v" * 32
     assert built_security.reset_password_token_secret is None
     assert built_security.totp_secret_key == "t" * 32
@@ -264,7 +262,7 @@ def test_manager_constructor_inputs_adapt_non_dataclass_security_for_legacy_cons
 
 def test_manager_constructor_inputs_skip_missing_legacy_security_kwargs() -> None:
     """Legacy compatibility kwargs include only the non-null secrets from typed security."""
-    security = SecurityContract(reset_password_token_secret="r" * 32)
+    security = UserManagerSecurity[UUID](reset_password_token_secret="r" * 32)
     inputs = ManagerConstructorInputs[UUID](
         manager_kwargs={},
         manager_security=security,

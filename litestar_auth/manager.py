@@ -10,7 +10,7 @@ import re
 import secrets
 from datetime import timedelta
 from threading import Lock
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 from weakref import WeakKeyDictionary
 
 from litestar_auth import config as _config
@@ -20,7 +20,7 @@ from litestar_auth._manager.account_tokens import (
     AccountTokensService,
     _AccountTokensManagerProtocol,
 )
-from litestar_auth._manager.construction import AccountTokenSecrets, ManagerSecretInputs
+from litestar_auth._manager.construction import AccountTokenSecrets, SecretFactory, resolve_account_token_secrets
 from litestar_auth._manager.totp_secrets import TotpSecretsService, _TotpSecretsManagerProtocol
 from litestar_auth._manager.user_lifecycle import (
     PRIVILEGED_FIELDS as _CANONICAL_PRIVILEGED_FIELDS,
@@ -258,38 +258,37 @@ class BaseUserManager[UP: UserProtocol[Any], ID](  # noqa: PLR0904
             reset_password_token_secret = security.reset_password_token_secret
             id_parser = security.id_parser
             totp_secret_key = security.totp_secret_key
-        resolved_secret_inputs = ManagerSecretInputs(
+        resolved_security = UserManagerSecurity(
             verification_token_secret,
             reset_password_token_secret,
             totp_secret_key,
-        ).resolve(
-            secret_factory=_SecretValue,
+            id_parser=id_parser,
+        )
+        account_token_secrets = resolve_account_token_secrets(
+            resolved_security,
+            secret_factory=cast("SecretFactory", _SecretValue),
             warning_stacklevel=4,
         )
-        resolved_verification_token_secret = (
-            resolved_secret_inputs.account_token_secrets.verification_token_secret.get_secret_value()
-        )
-        resolved_reset_password_token_secret = (
-            resolved_secret_inputs.account_token_secrets.reset_password_token_secret.get_secret_value()
-        )
+        resolved_verification_token_secret = account_token_secrets.verification_token_secret.get_secret_value()
+        resolved_reset_password_token_secret = account_token_secrets.reset_password_token_secret.get_secret_value()
         if not _config.is_testing():
             should_warn_about_reused_secret_roles = True
             if _config.plugin_owns_secret_role_reuse_warning():
                 should_warn_about_reused_secret_roles = not _config.plugin_secret_role_warning_matches_manager_surface(
                     verification_token_secret=resolved_verification_token_secret,
                     reset_password_token_secret=resolved_reset_password_token_secret,
-                    totp_secret_key=resolved_secret_inputs.totp_secret_key,
+                    totp_secret_key=resolved_security.totp_secret_key,
                 )
             if should_warn_about_reused_secret_roles:
                 _config.warn_if_secret_roles_are_reused(
                     verification_token_secret=resolved_verification_token_secret,
                     reset_password_token_secret=resolved_reset_password_token_secret,
-                    totp_secret_key=resolved_secret_inputs.totp_secret_key,
+                    totp_secret_key=resolved_security.totp_secret_key,
                     warning_options=(SecurityWarning, 4),
                 )
         self.user_db = user_db
         self.oauth_account_store = oauth_account_store or _resolve_oauth_account_store(user_db)
-        self._account_token_secrets = resolved_secret_inputs.account_token_secrets
+        self._account_token_secrets = account_token_secrets
         self.verification_token_secret = self._account_token_secrets.verification_token_secret
         self.reset_password_token_secret = self._account_token_secrets.reset_password_token_secret
         self.verification_token_lifetime = verification_token_lifetime
@@ -297,7 +296,7 @@ class BaseUserManager[UP: UserProtocol[Any], ID](  # noqa: PLR0904
         self.id_parser = id_parser
         self.password_validator = password_validator
         self.reset_verification_on_email_change = reset_verification_on_email_change
-        self.totp_secret_key = resolved_secret_inputs.totp_secret_key
+        self.totp_secret_key = resolved_security.totp_secret_key
         self.backends: tuple[object, ...] = backends
         self.login_identifier: LoginIdentifier = login_identifier
         resolved_password_helper = password_helper or PasswordHelper.from_defaults()

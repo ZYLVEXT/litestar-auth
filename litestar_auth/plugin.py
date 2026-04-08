@@ -144,14 +144,14 @@ class LitestarAuth[UP: UserProtocol[Any], ID](InitPlugin):
             manager_kwargs=self.config.user_manager_kwargs,
             manager_security=self.config.user_manager_security,
         )
-        secret_inputs = manager_inputs.secret_inputs
+        effective_security = manager_inputs.effective_security
         bound_backends = tuple(backends or self._session_bound_backends(session))
         # Plugin validation owns the config-managed warning baseline; manager construction
         # should only add a warning if a custom factory diverges from that secret surface.
         with plugin_secret_role_warning_owner(
-            verification_token_secret=secret_inputs.verification_token_secret,
-            reset_password_token_secret=secret_inputs.reset_password_token_secret,
-            totp_secret_key=secret_inputs.totp_secret_key,
+            verification_token_secret=effective_security.verification_token_secret,
+            reset_password_token_secret=effective_security.reset_password_token_secret,
+            totp_secret_key=effective_security.totp_secret_key,
         ):
             return self._user_manager_factory(
                 session=session,

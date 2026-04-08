@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass, is_dataclass, replace
-from typing import TYPE_CHECKING, Any, Protocol, Self, cast
+from dataclasses import dataclass, replace
+from typing import TYPE_CHECKING, Any, Protocol, cast
 
 from litestar_auth.config import _resolve_token_secret
 
@@ -41,82 +41,68 @@ class AccountTokenSecrets:
     reset_password_token_secret: SecretValueProtocol
 
 
-@dataclass(frozen=True, slots=True)
-class ResolvedManagerSecretInputs:
-    """Resolved secret inputs shared by manager token and TOTP flows."""
+def _build_user_manager_security[ID](
+    *,
+    verification_token_secret: str | None = None,
+    reset_password_token_secret: str | None = None,
+    totp_secret_key: str | None = None,
+    id_parser: Callable[[str], ID] | None = None,
+) -> UserManagerSecurity[ID]:
+    """Return the canonical concrete manager-security bundle."""
+    from litestar_auth.manager import UserManagerSecurity  # noqa: PLC0415
 
-    account_token_secrets: AccountTokenSecrets
-    totp_secret_key: str | None
-
-
-@dataclass(frozen=True, slots=True)
-class ManagerSecretInputs:
-    """Raw secret-related constructor inputs for a user manager."""
-
-    verification_token_secret: str | None = None
-    reset_password_token_secret: str | None = None
-    totp_secret_key: str | None = None
-
-    @classmethod
-    def from_mapping(cls, manager_kwargs: Mapping[str, Any]) -> Self:
-        """Build a typed secret view from ``user_manager_kwargs``.
-
-        Returns:
-            Typed secret inputs extracted from the provided kwargs mapping.
-        """
-        return cls(
-            verification_token_secret=cast("str | None", manager_kwargs.get("verification_token_secret")),
-            reset_password_token_secret=cast("str | None", manager_kwargs.get("reset_password_token_secret")),
-            totp_secret_key=cast("str | None", manager_kwargs.get("totp_secret_key")),
-        )
-
-    def resolve(
-        self,
-        *,
-        secret_factory: SecretFactory,
-        warning_stacklevel: int = 2,
-    ) -> ResolvedManagerSecretInputs:
-        """Resolve verify/reset secrets while preserving testing-mode behavior.
-
-        Returns:
-            Resolved verify/reset secret wrappers plus the current TOTP encryption key.
-        """
-        verification_token_secret = _resolve_token_secret(
-            self.verification_token_secret,
-            label="verification_token_secret",
-            warning_stacklevel=warning_stacklevel,
-        )
-        reset_password_token_secret = _resolve_token_secret(
-            self.reset_password_token_secret,
-            label="reset_password_token_secret",
-            warning_stacklevel=warning_stacklevel,
-        )
-        return ResolvedManagerSecretInputs(
-            account_token_secrets=AccountTokenSecrets(
-                verification_token_secret=secret_factory(verification_token_secret),
-                reset_password_token_secret=secret_factory(reset_password_token_secret),
-            ),
-            totp_secret_key=self.totp_secret_key,
-        )
+    return UserManagerSecurity(
+        verification_token_secret=verification_token_secret,
+        reset_password_token_secret=reset_password_token_secret,
+        totp_secret_key=totp_secret_key,
+        id_parser=id_parser,
+    )
 
 
-class UserManagerSecurityProtocol[ID](Protocol):
-    """Structural contract for the public typed manager-security bundle."""
+def user_manager_security_from_mapping[ID](
+    manager_kwargs: Mapping[str, Any],
+    *,
+    id_parser: Callable[[str], ID] | None = None,
+) -> UserManagerSecurity[ID]:
+    """Build the canonical manager-security bundle from legacy kwargs.
 
-    verification_token_secret: str | None
-    reset_password_token_secret: str | None
-    totp_secret_key: str | None
-    id_parser: Callable[[str], ID] | None
+    Returns:
+        Concrete ``UserManagerSecurity`` synthesized from the provided mapping.
+    """
+    explicit_id_parser = cast("Callable[[str], ID] | None", manager_kwargs.get("id_parser"))
+    return _build_user_manager_security(
+        verification_token_secret=cast("str | None", manager_kwargs.get("verification_token_secret")),
+        reset_password_token_secret=cast("str | None", manager_kwargs.get("reset_password_token_secret")),
+        totp_secret_key=cast("str | None", manager_kwargs.get("totp_secret_key")),
+        id_parser=explicit_id_parser if explicit_id_parser is not None else id_parser,
+    )
 
 
-@dataclass(frozen=True, slots=True)
-class ResolvedUserManagerSecurity[ID]:
-    """Concrete typed security bundle for synthesized manager-constructor inputs."""
+def resolve_account_token_secrets[ID](
+    manager_security: UserManagerSecurity[ID],
+    *,
+    secret_factory: SecretFactory,
+    warning_stacklevel: int = 2,
+) -> AccountTokenSecrets:
+    """Resolve verify/reset secrets from the canonical manager-security bundle.
 
-    verification_token_secret: str | None = None
-    reset_password_token_secret: str | None = None
-    totp_secret_key: str | None = None
-    id_parser: Callable[[str], ID] | None = None
+    Returns:
+        Wrapped verification/reset token secrets for account-token operations.
+    """
+    verification_token_secret = _resolve_token_secret(
+        manager_security.verification_token_secret,
+        label="verification_token_secret",
+        warning_stacklevel=warning_stacklevel,
+    )
+    reset_password_token_secret = _resolve_token_secret(
+        manager_security.reset_password_token_secret,
+        label="reset_password_token_secret",
+        warning_stacklevel=warning_stacklevel,
+    )
+    return AccountTokenSecrets(
+        verification_token_secret=secret_factory(verification_token_secret),
+        reset_password_token_secret=secret_factory(reset_password_token_secret),
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -124,7 +110,7 @@ class ManagerConstructorInputs[ID]:
     """Typed plugin-owned inputs for request-scoped manager construction."""
 
     manager_kwargs: Mapping[str, Any]
-    manager_security: UserManagerSecurity[ID] | UserManagerSecurityProtocol[ID] | None = None
+    manager_security: UserManagerSecurity[ID] | None = None
     password_validator: PasswordValidator | None = None
     backends: tuple[object, ...] = ()
     login_identifier: LoginIdentifier | None = None
@@ -165,36 +151,22 @@ class ManagerConstructorInputs[ID]:
         return tuple(sorted(set(self.manager_kwargs).intersection(_MANAGED_SECURITY_KEYS)))
 
     @property
-    def secret_inputs(self) -> ManagerSecretInputs:
-        """Return the typed secret view embedded in ``user_manager_kwargs``."""
-        if self.manager_security is not None:
-            return ManagerSecretInputs(
-                verification_token_secret=self.manager_security.verification_token_secret,
-                reset_password_token_secret=self.manager_security.reset_password_token_secret,
-                totp_secret_key=self.manager_security.totp_secret_key,
-            )
-        return ManagerSecretInputs.from_mapping(self.manager_kwargs)
-
-    def build_manager_security(self) -> UserManagerSecurityProtocol[ID] | None:
-        """Return the typed security bundle passed to security-aware managers."""
+    def effective_security(self) -> UserManagerSecurity[ID]:
+        """Return the canonical manager-security bundle for the current constructor inputs."""
         if self.manager_security is None:
-            return None
+            resolved_id_parser = self.explicit_id_parser if self.has_explicit_id_parser else self.id_parser
+            return user_manager_security_from_mapping(self.manager_kwargs, id_parser=resolved_id_parser)
 
         resolved_id_parser = self.resolved_security_id_parser
         if self.manager_security.id_parser is resolved_id_parser:
             return self.manager_security
-        if is_dataclass(self.manager_security):
-            return cast(
-                "UserManagerSecurityProtocol[ID]",
-                replace(cast("Any", self.manager_security), id_parser=resolved_id_parser),
-            )
+        return replace(self.manager_security, id_parser=resolved_id_parser)
 
-        return ResolvedUserManagerSecurity(
-            verification_token_secret=self.manager_security.verification_token_secret,
-            reset_password_token_secret=self.manager_security.reset_password_token_secret,
-            totp_secret_key=self.manager_security.totp_secret_key,
-            id_parser=resolved_id_parser,
-        )
+    def build_manager_security(self) -> UserManagerSecurity[ID] | None:
+        """Return the typed security bundle passed to security-aware managers."""
+        if self.manager_security is None:
+            return None
+        return self.effective_security
 
     def _build_manager_id_parser_kwargs(
         self,
