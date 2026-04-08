@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import typing
 from dataclasses import dataclass, field
+from types import MappingProxyType
 
 import litestar_auth._redis_protocols as redis_protocols_module
 import litestar_auth.ratelimit as ratelimit_module
@@ -47,6 +48,11 @@ def _default_rate_limit_tier() -> RedisAuthRateLimitTier:
     return RedisAuthRateLimitTier(max_attempts=5, window_seconds=60)
 
 
+def _empty_group_rate_limit_tiers() -> MappingProxyType[AuthRateLimitEndpointGroup, RedisAuthRateLimitTier]:
+    """Return an empty read-only group-tier mapping for the preset default."""
+    return MappingProxyType({})
+
+
 @dataclass(slots=True)
 class RedisAuthPreset:
     """Shared-client Redis preset for auth rate limiting and TOTP replay protection.
@@ -76,9 +82,13 @@ class RedisAuthPreset:
     redis: redis_protocols_module.RedisSharedAuthClient
     rate_limit_tier: RedisAuthRateLimitTier = field(default_factory=_default_rate_limit_tier)
     group_rate_limit_tiers: typing.Mapping[AuthRateLimitEndpointGroup, RedisAuthRateLimitTier] = field(
-        default_factory=dict,
+        default_factory=_empty_group_rate_limit_tiers,
     )
     totp_used_tokens_key_prefix: str | None = None
+
+    def __post_init__(self) -> None:
+        """Snapshot group-specific rate-limit tiers into a read-only mapping."""
+        self.group_rate_limit_tiers = MappingProxyType(dict(self.group_rate_limit_tiers))
 
     def _build_rate_limit_backend(self, tier: RedisAuthRateLimitTier) -> RateLimiterBackend:
         """Return a ``RedisRateLimiter`` for ``tier`` using the preset's client."""

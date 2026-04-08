@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from typing import get_type_hints
+from types import MappingProxyType
+from typing import Any, cast, get_type_hints
 from unittest.mock import AsyncMock
 from uuid import uuid4
 
@@ -29,6 +30,7 @@ from litestar_auth.oauth.router import create_provider_oauth_controller as base_
 from litestar_auth.ratelimit import (
     AUTH_RATE_LIMIT_ENDPOINT_SLOTS_BY_GROUP,
     AUTH_RATE_LIMIT_VERIFICATION_SLOTS,
+    AuthRateLimitEndpointGroup,
     RedisRateLimiter,
 )
 from litestar_auth.totp import RedisUsedTotpCodeStore as BaseRedisUsedTotpCodeStore
@@ -150,6 +152,33 @@ def test_contrib_redis_preset_exposes_shared_client_protocol() -> None:
 
     assert preset_hints["redis"] is RedisSharedAuthClient
     assert isinstance(PresetRedisClient(), RedisSharedAuthClient)
+
+
+def test_contrib_redis_preset_snapshots_group_rate_limit_tiers_as_read_only_mapping() -> None:
+    """The preset stores group tiers as a read-only snapshot detached from caller-owned mappings."""
+    source_tiers: dict[AuthRateLimitEndpointGroup, RedisAuthRateLimitTier] = {
+        "refresh": RedisAuthRateLimitTier(
+            max_attempts=REFRESH_MAX_ATTEMPTS,
+            window_seconds=REFRESH_WINDOW_SECONDS,
+        ),
+    }
+
+    preset = RedisAuthPreset(
+        redis=PresetRedisClient(),
+        group_rate_limit_tiers=source_tiers,
+    )
+    source_tiers["totp"] = RedisAuthRateLimitTier(
+        max_attempts=TOTP_MAX_ATTEMPTS,
+        window_seconds=TOTP_WINDOW_SECONDS,
+    )
+
+    assert isinstance(preset.group_rate_limit_tiers, MappingProxyType)
+    assert tuple(preset.group_rate_limit_tiers) == ("refresh",)
+    with pytest.raises(TypeError, match="mappingproxy"):
+        cast("Any", preset.group_rate_limit_tiers)["totp"] = RedisAuthRateLimitTier(
+            max_attempts=TOTP_MAX_ATTEMPTS,
+            window_seconds=TOTP_WINDOW_SECONDS,
+        )
 
 
 async def test_contrib_redis_preset_builds_shared_client_auth_components(monkeypatch: pytest.MonkeyPatch) -> None:

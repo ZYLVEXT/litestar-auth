@@ -478,7 +478,9 @@ totp_config = TotpConfig(
 `RedisAuthPreset.build_rate_limit_config()` forwards the current shared-builder inputs such as
 `enabled`, `disabled`, `group_backends`, `scope_overrides`, `namespace_style`,
 `namespace_overrides`, and `endpoint_overrides`. Explicit `group_backends` still win over any
-preset `group_rate_limit_tiers`.
+preset `group_rate_limit_tiers`. `RedisAuthPreset.group_rate_limit_tiers` is snapshotted into a
+read-only mapping at construction time, so later mutations to the caller's source `dict` do not
+silently change the preset's runtime budget layout.
 
 The shared builder itself exposes typed public identifiers and slot-set helpers from
 `litestar_auth.ratelimit`:
