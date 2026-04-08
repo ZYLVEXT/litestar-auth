@@ -46,6 +46,7 @@ from tests._helpers import ExampleUser
 
 if TYPE_CHECKING:
     from collections.abc import Callable
+    from types import TracebackType
 
 JTI_HEX_LENGTH = 32
 # ``secrets.token_hex(32)`` is 64 lowercase hex characters.
@@ -909,34 +910,118 @@ async def test_authenticate_verifies_dummy_hash_for_unknown_email() -> None:
 
     assert len(verify_calls) == 1
     assert verify_calls[0][0] == "test-password"
-    assert verify_calls[0][1] == _get_dummy_hash()
+    assert verify_calls[0][1] == _get_dummy_hash(password_helper)
 
 
-def test_get_dummy_hash_is_cached(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The dummy hash accessor returns the precomputed module-level constant."""
+def test_manager_module_does_not_hash_dummy_password_at_import(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Reloading the module should not hash a dummy password during import."""
+    hash_calls: list[str] = []
+    original_hash = PasswordHelper.hash
 
-    def fail_if_hash_called(*_: object) -> str:
-        pytest.fail("dummy hash should not be recomputed during access")
+    def record_hash(self: PasswordHelper, password: str) -> str:
+        hash_calls.append(password)
+        return original_hash(self, password)
 
-    monkeypatch.setattr(
-        manager_module.PasswordHelper,
-        "hash",
-        fail_if_hash_called,
-        raising=True,
-    )
+    monkeypatch.setattr(PasswordHelper, "hash", record_hash, raising=True)
 
-    first = manager_module._get_dummy_hash()
-    second = manager_module._get_dummy_hash()
+    reloaded_module = importlib.reload(manager_module)
+
+    assert hash_calls == []
+    helper = PasswordHelper()
+    dummy_hash = reloaded_module._get_dummy_hash(helper)
+
+    assert isinstance(dummy_hash, str)
+    assert len(hash_calls) == 1
+
+
+def test_get_dummy_hash_is_lazy_and_cached_per_helper() -> None:
+    """A helper computes one dummy hash lazily and reuses it for later lookups."""
+    password_helper = PasswordHelper()
+    hash_calls: list[str] = []
+    original_hash = password_helper.hash
+
+    def record_hash(password: str) -> str:
+        hash_calls.append(password)
+        return original_hash(password)
+
+    with patch.object(password_helper, "hash", side_effect=record_hash):
+        first = manager_module._get_dummy_hash(password_helper)
+        second = manager_module._get_dummy_hash(password_helper)
 
     assert first == second
-    assert first == manager_module._DUMMY_PASSWORD_HASH
+    assert len(hash_calls) == 1
+
+
+def test_get_dummy_hash_is_scoped_per_helper() -> None:
+    """Different helpers keep independent dummy-hash cache entries."""
+    first_helper = PasswordHelper()
+    second_helper = PasswordHelper()
+    first_hash_calls: list[str] = []
+    second_hash_calls: list[str] = []
+    first_original_hash = first_helper.hash
+    second_original_hash = second_helper.hash
+
+    def record_first_hash(password: str) -> str:
+        first_hash_calls.append(password)
+        return first_original_hash(password)
+
+    def record_second_hash(password: str) -> str:
+        second_hash_calls.append(password)
+        return second_original_hash(password)
+
+    with (
+        patch.object(first_helper, "hash", side_effect=record_first_hash),
+        patch.object(second_helper, "hash", side_effect=record_second_hash),
+    ):
+        first_dummy_hash = manager_module._get_dummy_hash(first_helper)
+        second_dummy_hash = manager_module._get_dummy_hash(second_helper)
+        assert manager_module._get_dummy_hash(first_helper) == first_dummy_hash
+        assert manager_module._get_dummy_hash(second_helper) == second_dummy_hash
+
+    assert len(first_hash_calls) == 1
+    assert len(second_hash_calls) == 1
+
+
+def test_get_dummy_hash_reuses_hash_populated_while_waiting_for_lock(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A cache hit discovered after entering the lock should be returned without hashing."""
+
+    class _RaceCache:
+        def __init__(self) -> None:
+            self.get_calls = 0
+
+        def get(self, _password_helper: PasswordHelper) -> str | None:
+            self.get_calls += 1
+            return None if self.get_calls == 1 else "cached-after-lock"
+
+        def __setitem__(self, _password_helper: PasswordHelper, _dummy_hash: str) -> None:
+            pytest.fail("dummy hash should not be recomputed when the cache is filled before the lock path re-check")
+
+    class _NoOpLock:
+        def __enter__(self) -> None:
+            return None
+
+        def __exit__(
+            self,
+            _exc_type: type[BaseException] | None,
+            _exc: BaseException | None,
+            _tb: TracebackType | None,
+        ) -> bool:
+            return False
+
+    password_helper = PasswordHelper()
+    monkeypatch.setattr(manager_module, "_DUMMY_PASSWORD_HASHES", _RaceCache())
+    monkeypatch.setattr(manager_module, "_DUMMY_PASSWORD_HASH_LOCK", _NoOpLock())
+
+    with patch.object(password_helper, "hash", side_effect=pytest.fail):
+        assert manager_module._get_dummy_hash(password_helper) == "cached-after-lock"
 
 
 def test_get_dummy_hash_returns_valid_password_hash() -> None:
     """The dummy hash should be a valid password hash value."""
-    dummy_hash = manager_module._get_dummy_hash()
+    password_helper = PasswordHelper()
+    dummy_hash = manager_module._get_dummy_hash(password_helper)
 
-    assert PasswordHelper().verify("not-the-secret", dummy_hash) is False
+    assert password_helper.verify("not-the-secret", dummy_hash) is False
 
 
 async def test_authenticate_logs_success_and_failure(caplog: pytest.LogCaptureFixture) -> None:
@@ -1105,7 +1190,7 @@ async def test_forgot_password_uses_dummy_fingerprint_for_missing_users() -> Non
     with patch.object(manager, "_password_fingerprint", wraps=manager._password_fingerprint) as fingerprint:
         assert await manager.forgot_password("missing@example.com") is None
 
-    fingerprint.assert_called_once_with(_get_dummy_hash())
+    fingerprint.assert_called_once_with(_get_dummy_hash(password_helper))
     assert len(manager.forgot_password_events) == 1
     assert manager.forgot_password_events[0] == (None, None)
 
@@ -1199,7 +1284,7 @@ async def test_authenticate_delegates_to_lifecycle_service_with_effective_mode(
         "lookup-value",
         "test-password",
         login_identifier=expected_mode,
-        dummy_hash=_get_dummy_hash(),
+        dummy_hash=_get_dummy_hash(password_helper),
         logger=manager_logger,
     )
 
@@ -1314,7 +1399,7 @@ async def test_verify_and_account_token_flows_delegate_to_account_tokens_service
 
     verify.assert_awaited_once_with("verify-token")
     request_verify_token.assert_awaited_once_with("user@example.com")
-    forgot_password.assert_awaited_once_with("user@example.com", dummy_hash=_get_dummy_hash())
+    forgot_password.assert_awaited_once_with("user@example.com", dummy_hash=_get_dummy_hash(password_helper))
     reset_password.assert_awaited_once_with("reset-token", "new-password")
 
 

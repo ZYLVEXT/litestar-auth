@@ -41,7 +41,7 @@ async def test_forgot_password_nonexistent_user_uses_dummy_hash_and_calls_hook_w
     password_helper = PasswordHelper()
     manager = TrackingUserManager(user_db, password_helper)
     user_db.get_by_email.return_value = None
-    dummy_hash = _get_dummy_hash()
+    dummy_hash = _get_dummy_hash(password_helper)
 
     with patch.object(
         manager._account_tokens,
@@ -64,7 +64,7 @@ async def test_forgot_password_existing_user_calls_hook_with_valid_reset_token()
     user = _build_user(password_helper, email="user@example.com")
     user_db.get_by_email.return_value = user
 
-    await manager._account_tokens.forgot_password("User@Example.com", dummy_hash=_get_dummy_hash())
+    await manager._account_tokens.forgot_password("User@Example.com", dummy_hash=_get_dummy_hash(password_helper))
 
     user_db.get_by_email.assert_awaited_once_with("user@example.com")
     assert len(manager.forgot_password_events) == 1
@@ -165,7 +165,7 @@ async def test_reset_password_updates_hash_invalidates_tokens_and_calls_hook() -
     manager = TrackingUserManager(user_db, password_helper)
     user = _build_user(password_helper)
     updated_user = replace(user, hashed_password=password_helper.hash("new-password-123"))
-    token = manager._account_tokens.write_reset_password_token(user, dummy_hash=_get_dummy_hash())
+    token = manager._account_tokens.write_reset_password_token(user, dummy_hash=_get_dummy_hash(password_helper))
     user_db.get.return_value = user
     user_db.update.return_value = updated_user
 
@@ -208,7 +208,7 @@ async def test_reset_password_rejects_inactive_user() -> None:
     password_helper = PasswordHelper()
     manager = TrackingUserManager(user_db, password_helper)
     user = replace(_build_user(password_helper), is_active=False)
-    token = manager._account_tokens.write_reset_password_token(user, dummy_hash=_get_dummy_hash())
+    token = manager._account_tokens.write_reset_password_token(user, dummy_hash=_get_dummy_hash(password_helper))
     user_db.get.return_value = user
 
     with pytest.raises(InvalidResetPasswordTokenError):
@@ -245,7 +245,10 @@ async def test_reset_password_rejects_stale_password_fingerprint() -> None:
     manager = TrackingUserManager(user_db, password_helper)
     original_user = _build_user(password_helper)
     current_user = replace(original_user, hashed_password=password_helper.hash("changed-password-123"))
-    token = manager._account_tokens.write_reset_password_token(original_user, dummy_hash=_get_dummy_hash())
+    token = manager._account_tokens.write_reset_password_token(
+        original_user,
+        dummy_hash=_get_dummy_hash(password_helper),
+    )
     user_db.get.return_value = current_user
 
     with pytest.raises(InvalidResetPasswordTokenError):
@@ -368,7 +371,7 @@ async def test_get_reset_password_context_rejects_missing_user(caplog: pytest.Lo
     password_helper = PasswordHelper()
     manager = TrackingUserManager(user_db, password_helper)
     user = _build_user(password_helper)
-    token = manager._account_tokens.write_reset_password_token(user, dummy_hash=_get_dummy_hash())
+    token = manager._account_tokens.write_reset_password_token(user, dummy_hash=_get_dummy_hash(password_helper))
     user_db.get.return_value = None
 
     with caplog.at_level(logging.WARNING, logger=manager_logger.name), pytest.raises(InvalidResetPasswordTokenError):

@@ -9,7 +9,9 @@ import logging
 import re
 import secrets
 from datetime import timedelta
+from threading import Lock
 from typing import TYPE_CHECKING, Any
+from weakref import WeakKeyDictionary
 
 from litestar_auth import config as _config
 from litestar_auth._manager import _protocols as _manager_protocols
@@ -114,14 +116,31 @@ class _SecretValue:
 EMAIL_MAX_LENGTH = 320
 _EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 logger = logging.getLogger(__name__)
-_DUMMY_PASSWORD_HASH = PasswordHelper.from_defaults().hash(secrets.token_urlsafe(32))
+_DUMMY_PASSWORD_HASHES: WeakKeyDictionary[PasswordHelper, str] = WeakKeyDictionary()
+_DUMMY_PASSWORD_HASH_LOCK = Lock()
 UserManagerUserProtocol = _manager_protocols.ManagedUserProtocol
 AccountStateUserProtocol = _manager_protocols.AccountStateUserProtocol
 
 
-def _get_dummy_hash() -> str:
-    """Return the precomputed dummy password hash for timing-equalized auth checks."""
-    return _DUMMY_PASSWORD_HASH
+def _get_dummy_hash(password_helper: PasswordHelper) -> str:
+    """Return a lazily computed dummy password hash for the provided helper.
+
+    The dummy hash must be produced by the same ``PasswordHelper`` instance that will
+    later verify it, otherwise custom helper pipelines can fail fast on unknown-hash
+    formats and weaken timing equalization for unknown-account paths.
+    """
+    cached_hash = _DUMMY_PASSWORD_HASHES.get(password_helper)
+    if cached_hash is not None:
+        return cached_hash
+
+    with _DUMMY_PASSWORD_HASH_LOCK:
+        cached_hash = _DUMMY_PASSWORD_HASHES.get(password_helper)
+        if cached_hash is not None:
+            return cached_hash
+
+        dummy_hash = password_helper.hash(secrets.token_urlsafe(32))
+        _DUMMY_PASSWORD_HASHES[password_helper] = dummy_hash
+        return dummy_hash
 
 
 def _mask_optional_secret(secret: str | None) -> str | None:
@@ -358,7 +377,7 @@ class BaseUserManager[UP: UserProtocol[Any], ID](  # noqa: PLR0904
             identifier,
             password,
             login_identifier=mode,
-            dummy_hash=_get_dummy_hash(),
+            dummy_hash=_get_dummy_hash(self.password_helper),
             logger=logger,
         )
         if user is None:
@@ -391,7 +410,7 @@ class BaseUserManager[UP: UserProtocol[Any], ID](  # noqa: PLR0904
 
     async def forgot_password(self, email: str) -> None:
         """Trigger the forgot-password flow without revealing whether a user exists."""
-        await self._account_tokens.forgot_password(email, dummy_hash=_get_dummy_hash())
+        await self._account_tokens.forgot_password(email, dummy_hash=_get_dummy_hash(self.password_helper))
 
     async def reset_password(self, token: str, password: str) -> UP:
         """Reset a user's password using a signed reset token.
