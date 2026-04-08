@@ -248,11 +248,11 @@ def _resolve_user_manager_capability_override(
 def _is_base_user_manager_class(current_class: type[object]) -> bool:
     """Return whether ``current_class`` is the canonical ``BaseUserManager`` type.
 
-    This stays reload-safe for tests that call ``importlib.reload`` on
-    ``litestar_auth.manager`` and would otherwise leave earlier imported class
-    objects stale inside this module.
+    The canonical base class carries a private marker in its own ``__dict__``.
+    That keeps capability-walk stop conditions reload-safe without identifying
+    the class by ``__module__`` / ``__qualname__`` strings.
     """
-    return current_class.__module__ == "litestar_auth.manager" and current_class.__qualname__ == "BaseUserManager"
+    return bool(current_class.__dict__.get("_litestar_auth_capability_root", False))
 
 
 def user_manager_accepts_security(user_manager_class: type[BaseUserManager[Any, Any]]) -> bool:

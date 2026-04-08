@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import importlib
 import logging
+import sys
 import warnings
 from functools import cache
 from typing import TYPE_CHECKING, Any, cast
@@ -41,15 +42,23 @@ def _is_jwt_strategy_instance(strategy: object) -> bool:
 
     Tests reload strategy modules to record module-body coverage. After a reload,
     the current ``JWTStrategy`` class object differs from older imports held by
-    this module, so a strict ``isinstance()`` check can miss the intended
-    strategy type. Matching on the stable module path and class name keeps the
-    startup warning logic consistent without broadening it to unrelated classes.
+    this module, so a strict ``isinstance()`` check against only the originally
+    imported class can miss the intended strategy type. Compare against both the
+    originally imported class object and the currently loaded module's class
+    object instead of identifying the type by ``__name__`` / ``__module__``
+    strings.
     """
-    strategy_type = type(strategy)
-    return isinstance(strategy, JWTStrategy) or (
-        strategy_type.__name__ == JWTStrategy.__name__
-        and strategy_type.__module__ == JWTStrategy.__module__
-        and hasattr(strategy, "revocation_is_durable")
+    if isinstance(strategy, JWTStrategy):
+        return True
+
+    jwt_strategy_module = sys.modules.get("litestar_auth.authentication.strategy.jwt")
+    current_jwt_strategy_cls = (
+        None if jwt_strategy_module is None else getattr(jwt_strategy_module, "JWTStrategy", None)
+    )
+    return (
+        isinstance(current_jwt_strategy_cls, type)
+        and current_jwt_strategy_cls is not JWTStrategy
+        and isinstance(strategy, current_jwt_strategy_cls)
     )
 
 

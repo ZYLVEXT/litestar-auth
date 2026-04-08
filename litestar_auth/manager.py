@@ -10,7 +10,7 @@ import re
 import secrets
 from datetime import timedelta
 from threading import Lock
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any, ClassVar, cast
 from weakref import WeakKeyDictionary
 
 from litestar_auth import config as _config
@@ -165,6 +165,10 @@ class BaseUserManager[UP: UserProtocol[Any], ID](  # noqa: PLR0904
 ):
     """Coordinate user persistence, password hashing, and account tokens."""
 
+    # Internal marker used by plugin capability resolution to stop walking the
+    # MRO at the canonical manager root even after importlib.reload() creates a
+    # fresh BaseUserManager class object.
+    _litestar_auth_capability_root: ClassVar[bool] = True
     accepts_security: bool = True
     accepts_password_validator: bool = True
     accepts_login_identifier: bool = True

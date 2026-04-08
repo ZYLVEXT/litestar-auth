@@ -457,6 +457,19 @@ def test_user_manager_accepts_security_requires_explicit_opt_in_for_kwargs_only(
     assert user_manager_accepts_security(cast("Any", _ManagerWithKwargs)) is False
 
 
+def test_user_manager_accepts_security_ignores_base_user_manager_default_after_reload() -> None:
+    """Reloading ``litestar_auth.manager`` does not turn base defaults into explicit overrides."""
+
+    class _KwargsOnlyManager(PluginUserManager):
+        def __init__(self, user_db: object, **kwargs: object) -> None:
+            super().__init__(cast("Any", user_db), **cast("Any", kwargs))
+
+    manager_module = importlib.import_module("litestar_auth.manager")
+    importlib.reload(manager_module)
+
+    assert user_manager_accepts_security(_KwargsOnlyManager) is False
+
+
 def test_user_manager_accepts_id_parser_prefers_explicit_class_attribute() -> None:
     """Explicit subclass metadata overrides constructor introspection for id_parser."""
 
