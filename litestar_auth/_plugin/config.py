@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import importlib
 import inspect
 import keyword
 import sys
@@ -122,8 +121,9 @@ def _build_default_user_db(session: AsyncSession, *, user_model: type[Any]) -> B
     Returns:
         A :class:`~litestar_auth.db.sqlalchemy.SQLAlchemyUserDatabase` bound to ``session``.
     """
-    mod = importlib.import_module("litestar_auth.db.sqlalchemy")
-    return mod.SQLAlchemyUserDatabase(session, user_model=user_model)
+    from litestar_auth.db.sqlalchemy import SQLAlchemyUserDatabase  # noqa: PLC0415
+
+    return SQLAlchemyUserDatabase(session, user_model=user_model)
 
 
 def _build_database_token_backend[UP: UserProtocol[Any], ID](
@@ -134,21 +134,22 @@ def _build_database_token_backend[UP: UserProtocol[Any], ID](
     """Build the canonical bearer + database-token backend lazily.
 
     Imports the backend, transport, and strategy only when the preset builder is used so
-    importing ``litestar_auth._plugin.config`` keeps the current lazy-import contract.
+    importing ``litestar_auth._plugin.config`` keeps the current lazy-import contract
+    without hiding first-party references behind string-based module lookups.
 
     Returns:
         Authentication backend configured for the canonical DB bearer path.
     """
-    authentication_package = importlib.import_module("litestar_auth.authentication")
-    strategy_package = importlib.import_module("litestar_auth.authentication.strategy")
-    transport_package = importlib.import_module("litestar_auth.authentication.transport")
+    from litestar_auth.authentication import AuthenticationBackend  # noqa: PLC0415
+    from litestar_auth.authentication.strategy import DatabaseTokenStrategy  # noqa: PLC0415
+    from litestar_auth.authentication.transport import BearerTransport  # noqa: PLC0415
 
-    return authentication_package.AuthenticationBackend[UP, ID](
+    return AuthenticationBackend[UP, ID](
         name=database_token_auth.backend_name,
-        transport=transport_package.BearerTransport(),
+        transport=BearerTransport(),
         strategy=cast(
             "Any",
-            strategy_package.DatabaseTokenStrategy(
+            DatabaseTokenStrategy(
                 session=resolve_database_token_strategy_session(session),
                 token_hash_secret=database_token_auth.token_hash_secret,
                 max_age=database_token_auth.max_age,
