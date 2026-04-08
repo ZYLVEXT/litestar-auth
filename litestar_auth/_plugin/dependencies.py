@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import inspect
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, cast
 
@@ -33,6 +33,8 @@ if TYPE_CHECKING:
 
     from litestar.config.app import AppConfig
     from litestar.connection import Request
+
+    from litestar_auth.authentication.backend import AuthenticationBackend
 
 
 type DbSessionProvider = Callable[[State, Scope], AsyncSession]
@@ -90,11 +92,11 @@ def _make_db_session_provide(
     return provide_db_session
 
 
-def _make_user_manager_dependency_provider(
-    build_user_manager: Callable[[AsyncSession], Any],
+def _make_user_manager_dependency_provider[TManager](
+    build_user_manager: Callable[[AsyncSession], TManager],
     db_session_key: str,
-) -> Callable[..., AsyncGenerator[Any, None]]:
-    """Build Litestar DI async generator: one ``BaseUserManager`` per injected ``AsyncSession``.
+) -> Callable[..., AsyncGenerator[TManager, None]]:
+    """Build Litestar DI async generator: one user-manager instance per injected ``AsyncSession``.
 
     The async generator parameter name matches ``db_session_key`` so Litestar injects the
     same session registered under ``LitestarAuthConfig.db_session_dependency_key``.
@@ -137,8 +139,71 @@ def _make_user_manager_dependency_provider(
 
         yield build_user_manager(cast("AsyncSession", dependencies[db_session_key]))
 
-    provider_fn = cast("Any", _provide_user_manager)
-    provider_fn.__signature__ = inspect.Signature(
+    return _bind_session_keyed_signature(
+        _provide_user_manager,
+        db_session_key=db_session_key,
+        qualname="_make_user_manager_dependency_provider.<locals>._provide_user_manager",
+    )
+
+
+def _make_backends_dependency_provider[UP: UserProtocol[Any], ID](
+    build_backends: Callable[[AsyncSession], Sequence[AuthenticationBackend[UP, ID]]],
+    db_session_key: str,
+) -> Callable[..., Sequence[AuthenticationBackend[UP, ID]]]:
+    """Build a dependency provider that returns request-scoped backends for the active session.
+
+    Returns:
+        Callable dependency provider whose signature matches ``db_session_key``.
+    """
+    missing = object()
+
+    def _provide_backends(
+        session: object = missing,
+        /,
+        **dependencies: object,
+    ) -> Sequence[AuthenticationBackend[UP, ID]]:
+        if session is not missing:
+            if dependencies:
+                msg = f"_provide_backends() got multiple values for argument {db_session_key!r}"
+                raise TypeError(msg)
+            return build_backends(cast("AsyncSession", session))
+
+        if len(dependencies) != 1 or db_session_key not in dependencies:
+            if not dependencies:
+                msg = f"_provide_backends() missing 1 required argument: {db_session_key!r}"
+            else:
+                unexpected = ", ".join(sorted(repr(name) for name in dependencies))
+                msg = f"_provide_backends() got unexpected keyword argument(s): {unexpected}"
+            raise TypeError(msg)
+
+        return build_backends(cast("AsyncSession", dependencies[db_session_key]))
+
+    return _bind_session_keyed_signature(
+        _provide_backends,
+        db_session_key=db_session_key,
+        qualname="_make_backends_dependency_provider.<locals>._provide_backends",
+    )
+
+
+def _bind_session_keyed_signature[T](
+    provider_fn: Callable[..., T],
+    *,
+    db_session_key: str,
+    qualname: str,
+) -> Callable[..., T]:
+    """Bind Litestar-visible signature metadata for a configurable session dependency key.
+
+    Litestar builds dependency signature models from the runtime callable signature, and
+    dependency kwargs must match the configured dependency key. That key is configurable
+    at runtime, so it cannot be expressed as a literal Python parameter name in source.
+    The helper keeps the implementation on ``**dependencies`` while advertising a
+    synthetic single-parameter signature to Litestar.
+
+    Returns:
+        The same callable with Litestar-visible runtime signature metadata attached.
+    """
+    provider_metadata = cast("Any", provider_fn)
+    provider_metadata.__signature__ = inspect.Signature(
         parameters=(
             inspect.Parameter(
                 db_session_key,
@@ -147,11 +212,11 @@ def _make_user_manager_dependency_provider(
             ),
         ),
     )
-    provider_fn.__annotations__ = {db_session_key: "Any"}
+    provider_metadata.__annotations__ = {db_session_key: "Any"}
     # Litestar resolves forward references from the defining module; keep metadata stable.
-    provider_fn.__module__ = __name__
-    provider_fn.__qualname__ = "_make_user_manager_dependency_provider.<locals>._provide_user_manager"
-    return cast("Callable[..., AsyncGenerator[Any, None]]", provider_fn)
+    provider_metadata.__module__ = __name__
+    provider_metadata.__qualname__ = qualname
+    return provider_fn
 
 
 def register_dependencies[UP: UserProtocol[Any], ID](

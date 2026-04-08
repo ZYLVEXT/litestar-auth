@@ -2,9 +2,8 @@
 
 from __future__ import annotations
 
-import inspect
 from functools import partial
-from typing import TYPE_CHECKING, Any, cast, override
+from typing import TYPE_CHECKING, Any, override
 
 from litestar.middleware import DefineMiddleware
 from litestar.plugins import InitPlugin
@@ -16,6 +15,7 @@ from litestar_auth._plugin.controllers import (
 )
 from litestar_auth._plugin.dependencies import (
     DependencyProviders,
+    _make_backends_dependency_provider,
     _make_user_manager_dependency_provider,
     register_dependencies,
     register_exception_handlers,
@@ -251,51 +251,3 @@ __all__ = (
     "OAuthConfig",
     "TotpConfig",
 )
-
-
-def _make_backends_dependency_provider[UP: UserProtocol[Any], ID](
-    build_backends: object,
-    db_session_key: str,
-) -> object:
-    """Build a dependency provider that returns request-scoped backends for the active session.
-
-    Returns:
-        Callable dependency provider whose signature matches ``db_session_key``.
-    """
-    missing = object()
-
-    def _provide_backends(
-        session: object = missing,
-        /,
-        **dependencies: object,
-    ) -> object:
-        if session is not missing:
-            if dependencies:
-                msg = f"_provide_backends() got multiple values for argument {db_session_key!r}"
-                raise TypeError(msg)
-            return cast("Any", build_backends)(session)
-
-        if len(dependencies) != 1 or db_session_key not in dependencies:
-            if not dependencies:
-                msg = f"_provide_backends() missing 1 required argument: {db_session_key!r}"
-            else:
-                unexpected = ", ".join(sorted(repr(name) for name in dependencies))
-                msg = f"_provide_backends() got unexpected keyword argument(s): {unexpected}"
-            raise TypeError(msg)
-
-        return cast("Any", build_backends)(dependencies[db_session_key])
-
-    provider_fn = cast("Any", _provide_backends)
-    provider_fn.__signature__ = inspect.Signature(
-        parameters=(
-            inspect.Parameter(
-                db_session_key,
-                kind=inspect.Parameter.POSITIONAL_OR_KEYWORD,
-                annotation=Any,
-            ),
-        ),
-    )
-    provider_fn.__annotations__ = {db_session_key: "Any"}
-    provider_fn.__module__ = __name__
-    provider_fn.__qualname__ = "_make_backends_dependency_provider.<locals>._provide_backends"
-    return provider_fn

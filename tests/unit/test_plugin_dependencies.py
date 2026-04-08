@@ -27,6 +27,7 @@ from litestar_auth._plugin import (
 from litestar_auth._plugin.config import LitestarAuthConfig, OAuthConfig
 from litestar_auth._plugin.dependencies import (
     DependencyProviders,
+    _make_backends_dependency_provider,
     _make_db_session_provide,
     _make_user_manager_dependency_provider,
     client_exception_handler,
@@ -181,6 +182,29 @@ def test_make_db_session_provide_annotations_are_runtime_resolvable() -> None:
     hints = get_type_hints(_make_db_session_provide)
 
     assert hints["session_maker"] is SessionFactory
+
+
+def test_make_backends_dependency_provider_uses_configured_di_key() -> None:
+    """The generated provider exposes the configured session key to Litestar DI."""
+    marker = object()
+    seen_sessions: list[object] = []
+
+    def build_backends(session: AsyncSession) -> tuple[AuthenticationBackend[ExampleUser, UUID], ...]:
+        seen_sessions.append(session)
+        return ()
+
+    provider = _make_backends_dependency_provider(build_backends, "custom_db_session")
+    provider_function = cast("Any", provider)
+    parameter = inspect.signature(provider).parameters["custom_db_session"]
+
+    assert provider(custom_db_session=marker) == ()
+    assert seen_sessions == [marker]
+    assert inspect.signature(provider).parameters.keys() == {"custom_db_session"}
+    assert parameter.kind is inspect.Parameter.POSITIONAL_OR_KEYWORD
+    assert parameter.annotation is Any
+    assert provider.__annotations__ == {"custom_db_session": "Any"}
+    assert provider.__module__ == "litestar_auth._plugin.dependencies"
+    assert provider_function.__qualname__ == "_make_backends_dependency_provider.<locals>._provide_backends"
 
 
 async def test_make_user_manager_dependency_provider_uses_configured_di_key() -> None:
