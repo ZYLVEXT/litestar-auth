@@ -25,9 +25,9 @@ MINIMUM_SECRET_LENGTH = 32
 DEFAULT_MINIMUM_PASSWORD_LENGTH = 12
 MAX_PASSWORD_LENGTH = 128
 # Canonical JWT audiences shared across account, auth, and TOTP flows.
-VERIFY_TOKEN_AUDIENCE = "litestar-auth:verify"  # noqa: S105
-RESET_PASSWORD_TOKEN_AUDIENCE = "litestar-auth:reset-password"  # noqa: S105
-JWT_ACCESS_TOKEN_AUDIENCE = "litestar-auth:access"  # noqa: S105
+VERIFY_TOKEN_AUDIENCE = "litestar-auth:verify"
+RESET_PASSWORD_TOKEN_AUDIENCE = "litestar-auth:reset-password"
+JWT_ACCESS_TOKEN_AUDIENCE = "litestar-auth:access"
 TOTP_PENDING_AUDIENCE = "litestar-auth:2fa-pending"
 TOTP_ENROLL_AUDIENCE = "litestar-auth:2fa-enroll"
 type OAuthProviderConfig = tuple[str, object]

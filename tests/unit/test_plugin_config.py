@@ -160,7 +160,7 @@ def test_litestar_auth_config_build_password_helper_memoizes_default_helper() ->
     second = config.build_password_helper()
 
     assert first is second
-    assert config.user_manager_kwargs["password_helper"] is first
+    assert "password_helper" not in config.user_manager_kwargs
     assert first.password_hash.hashers[0].__class__.__name__ == "Argon2Hasher"
     assert first.password_hash.hashers[1].__class__.__name__ == "BcryptHasher"
 
@@ -612,7 +612,8 @@ async def test_build_user_manager_applies_current_password_surface_from_config()
     password_helper = config.build_password_helper()
 
     def factory(config: LitestarAuthConfig[ExampleUser, UUID]) -> Callable[[str], None]:
-        assert config.user_manager_kwargs["password_helper"] is password_helper
+        assert config.memoized_default_password_helper() is password_helper
+        assert "password_helper" not in config.user_manager_kwargs
         assert config.user_manager_kwargs["verification_token_secret"] == verification_secret
         assert config.user_manager_kwargs["reset_password_token_secret"] == reset_secret
         return partial(require_password_length, minimum_length=minimum_length)
@@ -1079,7 +1080,7 @@ def test_litestar_auth_config_session_maker_annotation_is_runtime_resolvable() -
 
 
 def test_litestar_auth_config_builds_deferred_default_user_db_factory() -> None:
-    """Omitting user_db_factory stores the lazy SQLAlchemy-builder partial without importing the adapter."""
+    """Omitting user_db_factory exposes a lazy SQLAlchemy-builder partial without importing the adapter."""
     default_backend = AuthenticationBackend[ExampleUser, UUID](
         name="primary",
         transport=BearerTransport(),
@@ -1099,28 +1100,67 @@ def test_litestar_auth_config_builds_deferred_default_user_db_factory() -> None:
         },
     )
 
-    assert isinstance(config.user_db_factory, partial)
-    assert config.user_db_factory.func is plugin_config_module._build_default_user_db
-    assert config.user_db_factory.keywords == {"user_model": ExampleUser}
+    assert config.user_db_factory is None
+    resolved_factory = config.resolve_user_db_factory()
+    assert isinstance(resolved_factory, partial)
+    assert resolved_factory.func is plugin_config_module._build_default_user_db
+    assert resolved_factory.keywords == {"user_model": ExampleUser}
 
 
 def test_uses_bundled_database_token_models_detects_manual_db_backend_with_bundled_models() -> None:
     """Bundled DB-token models still trigger startup bootstrap for manual backend assembly."""
+    from litestar_auth.authentication.strategy.db import DatabaseTokenStrategy  # noqa: PLC0415
 
-    class DatabaseTokenStrategy:
-        access_token_model = AccessToken
-        refresh_token_model = RefreshToken
-
-    DatabaseTokenStrategy.__module__ = "litestar_auth.authentication.strategy.db"
-
+    strategy = DatabaseTokenStrategy(session=cast("Any", object()), token_hash_secret="x" * 40)
     backend = AuthenticationBackend[ExampleUser, UUID](
         name="database",
         transport=BearerTransport(),
-        strategy=cast("Any", DatabaseTokenStrategy()),
+        strategy=cast("Any", strategy),
     )
     config = _minimal_config(backends=[backend])
 
+    assert strategy.access_token_model is AccessToken
+    assert strategy.refresh_token_model is RefreshToken
     assert plugin_config_module._uses_bundled_database_token_models(config) is True
+
+
+def test_is_database_token_strategy_instance_returns_false_when_module_not_loaded(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The lazy isinstance check returns False when the DB-strategy module is absent from sys.modules.
+
+    This guards the lazy-import contract: ``import litestar_auth`` must not pull the
+    SQLAlchemy adapter, so before any DB strategy has been instantiated the helper
+    must report False without forcing the module to load.
+    """
+    fake_modules = {
+        name: module
+        for name, module in plugin_config_module.sys.modules.items()
+        if name != "litestar_auth.authentication.strategy.db"
+    }
+    monkeypatch.setattr(plugin_config_module.sys, "modules", fake_modules)
+
+    assert plugin_config_module._is_database_token_strategy_instance(object()) is False
+
+
+def test_is_bundled_token_model_returns_false_when_module_not_loaded(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The bundled-model identity check returns False when the db_models module is absent from sys.modules.
+
+    Mirrors the lazy-import contract for the bundled token model classes: when no
+    code has imported ``litestar_auth.authentication.strategy.db_models`` yet, no
+    object can be the bundled class, so the helper must short-circuit to False
+    without forcing the import.
+    """
+    fake_modules = {
+        name: module
+        for name, module in plugin_config_module.sys.modules.items()
+        if name != "litestar_auth.authentication.strategy.db_models"
+    }
+    monkeypatch.setattr(plugin_config_module.sys, "modules", fake_modules)
+
+    assert plugin_config_module._is_bundled_token_model(object(), attribute_name="AccessToken") is False
 
 
 def test_resolve_user_manager_factory_returns_explicit_factory_when_configured() -> None:

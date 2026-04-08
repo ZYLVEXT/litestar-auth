@@ -75,9 +75,7 @@ class UsersControllerManager(BaseUserManager[ExampleUser, UUID]):
 
     async def list_users(self, *, offset: int, limit: int) -> tuple[list[ExampleUser], int]:
         """Return users ordered by insertion with total count metadata."""
-        user_db = cast("InMemoryUserDatabase", self.user_db)
-        all_users = list(user_db.users_by_id.values())
-        return all_users[offset : offset + limit], len(all_users)
+        return await self.user_db.list_users(offset=offset, limit=limit)
 
 
 def build_app() -> tuple[

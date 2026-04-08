@@ -122,6 +122,20 @@ convention = "google"
 "litestar_auth/models/__init__.py" = ["PLC0415"]
 "litestar_auth/models/user.py" = ["TC001"]
 "litestar_auth/models/_oauth_encrypted_types.py" = ["TC003"]
+# S105: This module declares public ErrorCode string constants. Their identifier
+# names contain "TOKEN"/"PASSWORD" so Ruff flags them as possible hardcoded
+# secrets, but the values are stable error-code labels surfaced in API responses,
+# never credentials.
+"litestar_auth/exceptions.py" = ["S105"]
+# S105: JWT audience strings ("litestar-auth:verify", etc.) are public protocol
+# constants embedded in tokens, not secrets.
+"litestar_auth/config.py" = ["S105"]
+# S105: ORM column/class-name strings ("hashed_password", "AccessToken",
+# "RefreshToken") are SQLAlchemy attribute identifiers, not credentials.
+"litestar_auth/_auth_model_mixins.py" = ["S105"]
+# S105: TOTP controller error-detail strings are user-facing failure messages,
+# not secrets.
+"litestar_auth/controllers/totp.py" = ["S105"]
 "tests/**/*.py" = ["ARG001", "ARG002", "N802", "N806", "PLC2701", "PLR0914", "PLR6301", "S", "SLF"]
 
 [tool.pytest.ini_options]

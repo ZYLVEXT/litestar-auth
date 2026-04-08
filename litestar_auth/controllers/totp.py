@@ -52,9 +52,9 @@ if TYPE_CHECKING:
 
 from litestar_auth.ratelimit import TotpRateLimitOrchestrator, TotpSensitiveEndpoint
 
-INVALID_TOTP_TOKEN_DETAIL = "Invalid or expired 2FA pending token."  # noqa: S105
+INVALID_TOTP_TOKEN_DETAIL = "Invalid or expired 2FA pending token."
 INVALID_TOTP_CODE_DETAIL = "Invalid TOTP code."
-INVALID_ENROLL_TOKEN_DETAIL = "Invalid or expired enrollment token."  # noqa: S105
+INVALID_ENROLL_TOKEN_DETAIL = "Invalid or expired enrollment token."
 _TOTP_ENROLL_TOKEN_LIFETIME_SECONDS = 300  # 5 minutes
 TOTP_SENSITIVE_ENDPOINTS: tuple[TotpSensitiveEndpoint, ...] = ("enable", "confirm_enable", "verify", "disable")
 TOTP_RATE_LIMITED_ENDPOINTS: tuple[TotpSensitiveEndpoint, ...] = ("verify", "confirm_enable")

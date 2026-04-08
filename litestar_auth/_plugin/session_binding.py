@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any, Protocol, cast
 
-from litestar_auth.db.base import BaseUserStore
+from litestar_auth.db.base import BaseOAuthAccountStore, BaseUserStore
 from litestar_auth.oauth_encryption import oauth_token_encryption_scope
 from litestar_auth.types import UserProtocol
 
@@ -29,7 +29,14 @@ class _AccountStateValidator[UP](Protocol):  # noqa: PYI046
 
 
 class _ScopedUserDatabaseProxy[UP: UserProtocol[Any], ID](BaseUserStore[UP, ID]):
-    """Wrap OAuth-account persistence calls in the plugin's OAuth encryption scope."""
+    """Wrap OAuth-account persistence calls in the plugin's OAuth encryption scope.
+
+    The wrapped store must implement :class:`~litestar_auth.db.base.BaseUserStore`.
+    OAuth methods (:meth:`get_by_oauth_account`, :meth:`upsert_oauth_account`)
+    additionally require the wrapped store to satisfy
+    :class:`~litestar_auth.db.base.BaseOAuthAccountStore`; calling them on a store
+    that does not implement those methods raises ``AttributeError`` at runtime.
+    """
 
     def __init__(self, user_db: BaseUserStore[UP, ID], *, oauth_scope: object) -> None:
         """Wrap ``user_db`` and route OAuth calls through the encryption scope."""
@@ -78,9 +85,9 @@ class _ScopedUserDatabaseProxy[UP: UserProtocol[Any], ID](BaseUserStore[UP, ID])
         Returns:
             The linked user when the provider account exists, otherwise ``None``.
         """
+        oauth_store = cast("BaseOAuthAccountStore[UP, ID]", self._user_db)
         with oauth_token_encryption_scope(self._oauth_scope):
-            store = cast("Any", self._user_db)
-            return await store.get_by_oauth_account(oauth_name, account_id)
+            return await oauth_store.get_by_oauth_account(oauth_name, account_id)
 
     async def upsert_oauth_account(  # noqa: PLR0913
         self,
@@ -94,9 +101,9 @@ class _ScopedUserDatabaseProxy[UP: UserProtocol[Any], ID](BaseUserStore[UP, ID])
         refresh_token: str | None,
     ) -> None:
         """Persist a linked OAuth account within the plugin's encryption scope."""
+        oauth_store = cast("BaseOAuthAccountStore[UP, ID]", self._user_db)
         with oauth_token_encryption_scope(self._oauth_scope):
-            store = cast("Any", self._user_db)
-            await store.upsert_oauth_account(
+            await oauth_store.upsert_oauth_account(
                 user,
                 oauth_name=oauth_name,
                 account_id=account_id,
@@ -105,14 +112,3 @@ class _ScopedUserDatabaseProxy[UP: UserProtocol[Any], ID](BaseUserStore[UP, ID])
                 expires_at=expires_at,
                 refresh_token=refresh_token,
             )
-
-    def __getattr__(self, name: str) -> object:
-        attribute = getattr(self._user_db, name)
-        if not callable(attribute):
-            return attribute
-
-        async def _call(*args: object, **kwargs: object) -> object:
-            with oauth_token_encryption_scope(self._oauth_scope):
-                return await attribute(*args, **kwargs)
-
-        return _call

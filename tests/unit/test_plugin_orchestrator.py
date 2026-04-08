@@ -33,6 +33,7 @@ from litestar_auth._plugin.dependencies import DependencyProviders, register_dep
 from litestar_auth.authentication import Authenticator, LitestarAuthMiddleware
 from litestar_auth.authentication.backend import AuthenticationBackend
 from litestar_auth.authentication.strategy.db import DatabaseTokenStrategy
+from litestar_auth.authentication.strategy.db_models import DatabaseTokenModels
 from litestar_auth.authentication.strategy.jwt import JWTStrategy
 from litestar_auth.authentication.transport.bearer import BearerTransport
 from litestar_auth.authentication.transport.cookie import CookieTransport
@@ -248,27 +249,45 @@ def test_bundled_token_bootstrap_loader_is_cached(monkeypatch: pytest.MonkeyPatc
 
 
 def test_bundled_token_bootstrap_detection_skips_custom_token_models() -> None:
-    """Startup bootstrap detection skips app-owned token model contracts."""
+    """Startup bootstrap detection skips app-owned token model contracts.
+
+    Uses two backends so that after the first DB-token backend's bundled-model
+    check returns False, the for-loop continues to the next iteration. This
+    exercises the "custom-models -> next backend" branch in
+    ``_uses_bundled_database_token_models``.
+    """
 
     class AppAccessToken:
-        pass
+        token = None
+        created_at = None
+        user_id = None
+        user = None
 
     class AppRefreshToken:
-        pass
+        token = None
+        created_at = None
+        user_id = None
+        user = None
 
-    @dataclass(slots=True)
-    class DatabaseTokenStrategy:
-        access_token_model: type[object] = AppAccessToken
-        refresh_token_model: type[object] = AppRefreshToken
-
-    DatabaseTokenStrategy.__module__ = "litestar_auth.authentication.strategy.db"
-
-    backend = AuthenticationBackend[ExampleUser, UUID](
+    custom_strategy = DatabaseTokenStrategy(
+        session=cast("Any", object()),
+        token_hash_secret="x" * 40,
+        token_models=DatabaseTokenModels(
+            access_token_model=AppAccessToken,
+            refresh_token_model=AppRefreshToken,
+        ),
+    )
+    custom_backend = AuthenticationBackend[ExampleUser, UUID](
         name="database",
         transport=BearerTransport(),
-        strategy=cast("Any", DatabaseTokenStrategy()),
+        strategy=cast("Any", custom_strategy),
     )
-    config = _minimal_config(backends=[backend])
+    other_backend = AuthenticationBackend[ExampleUser, UUID](
+        name="other",
+        transport=BearerTransport(),
+        strategy=cast("Any", InMemoryTokenStrategy(token_prefix="other")),
+    )
+    config = _minimal_config(backends=[custom_backend, other_backend])
 
     assert plugin_module._plugin_config._uses_bundled_database_token_models(config) is False
 

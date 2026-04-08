@@ -31,7 +31,7 @@ class _DummyUserStore:
     """Test double with awaitable delegates for every proxied store method."""
 
     def __init__(self) -> None:
-        """Initialize awaitable delegates and passthrough attributes."""
+        """Initialize awaitable delegates for the proxied store contract."""
         self.get_mock = AsyncMock()
         self.get_by_email_mock = AsyncMock()
         self.get_by_field_mock = AsyncMock()
@@ -41,8 +41,6 @@ class _DummyUserStore:
         self.delete_mock = AsyncMock()
         self.get_by_oauth_account_mock = AsyncMock()
         self.upsert_oauth_account_mock = AsyncMock()
-        self.extra_async_method = AsyncMock()
-        self.non_callable = object()
 
     async def get(self, user_id: UUID) -> ExampleUser | None:
         """Delegate ``get`` calls to the tracked async mock.
@@ -259,32 +257,4 @@ async def test_scoped_user_database_proxy_wraps_oauth_upsert_in_encryption_scope
         expires_at=12345,
         refresh_token="refresh-token",
     )
-    assert events == [_ScopeEvent("enter", oauth_scope), _ScopeEvent("exit", oauth_scope)]
-
-
-def test_scoped_user_database_proxy_getattr_returns_non_callable_attributes_directly() -> None:
-    """Non-callable attributes are exposed without wrapping."""
-    user_store = _DummyUserStore()
-    proxy = _build_proxy(user_store, oauth_scope=object())
-
-    assert cast("Any", proxy).non_callable is user_store.non_callable
-
-
-async def test_scoped_user_database_proxy_getattr_wraps_callable_attributes_in_encryption_scope() -> None:
-    """Dynamic async delegation uses the OAuth encryption scope wrapper."""
-    user_store = _DummyUserStore()
-    oauth_scope = object()
-    proxy = _build_proxy(user_store, oauth_scope=oauth_scope)
-    expected = {"status": "ok"}
-    user_store.extra_async_method.return_value = expected
-    events: list[_ScopeEvent] = []
-
-    with patch(
-        "litestar_auth._plugin.session_binding.oauth_token_encryption_scope",
-        side_effect=lambda scope: TRACKING_SCOPE_CONTEXT(scope, expected_scope=oauth_scope, events=events),
-    ):
-        result = await cast("Any", proxy).extra_async_method("payload", retry=False)
-
-    assert result is expected
-    user_store.extra_async_method.assert_awaited_once_with("payload", retry=False)
     assert events == [_ScopeEvent("enter", oauth_scope), _ScopeEvent("exit", oauth_scope)]

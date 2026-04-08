@@ -372,10 +372,11 @@ If your application also hashes or verifies passwords outside `BaseUserManager`,
 `config.build_password_helper()` once after constructing `LitestarAuthConfig(...)`. When
 `user_manager_kwargs["password_helper"]` already points at an explicit helper override,
 `config.build_password_helper()` returns that object unchanged. Otherwise it memoizes
-`PasswordHelper.from_defaults()` into `user_manager_kwargs` so the plugin and app-owned code share
-the same Argon2-primary helper with bcrypt fallback. This helper path does not inherit anything
-from `password_validator_factory`, `user_manager_security`, or token settings; it only resolves the
-password-hash policy itself.
+`PasswordHelper.from_defaults()` on the config and the plugin will inject the same helper into
+each request-scoped manager, so the plugin and app-owned code share the same Argon2-primary helper
+with bcrypt fallback. The user-provided `user_manager_kwargs` mapping is left untouched. This
+helper path does not inherit anything from `password_validator_factory`, `user_manager_security`,
+or token settings; it only resolves the password-hash policy itself.
 
 Use `password_validator_factory` when the plugin should own runtime password-policy construction.
 If you do not provide it, the plugin injects the default `require_password_length` validator for

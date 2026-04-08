@@ -5,6 +5,7 @@ from __future__ import annotations
 import importlib
 import inspect
 import keyword
+import sys
 from collections.abc import Callable
 from contextvars import ContextVar
 from dataclasses import dataclass, field
@@ -337,8 +338,12 @@ def build_user_manager[UP: UserProtocol[Any], ID](
         the builder falls back to the legacy explicit secret kwargs.
     """
     del session
+    effective_manager_kwargs = dict(config.user_manager_kwargs)
+    memoized_password_helper = config.memoized_default_password_helper()
+    if memoized_password_helper is not None and "password_helper" not in effective_manager_kwargs:
+        effective_manager_kwargs["password_helper"] = memoized_password_helper
     manager_inputs = ManagerConstructorInputs(
-        manager_kwargs=config.user_manager_kwargs,
+        manager_kwargs=effective_manager_kwargs,
         manager_security=config.user_manager_security,
         password_validator=resolve_password_validator(config),
         backends=backends,
@@ -583,6 +588,12 @@ class LitestarAuthConfig[UP: UserProtocol[Any], ID]:
         repr=False,
         compare=False,
     )
+    _memoized_default_password_helper: PasswordHelper | None = field(
+        default=None,
+        init=False,
+        repr=False,
+        compare=False,
+    )
 
     @property
     def database_token_auth(self) -> DatabaseTokenAuthConfig | None:
@@ -590,18 +601,37 @@ class LitestarAuthConfig[UP: UserProtocol[Any], ID]:
         return self._database_token_auth
 
     def build_password_helper(self) -> PasswordHelper:
-        """Return the helper aligned with this config and memoize default construction.
+        """Return the helper aligned with this config, memoizing default construction.
+
+        An explicit ``user_manager_kwargs['password_helper']`` always wins. When the
+        user did not provide one, the first call constructs a shared default and
+        subsequent calls return that same instance. The plugin's manager construction
+        path mirrors this resolution so the plugin and app-owned code observe a single
+        default helper without the config mutating the user-provided ``user_manager_kwargs``.
 
         Returns:
-            The configured ``user_manager_kwargs["password_helper"]`` when present,
-            otherwise a shared default helper memoized back into ``user_manager_kwargs``.
+            The configured ``user_manager_kwargs['password_helper']`` when present,
+            otherwise a shared default helper memoized on the config instance.
         """
         configured_password_helper = cast("PasswordHelper | None", self.user_manager_kwargs.get("password_helper"))
         if configured_password_helper is not None:
             return configured_password_helper
-        password_helper = PasswordHelper.from_defaults()
-        self.user_manager_kwargs["password_helper"] = password_helper
-        return password_helper
+        if self._memoized_default_password_helper is None:
+            self._memoized_default_password_helper = PasswordHelper.from_defaults()
+        return self._memoized_default_password_helper
+
+    def memoized_default_password_helper(self) -> PasswordHelper | None:
+        """Return the memoized default helper when :meth:`build_password_helper` has been called.
+
+        This accessor lets the plugin's manager construction path observe the
+        same default helper that app-owned code received from
+        :meth:`build_password_helper`, without touching ``user_manager_kwargs``.
+
+        Returns:
+            The shared default helper, or ``None`` when
+            :meth:`build_password_helper` has not been invoked yet.
+        """
+        return self._memoized_default_password_helper
 
     @classmethod
     def with_database_token_auth(  # noqa: PLR0913
@@ -741,11 +771,6 @@ class LitestarAuthConfig[UP: UserProtocol[Any], ID]:
             ValueError: When ``db_session_dependency_key`` is not a valid Python identifier or is a
                 reserved keyword.
         """
-        if self.user_db_factory is None:
-            self.user_db_factory = cast(
-                "UserDatabaseFactory[UP, ID]",
-                partial(_build_default_user_db, user_model=self.user_model),
-            )
         if self.user_manager_security is not None and self.id_parser is None:
             self.id_parser = self.user_manager_security.id_parser
         if self.login_identifier not in _VALID_LOGIN_IDENTIFIERS:
@@ -755,30 +780,66 @@ class LitestarAuthConfig[UP: UserProtocol[Any], ID]:
             msg = f"db_session_dependency_key must be a valid Python identifier, got {self.db_session_dependency_key!r}"
             raise ValueError(msg)
 
+    def resolve_user_db_factory(self) -> UserDatabaseFactory[UP, ID]:
+        """Return the configured factory, falling back to the lazy default.
 
-_DATABASE_TOKEN_STRATEGY_MODULE = "litestar_auth.authentication.strategy.db"  # noqa: S105
-_DATABASE_TOKEN_STRATEGY_NAME = "DatabaseTokenStrategy"  # noqa: S105
-_BUNDLED_TOKEN_MODEL_MODULE = "litestar_auth.authentication.strategy.db_models"  # noqa: S105
-_BUNDLED_ACCESS_TOKEN_MODEL_NAME = "AccessToken"  # noqa: S105
-_BUNDLED_REFRESH_TOKEN_MODEL_NAME = "RefreshToken"  # noqa: S105
+        When ``user_db_factory`` is omitted, a SQLAlchemy-backed default is built
+        on demand using :attr:`user_model`. The default's underlying adapter
+        module is only imported on the first call.
+
+        Returns:
+            The user-provided factory or a lazy SQLAlchemy-backed default.
+        """
+        if self.user_db_factory is not None:
+            return self.user_db_factory
+        return cast(
+            "UserDatabaseFactory[UP, ID]",
+            partial(_build_default_user_db, user_model=self.user_model),
+        )
 
 
 def _is_database_token_strategy_instance(strategy: object) -> bool:
-    """Return whether ``strategy`` is a DB-token strategy, even across reloads."""
-    strategy_type = type(strategy)
-    return (
-        strategy_type.__name__ == _DATABASE_TOKEN_STRATEGY_NAME
-        and strategy_type.__module__ == _DATABASE_TOKEN_STRATEGY_MODULE
-        and hasattr(strategy, "access_token_model")
-        and hasattr(strategy, "refresh_token_model")
-    )
+    """Return whether ``strategy`` is a ``DatabaseTokenStrategy`` instance.
+
+    Performs a lazy ``isinstance`` check that respects the plugin's lazy-import
+    contract: when the DB-token strategy module has not been imported yet, no
+    such instance can exist in the configured backends, so the function returns
+    ``False`` without forcing the SQLAlchemy adapter to load. This keeps
+    ``import litestar_auth`` free of mapper side effects (see ``AGENTS.md``).
+    """
+    db_strategy_module = sys.modules.get("litestar_auth.authentication.strategy.db")
+    if db_strategy_module is None:
+        return False
+    db_strategy_cls = getattr(db_strategy_module, "DatabaseTokenStrategy", None)
+    return db_strategy_cls is not None and isinstance(strategy, db_strategy_cls)
 
 
-def _is_bundled_token_model(model: object, *, model_name: str) -> bool:
-    """Return whether ``model`` is one of the bundled DB-token ORM classes."""
-    return (
-        getattr(model, "__module__", None) == _BUNDLED_TOKEN_MODEL_MODULE
-        and getattr(model, "__name__", None) == model_name
+def _is_bundled_token_model(model: object, *, attribute_name: str) -> bool:
+    """Return whether ``model`` is the bundled token ORM class for ``attribute_name``.
+
+    Uses an identity check against the lazily-loaded class object so that
+    plugin startup never forces ``litestar_auth.authentication.strategy.db_models``
+    to import. Subclasses are intentionally rejected: only the bundled class
+    triggers the bundled-model bootstrap path.
+    """
+    db_models_module = sys.modules.get("litestar_auth.authentication.strategy.db_models")
+    if db_models_module is None:
+        return False
+    bundled_cls = getattr(db_models_module, attribute_name, None)
+    return bundled_cls is not None and model is bundled_cls
+
+
+def _backend_uses_bundled_database_token_models(backend: object) -> bool:
+    """Return whether ``backend``'s strategy is a DB-token strategy with bundled token models."""
+    strategy = getattr(backend, "strategy", None)
+    if not _is_database_token_strategy_instance(strategy):
+        return False
+    return _is_bundled_token_model(
+        getattr(strategy, "access_token_model", None),
+        attribute_name="AccessToken",
+    ) and _is_bundled_token_model(
+        getattr(strategy, "refresh_token_model", None),
+        attribute_name="RefreshToken",
     )
 
 
@@ -786,19 +847,4 @@ def _uses_bundled_database_token_models(config: LitestarAuthConfig[Any, Any]) ->
     """Return whether plugin startup should bootstrap the bundled DB-token ORM models."""
     if config.database_token_auth is not None:
         return True
-
-    for backend in config.backends:
-        strategy = getattr(backend, "strategy", None)
-        if not _is_database_token_strategy_instance(strategy):
-            continue
-
-        if _is_bundled_token_model(
-            getattr(strategy, "access_token_model", None),
-            model_name=_BUNDLED_ACCESS_TOKEN_MODEL_NAME,
-        ) and _is_bundled_token_model(
-            getattr(strategy, "refresh_token_model", None),
-            model_name=_BUNDLED_REFRESH_TOKEN_MODEL_NAME,
-        ):
-            return True
-
-    return False
+    return any(_backend_uses_bundled_database_token_models(backend) for backend in config.backends)

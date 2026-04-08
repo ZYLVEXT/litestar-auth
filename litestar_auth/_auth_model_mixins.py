@@ -31,7 +31,7 @@ class UserModelMixin:
     if TYPE_CHECKING:
         auth_hashed_password_column_name: ClassVar[str]
 
-    auth_hashed_password_column_name = "hashed_password"  # noqa: S105
+    auth_hashed_password_column_name = "hashed_password"
 
     email: Mapped[str] = mapped_column(String(length=320), unique=True, index=True)
     hashed_password: Mapped[str]
@@ -65,8 +65,8 @@ class UserAuthRelationshipMixin:
     and should omit that inverse relationship entirely.
     """
 
-    auth_access_token_model: ClassVar[str | None] = "AccessToken"  # noqa: S105
-    auth_refresh_token_model: ClassVar[str | None] = "RefreshToken"  # noqa: S105
+    auth_access_token_model: ClassVar[str | None] = "AccessToken"
+    auth_refresh_token_model: ClassVar[str | None] = "RefreshToken"
     auth_oauth_account_model: ClassVar[str | None] = "OAuthAccount"
     auth_token_relationship_lazy: ClassVar[str | None] = None
     auth_oauth_account_relationship_lazy: ClassVar[str | None] = None

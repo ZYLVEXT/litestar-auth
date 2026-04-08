@@ -247,7 +247,7 @@ def test_default_user_db_factory_imports_adapter_only_when_called() -> None:
         ")\n"
         "assert 'litestar_auth.db.sqlalchemy' not in sys.modules\n"
         "assert 'litestar_auth.models' not in sys.modules\n"
-        "database = config.user_db_factory(object())\n"
+        "database = config.resolve_user_db_factory()(object())\n"
         "assert database.__class__.__name__ == 'SQLAlchemyUserDatabase'\n"
         "assert database.user_model is UserModel\n"
         "assert 'litestar_auth.db.sqlalchemy' in sys.modules\n"

@@ -329,7 +329,9 @@ class JWTStrategy(Strategy[UP, ID]):
         try:
             user_id = self.subject_decoder(subject) if self.subject_decoder is not None else subject
         except ValueError:
-            logger.info("JWT subject could not be decoded: %s", subject)
+            # Security: avoid logging the subject itself to prevent user enumeration
+            # via authentication-failure log analysis (OWASP / NIST SP 800-63B §5.2.2).
+            logger.info("JWT subject could not be decoded")
             return None
 
         if user_id is None:
@@ -337,11 +339,11 @@ class JWTStrategy(Strategy[UP, ID]):
 
         user = await user_manager.get(cast("ID", user_id))
         if user is None:
-            logger.info("JWT subject references non-existent user: %s", subject)
+            logger.info("JWT subject references non-existent user")
             return None
 
         if not self._validate_fingerprint(payload, user):
-            logger.info("JWT fingerprint mismatch for user: %s", subject)
+            logger.info("JWT fingerprint mismatch")
             return None
 
         return user
