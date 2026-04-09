@@ -87,7 +87,7 @@ def _validate_manual_oauth_redirect_base_url(redirect_base_url: str) -> None:
 
     Raises:
         ConfigurationError: If the redirect base does not use a non-loopback public
-            HTTPS origin.
+            HTTPS origin or includes unsupported URL components.
     """
     parsed_redirect_base_url = urlsplit(redirect_base_url)
     if parsed_redirect_base_url.scheme.casefold() != "https":
@@ -101,6 +101,18 @@ def _validate_manual_oauth_redirect_base_url(redirect_base_url: str) -> None:
     if host is None or _is_loopback_host(host):
         msg = (
             "Manual/custom OAuth controllers require redirect_base_url to use a non-loopback public HTTPS origin. "
+            f"Received {redirect_base_url!r}."
+        )
+        raise ConfigurationError(msg)
+    if (
+        parsed_redirect_base_url.username is not None
+        or parsed_redirect_base_url.password is not None
+        or parsed_redirect_base_url.query
+        or parsed_redirect_base_url.fragment
+    ):
+        msg = (
+            "Manual/custom OAuth controllers require redirect_base_url to be a clean HTTPS callback base without "
+            "userinfo, query, or fragment components. "
             f"Received {redirect_base_url!r}."
         )
         raise ConfigurationError(msg)

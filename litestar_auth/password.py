@@ -35,14 +35,17 @@ class PasswordHelper:
         """Verify a password against a stored hash.
 
         pwdlib delegates verification to the selected hasher, which performs
-        constant-time comparison for password checks.
+        constant-time comparison for password checks. Legacy bcrypt hashes can
+        raise ``ValueError`` for passwords longer than 72 bytes; treat those
+        cases as authentication failures instead of bubbling an exception into
+        the login flow.
 
         Returns:
             ``True`` when the password matches the stored hash, otherwise ``False``.
         """
         try:
             return self.password_hash.verify(password, hashed)
-        except UnknownHashError:
+        except (UnknownHashError, ValueError):
             return False
 
     def verify_and_update(self, password: str, hashed: str) -> tuple[bool, str | None]:
@@ -58,5 +61,5 @@ class PasswordHelper:
         """
         try:
             return self.password_hash.verify_and_update(password, hashed)
-        except UnknownHashError:
+        except (UnknownHashError, ValueError):
             return (False, None)

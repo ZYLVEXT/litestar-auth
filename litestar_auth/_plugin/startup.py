@@ -141,8 +141,8 @@ def require_secure_oauth_redirect_in_production(
     """Fail closed when plugin-owned OAuth redirects use insecure production origins.
 
     Raises:
-        ConfigurationError: If plugin-owned OAuth routes use a non-HTTPS or loopback
-            redirect origin outside explicit debug or testing escape hatches.
+        ConfigurationError: If plugin-owned OAuth routes use a non-HTTPS, loopback,
+            or malformed redirect origin outside explicit debug or testing escape hatches.
     """
     if config.unsafe_testing or getattr(app_config, "debug", False):
         return
@@ -172,6 +172,19 @@ def require_secure_oauth_redirect_in_production(
             "Plugin-managed OAuth routes require oauth_redirect_base_url to use a non-loopback public HTTPS origin "
             f"in production. Received {redirect_base_url!r}. Use AppConfig(debug=True) or unsafe_testing=True only "
             "for explicit local-development and test recipes."
+        )
+        raise ConfigurationError(msg)
+    if (
+        parsed_redirect_base_url.username is not None
+        or parsed_redirect_base_url.password is not None
+        or parsed_redirect_base_url.query
+        or parsed_redirect_base_url.fragment
+    ):
+        msg = (
+            "Plugin-managed OAuth routes require oauth_redirect_base_url to be a clean HTTPS callback base without "
+            "userinfo, query, or fragment components in production. "
+            f"Received {redirect_base_url!r}. Use AppConfig(debug=True) or unsafe_testing=True only for explicit "
+            "local-development and test recipes."
         )
         raise ConfigurationError(msg)
 

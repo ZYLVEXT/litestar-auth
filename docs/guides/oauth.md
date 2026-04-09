@@ -18,7 +18,7 @@ The plugin no longer treats `oauth_providers` as inert metadata: if providers ar
 
 For plugin-owned routes, production app init now fails closed unless `oauth_redirect_base_url` uses a non-loopback `https://...` origin. Keep localhost or plain-HTTP redirect bases behind `AppConfig(debug=True)` or `unsafe_testing=True` only.
 
-For manual/custom controller wiring, `redirect_base_url` on `create_provider_oauth_controller()`, `create_oauth_controller()`, and `create_oauth_associate_controller()` must also use a non-loopback `https://...` origin. Unlike the plugin-owned route table, the low-level manual factories do not inspect `AppConfig(debug=True)` or `unsafe_testing=True`, so there is no localhost or plain-HTTP escape hatch on that API surface.
+For manual/custom controller wiring, `redirect_base_url` on `create_provider_oauth_controller()`, `create_oauth_controller()`, and `create_oauth_associate_controller()` must also use a non-loopback `https://...` origin and remain a clean callback base without embedded userinfo, query strings, or fragments. Unlike the plugin-owned route table, the low-level manual factories do not inspect `AppConfig(debug=True)` or `unsafe_testing=True`, so there is no localhost or plain-HTTP escape hatch on that API surface.
 
 ## Scope policy
 

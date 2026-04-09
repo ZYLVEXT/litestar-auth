@@ -119,6 +119,14 @@ def test_verify_accepts_bcrypt_hashes_as_fallback() -> None:
     assert helper.verify("legacy-password", bcrypt_hash) is True
 
 
+def test_verify_returns_false_for_overlong_password_against_bcrypt_hash() -> None:
+    """Overlong legacy bcrypt inputs fail closed instead of raising from pwdlib."""
+    helper = _password_helper_cls()()
+    bcrypt_hash = BcryptHasher().hash("a" * 72)
+
+    assert helper.verify("a" * 80, bcrypt_hash) is False
+
+
 def test_verify_and_update_returns_true_none_for_current_argon2_hash() -> None:
     """When the stored hash is already Argon2, no upgrade is needed."""
     helper = _password_helper_cls()()
@@ -137,6 +145,17 @@ def test_verify_and_update_returns_new_hash_for_deprecated_bcrypt() -> None:
     assert new_hash is not None
     assert new_hash.startswith("$argon2")
     assert new_hash != bcrypt_hash
+
+
+def test_verify_and_update_returns_false_none_for_overlong_password_against_bcrypt_hash() -> None:
+    """Legacy bcrypt verification should not leak errors for overlong passwords."""
+    helper = _password_helper_cls()()
+    bcrypt_hash = BcryptHasher().hash("a" * 72)
+
+    verified, new_hash = helper.verify_and_update("a" * 80, bcrypt_hash)
+
+    assert verified is False
+    assert new_hash is None
 
 
 def test_verify_and_update_returns_false_none_for_wrong_password() -> None:

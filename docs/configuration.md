@@ -670,6 +670,7 @@ Route-registration contract:
 - `oauth_redirect_base_url` is required whenever `oauth_providers` is configured. The plugin appends `/oauth` and `/associate` per route family instead of guessing a localhost fallback.
 - In production app init, plugin-owned OAuth routes now fail closed unless `oauth_redirect_base_url` uses a non-loopback `https://...` origin. Keep localhost or plain-HTTP redirect bases behind `AppConfig(debug=True)` or `unsafe_testing=True` only.
 - Manual/custom OAuth controller factories use the same non-loopback `https://...` redirect-origin baseline, but they enforce it immediately at controller construction time with no debug/testing override.
+- Both plugin-owned and manual OAuth redirect bases must remain clean callback bases without embedded userinfo, query strings, or fragments.
 - `include_oauth_associate=True` extends that same provider inventory with authenticated account-linking routes. If you need a custom route table, custom prefixes, or manual manager wiring, mount the controller factories yourself instead of mixing plugin-owned and manual ownership.
 
 ## Security and token policy

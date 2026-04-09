@@ -112,6 +112,9 @@ def test_create_provider_oauth_controller_missing_client_config_raises_configura
     [
         ("http://example.test", "public HTTPS origin"),
         ("https://localhost/auth/oauth", "non-loopback public HTTPS origin"),
+        ("https://user@example.test/auth/oauth", "without userinfo, query, or fragment"),
+        ("https://example.test/auth/oauth?next=/dashboard", "without userinfo, query, or fragment"),
+        ("https://example.test/auth/oauth#callback", "without userinfo, query, or fragment"),
     ],
 )
 def test_create_provider_oauth_controller_rejects_insecure_redirect_base_url(

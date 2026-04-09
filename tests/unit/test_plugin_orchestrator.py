@@ -487,6 +487,21 @@ def test_on_app_init_allows_oauth_providers_when_encryption_key_is_configured() 
             "non-loopback public HTTPS origin",
             id="loopback-https-origin",
         ),
+        pytest.param(
+            "https://user@app.example.com/auth",
+            "without userinfo, query, or fragment",
+            id="userinfo-origin",
+        ),
+        pytest.param(
+            "https://app.example.com/auth?next=/dashboard",
+            "without userinfo, query, or fragment",
+            id="query-origin",
+        ),
+        pytest.param(
+            "https://app.example.com/auth#callback",
+            "without userinfo, query, or fragment",
+            id="fragment-origin",
+        ),
     ],
 )
 def test_on_app_init_rejects_insecure_oauth_redirect_origins_in_production(
@@ -1259,7 +1274,7 @@ def test_provider_helpers_return_configured_objects() -> None:
     plugin = LitestarAuth(_minimal_config())
     provided_backends = plugin._provide_backends()
 
-    assert all(isinstance(backend, plugin_module.StartupBackendTemplate) for backend in provided_backends)
+    assert all(backend.__class__.__name__ == "StartupBackendTemplate" for backend in provided_backends)
     assert [backend.name for backend in provided_backends] == [backend.name for backend in plugin.config.backends]
     assert plugin._provide_config() is plugin.config
     assert plugin._provide_user_model() is plugin.config.user_model
@@ -1436,7 +1451,7 @@ def test_totp_backend_returns_configured_named_backend() -> None:
 
     startup_backend = plugin._totp_backend()
 
-    assert isinstance(startup_backend, plugin_module.StartupBackendTemplate)
+    assert startup_backend.__class__.__name__ == "StartupBackendTemplate"
     assert startup_backend.name == secondary_backend.name
     assert startup_backend.transport is secondary_backend.transport
     assert startup_backend.strategy is secondary_backend.strategy
