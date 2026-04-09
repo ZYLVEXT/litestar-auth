@@ -38,7 +38,6 @@ from litestar_auth.authentication.strategy.jwt import JWTStrategy
 from litestar_auth.authentication.transport.bearer import BearerTransport
 from litestar_auth.authentication.transport.cookie import CookieTransport
 from litestar_auth.manager import UserManagerSecurity, require_password_length
-from litestar_auth.oauth_encryption import OAuthTokenEncryption
 from litestar_auth.password import PasswordHelper
 from litestar_auth.plugin import DatabaseTokenAuthConfig, LitestarAuth, LitestarAuthConfig, OAuthConfig, TotpConfig
 from litestar_auth.ratelimit import AuthRateLimitConfig, EndpointRateLimit, InMemoryRateLimiter, RedisRateLimiter
@@ -1353,6 +1352,10 @@ def test_plugins_hold_distinct_explicit_oauth_token_policies() -> None:
     first_plugin = LitestarAuth(first_config)
     second_plugin = LitestarAuth(second_config)
 
-    assert first_plugin._oauth_token_encryption == OAuthTokenEncryption("a" * 44)
-    assert second_plugin._oauth_token_encryption == OAuthTokenEncryption("b" * 44)
+    assert first_plugin._oauth_token_encryption is not None
+    assert first_plugin._oauth_token_encryption.key == "a" * 44
+    assert first_plugin._oauth_token_encryption.unsafe_testing is False
+    assert second_plugin._oauth_token_encryption is not None
+    assert second_plugin._oauth_token_encryption.key == "b" * 44
+    assert second_plugin._oauth_token_encryption.unsafe_testing is False
     assert first_plugin._oauth_token_encryption is not second_plugin._oauth_token_encryption

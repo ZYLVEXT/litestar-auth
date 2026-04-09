@@ -17,9 +17,68 @@ from litestar_auth.oauth.router import create_provider_oauth_controller, load_ht
 from litestar_auth.types import UserProtocol
 
 if TYPE_CHECKING:
+    from litestar.connection import ASGIConnection
+    from litestar.response import Response
+
     from litestar_auth.controllers.oauth import OAuthControllerUserManagerProtocol
 
 pytestmark = pytest.mark.unit
+
+
+class _RouterTestUser(UserProtocol[object]):
+    """Minimal user protocol implementation for OAuth router typing tests."""
+
+    id: object
+
+
+class _RouterTestTransport:
+    """Minimal transport stub satisfying ``TransportProtocol``."""
+
+    async def read_token(self, connection: ASGIConnection[Any, Any, Any, Any]) -> str | None:
+        """Return no token for tests that only exercise router assembly."""
+        del connection
+        return None
+
+    def set_login_token(self, response: Response[Any], token: str) -> Response[Any]:
+        """Return the response unchanged."""
+        del token
+        return response
+
+    def set_logout(self, response: Response[Any]) -> Response[Any]:
+        """Return the response unchanged."""
+        return response
+
+
+class _RouterTestStrategy:
+    """Minimal strategy stub satisfying ``StrategyProtocol``."""
+
+    async def read_token(self, token: str | None, user_manager: object) -> _RouterTestUser | None:
+        """Return no user for tests that only exercise router assembly."""
+        del token, user_manager
+        return None
+
+    async def write_token(self, user: _RouterTestUser) -> str:
+        """Return a deterministic token for protocol completeness."""
+        del user
+        return "token"
+
+    async def destroy_token(self, token: str, user: _RouterTestUser) -> None:
+        """Accept token invalidation requests without side effects."""
+        del token, user
+
+
+def _make_backend() -> AuthenticationBackend[_RouterTestUser, object]:
+    """Return a typed backend stub for router contract tests."""
+    return AuthenticationBackend(
+        name="test",
+        transport=_RouterTestTransport(),
+        strategy=_RouterTestStrategy(),
+    )
+
+
+def _make_user_manager() -> OAuthControllerUserManagerProtocol[_RouterTestUser, object]:
+    """Return a typed user-manager stub for router contract tests."""
+    return cast("OAuthControllerUserManagerProtocol[_RouterTestUser, object]", object())
 
 
 def test_oauth_router_module_executes_under_coverage() -> None:
@@ -33,13 +92,8 @@ def test_oauth_router_module_executes_under_coverage() -> None:
 
 def test_create_provider_oauth_controller_missing_client_config_raises_configuration_error() -> None:
     """Factory without any client configuration raises `ConfigurationError`."""
-
-    class _User(UserProtocol[object]):
-        id: object
-
-    backend = AuthenticationBackend(name="test", transport=object(), strategy=object())  # ty: ignore[invalid-argument-type]
-    user_manager: OAuthControllerUserManagerProtocol[_User, object]
-    user_manager = object()  # ty: ignore[invalid-assignment]
+    backend = _make_backend()
+    user_manager = _make_user_manager()
 
     with pytest.raises(router_module.ConfigurationError, match="Provide oauth_client"):
         router_module.create_provider_oauth_controller(
@@ -108,13 +162,8 @@ def test_create_provider_oauth_controller_uses_factory_client(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """A factory-provided OAuth client should be passed through to the controller factory."""
-
-    class _User(UserProtocol[object]):
-        id: object
-
-    backend = AuthenticationBackend(name="test", transport=object(), strategy=object())  # ty: ignore[invalid-argument-type]
-    user_manager: OAuthControllerUserManagerProtocol[_User, object]
-    user_manager = object()  # ty: ignore[invalid-assignment]
+    backend = _make_backend()
+    user_manager = _make_user_manager()
     oauth_client = object()
     controller = cast("type[Any]", object())
     create_controller = Mock(return_value=controller)
@@ -146,13 +195,8 @@ def test_create_provider_oauth_controller_derives_path_from_auth_path(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Canonical helper derives the login route prefix from ``auth_path`` when ``path`` is omitted."""
-
-    class _User(UserProtocol[object]):
-        id: object
-
-    backend = AuthenticationBackend(name="test", transport=object(), strategy=object())  # ty: ignore[invalid-argument-type]
-    user_manager: OAuthControllerUserManagerProtocol[_User, object]
-    user_manager = object()  # ty: ignore[invalid-assignment]
+    backend = _make_backend()
+    user_manager = _make_user_manager()
     oauth_client = object()
     controller = cast("type[Any]", object())
     create_controller = Mock(return_value=controller)
@@ -185,13 +229,8 @@ def test_create_provider_oauth_controller_loads_client_from_class_path(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """A client class path should be resolved lazily and forwarded to the controller factory."""
-
-    class _User(UserProtocol[object]):
-        id: object
-
-    backend = AuthenticationBackend(name="test", transport=object(), strategy=object())  # ty: ignore[invalid-argument-type]
-    user_manager: OAuthControllerUserManagerProtocol[_User, object]
-    user_manager = object()  # ty: ignore[invalid-assignment]
+    backend = _make_backend()
+    user_manager = _make_user_manager()
     oauth_client = object()
     controller = cast("type[Any]", object())
     create_controller = Mock(return_value=controller)

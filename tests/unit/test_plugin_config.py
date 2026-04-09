@@ -509,7 +509,9 @@ def test_build_user_manager_injects_default_password_helper_without_prior_materi
         ),
     )
 
-    assert isinstance(manager.received_password_helper, PasswordHelper)
+    hashed_password = manager.received_password_helper.hash("shared-password")
+
+    assert manager.received_password_helper.verify("shared-password", hashed_password) is True
     assert manager.password_helper is manager.received_password_helper
     assert config.memoized_default_password_helper() is manager.received_password_helper
 
