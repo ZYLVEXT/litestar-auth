@@ -4,9 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import importlib
-import logging
 import time
-import warnings
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
@@ -46,7 +44,6 @@ from litestar_auth.controllers.totp import (
     _totp_resolve_pending_jti_store,
     _totp_validate_replay_and_password,
 )
-from litestar_auth.controllers.totp import logger as totp_logger
 from litestar_auth.exceptions import ConfigurationError, ErrorCode
 from litestar_auth.manager import BaseUserManager, UserManagerSecurity
 from litestar_auth.password import PasswordHelper
@@ -473,11 +470,13 @@ def test_decode_enrollment_token_rejects_missing_secret() -> None:
 
 
 def test_resolve_pending_jti_store_handles_explicit_and_unsafe_testing_modes() -> None:
-    """Pending-JTI resolution preserves configured stores and skips fallback in explicit unsafe testing."""
+    """Pending-JTI resolution preserves configured stores and skips checks only in explicit unsafe testing."""
     configured_store = InMemoryJWTDenylistStore()
 
     assert _totp_resolve_pending_jti_store(configured_store, unsafe_testing=False) is configured_store
     assert _totp_resolve_pending_jti_store(None, unsafe_testing=True) is None
+    with pytest.raises(ConfigurationError, match="pending_jti_store is required"):
+        _totp_resolve_pending_jti_store(None, unsafe_testing=False)
 
 
 async def test_handle_enable_requires_authenticated_totp_user() -> None:
@@ -1026,6 +1025,7 @@ async def test_plugin_mounts_totp_routes_under_custom_auth_path() -> None:
                     auth_path="/api/auth",
                     totp_config=TotpConfig(
                         totp_pending_secret=TOTP_PENDING_SECRET,
+                        totp_pending_jti_store=InMemoryJWTDenylistStore(),
                         totp_used_tokens_store=InMemoryUsedTotpCodeStore(),
                     ),
                 ),
@@ -1109,6 +1109,7 @@ async def test_plugin_allows_opt_out_of_totp_step_up_enrollment() -> None:
                     user_manager_kwargs={"password_helper": password_helper},
                     totp_config=TotpConfig(
                         totp_pending_secret=TOTP_PENDING_SECRET,
+                        totp_pending_jti_store=InMemoryJWTDenylistStore(),
                         totp_used_tokens_store=InMemoryUsedTotpCodeStore(),
                         totp_enable_requires_password=False,
                     ),
@@ -1859,37 +1860,10 @@ async def test_verify_allows_replayed_pending_token_when_pending_jti_store_is_di
         assert "access_token" in second_verify.json()
 
 
-async def test_verify_rejects_replayed_pending_token_with_inmemory_fallback(
-    caplog: pytest.LogCaptureFixture,
-) -> None:
-    """Production mode falls back to an in-memory denylist and rejects replayed pending tokens."""
-    with caplog.at_level(logging.WARNING, logger=totp_logger.name):
-        app, _, _, _ = build_app(pending_jti_store=None)
-
-    assert "process-local in-memory pending-token JTI denylist store" in caplog.text
-    assert any(getattr(record, "event", None) == "totp_pending_jti_inmemory_fallback" for record in caplog.records)
-
-    async with AsyncTestClient(app=app) as client:
-        secret = await _enable_totp_and_get_secret(client)
-        pending_token = (
-            await client.post("/auth/login", json={"identifier": "user@example.com", "password": "correct-password"})
-        ).json()["pending_token"]
-        valid_code = _generate_totp_code(secret, _current_counter())
-        with warnings.catch_warnings(record=True) as captured_warnings:
-            warnings.simplefilter("always")
-            first_verify = await client.post(
-                "/auth/2fa/verify",
-                json={"pending_token": pending_token, "code": valid_code},
-            )
-            second_verify = await client.post(
-                "/auth/2fa/verify",
-                json={"pending_token": pending_token, "code": valid_code},
-            )
-
-    assert first_verify.status_code == HTTP_CREATED
-    assert second_verify.status_code == HTTP_BAD_REQUEST
-    assert second_verify.json()["detail"] == INVALID_TOTP_TOKEN_DETAIL
-    assert not captured_warnings
+def test_build_app_rejects_missing_pending_jti_store_outside_testing() -> None:
+    """Production controller assembly fails closed when pending-token replay storage is missing."""
+    with pytest.raises(ConfigurationError, match="pending_jti_store is required"):
+        build_app(pending_jti_store=None)
 
 
 async def test_verify_with_unknown_user_increments_rate_limit() -> None:

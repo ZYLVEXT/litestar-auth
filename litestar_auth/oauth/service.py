@@ -6,22 +6,34 @@ import secrets
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Protocol
 
-from litestar.exceptions import ClientException, PermissionDeniedException
+from litestar.exceptions import ClientException
 
-from litestar_auth.exceptions import (
-    ConfigurationError,
-    ErrorCode,
-    InactiveUserError,
-    OAuthAccountAlreadyLinkedError,
-    UnverifiedUserError,
-)
-from litestar_auth.guards._guards import _ACCOUNT_STATE_DETAIL
-from litestar_auth.types import GuardedUserProtocol, UserProtocol
+import litestar_auth._account_state as _shared_account_state
+from litestar_auth.types import UserProtocol
+
+# Keep exception identity stable across module reload tests.
+if "ConfigurationError" not in globals():
+    from litestar_auth.exceptions import ConfigurationError
+if "ErrorCode" not in globals():
+    from litestar_auth.exceptions import ErrorCode
+if "InactiveUserError" not in globals():
+    from litestar_auth.exceptions import InactiveUserError
+if "OAuthAccountAlreadyLinkedError" not in globals():
+    from litestar_auth.exceptions import OAuthAccountAlreadyLinkedError
+if "UnverifiedUserError" not in globals():
+    from litestar_auth.exceptions import UnverifiedUserError
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
 
     from litestar_auth.oauth.client_adapter import OAuthClientAdapter, OAuthTokenPayload
+
+
+_ACCOUNT_STATE_ERROR_TYPES = _shared_account_state.AccountStateErrorTypes(
+    inactive_error=InactiveUserError,
+    unverified_error=UnverifiedUserError,
+)
+_resolve_account_state_validator = _shared_account_state.resolve_account_state_validator
 
 
 class OAuthServiceUserStoreProtocol[UP: UserProtocol[Any], ID](Protocol):
@@ -82,13 +94,6 @@ class OAuthAuthorization:
 
     authorization_url: str
     state: str
-
-
-class AccountStateValidator(Protocol):
-    """Callable account-state validator contract used by OAuth service."""
-
-    def __call__(self, user: object, *, require_verified: bool) -> None:
-        """Validate the given user account state."""
 
 
 class OAuthService[UP: UserProtocol[Any], ID]:
@@ -345,54 +350,14 @@ def _require_account_state(
     *,
     user_manager: object,
 ) -> None:
-    """Validate the user account state and map failures to client-facing errors.
-
-    Raises:
-        ClientException: If the user account is inactive or unverified.
-        PermissionDeniedException: If the user does not implement :class:`~litestar_auth.types.GuardedUserProtocol`
-            (attribute fallback path only).
-    """
-    try:
-        validator = _resolve_account_state_validator(user_manager)
-        if validator is not None:
-            validator(user, require_verified=False)
-        else:
-            if not isinstance(user, GuardedUserProtocol):
-                raise PermissionDeniedException(detail=_ACCOUNT_STATE_DETAIL)
-            if not user.is_active:
-                _raise_inactive_user_error()
-    except InactiveUserError as exc:
-        raise ClientException(
-            status_code=400,
-            detail=str(exc),
-            extra={"code": ErrorCode.LOGIN_USER_INACTIVE},
-        ) from exc
-    except UnverifiedUserError as exc:
-        raise ClientException(
-            status_code=400,
-            detail=str(exc),
-            extra={"code": ErrorCode.LOGIN_USER_NOT_VERIFIED},
-        ) from exc
-
-
-def _resolve_account_state_validator(
-    user_manager: object,
-) -> AccountStateValidator | None:
-    """Return an optional account-state validator exposed by a manager."""
-    validator = getattr(user_manager, "require_account_state", None)
-    if callable(validator):
-        return validator
-
-    return None
-
-
-def _raise_inactive_user_error() -> None:
-    """Raise the internal inactive-user signal used by account-state mapping.
-
-    Raises:
-        InactiveUserError: Always raised to trigger client-error mapping upstream.
-    """
-    raise InactiveUserError
+    """Validate the user account state and map failures to client-facing errors."""
+    _shared_account_state.require_account_state_with_client_error(
+        user,
+        require_verified=False,
+        prioritize_unverified=False,
+        user_manager=user_manager,
+        error_types=_ACCOUNT_STATE_ERROR_TYPES,
+    )
 
 
 def _raise_account_already_linked() -> None:

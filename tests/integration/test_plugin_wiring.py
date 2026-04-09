@@ -16,6 +16,7 @@ from litestar.testing import AsyncTestClient
 from sqlalchemy import create_engine
 from sqlalchemy.pool import StaticPool
 
+import litestar_auth.plugin as plugin_module
 from litestar_auth._plugin import (
     DEFAULT_BACKENDS_DEPENDENCY_KEY,
     DEFAULT_CONFIG_DEPENDENCY_KEY,
@@ -26,6 +27,7 @@ from litestar_auth._plugin import (
 )
 from litestar_auth._plugin.config import DatabaseTokenAuthConfig, OAuthConfig, TotpConfig
 from litestar_auth.authentication.backend import AuthenticationBackend
+from litestar_auth.authentication.strategy.jwt import InMemoryJWTDenylistStore
 from litestar_auth.authentication.transport.bearer import BearerTransport
 from litestar_auth.authentication.transport.cookie import CookieTransport
 from litestar_auth.exceptions import ConfigurationError
@@ -168,7 +170,7 @@ def test_validate_config_totp_config_requires_pending_secret() -> None:
     config = _minimal_litestar_auth_config()
     config.totp_config = TotpConfig(totp_pending_secret="")
 
-    with pytest.raises(ValueError, match="totp_pending_secret"):
+    with pytest.raises(ConfigurationError, match="totp_pending_secret"):
         LitestarAuth(config)
 
 
@@ -266,6 +268,69 @@ def test_oauth_plugin_routes_require_encryption_key_at_startup() -> None:
 
     with pytest.raises(ConfigurationError, match=r"oauth_token_encryption_key is required"):
         plugin.on_app_init(AppConfig())
+
+
+@pytest.mark.parametrize(
+    ("redirect_base_url", "message"),
+    [
+        pytest.param(
+            "http://app.example.com/auth",
+            "public HTTPS origin",
+            id="public-http-origin",
+        ),
+        pytest.param(
+            "https://localhost/auth",
+            "non-loopback public HTTPS origin",
+            id="loopback-https-origin",
+        ),
+    ],
+)
+def test_oauth_plugin_routes_require_secure_public_redirect_origins_at_startup(
+    redirect_base_url: str,
+    message: str,
+) -> None:
+    """Plugin-owned OAuth startup now fails closed for insecure redirect origins."""
+    config = _minimal_litestar_auth_config()
+    config.oauth_config = OAuthConfig(
+        oauth_providers=[("example", object())],
+        oauth_redirect_base_url=redirect_base_url,
+        oauth_token_encryption_key="a" * 44,
+    )
+    plugin = LitestarAuth(config)
+
+    with pytest.raises(ConfigurationError, match=message):
+        plugin.on_app_init(AppConfig(debug=False))
+
+
+def test_oauth_plugin_routes_allow_localhost_redirects_in_debug_mode() -> None:
+    """Debug mode keeps the explicit localhost OAuth plugin recipe available."""
+    config = _minimal_litestar_auth_config()
+    config.oauth_config = OAuthConfig(
+        oauth_providers=[("example", object())],
+        oauth_redirect_base_url="http://localhost/auth",
+        oauth_token_encryption_key="a" * 44,
+    )
+    plugin = LitestarAuth(config)
+
+    result_config = plugin.on_app_init(AppConfig(debug=True))
+
+    assert result_config is not None
+
+
+def test_oauth_plugin_routes_allow_localhost_redirects_in_unsafe_testing_mode() -> None:
+    """unsafe_testing keeps localhost plugin OAuth redirects available for app tests."""
+    config = _minimal_litestar_auth_config()
+    config.unsafe_testing = True
+    config.oauth_config = OAuthConfig(
+        oauth_providers=[("example", object())],
+        oauth_redirect_base_url="http://localhost/auth",
+        oauth_token_encryption_key="a" * 44,
+    )
+    plugin = LitestarAuth(config)
+
+    result_config = plugin.on_app_init(AppConfig(debug=False))
+
+    assert result_config is not None
 
 
 @pytest.mark.parametrize(
@@ -515,6 +580,7 @@ def test_totp_backend_resolves_named_backend() -> None:
     config.totp_config = TotpConfig(
         totp_pending_secret="pending-secret-for-totp-pending-jwt-secret-123",
         totp_backend_name="secondary",
+        totp_pending_jti_store=InMemoryJWTDenylistStore(),
         totp_used_tokens_store=cast("Any", object()),
     )
     config.user_manager_security = UserManagerSecurity[UUID](
@@ -525,9 +591,12 @@ def test_totp_backend_resolves_named_backend() -> None:
     )
     plugin = LitestarAuth(config)
 
-    totp_backend = plugin._totp_backend()
+    startup_backend = plugin._totp_backend()
 
-    assert totp_backend is secondary_backend
+    assert isinstance(startup_backend, plugin_module.StartupBackendTemplate)
+    assert startup_backend.name == secondary_backend.name
+    assert startup_backend.transport is secondary_backend.transport
+    assert startup_backend.strategy is secondary_backend.strategy
 
 
 def test_totp_backend_unknown_name_raises_value_error() -> None:
@@ -542,6 +611,7 @@ def test_totp_backend_unknown_name_raises_value_error() -> None:
     config.totp_config = TotpConfig(
         totp_pending_secret="pending-secret-for-totp-pending-jwt-secret-123",
         totp_backend_name="unknown-backend",
+        totp_pending_jti_store=InMemoryJWTDenylistStore(),
         totp_used_tokens_store=cast("Any", object()),
     )
     config.user_manager_security = UserManagerSecurity[UUID](

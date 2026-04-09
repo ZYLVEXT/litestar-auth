@@ -7,6 +7,7 @@ import logging
 import warnings
 from dataclasses import dataclass
 from datetime import timedelta
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, cast
 from uuid import UUID
 
@@ -32,7 +33,7 @@ from litestar_auth._plugin.startup import (
     has_configured_oauth_providers,
     has_configured_oauth_providers_for,
     require_oauth_token_encryption_for_configured_providers,
-    warn_if_insecure_oauth_redirect_in_production,
+    require_secure_oauth_redirect_in_production,
     warn_insecure_plugin_startup_defaults,
 )
 from litestar_auth._plugin.validation import (
@@ -58,7 +59,8 @@ from litestar_auth.config import (
     TOTP_PENDING_AUDIENCE,
     VERIFY_TOKEN_AUDIENCE,
 )
-from litestar_auth.manager import UserManagerSecurity
+from litestar_auth.exceptions import ConfigurationError
+from litestar_auth.manager import TotpSecretStoragePosture, UserManagerSecurity
 from litestar_auth.models import User as OrmUser
 from litestar_auth.password import PasswordHelper
 from litestar_auth.plugin import LitestarAuth
@@ -90,6 +92,29 @@ class _DurableDenylistStore:
     async def is_denied(self, jti: str) -> bool:
         del jti
         return False
+
+
+def _configured_totp_config(
+    *,
+    totp_pending_secret: str = "p" * 32,
+    totp_algorithm: str = "SHA256",
+    totp_used_tokens_store: object | None = None,
+    totp_require_replay_protection: bool = True,
+    totp_enable_requires_password: bool = True,
+) -> TotpConfig:
+    """Build a production-valid TOTP config for validation-focused tests.
+
+    Returns:
+        ``TotpConfig`` with a non-`None` pending-token denylist store.
+    """
+    return TotpConfig(
+        totp_pending_secret=totp_pending_secret,
+        totp_algorithm=cast("Any", totp_algorithm),
+        totp_pending_jti_store=cast("Any", _DurableDenylistStore()),
+        totp_used_tokens_store=cast("Any", totp_used_tokens_store),
+        totp_require_replay_protection=totp_require_replay_protection,
+        totp_enable_requires_password=totp_enable_requires_password,
+    )
 
 
 @dataclass(slots=True, frozen=True)
@@ -135,6 +160,68 @@ def test_plugin_rate_limit_module_executes_under_coverage() -> None:
     assert reloaded_module.iter_rate_limit_endpoints.__name__ == iter_rate_limit_endpoints.__name__
 
 
+def test_plugin_security_tradeoff_docs_snippet_matches_shared_policy_wording() -> None:
+    """The shared docs snippet stays aligned with the plugin-owned tradeoff policy source."""
+    snippet = Path("docs/snippets/plugin_security_tradeoffs.md").read_text(encoding="utf-8")
+
+    for policy in plugin_config_module._iter_plugin_security_tradeoff_policies():
+        assert policy.plugin_surface in snippet
+        assert policy.contract_reference in snippet
+        assert policy.docs_summary in snippet
+        assert policy.production_requirement in snippet
+
+
+def test_describe_jwt_revocation_tradeoff_accepts_reloaded_posture() -> None:
+    """Duck-typed JWT posture resolution survives strategy-module reloads."""
+    reloaded_jwt_module = importlib.reload(jwt_strategy_module)
+    strategy = reloaded_jwt_module.JWTStrategy(secret=JWT_SECRET)
+
+    notice = plugin_config_module._describe_jwt_revocation_tradeoff(strategy.revocation_posture)
+
+    assert notice is not None
+    assert notice.policy.key == "jwt_revocation"
+    assert notice.posture_key == "compatibility_in_memory"
+    assert notice.production_validation_error == strategy.revocation_posture.production_validation_error
+    assert notice.startup_warning == strategy.revocation_posture.startup_warning
+
+
+def test_resolve_plugin_managed_totp_secret_storage_tradeoff_matches_plaintext_posture() -> None:
+    """Plugin-owned TOTP wiring reuses the shared plaintext posture messaging."""
+    config = _minimal_config(totp_config=TotpConfig(totp_pending_secret="p" * 32))
+
+    notice = plugin_config_module._resolve_plugin_managed_totp_secret_storage_tradeoff(config)
+
+    assert notice is not None
+    assert notice.policy.key == "totp_secret_storage"
+    assert notice.posture_key == "compatibility_plaintext"
+    assert (
+        notice.production_validation_error
+        == TotpSecretStoragePosture.compatibility_plaintext().production_validation_error
+    )
+    assert notice.startup_warning is None
+
+
+def test_resolve_plugin_managed_totp_secret_storage_tradeoff_returns_none_without_totp() -> None:
+    """Configs without TOTP do not report a plugin-managed TOTP storage tradeoff."""
+    notice = plugin_config_module._resolve_plugin_managed_totp_secret_storage_tradeoff(_minimal_config())
+
+    assert notice is None
+
+
+def test_resolve_plugin_managed_totp_secret_storage_tradeoff_skips_factory_owned_wiring() -> None:
+    """Custom manager factories can own TOTP-secret storage without plugin validation interference."""
+    config = _minimal_config(
+        totp_config=TotpConfig(totp_pending_secret="p" * 32),
+        user_manager_security=None,
+    )
+    config.user_manager_security = None
+    config.user_manager_factory = lambda **kwargs: cast("Any", kwargs["user_db"])
+
+    notice = plugin_config_module._resolve_plugin_managed_totp_secret_storage_tradeoff(config)
+
+    assert notice is None
+
+
 def test_plugin_startup_module_executes_under_coverage() -> None:
     """Reload the startup helper module in-test so coverage records module-body execution."""
     reloaded_module = importlib.reload(startup_module)
@@ -144,6 +231,9 @@ def test_plugin_startup_module_executes_under_coverage() -> None:
     )
     assert reloaded_module.require_oauth_token_encryption_for_configured_providers.__name__ == (
         require_oauth_token_encryption_for_configured_providers.__name__
+    )
+    assert reloaded_module.require_secure_oauth_redirect_in_production.__name__ == (
+        require_secure_oauth_redirect_in_production.__name__
     )
 
 
@@ -160,6 +250,7 @@ def test_warn_insecure_plugin_startup_defaults_emits_all_expected_security_warni
         rate_limit_config=_rate_limit_config(backend=InMemoryRateLimiter(max_attempts=5, window_seconds=60)),
         totp_config=TotpConfig(
             totp_pending_secret="p" * 32,
+            totp_pending_jti_store=jwt_strategy_module.InMemoryJWTDenylistStore(),
             totp_used_tokens_store=cast("Any", InMemoryUsedTotpCodeStore()),
         ),
     )
@@ -174,6 +265,7 @@ def test_warn_insecure_plugin_startup_defaults_emits_all_expected_security_warni
     assert any("process-local in-memory denylist" in message for message in messages)
     assert any("process-local in-memory backend" in message for message in messages)
     assert any("InMemoryUsedTotpCodeStore" in message for message in messages)
+    assert any("TOTP pending-token replay protection uses InMemoryJWTDenylistStore" in message for message in messages)
     assert any("refresh_max_age is not set" in message for message in messages)
 
 
@@ -181,13 +273,15 @@ def test_warn_insecure_plugin_startup_defaults_warns_for_reloaded_jwt_strategy(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """JWT denylist warnings survive strategy-module reloads used in coverage tests."""
+    del monkeypatch
     reloaded_jwt_module = importlib.reload(jwt_strategy_module)
+    strategy = reloaded_jwt_module.JWTStrategy(secret=JWT_SECRET)
     config = _minimal_config(
         backends=[
             AuthenticationBackend[ExampleUser, UUID](
                 name="jwt",
                 transport=BearerTransport(),
-                strategy=reloaded_jwt_module.JWTStrategy(secret=JWT_SECRET),
+                strategy=strategy,
             ),
         ],
     )
@@ -197,7 +291,7 @@ def test_warn_insecure_plugin_startup_defaults_warns_for_reloaded_jwt_strategy(
         warn_insecure_plugin_startup_defaults(config)
 
     messages = [str(record.message) for record in records]
-    assert any("process-local in-memory denylist" in message for message in messages)
+    assert strategy.revocation_posture.startup_warning in messages
 
 
 def test_warn_insecure_plugin_startup_defaults_is_silent_in_testing(
@@ -210,6 +304,7 @@ def test_warn_insecure_plugin_startup_defaults_is_silent_in_testing(
         rate_limit_config=_rate_limit_config(backend=InMemoryRateLimiter(max_attempts=5, window_seconds=60)),
         totp_config=TotpConfig(
             totp_pending_secret="p" * 32,
+            totp_pending_jti_store=jwt_strategy_module.InMemoryJWTDenylistStore(),
             totp_used_tokens_store=cast("Any", InMemoryUsedTotpCodeStore()),
         ),
     )
@@ -237,8 +332,8 @@ def test_warn_insecure_plugin_startup_defaults_is_silent_for_safe_production_con
             oauth_token_encryption_key="k" * 44,
         ),
         rate_limit_config=_rate_limit_config(backend=_SharedRateLimitBackend()),
-        totp_config=TotpConfig(
-            totp_pending_secret="p" * 32,
+        totp_config=_configured_totp_config(
+            totp_used_tokens_store=cast("Any", object()),
         ),
     )
     config.csrf_secret = "c" * 32
@@ -440,10 +535,14 @@ def test_validate_backend_strategy_security_rejects_nondurable_jwt_revocation(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Production validation rejects JWT denylist storage that is only process-local."""
-    config = _minimal_config(backends=[_jwt_backend()])
+    del monkeypatch
+    backend = _jwt_backend()
+    config = _minimal_config(backends=[backend])
+    strategy = cast("Any", backend.strategy)
 
-    with pytest.raises(ValueError, match="process-local in-memory denylist"):
+    with pytest.raises(ValueError, match="process-local in-memory denylist") as exc_info:
         _validate_backend_strategy_security(config)
+    assert str(exc_info.value) == strategy.revocation_posture.production_validation_error
 
 
 def test_validate_backend_strategy_security_allows_durable_jwt_revocation(
@@ -841,10 +940,7 @@ def test_validate_totp_pending_secret_config_logs_sha1_warning(
 ) -> None:
     """Production validation logs when TOTP is configured with SHA1."""
     config = _minimal_config(
-        totp_config=TotpConfig(
-            totp_pending_secret="p" * 32,
-            totp_algorithm="SHA1",
-        ),
+        totp_config=_configured_totp_config(totp_algorithm="SHA1"),
     )
 
     with caplog.at_level(logging.WARNING, logger="litestar_auth.plugin"):
@@ -860,10 +956,7 @@ def test_validate_totp_pending_secret_config_is_silent_for_non_sha1(
 ) -> None:
     """Non-SHA1 algorithms skip the production warning path."""
     config = _minimal_config(
-        totp_config=TotpConfig(
-            totp_pending_secret="p" * 32,
-            totp_algorithm="SHA256",
-        ),
+        totp_config=_configured_totp_config(totp_algorithm="SHA256"),
     )
 
     with caplog.at_level(logging.WARNING, logger="litestar_auth.plugin"):
@@ -886,6 +979,7 @@ def test_validate_totp_pending_secret_config_rejects_short_secret() -> None:
     config = _minimal_config(
         totp_config=TotpConfig(
             totp_pending_secret="short",
+            totp_pending_jti_store=cast("Any", _DurableDenylistStore()),
             totp_used_tokens_store=cast("Any", object()),
         ),
     )
@@ -899,10 +993,15 @@ def test_validate_totp_encryption_key_requires_secret_in_production(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Production TOTP validation requires an at-rest encryption key."""
+    del monkeypatch
     config = _minimal_config(totp_config=TotpConfig(totp_pending_secret="p" * 32))
 
-    with pytest.raises(validation_module.ConfigurationError, match="totp_secret_key is required in production"):
+    with pytest.raises(
+        validation_module.ConfigurationError,
+        match="totp_secret_key is required in production",
+    ) as exc_info:
         _validate_totp_encryption_key(config)
+    assert str(exc_info.value) == TotpSecretStoragePosture.compatibility_plaintext().production_validation_error
 
 
 def test_validate_totp_encryption_key_allows_configured_secret_in_production(
@@ -955,6 +1054,7 @@ def test_validate_totp_encryption_key_rejects_empty_secret_in_production(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """An empty typed TOTP secret still fails the production encryption check."""
+    del monkeypatch
     config = _minimal_config(
         totp_config=TotpConfig(totp_pending_secret="p" * 32),
         user_manager_security=UserManagerSecurity[UUID](
@@ -964,8 +1064,12 @@ def test_validate_totp_encryption_key_rejects_empty_secret_in_production(
         ),
     )
 
-    with pytest.raises(validation_module.ConfigurationError, match="totp_secret_key is required in production"):
+    with pytest.raises(
+        validation_module.ConfigurationError,
+        match="totp_secret_key is required in production",
+    ) as exc_info:
         _validate_totp_encryption_key(config)
+    assert str(exc_info.value) == TotpSecretStoragePosture.compatibility_plaintext().production_validation_error
 
 
 def test_validate_user_manager_security_config_rejects_legacy_security_kwargs_without_factory() -> None:
@@ -1039,10 +1143,7 @@ def test_validate_config_accepts_typed_user_manager_security_contract() -> None:
             id_parser=UUID,
         ),
         id_parser=UUID,
-        totp_config=TotpConfig(
-            totp_pending_secret="p" * 32,
-            totp_used_tokens_store=cast("Any", InMemoryUsedTotpCodeStore()),
-        ),
+        totp_config=_configured_totp_config(totp_used_tokens_store=cast("Any", InMemoryUsedTotpCodeStore())),
     )
     config.user_manager_kwargs = {"password_helper": object()}
 
@@ -1060,7 +1161,7 @@ def test_validate_user_manager_security_config_warns_when_secret_roles_share_one
             reset_password_token_secret=shared_secret,
             totp_secret_key=shared_secret,
         ),
-        totp_config=TotpConfig(
+        totp_config=_configured_totp_config(
             totp_pending_secret=shared_secret,
             totp_used_tokens_store=cast("Any", InMemoryUsedTotpCodeStore()),
         ),
@@ -1091,7 +1192,7 @@ def test_plugin_managed_secret_role_reuse_warning_is_owned_by_validation() -> No
             reset_password_token_secret=shared_secret,
             totp_secret_key=shared_secret,
         ),
-        totp_config=TotpConfig(
+        totp_config=_configured_totp_config(
             totp_pending_secret=shared_secret,
             totp_used_tokens_store=cast("Any", InMemoryUsedTotpCodeStore()),
         ),
@@ -1121,7 +1222,7 @@ def test_custom_user_manager_factory_does_not_duplicate_aligned_secret_role_warn
             reset_password_token_secret=shared_secret,
             totp_secret_key=shared_secret,
         ),
-        totp_config=TotpConfig(
+        totp_config=_configured_totp_config(
             totp_pending_secret=shared_secret,
             totp_used_tokens_store=cast("Any", InMemoryUsedTotpCodeStore()),
         ),
@@ -1197,10 +1298,7 @@ def test_validate_totp_config_warns_for_insecure_cookie_transport(
     """Production TOTP validation warns when the enable endpoint can travel over insecure cookies."""
     config = _minimal_config(
         backends=[_cookie_backend()],
-        totp_config=TotpConfig(
-            totp_pending_secret="p" * 32,
-            totp_used_tokens_store=cast("Any", InMemoryUsedTotpCodeStore()),
-        ),
+        totp_config=_configured_totp_config(totp_used_tokens_store=cast("Any", InMemoryUsedTotpCodeStore())),
     )
 
     with pytest.warns(validation_module.SecurityWarning, match="CookieTransport.secure=False"):
@@ -1213,10 +1311,7 @@ def test_validate_totp_config_skips_insecure_cookie_warning_in_testing(
     """Testing mode suppresses the insecure-cookie warning branch for TOTP validation."""
     config = _minimal_config(
         backends=[_cookie_backend()],
-        totp_config=TotpConfig(
-            totp_pending_secret="p" * 32,
-            totp_used_tokens_store=cast("Any", InMemoryUsedTotpCodeStore()),
-        ),
+        totp_config=_configured_totp_config(totp_used_tokens_store=cast("Any", InMemoryUsedTotpCodeStore())),
     )
     config.unsafe_testing = True
 
@@ -1227,11 +1322,11 @@ def test_validate_totp_config_skips_insecure_cookie_warning_in_testing(
     assert not records
 
 
-def test_validate_totp_sub_config_rejects_missing_replay_store_in_production(
+def test_validate_totp_sub_config_rejects_missing_pending_jti_store_in_production(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Replay protection requires a configured store outside explicit unsafe testing."""
-    with pytest.raises(ValueError, match="totp_require_replay_protection=True requires"):
+    """Pending-token replay protection requires a configured denylist outside explicit unsafe testing."""
+    with pytest.raises(ValueError, match="totp_pending_jti_store is required"):
         validate_totp_sub_config(
             TotpConfig(totp_pending_secret="p" * 32),
             user_manager_class=PluginUserManager,
@@ -1257,10 +1352,7 @@ def test_validate_totp_sub_config_rejects_missing_authenticate_method(
 
     with pytest.raises(ValueError, match=r"user_manager_class\.authenticate"):
         validate_totp_sub_config(
-            TotpConfig(
-                totp_pending_secret="p" * 32,
-                totp_enable_requires_password=True,
-            ),
+            _configured_totp_config(totp_enable_requires_password=True),
             user_manager_class=_ManagerWithoutAuthenticate,
             unsafe_testing=True,
         )
@@ -1404,10 +1496,8 @@ def test_has_configured_oauth_provider_helpers_report_expected_state() -> None:
     assert has_configured_oauth_providers_for(login_and_associate_config) is True
 
 
-def test_warn_if_insecure_oauth_redirect_in_production_skips_login_only_inventory(
-    caplog: pytest.LogCaptureFixture,
-) -> None:
-    """Public plugin OAuth redirect origins do not trigger the production warning."""
+def test_require_secure_oauth_redirect_in_production_accepts_public_https_origin() -> None:
+    """Production startup accepts public HTTPS plugin redirect origins."""
     config = _minimal_config(
         oauth_config=OAuthConfig(
             oauth_providers=[("github", object())],
@@ -1415,16 +1505,42 @@ def test_warn_if_insecure_oauth_redirect_in_production_skips_login_only_inventor
         ),
     )
 
-    with caplog.at_level(logging.WARNING, logger="litestar_auth.plugin"):
-        warn_if_insecure_oauth_redirect_in_production(config=config, app_config=AppConfig(debug=False))
-
-    assert not caplog.text
+    require_secure_oauth_redirect_in_production(config=config, app_config=AppConfig(debug=False))
 
 
-def test_warn_if_insecure_oauth_redirect_in_production_logs_localhost_default(
-    caplog: pytest.LogCaptureFixture,
+@pytest.mark.parametrize(
+    ("redirect_base_url", "message"),
+    [
+        pytest.param(
+            "http://app.example.com/auth",
+            "public HTTPS origin",
+            id="public-http-origin",
+        ),
+        pytest.param(
+            "https://localhost/auth",
+            "non-loopback public HTTPS origin",
+            id="loopback-https-origin",
+        ),
+    ],
+)
+def test_require_secure_oauth_redirect_in_production_rejects_insecure_origins(
+    redirect_base_url: str,
+    message: str,
 ) -> None:
-    """Production startup warns when plugin OAuth redirects target localhost."""
+    """Production startup fails closed for public HTTP and loopback OAuth redirect bases."""
+    config = _minimal_config(
+        oauth_config=OAuthConfig(
+            oauth_providers=[("github", object())],
+            oauth_redirect_base_url=redirect_base_url,
+        ),
+    )
+
+    with pytest.raises(ConfigurationError, match=message):
+        require_secure_oauth_redirect_in_production(config=config, app_config=AppConfig(debug=False))
+
+
+def test_require_secure_oauth_redirect_in_production_skips_debug_mode() -> None:
+    """Debug mode keeps explicit localhost redirect recipes available."""
     config = _minimal_config(
         oauth_config=OAuthConfig(
             oauth_providers=[("github", object())],
@@ -1432,45 +1548,20 @@ def test_warn_if_insecure_oauth_redirect_in_production_logs_localhost_default(
         ),
     )
 
-    with caplog.at_level(logging.WARNING, logger="litestar_auth.plugin"):
-        warn_if_insecure_oauth_redirect_in_production(config=config, app_config=AppConfig(debug=False))
-
-    assert "localhost" in caplog.text
-    assert "oauth_redirect_base_url" in caplog.text
+    require_secure_oauth_redirect_in_production(config=config, app_config=AppConfig(debug=True))
 
 
-def test_warn_if_insecure_oauth_redirect_in_production_skips_public_origin(
-    caplog: pytest.LogCaptureFixture,
-) -> None:
-    """Public OAuth redirect origins do not trigger the localhost warning."""
-    config = _minimal_config(
-        oauth_config=OAuthConfig(
-            oauth_providers=[("github", object())],
-            oauth_redirect_base_url="https://app.example.com/auth",
-        ),
-    )
-
-    with caplog.at_level(logging.WARNING, logger="litestar_auth.plugin"):
-        warn_if_insecure_oauth_redirect_in_production(config=config, app_config=AppConfig(debug=False))
-
-    assert not caplog.text
-
-
-def test_warn_if_insecure_oauth_redirect_in_production_skips_debug_mode(
-    caplog: pytest.LogCaptureFixture,
-) -> None:
-    """Debug mode bypasses the localhost redirect warning."""
+def test_require_secure_oauth_redirect_in_production_skips_unsafe_testing() -> None:
+    """unsafe_testing keeps explicit localhost redirect recipes available for tests."""
     config = _minimal_config(
         oauth_config=OAuthConfig(
             oauth_providers=[("github", object())],
             oauth_redirect_base_url="http://localhost/auth",
         ),
     )
+    config.unsafe_testing = True
 
-    with caplog.at_level(logging.WARNING, logger="litestar_auth.plugin"):
-        warn_if_insecure_oauth_redirect_in_production(config=config, app_config=AppConfig(debug=True))
-
-    assert not caplog.text
+    require_secure_oauth_redirect_in_production(config=config, app_config=AppConfig(debug=False))
 
 
 def test_validate_config_rejects_include_oauth_associate_without_provider_inventory() -> None:
@@ -1603,7 +1694,7 @@ def test_validate_config_keeps_unsafe_testing_instance_scoped(
     """Unsafe-testing relaxations stay instance-scoped instead of process-global."""
     strict_config = _minimal_config(
         backends=[_cookie_backend(), _jwt_backend()],
-        totp_config=TotpConfig(totp_pending_secret="p" * 32),
+        totp_config=_configured_totp_config(),
     )
     relaxed_config = _minimal_config(
         backends=[_cookie_backend(), _jwt_backend()],

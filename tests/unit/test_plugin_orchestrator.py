@@ -29,17 +29,28 @@ from litestar_auth._plugin import (
     DEFAULT_USER_MANAGER_DEPENDENCY_KEY,
     DEFAULT_USER_MODEL_DEPENDENCY_KEY,
 )
-from litestar_auth._plugin.dependencies import DependencyProviders, register_dependencies
+from litestar_auth._plugin.dependencies import (
+    DependencyProviders,
+    client_exception_handler,
+    register_dependencies,
+)
 from litestar_auth.authentication import Authenticator, LitestarAuthMiddleware
 from litestar_auth.authentication.backend import AuthenticationBackend
 from litestar_auth.authentication.strategy.db import DatabaseTokenStrategy
 from litestar_auth.authentication.strategy.db_models import DatabaseTokenModels
-from litestar_auth.authentication.strategy.jwt import JWTStrategy
+from litestar_auth.authentication.strategy.jwt import InMemoryJWTDenylistStore, JWTStrategy
 from litestar_auth.authentication.transport.bearer import BearerTransport
 from litestar_auth.authentication.transport.cookie import CookieTransport
+from litestar_auth.exceptions import ConfigurationError
 from litestar_auth.manager import UserManagerSecurity, require_password_length
 from litestar_auth.password import PasswordHelper
-from litestar_auth.plugin import DatabaseTokenAuthConfig, LitestarAuth, LitestarAuthConfig, OAuthConfig, TotpConfig
+from litestar_auth.plugin import (
+    DatabaseTokenAuthConfig,
+    LitestarAuth,
+    LitestarAuthConfig,
+    OAuthConfig,
+    TotpConfig,
+)
 from litestar_auth.ratelimit import AuthRateLimitConfig, EndpointRateLimit, InMemoryRateLimiter, RedisRateLimiter
 from litestar_auth.totp import InMemoryUsedTotpCodeStore, SecurityWarning
 from tests.integration.test_orchestrator import (
@@ -69,6 +80,7 @@ def test_plugin_module_executes_under_coverage() -> None:
         "LitestarAuth",
         "LitestarAuthConfig",
         "OAuthConfig",
+        "StartupBackendTemplate",
         "TotpConfig",
     )
 
@@ -135,8 +147,8 @@ def test_on_app_init_runs_lifecycle_steps_in_order(monkeypatch: pytest.MonkeyPat
         lambda **_kwargs: calls.append("require-oauth-key"),
     )
     monkeypatch.setattr(
-        "litestar_auth.plugin.warn_if_insecure_oauth_redirect_in_production",
-        lambda **_kwargs: calls.append("warn-oauth-redirect"),
+        "litestar_auth.plugin.require_secure_oauth_redirect_in_production",
+        lambda **_kwargs: calls.append("require-oauth-redirect"),
     )
     monkeypatch.setattr(
         "litestar_auth.plugin.bootstrap_bundled_token_orm_models",
@@ -144,8 +156,8 @@ def test_on_app_init_runs_lifecycle_steps_in_order(monkeypatch: pytest.MonkeyPat
     )
     monkeypatch.setattr(plugin, "_register_dependencies", lambda _app_config: calls.append("dependencies"))
     monkeypatch.setattr(plugin, "_register_middleware", lambda _app_config: calls.append("middleware"))
-    monkeypatch.setattr(plugin, "_register_controllers", lambda _app_config: calls.append("controllers"))
-    monkeypatch.setattr(plugin, "_register_exception_handlers", lambda _app_config: calls.append("exceptions"))
+    monkeypatch.setattr(plugin, "_register_controllers", lambda _app_config: calls.append("controllers") or [])
+    monkeypatch.setattr(plugin, "_register_exception_handlers", lambda _route_handlers: calls.append("exceptions"))
 
     result = plugin.on_app_init(app_config)
 
@@ -153,7 +165,7 @@ def test_on_app_init_runs_lifecycle_steps_in_order(monkeypatch: pytest.MonkeyPat
     assert calls == [
         "warn",
         "require-oauth-key",
-        "warn-oauth-redirect",
+        "require-oauth-redirect",
         "bootstrap-token-models",
         "dependencies",
         "middleware",
@@ -183,7 +195,11 @@ def test_on_app_init_registers_middleware_controllers_dependencies_and_exception
     assert DEFAULT_USER_MODEL_DEPENDENCY_KEY in result.dependencies
     assert "db_session" in result.dependencies
     assert result.route_handlers
-    assert result.exception_handlers[ClientException]
+    auth_controller = next(handler for handler in result.route_handlers if getattr(handler, "path", None) == "/auth")
+    assert not result.exception_handlers or ClientException not in result.exception_handlers
+    auth_handler = cast("Any", auth_controller).exception_handlers[ClientException]
+    assert auth_handler.__name__ == client_exception_handler.__name__
+    assert auth_handler.__module__ == client_exception_handler.__module__
     assert isinstance(result.csrf_config, CSRFConfig)
     assert result.csrf_config.cookie_name == DEFAULT_CSRF_COOKIE_NAME
     assert result.csrf_config.cookie_path == "/auth"
@@ -458,6 +474,53 @@ def test_on_app_init_allows_oauth_providers_when_encryption_key_is_configured() 
     assert not any(issubclass(record.category, SecurityWarning) for record in records)
 
 
+@pytest.mark.parametrize(
+    ("redirect_base_url", "message"),
+    [
+        pytest.param(
+            "http://app.example.com/auth",
+            "public HTTPS origin",
+            id="public-http-origin",
+        ),
+        pytest.param(
+            "https://localhost/auth",
+            "non-loopback public HTTPS origin",
+            id="loopback-https-origin",
+        ),
+    ],
+)
+def test_on_app_init_rejects_insecure_oauth_redirect_origins_in_production(
+    redirect_base_url: str,
+    message: str,
+) -> None:
+    """Production app init fails closed for insecure plugin-owned OAuth redirect bases."""
+    config = _minimal_config()
+    config.oauth_config = OAuthConfig(
+        oauth_providers=[("github", object())],
+        oauth_redirect_base_url=redirect_base_url,
+        oauth_token_encryption_key="a" * 44,
+    )
+    plugin = LitestarAuth(config)
+
+    with pytest.raises(ConfigurationError, match=message):
+        plugin.on_app_init(AppConfig(debug=False))
+
+
+def test_on_app_init_allows_loopback_oauth_redirect_origin_in_debug_mode() -> None:
+    """Debug mode preserves explicit localhost OAuth plugin recipes."""
+    config = _minimal_config()
+    config.oauth_config = OAuthConfig(
+        oauth_providers=[("github", object())],
+        oauth_redirect_base_url="http://localhost/auth",
+        oauth_token_encryption_key="a" * 44,
+    )
+    plugin = LitestarAuth(config)
+
+    result = plugin.on_app_init(AppConfig(debug=True))
+
+    assert result is not None
+
+
 def test_on_app_init_warns_security_warning_for_inmemory_totp_used_store(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -465,6 +528,7 @@ def test_on_app_init_warns_security_warning_for_inmemory_totp_used_store(
     config = _minimal_config()
     config.totp_config = TotpConfig(
         totp_pending_secret="x" * 32,
+        totp_pending_jti_store=InMemoryJWTDenylistStore(),
         totp_used_tokens_store=InMemoryUsedTotpCodeStore(),
     )
     config.user_manager_security = UserManagerSecurity[UUID](
@@ -532,6 +596,7 @@ def test_on_app_init_testing_recipe_suppresses_single_process_security_warnings(
     )
     config.totp_config = TotpConfig(
         totp_pending_secret="x" * 32,
+        totp_pending_jti_store=InMemoryJWTDenylistStore(),
         totp_used_tokens_store=InMemoryUsedTotpCodeStore(),
     )
     config.user_manager_security = UserManagerSecurity[UUID](
@@ -658,12 +723,12 @@ def test_register_dependencies_skips_builtin_db_session_when_external_declared()
 def test_register_exception_handlers_delegates_to_shared_registration_function() -> None:
     """Exception-handler registration goes through the shared dependency helper."""
     plugin = LitestarAuth(_minimal_config())
-    app_config = AppConfig()
+    route_handlers = [cast("Any", object())]
 
     with patch("litestar_auth.plugin.register_exception_handlers") as register_handlers_mock:
-        plugin._register_exception_handlers(app_config)
+        plugin._register_exception_handlers(route_handlers)
 
-    register_handlers_mock.assert_called_once_with(app_config)
+    register_handlers_mock.assert_called_once_with(route_handlers)
 
 
 def test_register_controllers_extends_route_handlers() -> None:
@@ -673,10 +738,33 @@ def test_register_controllers_extends_route_handlers() -> None:
     app_config.route_handlers.append(cast("Any", "existing"))
 
     with patch("litestar_auth.plugin.build_controllers", return_value=["new-controller"]) as build_controllers_mock:
-        plugin._register_controllers(app_config)
+        controllers = plugin._register_controllers(app_config)
 
+    assert controllers == ["new-controller"]
     assert app_config.route_handlers == ["existing", "new-controller"]
     build_controllers_mock.assert_called_once_with(plugin.config)
+
+
+def test_on_app_init_registers_exception_handlers_for_all_app_route_handlers() -> None:
+    """App init lets the shared helper filter the full route handler inventory."""
+    plugin = LitestarAuth(_minimal_config())
+    app_config = AppConfig(route_handlers=[cast("Any", "existing-route")])
+    new_controllers = [cast("Any", "plugin-controller")]
+
+    with (
+        patch("litestar_auth.plugin.warn_insecure_plugin_startup_defaults"),
+        patch("litestar_auth.plugin.require_oauth_token_encryption_for_configured_providers"),
+        patch("litestar_auth.plugin.require_secure_oauth_redirect_in_production"),
+        patch("litestar_auth.plugin.bootstrap_bundled_token_orm_models"),
+        patch.object(plugin, "_register_dependencies"),
+        patch.object(plugin, "_register_middleware"),
+        patch("litestar_auth.plugin.build_controllers", return_value=new_controllers),
+        patch("litestar_auth.plugin.register_exception_handlers") as register_handlers_mock,
+    ):
+        plugin.on_app_init(app_config)
+
+    assert app_config.route_handlers == ["existing-route", "plugin-controller"]
+    register_handlers_mock.assert_called_once_with(app_config.route_handlers)
 
 
 @dataclass(slots=True)
@@ -688,6 +776,8 @@ class _ScopedProxyRecorder:
 @dataclass(slots=True)
 class _FakeSessionBoundBackend:
     strategy: object
+    name: str = "fake"
+    transport: object | None = None
     bound_session: object | None = None
 
     def with_session(self, session: object) -> _FakeSessionBoundBackend:
@@ -1000,6 +1090,8 @@ def test_session_bound_backends_rebinds_each_backend_to_current_session() -> Non
     class _BackendRecorder:
         name: str
         seen_sessions: list[object]
+        transport: object | None = None
+        strategy: object | None = None
 
         def with_session(self, session: object) -> str:
             self.seen_sessions.append(session)
@@ -1165,8 +1257,10 @@ def test_resolve_account_state_validator_raises_for_missing_callable() -> None:
 def test_provider_helpers_return_configured_objects() -> None:
     """Provider helpers expose the config values used by dependency registration."""
     plugin = LitestarAuth(_minimal_config())
+    provided_backends = plugin._provide_backends()
 
-    assert plugin._provide_backends() is plugin.config.backends
+    assert all(isinstance(backend, plugin_module.StartupBackendTemplate) for backend in provided_backends)
+    assert [backend.name for backend in provided_backends] == [backend.name for backend in plugin.config.backends]
     assert plugin._provide_config() is plugin.config
     assert plugin._provide_user_model() is plugin.config.user_model
 
@@ -1193,6 +1287,9 @@ def test_provide_request_backends_respects_custom_db_session_key() -> None:
     @dataclass(slots=True)
     class _BackendRecorder:
         seen_sessions: list[object]
+        name: str = "recorder"
+        transport: object | None = None
+        strategy: object | None = None
 
         def with_session(self, session: object) -> str:
             self.seen_sessions.append(session)
@@ -1216,6 +1313,9 @@ def test_provide_request_backends_accepts_positional_session_argument() -> None:
     @dataclass(slots=True)
     class _BackendRecorder:
         seen_sessions: list[object]
+        name: str = "recorder"
+        transport: object | None = None
+        strategy: object | None = None
 
         def with_session(self, session: object) -> str:
             self.seen_sessions.append(session)
@@ -1244,10 +1344,10 @@ def test_provide_request_backends_validates_dependency_inputs() -> None:
     """Backends DI rejects missing or unexpected dependency arguments before building backends."""
     plugin = LitestarAuth(_minimal_config())
 
-    with pytest.raises(TypeError, match="missing 1 required argument: 'db_session'"):
+    with pytest.raises(TypeError, match="missing 1 required positional argument: 'db_session'"):
         cast("Any", plugin._provide_request_backends)()
 
-    with pytest.raises(TypeError, match=r"got unexpected keyword argument\(s\): 'other'"):
+    with pytest.raises(TypeError, match="got an unexpected keyword argument 'other'"):
         cast("Any", plugin._provide_request_backends)(other=object())
 
 
@@ -1331,9 +1431,15 @@ def test_totp_backend_returns_configured_named_backend() -> None:
     plugin.config.totp_config = TotpConfig(
         totp_pending_secret="p" * 32,
         totp_backend_name="secondary",
+        totp_pending_jti_store=InMemoryJWTDenylistStore(),
     )
 
-    assert plugin._totp_backend() is secondary_backend
+    startup_backend = plugin._totp_backend()
+
+    assert isinstance(startup_backend, plugin_module.StartupBackendTemplate)
+    assert startup_backend.name == secondary_backend.name
+    assert startup_backend.transport is secondary_backend.transport
+    assert startup_backend.strategy is secondary_backend.strategy
 
 
 def test_public_aliases_reexport_nested_config_types() -> None:

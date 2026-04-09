@@ -15,7 +15,7 @@ from sqlalchemy.pool import StaticPool
 
 from litestar_auth._plugin.config import TotpConfig
 from litestar_auth.authentication.backend import AuthenticationBackend
-from litestar_auth.authentication.strategy.jwt import JWTStrategy
+from litestar_auth.authentication.strategy.jwt import InMemoryJWTDenylistStore, JWTStrategy
 from litestar_auth.authentication.transport.bearer import BearerTransport
 from litestar_auth.guards import is_authenticated
 from litestar_auth.manager import BaseUserManager, UserManagerSecurity
@@ -117,6 +117,7 @@ def app() -> Iterator[Litestar]:
         user_manager_kwargs={"password_helper": password_helper},
         totp_config=TotpConfig(
             totp_pending_secret=TOTP_PENDING_SECRET,
+            totp_pending_jti_store=InMemoryJWTDenylistStore(),
             totp_used_tokens_store=InMemoryUsedTotpCodeStore(),
         ),
     )

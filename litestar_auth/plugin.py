@@ -31,7 +31,7 @@ from litestar_auth._plugin.session_binding import (
 from litestar_auth._plugin.startup import (
     bootstrap_bundled_token_orm_models,
     require_oauth_token_encryption_for_configured_providers,
-    warn_if_insecure_oauth_redirect_in_production,
+    require_secure_oauth_redirect_in_production,
     warn_insecure_plugin_startup_defaults,
 )
 from litestar_auth._plugin.validation import validate_config
@@ -47,6 +47,7 @@ if TYPE_CHECKING:
     from collections.abc import Sequence
 
     from litestar.config.app import AppConfig
+    from litestar.types import ControllerRouterHandler
     from sqlalchemy.ext.asyncio import AsyncSession
 
     from litestar_auth.authentication.backend import AuthenticationBackend
@@ -64,6 +65,7 @@ if TYPE_CHECKING:
 DatabaseTokenAuthConfig = _plugin_config.DatabaseTokenAuthConfig
 LitestarAuthConfig = _plugin_config.LitestarAuthConfig
 OAuthConfig = _plugin_config.OAuthConfig
+StartupBackendTemplate = _plugin_config.StartupBackendTemplate
 TotpConfig = _plugin_config.TotpConfig
 
 
@@ -114,12 +116,12 @@ class LitestarAuth[UP: UserProtocol[Any], ID](InitPlugin):
             config=self.config,
             require_key=partial(require_oauth_token_encryption, self._oauth_token_encryption),
         )
-        warn_if_insecure_oauth_redirect_in_production(config=self.config, app_config=app_config)
+        require_secure_oauth_redirect_in_production(config=self.config, app_config=app_config)
         bootstrap_bundled_token_orm_models(self.config)
         self._register_dependencies(app_config)
         self._register_middleware(app_config)
         self._register_controllers(app_config)
-        self._register_exception_handlers(app_config)
+        self._register_exception_handlers(app_config.route_handlers)
         return app_config
 
     def _session_bound_backends(self, session: AsyncSession) -> list[AuthenticationBackend[UP, ID]]:
@@ -192,12 +194,15 @@ class LitestarAuth[UP: UserProtocol[Any], ID](InitPlugin):
         )
         raise TypeError(msg)
 
-    def _register_controllers(self, app_config: AppConfig) -> None:
-        app_config.route_handlers.extend(build_controllers(self.config))
+    def _register_controllers(self, app_config: AppConfig) -> list[ControllerRouterHandler]:
+        controllers = build_controllers(self.config)
+        app_config.route_handlers.extend(controllers)
+        return controllers
 
-    def _register_exception_handlers(self, app_config: AppConfig) -> None:  # noqa: PLR6301
-        """Register ClientException handler for uniform detail and code response format."""
-        register_exception_handlers(app_config)
+    @staticmethod
+    def _register_exception_handlers(route_handlers: Sequence[ControllerRouterHandler]) -> None:
+        """Register ClientException handlers for litestar-auth-generated routes only."""
+        register_exception_handlers(route_handlers)
 
     def _register_dependencies(self, app_config: AppConfig) -> None:
         register_dependencies(
@@ -233,7 +238,7 @@ class LitestarAuth[UP: UserProtocol[Any], ID](InitPlugin):
             ),
         )
 
-    def _provide_backends(self) -> object:
+    def _provide_backends(self) -> tuple[StartupBackendTemplate[UP, ID], ...]:
         return self.config.startup_backends()
 
     def _provide_config(self) -> object:
@@ -242,7 +247,7 @@ class LitestarAuth[UP: UserProtocol[Any], ID](InitPlugin):
     def _provide_user_model(self) -> object:
         return self.config.user_model
 
-    def _totp_backend(self) -> AuthenticationBackend[UP, ID]:
+    def _totp_backend(self) -> StartupBackendTemplate[UP, ID]:
         return totp_backend(self.config)
 
 
@@ -251,5 +256,6 @@ __all__ = (
     "LitestarAuth",
     "LitestarAuthConfig",
     "OAuthConfig",
+    "StartupBackendTemplate",
     "TotpConfig",
 )

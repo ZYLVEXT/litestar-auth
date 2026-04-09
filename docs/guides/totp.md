@@ -15,7 +15,7 @@ When a login requires a second factor, the client finishes with:
 
 - **`POST .../2fa/verify`** — pending token + TOTP code.
 
-Pending login JWTs use a JTI denylist internally. The plugin-built TOTP controller does not expose a Redis `pending_jti_store`; it resolves an in-process fallback with **warnings** unless the owning config/controller explicitly sets `unsafe_testing=True`. For strict multi-worker deduplication of pending JTIs, mount **`create_totp_controller`** yourself and pass **`pending_jti_store`** (e.g. `RedisJWTDenylistStore`).
+Pending login JWTs use a JTI denylist internally. In production, configure **`TotpConfig.totp_pending_jti_store`** on the plugin-managed path or pass **`pending_jti_store`** to **`create_totp_controller`** manually. Missing pending-token replay storage now fails closed unless the owning config/controller explicitly sets **`unsafe_testing=True`**.
 
 ## Disable
 

@@ -299,6 +299,7 @@ def test_root_package_exports_canonical_database_token_preset_entrypoint() -> No
     assert config.session_maker is session_maker
 
     backend = config.startup_backends()[0]
+    assert isinstance(backend, plugin_module.StartupBackendTemplate)
     assert backend.name == "database"
     assert isinstance(backend.transport, BearerTransport)
     assert isinstance(backend.strategy, litestar_auth.DatabaseTokenStrategy)
@@ -531,6 +532,7 @@ async def test_root_package_supports_documented_redis_migration_recipe_and_totp_
     used_tokens_store = RedisUsedTotpCodeStore(redis=totp_redis)
     totp_config = TotpConfig(
         totp_pending_secret="p" * 32,
+        totp_pending_jti_store=RedisJWTDenylistStore(redis=cast("Any", totp_redis)),
         totp_used_tokens_store=used_tokens_store,
     )
 
@@ -867,10 +869,13 @@ def test_plugin_module_public_exports_no_compat_shims() -> None:
         "LitestarAuth",
         "LitestarAuthConfig",
         "OAuthConfig",
+        "StartupBackendTemplate",
         "TotpConfig",
     )
     assert current_plugin_module.DatabaseTokenAuthConfig is current_root_module.DatabaseTokenAuthConfig
     assert current_plugin_module.LitestarAuthConfig is current_plugin_internals.LitestarAuthConfig
+    assert current_plugin_module.StartupBackendTemplate.__module__ == "litestar_auth._plugin.config"
+    assert not hasattr(current_root_module, "StartupBackendTemplate")
     assert "AuthPlugin" not in plugin_module.__all__
     assert not hasattr(plugin_module, "AuthPlugin")
     for name in (

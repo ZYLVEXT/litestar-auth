@@ -11,7 +11,7 @@ from uuid import uuid4
 import pytest
 
 import litestar_auth._manager.totp_secrets as totp_secrets_module
-from litestar_auth._manager.totp_secrets import TotpSecretsService
+from litestar_auth._manager.totp_secrets import TotpSecretsService, TotpSecretStoragePosture
 from tests._helpers import ExampleUser
 
 pytestmark = pytest.mark.unit
@@ -74,6 +74,28 @@ def test_totp_secrets_module_executes_under_coverage() -> None:
     reloaded_module = importlib.reload(totp_secrets_module)
 
     assert reloaded_module.TotpSecretsService.__name__ == TotpSecretsService.__name__
+
+
+def test_totp_secret_storage_posture_reports_plaintext_compatibility_without_key() -> None:
+    """Missing keys keep the plaintext compatibility contract explicit."""
+    posture = TotpSecretStoragePosture.from_secret_key(None)
+
+    assert posture == TotpSecretStoragePosture.compatibility_plaintext()
+    assert posture.key == "compatibility_plaintext"
+    assert posture.encrypts_at_rest is False
+    assert posture.requires_explicit_production_opt_in is True
+    assert posture.production_validation_error is not None
+
+
+def test_totp_secret_storage_posture_reports_fernet_encrypted_with_key() -> None:
+    """Configured keys switch the explicit storage contract to Fernet encryption."""
+    posture = TotpSecretStoragePosture.from_secret_key("test-key")
+
+    assert posture == TotpSecretStoragePosture.fernet_encrypted()
+    assert posture.key == "fernet_encrypted"
+    assert posture.encrypts_at_rest is True
+    assert posture.requires_explicit_production_opt_in is False
+    assert posture.production_validation_error is None
 
 
 async def test_set_secret_delegates_to_user_store_with_encrypted_value() -> None:

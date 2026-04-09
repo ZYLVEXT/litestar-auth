@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import logging
 from typing import Any, cast
 from uuid import UUID
 
@@ -12,6 +11,7 @@ from litestar.config.app import AppConfig
 from litestar_auth._plugin.config import OAuthConfig
 from litestar_auth.authentication.backend import AuthenticationBackend
 from litestar_auth.authentication.transport.bearer import BearerTransport
+from litestar_auth.exceptions import ConfigurationError
 from litestar_auth.plugin import LitestarAuth, LitestarAuthConfig
 from tests.integration.test_orchestrator import (
     DummySessionMaker,
@@ -41,8 +41,8 @@ def _minimal_config() -> LitestarAuthConfig[ExampleUser, UUID]:
     )
 
 
-def test_oauth_redirect_localhost_warns_in_production(caplog: pytest.LogCaptureFixture) -> None:
-    """Warn when plugin-owned OAuth redirects target localhost with debug=False."""
+def test_oauth_redirect_localhost_fails_closed_in_production() -> None:
+    """Production startup rejects plugin-owned localhost OAuth redirect origins."""
     config = _minimal_config()
     config.oauth_config = OAuthConfig(
         oauth_providers=[("example", object())],
@@ -51,15 +51,12 @@ def test_oauth_redirect_localhost_warns_in_production(caplog: pytest.LogCaptureF
     )
     plugin = LitestarAuth(config)
 
-    with caplog.at_level(logging.WARNING, logger="litestar_auth.plugin"):
+    with pytest.raises(ConfigurationError, match="public HTTPS origin"):
         plugin.on_app_init(AppConfig(debug=False))
 
-    assert "localhost" in caplog.text
-    assert "oauth_redirect_base_url" in caplog.text
 
-
-def test_oauth_redirect_localhost_does_not_warn_in_debug(caplog: pytest.LogCaptureFixture) -> None:
-    """Do not warn when running in debug mode."""
+def test_oauth_redirect_localhost_is_allowed_in_debug() -> None:
+    """Debug mode preserves explicit localhost plugin OAuth recipes."""
     config = _minimal_config()
     config.oauth_config = OAuthConfig(
         oauth_providers=[("example", object())],
@@ -68,7 +65,6 @@ def test_oauth_redirect_localhost_does_not_warn_in_debug(caplog: pytest.LogCaptu
     )
     plugin = LitestarAuth(config)
 
-    with caplog.at_level(logging.WARNING, logger="litestar_auth.plugin"):
-        plugin.on_app_init(AppConfig(debug=True))
+    result = plugin.on_app_init(AppConfig(debug=True))
 
-    assert not caplog.text
+    assert result is not None

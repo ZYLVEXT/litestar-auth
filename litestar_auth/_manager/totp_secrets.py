@@ -3,15 +3,79 @@
 
 from __future__ import annotations
 
-from typing import Any, Protocol
+from dataclasses import dataclass
+from typing import Any, Literal, Protocol, Self
 
 from litestar_auth._manager._protocols import UserDatabaseManagerProtocol
+
+_TOTP_STORAGE_VALIDATION_ERROR = (
+    "totp_secret_key is required in production when TOTP is enabled. "
+    "TOTP secrets must be encrypted at rest. Generate a Fernet key with: "
+    'python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"'
+)
+
+type TotpSecretStoragePostureKey = Literal["compatibility_plaintext", "fernet_encrypted"]
+
+
+@dataclass(slots=True, frozen=True)
+class TotpSecretStoragePosture:
+    """Explicit contract describing how persisted TOTP secrets are stored."""
+
+    key: TotpSecretStoragePostureKey
+    encrypts_at_rest: bool
+    requires_explicit_production_opt_in: bool
+
+    @classmethod
+    def compatibility_plaintext(cls) -> Self:
+        """Return the compatibility-grade plaintext storage posture."""
+        return cls(
+            key="compatibility_plaintext",
+            encrypts_at_rest=False,
+            requires_explicit_production_opt_in=True,
+        )
+
+    @classmethod
+    def fernet_encrypted(cls) -> Self:
+        """Return the Fernet-encrypted storage posture."""
+        return cls(
+            key="fernet_encrypted",
+            encrypts_at_rest=True,
+            requires_explicit_production_opt_in=False,
+        )
+
+    @classmethod
+    def from_secret_key(cls, totp_secret_key: str | None) -> Self:
+        """Build the storage posture for the configured TOTP secret key.
+
+        Returns:
+            The explicit TOTP secret storage posture for ``totp_secret_key``.
+        """
+        if totp_secret_key is None:
+            return cls.compatibility_plaintext()
+        return cls.fernet_encrypted()
+
+    @property
+    def production_validation_error(self) -> str | None:
+        """Return the plugin validation error for this posture, if any."""
+        if not self.requires_explicit_production_opt_in:
+            return None
+        return _TOTP_STORAGE_VALIDATION_ERROR
 
 
 class _TotpSecretsManagerProtocol[UP](UserDatabaseManagerProtocol[UP], Protocol):
     """Manager surface required by the TOTP-secret service."""
 
     totp_secret_key: str | None
+
+
+def _load_fernet_for_totp_secret(
+    *,
+    load_cryptography_fernet: Any,
+    totp_secret_key: str,
+) -> tuple[Any, Any]:
+    """Return the cryptography module and Fernet instance for ``totp_secret_key``."""
+    fernet_module = load_cryptography_fernet()
+    return fernet_module, fernet_module.Fernet(totp_secret_key.encode())
 
 
 class TotpSecretsService[UP]:
@@ -45,12 +109,15 @@ class TotpSecretsService[UP]:
         if secret is None or not secret.startswith(self._prefix):
             return secret
 
-        if self._manager.totp_secret_key is None:
+        totp_secret_key = self._manager.totp_secret_key
+        if totp_secret_key is None:
             msg = "Encrypted TOTP secrets require totp_secret_key."
             raise RuntimeError(msg)
 
-        fernet_module = load_cryptography_fernet()
-        fernet = fernet_module.Fernet(self._manager.totp_secret_key.encode())
+        fernet_module, fernet = _load_fernet_for_totp_secret(
+            load_cryptography_fernet=load_cryptography_fernet,
+            totp_secret_key=totp_secret_key,
+        )
         encrypted_value = secret.removeprefix(self._prefix).encode()
         try:
             return fernet.decrypt(encrypted_value).decode()
@@ -65,10 +132,19 @@ class TotpSecretsService[UP]:
         load_cryptography_fernet: Any,
     ) -> str | None:
         """Return the database representation for a TOTP secret."""
-        if secret is None or self._manager.totp_secret_key is None:
+        if secret is None:
             return secret
 
-        fernet_module = load_cryptography_fernet()
-        fernet = fernet_module.Fernet(self._manager.totp_secret_key.encode())
+        totp_secret_key = self._manager.totp_secret_key
+        posture = TotpSecretStoragePosture.from_secret_key(totp_secret_key)
+        if not posture.encrypts_at_rest:
+            return secret
+        if totp_secret_key is None:  # pragma: no cover - posture branch above already guards this
+            return secret
+
+        _, fernet = _load_fernet_for_totp_secret(
+            load_cryptography_fernet=load_cryptography_fernet,
+            totp_secret_key=totp_secret_key,
+        )
         encrypted_secret = fernet.encrypt(secret.encode()).decode()
         return f"{self._prefix}{encrypted_secret}"

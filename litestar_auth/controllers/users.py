@@ -14,6 +14,7 @@ from litestar_auth.controllers._utils import (
     AccountStateValidatorProvider,
     _configure_request_body_handler,
     _map_domain_exceptions,
+    _mark_litestar_auth_route_handler,
     _require_account_state,
     _require_msgspec_struct,
     _to_user_schema,
@@ -365,7 +366,7 @@ def create_users_controller[UP: UsersControllerUserProtocol[Any], ID](  # noqa: 
     )
     controller_cls = _define_users_controller_class_di(ctx)
     controller_cls.path = path
-    return controller_cls
+    return _mark_litestar_auth_route_handler(controller_cls)
 
 
 def _build_safe_self_update(data: msgspec.Struct) -> dict[str, Any]:

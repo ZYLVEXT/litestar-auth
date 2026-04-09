@@ -12,6 +12,7 @@ from litestar.status_codes import HTTP_200_OK, HTTP_202_ACCEPTED
 from litestar_auth.controllers._utils import (
     _create_before_request_handler,
     _create_rate_limit_handlers,
+    _mark_litestar_auth_route_handler,
     _require_msgspec_struct,
     _to_user_schema,
 )
@@ -117,4 +118,4 @@ def create_verify_controller[UP: VerifyControllerUserProtocol[Any], ID](
 
     verify_cls = VerifyController
     verify_cls.path = path
-    return cast("type[Controller]", verify_cls)
+    return _mark_litestar_auth_route_handler(cast("type[Controller]", verify_cls))

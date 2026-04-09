@@ -18,7 +18,7 @@ from sqlalchemy.pool import StaticPool
 import litestar_auth.totp as _totp_mod
 from litestar_auth._plugin.config import TotpConfig
 from litestar_auth.authentication.backend import AuthenticationBackend
-from litestar_auth.authentication.strategy.jwt import JWTStrategy
+from litestar_auth.authentication.strategy.jwt import InMemoryJWTDenylistStore, JWTStrategy
 from litestar_auth.authentication.transport.bearer import BearerTransport
 from litestar_auth.manager import BaseUserManager, UserManagerSecurity
 from litestar_auth.models import User
@@ -163,6 +163,7 @@ def _build_app_with_trusted_proxy(
         rate_limit_config=rate_limit_config,
         totp_config=TotpConfig(
             totp_pending_secret="test-totp-pending-secret-thirty-two!",
+            totp_pending_jti_store=InMemoryJWTDenylistStore(),
             totp_used_tokens_store=InMemoryUsedTotpCodeStore(),
         ),
     )

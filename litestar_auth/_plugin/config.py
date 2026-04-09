@@ -8,11 +8,12 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import timedelta
 from functools import partial
-from typing import TYPE_CHECKING, Any, Never, Protocol, cast
+from typing import TYPE_CHECKING, Any, Literal, Never, Protocol, TypeGuard, cast
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from litestar_auth._manager.construction import ManagerConstructorInputs
+from litestar_auth._manager.totp_secrets import TotpSecretStoragePosture
 from litestar_auth._plugin.scoped_session import SessionFactory
 from litestar_auth.config import DEFAULT_MINIMUM_PASSWORD_LENGTH, require_password_length
 from litestar_auth.db.base import BaseUserStore
@@ -21,15 +22,17 @@ from litestar_auth.password import PasswordHelper
 from litestar_auth.types import LoginIdentifier, UserProtocol
 
 if TYPE_CHECKING:
-    from collections.abc import Sequence
+    from collections.abc import Mapping, Sequence
 
     import msgspec
 
     from litestar_auth.authentication.backend import AuthenticationBackend
+    from litestar_auth.authentication.strategy.jwt import JWTDenylistStore
     from litestar_auth.config import OAuthProviderConfig
     from litestar_auth.manager import BaseUserManager, UserManagerSecurity
     from litestar_auth.ratelimit import AuthRateLimitConfig
     from litestar_auth.totp import TotpAlgorithm, UsedTotpCodeStore
+    from litestar_auth.types import StrategyProtocol, TransportProtocol
 
 type UserDatabaseFactory[UP: UserProtocol[Any], ID] = Callable[[AsyncSession], BaseUserStore[UP, ID]]
 _SESSION_FACTORY_CONTRACT = SessionFactory
@@ -45,6 +48,165 @@ DEFAULT_DATABASE_TOKEN_BACKEND_NAME = "database"  # noqa: S105
 DEFAULT_DATABASE_TOKEN_MAX_AGE = timedelta(hours=1)
 DEFAULT_DATABASE_TOKEN_REFRESH_MAX_AGE = timedelta(days=30)
 DEFAULT_DATABASE_TOKEN_BYTES = 32
+
+type _PluginSecurityTradeoffKey = Literal["jwt_revocation", "totp_secret_storage"]
+
+
+@dataclass(frozen=True, slots=True)
+class _PluginSecurityTradeoffPolicy:
+    """Shared documentation and ownership wording for plugin-managed security tradeoffs."""
+
+    key: _PluginSecurityTradeoffKey
+    plugin_surface: str
+    contract_reference: str
+    docs_summary: str
+    production_requirement: str
+
+
+@dataclass(frozen=True, slots=True)
+class _PluginSecurityTradeoffNotice:
+    """One concrete runtime tradeoff resolved from a posture contract."""
+
+    policy: _PluginSecurityTradeoffPolicy
+    posture_key: str
+    requires_explicit_production_opt_in: bool
+    production_validation_error: str | None
+    startup_warning: str | None
+
+
+class _JWTRevocationPostureLike(Protocol):
+    """Runtime posture contract needed by plugin validation and startup warnings."""
+
+    key: str
+    requires_explicit_production_opt_in: bool
+    production_validation_error: str | None
+    startup_warning: str | None
+
+
+_JWT_REVOCATION_TRADEOFF_POLICY = _PluginSecurityTradeoffPolicy(
+    key="jwt_revocation",
+    plugin_surface="allow_nondurable_jwt_revocation=True",
+    contract_reference="JWTStrategy.revocation_posture",
+    docs_summary=(
+        "`JWTStrategy(secret=...)` defaults to the compatibility-grade `compatibility_in_memory` posture "
+        "unless you provide a shared denylist store."
+    ),
+    production_requirement=(
+        "Plugin-managed production rejects this posture unless "
+        "`allow_nondurable_jwt_revocation=True` or `unsafe_testing=True`; startup still warns when you "
+        "explicitly accept the single-process tradeoff."
+    ),
+)
+_TOTP_SECRET_STORAGE_TRADEOFF_POLICY = _PluginSecurityTradeoffPolicy(
+    key="totp_secret_storage",
+    plugin_surface="user_manager_security.totp_secret_key",
+    contract_reference="BaseUserManager.totp_secret_storage_posture",
+    docs_summary=(
+        "Omitting `totp_secret_key` keeps the compatibility-grade `compatibility_plaintext` posture "
+        "so legacy plaintext TOTP secrets still round-trip."
+    ),
+    production_requirement=(
+        "With `totp_config` enabled, plugin-managed production requires `user_manager_security.totp_secret_key` "
+        "unless `unsafe_testing=True` or a custom `user_manager_factory` explicitly owns that wiring."
+    ),
+)
+
+
+def _is_jwt_revocation_posture_like(posture: object) -> TypeGuard[_JWTRevocationPostureLike]:
+    """Return whether ``posture`` matches the JWT revocation posture contract.
+
+    This uses attribute checks instead of ``isinstance()`` so strategy-module reloads in
+    test coverage still satisfy the shared posture contract.
+    """
+    production_validation_error = getattr(posture, "production_validation_error", None)
+    startup_warning = getattr(posture, "startup_warning", None)
+    return (
+        isinstance(getattr(posture, "key", None), str)
+        and isinstance(getattr(posture, "requires_explicit_production_opt_in", None), bool)
+        and (production_validation_error is None or isinstance(production_validation_error, str))
+        and (startup_warning is None or isinstance(startup_warning, str))
+    )
+
+
+def _describe_jwt_revocation_tradeoff(posture: object) -> _PluginSecurityTradeoffNotice | None:
+    """Resolve the shared plugin tradeoff notice for a JWT revocation posture.
+
+    Returns:
+        The shared plugin notice when ``posture`` satisfies the JWT revocation
+        contract, otherwise ``None``.
+    """
+    if not _is_jwt_revocation_posture_like(posture):
+        return None
+    return _PluginSecurityTradeoffNotice(
+        policy=_JWT_REVOCATION_TRADEOFF_POLICY,
+        posture_key=posture.key,
+        requires_explicit_production_opt_in=posture.requires_explicit_production_opt_in,
+        production_validation_error=posture.production_validation_error,
+        startup_warning=posture.startup_warning,
+    )
+
+
+def _describe_totp_secret_storage_tradeoff(totp_secret_key: str | None) -> _PluginSecurityTradeoffNotice:
+    """Resolve the shared plugin tradeoff notice for TOTP secret storage.
+
+    Returns:
+        The shared plugin notice for the resolved TOTP storage posture.
+    """
+    posture = TotpSecretStoragePosture.from_secret_key(totp_secret_key)
+    return _PluginSecurityTradeoffNotice(
+        policy=_TOTP_SECRET_STORAGE_TRADEOFF_POLICY,
+        posture_key=posture.key,
+        requires_explicit_production_opt_in=posture.requires_explicit_production_opt_in,
+        production_validation_error=posture.production_validation_error,
+        startup_warning=None,
+    )
+
+
+def _iter_plugin_security_tradeoff_policies() -> tuple[_PluginSecurityTradeoffPolicy, ...]:
+    """Return the shared plugin-managed JWT/TOTP tradeoff descriptions."""
+    return (
+        _JWT_REVOCATION_TRADEOFF_POLICY,
+        _TOTP_SECRET_STORAGE_TRADEOFF_POLICY,
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class StartupBackendTemplate[UP: UserProtocol[Any], ID]:
+    """Startup-only backend template used for plugin assembly and validation."""
+
+    name: str
+    transport: TransportProtocol
+    strategy: StrategyProtocol[UP, ID]
+    _runtime_backend_factory: Callable[[AsyncSession], AuthenticationBackend[UP, ID]] = field(
+        repr=False,
+        compare=False,
+    )
+
+    @classmethod
+    def from_runtime_backend(
+        cls,
+        backend: AuthenticationBackend[UP, ID],
+    ) -> StartupBackendTemplate[UP, ID]:
+        """Wrap a runtime backend in the startup-only template type.
+
+        Returns:
+            Startup-only template carrying the runtime backend's public surface and
+            session-binding factory.
+        """
+        return cls(
+            name=backend.name,
+            transport=backend.transport,
+            strategy=backend.strategy,
+            _runtime_backend_factory=backend.with_session,
+        )
+
+    def bind_runtime_backend(self, session: AsyncSession) -> AuthenticationBackend[UP, ID]:
+        """Materialize the request-scoped runtime backend for ``session``.
+
+        Returns:
+            Runtime authentication backend rebound to ``session``.
+        """
+        return self._runtime_backend_factory(session)
 
 
 class _StartupOnlyDatabaseTokenSession:
@@ -74,7 +236,8 @@ def resolve_database_token_strategy_session(session: AsyncSession | None = None)
 
     Returns:
         The provided request ``AsyncSession`` when available, otherwise the startup-only
-        sentinel used by :meth:`LitestarAuthConfig.startup_backends`.
+        sentinel used by :class:`StartupBackendTemplate` values from
+        :meth:`LitestarAuthConfig.startup_backends`.
     """
     return session if session is not None else cast("AsyncSession", _STARTUP_ONLY_DATABASE_TOKEN_SESSION)
 
@@ -97,6 +260,32 @@ def build_database_token_backend[UP: UserProtocol[Any], ID](
     )
 
 
+def _build_database_token_backend_template[UP: UserProtocol[Any], ID](
+    database_token_auth: DatabaseTokenAuthConfig,
+    *,
+    unsafe_testing: bool = False,
+) -> StartupBackendTemplate[UP, ID]:
+    """Build the startup-only template for the canonical DB-token backend.
+
+    Returns:
+        Startup-only template for the canonical DB-token backend.
+    """
+    startup_backend = _build_database_token_backend(
+        database_token_auth,
+        unsafe_testing=unsafe_testing,
+    )
+    return StartupBackendTemplate[UP, ID](
+        name=startup_backend.name,
+        transport=startup_backend.transport,
+        strategy=startup_backend.strategy,
+        _runtime_backend_factory=lambda session: build_database_token_backend(
+            database_token_auth,
+            session=session,
+            unsafe_testing=unsafe_testing,
+        ),
+    )
+
+
 def _build_default_user_db(session: AsyncSession, *, user_model: type[Any]) -> BaseUserStore[Any, Any]:
     """Build a ``SQLAlchemyUserDatabase`` with a deferred adapter import.
 
@@ -110,6 +299,27 @@ def _build_default_user_db(session: AsyncSession, *, user_model: type[Any]) -> B
     from litestar_auth.db.sqlalchemy import SQLAlchemyUserDatabase  # noqa: PLC0415
 
     return SQLAlchemyUserDatabase(session, user_model=user_model)
+
+
+def _resolve_plugin_managed_totp_secret_storage_tradeoff[UP: UserProtocol[Any], ID](
+    config: LitestarAuthConfig[UP, ID],
+) -> _PluginSecurityTradeoffNotice | None:
+    """Resolve the TOTP storage tradeoff owned by plugin-managed manager wiring.
+
+    Returns:
+        The plugin-managed TOTP storage notice when the plugin owns manager
+        secret wiring for the active config, otherwise ``None``.
+    """
+    if config.totp_config is None:
+        return None
+    if config.user_manager_factory is not None and config.user_manager_security is None:
+        return None
+    manager_inputs = ManagerConstructorInputs(
+        manager_kwargs=config.user_manager_kwargs,
+        manager_security=config.user_manager_security,
+        id_parser=config.id_parser,
+    )
+    return _describe_totp_secret_storage_tradeoff(manager_inputs.effective_security.totp_secret_key or None)
 
 
 def _build_database_token_backend[UP: UserProtocol[Any], ID](
@@ -363,6 +573,7 @@ class TotpConfig:
     totp_issuer: str = "litestar-auth"
     totp_algorithm: TotpAlgorithm = "SHA256"
     totp_used_tokens_store: UsedTotpCodeStore | None = None
+    totp_pending_jti_store: JWTDenylistStore | None = None
     totp_require_replay_protection: bool = True
     totp_enable_requires_password: bool = True
 
@@ -373,6 +584,7 @@ class OAuthConfig:
 
     oauth_cookie_secure: bool = True
     oauth_providers: Sequence[OAuthProviderConfig] | None = None
+    oauth_provider_scopes: Mapping[str, Sequence[str]] = field(default_factory=dict)
     oauth_associate_by_email: bool = False
     oauth_trust_provider_email_verified: bool = False
     include_oauth_associate: bool = False
@@ -385,6 +597,7 @@ class _OAuthRouteRegistrationContract:
     """Internal contract describing plugin-owned OAuth login and associate routes."""
 
     providers: tuple[OAuthProviderConfig, ...]
+    oauth_provider_scopes: dict[str, tuple[str, ...]]
     include_oauth_associate: bool
     oauth_cookie_secure: bool
     oauth_associate_by_email: bool
@@ -430,6 +643,58 @@ def _normalize_oauth_provider_inventory(
     return tuple(providers or ())
 
 
+def _normalize_oauth_scopes(scopes: Sequence[str]) -> tuple[str, ...]:
+    """Return a normalized tuple of configured OAuth scopes.
+
+    Raises:
+        TypeError: If any configured scope is not a string.
+        ValueError: If any configured scope is empty or contains whitespace.
+    """
+    normalized_scopes: list[str] = []
+    seen_scopes: set[str] = set()
+    for raw_scope in scopes:
+        if not isinstance(raw_scope, str):
+            msg = "oauth_provider_scopes values must be strings."
+            raise TypeError(msg)
+        scope = raw_scope.strip()
+        if not scope:
+            msg = "oauth_provider_scopes values must be non-empty strings."
+            raise ValueError(msg)
+        if any(character.isspace() for character in scope):
+            msg = "oauth_provider_scopes values must be individual tokens without embedded whitespace."
+            raise ValueError(msg)
+        if scope not in seen_scopes:
+            normalized_scopes.append(scope)
+            seen_scopes.add(scope)
+    return tuple(normalized_scopes)
+
+
+def _normalize_oauth_provider_scopes(
+    *,
+    providers: tuple[OAuthProviderConfig, ...],
+    provider_scopes: Mapping[str, Sequence[str]],
+) -> dict[str, tuple[str, ...]]:
+    """Return normalized per-provider OAuth scopes keyed by provider name.
+
+    Raises:
+        ValueError: If provider scopes reference an unknown provider name or contain invalid scopes.
+    """
+    normalized_provider_scopes: dict[str, tuple[str, ...]] = {}
+    configured_provider_names = {provider_name for provider_name, _oauth_client in providers}
+    unknown_provider_names = sorted(set(provider_scopes) - configured_provider_names)
+    if unknown_provider_names:
+        joined_names = ", ".join(unknown_provider_names)
+        msg = f"oauth_provider_scopes contains unknown provider names: {joined_names}."
+        raise ValueError(msg)
+
+    for provider_name, scopes in provider_scopes.items():
+        normalized_scopes = _normalize_oauth_scopes(scopes)
+        if normalized_scopes:
+            normalized_provider_scopes[provider_name] = normalized_scopes
+
+    return normalized_provider_scopes
+
+
 def _build_oauth_route_registration_contract(
     *,
     auth_path: str,
@@ -450,6 +715,7 @@ def _build_oauth_route_registration_contract(
     if oauth_config is None:
         return _OAuthRouteRegistrationContract(
             providers=(),
+            oauth_provider_scopes={},
             include_oauth_associate=False,
             oauth_cookie_secure=True,
             oauth_associate_by_email=False,
@@ -463,6 +729,10 @@ def _build_oauth_route_registration_contract(
     redirect_base_url = oauth_config.oauth_redirect_base_url or None
     return _OAuthRouteRegistrationContract(
         providers=providers,
+        oauth_provider_scopes=_normalize_oauth_provider_scopes(
+            providers=providers,
+            provider_scopes=oauth_config.oauth_provider_scopes,
+        ),
         include_oauth_associate=oauth_config.include_oauth_associate,
         oauth_cookie_secure=oauth_config.oauth_cookie_secure,
         oauth_associate_by_email=oauth_config.oauth_associate_by_email,
@@ -513,6 +783,8 @@ class LitestarAuthConfig[UP: UserProtocol[Any], ID]:
     API schemas and DB-session dependency injection:
         ``user_read_schema``, ``user_create_schema``, ``user_update_schema``,
         ``db_session_dependency_key``, ``db_session_dependency_provided_externally``.
+        ``db_session_dependency_key`` must be a valid non-keyword Python identifier
+        because Litestar resolves dependencies by matching keys to callable parameter names.
     Login identifier:
         ``login_identifier`` (``'email'`` | ``'username'``) selects which user-model
         field is used for credential lookup (default ``'email'``).
@@ -586,7 +858,7 @@ class LitestarAuthConfig[UP: UserProtocol[Any], ID]:
             raise ValueError(msg)
         return self.backends
 
-    def startup_backends(self) -> Sequence[AuthenticationBackend[UP, ID]]:
+    def startup_backends(self) -> tuple[StartupBackendTemplate[UP, ID], ...]:
         """Return startup-only backends for plugin setup, validation, and route assembly.
 
         Returns:
@@ -594,8 +866,13 @@ class LitestarAuthConfig[UP: UserProtocol[Any], ID]:
         """
         self._validate_backend_configuration()
         if self.database_token_auth is not None:
-            return (_build_database_token_backend(self.database_token_auth, unsafe_testing=self.unsafe_testing),)
-        return self.backends
+            return (
+                _build_database_token_backend_template(
+                    self.database_token_auth,
+                    unsafe_testing=self.unsafe_testing,
+                ),
+            )
+        return tuple(StartupBackendTemplate.from_runtime_backend(backend) for backend in self.backends)
 
     def bind_request_backends(self, session: AsyncSession) -> tuple[AuthenticationBackend[UP, ID], ...]:
         """Return authentication backends bound to the current request session.
@@ -604,15 +881,7 @@ class LitestarAuthConfig[UP: UserProtocol[Any], ID]:
             Request-scoped backends aligned with the provided SQLAlchemy session.
         """
         self._validate_backend_configuration()
-        if self.database_token_auth is not None:
-            return (
-                build_database_token_backend(
-                    self.database_token_auth,
-                    session=session,
-                    unsafe_testing=self.unsafe_testing,
-                ),
-            )
-        return tuple(backend.with_session(session) for backend in self.startup_backends())
+        return tuple(backend.bind_runtime_backend(session) for backend in self.startup_backends())
 
     def build_password_helper(self) -> PasswordHelper:
         """Return the helper aligned with this config, memoizing default construction.
@@ -662,7 +931,10 @@ class LitestarAuthConfig[UP: UserProtocol[Any], ID]:
             msg = f"Invalid login_identifier {self.login_identifier!r}. Expected 'email' or 'username'."
             raise ConfigurationError(msg)
         if not self.db_session_dependency_key.isidentifier() or keyword.iskeyword(self.db_session_dependency_key):
-            msg = f"db_session_dependency_key must be a valid Python identifier, got {self.db_session_dependency_key!r}"
+            msg = (
+                "db_session_dependency_key must be a valid Python identifier because Litestar matches dependency "
+                f"keys to callable parameter names, got {self.db_session_dependency_key!r}"
+            )
             raise ValueError(msg)
 
     def _validate_backend_configuration(self) -> None:

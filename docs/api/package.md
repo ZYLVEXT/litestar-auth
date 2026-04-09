@@ -57,7 +57,7 @@ In that example, `session_maker` is any compatible request-session factory calla
 
 If you previously built the DB bearer backend by hand with `AuthenticationBackend(..., BearerTransport(), DatabaseTokenStrategy(...))`, migrate to the direct `database_token_auth=DatabaseTokenAuthConfig(...)` form above. Keep manual backends for multi-backend or custom-transport cases.
 
-`backends` remains the explicit manual-backend field. For the canonical `database_token_auth=...` path, call `config.startup_backends()` when you need the setup-time backend templates used during plugin assembly, and `config.bind_request_backends(session)` when you need request-scoped runtime backend instances.
+`backends` remains the explicit manual-backend field. For the canonical `database_token_auth=...` path, `config.startup_backends()` returns startup-only `StartupBackendTemplate` values used during plugin assembly, while `config.bind_request_backends(session)` returns request-scoped runtime `AuthenticationBackend` instances.
 
 ## Public surface (high level)
 

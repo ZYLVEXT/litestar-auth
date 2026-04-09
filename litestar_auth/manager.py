@@ -21,7 +21,11 @@ from litestar_auth._manager.account_tokens import (
     _AccountTokensManagerProtocol,
 )
 from litestar_auth._manager.construction import AccountTokenSecrets, SecretFactory, resolve_account_token_secrets
-from litestar_auth._manager.totp_secrets import TotpSecretsService, _TotpSecretsManagerProtocol
+from litestar_auth._manager.totp_secrets import (
+    TotpSecretsService,
+    TotpSecretStoragePosture,
+    _TotpSecretsManagerProtocol,
+)
 from litestar_auth._manager.user_lifecycle import (
     PRIVILEGED_FIELDS as _CANONICAL_PRIVILEGED_FIELDS,
 )
@@ -224,6 +228,8 @@ class BaseUserManager[UP: UserProtocol[Any], ID](  # noqa: PLR0904
             reset_verification_on_email_change: Whether email changes should clear ``is_verified`` and
                 trigger a new verification token hook.
             totp_secret_key: Optional Fernet key used to encrypt stored TOTP secrets.
+                When omitted, the manager keeps the compatibility-grade plaintext
+                storage posture for direct/custom usage.
             backends: Session-bound auth backends when constructed via ``LitestarAuth``;
                 keeps credential updates aligned with the same backends used for request auth.
             login_identifier: Which field ``authenticate`` uses for credential lookup by default
@@ -326,6 +332,11 @@ class BaseUserManager[UP: UserProtocol[Any], ID](  # noqa: PLR0904
     def account_token_secrets(self) -> AccountTokenSecrets:
         """Return the resolved verify/reset secret bundle used by account-token services."""
         return self._account_token_secrets
+
+    @property
+    def totp_secret_storage_posture(self) -> TotpSecretStoragePosture:
+        """Return the explicit storage contract for persisted TOTP secrets."""
+        return TotpSecretStoragePosture.from_secret_key(self.totp_secret_key)
 
     async def get(self, user_id: ID) -> UP | None:
         """Return a user by identifier.

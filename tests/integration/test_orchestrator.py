@@ -11,6 +11,7 @@ import msgspec
 import pytest
 from cryptography.fernet import Fernet
 from litestar import Litestar, Request, get
+from litestar.exceptions import ClientException
 from litestar.plugins import InitPlugin
 from litestar.testing import AsyncTestClient
 
@@ -18,8 +19,10 @@ import litestar_auth.totp as _totp_mod
 from litestar_auth._plugin.config import TotpConfig
 from litestar_auth.authentication.backend import AuthenticationBackend
 from litestar_auth.authentication.strategy.base import Strategy, UserManagerProtocol
+from litestar_auth.authentication.strategy.jwt import InMemoryJWTDenylistStore
 from litestar_auth.authentication.transport.bearer import BearerTransport
 from litestar_auth.controllers.totp import INVALID_TOTP_TOKEN_DETAIL
+from litestar_auth.exceptions import ErrorCode
 from litestar_auth.manager import BaseUserManager, UserManagerSecurity, require_password_length
 from litestar_auth.password import PasswordHelper
 from litestar_auth.plugin import LitestarAuth, LitestarAuthConfig
@@ -230,6 +233,20 @@ def auth_state(request: Request[Any, Any, Any]) -> dict[str, str | None]:
     return {"email": user.email if user is not None else None}
 
 
+@get("/non-auth-client-exception", sync_to_thread=False)
+def non_auth_client_exception() -> None:
+    """Raise a non-auth ClientException for handler-scoping regressions.
+
+    Raises:
+        ClientException: Always, to verify the plugin no longer intercepts unrelated routes.
+    """
+    raise ClientException(
+        status_code=HTTP_BAD_REQUEST,
+        detail="Outside auth routes.",
+        extra={"code": "NON_AUTH_ROUTE"},
+    )
+
+
 def build_app() -> tuple[
     Litestar,
     InMemoryUserDatabase,
@@ -292,7 +309,7 @@ def build_app() -> tuple[
         include_users=True,
     )
     plugin = LitestarAuth(config)
-    app = Litestar(route_handlers=[dependency_probe, auth_state], plugins=[plugin])
+    app = Litestar(route_handlers=[dependency_probe, auth_state, non_auth_client_exception], plugins=[plugin])
     return app, user_db, primary_strategy, secondary_strategy
 
 
@@ -435,6 +452,7 @@ def build_advanced_app() -> tuple[
         include_users=True,
         totp_config=TotpConfig(
             totp_pending_secret="plugin-totp-pending-secret-thirty-two!",
+            totp_pending_jti_store=InMemoryJWTDenylistStore(),
             totp_used_tokens_store=used_tokens_store,
         ),
         enable_refresh=True,
@@ -571,6 +589,27 @@ async def test_plugin_registers_di_middleware_and_generated_controllers(
     users_response = await test_client.get("/users", headers={"Authorization": "Bearer primary-2"})
     assert users_response.status_code == HTTP_OK
     assert users_response.json()["total"] == TOTAL_USERS
+
+
+async def test_plugin_scopes_client_exception_handler_to_auth_routes() -> None:
+    """Plugin-owned auth routes keep auth error formatting without affecting unrelated routes."""
+    app, _user_db, _primary_strategy, _secondary_strategy = build_app()
+
+    async with AsyncTestClient(app=app) as client:
+        auth_response = await client.post("/auth/verify", json={"token": "not-a-valid-token"})
+        non_auth_response = await client.get("/non-auth-client-exception")
+
+    assert auth_response.status_code == HTTP_BAD_REQUEST
+    assert auth_response.json() == {
+        "detail": "The email verification token is invalid.",
+        "code": ErrorCode.VERIFY_USER_BAD_TOKEN,
+    }
+
+    assert non_auth_response.status_code == HTTP_BAD_REQUEST
+    assert non_auth_response.json()["status_code"] == HTTP_BAD_REQUEST
+    assert non_auth_response.json()["detail"] == "Outside auth routes."
+    assert non_auth_response.json().get("code") is None
+    assert non_auth_response.json()["extra"]["code"] == "NON_AUTH_ROUTE"
 
 
 async def test_plugin_enforces_default_minimum_password_length() -> None:

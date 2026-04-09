@@ -16,6 +16,18 @@ OAuth has one plugin-owned route-registration contract plus a manual escape hatc
 
 The plugin no longer treats `oauth_providers` as inert metadata: if providers are declared, login routes are part of the plugin-owned HTTP surface.
 
+For plugin-owned routes, production app init now fails closed unless `oauth_redirect_base_url` uses a non-loopback `https://...` origin. Keep localhost or plain-HTTP redirect bases behind `AppConfig(debug=True)` or `unsafe_testing=True` only.
+
+For manual/custom controller wiring, `redirect_base_url` on `create_provider_oauth_controller()`, `create_oauth_controller()`, and `create_oauth_associate_controller()` must also use a non-loopback `https://...` origin. Unlike the plugin-owned route table, the low-level manual factories do not inspect `AppConfig(debug=True)` or `unsafe_testing=True`, so there is no localhost or plain-HTTP escape hatch on that API surface.
+
+## Scope policy
+
+OAuth scopes are **server-owned configuration**, not caller input.
+
+- Plugin-owned routes: set `OAuthConfig.oauth_provider_scopes={"github": ["openid", "email"]}` to pin scopes per provider.
+- Manual routes: pass `oauth_scopes=[...]` to `create_provider_oauth_controller()` or `create_oauth_controller()`.
+- Runtime `GET /authorize?scopes=...` overrides are rejected with **400**.
+
 ## Account association
 
 For logged-in users linking another identity:
@@ -24,6 +36,10 @@ For logged-in users linking another identity:
 - Configure `oauth_providers` and `oauth_redirect_base_url`.
 
 Routes use the `/auth/associate/{provider}/...` prefix by default, and the same provider inventory also owns the `/auth/oauth/{provider}/...` login routes. If you need associate-only plugin wiring or a different path layout, switch to manual controller factories for the whole OAuth route table.
+
+Associate callbacks enforce the same active-account checks as login callbacks before linking a provider identity.
+
+For manual `create_oauth_associate_controller(..., user_manager_dependency_key=...)` wiring, the dependency key must be a valid non-keyword Python identifier. Litestar resolves that dependency by matching the key to the generated callback parameter name.
 
 ## Token encryption
 
@@ -51,7 +67,7 @@ For ad-hoc ORM queries against `OAuthAccount`, bind the same policy to the sessi
 
 ## Provider email trust
 
-For plugin-owned OAuth login routes, set **`oauth_trust_provider_email_verified=True`** when a provider's `email_verified` claim can safely drive auto-verification or login-time associate-by-email behavior. Manual controller factories use the lower-level **`trust_provider_email_verified`** flag directly. Enable either form **only** for providers that cryptographically assert email ownership. Mismatched configuration yields **400** responses with `OAUTH_EMAIL_NOT_VERIFIED` or related codes (see [Errors](../errors.md)).
+For plugin-owned OAuth login routes, set **`oauth_trust_provider_email_verified=True`** when a provider's `email_verified` claim can safely drive auto-verification or login-time associate-by-email behavior. Manual controller factories use the lower-level **`trust_provider_email_verified`** flag directly and can also pin **`oauth_scopes`** per controller. Enable either form **only** for providers that cryptographically assert email ownership. Mismatched configuration yields **400** responses with `OAUTH_EMAIL_NOT_VERIFIED` or related codes (see [Errors](../errors.md)).
 
 Default **`oauth_associate_by_email=False`** avoids implicit login-time linking by email alone. On the plugin-owned route table, this flag applies to the login callbacks derived from `oauth_providers`; it does not change the authenticated associate routes.
 

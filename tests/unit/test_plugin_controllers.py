@@ -113,10 +113,16 @@ def test_build_auth_controllers_builds_backend_specific_paths_and_totp_secret(
     monkeypatch.setattr(controllers_module, "create_auth_controller", _create_auth_controller)
 
     assert _build_auth_controllers(config=config) == ["/auth", "/auth/secondary"]
-    assert calls[0]["backend"] is primary_backend
+    assert isinstance(calls[0]["backend"], controllers_module.StartupBackendTemplate)
+    assert calls[0]["backend"].name == primary_backend.name
+    assert calls[0]["backend"].transport is primary_backend.transport
+    assert calls[0]["backend"].strategy is primary_backend.strategy
     assert calls[0]["totp_pending_secret"] == "p" * 32
     assert calls[0]["unsafe_testing"] is False
-    assert calls[1]["backend"] is secondary_backend
+    assert isinstance(calls[1]["backend"], controllers_module.StartupBackendTemplate)
+    assert calls[1]["backend"].name == secondary_backend.name
+    assert calls[1]["backend"].transport is secondary_backend.transport
+    assert calls[1]["backend"].strategy is secondary_backend.strategy
     assert calls[1]["path"] == "/auth/secondary"
     assert calls[1]["unsafe_testing"] is False
 
@@ -132,6 +138,7 @@ def test_build_totp_controller_forwards_named_backend_and_config(monkeypatch: py
     primary_backend = _backend(name="primary", token_prefix="primary")
     secondary_backend = _backend(name="secondary", token_prefix="secondary")
     used_tokens_store = cast("Any", object())
+    pending_jti_store = cast("Any", object())
     config = _minimal_config(
         backends=[primary_backend, secondary_backend],
         totp_config=TotpConfig(
@@ -140,6 +147,7 @@ def test_build_totp_controller_forwards_named_backend_and_config(monkeypatch: py
             totp_issuer="Example Issuer",
             totp_algorithm=cast("Any", "SHA512"),
             totp_used_tokens_store=used_tokens_store,
+            totp_pending_jti_store=pending_jti_store,
             totp_require_replay_protection=False,
             totp_enable_requires_password=False,
         ),
@@ -153,9 +161,13 @@ def test_build_totp_controller_forwards_named_backend_and_config(monkeypatch: py
     monkeypatch.setattr(controllers_module, "create_totp_controller", _create_totp_controller)
 
     assert build_totp_controller(config) == "totp-controller"
-    assert captured["backend"] is secondary_backend
+    assert isinstance(captured["backend"], controllers_module.StartupBackendTemplate)
+    assert captured["backend"].name == secondary_backend.name
+    assert captured["backend"].transport is secondary_backend.transport
+    assert captured["backend"].strategy is secondary_backend.strategy
     assert captured["user_manager_dependency_key"] == "litestar_auth_user_manager"
     assert captured["used_tokens_store"] is used_tokens_store
+    assert captured["pending_jti_store"] is pending_jti_store
     assert captured["require_replay_protection"] is False
     assert captured["requires_verification"] is False
     assert captured["totp_pending_secret"] == "p" * 32
@@ -219,9 +231,12 @@ def test_resolve_request_backend_raises_when_backend_name_changes() -> None:
 async def test_create_totp_controller_enable_validation_callback_runs_background_task() -> None:
     """Plugin TOTP enable handlers keep the invalid-payload background callback wired."""
     controller_cls = controllers_module.create_totp_controller(
-        backend=_backend(name="primary", token_prefix="primary"),
+        backend=controllers_module.StartupBackendTemplate.from_runtime_backend(
+            _backend(name="primary", token_prefix="primary"),
+        ),
         backend_index=0,
         user_manager_dependency_key="litestar_auth_user_manager",
+        pending_jti_store=cast("Any", object()),
         require_replay_protection=False,
         totp_pending_secret="p" * 32,
         totp_enable_requires_password=True,
@@ -438,15 +453,49 @@ def test_append_oauth_login_controllers_uses_explicit_redirect_base_url_and_prim
         {
             "provider_name": "github",
             "oauth_client": client,
-            "backend": primary_backend,
+            "backend": controllers_module.StartupBackendTemplate.from_runtime_backend(primary_backend),
             "backend_index": 0,
             "redirect_base_url": "https://app.example/auth/oauth",
             "path": "/auth/oauth",
             "cookie_secure": False,
+            "oauth_scopes": None,
             "associate_by_email": True,
             "trust_provider_email_verified": True,
         },
     ]
+
+
+def test_append_oauth_login_controllers_forwards_per_provider_scopes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Plugin OAuth login assembly forwards configured server-owned scopes per provider."""
+    primary_backend = _backend(name="primary", token_prefix="primary")
+    github_client = object()
+    gitlab_client = object()
+    config = _minimal_config(
+        backends=[primary_backend],
+        oauth_config=OAuthConfig(
+            oauth_providers=[("github", github_client), ("gitlab", gitlab_client)],
+            oauth_redirect_base_url="https://app.example/auth",
+            oauth_provider_scopes={"github": ["openid", "email"]},
+        ),
+    )
+    captured: list[dict[str, object]] = []
+
+    def _create_oauth_login_controller(**kwargs: object) -> str:
+        captured.append(dict(kwargs))
+        return cast("str", kwargs["provider_name"])
+
+    monkeypatch.setattr(controllers_module, "create_oauth_login_controller", _create_oauth_login_controller)
+
+    controllers: list[ControllerRouterHandler] = []
+    _append_oauth_login_controllers(controllers=controllers, config=config)
+
+    assert controllers == ["github", "gitlab"]
+    assert captured[0]["provider_name"] == "github"
+    assert captured[0]["oauth_scopes"] == ("openid", "email")
+    assert captured[1]["provider_name"] == "gitlab"
+    assert captured[1]["oauth_scopes"] is None
 
 
 def test_append_oauth_associate_controllers_uses_explicit_redirect_base_url(
@@ -574,6 +623,8 @@ def _oauth_login_call(
     provider_name: str,
     oauth_client: object,
     backend: AuthenticationBackend[ExampleUser, UUID],
+    *,
+    oauth_scopes: tuple[str, ...] | None = None,
 ) -> dict[str, object]:
     """Build the expected kwargs for plugin-owned OAuth login controller factories.
 
@@ -583,11 +634,12 @@ def _oauth_login_call(
     return {
         "provider_name": provider_name,
         "oauth_client": oauth_client,
-        "backend": backend,
+        "backend": controllers_module.StartupBackendTemplate.from_runtime_backend(backend),
         "backend_index": 0,
         "redirect_base_url": "https://app.example/auth/oauth",
         "path": "/auth/oauth",
         "cookie_secure": False,
+        "oauth_scopes": oauth_scopes,
         "associate_by_email": False,
         "trust_provider_email_verified": False,
     }

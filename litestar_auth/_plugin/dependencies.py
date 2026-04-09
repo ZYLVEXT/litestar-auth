@@ -2,9 +2,8 @@
 
 from __future__ import annotations
 
-import asyncio
 import inspect
-from collections.abc import Callable, Sequence
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, cast
 
@@ -27,13 +26,15 @@ from litestar_auth._plugin.config import (
     _build_oauth_route_registration_contract,
 )
 from litestar_auth._plugin.scoped_session import SessionFactory, get_or_create_scoped_session
+from litestar_auth.controllers._utils import _is_litestar_auth_route_handler
 from litestar_auth.types import UserProtocol
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncGenerator
+    from collections.abc import AsyncGenerator, Sequence
 
     from litestar.config.app import AppConfig
     from litestar.connection import Request
+    from litestar.types import ControllerRouterHandler
 
     from litestar_auth.authentication.backend import AuthenticationBackend
 
@@ -71,11 +72,18 @@ def client_exception_handler(
     )
 
 
-def register_exception_handlers(app_config: AppConfig) -> None:
-    """Register the auth ClientException handler on the app config."""
-    existing = dict(app_config.exception_handlers) if app_config.exception_handlers else {}
-    existing[ClientException] = cast("Any", client_exception_handler)
-    app_config.exception_handlers = existing
+def register_exception_handlers(
+    route_handlers: Sequence[ControllerRouterHandler],
+) -> None:
+    """Register the auth ClientException handler on litestar-auth route handlers only."""
+    for route_handler in route_handlers:
+        if not _is_litestar_auth_route_handler(route_handler):
+            continue
+        route_handler_dict = getattr(route_handler, "__dict__", {})
+        existing_handlers = route_handler_dict.get("exception_handlers")
+        existing = dict(existing_handlers) if existing_handlers is not None else {}
+        existing.setdefault(ClientException, cast("Any", client_exception_handler))
+        cast("Any", route_handler).exception_handlers = existing
 
 
 def _make_db_session_provide(
@@ -99,9 +107,6 @@ def _make_user_manager_dependency_provider[TManager](
 ) -> Callable[..., AsyncGenerator[TManager, None]]:
     """Build Litestar DI async generator: one user-manager instance per injected ``AsyncSession``.
 
-    The async generator parameter name matches ``db_session_key`` so Litestar injects the
-    same session registered under ``LitestarAuthConfig.db_session_dependency_key``.
-
     Args:
         build_user_manager: Callable that builds a manager for a request session (typically
             ``LitestarAuth._build_user_manager`` bound to the plugin).
@@ -109,42 +114,22 @@ def _make_user_manager_dependency_provider[TManager](
 
     Returns:
         Async generator dependency suitable for ``Provide`` (``use_cache=False``).
-
-    Note:
-        ``db_session_key`` must be validated by :meth:`LitestarAuthConfig.__post_init__` before this
-        runs; invalid keys are rejected at configuration construction time.
     """
-    missing = object()
-
-    async def _provide_user_manager(
-        session: object = missing,
-        /,
-        **dependencies: object,
-    ) -> AsyncGenerator[Any, None]:
-        if False:  # pragma: no cover
-            await asyncio.sleep(0)
-        if session is not missing:
-            if dependencies:
-                msg = f"_provide_user_manager() got multiple values for argument {db_session_key!r}"
-                raise TypeError(msg)
-            yield build_user_manager(cast("AsyncSession", session))
-            return
-
-        if len(dependencies) != 1 or db_session_key not in dependencies:
-            if not dependencies:
-                msg = f"_provide_user_manager() missing 1 required argument: {db_session_key!r}"
-            else:
-                unexpected = ", ".join(sorted(repr(name) for name in dependencies))
-                msg = f"_provide_user_manager() got unexpected keyword argument(s): {unexpected}"
-            raise TypeError(msg)
-
-        yield build_user_manager(cast("AsyncSession", dependencies[db_session_key]))
-
-    return _bind_session_keyed_signature(
-        _provide_user_manager,
-        db_session_key=db_session_key,
-        qualname="_make_user_manager_dependency_provider.<locals>._provide_user_manager",
+    namespace = {
+        "Any": Any,
+        "_build_user_manager": build_user_manager,
+    }
+    # Litestar matches dependency keys to real callable parameter names, so we
+    # compile a tiny provider with the configured identifier instead of
+    # overriding ``__signature__`` metadata at runtime.
+    source = (
+        f"async def _provide_user_manager({db_session_key}: Any):\n    yield _build_user_manager({db_session_key})\n"
     )
+    exec(source, namespace)  # noqa: S102
+    provider = cast("Any", namespace["_provide_user_manager"])
+    provider.__module__ = __name__
+    provider.__qualname__ = "_make_user_manager_dependency_provider.<locals>._provide_user_manager"
+    return cast("Callable[..., AsyncGenerator[TManager, None]]", provider)
 
 
 def _make_backends_dependency_provider[UP: UserProtocol[Any], ID](
@@ -156,68 +141,17 @@ def _make_backends_dependency_provider[UP: UserProtocol[Any], ID](
     Returns:
         Callable dependency provider whose signature matches ``db_session_key``.
     """
-    missing = object()
-
-    def _provide_backends(
-        session: object = missing,
-        /,
-        **dependencies: object,
-    ) -> Sequence[AuthenticationBackend[UP, ID]]:
-        if session is not missing:
-            if dependencies:
-                msg = f"_provide_backends() got multiple values for argument {db_session_key!r}"
-                raise TypeError(msg)
-            return build_backends(cast("AsyncSession", session))
-
-        if len(dependencies) != 1 or db_session_key not in dependencies:
-            if not dependencies:
-                msg = f"_provide_backends() missing 1 required argument: {db_session_key!r}"
-            else:
-                unexpected = ", ".join(sorted(repr(name) for name in dependencies))
-                msg = f"_provide_backends() got unexpected keyword argument(s): {unexpected}"
-            raise TypeError(msg)
-
-        return build_backends(cast("AsyncSession", dependencies[db_session_key]))
-
-    return _bind_session_keyed_signature(
-        _provide_backends,
-        db_session_key=db_session_key,
-        qualname="_make_backends_dependency_provider.<locals>._provide_backends",
-    )
-
-
-def _bind_session_keyed_signature[T](
-    provider_fn: Callable[..., T],
-    *,
-    db_session_key: str,
-    qualname: str,
-) -> Callable[..., T]:
-    """Bind Litestar-visible signature metadata for a configurable session dependency key.
-
-    Litestar builds dependency signature models from the runtime callable signature, and
-    dependency kwargs must match the configured dependency key. That key is configurable
-    at runtime, so it cannot be expressed as a literal Python parameter name in source.
-    The helper keeps the implementation on ``**dependencies`` while advertising a
-    synthetic single-parameter signature to Litestar.
-
-    Returns:
-        The same callable with Litestar-visible runtime signature metadata attached.
-    """
-    provider_metadata = cast("Any", provider_fn)
-    provider_metadata.__signature__ = inspect.Signature(
-        parameters=(
-            inspect.Parameter(
-                db_session_key,
-                kind=inspect.Parameter.POSITIONAL_OR_KEYWORD,
-                annotation=Any,
-            ),
-        ),
-    )
-    provider_metadata.__annotations__ = {db_session_key: "Any"}
-    # Litestar resolves forward references from the defining module; keep metadata stable.
-    provider_metadata.__module__ = __name__
-    provider_metadata.__qualname__ = qualname
-    return provider_fn
+    namespace = {
+        "Any": Any,
+        "_build_backends": build_backends,
+    }
+    # Keep the Litestar-visible signature native rather than patching metadata.
+    source = f"def _provide_backends({db_session_key}: Any):\n    return _build_backends({db_session_key})\n"
+    exec(source, namespace)  # noqa: S102
+    provider = cast("Any", namespace["_provide_backends"])
+    provider.__module__ = __name__
+    provider.__qualname__ = "_make_backends_dependency_provider.<locals>._provide_backends"
+    return cast("Callable[..., Sequence[AuthenticationBackend[UP, ID]]]", provider)
 
 
 def register_dependencies[UP: UserProtocol[Any], ID](

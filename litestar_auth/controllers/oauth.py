@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 import hmac
-import inspect
 import keyword
 from dataclasses import dataclass
+from ipaddress import ip_address
 from typing import TYPE_CHECKING, Any, cast
+from urllib.parse import urlsplit
 
 from litestar import Controller, Request, get
 from litestar.enums import MediaType
@@ -15,7 +16,7 @@ from litestar.params import Parameter
 from litestar.response import Response
 from litestar.response.redirect import Redirect
 
-from litestar_auth.controllers._utils import _build_controller_name
+from litestar_auth.controllers._utils import _build_controller_name, _mark_litestar_auth_route_handler
 from litestar_auth.exceptions import ConfigurationError, ErrorCode
 from litestar_auth.guards import is_authenticated
 from litestar_auth.oauth.client_adapter import (
@@ -28,6 +29,9 @@ from litestar_auth.oauth.client_adapter import (
 from litestar_auth.oauth.service import OAuthService
 from litestar_auth.oauth.service import (
     OAuthServiceUserManagerProtocol as OAuthControllerUserManagerProtocol,
+)
+from litestar_auth.oauth.service import (
+    _require_account_state as _require_service_account_state,
 )
 from litestar_auth.oauth.service import (
     _require_verified_email_evidence as _service_require_verified_email_evidence,
@@ -64,6 +68,7 @@ class _OAuthControllerAssembly[UP: UserProtocol[Any], ID]:
     cookie_name: str
     cookie_path: str
     cookie_secure: bool
+    oauth_scopes: tuple[str, ...] | None
     oauth_service: OAuthService[UP, ID]
     user_manager_binding: _OAuthUserManagerBinding[UP, ID]
 
@@ -75,6 +80,40 @@ def _build_callback_url_from_base(redirect_base_url: str, provider_name: str) ->
         redirect_base_url with trailing slash stripped, plus /{provider_name}/callback.
     """
     return f"{redirect_base_url.rstrip('/')}/{provider_name}/callback"
+
+
+def _validate_manual_oauth_redirect_base_url(redirect_base_url: str) -> None:
+    """Validate the fail-closed redirect-origin contract for manual OAuth controllers.
+
+    Raises:
+        ConfigurationError: If the redirect base does not use a non-loopback public
+            HTTPS origin.
+    """
+    parsed_redirect_base_url = urlsplit(redirect_base_url)
+    if parsed_redirect_base_url.scheme.casefold() != "https":
+        msg = (
+            "Manual/custom OAuth controllers require redirect_base_url to use a public HTTPS origin. "
+            f"Received {redirect_base_url!r}."
+        )
+        raise ConfigurationError(msg)
+
+    host = parsed_redirect_base_url.hostname
+    if host is None or _is_loopback_host(host):
+        msg = (
+            "Manual/custom OAuth controllers require redirect_base_url to use a non-loopback public HTTPS origin. "
+            f"Received {redirect_base_url!r}."
+        )
+        raise ConfigurationError(msg)
+
+
+def _is_loopback_host(host: str) -> bool:
+    """Return whether ``host`` is a localhost or loopback IP literal."""
+    if host.casefold() == "localhost":
+        return True
+    try:
+        return ip_address(host).is_loopback
+    except ValueError:
+        return False
 
 
 def _build_direct_user_manager_binding[UP: UserProtocol[Any], ID](
@@ -104,8 +143,8 @@ def _build_associate_user_manager_binding[UP: UserProtocol[Any], ID](
     dependency_parameter_name = cast("str", user_manager_dependency_key)
     if not dependency_parameter_name.isidentifier() or keyword.iskeyword(dependency_parameter_name):
         msg = (
-            "user_manager_dependency_key must be a valid Python identifier because it becomes the generated "
-            "callback parameter name."
+            "user_manager_dependency_key must be a valid Python identifier because Litestar matches dependency "
+            "keys to callback parameter names."
         )
         raise ConfigurationError(msg)
 
@@ -125,14 +164,18 @@ def _build_oauth_controller_assembly[UP: UserProtocol[Any], ID](  # noqa: PLR091
     state_cookie_prefix: str,
     controller_name_suffix: str,
     user_manager_binding: _OAuthUserManagerBinding[UP, ID],
+    oauth_scopes: Sequence[str] | None = None,
     associate_by_email: bool = False,
     trust_provider_email_verified: bool = False,
+    validate_redirect_base_url: bool = True,
 ) -> _OAuthControllerAssembly[UP, ID]:
     """Build the shared provider-scoped OAuth controller assembly state.
 
     Returns:
         Shared controller metadata, callback details, cookie scope, and manager binding.
     """
+    if validate_redirect_base_url:
+        _validate_manual_oauth_redirect_base_url(redirect_base_url)
     controller_path = _build_cookie_path(path=path, provider_name=provider_name)
     return _OAuthControllerAssembly(
         controller_name=f"{_build_controller_name(provider_name)}{controller_name_suffix}",
@@ -141,6 +184,7 @@ def _build_oauth_controller_assembly[UP: UserProtocol[Any], ID](  # noqa: PLR091
         cookie_name=f"{state_cookie_prefix}{provider_name}",
         cookie_path=controller_path,
         cookie_secure=cookie_secure,
+        oauth_scopes=_normalize_oauth_scopes(oauth_scopes),
         oauth_service=OAuthService(
             provider_name=provider_name,
             client=OAuthClientAdapter(oauth_client),
@@ -174,52 +218,31 @@ def _create_oauth_controller_type(
     OAuthController.__name__ = assembly.controller_name
     OAuthController.__qualname__ = assembly.controller_name
     OAuthController.path = assembly.controller_path
-    return OAuthController
+    return _mark_litestar_auth_route_handler(OAuthController)
 
 
 def _create_authorize_handler[UP: UserProtocol[Any], ID](
     *,
     assembly: _OAuthControllerAssembly[UP, ID],
     guards: Sequence[Guard] | None = None,
-    allow_scopes: bool,
 ) -> object:
     """Create the authorize route handler for a provider-scoped OAuth controller.
 
     Returns:
         Decorated Litestar route handler for the provider authorize endpoint.
     """
-    if allow_scopes:
-
-        @get("/authorize", guards=guards)
-        async def authorize(
-            self: object,
-            request: Request[Any, Any, Any],
-            scopes: list[str] | None = Parameter(query="scopes", default=None),  # noqa: B008
-        ) -> Redirect:
-            del self, request
-            authorization = await assembly.oauth_service.authorize(
-                redirect_uri=assembly.callback_url,
-                scopes=scopes,
-            )
-            response = Redirect(authorization.authorization_url)
-            _set_state_cookie(
-                response,
-                cookie_name=assembly.cookie_name,
-                state=authorization.state,
-                cookie_path=assembly.cookie_path,
-                cookie_secure=assembly.cookie_secure,
-            )
-            return response
-
-        return authorize
 
     @get("/authorize", guards=guards)
     async def authorize(
         self: object,
         request: Request[Any, Any, Any],
     ) -> Redirect:
-        del self, request
-        authorization = await assembly.oauth_service.authorize(redirect_uri=assembly.callback_url)
+        del self
+        _reject_runtime_oauth_scope_override(request)
+        authorization = await assembly.oauth_service.authorize(
+            redirect_uri=assembly.callback_url,
+            scopes=list(assembly.oauth_scopes) if assembly.oauth_scopes is not None else None,
+        )
         response = Redirect(authorization.authorization_url)
         _set_state_cookie(
             response,
@@ -315,6 +338,7 @@ async def _complete_associate_callback[UP: UserProtocol[Any], ID](
     _validate_state(request.cookies.get(assembly.cookie_name), oauth_state)
     # Litestar does not narrow ``Request.user`` to ``UP``; associate routes use ``is_authenticated``.
     user = cast("UP", request.user)
+    _require_service_account_state(user, user_manager=user_manager)
     await assembly.oauth_service.associate_account(
         user=user,
         code=code,
@@ -345,32 +369,33 @@ def _create_associate_callback_handler[UP: UserProtocol[Any], ID](
     """
     dependency_parameter_name = assembly.user_manager_binding.dependency_parameter_name
     if dependency_parameter_name is not None:
-
-        @get("/callback", guards=[is_authenticated])
-        async def callback(
-            self: object,
-            request: Request[Any, Any, Any],
-            code: str,
-            oauth_state: str = Parameter(query="state"),
-            **dependencies: object,
-        ) -> Response[Any]:
-            del self
-            if dependency_parameter_name not in dependencies:
-                msg = f"callback() missing 1 required keyword argument: {dependency_parameter_name!r}"
-                raise TypeError(msg)
-            return await _complete_associate_callback(
-                assembly=assembly,
-                request=request,
-                code=code,
-                oauth_state=oauth_state,
-                user_manager=cast(
-                    "OAuthControllerUserManagerProtocol[UP, ID]",
-                    dependencies[dependency_parameter_name],
-                ),
-            )
-
-        _set_dependency_parameter_signature(callback, parameter_name=dependency_parameter_name)
-        return callback
+        namespace = {
+            "Any": Any,
+            "Parameter": Parameter,
+            "Request": Request,
+            "Response": Response,
+            "_complete_associate_callback": _complete_associate_callback,
+            "assembly": assembly,
+        }
+        # Litestar injects dependencies by callable parameter name, so build a
+        # native callback signature for the configured key.
+        source = (
+            "async def callback("
+            f"self: object, request: Request, code: str, {dependency_parameter_name}: Any, "
+            "oauth_state: str = Parameter(query='state')) -> Response:\n"
+            "    del self\n"
+            "    return await _complete_associate_callback(\n"
+            "        assembly=assembly,\n"
+            "        request=request,\n"
+            "        code=code,\n"
+            "        oauth_state=oauth_state,\n"
+            f"        user_manager={dependency_parameter_name},\n"
+            "    )\n"
+        )
+        exec(source, namespace)  # noqa: S102
+        callback = cast("Any", namespace["callback"])
+        callback.__module__ = __name__
+        return get("/callback", guards=[is_authenticated])(callback)
 
     user_manager = cast(
         "OAuthControllerUserManagerProtocol[UP, ID]",
@@ -405,10 +430,16 @@ def create_oauth_controller[UP: UserProtocol[Any], ID](  # noqa: PLR0913
     redirect_base_url: str,
     path: str = "/auth/oauth",
     cookie_secure: bool = True,
+    oauth_scopes: Sequence[str] | None = None,
     associate_by_email: bool = False,
     trust_provider_email_verified: bool = False,
 ) -> type[Controller]:
     """Return a controller subclass bound to one OAuth provider.
+
+    The authorize endpoint uses only server-configured ``oauth_scopes``. Runtime
+    scope-query overrides are rejected. ``redirect_base_url`` must use a
+    non-loopback ``https://`` origin; the manual controller API does not expose
+    a debug or testing escape hatch for insecure callback origins.
 
     Returns:
         Generated controller class mounted under the provider-specific path.
@@ -422,6 +453,7 @@ def create_oauth_controller[UP: UserProtocol[Any], ID](  # noqa: PLR0913
         state_cookie_prefix=STATE_COOKIE_PREFIX,
         controller_name_suffix="OAuthController",
         user_manager_binding=_build_direct_user_manager_binding(user_manager),
+        oauth_scopes=oauth_scopes,
         associate_by_email=associate_by_email,
         trust_provider_email_verified=trust_provider_email_verified,
     )
@@ -429,13 +461,53 @@ def create_oauth_controller[UP: UserProtocol[Any], ID](  # noqa: PLR0913
         assembly=assembly,
         authorize_handler=_create_authorize_handler(
             assembly=assembly,
-            allow_scopes=True,
         ),
         callback_handler=_create_login_callback_handler(
             assembly=assembly,
             backend=backend,
         ),
         docstring="Provider-specific OAuth authorize/callback endpoints.",
+    )
+
+
+def _create_oauth_associate_controller[UP: UserProtocol[Any], ID](  # noqa: PLR0913
+    *,
+    provider_name: str,
+    user_manager: OAuthControllerUserManagerProtocol[UP, ID] | None = None,
+    user_manager_dependency_key: str | None = None,
+    oauth_client: object,
+    redirect_base_url: str,
+    path: str = "/auth/associate",
+    cookie_secure: bool = True,
+    validate_redirect_base_url: bool = True,
+) -> type[Controller]:
+    """Build an OAuth associate controller with optional redirect-origin validation.
+
+    Returns:
+        Generated controller class mounted under the provider-specific path.
+    """
+    assembly = _build_oauth_controller_assembly(
+        provider_name=provider_name,
+        oauth_client=oauth_client,
+        redirect_base_url=redirect_base_url,
+        path=path,
+        cookie_secure=cookie_secure,
+        state_cookie_prefix=ASSOCIATE_STATE_COOKIE_PREFIX,
+        controller_name_suffix="OAuthAssociateController",
+        user_manager_binding=_build_associate_user_manager_binding(
+            user_manager=user_manager,
+            user_manager_dependency_key=user_manager_dependency_key,
+        ),
+        validate_redirect_base_url=validate_redirect_base_url,
+    )
+    return _create_oauth_controller_type(
+        assembly=assembly,
+        authorize_handler=_create_authorize_handler(
+            assembly=assembly,
+            guards=[is_authenticated],
+        ),
+        callback_handler=_create_associate_callback_handler(assembly=assembly),
+        docstring="Provider-specific OAuth associate authorize/callback endpoints.",
     )
 
 
@@ -452,38 +524,72 @@ def create_oauth_associate_controller[UP: UserProtocol[Any], ID](  # noqa: PLR09
     """Return a controller for linking an OAuth account to the authenticated user.
 
     Both /authorize and /callback are protected by is_authenticated. Callback
-    upserts the OAuth account for request.user and does not create new users.
+    validates account state, then upserts the OAuth account for request.user and
+    does not create new users.
 
     Provide either user_manager (for direct use) or user_manager_dependency_key
-    (for plugin use with a request-scoped dependency).
+    (for plugin use with a request-scoped dependency). ``user_manager_dependency_key``
+    must be a valid non-keyword Python identifier because Litestar injects
+    dependencies by matching keys to callback parameter names.
+    ``redirect_base_url`` must use a non-loopback ``https://`` origin; the
+    manual controller API does not expose a debug or testing escape hatch for
+    insecure callback origins.
 
     Returns:
         Generated controller class mounted under the provider-specific path.
-
     """
-    assembly = _build_oauth_controller_assembly(
+    return _create_oauth_associate_controller(
         provider_name=provider_name,
+        user_manager=user_manager,
+        user_manager_dependency_key=user_manager_dependency_key,
         oauth_client=oauth_client,
         redirect_base_url=redirect_base_url,
         path=path,
         cookie_secure=cookie_secure,
-        state_cookie_prefix=ASSOCIATE_STATE_COOKIE_PREFIX,
-        controller_name_suffix="OAuthAssociateController",
-        user_manager_binding=_build_associate_user_manager_binding(
-            user_manager=user_manager,
-            user_manager_dependency_key=user_manager_dependency_key,
-        ),
     )
-    return _create_oauth_controller_type(
-        assembly=assembly,
-        authorize_handler=_create_authorize_handler(
-            assembly=assembly,
-            guards=[is_authenticated],
-            allow_scopes=False,
-        ),
-        callback_handler=_create_associate_callback_handler(assembly=assembly),
-        docstring="Provider-specific OAuth associate authorize/callback endpoints.",
-    )
+
+
+def _normalize_oauth_scopes(scopes: Sequence[str] | None) -> tuple[str, ...] | None:
+    """Return normalized server-owned OAuth scopes, or ``None`` when unset.
+
+    Raises:
+        ConfigurationError: If any configured scope is empty or contains whitespace.
+    """
+    if scopes is None:
+        return None
+
+    normalized_scopes: list[str] = []
+    seen_scopes: set[str] = set()
+    for raw_scope in scopes:
+        if not isinstance(raw_scope, str):
+            msg = "OAuth scopes must be strings."
+            raise ConfigurationError(msg)
+        scope = raw_scope.strip()
+        if not scope:
+            msg = "OAuth scopes must be non-empty strings."
+            raise ConfigurationError(msg)
+        if any(character.isspace() for character in scope):
+            msg = "OAuth scopes must be provided as individual tokens without embedded whitespace."
+            raise ConfigurationError(msg)
+        if scope not in seen_scopes:
+            normalized_scopes.append(scope)
+            seen_scopes.add(scope)
+
+    return tuple(normalized_scopes) if normalized_scopes else None
+
+
+def _reject_runtime_oauth_scope_override(request: Request[Any, Any, Any]) -> None:
+    """Reject caller-controlled scope overrides on OAuth authorize endpoints.
+
+    Raises:
+        ClientException: If the request attempts to override OAuth scopes.
+    """
+    query_params = getattr(request, "query_params", None)
+    if query_params is None or query_params.get("scopes") is None:
+        return
+
+    msg = "OAuth scopes must be configured on the server."
+    raise ClientException(status_code=400, detail=msg)
 
 
 def _build_cookie_path(*, path: str, provider_name: str) -> str:
@@ -493,56 +599,6 @@ def _build_cookie_path(*, path: str, provider_name: str) -> str:
         Provider-specific cookie path used for OAuth state cookies.
     """
     return f"{path.rstrip('/')}/{provider_name}"
-
-
-def _set_dependency_parameter_signature(
-    handler_fn: object,
-    *,
-    parameter_name: str,
-) -> None:
-    """Expose the generated DI parameter name on a handler's public signature.
-
-    Raises:
-        TypeError: If the handler does not declare ``oauth_state`` and ``**dependencies``.
-    """
-    target = cast("Any", getattr(handler_fn, "fn", handler_fn))
-    signature = inspect.signature(target)
-    parameters: list[inspect.Parameter] = []
-    has_oauth_state_parameter = False
-    has_var_keyword_parameter = False
-
-    for parameter in signature.parameters.values():
-        if parameter.name == "oauth_state":
-            parameters.extend(
-                (
-                    inspect.Parameter(
-                        parameter_name,
-                        kind=inspect.Parameter.POSITIONAL_OR_KEYWORD,
-                        annotation=object,
-                    ),
-                    parameter,
-                ),
-            )
-            has_oauth_state_parameter = True
-            continue
-        if parameter.kind is inspect.Parameter.VAR_KEYWORD:
-            has_var_keyword_parameter = True
-            continue
-        parameters.append(parameter)
-
-    if not has_oauth_state_parameter or not has_var_keyword_parameter:
-        msg = "OAuth associate callback handlers must declare oauth_state and **dependencies."
-        raise TypeError(msg)
-
-    adapted_handler = target
-    adapted_handler.__signature__ = inspect.Signature(
-        parameters=parameters,
-        return_annotation=signature.return_annotation,
-    )
-    adapted_handler.__annotations__ = {
-        **getattr(adapted_handler, "__annotations__", {}),
-        parameter_name: object,
-    }
 
 
 def _set_state_cookie(

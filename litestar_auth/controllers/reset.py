@@ -13,6 +13,7 @@ from litestar_auth.controllers._utils import (
     _create_before_request_handler,
     _create_rate_limit_handlers,
     _map_domain_exceptions,
+    _mark_litestar_auth_route_handler,
     _require_msgspec_struct,
     _to_user_schema,
 )
@@ -124,4 +125,4 @@ def create_reset_password_controller[UP: ResetPasswordControllerUserProtocol[Any
     reset_cls = ResetPasswordController
     _configure_request_body_handler(reset_cls.reset_password, schema=ResetPassword)
     reset_cls.path = path
-    return reset_cls
+    return _mark_litestar_auth_route_handler(reset_cls)

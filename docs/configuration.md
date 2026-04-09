@@ -42,7 +42,7 @@ Here, `session_maker` means a callable session factory the plugin can invoke as 
 
 If you previously hand-assembled `AuthenticationBackend(..., transport=BearerTransport(), strategy=DatabaseTokenStrategy(...))`, migrate that setup to the direct `database_token_auth=DatabaseTokenAuthConfig(...)` form above. Keep manual `backends=` assembly only when you need multiple backends, custom token models, or another non-canonical transport/strategy mix.
 
-When you use `database_token_auth=...`, `config.backends` stays empty by design. Call `config.startup_backends()` when you need the setup-time backend templates used for plugin assembly and validation, or `config.bind_request_backends(session)` when you need request-scoped backend instances bound to the active `AsyncSession`. `config.resolve_backends()` is now limited to the explicit manual `backends=` surface.
+When you use `database_token_auth=...`, `config.backends` stays empty by design. `config.startup_backends()` now returns startup-only `StartupBackendTemplate` values for plugin assembly and validation, while `config.bind_request_backends(session)` returns request-scoped runtime `AuthenticationBackend` instances bound to the active `AsyncSession`. `config.resolve_backends()` remains limited to the explicit manual `backends=` surface.
 
 ## Custom SQLAlchemy `User` and token models
 
@@ -617,9 +617,8 @@ totp_config = TotpConfig(
 ```
 
 `totp_pending_secret` still signs pending-2FA JWTs for the controller flow; it does not replace
-`totp_used_tokens_store`. For strict multi-worker deduplication of pending login-token JTIs, mount
-`create_totp_controller(..., pending_jti_store=...)` separately. The plugin-owned controller does
-not wire that store automatically.
+replay stores. Configure `TotpConfig.totp_pending_jti_store` for pending login-token JTI
+deduplication and `TotpConfig.totp_used_tokens_store` for TOTP-code replay protection.
 
 ### Redis contrib import boundary
 
@@ -636,6 +635,7 @@ shared-backend builder surface remain on `litestar_auth.ratelimit`.
 | `totp_backend_name` | `None` | Which named `AuthenticationBackend` issues tokens after 2FA. |
 | `totp_issuer` | `"litestar-auth"` | Issuer in otpauth URI. |
 | `totp_algorithm` | `"SHA256"` | TOTP hash algorithm. |
+| `totp_pending_jti_store` | `None` | JWT JTI denylist for pending login tokens. Required unless the owning config/controller explicitly sets `unsafe_testing=True`. Use a shared store such as `RedisJWTDenylistStore` for multi-worker deployments. |
 | `totp_used_tokens_store` | `None` | Replay store for consumed TOTP codes (required unless the owning config/controller explicitly sets `unsafe_testing=True`). See [Canonical Redis-backed auth surface](#canonical-redis-backed-auth-surface) for the Redis setup and import paths. |
 | `totp_require_replay_protection` | `True` | Fail startup without a store unless `unsafe_testing=True`. |
 | `totp_enable_requires_password` | `True` | Step-up password for `/2fa/enable`. |
@@ -647,7 +647,7 @@ Routes: `{auth_path}/2fa/...`. See [TOTP guide](guides/totp.md).
 the user record.
 
 !!! note "Pending-token JTI store"
-    `create_totp_controller(..., pending_jti_store=...)` supports a shared JWT JTI denylist for pending login tokens. The plugin’s internal `build_totp_controller` does not pass this parameter; advanced deployments can mount a custom controller if they need a Redis-backed pending JTI store across workers.
+    The plugin-owned controller forwards `TotpConfig.totp_pending_jti_store` into `create_totp_controller(..., pending_jti_store=...)`. In production, missing pending-token replay storage now fails closed unless `unsafe_testing=True`.
 
 ## OAuth — `oauth_config: OAuthConfig | None`
 
@@ -655,18 +655,21 @@ the user record.
 | ----- | ------- | ------- |
 | `oauth_cookie_secure` | `True` | Secure flag for OAuth cookies. |
 | `oauth_providers` | `None` | Single plugin-owned OAuth provider inventory. Each provider auto-mounts `GET {auth_path}/oauth/{provider}/authorize` and `GET {auth_path}/oauth/{provider}/callback`. |
+| `oauth_provider_scopes` | `{}` | Optional server-owned OAuth scopes keyed by provider name. Each provider authorize route uses only these configured scopes; runtime query overrides are rejected. |
 | `oauth_associate_by_email` | `False` | Policy for plugin-owned OAuth login routes. When enabled, login callbacks may associate an existing local user by email if provider email ownership is also trusted. |
 | `oauth_trust_provider_email_verified` | `False` | Trust provider `email_verified` claims for plugin-owned OAuth login routes. Use only with providers that cryptographically assert email ownership. |
 | `include_oauth_associate` | `False` | Also auto-mount authenticated associate routes for the same `oauth_providers` inventory under `GET {auth_path}/associate/{provider}/authorize` and `GET {auth_path}/associate/{provider}/callback`. |
-| `oauth_redirect_base_url` | `""` | Required public redirect base for plugin-owned OAuth callbacks. The plugin derives `{oauth_redirect_base_url}/oauth/{provider}/callback` and, when associate routes are enabled, `{oauth_redirect_base_url}/associate/{provider}/callback`. |
+| `oauth_redirect_base_url` | `""` | Required public HTTPS redirect base for plugin-owned OAuth callbacks. The plugin derives `{oauth_redirect_base_url}/oauth/{provider}/callback` and, when associate routes are enabled, `{oauth_redirect_base_url}/associate/{provider}/callback`. |
 | `oauth_token_encryption_key` | `None` | **Required** for any declared provider inventory in production — encrypts OAuth tokens at rest. |
 
-For manual custom controllers, `create_provider_oauth_controller(...)` / `create_oauth_controller(...)` still take **`trust_provider_email_verified`** directly (see [OAuth guide](guides/oauth.md)). The plugin-owned route table maps `OAuthConfig.oauth_trust_provider_email_verified` onto the same runtime behavior.
+For manual custom controllers, `create_provider_oauth_controller(...)` / `create_oauth_controller(...)` still take **`trust_provider_email_verified`** and optional **`oauth_scopes`** directly (see [OAuth guide](guides/oauth.md)). Their `redirect_base_url` also now fails closed unless it uses a non-loopback `https://...` origin; unlike the plugin-owned route table, the manual factories do not have an `AppConfig(debug=True)` or `unsafe_testing=True` escape hatch. The plugin-owned route table maps `OAuthConfig.oauth_trust_provider_email_verified` and `OAuthConfig.oauth_provider_scopes` onto the same runtime behavior.
 
 Route-registration contract:
 
 - `oauth_providers` is the single plugin-owned provider inventory; there is no separate associate-only provider list.
 - `oauth_redirect_base_url` is required whenever `oauth_providers` is configured. The plugin appends `/oauth` and `/associate` per route family instead of guessing a localhost fallback.
+- In production app init, plugin-owned OAuth routes now fail closed unless `oauth_redirect_base_url` uses a non-loopback `https://...` origin. Keep localhost or plain-HTTP redirect bases behind `AppConfig(debug=True)` or `unsafe_testing=True` only.
+- Manual/custom OAuth controller factories use the same non-loopback `https://...` redirect-origin baseline, but they enforce it immediately at controller construction time with no debug/testing override.
 - `include_oauth_associate=True` extends that same provider inventory with authenticated account-linking routes. If you need a custom route table, custom prefixes, or manual manager wiring, mount the controller factories yourself instead of mixing plugin-owned and manual ownership.
 
 ## Security and token policy
@@ -677,8 +680,12 @@ Route-registration contract:
 | `csrf_header_name` | `"X-CSRF-Token"` | Header Litestar expects for CSRF token. |
 | `unsafe_testing` | `False` | Explicit per-config test-only escape hatch for generated fallback secrets, single-process validation shortcuts, and startup-warning suppression. Never enable it for production traffic. |
 | `allow_legacy_plaintext_tokens` | `False` | **Migration only** — accept legacy plaintext DB tokens for manual `DatabaseTokenStrategy` setups. The canonical preset reads this from `DatabaseTokenAuthConfig.accept_legacy_plaintext_tokens` instead. |
-| `allow_nondurable_jwt_revocation` | `False` | Opt-in to in-memory JWT denylist semantics. |
+| `allow_nondurable_jwt_revocation` | `False` | Opt in to the compatibility-grade `JWTStrategy.revocation_posture` reported by the default in-memory denylist. |
 | `id_parser` | `None` | Parse path/query user ids (e.g. `UUID`). Defaults from `user_manager_security.id_parser` when that typed contract is configured. |
+
+The plugin-managed JWT/TOTP downgrade surfaces use the same shared posture wording as runtime startup and validation:
+
+--8<-- "docs/snippets/plugin_security_tradeoffs.md"
 
 ## Schemas and DI
 
@@ -687,7 +694,7 @@ Route-registration contract:
 | `user_read_schema` | `None` | msgspec struct for safe user responses returned by register/verify/reset/users flows. |
 | `user_create_schema` | `None` | msgspec struct for registration/create request bodies; built-in registration defaults to `UserCreate`. |
 | `user_update_schema` | `None` | msgspec struct for user PATCH bodies. |
-| `db_session_dependency_key` | `"db_session"` | Litestar DI key for `AsyncSession`. |
+| `db_session_dependency_key` | `"db_session"` | Litestar DI key for `AsyncSession`. Must be a valid non-keyword Python identifier because Litestar matches dependency keys to callable parameter names. |
 | `db_session_dependency_provided_externally` | `False` | Skip plugin session provider when your app already registers the key. |
 
 `user_*_schema` customizes registration and user CRUD surfaces. It does not rename the built-in auth lifecycle request structs: `LoginCredentials`, `RefreshTokenRequest`, `RequestVerifyToken`, `VerifyToken`, `ForgotPassword`, `ResetPassword`, or the TOTP payloads.

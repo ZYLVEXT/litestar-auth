@@ -6,8 +6,12 @@ import importlib
 from dataclasses import dataclass, field
 
 import pytest
+from advanced_alchemy.base import UUIDPrimaryKey, create_registry
+from sqlalchemy import event
+from sqlalchemy.orm import DeclarativeBase
 
 from litestar_auth import oauth_encryption
+from litestar_auth.models import OAuthAccountMixin, UserAuthRelationshipMixin, UserModelMixin
 from litestar_auth.oauth_encryption import (
     Fernet as _FernetImport,
 )
@@ -270,6 +274,80 @@ def test_register_oauth_model_encryption_events_skips_existing_listeners(monkeyp
     oauth_encryption.register_oauth_model_encryption_events(object)
 
     assert listens == []
+
+
+def test_oauth_account_mixin_registers_encryption_events_for_direct_subclasses() -> None:
+    """Declaring a direct OAuth mixin subclass attaches the mapper hooks lazily."""
+
+    class _AuthBase(DeclarativeBase):
+        """Isolated declarative registry for the event-registration regression test."""
+
+        registry = create_registry()
+        metadata = registry.metadata
+        __abstract__ = True
+
+    class _AuthUUIDBase(UUIDPrimaryKey, _AuthBase):
+        """UUID primary-key base bound to the isolated registry."""
+
+        __abstract__ = True
+
+    class _OAuthUser(UserModelMixin, UserAuthRelationshipMixin, _AuthUUIDBase):
+        """Custom user model linked to the regression-test OAuth mapper."""
+
+        __tablename__ = "oauth_event_user"
+
+        auth_access_token_model = None
+        auth_refresh_token_model = None
+        auth_oauth_account_model = "_OAuthAccount"
+
+    class _OAuthAccount(OAuthAccountMixin, _AuthUUIDBase):
+        """Direct OAuth mixin subclass used to verify lazy hook registration."""
+
+        __tablename__ = "oauth_event_account"
+
+        auth_user_model = "_OAuthUser"
+        auth_user_table = "oauth_event_user"
+
+    assert event.contains(_OAuthAccount, "load", oauth_encryption._decrypt_loaded_oauth_tokens)
+    assert event.contains(_OAuthAccount, "before_insert", oauth_encryption._encrypt_oauth_tokens_before_insert)
+    assert event.contains(_OAuthAccount, "after_update", oauth_encryption._restore_oauth_tokens_after_write)
+    assert _OAuthUser.auth_oauth_account_model == "_OAuthAccount"
+
+
+def test_oauth_account_mixin_descendants_reuse_ancestor_encryption_events(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Descendants reuse the nearest registered OAuth mixin ancestor instead of duplicating hooks."""
+    registrations: list[str] = []
+    monkeypatch.setattr(
+        "litestar_auth.models.mixins.register_oauth_model_encryption_events",
+        lambda model_base: registrations.append(model_base.__name__),
+    )
+
+    class _AuthBase(DeclarativeBase):
+        """Isolated declarative registry for the inherited-hook regression test."""
+
+        registry = create_registry()
+        metadata = registry.metadata
+        __abstract__ = True
+
+    class _AuthUUIDBase(UUIDPrimaryKey, _AuthBase):
+        """UUID primary-key base bound to the inherited-hook test registry."""
+
+        __abstract__ = True
+
+    class _BaseOAuthAccount(OAuthAccountMixin, _AuthUUIDBase):
+        """Abstract OAuth base that owns the propagated encryption hooks."""
+
+        __abstract__ = True
+
+    class _ConcreteOAuthAccount(_BaseOAuthAccount):
+        """Concrete OAuth mapper that inherits the ancestor's encryption hooks."""
+
+        __tablename__ = "oauth_inherited_account"
+
+    assert _ConcreteOAuthAccount.__tablename__ == "oauth_inherited_account"
+    assert registrations == ["_BaseOAuthAccount"]
 
 
 def test_iter_session_targets_avoids_cycles() -> None:

@@ -15,12 +15,12 @@ from litestar_auth._plugin.config import (
     DEFAULT_USER_MANAGER_DEPENDENCY_KEY,
     OAUTH_ASSOCIATE_USER_MANAGER_DEPENDENCY_KEY,
     LitestarAuthConfig,
+    StartupBackendTemplate,
     _build_oauth_route_registration_contract,
     require_session_maker,
 )
 from litestar_auth.config import validate_secret_length
 from litestar_auth.controllers import (
-    create_oauth_associate_controller,
     create_register_controller,
     create_reset_password_controller,
     create_users_controller,
@@ -31,6 +31,7 @@ from litestar_auth.controllers._utils import (
     _configure_request_body_handler,
     _create_before_request_handler,
     _create_request_body_exception_handlers,
+    _mark_litestar_auth_route_handler,
 )
 from litestar_auth.controllers.auth import (
     _handle_auth_login,
@@ -47,6 +48,9 @@ from litestar_auth.controllers.oauth import (
 from litestar_auth.controllers.oauth import _complete_login_callback as _complete_oauth_login_callback
 from litestar_auth.controllers.oauth import (
     _create_authorize_handler as _create_plugin_oauth_authorize_handler,
+)
+from litestar_auth.controllers.oauth import (
+    _create_oauth_associate_controller as _create_plugin_oauth_associate_controller,
 )
 from litestar_auth.controllers.oauth import (
     _create_oauth_controller_type as _create_plugin_oauth_controller_type,
@@ -136,7 +140,7 @@ def _resolve_request_backend[UP: UserProtocol[Any], ID](
 
 def create_auth_controller[UP: UserProtocol[Any], ID](  # noqa: PLR0913
     *,
-    backend: AuthenticationBackend[UP, ID],
+    backend: StartupBackendTemplate[UP, ID],
     backend_index: int,
     rate_limit_config: AuthRateLimitConfig | None = None,
     enable_refresh: bool = False,
@@ -237,17 +241,40 @@ def create_auth_controller[UP: UserProtocol[Any], ID](  # noqa: PLR0913
     generated_controller.__name__ = f"{_build_controller_name(backend.name)}AuthController"
     generated_controller.__qualname__ = generated_controller.__name__
     generated_controller.path = path
-    return generated_controller
+    return _mark_litestar_auth_route_handler(generated_controller)
+
+
+def create_oauth_associate_controller[UP: UserProtocol[Any], ID](  # noqa: PLR0913
+    *,
+    provider_name: str,
+    user_manager_dependency_key: str,
+    oauth_client: object,
+    redirect_base_url: str,
+    path: str = "/auth/associate",
+    cookie_secure: bool = True,
+) -> type[Controller]:
+    """Return a plugin-owned OAuth associate controller bound to request DI."""
+    return _create_plugin_oauth_associate_controller(
+        provider_name=provider_name,
+        user_manager=None,
+        user_manager_dependency_key=user_manager_dependency_key,
+        oauth_client=oauth_client,
+        redirect_base_url=redirect_base_url,
+        path=path,
+        cookie_secure=cookie_secure,
+        validate_redirect_base_url=False,
+    )
 
 
 def create_oauth_login_controller[UP: UserProtocol[Any], ID](  # noqa: PLR0913
     *,
     provider_name: str,
     oauth_client: object,
-    backend: AuthenticationBackend[UP, ID],
+    backend: StartupBackendTemplate[UP, ID],
     backend_index: int,
     redirect_base_url: str,
     cookie_secure: bool = True,
+    oauth_scopes: Sequence[str] | None = None,
     associate_by_email: bool = False,
     trust_provider_email_verified: bool = False,
     path: str = "/auth/oauth",
@@ -263,8 +290,11 @@ def create_oauth_login_controller[UP: UserProtocol[Any], ID](  # noqa: PLR0913
         controller_name_suffix="OAuthController",
         # The plugin resolves the request-scoped manager inside the callback handler.
         user_manager_binding=_build_oauth_direct_user_manager_binding(cast("Any", object())),
+        oauth_scopes=oauth_scopes,
         associate_by_email=associate_by_email,
         trust_provider_email_verified=trust_provider_email_verified,
+        # Plugin-owned routes keep their debug/unsafe_testing escape hatch in startup validation.
+        validate_redirect_base_url=False,
     )
 
     @get("/callback")
@@ -295,7 +325,6 @@ def create_oauth_login_controller[UP: UserProtocol[Any], ID](  # noqa: PLR0913
         assembly=assembly,
         authorize_handler=_create_plugin_oauth_authorize_handler(
             assembly=assembly,
-            allow_scopes=True,
         ),
         callback_handler=callback,
         docstring="Provider-specific OAuth authorize/callback endpoints.",
@@ -429,7 +458,7 @@ def _define_plugin_totp_controller_class_di[UP: UserProtocol[Any], ID](
 
 def create_totp_controller[UP: UserProtocol[Any], ID](  # noqa: PLR0913
     *,
-    backend: AuthenticationBackend[UP, ID],
+    backend: StartupBackendTemplate[UP, ID],
     backend_index: int,
     user_manager_dependency_key: str,
     used_tokens_store: UsedTotpCodeStore | None = None,
@@ -469,7 +498,7 @@ def create_totp_controller[UP: UserProtocol[Any], ID](  # noqa: PLR0913
         disable=rate_limit_config.totp_disable if rate_limit_config else None,
     )
     startup_ctx = _TotpControllerContext(
-        backend=backend,
+        backend=cast("Any", backend),
         used_tokens_store=used_tokens_store,
         require_replay_protection=require_replay_protection,
         requires_verification=requires_verification,
@@ -616,6 +645,7 @@ def _append_oauth_login_controllers[UP: UserProtocol[Any], ID](
                 backend_index=0,
                 redirect_base_url=redirect_base_url,
                 cookie_secure=contract.oauth_cookie_secure,
+                oauth_scopes=contract.oauth_provider_scopes.get(provider_name),
                 associate_by_email=contract.oauth_associate_by_email,
                 trust_provider_email_verified=contract.oauth_trust_provider_email_verified,
                 path=contract.login_path,
@@ -679,6 +709,7 @@ def build_totp_controller[UP: UserProtocol[Any], ID](
         backend_index=backend_index,
         user_manager_dependency_key=DEFAULT_USER_MANAGER_DEPENDENCY_KEY,
         used_tokens_store=totp_config.totp_used_tokens_store,
+        pending_jti_store=totp_config.totp_pending_jti_store,
         require_replay_protection=totp_config.totp_require_replay_protection,
         rate_limit_config=config.rate_limit_config,
         requires_verification=config.requires_verification,
@@ -737,7 +768,7 @@ def backend_auth_path(*, auth_path: str, backend_name: str, index: int) -> str:
 
 def totp_backend[UP: UserProtocol[Any], ID](
     config: LitestarAuthConfig[UP, ID],
-) -> AuthenticationBackend[UP, ID]:
+) -> StartupBackendTemplate[UP, ID]:
     """Return the configured TOTP backend or the primary backend.
 
     Returns:

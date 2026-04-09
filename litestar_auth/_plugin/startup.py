@@ -3,26 +3,27 @@
 from __future__ import annotations
 
 import importlib
-import logging
-import sys
 import warnings
 from functools import cache
+from ipaddress import ip_address
 from typing import TYPE_CHECKING, Any, cast
 from urllib.parse import urlsplit
 
-from litestar_auth._plugin.config import _build_oauth_route_registration_contract, _uses_bundled_database_token_models
+from litestar_auth._plugin.config import (
+    _build_oauth_route_registration_contract,
+    _describe_jwt_revocation_tradeoff,
+    _uses_bundled_database_token_models,
+)
 from litestar_auth._plugin.middleware import get_cookie_transports
 from litestar_auth._plugin.rate_limit import iter_rate_limit_endpoints
-from litestar_auth.authentication.strategy.jwt import JWTStrategy
+from litestar_auth.authentication.strategy.jwt import InMemoryJWTDenylistStore
+from litestar_auth.exceptions import ConfigurationError
 from litestar_auth.totp import InMemoryUsedTotpCodeStore, SecurityWarning
 
 if TYPE_CHECKING:
     from litestar.config.app import AppConfig
 
     from litestar_auth._plugin.config import LitestarAuthConfig, OAuthConfig
-
-
-logger = logging.getLogger("litestar_auth.plugin")
 
 
 @cache
@@ -34,31 +35,6 @@ def _load_bundled_token_orm_models() -> tuple[object, object]:
     """
     models_module = importlib.import_module("litestar_auth.models")
     return cast("Any", models_module).import_token_orm_models()
-
-
-def _is_jwt_strategy_instance(strategy: object) -> bool:
-    """Return whether ``strategy`` is a JWT strategy, even across module reloads.
-
-    Tests reload strategy modules to record module-body coverage. After a reload,
-    the current ``JWTStrategy`` class object differs from older imports held by
-    this module, so a strict ``isinstance()`` check against only the originally
-    imported class can miss the intended strategy type. Compare against both the
-    originally imported class object and the currently loaded module's class
-    object instead of identifying the type by ``__name__`` / ``__module__``
-    strings.
-    """
-    if isinstance(strategy, JWTStrategy):
-        return True
-
-    jwt_strategy_module = sys.modules.get("litestar_auth.authentication.strategy.jwt")
-    current_jwt_strategy_cls = (
-        None if jwt_strategy_module is None else getattr(jwt_strategy_module, "JWTStrategy", None)
-    )
-    return (
-        isinstance(current_jwt_strategy_cls, type)
-        and current_jwt_strategy_cls is not JWTStrategy
-        and isinstance(strategy, current_jwt_strategy_cls)
-    )
 
 
 def bootstrap_bundled_token_orm_models(config: LitestarAuthConfig[Any, Any]) -> None:
@@ -92,11 +68,11 @@ def warn_insecure_plugin_startup_defaults(config: LitestarAuthConfig[Any, Any]) 
 
     for backend in config.startup_backends():
         strategy = getattr(backend, "strategy", None)
-        if _is_jwt_strategy_instance(strategy) and not getattr(strategy, "revocation_is_durable", True):
+        notice = _describe_jwt_revocation_tradeoff(getattr(strategy, "revocation_posture", None))
+        warning_message = None if notice is None else notice.startup_warning
+        if isinstance(warning_message, str):
             warnings.warn(
-                "JWTStrategy is configured with a process-local in-memory denylist. "
-                "Revoked tokens are not visible across workers; use RedisJWTDenylistStore or "
-                "allow_nondurable_jwt_revocation=True only with full understanding of the tradeoff.",
+                warning_message,
                 SecurityWarning,
                 stacklevel=2,
             )
@@ -116,6 +92,13 @@ def warn_insecure_plugin_startup_defaults(config: LitestarAuthConfig[Any, Any]) 
         warnings.warn(
             "TOTP replay protection uses InMemoryUsedTotpCodeStore; used-code state is not "
             "shared across workers. Use RedisUsedTotpCodeStore for production multi-worker deployments.",
+            SecurityWarning,
+            stacklevel=2,
+        )
+    if totp_config is not None and isinstance(totp_config.totp_pending_jti_store, InMemoryJWTDenylistStore):
+        warnings.warn(
+            "TOTP pending-token replay protection uses InMemoryJWTDenylistStore; pending JTI state is not "
+            "shared across workers. Use RedisJWTDenylistStore for production multi-worker deployments.",
             SecurityWarning,
             stacklevel=2,
         )
@@ -150,13 +133,18 @@ def has_configured_oauth_providers_for(oauth_config: OAuthConfig) -> bool:
     return bool(oauth_config.oauth_providers)
 
 
-def warn_if_insecure_oauth_redirect_in_production(
+def require_secure_oauth_redirect_in_production(
     *,
     config: LitestarAuthConfig[Any, Any],
     app_config: AppConfig,
 ) -> None:
-    """Warn when plugin-owned OAuth redirects target localhost in production."""
-    if getattr(app_config, "debug", False):
+    """Fail closed when plugin-owned OAuth redirects use insecure production origins.
+
+    Raises:
+        ConfigurationError: If plugin-owned OAuth routes use a non-HTTPS or loopback
+            redirect origin outside explicit debug or testing escape hatches.
+    """
+    if config.unsafe_testing or getattr(app_config, "debug", False):
         return
 
     contract = _build_oauth_route_registration_contract(
@@ -169,18 +157,33 @@ def warn_if_insecure_oauth_redirect_in_production(
     if redirect_base_url is None:  # pragma: no cover - validation guarantees this when providers exist
         return
 
-    host = urlsplit(redirect_base_url).hostname
-    if host not in {"localhost", "127.0.0.1", "::1"}:
-        return
+    parsed_redirect_base_url = urlsplit(redirect_base_url)
+    if parsed_redirect_base_url.scheme.lower() != "https":
+        msg = (
+            "Plugin-managed OAuth routes require oauth_redirect_base_url to use a public HTTPS origin in production. "
+            f"Received {redirect_base_url!r}. Use AppConfig(debug=True) or unsafe_testing=True only for explicit "
+            "local-development and test recipes."
+        )
+        raise ConfigurationError(msg)
 
-    logger.warning(
-        "Insecure OAuth redirect_base_url detected in production. "
-        "The configured plugin OAuth redirect base URL resolves to localhost (%s). "
-        "Set oauth_redirect_base_url to your public HTTPS auth origin before enabling plugin-managed "
-        "OAuth routes in production.",
-        redirect_base_url,
-        extra={"event": "oauth_redirect_localhost_default"},
-    )
+    host = parsed_redirect_base_url.hostname
+    if host is None or _is_loopback_host(host):
+        msg = (
+            "Plugin-managed OAuth routes require oauth_redirect_base_url to use a non-loopback public HTTPS origin "
+            f"in production. Received {redirect_base_url!r}. Use AppConfig(debug=True) or unsafe_testing=True only "
+            "for explicit local-development and test recipes."
+        )
+        raise ConfigurationError(msg)
+
+
+def _is_loopback_host(host: str) -> bool:
+    """Return whether ``host`` is a localhost or loopback IP literal."""
+    if host == "localhost":
+        return True
+    try:
+        return ip_address(host).is_loopback
+    except ValueError:
+        return False
 
 
 def _has_inmemory_rate_limit_backend(config: LitestarAuthConfig[Any, Any]) -> bool:

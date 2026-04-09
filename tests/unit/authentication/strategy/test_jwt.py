@@ -279,6 +279,31 @@ def test_jwt_strategy_rejects_unsupported_algorithms() -> None:
         JWTStrategy(secret=DEFAULT_SECRET, algorithm="none")
 
 
+def test_jwt_strategy_revocation_posture_reports_inmemory_compatibility_mode() -> None:
+    """Default JWT strategy posture keeps the in-memory compatibility contract explicit."""
+    strategy = JWTStrategy(secret=DEFAULT_SECRET)
+
+    assert strategy.revocation_posture.key == "compatibility_in_memory"
+    assert strategy.revocation_posture.denylist_store_type == "InMemoryJWTDenylistStore"
+    assert strategy.revocation_posture.revocation_is_durable is False
+    assert strategy.revocation_posture.requires_explicit_production_opt_in is True
+    assert strategy.revocation_posture.production_validation_error is not None
+    assert strategy.revocation_posture.startup_warning is not None
+
+
+def test_jwt_strategy_revocation_posture_reports_shared_store_mode() -> None:
+    """Shared denylist backends expose the durable shared-store posture."""
+    shared_store = RedisJWTDenylistStore(redis=cast("Any", _FakeRedis()))
+    strategy = JWTStrategy(secret=DEFAULT_SECRET, denylist_store=shared_store)
+
+    assert strategy.revocation_posture.key == "shared_store"
+    assert strategy.revocation_posture.denylist_store_type == "RedisJWTDenylistStore"
+    assert strategy.revocation_posture.revocation_is_durable is True
+    assert strategy.revocation_posture.requires_explicit_production_opt_in is False
+    assert strategy.revocation_posture.production_validation_error is None
+    assert strategy.revocation_posture.startup_warning is None
+
+
 def test_jwt_strategy_revocation_is_durable_reflects_store_backend() -> None:
     """Shared denylist backends report durable revocation."""
     shared_store = RedisJWTDenylistStore(redis=cast("Any", _FakeRedis()))

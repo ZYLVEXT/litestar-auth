@@ -12,6 +12,8 @@ import msgspec
 import pytest
 from litestar.exceptions import ClientException, NotAuthorizedException, PermissionDeniedException, ValidationException
 
+import litestar_auth._account_state as account_state_module
+import litestar_auth.oauth.service as oauth_service_module
 from litestar_auth.controllers import _utils
 from litestar_auth.controllers._utils import (
     _build_controller_name,
@@ -134,10 +136,42 @@ async def _raise_runtime_error_in_mapped_context() -> None:
 
 def test_module_reload_executes_controller_utils_module_body() -> None:
     """Reloading the module executes its top-level definitions under coverage."""
+    for name in ("ConfigurationError", "ErrorCode", "InactiveUserError", "UnverifiedUserError"):
+        delattr(_utils, name)
     reloaded_module = importlib.reload(_utils)
 
     assert frozenset({"hashed_password", "totp_secret", "password"}) == reloaded_module._SENSITIVE_FIELD_BLOCKLIST
     assert reloaded_module._build_controller_name("oauth_google-provider") == "OauthGoogleProvider"
+
+
+def test_account_state_module_executes_under_coverage() -> None:
+    """Reload the shared account-state module so coverage records its top-level definitions."""
+    reloaded_module = importlib.reload(account_state_module)
+
+    assert reloaded_module.AccountStateErrorTypes.__name__ == "AccountStateErrorTypes"
+    assert reloaded_module.resolve_account_state_client_error("inactive") == (
+        STATUS_BAD_REQUEST,
+        ErrorCode.LOGIN_USER_INACTIVE,
+    )
+
+
+def test_shared_account_state_client_error_helper_maps_inactive_users() -> None:
+    """Shared account-state helpers preserve the stable inactive-user client payload."""
+    with pytest.raises(ClientException) as exc_info:
+        account_state_module.require_account_state_with_client_error(
+            _DummyUser(is_active=False),
+            require_verified=False,
+            prioritize_unverified=False,
+            user_manager=None,
+            error_types=account_state_module.AccountStateErrorTypes(
+                inactive_error=InactiveUserError,
+                unverified_error=UnverifiedUserError,
+            ),
+        )
+
+    assert exc_info.value.status_code == STATUS_BAD_REQUEST
+    assert exc_info.value.detail == "The user account is inactive."
+    assert exc_info.value.extra == {"code": ErrorCode.LOGIN_USER_INACTIVE}
 
 
 @pytest.mark.asyncio
@@ -477,6 +511,17 @@ async def test_create_before_request_handler_delegates_to_rate_limit() -> None:
 def test_resolve_account_state_validator_returns_none_for_missing_manager() -> None:
     """No manager means no dedicated validator."""
     assert _resolve_account_state_validator(None) is None
+
+
+def test_account_state_helper_aliases_point_to_shared_core() -> None:
+    """Controllers and OAuth service share the same resolver core."""
+    reloaded_utils = importlib.reload(_utils)
+    reloaded_oauth_service = importlib.reload(oauth_service_module)
+
+    assert reloaded_utils._resolve_account_state_validator is account_state_module.resolve_account_state_validator
+    assert (
+        reloaded_oauth_service._resolve_account_state_validator is account_state_module.resolve_account_state_validator
+    )
 
 
 def test_resolve_account_state_validator_returns_none_for_non_callable_attribute() -> None:

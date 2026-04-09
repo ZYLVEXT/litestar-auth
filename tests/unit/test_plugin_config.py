@@ -6,7 +6,7 @@ import importlib
 from collections.abc import Callable, Sequence
 from datetime import timedelta
 from functools import partial
-from typing import TYPE_CHECKING, Any, Literal, cast, get_type_hints
+from typing import TYPE_CHECKING, Any, Literal, assert_type, cast, get_args, get_origin, get_type_hints
 from uuid import UUID
 
 import msgspec
@@ -186,6 +186,7 @@ def test_totp_config_defaults_match_expected_values() -> None:
     assert config.totp_issuer == "litestar-auth"
     assert config.totp_algorithm == "SHA256"
     assert config.totp_used_tokens_store is None
+    assert config.totp_pending_jti_store is None
     assert config.totp_require_replay_protection is True
     assert config.totp_enable_requires_password is True
 
@@ -196,6 +197,7 @@ def test_oauth_config_defaults_match_expected_values() -> None:
 
     assert config.oauth_cookie_secure is True
     assert config.oauth_providers is None
+    assert config.oauth_provider_scopes == {}
     assert config.oauth_associate_by_email is False
     assert config.oauth_trust_provider_email_verified is False
     assert config.include_oauth_associate is False
@@ -233,6 +235,76 @@ def test_oauth_route_registration_contract_derives_login_and_associate_redirect_
     assert contract.associate_path == "/auth/associate"
     assert contract.login_redirect_base_url == "https://app.example/auth/oauth"
     assert contract.associate_redirect_base_url == "https://app.example/auth/associate"
+
+
+def test_oauth_route_registration_contract_normalizes_per_provider_scopes() -> None:
+    """Configured plugin-owned OAuth scopes are normalized per provider."""
+    contract = _build_oauth_route_registration_contract(
+        auth_path="/auth/",
+        oauth_config=OAuthConfig(
+            oauth_providers=[("github", object()), ("gitlab", object())],
+            oauth_provider_scopes={"github": ["openid", "email", "openid"]},
+            oauth_redirect_base_url="https://app.example/auth/",
+        ),
+    )
+
+    assert contract.oauth_provider_scopes == {"github": ("openid", "email")}
+
+
+def test_oauth_route_registration_contract_omits_empty_provider_scope_lists() -> None:
+    """Empty configured scope lists do not create a provider-scope entry."""
+    contract = _build_oauth_route_registration_contract(
+        auth_path="/auth/",
+        oauth_config=OAuthConfig(
+            oauth_providers=[("github", object())],
+            oauth_provider_scopes={"github": []},
+            oauth_redirect_base_url="https://app.example/auth/",
+        ),
+    )
+
+    assert contract.oauth_provider_scopes == {}
+
+
+def test_oauth_route_registration_contract_rejects_unknown_scope_provider_names() -> None:
+    """Per-provider OAuth scopes must reference declared plugin-owned providers."""
+    with pytest.raises(ValueError, match="oauth_provider_scopes contains unknown provider names: gitlab"):
+        _build_oauth_route_registration_contract(
+            auth_path="/auth/",
+            oauth_config=OAuthConfig(
+                oauth_providers=[("github", object())],
+                oauth_provider_scopes={"gitlab": ["openid"]},
+                oauth_redirect_base_url="https://app.example/auth/",
+            ),
+        )
+
+
+@pytest.mark.parametrize(
+    ("provider_scopes", "expected_error", "expected_message"),
+    [
+        ({"github": [cast("Any", object())]}, TypeError, "oauth_provider_scopes values must be strings"),
+        ({"github": [""]}, ValueError, "oauth_provider_scopes values must be non-empty strings"),
+        (
+            {"github": ["openid email"]},
+            ValueError,
+            "oauth_provider_scopes values must be individual tokens without embedded whitespace",
+        ),
+    ],
+)
+def test_oauth_route_registration_contract_rejects_invalid_scope_values(
+    provider_scopes: dict[str, list[object]],
+    expected_error: type[Exception],
+    expected_message: str,
+) -> None:
+    """Per-provider OAuth scopes reject invalid configured values."""
+    with pytest.raises(expected_error, match=expected_message):
+        _build_oauth_route_registration_contract(
+            auth_path="/auth/",
+            oauth_config=OAuthConfig(
+                oauth_providers=[("github", object())],
+                oauth_provider_scopes=cast("Any", provider_scopes),
+                oauth_redirect_base_url="https://app.example/auth/",
+            ),
+        )
 
 
 def test_litestar_auth_config_database_token_auth_defaults_to_none() -> None:
@@ -274,6 +346,7 @@ def test_database_token_auth_field_builds_canonical_db_bearer_backend() -> None:
     assert preset.accept_legacy_plaintext_tokens is True
 
     backend = config.startup_backends()[0]
+    assert isinstance(backend, plugin_config_module.StartupBackendTemplate)
     assert backend.name == "database"
     assert isinstance(backend.transport, BearerTransport)
     current_strategy_module = importlib.import_module("litestar_auth.authentication.strategy")
@@ -283,6 +356,23 @@ def test_database_token_auth_field_builds_canonical_db_bearer_backend() -> None:
     assert backend.strategy.token_bytes == configured_token_bytes
     assert backend.strategy.accept_legacy_plaintext_tokens is True
     assert require_session_maker(config) is session_maker
+
+
+def test_startup_backends_wrap_manual_backends_in_startup_templates() -> None:
+    """Manual backends are exposed through the startup-only template type."""
+    backend = AuthenticationBackend[ExampleUser, UUID](
+        name="manual",
+        transport=BearerTransport(),
+        strategy=cast("Any", InMemoryTokenStrategy(token_prefix="manual")),
+    )
+    config = _minimal_config(backends=[backend])
+
+    startup_backend = config.startup_backends()[0]
+
+    assert isinstance(startup_backend, plugin_config_module.StartupBackendTemplate)
+    assert startup_backend.name == backend.name
+    assert startup_backend.transport is backend.transport
+    assert startup_backend.strategy is backend.strategy
 
 
 def test_startup_database_token_session_sentinel_requires_request_bound_backends() -> None:
@@ -914,6 +1004,50 @@ def test_require_session_maker_annotations_are_runtime_resolvable() -> None:
     hints = get_type_hints(require_session_maker)
 
     assert hints["return"] is SessionFactory
+
+
+def test_backend_split_annotations_are_runtime_resolvable() -> None:
+    """Config methods keep startup/runtime backend types distinct in runtime-resolved hints."""
+    current_startup_backend_template = plugin_config_module.StartupBackendTemplate
+    startup_hints = get_type_hints(
+        LitestarAuthConfig.startup_backends,
+        localns={
+            "StartupBackendTemplate": current_startup_backend_template,
+            "UP": ExampleUser,
+            "ID": UUID,
+        },
+    )
+    bind_hints = get_type_hints(
+        LitestarAuthConfig.bind_request_backends,
+        localns={
+            "AuthenticationBackend": AuthenticationBackend,
+            "StartupBackendTemplate": current_startup_backend_template,
+            "UP": ExampleUser,
+            "ID": UUID,
+        },
+    )
+
+    startup_return = startup_hints["return"]
+    runtime_return = bind_hints["return"]
+
+    assert get_origin(startup_return) is tuple
+    assert get_origin(get_args(startup_return)[0]) is current_startup_backend_template
+    assert get_args(startup_return)[1] is Ellipsis
+    assert get_origin(runtime_return) is tuple
+    assert get_origin(get_args(runtime_return)[0]) is AuthenticationBackend
+    assert get_args(runtime_return)[1] is Ellipsis
+
+
+def test_backend_split_static_types_remain_distinct() -> None:
+    """Static typing keeps startup templates separate from runtime backends."""
+    startup_backends = _minimal_config().startup_backends()
+    runtime_backends = _minimal_config().bind_request_backends(cast("Any", DummySession()))
+
+    assert_type(
+        startup_backends,
+        tuple[plugin_config_module.StartupBackendTemplate[ExampleUser, UUID], ...],
+    )
+    assert_type(runtime_backends, tuple[AuthenticationBackend[ExampleUser, UUID], ...])
 
 
 def test_litestar_auth_config_session_maker_annotation_is_runtime_resolvable() -> None:

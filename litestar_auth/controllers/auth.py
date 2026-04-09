@@ -28,6 +28,7 @@ from litestar_auth.controllers._utils import (
     _create_before_request_handler,
     _create_rate_limit_handlers,
     _create_request_body_exception_handlers,
+    _mark_litestar_auth_route_handler,
     _require_account_state,
 )
 from litestar_auth.exceptions import ConfigurationError, ErrorCode
@@ -426,7 +427,7 @@ def create_auth_controller[UP: UserProtocol[Any], ID](  # noqa: PLR0913
     generated_controller.__name__ = f"{_build_controller_name(backend.name)}AuthController"
     generated_controller.__qualname__ = generated_controller.__name__
     generated_controller.path = path
-    return generated_controller
+    return _mark_litestar_auth_route_handler(generated_controller)
 
 
 def _get_refresh_strategy[UP: UserProtocol[Any], ID](strategy: object) -> RefreshableStrategy[UP, ID]:

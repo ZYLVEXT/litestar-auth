@@ -107,6 +107,31 @@ def test_create_provider_oauth_controller_missing_client_config_raises_configura
         )
 
 
+@pytest.mark.parametrize(
+    ("redirect_base_url", "expected_message"),
+    [
+        ("http://example.test", "public HTTPS origin"),
+        ("https://localhost/auth/oauth", "non-loopback public HTTPS origin"),
+    ],
+)
+def test_create_provider_oauth_controller_rejects_insecure_redirect_base_url(
+    redirect_base_url: str,
+    expected_message: str,
+) -> None:
+    """Provider helper rejects HTTP and loopback redirect origins before controller assembly."""
+    backend = _make_backend()
+    user_manager = _make_user_manager()
+
+    with pytest.raises(router_module.ConfigurationError, match=expected_message):
+        router_module.create_provider_oauth_controller(
+            provider_name="example",
+            backend=backend,
+            user_manager=user_manager,
+            oauth_client=object(),
+            redirect_base_url=redirect_base_url,
+        )
+
+
 def test_load_httpx_oauth_client_invalid_class_path_raises_configuration_error() -> None:
     """Unresolvable client class path raises `ConfigurationError`."""
     invalid_path = "litestar_auth.oauth.router.NonExistentClient"
@@ -186,6 +211,7 @@ def test_create_provider_oauth_controller_uses_factory_client(
         redirect_base_url="https://example.test",
         path="/auth/oauth",
         cookie_secure=True,
+        oauth_scopes=None,
         associate_by_email=False,
         trust_provider_email_verified=False,
     )
@@ -220,6 +246,7 @@ def test_create_provider_oauth_controller_derives_path_from_auth_path(
         redirect_base_url="https://example.test/identity/oauth",
         path="/identity/oauth",
         cookie_secure=True,
+        oauth_scopes=None,
         associate_by_email=False,
         trust_provider_email_verified=False,
     )
@@ -257,6 +284,7 @@ def test_create_provider_oauth_controller_loads_client_from_class_path(
         redirect_base_url="https://example.test",
         path="/auth/oauth",
         cookie_secure=True,
+        oauth_scopes=None,
         associate_by_email=False,
         trust_provider_email_verified=False,
     )

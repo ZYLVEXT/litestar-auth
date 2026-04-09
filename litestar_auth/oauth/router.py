@@ -5,12 +5,16 @@ from __future__ import annotations
 from importlib import import_module
 from typing import TYPE_CHECKING, Any
 
-from litestar_auth.controllers.oauth import OAuthControllerUserManagerProtocol, create_oauth_controller
+from litestar_auth.controllers.oauth import (
+    OAuthControllerUserManagerProtocol,
+    _validate_manual_oauth_redirect_base_url,
+    create_oauth_controller,
+)
 from litestar_auth.exceptions import ConfigurationError
 from litestar_auth.types import UserProtocol
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Mapping
+    from collections.abc import Callable, Mapping, Sequence
 
     from litestar import Controller
 
@@ -30,17 +34,25 @@ def create_provider_oauth_controller[UP: UserProtocol[Any], ID](  # noqa: PLR091
     auth_path: str = "/auth",
     path: str | None = None,
     cookie_secure: bool = True,
+    oauth_scopes: Sequence[str] | None = None,
     associate_by_email: bool = False,
     trust_provider_email_verified: bool = False,
 ) -> type[Controller]:
     """Build a provider-specific OAuth controller from a client or lazy factory.
 
+    The authorize endpoint uses only server-configured ``oauth_scopes``. Runtime
+    scope-query overrides are rejected. ``redirect_base_url`` must use a
+    non-loopback ``https://`` origin; the manual controller API does not expose
+    a debug or testing escape hatch for insecure callback origins.
+
     Returns:
         Generated controller class mounted under the provider-specific path.
 
     Raises:
-        ConfigurationError: If no OAuth client configuration is provided.
+        ConfigurationError: If no OAuth client configuration is provided or
+            ``redirect_base_url`` is not a public HTTPS origin.
     """
+    _validate_manual_oauth_redirect_base_url(redirect_base_url)
     client = oauth_client
     if client is None and oauth_client_factory is not None:
         client = oauth_client_factory()
@@ -60,6 +72,7 @@ def create_provider_oauth_controller[UP: UserProtocol[Any], ID](  # noqa: PLR091
         redirect_base_url=redirect_base_url,
         path=resolved_path,
         cookie_secure=cookie_secure,
+        oauth_scopes=oauth_scopes,
         associate_by_email=associate_by_email,
         trust_provider_email_verified=trust_provider_email_verified,
     )

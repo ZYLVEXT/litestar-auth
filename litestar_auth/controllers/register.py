@@ -11,6 +11,7 @@ from litestar_auth.controllers._utils import (
     _configure_request_body_handler,
     _create_before_request_handler,
     _map_domain_exceptions,
+    _mark_litestar_auth_route_handler,
     _require_msgspec_struct,
     _to_user_schema,
 )
@@ -124,4 +125,4 @@ def create_register_controller[UP: RegisterControllerUserProtocol[Any], ID](
     register_cls = RegisterController
     _configure_request_body_handler(register_cls.register, schema=user_create_schema_type)
     register_cls.path = path
-    return cast("type[Controller]", register_cls)
+    return _mark_litestar_auth_route_handler(cast("type[Controller]", register_cls))

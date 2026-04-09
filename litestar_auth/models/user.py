@@ -2,14 +2,13 @@
 
 from __future__ import annotations
 
-import importlib
-
 from advanced_alchemy.base import UUIDBase
 
 from litestar_auth.models.mixins import UserAuthRelationshipMixin, UserModelMixin
+from litestar_auth.models.oauth import OAuthAccount as _BundledOAuthAccount
 
-# Ensure the bundled OAuthAccount mapper is registered when the reference ``User`` is used.
-importlib.import_module("litestar_auth.models.oauth")
+# Ensure SQLAlchemy can resolve ``User.oauth_accounts`` against the bundled OAuth mapper.
+_ = _BundledOAuthAccount
 
 
 class User(UserModelMixin, UserAuthRelationshipMixin, UUIDBase):

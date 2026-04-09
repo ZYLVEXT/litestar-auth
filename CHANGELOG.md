@@ -1,3 +1,32 @@
+## Unreleased
+
+### Added
+
+- **Explicit security-posture contracts for JWT revocation and TOTP secret storage** — `JWTStrategy.revocation_posture` now reports whether a strategy uses the compatibility-grade in-memory denylist or a durable shared-store posture, and manager-owned TOTP secret handling now exposes an explicit `totp_secret_storage_posture` contract instead of leaving plaintext-vs-encrypted storage as an implicit side effect of `totp_secret_key` being present or absent.
+- **New high-level OAuth and TOTP config fields for production-safe defaults** — `OAuthConfig.oauth_provider_scopes` now pins per-provider OAuth scopes on plugin-owned routes, and `TotpConfig.totp_pending_jti_store` lets the plugin-managed TOTP flow use a shared JWT denylist for pending-login replay protection.
+- **Startup-only backend templates for canonical plugin wiring** — `LitestarAuthConfig.startup_backends()` now returns `StartupBackendTemplate` values that describe the setup-time auth surface, while `config.bind_request_backends(session)` remains the runtime path that materializes request-scoped `AuthenticationBackend` instances.
+
+### Changed
+
+- **Auth `ClientException` shaping is now scoped to litestar-auth routes** — the plugin no longer installs a global app-wide `ClientException` handler. Auth routes still return the stable `{detail, code}` payload shape, but unrelated application routes keep Litestar’s default `ClientException` behavior.
+- **OAuth scope selection is now server-owned end-to-end** — plugin-owned routes use `OAuthConfig.oauth_provider_scopes`, manual controller factories accept `oauth_scopes=...`, and runtime `GET /authorize?scopes=...` overrides now fail with **400** instead of allowing the caller to change provider permissions from the browser.
+- **OAuth associate callbacks now enforce the same account-state gate as login** — inactive or otherwise blocked users can no longer link new OAuth identities through an already-authenticated associate flow.
+- **OAuth redirect-origin policy is now fail-closed across both plugin-owned and manual routes** — plugin startup rejects non-HTTPS or loopback `oauth_redirect_base_url` values outside explicit `AppConfig(debug=True)` / `unsafe_testing=True` escape hatches, and manual/custom OAuth controller factories reject insecure `redirect_base_url` values immediately with no localhost/plain-HTTP override.
+- **Plugin DI now uses native generated callables instead of public `__signature__` rewriting** — configurable dependency keys still work, but the contract is now explicit: `db_session_dependency_key` and OAuth associate `user_manager_dependency_key` must be valid non-keyword Python identifiers because Litestar resolves them by real callable parameter names.
+- **OAuth mapper bootstrap is less side-effect driven** — OAuth token-encryption hooks now register when concrete `OAuthAccountMixin` subclasses are declared, and the bundled `User` mapper references the bundled `OAuthAccount` class directly instead of depending on a string-based `importlib` side effect.
+
+### Fixed
+
+- **Pending TOTP login-token replay protection no longer silently degrades to process-local storage** — missing `pending_jti_store` now fails closed unless `unsafe_testing=True`, including the plugin-managed path that forwards `TotpConfig.totp_pending_jti_store` into the generated TOTP controller.
+- **JWT and TOTP downgrade messaging is now aligned across runtime validation, startup warnings, and docs** — the plugin-managed single-process JWT denylist tradeoff and plaintext TOTP-secret compatibility posture now share one wording/contract source instead of drifting independently across startup, validation, and documentation.
+
+### Migration
+
+- Configure a public **`https://...`** callback base for all OAuth routes. Plugin-owned OAuth can still use localhost/plain HTTP only behind `AppConfig(debug=True)` or `unsafe_testing=True`; manual/custom OAuth controller factories no longer expose that escape hatch.
+- Replace browser-driven OAuth scope requests with server configuration: use `OAuthConfig.oauth_provider_scopes={"provider": ["openid", "email"]}` on the plugin-owned path or `oauth_scopes=[...]` when mounting manual controllers.
+- Set `TotpConfig.totp_pending_jti_store` for plugin-managed TOTP or `pending_jti_store=...` when calling `create_totp_controller(...)` directly in any non-testing deployment.
+- If your code inspects `config.startup_backends()`, update it to consume `StartupBackendTemplate` values; use `config.bind_request_backends(session)` or `template.bind_runtime_backend(session)` when you need runtime `AuthenticationBackend` instances.
+
 ## 1.3.0 (2026-04-09)
 
 ### Changed

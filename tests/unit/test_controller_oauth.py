@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import importlib
+import inspect
 from types import SimpleNamespace
 from typing import Any, cast
 from unittest.mock import AsyncMock, MagicMock
@@ -30,7 +31,12 @@ from litestar_auth.controllers.oauth import (
     create_oauth_associate_controller,
     create_oauth_controller,
 )
-from litestar_auth.exceptions import ConfigurationError, ErrorCode, OAuthAccountAlreadyLinkedError
+from litestar_auth.exceptions import (
+    ConfigurationError,
+    ErrorCode,
+    InactiveUserError,
+    OAuthAccountAlreadyLinkedError,
+)
 from litestar_auth.oauth.service import OAuthAuthorization
 
 pytestmark = pytest.mark.unit
@@ -502,7 +508,12 @@ def _build_associate_controller(*, user_manager: object | None = None) -> object
     return cast("Any", controller_class(owner=Router(path="/", route_handlers=[])))
 
 
-def _build_login_controller(*, backend: object, user_manager: object) -> object:
+def _build_login_controller(
+    *,
+    backend: object,
+    user_manager: object,
+    oauth_scopes: tuple[str, ...] | None = None,
+) -> object:
     """Create an OAuth login controller instance for direct handler tests.
 
     Returns:
@@ -516,6 +527,7 @@ def _build_login_controller(*, backend: object, user_manager: object) -> object:
         redirect_base_url="https://app.example/auth/oauth",
         path="/auth/oauth",
         cookie_secure=True,
+        oauth_scopes=oauth_scopes,
     )
     return cast("Any", controller_class(owner=Router(path="/", route_handlers=[])))
 
@@ -543,6 +555,7 @@ def test_shared_oauth_controller_assembly_uses_direct_manager_binding_and_provid
         state_cookie_prefix=oauth_module.STATE_COOKIE_PREFIX,
         controller_name_suffix="OAuthController",
         user_manager_binding=oauth_module._build_direct_user_manager_binding(cast("Any", manager)),
+        oauth_scopes=("openid", "email", "openid"),
         associate_by_email=True,
         trust_provider_email_verified=True,
     )
@@ -553,8 +566,56 @@ def test_shared_oauth_controller_assembly_uses_direct_manager_binding_and_provid
     assert assembly.cookie_name == "__oauth_state_github"
     assert assembly.cookie_path == "/auth/oauth/github"
     assert assembly.cookie_secure is True
+    assert assembly.oauth_scopes == ("openid", "email")
     assert assembly.user_manager_binding.user_manager is manager
     assert assembly.user_manager_binding.dependency_parameter_name is None
+
+
+@pytest.mark.parametrize(
+    ("oauth_scopes", "expected_message"),
+    [
+        ([cast("Any", object())], "OAuth scopes must be strings."),
+        ([""], "OAuth scopes must be non-empty strings."),
+        (["openid email"], "OAuth scopes must be provided as individual tokens without embedded whitespace."),
+    ],
+)
+def test_create_oauth_controller_rejects_invalid_configured_scopes(
+    oauth_scopes: list[object],
+    expected_message: str,
+) -> None:
+    """Manual OAuth controllers reject invalid server-owned scope configuration."""
+    with pytest.raises(ConfigurationError, match=expected_message):
+        create_oauth_controller(
+            provider_name="github",
+            backend=cast("Any", MagicMock()),
+            user_manager=cast("Any", MagicMock()),
+            oauth_client=object(),
+            redirect_base_url="https://app.example/auth/oauth",
+            oauth_scopes=cast("Any", oauth_scopes),
+        )
+
+
+@pytest.mark.parametrize(
+    ("redirect_base_url", "expected_message"),
+    [
+        ("http://app.example/auth/oauth", "public HTTPS origin"),
+        ("https://localhost/auth/oauth", "non-loopback public HTTPS origin"),
+        ("https://127.0.0.1/auth/oauth", "non-loopback public HTTPS origin"),
+    ],
+)
+def test_create_oauth_controller_rejects_insecure_redirect_base_url(
+    redirect_base_url: str,
+    expected_message: str,
+) -> None:
+    """Manual login-controller wiring fails closed for HTTP and loopback redirect origins."""
+    with pytest.raises(ConfigurationError, match=expected_message):
+        create_oauth_controller(
+            provider_name="github",
+            backend=cast("Any", MagicMock()),
+            user_manager=cast("Any", MagicMock()),
+            oauth_client=object(),
+            redirect_base_url=redirect_base_url,
+        )
 
 
 def test_shared_oauth_controller_assembly_uses_dependency_binding_for_associate_routes() -> None:
@@ -650,6 +711,28 @@ def test_create_oauth_associate_controller_rejects_invalid_dependency_parameter_
         )
 
 
+@pytest.mark.parametrize(
+    ("redirect_base_url", "expected_message"),
+    [
+        ("http://app.example/auth/associate", "public HTTPS origin"),
+        ("https://localhost/auth/associate", "non-loopback public HTTPS origin"),
+        ("https://[::1]/auth/associate", "non-loopback public HTTPS origin"),
+    ],
+)
+def test_create_oauth_associate_controller_rejects_insecure_redirect_base_url(
+    redirect_base_url: str,
+    expected_message: str,
+) -> None:
+    """Manual associate-controller wiring fails closed for HTTP and loopback redirect origins."""
+    with pytest.raises(ConfigurationError, match=expected_message):
+        create_oauth_associate_controller(
+            provider_name="github",
+            user_manager=cast("Any", MagicMock()),
+            oauth_client=object(),
+            redirect_base_url=redirect_base_url,
+        )
+
+
 async def test_oauth_associate_callback_links_authenticated_user_and_clears_cookie(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -702,6 +785,36 @@ async def test_oauth_associate_callback_links_authenticated_user_and_clears_cook
     assert cookie.secure is True
     assert cookie.httponly is True
     assert cookie.samesite == "lax"
+
+
+async def test_oauth_associate_callback_rejects_inactive_user_before_linking(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Associate callback enforces account-state validation before linking an OAuth identity."""
+    user = object()
+    manager = MagicMock()
+    manager.require_account_state.side_effect = InactiveUserError
+    associate_account = AsyncMock()
+
+    monkeypatch.setattr("litestar_auth.controllers.oauth.OAuthService.associate_account", associate_account)
+    controller = cast("Any", _build_associate_controller(user_manager=manager))
+    request = cast(
+        "Any",
+        SimpleNamespace(cookies={"__oauth_associate_state_github": "associate-state"}, user=user),
+    )
+
+    with pytest.raises(ClientException) as exc_info:
+        await controller.callback.fn(
+            controller,
+            request,
+            code="provider-code",
+            oauth_state="associate-state",
+        )
+
+    assert exc_info.value.status_code == HTTP_400_BAD_REQUEST
+    extra = exc_info.value.extra
+    assert (extra.get("code") if isinstance(extra, dict) else None) == ErrorCode.LOGIN_USER_INACTIVE
+    associate_account.assert_not_awaited()
 
 
 async def test_oauth_associate_callback_rejects_invalid_state() -> None:
@@ -810,7 +923,7 @@ async def test_oauth_associate_di_callback_raises_when_injected_manager_missing(
         SimpleNamespace(cookies={"__oauth_associate_state_github": "associate-state"}, user=object()),
     )
 
-    with pytest.raises(TypeError, match="missing 1 required keyword argument: 'custom_manager_key'"):
+    with pytest.raises(TypeError, match="missing 1 required positional argument: 'custom_manager_key'"):
         await controller.callback.fn(
             controller,
             request,
@@ -819,22 +932,25 @@ async def test_oauth_associate_di_callback_raises_when_injected_manager_missing(
         )
 
 
-def test_set_dependency_parameter_signature_requires_oauth_state_and_var_keyword() -> None:
-    """Signature adaptation fails fast when the handler shape is incompatible."""
+def test_oauth_associate_di_callback_uses_native_signature_without_override() -> None:
+    """DI-key associate callbacks expose the dependency parameter without ``__signature__`` rewriting."""
+    controller = create_oauth_associate_controller(
+        provider_name="github",
+        user_manager_dependency_key="custom_manager_key",
+        oauth_client=object(),
+        redirect_base_url="https://app.example/auth/associate",
+        path="/auth/associate",
+        cookie_secure=True,
+    )
 
-    def invalid_callback(self: object, request: object, code: str) -> Response[Any]:
-        del self, request, code
-        return Response(content=None)
+    callback_handler = cast("Any", controller).callback.fn
 
-    with pytest.raises(TypeError, match=r"must declare oauth_state and \*\*dependencies"):
-        oauth_module._set_dependency_parameter_signature(
-            invalid_callback,
-            parameter_name="custom_manager_key",
-        )
+    assert "custom_manager_key" in inspect.signature(callback_handler).parameters
+    assert "__signature__" not in callback_handler.__dict__
 
 
 async def test_oauth_login_authorize_sets_state_cookie_and_redirects(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Login authorize forwards scopes, provider callback URL, and the OAuth state cookie."""
+    """Login authorize forwards only configured scopes, callback URL, and the OAuth state cookie."""
     seen: dict[str, object] = {}
 
     async def fake_authorize(
@@ -853,12 +969,18 @@ async def test_oauth_login_authorize_sets_state_cookie_and_redirects(monkeypatch
         )
 
     monkeypatch.setattr("litestar_auth.controllers.oauth.OAuthService.authorize", fake_authorize)
-    controller = cast("Any", _build_login_controller(backend=MagicMock(), user_manager=MagicMock()))
+    controller = cast(
+        "Any",
+        _build_login_controller(
+            backend=MagicMock(),
+            user_manager=MagicMock(),
+            oauth_scopes=("openid", "email"),
+        ),
+    )
 
     response = await controller.authorize.fn(
         controller,
-        cast("Any", SimpleNamespace(cookies={}, user=None)),
-        scopes=["openid", "email"],
+        cast("Any", SimpleNamespace(cookies={}, query_params={}, user=None)),
     )
 
     assert isinstance(response, Redirect)
@@ -871,6 +993,20 @@ async def test_oauth_login_authorize_sets_state_cookie_and_redirects(monkeypatch
     assert cookie.key == "__oauth_state_github"
     assert cookie.value == "login-state"
     assert cookie.path == "/auth/oauth/github"
+
+
+async def test_oauth_login_authorize_rejects_runtime_scope_override() -> None:
+    """Login authorize rejects caller-controlled scope overrides."""
+    controller = cast("Any", _build_login_controller(backend=MagicMock(), user_manager=MagicMock()))
+
+    with pytest.raises(ClientException) as exc_info:
+        await controller.authorize.fn(
+            controller,
+            cast("Any", SimpleNamespace(cookies={}, query_params={"scopes": "openid"}, user=None)),
+        )
+
+    assert exc_info.value.status_code == HTTP_400_BAD_REQUEST
+    assert exc_info.value.detail == "OAuth scopes must be configured on the server."
 
 
 async def test_oauth_login_callback_logs_in_and_clears_state_cookie(monkeypatch: pytest.MonkeyPatch) -> None:

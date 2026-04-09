@@ -15,6 +15,8 @@ from litestar_auth._plugin.config import (
     TotpConfig,
     _build_default_user_manager_validation_kwargs,
     _build_oauth_route_registration_contract,
+    _describe_jwt_revocation_tradeoff,
+    _resolve_plugin_managed_totp_secret_storage_tradeoff,
 )
 from litestar_auth._plugin.middleware import get_cookie_transports
 from litestar_auth._plugin.rate_limit import iter_rate_limit_endpoints
@@ -189,10 +191,10 @@ def validate_config[UP: UserProtocol[Any], ID](config: LitestarAuthConfig[UP, ID
     for validator in (
         validate_core_session_config,
         validate_credential_config,
+        validate_totp_secret_config,
         validate_totp_domain_config,
         validate_request_security_config,
         validate_oauth_route_registration_config,
-        validate_totp_secret_config,
         validate_backend_security_config,
         validate_totp_encryption_config,
     ):
@@ -308,19 +310,18 @@ def _validate_jwt_strategy_revocation[UP: UserProtocol[Any], ID](
     Raises:
         ValueError: If JWT revocation storage is nondurable in production.
     """
+    notice = _describe_jwt_revocation_tradeoff(strategy.revocation_posture)
     if (
-        getattr(strategy, "revocation_is_durable", False)
+        notice is None
+        or not notice.requires_explicit_production_opt_in
         or config.allow_nondurable_jwt_revocation
         or config.unsafe_testing
     ):
         return
 
-    msg = (
-        "JWTStrategy is configured with a process-local in-memory denylist. "
-        "For production deployments, configure a durable denylist store (e.g. RedisJWTDenylistStore) "
-        "or use RedisTokenStrategy / DatabaseTokenStrategy. "
-        "To explicitly accept nondurable logout semantics, set allow_nondurable_jwt_revocation=True."
-    )
+    msg = notice.production_validation_error
+    if msg is None:  # pragma: no cover - posture branch above guarantees a message
+        return
     raise ValueError(msg)
 
 
@@ -333,21 +334,14 @@ def _validate_totp_encryption_key[UP: UserProtocol[Any], ID](config: LitestarAut
     """
     if config.totp_config is None or config.unsafe_testing:
         return
-    if config.user_manager_factory is not None and config.user_manager_security is None:
+    notice = _resolve_plugin_managed_totp_secret_storage_tradeoff(config)
+    if notice is None or not notice.requires_explicit_production_opt_in:
         return
 
-    manager_inputs = ManagerConstructorInputs(
-        manager_kwargs=config.user_manager_kwargs,
-        manager_security=config.user_manager_security,
-        id_parser=config.id_parser,
-    )
-    if not manager_inputs.effective_security.totp_secret_key:
-        msg = (
-            "totp_secret_key is required in production when TOTP is enabled. "
-            "TOTP secrets must be encrypted at rest. Generate a Fernet key with: "
-            'python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"'
-        )
-        raise ConfigurationError(msg)
+    msg = notice.production_validation_error
+    if msg is None:  # pragma: no cover - compatibility plaintext posture always provides a validation error
+        return
+    raise ConfigurationError(msg)
 
 
 def validate_user_manager_security_config[UP: UserProtocol[Any], ID](config: LitestarAuthConfig[UP, ID]) -> None:
@@ -573,7 +567,13 @@ def validate_totp_sub_config[UP: UserProtocol[Any]](
     if not totp_config.totp_pending_secret:
         msg = "totp_config requires totp_pending_secret."
         raise ValueError(msg)
-    if totp_config.totp_require_replay_protection and totp_config.totp_used_tokens_store is None and not unsafe_testing:
+    pending_jti_store = getattr(totp_config, "totp_pending_jti_store", None)
+    if pending_jti_store is None and not unsafe_testing:
+        msg = "totp_pending_jti_store is required unless unsafe_testing=True."
+        raise ValueError(msg)
+    require_replay_protection = bool(getattr(totp_config, "totp_require_replay_protection", False))
+    used_tokens_store = getattr(totp_config, "totp_used_tokens_store", None)
+    if require_replay_protection and used_tokens_store is None and not unsafe_testing:
         msg = "totp_require_replay_protection=True requires totp_used_tokens_store to be configured."
         raise ValueError(msg)
     if totp_config.totp_enable_requires_password and not callable(

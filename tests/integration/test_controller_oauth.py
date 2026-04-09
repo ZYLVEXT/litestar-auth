@@ -53,6 +53,9 @@ HTTP_BAD_REQUEST = 400
 HTTP_OK = 200
 HTTP_UNAUTHORIZED = 401
 HTTP_INTERNAL_SERVER_ERROR = 500
+MANUAL_LOGIN_REDIRECT_BASE_URL = "https://app.example/auth/oauth"
+MANUAL_ASSOCIATE_REDIRECT_BASE_URL = "https://app.example/auth/associate"
+MANUAL_IDENTITY_REDIRECT_BASE_URL = "https://app.example/identity/oauth"
 
 
 @dataclass(slots=True)
@@ -373,6 +376,7 @@ def build_app(  # noqa: PLR0913
     oauth_client: FakeOAuthClient | None = None,
     use_provider_helper: bool = False,
     cookie_secure: bool = True,
+    oauth_scopes: tuple[str, ...] | None = None,
     associate_by_email: bool = False,
     trust_provider_email_verified: bool = False,
 ) -> tuple[Litestar, InMemoryOAuthUserDatabase, TrackingUserManager, InMemoryTokenStrategy, FakeOAuthClient]:
@@ -397,8 +401,9 @@ def build_app(  # noqa: PLR0913
             backend=backend,
             user_manager=cast("Any", user_manager),
             oauth_client=client,
-            redirect_base_url="http://testserver.local/auth/oauth",
+            redirect_base_url=MANUAL_LOGIN_REDIRECT_BASE_URL,
             cookie_secure=cookie_secure,
+            oauth_scopes=oauth_scopes,
             associate_by_email=associate_by_email,
             trust_provider_email_verified=trust_provider_email_verified,
         )
@@ -408,8 +413,9 @@ def build_app(  # noqa: PLR0913
             backend=backend,
             user_manager=cast("Any", user_manager),
             oauth_client=client,
-            redirect_base_url="http://testserver.local/auth/oauth",
+            redirect_base_url=MANUAL_LOGIN_REDIRECT_BASE_URL,
             cookie_secure=cookie_secure,
+            oauth_scopes=oauth_scopes,
             associate_by_email=associate_by_email,
             trust_provider_email_verified=trust_provider_email_verified,
         )
@@ -443,7 +449,7 @@ def build_app_with_associate(
         backend=backend,
         user_manager=cast("Any", user_manager),
         oauth_client=client,
-        redirect_base_url="http://testserver.local/auth/oauth",
+        redirect_base_url=MANUAL_LOGIN_REDIRECT_BASE_URL,
         path="/auth/oauth",
         cookie_secure=cookie_secure,
     )
@@ -451,7 +457,7 @@ def build_app_with_associate(
         provider_name="github",
         user_manager=cast("Any", user_manager),
         oauth_client=client,
-        redirect_base_url="http://testserver.local/auth/associate",
+        redirect_base_url=MANUAL_ASSOCIATE_REDIRECT_BASE_URL,
         path="/auth/associate",
         cookie_secure=cookie_secure,
     )
@@ -502,7 +508,7 @@ async def test_authorize_redirects_and_sets_secure_state_cookie(
     state_cookie = response.cookies.get("__oauth_state_github")
     assert state_cookie
     assert oauth_client.authorization_calls == [
-        ("http://testserver.local/auth/oauth/github/callback", state_cookie, None),
+        ("https://app.example/auth/oauth/github/callback", state_cookie, None),
     ]
     set_cookie = response.headers["set-cookie"].lower()
     assert "__oauth_state_github=" in set_cookie
@@ -534,7 +540,21 @@ async def test_authorize_without_scopes_works_as_before(
     assert response.headers["location"] == f"https://provider.example/authorize?state={state}"
 
 
-async def test_authorize_with_scopes_passes_them_to_provider(
+async def test_authorize_uses_configured_server_owned_scopes() -> None:
+    """Authorize uses configured server-owned scopes instead of caller input."""
+    app, _, _, _, oauth_client = build_app(oauth_scopes=("openid", "email"))
+
+    async with AsyncTestClient(app=app) as test_client:
+        response = await test_client.get("/auth/oauth/github/authorize", follow_redirects=False)
+
+    assert response.status_code == HTTP_FOUND
+    assert len(oauth_client.authorization_calls) == 1
+    _redirect_uri, _state, scope = oauth_client.authorization_calls[0]
+    assert scope == "openid email"
+    assert "scope=openid%20email" in response.headers["location"]
+
+
+async def test_authorize_rejects_runtime_scope_override(
     client: tuple[
         AsyncTestClient[Litestar],
         InMemoryOAuthUserDatabase,
@@ -543,7 +563,7 @@ async def test_authorize_with_scopes_passes_them_to_provider(
         FakeOAuthClient,
     ],
 ) -> None:
-    """Authorize with scopes query param passes them to the OAuth client."""
+    """Authorize rejects caller-controlled scope query parameters."""
     test_client, _, _, _, oauth_client = client
 
     response = await test_client.get(
@@ -552,12 +572,9 @@ async def test_authorize_with_scopes_passes_them_to_provider(
         follow_redirects=False,
     )
 
-    assert response.status_code == HTTP_FOUND
-    assert len(oauth_client.authorization_calls) == 1
-    _redirect_uri, _state, scope = oauth_client.authorization_calls[0]
-    assert scope == "openid email"
-    assert "scope=openid" in response.headers["location"]
-    assert "email" in response.headers["location"]
+    assert response.status_code == HTTP_BAD_REQUEST
+    assert response.json()["detail"] == "OAuth scopes must be configured on the server."
+    assert oauth_client.authorization_calls == []
 
 
 async def test_callback_does_not_auto_verify_new_user_by_default(
@@ -592,7 +609,7 @@ async def test_callback_does_not_auto_verify_new_user_by_default(
     assert oauth_account.user_id == created_user.id
     assert oauth_account.account_email == "oauth@example.com"
     assert oauth_account.access_token == "provider-access-token"
-    assert oauth_client.access_token_calls == [("provider-code", "http://testserver.local/auth/oauth/github/callback")]
+    assert oauth_client.access_token_calls == [("provider-code", "https://app.example/auth/oauth/github/callback")]
     assert oauth_client.id_email_calls == ["provider-access-token"]
     assert not callback_response.cookies.get("__oauth_state_github")
     set_cookie = callback_response.headers["set-cookie"].lower()
@@ -1095,7 +1112,7 @@ async def test_callback_returns_400_when_provider_profile_has_no_email() -> None
 
 
 async def test_oauth_state_cookie_secure_flag_can_be_disabled() -> None:
-    """OAuth state cookies can opt out of the secure attribute for localhost flows."""
+    """OAuth state cookies can opt out of the secure attribute independently of redirect-origin validation."""
     app, _, _, _, _ = build_app(cookie_secure=False)
 
     async with AsyncTestClient(app=app) as client:
@@ -1132,7 +1149,7 @@ def test_create_oauth_associate_controller_raises_when_both_or_neither_user_mana
             user_manager=None,
             user_manager_dependency_key=None,
             oauth_client=client,
-            redirect_base_url="http://testserver.local/auth/associate",
+            redirect_base_url=MANUAL_ASSOCIATE_REDIRECT_BASE_URL,
         )
     password_helper = PasswordHelper()
     user_db = InMemoryOAuthUserDatabase()
@@ -1143,8 +1160,61 @@ def test_create_oauth_associate_controller_raises_when_both_or_neither_user_mana
             user_manager=cast("Any", user_manager),
             user_manager_dependency_key="some_key",
             oauth_client=client,
-            redirect_base_url="http://testserver.local/auth/associate",
+            redirect_base_url=MANUAL_ASSOCIATE_REDIRECT_BASE_URL,
         )
+
+
+@pytest.mark.parametrize(
+    ("factory_name", "redirect_base_url", "expected_message"),
+    [
+        ("login", "http://app.example/auth/oauth", "public HTTPS origin"),
+        ("associate", "https://localhost/auth/associate", "non-loopback public HTTPS origin"),
+        ("provider", "http://app.example/auth/oauth", "public HTTPS origin"),
+    ],
+)
+def test_manual_oauth_factories_reject_insecure_redirect_origins(
+    factory_name: str,
+    redirect_base_url: str,
+    expected_message: str,
+) -> None:
+    """Manual OAuth factories fail closed for insecure redirect origins before app startup."""
+    password_helper = PasswordHelper()
+    user_manager = TrackingUserManager(InMemoryOAuthUserDatabase(), password_helper)
+    backend = AuthenticationBackend[ExampleUser, UUID](
+        name="oauth-bearer",
+        transport=BearerTransport(),
+        strategy=cast("Any", InMemoryTokenStrategy()),
+    )
+
+    if factory_name == "login":
+        factory = create_oauth_controller
+        factory_kwargs = {
+            "provider_name": "github",
+            "backend": backend,
+            "user_manager": cast("Any", user_manager),
+            "oauth_client": FakeOAuthClient(),
+            "redirect_base_url": redirect_base_url,
+        }
+    elif factory_name == "associate":
+        factory = create_oauth_associate_controller
+        factory_kwargs = {
+            "provider_name": "github",
+            "user_manager": cast("Any", user_manager),
+            "oauth_client": FakeOAuthClient(),
+            "redirect_base_url": redirect_base_url,
+        }
+    else:
+        factory = create_provider_oauth_controller
+        factory_kwargs = {
+            "provider_name": "github",
+            "backend": backend,
+            "user_manager": cast("Any", user_manager),
+            "oauth_client": FakeOAuthClient(),
+            "redirect_base_url": redirect_base_url,
+        }
+
+    with pytest.raises(ConfigurationError, match=expected_message):
+        cast("Any", factory)(**factory_kwargs)
 
 
 async def test_callback_returns_400_when_state_cookie_missing() -> None:
@@ -1187,7 +1257,7 @@ async def test_create_provider_oauth_controller_uses_oauth_client_factory() -> N
         backend=backend,
         user_manager=cast("Any", user_manager),
         oauth_client_factory=make_client,
-        redirect_base_url="http://testserver.local/auth/oauth",
+        redirect_base_url=MANUAL_LOGIN_REDIRECT_BASE_URL,
     )
     app2 = Litestar(route_handlers=[controller])
 
@@ -1416,6 +1486,44 @@ async def test_associate_authenticated_user_links_oauth() -> None:
         assert oauth_account.user_id == created_user.id
 
 
+async def test_associate_rejects_inactive_authenticated_user() -> None:
+    """Inactive authenticated users cannot link new OAuth identities."""
+    user = ExampleUser(
+        id=uuid4(),
+        email="inactive-link@example.com",
+        hashed_password=PasswordHelper().hash("pw"),
+        is_active=False,
+    )
+    app, user_db, _, strategy, _ = build_app_with_associate(users=[user])
+    strategy.tokens["bearer-token"] = user.id
+
+    async with AsyncTestClient(app=app) as client:
+        authorize_response = await client.get(
+            "/auth/associate/github/authorize",
+            headers={"Authorization": "Bearer bearer-token"},
+            follow_redirects=False,
+        )
+        assert authorize_response.status_code == HTTP_FOUND
+        state = authorize_response.cookies["__oauth_associate_state_github"]
+        client.cookies.set(
+            "__oauth_associate_state_github",
+            state,
+            domain="testserver.local",
+            path="/auth/associate/github",
+        )
+        callback_response = await client.get(
+            "/auth/associate/github/callback",
+            params={"code": "associate-code", "state": state},
+            headers={"Authorization": "Bearer bearer-token"},
+        )
+
+    assert callback_response.status_code == HTTP_BAD_REQUEST
+    body = callback_response.json()
+    code = body.get("code") or (body.get("extra") or {}).get("code")
+    assert code == ErrorCode.LOGIN_USER_INACTIVE
+    assert user_db.oauth_accounts == {}
+
+
 async def test_associate_unauthenticated_returns_401() -> None:
     """Unauthenticated request to associate authorize returns 401."""
     app, _, _, _, _ = build_app_with_associate()
@@ -1599,7 +1707,7 @@ def test_associate_flow_uses_di_key_variant_and_clears_state_cookie() -> None:
         provider_name="github",
         user_manager_dependency_key="litestar_auth_oauth_associate_user_manager",
         oauth_client=FakeOAuthClient(),
-        redirect_base_url="http://testserver.local/auth/associate",
+        redirect_base_url=MANUAL_ASSOCIATE_REDIRECT_BASE_URL,
         path="/auth/associate",
         cookie_secure=True,
     )
@@ -1608,13 +1716,13 @@ def test_associate_flow_uses_di_key_variant_and_clears_state_cookie() -> None:
 
 
 def test_associate_di_key_variant_preserves_dependency_injection_callback_signature() -> None:
-    """DI-key variant keeps the injected manager callback parameter name."""
+    """DI-key variant keeps the injected manager callback parameter name without a signature override."""
     dependency_parameter_name = "custom_manager_key"
     controller = create_oauth_associate_controller(
         provider_name="github",
         user_manager_dependency_key=dependency_parameter_name,
         oauth_client=FakeOAuthClient(),
-        redirect_base_url="http://testserver.local/auth/associate",
+        redirect_base_url=MANUAL_ASSOCIATE_REDIRECT_BASE_URL,
         path="/auth/associate",
         cookie_secure=True,
     )
@@ -1623,6 +1731,7 @@ def test_associate_di_key_variant_preserves_dependency_injection_callback_signat
     callback_handler = controller_type.callback.fn
     parameters = inspect.signature(callback_handler).parameters
     assert dependency_parameter_name in parameters
+    assert "__signature__" not in callback_handler.__dict__
 
 
 def test_associate_direct_variant_omits_dependency_injection_callback_parameter() -> None:
@@ -1633,7 +1742,7 @@ def test_associate_direct_variant_omits_dependency_injection_callback_parameter(
         provider_name="github",
         user_manager=cast("Any", user_manager),
         oauth_client=FakeOAuthClient(),
-        redirect_base_url="http://testserver.local/auth/associate",
+        redirect_base_url=MANUAL_ASSOCIATE_REDIRECT_BASE_URL,
         path="/auth/associate",
         cookie_secure=True,
     )
@@ -1661,7 +1770,7 @@ async def test_provider_helper_mounts_login_routes_under_custom_auth_path() -> N
         backend=backend,
         user_manager=cast("Any", user_manager),
         oauth_client=oauth_client,
-        redirect_base_url="http://testserver.local/identity/oauth",
+        redirect_base_url=MANUAL_IDENTITY_REDIRECT_BASE_URL,
         auth_path="/identity",
     )
     app = Litestar(route_handlers=[controller])
@@ -1672,7 +1781,7 @@ async def test_provider_helper_mounts_login_routes_under_custom_auth_path() -> N
     assert response.status_code == HTTP_FOUND
     assert len(oauth_client.authorization_calls) == 1
     redirect_uri, _state, scopes = oauth_client.authorization_calls[0]
-    assert redirect_uri == "http://testserver.local/identity/oauth/github/callback"
+    assert redirect_uri == "https://app.example/identity/oauth/github/callback"
     assert scopes is None
     assert "path=/identity/oauth/github" in response.headers["set-cookie"].lower()
 
@@ -1693,7 +1802,7 @@ async def test_associate_di_key_variant_links_oauth() -> None:
         provider_name="github",
         user_manager_dependency_key="litestar_auth_oauth_associate_user_manager",
         oauth_client=oauth_client,
-        redirect_base_url="http://testserver.local/auth/associate",
+        redirect_base_url=MANUAL_ASSOCIATE_REDIRECT_BASE_URL,
         path="/auth/associate",
         cookie_secure=True,
     )

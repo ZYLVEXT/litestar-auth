@@ -102,6 +102,17 @@ def test_import_models_package_keeps_user_and_oauth_submodules_lazy() -> None:
     assert proc.returncode == 0, proc.stdout + proc.stderr
 
 
+def test_import_models_mixins_module_does_not_register_oauth_encryption_events() -> None:
+    """Importing ``litestar_auth.models.mixins`` keeps OAuth mapper hooks deferred."""
+    proc = _run_isolated(
+        "from sqlalchemy import event\n"
+        "from litestar_auth.models.mixins import OAuthAccountMixin\n"
+        "from litestar_auth.oauth_encryption import _decrypt_loaded_oauth_tokens\n"
+        "assert not event.contains(OAuthAccountMixin, 'load', _decrypt_loaded_oauth_tokens)\n",
+    )
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+
+
 def test_accessing_oauth_account_from_models_package_only_loads_oauth_submodule() -> None:
     """Lazy ``OAuthAccount`` access loads ``models.oauth`` without importing the reference ``User`` model."""
     proc = _run_isolated(
@@ -110,6 +121,19 @@ def test_accessing_oauth_account_from_models_package_only_loads_oauth_submodule(
         "oauth_model = models.OAuthAccount\n"
         "assert oauth_model.__module__ == 'litestar_auth.models.oauth'\n"
         "assert 'litestar_auth.models.oauth' in sys.modules\n"
+        "assert 'litestar_auth.models.user' not in sys.modules\n",
+    )
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+
+
+def test_importing_oauth_model_registers_oauth_encryption_events() -> None:
+    """Loading the bundled OAuth model registers its encryption hooks without importing ``models.user``."""
+    proc = _run_isolated(
+        "import sys\n"
+        "from sqlalchemy import event\n"
+        "from litestar_auth.models.oauth import OAuthAccount\n"
+        "from litestar_auth.oauth_encryption import _decrypt_loaded_oauth_tokens\n"
+        "assert event.contains(OAuthAccount, 'load', _decrypt_loaded_oauth_tokens)\n"
         "assert 'litestar_auth.models.user' not in sys.modules\n",
     )
     assert proc.returncode == 0, proc.stdout + proc.stderr

@@ -19,6 +19,7 @@ from litestar_auth._plugin.config import DEFAULT_USER_MANAGER_DEPENDENCY_KEY
 from litestar_auth.authentication.authenticator import Authenticator
 from litestar_auth.authentication.backend import AuthenticationBackend
 from litestar_auth.authentication.middleware import LitestarAuthMiddleware
+from litestar_auth.authentication.strategy.jwt import InMemoryJWTDenylistStore
 from litestar_auth.authentication.transport.bearer import BearerTransport
 from litestar_auth.controllers import create_auth_controller, create_totp_controller
 from litestar_auth.manager import ENCRYPTED_TOTP_SECRET_PREFIX, BaseUserManager
@@ -147,6 +148,7 @@ def _build_app() -> tuple[Litestar, InMemoryUserDatabase]:
         backend=backend,
         user_manager_dependency_key=DEFAULT_USER_MANAGER_DEPENDENCY_KEY,
         used_tokens_store=InMemoryUsedTotpCodeStore(),
+        pending_jti_store=InMemoryJWTDenylistStore(),
         totp_pending_secret=TOTP_PENDING_SECRET,
         totp_enable_requires_password=False,
         id_parser=UUID,
@@ -192,6 +194,18 @@ async def test_read_totp_secret_preserves_plaintext_for_backward_compatibility()
         await _build_manager(user_db, totp_secret_key=TOTP_SECRET_KEY).read_totp_secret(plaintext_secret)
         == plaintext_secret
     )
+
+
+def test_manager_totp_secret_storage_posture_reports_plaintext_and_encrypted_modes() -> None:
+    """The manager exposes the explicit TOTP storage contract for both supported branches."""
+    user_db = AsyncMock()
+    plaintext_manager = _build_manager(user_db)
+    encrypted_manager = _build_manager(user_db, totp_secret_key=TOTP_SECRET_KEY)
+
+    assert plaintext_manager.totp_secret_storage_posture.key == "compatibility_plaintext"
+    assert plaintext_manager.totp_secret_storage_posture.encrypts_at_rest is False
+    assert encrypted_manager.totp_secret_storage_posture.key == "fernet_encrypted"
+    assert encrypted_manager.totp_secret_storage_posture.encrypts_at_rest is True
 
 
 async def test_read_totp_secret_raises_runtime_error_on_decrypt_failure(

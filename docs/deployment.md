@@ -65,7 +65,8 @@ When `rate_limit_config` is set, throttled endpoints return **429** with **`Retr
 ## OAuth
 
 - Set **`oauth_token_encryption_key`** for any configured providers.
-- Use **`https`** redirect URIs in production; review startup warnings for insecure redirect bases.
+- Plugin-owned OAuth startup now fails closed unless **`oauth_redirect_base_url`** uses a public **`https://...`** origin. Plain HTTP and loopback hosts are only supported behind explicit local/test escape hatches such as `AppConfig(debug=True)` or `unsafe_testing=True`.
+- Manual/custom OAuth controllers now use the same public **`https://...`** baseline for `redirect_base_url`, but they enforce it at controller construction time with no localhost or plain-HTTP escape hatch.
 - **`oauth_associate_by_email`**: keep `False` unless you understand identity linking risk. If `True` on the plugin-owned route table, pair it with **`oauth_trust_provider_email_verified=True`** only for providers that cryptographically assert email ownership. Manual OAuth controllers use the lower-level **`trust_provider_email_verified=True`** flag instead (see [OAuth guide](guides/oauth.md)).
 
 ## Cookies

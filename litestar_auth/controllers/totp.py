@@ -14,12 +14,12 @@ from jwt import ExpiredSignatureError, InvalidTokenError
 from litestar import Controller, Request, post
 from litestar.exceptions import ClientException, NotAuthorizedException
 
-from litestar_auth.authentication.strategy.jwt import InMemoryJWTDenylistStore, JWTDenylistStore
 from litestar_auth.config import TOTP_ENROLL_AUDIENCE, validate_secret_length
 from litestar_auth.controllers._utils import (
     AccountStateValidatorProvider,
     _configure_request_body_handler,
     _decode_request_body,
+    _mark_litestar_auth_route_handler,
     _require_account_state,
 )
 from litestar_auth.controllers.auth import INVALID_CREDENTIALS_DETAIL
@@ -48,6 +48,7 @@ if TYPE_CHECKING:
     from collections.abc import Callable
 
     from litestar_auth.authentication.backend import AuthenticationBackend
+    from litestar_auth.authentication.strategy.jwt import JWTDenylistStore
     from litestar_auth.ratelimit import AuthRateLimitConfig
 
 from litestar_auth.ratelimit import TotpRateLimitOrchestrator, TotpSensitiveEndpoint
@@ -139,24 +140,25 @@ def _totp_resolve_pending_jti_store(
     *,
     unsafe_testing: bool,
 ) -> JWTDenylistStore | None:
-    """Return a denylist store, falling back to in-memory when appropriate.
+    """Return the configured pending-token JTI store.
 
     Returns:
-        The caller-provided store, ``None`` in explicit unsafe-testing mode when
-        unset, or a process-local in-memory denylist when not testing and no
-        shared store was configured.
+        The caller-provided store, or ``None`` in explicit unsafe-testing mode.
+
+    Raises:
+        ConfigurationError: If pending-token replay protection storage is omitted
+            outside explicit ``unsafe_testing`` mode.
     """
     if pending_jti_store is not None:
         return pending_jti_store
     if unsafe_testing:
         return None
-    logger.warning(
-        "Falling back to process-local in-memory pending-token JTI denylist store. "
-        "This prevents TOTP pending-token replay only within a single process; "
-        "configure a shared pending_jti_store for multi-worker deployments.",
-        extra={"event": "totp_pending_jti_inmemory_fallback"},
+
+    msg = (
+        "pending_jti_store is required when unsafe_testing=False. "
+        "Configure a JWTDenylistStore for TOTP pending-token replay protection."
     )
-    return InMemoryJWTDenylistStore()
+    raise ConfigurationError(msg)
 
 
 async def _totp_handle_enable[UP: UserProtocol[Any], ID](
@@ -634,8 +636,8 @@ def create_totp_controller[UP: UserProtocol[Any], ID](  # noqa: PLR0913
         used_tokens_store: Optional replay-protection cache for successful `/verify`
             attempts. When omitted, same-window replay protection stays disabled.
         pending_jti_store: Optional denylist store used to reject replayed
-            pending-token JTIs after successful `/verify`. When omitted, JTIs
-            are still required and validated structurally, but not deduplicated.
+            pending-token JTIs after successful `/verify`. Required unless
+            ``unsafe_testing=True``.
         require_replay_protection: When enabled, the controller refuses to start
             without a used-token replay store unless ``unsafe_testing=True``.
         rate_limit_config: Optional auth-endpoint rate-limiter configuration.
@@ -720,4 +722,4 @@ def create_totp_controller[UP: UserProtocol[Any], ID](  # noqa: PLR0913
     totp_controller_cls.__name__ = "TotpController"
     totp_controller_cls.__qualname__ = "TotpController"
     totp_controller_cls.path = path
-    return totp_controller_cls
+    return _mark_litestar_auth_route_handler(totp_controller_cls)

@@ -15,6 +15,7 @@ from litestar_auth._plugin.config import DEFAULT_USER_MANAGER_DEPENDENCY_KEY
 from litestar_auth.authentication.authenticator import Authenticator
 from litestar_auth.authentication.backend import AuthenticationBackend
 from litestar_auth.authentication.middleware import LitestarAuthMiddleware
+from litestar_auth.authentication.strategy.jwt import InMemoryJWTDenylistStore
 from litestar_auth.authentication.transport.bearer import BearerTransport
 from litestar_auth.controllers import (
     create_auth_controller,
@@ -141,6 +142,7 @@ def build_app(*, rate_limit_config: AuthRateLimitConfig | None = None) -> Litest
             backend=backend,
             user_manager_dependency_key=DEFAULT_USER_MANAGER_DEPENDENCY_KEY,
             used_tokens_store=InMemoryUsedTotpCodeStore(),
+            pending_jti_store=InMemoryJWTDenylistStore(),
             rate_limit_config=rate_limit_config,
             totp_pending_secret=TOTP_PENDING_SECRET,
             totp_enable_requires_password=False,

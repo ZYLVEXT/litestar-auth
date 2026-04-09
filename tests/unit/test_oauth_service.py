@@ -43,6 +43,14 @@ def _build_manager(*, existing_user: ExampleUser | None = None) -> AsyncMock:
 
 def test_oauth_service_module_executes_under_coverage() -> None:
     """Reload the module in-test so coverage records protocol and helper definitions."""
+    for name in (
+        "ConfigurationError",
+        "ErrorCode",
+        "InactiveUserError",
+        "OAuthAccountAlreadyLinkedError",
+        "UnverifiedUserError",
+    ):
+        delattr(oauth_service_module, name)
     reloaded_module = importlib.reload(oauth_service_module)
 
     assert reloaded_module.OAuthService.__name__ == OAuthService.__name__

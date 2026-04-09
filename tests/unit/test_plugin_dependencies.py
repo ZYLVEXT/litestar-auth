@@ -5,10 +5,11 @@ from __future__ import annotations
 import asyncio
 import importlib
 import inspect
-from typing import TYPE_CHECKING, Any, cast, get_type_hints
+from typing import TYPE_CHECKING, Any, ClassVar, cast, get_type_hints
 from uuid import UUID
 
 import pytest
+from litestar import Controller
 from litestar.config.app import AppConfig
 from litestar.datastructures.state import State
 from litestar.di import Provide
@@ -37,6 +38,7 @@ from litestar_auth._plugin.dependencies import (
 from litestar_auth._plugin.scoped_session import SessionFactory
 from litestar_auth.authentication.backend import AuthenticationBackend
 from litestar_auth.authentication.transport.bearer import BearerTransport
+from litestar_auth.controllers._utils import _mark_litestar_auth_route_handler
 from litestar_auth.manager import UserManagerSecurity
 from tests.e2e.conftest import assert_structural_session_factory
 from tests.integration.test_orchestrator import (
@@ -145,8 +147,7 @@ def test_client_exception_handler_formats_json_response() -> None:
 
 
 def test_register_exception_handlers_preserves_existing_handlers() -> None:
-    """Registering auth handlers keeps existing handlers while adding ClientException."""
-    app_config = AppConfig()
+    """Registering auth handlers keeps existing controller handlers while adding ClientException."""
 
     def existing_handler(_request: object, _exc: Exception) -> Response[dict[str, str]]:
         """Placeholder handler used to confirm existing handlers are preserved.
@@ -156,12 +157,57 @@ def test_register_exception_handlers_preserves_existing_handlers() -> None:
         """
         return Response({"detail": "runtime", "code": "RUNTIME"}, media_type=MediaType.JSON)
 
-    app_config.exception_handlers = {RuntimeError: existing_handler}
+    @_mark_litestar_auth_route_handler
+    class ExistingController(Controller):
+        exception_handlers: ClassVar[dict[type[Exception], object] | None] = {RuntimeError: existing_handler}
+        path = "/auth"
 
-    register_exception_handlers(app_config)
+    register_exception_handlers([ExistingController])
+    handlers = cast("dict[type[Exception], object]", ExistingController.exception_handlers)
 
-    assert app_config.exception_handlers[RuntimeError] is existing_handler
-    assert app_config.exception_handlers[ClientException] is dependencies_module.client_exception_handler
+    assert handlers[RuntimeError] is existing_handler
+    assert handlers[ClientException] is dependencies_module.client_exception_handler
+
+
+def test_register_exception_handlers_preserves_existing_client_exception_handler() -> None:
+    """Registering auth handlers does not override controller-local ClientException handlers."""
+
+    def existing_handler(_request: object, _exc: ClientException) -> Response[dict[str, str]]:
+        """Return a sentinel response for identity assertions.
+
+        Returns:
+            Static JSON response used only for handler identity checks.
+        """
+        return Response({"detail": "existing", "code": "EXISTING"}, media_type=MediaType.JSON)
+
+    @_mark_litestar_auth_route_handler
+    class ExistingController(Controller):
+        exception_handlers: ClassVar[dict[type[Exception], object] | None] = {ClientException: existing_handler}
+        path = "/auth"
+
+    register_exception_handlers([ExistingController])
+    handlers = cast("dict[type[Exception], object]", ExistingController.exception_handlers)
+
+    assert handlers[ClientException] is existing_handler
+
+
+def test_register_exception_handlers_only_mutates_handlers_it_receives() -> None:
+    """Scope is controlled by the exact handler list supplied by the caller."""
+
+    @_mark_litestar_auth_route_handler
+    class PluginOwnedController(Controller):
+        exception_handlers: ClassVar[dict[type[Exception], object] | None] = None
+        path = "/auth"
+
+    class NonAuthController(Controller):
+        exception_handlers: ClassVar[dict[type[Exception], object] | None] = None
+        path = "/auth-state"
+
+    register_exception_handlers([PluginOwnedController])
+
+    assert PluginOwnedController.exception_handlers is not None
+    assert PluginOwnedController.exception_handlers[ClientException] is dependencies_module.client_exception_handler
+    assert NonAuthController.exception_handlers is None
 
 
 def test_make_db_session_provide_reuses_scoped_session_within_scope() -> None:
@@ -203,8 +249,9 @@ def test_make_backends_dependency_provider_uses_configured_di_key() -> None:
     assert seen_sessions == [marker]
     assert inspect.signature(provider).parameters.keys() == {"custom_db_session"}
     assert parameter.kind is inspect.Parameter.POSITIONAL_OR_KEYWORD
-    assert parameter.annotation is Any
-    assert provider.__annotations__ == {"custom_db_session": "Any"}
+    assert parameter.annotation in {Any, "Any"}
+    assert provider.__annotations__["custom_db_session"] in {Any, "Any"}
+    assert "__signature__" not in provider_function.__dict__
     assert provider.__module__ == "litestar_auth._plugin.dependencies"
     assert provider_function.__qualname__ == "_make_backends_dependency_provider.<locals>._provide_backends"
 
@@ -228,13 +275,14 @@ async def test_make_user_manager_dependency_provider_uses_configured_di_key() ->
     assert manager == ("manager", marker)
     assert inspect.signature(provider).parameters.keys() == {"custom_db_session"}
     assert parameter.kind is inspect.Parameter.POSITIONAL_OR_KEYWORD
-    assert parameter.annotation is Any
-    assert provider.__annotations__ == {"custom_db_session": "Any"}
+    assert parameter.annotation in {Any, "Any"}
+    assert provider.__annotations__["custom_db_session"] in {Any, "Any"}
+    assert "__signature__" not in provider_function.__dict__
     assert provider.__module__ == "litestar_auth._plugin.dependencies"
     assert provider_function.__qualname__ == "_make_user_manager_dependency_provider.<locals>._provide_user_manager"
 
 
-async def test_make_user_manager_dependency_provider_rejects_positional_and_keyword_session() -> None:
+def test_make_user_manager_dependency_provider_rejects_positional_and_keyword_session() -> None:
     """Providing both the positional session and keyword DI value fails closed."""
     marker = object()
 
@@ -242,9 +290,8 @@ async def test_make_user_manager_dependency_provider_rejects_positional_and_keyw
         pytest.fail("build_user_manager should not run when duplicate dependency inputs are provided")
 
     provider = _make_user_manager_dependency_provider(build_user_manager, "db_session")
-    generator = provider(marker, db_session=marker)
     with pytest.raises(TypeError, match="got multiple values for argument 'db_session'"):
-        await anext(generator)
+        provider(marker, db_session=marker)
 
 
 async def test_make_user_manager_dependency_provider_positional_path_stops_after_single_yield() -> None:
@@ -262,19 +309,18 @@ async def test_make_user_manager_dependency_provider_positional_path_stops_after
         await anext(generator)
 
 
-async def test_make_user_manager_dependency_provider_requires_session_dependency() -> None:
+def test_make_user_manager_dependency_provider_requires_session_dependency() -> None:
     """Calling the provider without the configured dependency key raises TypeError."""
 
     def build_user_manager(_session: object) -> object:
         pytest.fail("build_user_manager should not run when the dependency is missing")
 
     provider = _make_user_manager_dependency_provider(build_user_manager, "db_session")
-    generator = provider()
-    with pytest.raises(TypeError, match="missing 1 required argument: 'db_session'"):
-        await anext(generator)
+    with pytest.raises(TypeError, match="missing 1 required positional argument: 'db_session'"):
+        provider()
 
 
-async def test_make_user_manager_dependency_provider_rejects_unexpected_keyword_dependencies() -> None:
+def test_make_user_manager_dependency_provider_rejects_unexpected_keyword_dependencies() -> None:
     """Unexpected keyword dependencies are rejected before building a user manager."""
     marker = object()
 
@@ -282,9 +328,8 @@ async def test_make_user_manager_dependency_provider_rejects_unexpected_keyword_
         pytest.fail("build_user_manager should not run for unexpected keyword dependencies")
 
     provider = _make_user_manager_dependency_provider(build_user_manager, "db_session")
-    generator = provider(other_session=marker)
-    with pytest.raises(TypeError, match="got unexpected keyword argument\\(s\\): 'other_session'"):
-        await anext(generator)
+    with pytest.raises(TypeError, match="got an unexpected keyword argument 'other_session'"):
+        provider(other_session=marker)
 
 
 def test_register_dependencies_raises_for_dependency_key_collisions() -> None:

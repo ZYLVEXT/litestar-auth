@@ -13,11 +13,12 @@ from litestar_auth.types import UserProtocol
 if TYPE_CHECKING:
     from collections.abc import Sequence
 
+    from litestar_auth._plugin.config import StartupBackendTemplate
     from litestar_auth.authentication.backend import AuthenticationBackend
 
 
 def get_cookie_transports[UP: UserProtocol[Any], ID](
-    backends: Sequence[AuthenticationBackend[UP, ID]],
+    backends: Sequence[StartupBackendTemplate[UP, ID] | AuthenticationBackend[UP, ID]],
 ) -> list[CookieTransport]:
     """Return configured cookie transports from the backend list."""
     return [

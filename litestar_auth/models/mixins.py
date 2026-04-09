@@ -25,6 +25,8 @@ __all__ = (
     "UserModelMixin",
 )
 
+_OAUTH_EVENTS_REGISTERED_ATTR = "_litestar_auth_oauth_events_registered"
+
 
 class OAuthAccountMixin:
     """Shared columns and relationship wiring for OAuth account models."""
@@ -38,6 +40,14 @@ class OAuthAccountMixin:
     auth_provider_identity_constraint_name: ClassVar[str | None] = None
     user_id: Mapped[uuid.UUID]
     user: Mapped[Any]
+
+    def __init_subclass__(cls, **kwargs: object) -> None:
+        """Register OAuth token encryption hooks when an OAuth model family is declared."""
+        super().__init_subclass__(**kwargs)
+        if _inherits_registered_oauth_hooks(cls):
+            return
+        register_oauth_model_encryption_events(cls)
+        setattr(cls, _OAUTH_EVENTS_REGISTERED_ATTR, True)
 
     @declared_attr.directive
     def __table_args__(cls) -> tuple[UniqueConstraint]:  # noqa: N805, PLW3201
@@ -87,4 +97,8 @@ class OAuthAccountMixin:
         )
 
 
-register_oauth_model_encryption_events(OAuthAccountMixin)
+def _inherits_registered_oauth_hooks(model_class: type[OAuthAccountMixin]) -> bool:
+    """Return whether a parent class already owns propagated OAuth encryption hooks."""
+    return any(
+        bool(base_class.__dict__.get(_OAUTH_EVENTS_REGISTERED_ATTR, False)) for base_class in model_class.__mro__[1:]
+    )
