@@ -179,3 +179,11 @@ TECHSTACK.md
 .agents/
 .claude/
 .cursor/
+
+ralph_helpers.py
+ralph-refactoring.sh
+refactoring.json
+refactoring-progress.json
+.ralph_refac_state.json
+.ralph_refac.lock
+.ralph_refac_runs/

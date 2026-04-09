@@ -26,7 +26,6 @@ from litestar_auth.config import (
     plugin_secret_role_warning_owner,
     resolve_trusted_proxy_setting,
     validate_secret_length,
-    validate_testing_mode_for_startup,
 )
 from litestar_auth.exceptions import ConfigurationError
 
@@ -39,7 +38,8 @@ def test_config_module_executes_under_coverage() -> None:
     reloaded_module = importlib.reload(config_module)
 
     assert reloaded_module.MINIMUM_SECRET_LENGTH == MINIMUM_SECRET_LENGTH
-    assert reloaded_module.validate_testing_mode_for_startup is config_module.validate_testing_mode_for_startup
+    assert reloaded_module._resolve_token_secret is config_module._resolve_token_secret
+    assert not hasattr(reloaded_module, "validate_testing_mode_for_startup")
 
 
 def test_config_defines_canonical_token_audiences() -> None:
@@ -85,15 +85,11 @@ def test_existing_modules_export_canonical_token_audiences(
     assert getattr(module, attribute) == getattr(config_module, attribute) == expected
 
 
-def test_resolve_token_secret_generates_testing_secret(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Testing mode allows an ephemeral secret when none is configured."""
-    monkeypatch.setenv("LITESTAR_AUTH_TESTING", "1")
-
+def test_resolve_token_secret_generates_unsafe_testing_secret() -> None:
+    """Explicit unsafe testing allows an ephemeral secret when none is configured."""
     with warnings.catch_warnings(record=True) as records:
         warnings.simplefilter("always")
-        secret = _resolve_token_secret(None, label="JWT secret", warning_stacklevel=1)
+        secret = _resolve_token_secret(None, label="JWT secret", warning_stacklevel=1, unsafe_testing=True)
 
     assert len(secret) == GENERATED_SECRET_HEX_LENGTH
     assert re.fullmatch(rf"[0-9a-f]{{{GENERATED_SECRET_HEX_LENGTH}}}", secret) is not None
@@ -101,22 +97,14 @@ def test_resolve_token_secret_generates_testing_secret(
     assert "JWT secret not provided" in str(records[0].message)
 
 
-def test_resolve_token_secret_raises_without_secret_in_production(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+def test_resolve_token_secret_raises_without_secret_in_production() -> None:
     """Production mode requires explicit token secrets."""
-    monkeypatch.delenv("LITESTAR_AUTH_TESTING", raising=False)
-
     with pytest.raises(ConfigurationError, match="JWT secret not provided"):
         _resolve_token_secret(None, label="JWT secret")
 
 
-def test_resolve_token_secret_validates_short_secret_in_production(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+def test_resolve_token_secret_validates_short_secret_in_production() -> None:
     """Production mode rejects secrets shorter than the configured minimum."""
-    monkeypatch.delenv("LITESTAR_AUTH_TESTING", raising=False)
-
     with pytest.raises(
         ConfigurationError,
         match=rf"JWT secret must be at least {MINIMUM_SECRET_LENGTH} characters\.",
@@ -135,32 +123,13 @@ def test_validate_secret_length_accepts_secret_at_minimum_length() -> None:
     validate_secret_length("a" * 10, label="token secret", minimum_length=10)
 
 
-def test_validate_testing_mode_for_startup_raises_outside_pytest(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Testing mode is rejected when startup is not running under pytest."""
-    monkeypatch.setenv("LITESTAR_AUTH_TESTING", "1")
-    monkeypatch.delenv("PYTEST_CURRENT_TEST", raising=False)
-
-    with pytest.raises(ConfigurationError, match="automated tests only"):
-        validate_testing_mode_for_startup()
+def test_resolve_token_secret_skips_length_validation_under_explicit_unsafe_testing() -> None:
+    """Explicit unsafe testing skips production minimum-length enforcement."""
+    assert _resolve_token_secret("short-secret", label="JWT secret", unsafe_testing=True) == "short-secret"
 
 
-def test_validate_testing_mode_for_startup_returns_inside_pytest(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Testing mode remains valid when the runtime is pytest."""
-    monkeypatch.setenv("LITESTAR_AUTH_TESTING", "1")
-    monkeypatch.setenv("PYTEST_CURRENT_TEST", "tests/unit/test_config.py::test_case")
-
-    validate_testing_mode_for_startup()
-
-
-def test_resolve_token_secret_returns_explicit_secret_in_production(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+def test_resolve_token_secret_returns_explicit_secret_in_production() -> None:
     """Configured production secrets are returned unchanged."""
-    monkeypatch.delenv("LITESTAR_AUTH_TESTING", raising=False)
     secret = "s" * MINIMUM_SECRET_LENGTH
 
     assert _resolve_token_secret(secret, label="JWT secret") == secret

@@ -200,7 +200,6 @@ async def test_verify_totp_with_store_warns_when_replay_protection_disabled(monk
 async def test_verify_totp_with_store_requires_store_outside_testing(monkeypatch: pytest.MonkeyPatch) -> None:
     """Production mode rejects missing replay stores when protection is required."""
     monkeypatch.setattr(totp.time, "time", lambda: 59.0)
-    monkeypatch.setattr(totp, "is_testing", lambda: False)
     current_code = totp._generate_totp_code(RFC_SECRET, 1)
 
     with pytest.raises(totp.ConfigurationError, match="UsedTotpCodeStore"):
@@ -210,11 +209,18 @@ async def test_verify_totp_with_store_requires_store_outside_testing(monkeypatch
 async def test_verify_totp_with_store_warns_in_testing_without_store(monkeypatch: pytest.MonkeyPatch) -> None:
     """Testing mode allows missing replay stores but still emits a warning."""
     monkeypatch.setattr(totp.time, "time", lambda: 59.0)
-    monkeypatch.setattr(totp, "is_testing", lambda: True)
     current_code = totp._generate_totp_code(RFC_SECRET, 1)
 
     with pytest.warns(totp.SecurityWarning, match="used_tokens_store=None"):
-        assert await totp.verify_totp_with_store(RFC_SECRET, current_code, user_id="user-1") is True
+        assert (
+            await totp.verify_totp_with_store(
+                RFC_SECRET,
+                current_code,
+                user_id="user-1",
+                unsafe_testing=True,
+            )
+            is True
+        )
 
 
 async def test_verify_totp_with_store_does_not_warn_when_store_provided(monkeypatch: pytest.MonkeyPatch) -> None:

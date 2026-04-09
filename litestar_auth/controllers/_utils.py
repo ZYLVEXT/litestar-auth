@@ -15,7 +15,6 @@ from litestar.enums import MediaType
 from litestar.exceptions import ClientException, PermissionDeniedException, ValidationException
 from litestar.response import Response
 
-from litestar_auth.config import is_testing
 from litestar_auth.exceptions import ConfigurationError, ErrorCode, InactiveUserError, UnverifiedUserError
 from litestar_auth.guards._guards import _ACCOUNT_STATE_DETAIL
 from litestar_auth.types import GuardedUserProtocol
@@ -276,7 +275,12 @@ _SENSITIVE_FIELD_BLOCKLIST: frozenset[str] = frozenset(
 )
 
 
-def _to_user_schema(user: object, schema: type[msgspec.Struct]) -> msgspec.Struct:
+def _to_user_schema(
+    user: object,
+    schema: type[msgspec.Struct],
+    *,
+    unsafe_testing: bool = False,
+) -> msgspec.Struct:
     """Build the configured public response struct from a user object.
 
     Returns:
@@ -287,7 +291,7 @@ def _to_user_schema(user: object, schema: type[msgspec.Struct]) -> msgspec.Struc
     """
     leaked = _SENSITIVE_FIELD_BLOCKLIST & frozenset(schema.__struct_fields__)
     if leaked:
-        if not is_testing():
+        if not unsafe_testing:
             msg = (
                 f"UserRead schema includes sensitive fields {sorted(leaked)}; "
                 "remove them from the response schema to prevent data leakage."

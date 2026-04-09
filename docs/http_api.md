@@ -6,7 +6,7 @@ Placeholders:
 
 - `{auth}` — value of `auth_path` without trailing slash ambiguity (routes are registered under `auth_path`).
 - `{users}` — `users_path`.
-- `{provider}` — OAuth provider name from your controller factory.
+- `{provider}` — OAuth provider name from `OAuthConfig.oauth_providers` or a manual controller factory.
 
 Generated OpenAPI publishes the built-in request/response payload names from `litestar_auth.payloads`. `login_identifier` only changes how `LoginCredentials.identifier` is resolved during login; it does not rename the email/token fields used by the built-in registration, verification, reset-password, refresh, or TOTP routes.
 
@@ -56,18 +56,18 @@ The built-in TOTP flow remains email-oriented internally: the otpauth URI and de
 
 ## OAuth2 login
 
-Login routes are the explicit-helper path: declaring `oauth_providers` on `OAuthConfig` does **not** make the plugin auto-mount them. The canonical helper is `litestar_auth.oauth.create_provider_oauth_controller(..., auth_path=config.auth_path)`, which uses the `{auth}/oauth/{provider}` prefix.
+When `oauth_config.oauth_providers` is configured with `oauth_redirect_base_url`, the plugin auto-mounts login routes under `{auth}/oauth/{provider}`.
 
 | Method | Path pattern | Description |
 | ------ | ------------ | ----------- |
 | GET | `{auth}/oauth/{provider}/authorize` | Redirect to provider. |
-| GET | `{auth}/oauth/{provider}/callback` | Provider redirect; completes the explicit OAuth login flow. |
+| GET | `{auth}/oauth/{provider}/callback` | Provider redirect; completes the plugin-owned OAuth login flow. |
 
-If you mount `create_oauth_controller()` directly for a custom route table, the prefix may differ from `{auth}/oauth/{provider}`.
+If you mount `create_provider_oauth_controller()` or `create_oauth_controller()` directly for a custom route table, the prefix may differ from `{auth}/oauth/{provider}`.
 
 ## OAuth account linking (associate)
 
-When `oauth_config.include_oauth_associate=True` and `oauth_associate_providers` is non-empty, the plugin auto-mounts associate routes under `{auth}/associate/{provider}`.
+When `oauth_config.include_oauth_associate=True`, the plugin auto-mounts associate routes under `{auth}/associate/{provider}` for the same `oauth_providers` inventory.
 
 | Method | Path pattern | Description |
 | ------ | ------------ | ----------- |

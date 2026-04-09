@@ -133,6 +133,7 @@ async def test_authenticate_pending_login_returns_user_and_denies_verified_jti()
         used_tokens_store=used_tokens_store,
         algorithm="SHA256",
         require_replay_protection=True,
+        unsafe_testing=False,
     )
     pending_jti_store.is_denied.assert_awaited_once()
     pending_jti_store.deny.assert_awaited_once()
@@ -327,18 +328,16 @@ async def test_deny_pending_login_records_pending_jti_with_remaining_ttl(monkeyp
     pending_jti_store.deny.assert_awaited_once_with("b" * 32, ttl_seconds=45)
 
 
-async def test_deny_pending_login_warns_in_testing_without_denylist_store(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Testing mode allows pending-login verification without a denylist backend."""
+async def test_deny_pending_login_warns_in_unsafe_testing_without_denylist_store() -> None:
+    """Unsafe testing allows pending-login verification without a denylist backend."""
     user = ExampleUser(id=uuid4(), email="user@example.com")
     service = TotpLoginFlowService[ExampleUser, UUID](
         user_manager=_build_manager(user=user),
         totp_pending_secret=TOTP_PENDING_SECRET,
+        unsafe_testing=True,
     )
-    monkeypatch.setattr("litestar_auth.totp_flow.is_testing", lambda: True)
 
-    with pytest.warns(SecurityWarning, match="JTI deduplication is DISABLED"):
+    with pytest.warns(SecurityWarning, match="unsafe_testing=True"):
         await service._deny_pending_login(
             PendingTotpLogin(
                 user=user,
@@ -348,16 +347,13 @@ async def test_deny_pending_login_warns_in_testing_without_denylist_store(
         )
 
 
-async def test_deny_pending_login_raises_without_store_outside_testing(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+async def test_deny_pending_login_raises_without_store_outside_unsafe_testing() -> None:
     """Production mode requires a pending-token denylist store."""
     user = ExampleUser(id=uuid4(), email="user@example.com")
     service = TotpLoginFlowService[ExampleUser, UUID](
         user_manager=_build_manager(user=user),
         totp_pending_secret=TOTP_PENDING_SECRET,
     )
-    monkeypatch.setattr("litestar_auth.totp_flow.is_testing", lambda: False)
 
     with pytest.raises(totp_flow_module.ConfigurationError, match="Configure a JWTDenylistStore"):
         await service._deny_pending_login(

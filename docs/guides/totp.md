@@ -15,7 +15,7 @@ When a login requires a second factor, the client finishes with:
 
 - **`POST .../2fa/verify`** — pending token + TOTP code.
 
-Pending login JWTs use a JTI denylist internally. The plugin-built TOTP controller does not expose a Redis `pending_jti_store`; it resolves an in-process fallback with **warnings** when not in testing mode. For strict multi-worker deduplication of pending JTIs, mount **`create_totp_controller`** yourself and pass **`pending_jti_store`** (e.g. `RedisJWTDenylistStore`).
+Pending login JWTs use a JTI denylist internally. The plugin-built TOTP controller does not expose a Redis `pending_jti_store`; it resolves an in-process fallback with **warnings** unless the owning config/controller explicitly sets `unsafe_testing=True`. For strict multi-worker deduplication of pending JTIs, mount **`create_totp_controller`** yourself and pass **`pending_jti_store`** (e.g. `RedisJWTDenylistStore`).
 
 ## Disable
 
@@ -23,9 +23,9 @@ Pending login JWTs use a JTI denylist internally. The plugin-built TOTP controll
 
 ## Replay protection
 
-Production deployments should configure **`totp_used_tokens_store`** so codes cannot be reused. Without it, the library fails fast outside testing mode.
+Production deployments should configure **`totp_used_tokens_store`** so codes cannot be reused. Without it, the library fails fast unless the owning config/controller explicitly opts into `unsafe_testing=True`.
 
-For pytest-driven plugin tests, see the [testing guide](testing.md). Under **`LITESTAR_AUTH_TESTING=1`**, the plugin can run without **`totp_used_tokens_store`**, but that is a single-process testing convenience rather than a production-safe replay-protection setup.
+For pytest-driven plugin tests, see the [testing guide](testing.md). Under **`unsafe_testing=True`**, the plugin can run without **`totp_used_tokens_store`**, but that is a single-process testing convenience rather than a production-safe replay-protection setup.
 
 Algorithm defaults to **SHA256** (`totp_algorithm`).
 
@@ -34,4 +34,4 @@ Algorithm defaults to **SHA256** (`totp_algorithm`).
 - [Configuration](../configuration.md) — `TotpConfig`.
 - [TOTP API](../api/totp.md) — helpers and types.
 - [Manager API](../api/manager.md) — manager hooks for secrets and lifecycle.
-- [Testing plugin-backed apps](testing.md) — pytest-only testing mode, request-scoped sessions, and store-isolation boundaries.
+- [Testing plugin-backed apps](testing.md) — explicit `unsafe_testing`, request-scoped sessions, and store-isolation boundaries.

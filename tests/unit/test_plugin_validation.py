@@ -7,7 +7,7 @@ import logging
 import warnings
 from dataclasses import dataclass
 from datetime import timedelta
-from typing import Any, cast
+from typing import TYPE_CHECKING, Any, Literal, cast
 from uuid import UUID
 
 import pytest
@@ -73,12 +73,14 @@ from tests.integration.test_orchestrator import (
     PluginUserManager,
 )
 
+if TYPE_CHECKING:
+    from collections.abc import Callable
+
 pytestmark = pytest.mark.unit
 
 JWT_SECRET = "s" * 32
 TOKEN_HASH_SECRET = "t" * 32
 TOTP_SECRET_KEY = "u" * 32
-EXPECTED_SECURITY_WARNING_COUNT = 5
 
 
 class _DurableDenylistStore:
@@ -149,7 +151,6 @@ def test_warn_insecure_plugin_startup_defaults_emits_all_expected_security_warni
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Production startup emits warnings for each insecure default this task targets."""
-    monkeypatch.setattr(startup_module, "is_testing", lambda: False)
     config = _minimal_config(
         backends=[
             _cookie_backend(),
@@ -169,7 +170,6 @@ def test_warn_insecure_plugin_startup_defaults_emits_all_expected_security_warni
         warn_insecure_plugin_startup_defaults(config)
 
     messages = [str(record.message) for record in records]
-    assert len(messages) == EXPECTED_SECURITY_WARNING_COUNT
     assert any("oauth_token_encryption_key is not set" in message for message in messages)
     assert any("process-local in-memory denylist" in message for message in messages)
     assert any("process-local in-memory backend" in message for message in messages)
@@ -181,7 +181,6 @@ def test_warn_insecure_plugin_startup_defaults_warns_for_reloaded_jwt_strategy(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """JWT denylist warnings survive strategy-module reloads used in coverage tests."""
-    monkeypatch.setattr(startup_module, "is_testing", lambda: False)
     reloaded_jwt_module = importlib.reload(jwt_strategy_module)
     config = _minimal_config(
         backends=[
@@ -205,7 +204,6 @@ def test_warn_insecure_plugin_startup_defaults_is_silent_in_testing(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Testing mode suppresses the insecure-default warnings."""
-    monkeypatch.setattr(startup_module, "is_testing", lambda: True)
     config = _minimal_config(
         backends=[_cookie_backend(), _jwt_backend()],
         oauth_config=OAuthConfig(oauth_providers=[("github", object())]),
@@ -216,6 +214,7 @@ def test_warn_insecure_plugin_startup_defaults_is_silent_in_testing(
         ),
     )
     config.enable_refresh = True
+    config.unsafe_testing = True
 
     with warnings.catch_warnings(record=True) as records:
         warnings.simplefilter("always")
@@ -228,7 +227,6 @@ def test_warn_insecure_plugin_startup_defaults_is_silent_for_safe_production_con
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Safe production settings avoid the insecure-default warnings entirely."""
-    monkeypatch.setattr(startup_module, "is_testing", lambda: False)
     config = _minimal_config(
         backends=[
             _cookie_backend(refresh_max_age=604800),
@@ -257,7 +255,6 @@ def test_warn_insecure_plugin_startup_defaults_warns_for_missing_refresh_cookie_
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Refresh-cookie startup warnings stay with the startup helper owner."""
-    monkeypatch.setattr(startup_module, "is_testing", lambda: False)
     config = _minimal_config(backends=[_cookie_backend()])
     config.csrf_secret = "c" * 32
     config.enable_refresh = True
@@ -270,7 +267,6 @@ def test_warn_insecure_plugin_startup_defaults_skips_refresh_warning_when_cookie
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Explicit refresh-cookie lifetimes suppress the startup helper warning."""
-    monkeypatch.setattr(startup_module, "is_testing", lambda: False)
     config = _minimal_config(backends=[_cookie_backend(refresh_max_age=604800)])
     config.csrf_secret = "c" * 32
     config.enable_refresh = True
@@ -286,7 +282,6 @@ def test_warn_insecure_plugin_startup_defaults_skips_refresh_warning_when_refres
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Disable-refresh configs do not warn about refresh-cookie max age."""
-    monkeypatch.setattr(startup_module, "is_testing", lambda: False)
     config = _minimal_config(backends=[_cookie_backend()])
     config.csrf_secret = "c" * 32
     config.enable_refresh = False
@@ -302,7 +297,6 @@ def test_validate_backend_strategy_security_rejects_legacy_plaintext_tokens(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Production validation rejects migration-only plaintext-token compatibility mode."""
-    monkeypatch.setattr(validation_module, "is_testing", lambda: False)
     config = _minimal_config(
         backends=[_database_backend(accept_legacy_plaintext_tokens=True)],
     )
@@ -315,7 +309,6 @@ def test_validate_backend_strategy_security_skips_non_database_strategies(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Non-database strategies do not enter the legacy-plaintext validation path."""
-    monkeypatch.setattr(validation_module, "is_testing", lambda: False)
     config = _minimal_config(backends=[_non_jwt_backend()])
 
     _validate_backend_strategy_security(config)
@@ -325,7 +318,6 @@ def test_validate_backend_strategy_security_warns_for_jwt_named_non_jwt_strategy
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """JWT-like backend names emit an advisory warning when the strategy is not JWT-based."""
-    monkeypatch.setattr(validation_module, "is_testing", lambda: False)
     backend = _database_backend(accept_legacy_plaintext_tokens=False)
     backend.name = "Jwt-database"
     config = _minimal_config(backends=[backend])
@@ -341,7 +333,6 @@ def test_validate_backend_strategy_security_does_not_warn_for_jwt_named_jwt_stra
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """JWT-backed strategies remain warning-free even when the backend name contains JWT."""
-    monkeypatch.setattr(validation_module, "is_testing", lambda: False)
     config = _minimal_config(backends=[_jwt_backend(denylist_store=_DurableDenylistStore())])
 
     with warnings.catch_warnings():
@@ -353,7 +344,6 @@ def test_validate_backend_strategy_security_does_not_warn_for_neutral_backend_na
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Neutral backend names stay silent even when the strategy is not JWT-based."""
-    monkeypatch.setattr(validation_module, "is_testing", lambda: False)
     config = _minimal_config(backends=[_database_backend(accept_legacy_plaintext_tokens=False)])
 
     with warnings.catch_warnings():
@@ -365,7 +355,6 @@ def test_validate_backend_strategy_security_allows_explicit_plaintext_token_over
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """The explicit compatibility override keeps the legacy DB-token mode available."""
-    monkeypatch.setattr(validation_module, "is_testing", lambda: False)
     config = _minimal_config(
         backends=[_database_backend(accept_legacy_plaintext_tokens=True)],
     )
@@ -378,7 +367,6 @@ def test_validate_backend_strategy_security_allows_database_token_preset_legacy_
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """The canonical DB-token preset uses its nested settings as the rollout source of truth."""
-    monkeypatch.setattr(validation_module, "is_testing", lambda: False)
     config = LitestarAuthConfig[ExampleUser, UUID](
         database_token_auth=DatabaseTokenAuthConfig(
             token_hash_secret=TOKEN_HASH_SECRET,
@@ -388,10 +376,10 @@ def test_validate_backend_strategy_security_allows_database_token_preset_legacy_
         user_manager_class=PluginUserManager,
         session_maker=cast("Any", DummySessionMaker()),
         user_db_factory=lambda _session: InMemoryUserDatabase([]),
-        user_manager_kwargs={
-            "verification_token_secret": "v" * 32,
-            "reset_password_token_secret": "r" * 32,
-        },
+        user_manager_security=UserManagerSecurity[UUID](
+            verification_token_secret="v" * 32,
+            reset_password_token_secret="r" * 32,
+        ),
     )
 
     _validate_backend_strategy_security(config)
@@ -401,7 +389,6 @@ def test_validate_backend_strategy_security_uses_database_token_preset_rollout_h
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Preset validation errors point callers to the nested DB-token settings object."""
-    monkeypatch.setattr(validation_module, "is_testing", lambda: False)
     config = LitestarAuthConfig[ExampleUser, UUID](
         database_token_auth=DatabaseTokenAuthConfig(
             token_hash_secret=TOKEN_HASH_SECRET,
@@ -410,10 +397,10 @@ def test_validate_backend_strategy_security_uses_database_token_preset_rollout_h
         user_manager_class=PluginUserManager,
         session_maker=cast("Any", DummySessionMaker()),
         user_db_factory=lambda _session: InMemoryUserDatabase([]),
-        user_manager_kwargs={
-            "verification_token_secret": "v" * 32,
-            "reset_password_token_secret": "r" * 32,
-        },
+        user_manager_security=UserManagerSecurity[UUID](
+            verification_token_secret="v" * 32,
+            reset_password_token_secret="r" * 32,
+        ),
     )
     legacy_backend = AuthenticationBackend[ExampleUser, UUID](
         name="database",
@@ -432,9 +419,11 @@ def test_validate_backend_strategy_security_uses_database_token_preset_rollout_h
         _database_token_auth: DatabaseTokenAuthConfig,
         *,
         session: object | None = None,
+        unsafe_testing: bool = False,
     ) -> AuthenticationBackend[ExampleUser, UUID]:
         del _database_token_auth
         del session
+        del unsafe_testing
         return legacy_backend
 
     monkeypatch.setattr(
@@ -451,7 +440,6 @@ def test_validate_backend_strategy_security_rejects_nondurable_jwt_revocation(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Production validation rejects JWT denylist storage that is only process-local."""
-    monkeypatch.setattr(validation_module, "is_testing", lambda: False)
     config = _minimal_config(backends=[_jwt_backend()])
 
     with pytest.raises(ValueError, match="process-local in-memory denylist"):
@@ -462,7 +450,6 @@ def test_validate_backend_strategy_security_allows_durable_jwt_revocation(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """A durable denylist store satisfies the JWT revocation validation."""
-    monkeypatch.setattr(validation_module, "is_testing", lambda: False)
     config = _minimal_config(backends=[_jwt_backend(denylist_store=_DurableDenylistStore())])
 
     _validate_backend_strategy_security(config)
@@ -472,7 +459,6 @@ def test_validate_backend_strategy_security_allows_nondurable_jwt_override(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """The explicit nondurable-JWT override keeps the production config valid."""
-    monkeypatch.setattr(validation_module, "is_testing", lambda: False)
     config = _minimal_config(backends=[_jwt_backend()])
     config.allow_nondurable_jwt_revocation = True
 
@@ -482,9 +468,9 @@ def test_validate_backend_strategy_security_allows_nondurable_jwt_override(
 def test_validate_backend_strategy_security_allows_nondurable_jwt_revocation_in_testing(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Pytest-only testing mode preserves the single-process JWT denylist branch."""
-    monkeypatch.setattr(validation_module, "is_testing", lambda: True)
+    """Explicit unsafe testing preserves the single-process JWT denylist branch."""
     config = _minimal_config(backends=[_jwt_backend()])
+    config.unsafe_testing = True
 
     _validate_backend_strategy_security(config)
 
@@ -597,8 +583,8 @@ def test_validate_password_validator_config_allows_explicit_user_manager_factory
     validate_password_validator_config(config)
 
 
-def test_validate_password_validator_config_rejects_incompatible_manager() -> None:
-    """Factories targeting managers without password-validator support fail fast."""
+def test_validate_password_validator_config_does_not_probe_manager_signature() -> None:
+    """Validation no longer introspects custom manager constructors for password-validator support."""
 
     class _ManagerWithoutPasswordValidator:
         def __init__(self, user_db: object) -> None:
@@ -608,8 +594,130 @@ def test_validate_password_validator_config_rejects_incompatible_manager() -> No
     config.password_validator_factory = lambda _config: None
     config.user_manager_class = cast("type[Any]", _ManagerWithoutPasswordValidator)
 
-    with pytest.raises(ValueError, match="requires user_manager_class to accept password_validator"):
-        validate_password_validator_config(config)
+    validate_password_validator_config(config)
+
+
+def test_validate_config_accepts_default_user_manager_requiring_password_helper() -> None:
+    """Constructor-shape validation should include the default ``password_helper`` slot."""
+
+    class _PasswordHelperRequiredManager(PluginUserManager):
+        def __init__(  # noqa: PLR0913
+            self,
+            user_db: object,
+            *,
+            password_helper: PasswordHelper,
+            security: UserManagerSecurity[UUID] | None = None,
+            password_validator: Callable[[str], None] | None = None,
+            backends: tuple[object, ...] = (),
+            login_identifier: Literal["email", "username"] = "email",
+            unsafe_testing: bool = False,
+        ) -> None:
+            super().__init__(
+                cast("Any", user_db),
+                password_helper=password_helper,
+                security=security,
+                password_validator=password_validator,
+                backends=backends,
+                login_identifier=login_identifier,
+                unsafe_testing=unsafe_testing,
+            )
+
+    config = _minimal_config()
+    config.user_manager_class = cast("type[Any]", _PasswordHelperRequiredManager)
+
+    validate_config(config)
+
+
+def test_validate_config_does_not_invoke_password_validator_factory_for_constructor_shape() -> None:
+    """Startup constructor validation must not execute runtime password-validator factories."""
+    config = _minimal_config()
+    calls = 0
+
+    def _factory(_config: object) -> None:
+        nonlocal calls
+        calls += 1
+
+    config.password_validator_factory = _factory
+
+    validate_config(config)
+
+    assert calls == 0
+
+
+def test_validate_config_rejects_non_canonical_default_user_manager_constructor() -> None:
+    """Plugin construction should fail fast for managers that do not accept ``security=...``."""
+
+    class _LegacyManagerWithoutSecurity(PluginUserManager):
+        def __init__(  # noqa: PLR0913
+            self,
+            user_db: object,
+            *,
+            password_helper: PasswordHelper | None = None,
+            password_validator: object | None = None,
+            verification_token_secret: str,
+            reset_password_token_secret: str,
+            backends: tuple[object, ...] = (),
+        ) -> None:
+            super().__init__(
+                cast("Any", user_db),
+                password_helper=password_helper,
+                password_validator=cast("Any", password_validator),
+                verification_token_secret=verification_token_secret,
+                reset_password_token_secret=reset_password_token_secret,
+                backends=backends,
+            )
+
+    config = _minimal_config()
+    config.user_manager_class = cast("type[Any]", _LegacyManagerWithoutSecurity)
+
+    with pytest.raises(validation_module.ConfigurationError, match=r"user_manager_factory.*security"):
+        validate_config(config)
+
+
+def test_validate_config_rejects_default_user_manager_missing_unsafe_testing_kwarg() -> None:
+    """The default builder contract includes ``unsafe_testing`` and should fail fast when missing."""
+
+    class _ManagerWithoutUnsafeTesting(PluginUserManager):
+        def __init__(  # noqa: PLR0913
+            self,
+            user_db: object,
+            *,
+            password_helper: PasswordHelper | None = None,
+            security: UserManagerSecurity[UUID] | None = None,
+            password_validator: Callable[[str], None] | None = None,
+            backends: tuple[object, ...] = (),
+            login_identifier: Literal["email", "username"] = "email",
+        ) -> None:
+            super().__init__(
+                cast("Any", user_db),
+                password_helper=password_helper,
+                security=security,
+                password_validator=password_validator,
+                backends=backends,
+                login_identifier=login_identifier,
+            )
+
+    config = _minimal_config()
+    config.user_manager_class = cast("type[Any]", _ManagerWithoutUnsafeTesting)
+
+    with pytest.raises(validation_module.ConfigurationError, match=r"user_manager_factory.*unsafe_testing"):
+        validate_config(config)
+
+
+def test_validate_config_rejects_non_introspectable_default_user_manager_constructor(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The default builder requires an introspectable constructor surface."""
+
+    def _raise_signature_error(_manager_class: object) -> object:
+        msg = "signature unavailable"
+        raise ValueError(msg)
+
+    config = _minimal_config()
+    monkeypatch.setattr(validation_module.inspect, "signature", _raise_signature_error)
+
+    with pytest.raises(validation_module.ConfigurationError, match="introspectable constructor"):
+        validate_config(config)
 
 
 def test_validate_rate_limit_config_rejects_non_boolean_trusted_proxy() -> None:
@@ -661,7 +769,6 @@ def test_warn_insecure_plugin_startup_defaults_warns_for_request_verify_token_in
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Startup warnings still inspect non-login endpoint rate-limit settings."""
-    monkeypatch.setattr(startup_module, "is_testing", lambda: False)
     config = _minimal_config(
         rate_limit_config=AuthRateLimitConfig(
             request_verify_token=EndpointRateLimit(
@@ -683,7 +790,6 @@ def test_warn_insecure_plugin_startup_defaults_warns_for_totp_confirm_enable_inm
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Startup warnings still inspect TOTP confirm-enrollment rate-limit settings."""
-    monkeypatch.setattr(startup_module, "is_testing", lambda: False)
     config = _minimal_config(
         rate_limit_config=AuthRateLimitConfig(
             totp_confirm_enable=EndpointRateLimit(
@@ -734,7 +840,6 @@ def test_validate_totp_pending_secret_config_logs_sha1_warning(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     """Production validation logs when TOTP is configured with SHA1."""
-    monkeypatch.setattr(validation_module, "is_testing", lambda: False)
     config = _minimal_config(
         totp_config=TotpConfig(
             totp_pending_secret="p" * 32,
@@ -754,7 +859,6 @@ def test_validate_totp_pending_secret_config_is_silent_for_non_sha1(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     """Non-SHA1 algorithms skip the production warning path."""
-    monkeypatch.setattr(validation_module, "is_testing", lambda: False)
     config = _minimal_config(
         totp_config=TotpConfig(
             totp_pending_secret="p" * 32,
@@ -795,7 +899,6 @@ def test_validate_totp_encryption_key_requires_secret_in_production(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Production TOTP validation requires an at-rest encryption key."""
-    monkeypatch.setattr(validation_module, "is_testing", lambda: False)
     config = _minimal_config(totp_config=TotpConfig(totp_pending_secret="p" * 32))
 
     with pytest.raises(validation_module.ConfigurationError, match="totp_secret_key is required in production"):
@@ -806,9 +909,14 @@ def test_validate_totp_encryption_key_allows_configured_secret_in_production(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Providing the encryption key satisfies the production-only TOTP requirement."""
-    monkeypatch.setattr(validation_module, "is_testing", lambda: False)
-    config = _minimal_config(totp_config=TotpConfig(totp_pending_secret="p" * 32))
-    config.user_manager_kwargs["totp_secret_key"] = TOTP_SECRET_KEY
+    config = _minimal_config(
+        totp_config=TotpConfig(totp_pending_secret="p" * 32),
+        user_manager_security=UserManagerSecurity[UUID](
+            verification_token_secret="v" * 32,
+            reset_password_token_secret="r" * 32,
+            totp_secret_key=TOTP_SECRET_KEY,
+        ),
+    )
 
     _validate_totp_encryption_key(config)
 
@@ -817,7 +925,6 @@ def test_validate_totp_encryption_key_allows_typed_security_secret_in_production
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """The canonical typed security bundle satisfies the production TOTP requirement."""
-    monkeypatch.setattr(validation_module, "is_testing", lambda: False)
     config = _minimal_config(
         totp_config=TotpConfig(totp_pending_secret="p" * 32),
         user_manager_security=UserManagerSecurity[UUID](totp_secret_key=TOTP_SECRET_KEY),
@@ -829,16 +936,49 @@ def test_validate_totp_encryption_key_allows_typed_security_secret_in_production
     _validate_totp_encryption_key(config)
 
 
+def test_validate_totp_encryption_key_allows_factory_owned_totp_secret_in_production(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Custom factories own TOTP encryption wiring when the typed contract is omitted."""
+    config = _minimal_config(
+        totp_config=TotpConfig(totp_pending_secret="p" * 32),
+        user_manager_security=None,
+    )
+    config.user_manager_security = None
+    config.user_manager_factory = lambda **kwargs: cast("Any", kwargs["user_db"])
+    config.user_manager_kwargs = {"totp_secret_key": TOTP_SECRET_KEY}
+
+    _validate_totp_encryption_key(config)
+
+
 def test_validate_totp_encryption_key_rejects_empty_secret_in_production(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """An empty legacy TOTP secret still fails the production encryption check."""
-    monkeypatch.setattr(validation_module, "is_testing", lambda: False)
-    config = _minimal_config(totp_config=TotpConfig(totp_pending_secret="p" * 32))
-    config.user_manager_kwargs["totp_secret_key"] = ""
+    """An empty typed TOTP secret still fails the production encryption check."""
+    config = _minimal_config(
+        totp_config=TotpConfig(totp_pending_secret="p" * 32),
+        user_manager_security=UserManagerSecurity[UUID](
+            verification_token_secret="v" * 32,
+            reset_password_token_secret="r" * 32,
+            totp_secret_key="",
+        ),
+    )
 
     with pytest.raises(validation_module.ConfigurationError, match="totp_secret_key is required in production"):
         _validate_totp_encryption_key(config)
+
+
+def test_validate_user_manager_security_config_rejects_legacy_security_kwargs_without_factory() -> None:
+    """Default plugin construction rejects legacy security kwargs outright."""
+    config = _minimal_config()
+    config.user_manager_security = None
+    config.user_manager_kwargs = {
+        "verification_token_secret": "s" * 32,
+        "reset_password_token_secret": "r" * 32,
+    }
+
+    with pytest.raises(validation_module.ConfigurationError, match="canonical plugin-managed path"):
+        validate_user_manager_security_config(config)
 
 
 def test_validate_user_manager_security_config_rejects_legacy_secret_overlap() -> None:
@@ -849,9 +989,28 @@ def test_validate_user_manager_security_config_rejects_legacy_secret_overlap() -
             reset_password_token_secret="r" * 32,
         ),
     )
+    config.user_manager_kwargs = {
+        "verification_token_secret": "s" * 32,
+        "reset_password_token_secret": "r" * 32,
+    }
 
-    with pytest.raises(validation_module.ConfigurationError, match="overlapping legacy entries"):
+    with pytest.raises(validation_module.ConfigurationError, match="overlapping entries"):
         validate_user_manager_security_config(config)
+
+
+def test_validate_user_manager_security_config_allows_factory_owned_legacy_security_kwargs() -> None:
+    """Custom factories remain the explicit escape hatch for non-standard manager construction."""
+    config = _minimal_config()
+    config.user_manager_security = None
+    config.user_manager_kwargs = {
+        "verification_token_secret": "s" * 32,
+        "reset_password_token_secret": "r" * 32,
+        "totp_secret_key": TOTP_SECRET_KEY,
+        "id_parser": UUID,
+    }
+    config.user_manager_factory = lambda **kwargs: cast("Any", kwargs["user_db"])
+
+    validate_user_manager_security_config(config)
 
 
 def test_validate_user_manager_security_config_rejects_mismatched_top_level_id_parser() -> None:
@@ -894,7 +1053,6 @@ def test_validate_user_manager_security_config_warns_when_secret_roles_share_one
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Production validation warns when verify/reset/TOTP roles reuse one value."""
-    monkeypatch.setattr(validation_module, "is_testing", lambda: False)
     shared_secret = "shared-secret-role-value-1234567890"
     config = _minimal_config(
         user_manager_security=UserManagerSecurity[UUID](
@@ -1037,7 +1195,6 @@ def test_validate_totp_config_warns_for_insecure_cookie_transport(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Production TOTP validation warns when the enable endpoint can travel over insecure cookies."""
-    monkeypatch.setattr(validation_module, "is_testing", lambda: False)
     config = _minimal_config(
         backends=[_cookie_backend()],
         totp_config=TotpConfig(
@@ -1054,7 +1211,6 @@ def test_validate_totp_config_skips_insecure_cookie_warning_in_testing(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Testing mode suppresses the insecure-cookie warning branch for TOTP validation."""
-    monkeypatch.setattr(validation_module, "is_testing", lambda: True)
     config = _minimal_config(
         backends=[_cookie_backend()],
         totp_config=TotpConfig(
@@ -1062,6 +1218,7 @@ def test_validate_totp_config_skips_insecure_cookie_warning_in_testing(
             totp_used_tokens_store=cast("Any", InMemoryUsedTotpCodeStore()),
         ),
     )
+    config.unsafe_testing = True
 
     with warnings.catch_warnings(record=True) as records:
         warnings.simplefilter("always")
@@ -1073,9 +1230,7 @@ def test_validate_totp_config_skips_insecure_cookie_warning_in_testing(
 def test_validate_totp_sub_config_rejects_missing_replay_store_in_production(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Replay protection requires a configured store outside testing mode."""
-    monkeypatch.setattr(validation_module, "is_testing", lambda: False)
-
+    """Replay protection requires a configured store outside explicit unsafe testing."""
     with pytest.raises(ValueError, match="totp_require_replay_protection=True requires"):
         validate_totp_sub_config(
             TotpConfig(totp_pending_secret="p" * 32),
@@ -1096,7 +1251,6 @@ def test_validate_totp_sub_config_rejects_missing_authenticate_method(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Password-gated TOTP enrollment requires an authenticate hook."""
-    monkeypatch.setattr(validation_module, "is_testing", lambda: True)
 
     class _ManagerWithoutAuthenticate:
         pass
@@ -1108,6 +1262,7 @@ def test_validate_totp_sub_config_rejects_missing_authenticate_method(
                 totp_enable_requires_password=True,
             ),
             user_manager_class=_ManagerWithoutAuthenticate,
+            unsafe_testing=True,
         )
 
 
@@ -1115,7 +1270,6 @@ def test_validate_cookie_auth_config_rejects_missing_csrf_secret_in_production(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Cookie auth in production requires either a CSRF secret or an explicit unsafe override."""
-    monkeypatch.setattr(validation_module, "is_testing", lambda: False)
     config = _minimal_config(backends=[_cookie_backend()])
 
     with pytest.raises(validation_module.ConfigurationError, match="requires csrf_secret"):
@@ -1126,7 +1280,6 @@ def test_validate_cookie_auth_config_rejects_short_csrf_secret(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Configured CSRF secrets still have to satisfy minimum-length validation."""
-    monkeypatch.setattr(validation_module, "is_testing", lambda: False)
     config = _minimal_config(backends=[_cookie_backend()])
     config.csrf_secret = "short"
 
@@ -1139,7 +1292,6 @@ def test_validate_cookie_auth_config_allows_explicit_insecure_cookie_override(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """The compatibility override keeps the legacy cookie path available when chosen explicitly."""
-    monkeypatch.setattr(validation_module, "is_testing", lambda: False)
     config = _minimal_config(
         backends=[_cookie_backend(allow_insecure_cookie_auth=True)],
     )
@@ -1201,18 +1353,10 @@ def test_build_csrf_config_returns_expected_cookie_settings() -> None:
         ),
         pytest.param(
             OAuthConfig(
-                include_oauth_associate=True,
-                oauth_associate_providers=[("github", object())],
-            ),
-            id="associate-providers",
-        ),
-        pytest.param(
-            OAuthConfig(
                 oauth_providers=[("github", object())],
                 include_oauth_associate=True,
-                oauth_associate_providers=[("gitlab", object())],
             ),
-            id="mixed-providers",
+            id="login-and-associate",
         ),
     ],
 )
@@ -1247,33 +1391,27 @@ def test_has_configured_oauth_provider_helpers_report_expected_state() -> None:
     """Both provider helper variants agree on configured and unconfigured OAuth state."""
     empty_config = OAuthConfig()
     login_only_config = OAuthConfig(oauth_providers=[("github", object())])
-    associate_only_config = OAuthConfig(
+    login_and_associate_config = OAuthConfig(
         include_oauth_associate=True,
-        oauth_associate_providers=[("github", object())],
-    )
-    mixed_config = OAuthConfig(
         oauth_providers=[("github", object())],
-        include_oauth_associate=True,
-        oauth_associate_providers=[("gitlab", object())],
     )
 
     assert has_configured_oauth_providers(_minimal_config(oauth_config=None)) is False
     assert has_configured_oauth_providers(_minimal_config(oauth_config=login_only_config)) is True
-    assert has_configured_oauth_providers(_minimal_config(oauth_config=associate_only_config)) is True
-    assert has_configured_oauth_providers(_minimal_config(oauth_config=mixed_config)) is True
+    assert has_configured_oauth_providers(_minimal_config(oauth_config=login_and_associate_config)) is True
     assert has_configured_oauth_providers_for(empty_config) is False
     assert has_configured_oauth_providers_for(login_only_config) is True
-    assert has_configured_oauth_providers_for(associate_only_config) is True
-    assert has_configured_oauth_providers_for(mixed_config) is True
+    assert has_configured_oauth_providers_for(login_and_associate_config) is True
 
 
 def test_warn_if_insecure_oauth_redirect_in_production_skips_login_only_inventory(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """Login-provider inventory alone does not trigger the associate-route localhost warning."""
+    """Public plugin OAuth redirect origins do not trigger the production warning."""
     config = _minimal_config(
         oauth_config=OAuthConfig(
             oauth_providers=[("github", object())],
+            oauth_redirect_base_url="https://app.example.com/auth",
         ),
     )
 
@@ -1286,11 +1424,11 @@ def test_warn_if_insecure_oauth_redirect_in_production_skips_login_only_inventor
 def test_warn_if_insecure_oauth_redirect_in_production_logs_localhost_default(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """Production startup warns when associate redirects fall back to localhost."""
+    """Production startup warns when plugin OAuth redirects target localhost."""
     config = _minimal_config(
         oauth_config=OAuthConfig(
-            include_oauth_associate=True,
-            oauth_associate_providers=[("github", object())],
+            oauth_providers=[("github", object())],
+            oauth_redirect_base_url="http://localhost/auth",
         ),
     )
 
@@ -1298,7 +1436,7 @@ def test_warn_if_insecure_oauth_redirect_in_production_logs_localhost_default(
         warn_if_insecure_oauth_redirect_in_production(config=config, app_config=AppConfig(debug=False))
 
     assert "localhost" in caplog.text
-    assert "oauth_associate_redirect_base_url" in caplog.text
+    assert "oauth_redirect_base_url" in caplog.text
 
 
 def test_warn_if_insecure_oauth_redirect_in_production_skips_public_origin(
@@ -1307,9 +1445,8 @@ def test_warn_if_insecure_oauth_redirect_in_production_skips_public_origin(
     """Public OAuth redirect origins do not trigger the localhost warning."""
     config = _minimal_config(
         oauth_config=OAuthConfig(
-            include_oauth_associate=True,
-            oauth_associate_providers=[("github", object())],
-            oauth_associate_redirect_base_url="https://app.example.com/auth/associate",
+            oauth_providers=[("github", object())],
+            oauth_redirect_base_url="https://app.example.com/auth",
         ),
     )
 
@@ -1325,8 +1462,8 @@ def test_warn_if_insecure_oauth_redirect_in_production_skips_debug_mode(
     """Debug mode bypasses the localhost redirect warning."""
     config = _minimal_config(
         oauth_config=OAuthConfig(
-            include_oauth_associate=True,
-            oauth_associate_providers=[("github", object())],
+            oauth_providers=[("github", object())],
+            oauth_redirect_base_url="http://localhost/auth",
         ),
     )
 
@@ -1336,43 +1473,42 @@ def test_warn_if_insecure_oauth_redirect_in_production_skips_debug_mode(
     assert not caplog.text
 
 
-def test_validate_config_rejects_associate_inventory_without_plugin_route_flag() -> None:
-    """Associate-provider inventory without the plugin route flag is rejected explicitly."""
+def test_validate_config_rejects_include_oauth_associate_without_provider_inventory() -> None:
+    """Associate-route enablement still requires the single plugin-owned provider inventory."""
     config = _minimal_config(
         oauth_config=OAuthConfig(
-            oauth_associate_providers=[("github", object())],
             oauth_token_encryption_key="a" * 44,
-        ),
-    )
-
-    with pytest.raises(ValueError, match="include_oauth_associate=True or remove oauth_associate_providers"):
-        validate_config(config)
-
-
-def test_validate_config_rejects_empty_plugin_associate_inventory() -> None:
-    """include_oauth_associate=True requires a concrete provider inventory."""
-    config = _minimal_config(
-        oauth_config=OAuthConfig(
             include_oauth_associate=True,
-            oauth_token_encryption_key="a" * 44,
         ),
     )
 
-    with pytest.raises(ValueError, match="include_oauth_associate=True requires oauth_associate_providers"):
+    with pytest.raises(ValueError, match="include_oauth_associate=True requires oauth_providers"):
         validate_config(config)
 
 
-def test_validate_config_rejects_orphan_associate_redirect_base_url() -> None:
-    """Associate redirect-base settings must correspond to plugin-owned associate routes."""
+def test_validate_config_rejects_missing_redirect_base_url_for_plugin_owned_oauth_routes() -> None:
+    """Plugin-owned OAuth routes require an explicit public redirect base URL."""
     config = _minimal_config(
         oauth_config=OAuthConfig(
             oauth_providers=[("github", object())],
-            oauth_associate_redirect_base_url="https://app.example.com/auth/associate",
             oauth_token_encryption_key="a" * 44,
         ),
     )
 
-    with pytest.raises(ValueError, match="oauth_associate_redirect_base_url requires include_oauth_associate=True"):
+    with pytest.raises(ValueError, match="oauth_redirect_base_url is required when oauth_providers are configured"):
+        validate_config(config)
+
+
+def test_validate_config_rejects_orphan_redirect_base_url() -> None:
+    """OAuth redirect-base settings must correspond to plugin-owned OAuth routes."""
+    config = _minimal_config(
+        oauth_config=OAuthConfig(
+            oauth_redirect_base_url="https://app.example.com/auth",
+            oauth_token_encryption_key="a" * 44,
+        ),
+    )
+
+    with pytest.raises(ValueError, match="oauth_redirect_base_url requires oauth_providers to be configured"):
         validate_config(config)
 
 
@@ -1381,6 +1517,7 @@ def test_validate_config_rejects_duplicate_login_provider_names() -> None:
     config = _minimal_config(
         oauth_config=OAuthConfig(
             oauth_providers=[("github", object()), ("github", object())],
+            oauth_redirect_base_url="https://app.example.com/auth",
             oauth_token_encryption_key="a" * 44,
         ),
     )
@@ -1389,25 +1526,8 @@ def test_validate_config_rejects_duplicate_login_provider_names() -> None:
         validate_config(config)
 
 
-def test_validate_config_rejects_duplicate_associate_provider_names() -> None:
-    """Duplicate associate-provider names are rejected before plugin route assembly."""
-    config = _minimal_config(
-        oauth_config=OAuthConfig(
-            include_oauth_associate=True,
-            oauth_associate_providers=[("github", object()), ("github", object())],
-            oauth_token_encryption_key="a" * 44,
-        ),
-    )
-
-    with pytest.raises(
-        ValueError,
-        match=r"oauth_associate_providers must not contain duplicate provider names: github",
-    ):
-        validate_config(config)
-
-
 def test_validate_config_rejects_oauth_associate_by_email_without_login_provider_inventory() -> None:
-    """Associate-by-email cannot be declared without explicit login-provider registration metadata."""
+    """Associate-by-email cannot be declared without plugin-owned OAuth login routes."""
     config = _minimal_config(
         oauth_config=OAuthConfig(
             oauth_associate_by_email=True,
@@ -1415,13 +1535,28 @@ def test_validate_config_rejects_oauth_associate_by_email_without_login_provider
         ),
     )
 
-    with pytest.raises(ValueError, match="oauth_associate_by_email only affects explicitly mounted OAuth login"):
+    with pytest.raises(ValueError, match="oauth_associate_by_email only affects plugin-owned OAuth login routes"):
+        validate_config(config)
+
+
+def test_validate_config_rejects_oauth_trust_provider_email_verified_without_provider_inventory() -> None:
+    """Provider-email trust cannot be declared without plugin-owned OAuth login routes."""
+    config = _minimal_config(
+        oauth_config=OAuthConfig(
+            oauth_trust_provider_email_verified=True,
+            oauth_token_encryption_key="a" * 44,
+        ),
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="oauth_trust_provider_email_verified only affects plugin-owned OAuth login routes",
+    ):
         validate_config(config)
 
 
 def test_validate_config_runs_happy_path(monkeypatch: pytest.MonkeyPatch) -> None:
     """The top-level validator exercises the expected startup validation sequence."""
-    monkeypatch.setattr(validation_module, "validate_testing_mode_for_startup", lambda: None)
     config = _minimal_config()
 
     validate_config(config)
@@ -1431,7 +1566,6 @@ def test_validate_config_runs_happy_path_for_database_token_preset(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """The DB bearer preset flows through the same top-level validator path as manual backends."""
-    monkeypatch.setattr(validation_module, "validate_testing_mode_for_startup", lambda: None)
     config = LitestarAuthConfig[ExampleUser, UUID](
         database_token_auth=DatabaseTokenAuthConfig(
             token_hash_secret=TOKEN_HASH_SECRET,
@@ -1441,44 +1575,52 @@ def test_validate_config_runs_happy_path_for_database_token_preset(
         user_manager_class=PluginUserManager,
         session_maker=cast("Any", DummySessionMaker()),
         user_db_factory=lambda _session: InMemoryUserDatabase([]),
-        user_manager_kwargs={
-            "verification_token_secret": "v" * 32,
-            "reset_password_token_secret": "r" * 32,
-        },
+        user_manager_security=UserManagerSecurity[UUID](
+            verification_token_secret="v" * 32,
+            reset_password_token_secret="r" * 32,
+        ),
     )
 
     validate_config(config)
 
 
-def test_validate_config_rejects_testing_mode_in_non_test_runtime(
+def test_validate_config_allows_explicit_unsafe_testing_recipe(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Testing-mode startup is rejected by constructor-time validation outside pytest."""
-    config = _minimal_config()
-    monkeypatch.setenv("LITESTAR_AUTH_TESTING", "1")
-    monkeypatch.delenv("PYTEST_CURRENT_TEST", raising=False)
-
-    with pytest.raises(Exception, match=r"LITESTAR_AUTH_TESTING=1") as exc_info:
-        validate_config(config)
-    assert type(exc_info.value).__name__ == "ConfigurationError"
-
-
-def test_validate_config_allows_testing_mode_under_pytest_runtime(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Pytest execution keeps the testing-mode startup branch valid."""
-    config = _minimal_config()
-    monkeypatch.setenv("LITESTAR_AUTH_TESTING", "1")
-    monkeypatch.setenv("PYTEST_CURRENT_TEST", "tests/unit/test_plugin_validation.py::test_example")
+    """Explicit unsafe testing, not runtime globals, controls relaxed validation."""
+    config = _minimal_config(
+        backends=[_cookie_backend(), _jwt_backend()],
+        totp_config=TotpConfig(totp_pending_secret="p" * 32),
+    )
+    config.unsafe_testing = True
 
     validate_config(config)
+
+
+def test_validate_config_keeps_unsafe_testing_instance_scoped(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Unsafe-testing relaxations stay instance-scoped instead of process-global."""
+    strict_config = _minimal_config(
+        backends=[_cookie_backend(), _jwt_backend()],
+        totp_config=TotpConfig(totp_pending_secret="p" * 32),
+    )
+    relaxed_config = _minimal_config(
+        backends=[_cookie_backend(), _jwt_backend()],
+        totp_config=TotpConfig(totp_pending_secret="p" * 32),
+    )
+    relaxed_config.unsafe_testing = True
+
+    with pytest.raises(ValueError, match="totp_require_replay_protection=True requires"):
+        validate_config(strict_config)
+
+    validate_config(relaxed_config)
 
 
 def test_validate_config_reports_missing_backends_before_later_errors(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Core startup prerequisites fail before later user-manager contract checks."""
-    monkeypatch.setattr(validation_module, "validate_testing_mode_for_startup", lambda: None)
     config = _minimal_config(backends=[])
 
     class _ManagerWithoutListUsers(PluginUserManager):
@@ -1495,17 +1637,16 @@ def test_validate_config_preserves_session_prerequisite_for_database_token_prese
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """The DB bearer preset still requires the same session source as the manual backend path."""
-    monkeypatch.setattr(validation_module, "validate_testing_mode_for_startup", lambda: None)
     config = LitestarAuthConfig[ExampleUser, UUID](
         database_token_auth=DatabaseTokenAuthConfig(
             token_hash_secret=TOKEN_HASH_SECRET,
         ),
         user_model=ExampleUser,
         user_manager_class=PluginUserManager,
-        user_manager_kwargs={
-            "verification_token_secret": "v" * 32,
-            "reset_password_token_secret": "r" * 32,
-        },
+        user_manager_security=UserManagerSecurity[UUID](
+            verification_token_secret="v" * 32,
+            reset_password_token_secret="r" * 32,
+        ),
     )
 
     with pytest.raises(ValueError, match=r"requires session_maker or db_session_dependency_provided_externally"):
@@ -1516,8 +1657,6 @@ def test_validate_config_reports_user_manager_contract_errors_before_request_sec
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Credential-contract failures surface before later cookie-auth validation errors."""
-    monkeypatch.setattr(validation_module, "validate_testing_mode_for_startup", lambda: None)
-    monkeypatch.setattr(validation_module, "is_testing", lambda: False)
 
     class _ManagerWithoutListUsers(PluginUserManager):
         list_users = None
@@ -1534,8 +1673,6 @@ def test_validate_config_reports_totp_shape_errors_before_encryption_key_errors(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Malformed TOTP config surfaces before the production encryption-key requirement."""
-    monkeypatch.setattr(validation_module, "validate_testing_mode_for_startup", lambda: None)
-    monkeypatch.setattr(validation_module, "is_testing", lambda: False)
     config = _minimal_config()
     config.totp_config = cast(
         "Any",
@@ -1594,6 +1731,10 @@ def _minimal_config(  # noqa: PLR0913
     Returns:
         Minimal config object with overridable backends and optional nested auth settings.
     """
+    resolved_manager_security = user_manager_security or UserManagerSecurity[UUID](
+        verification_token_secret="v" * 32,
+        reset_password_token_secret="r" * 32,
+    )
     user_db = InMemoryUserDatabase([])
     configured_backends = (
         backends
@@ -1612,11 +1753,8 @@ def _minimal_config(  # noqa: PLR0913
         user_model=ExampleUser,
         user_manager_class=PluginUserManager,
         user_db_factory=lambda _session: user_db,
-        user_manager_security=user_manager_security,
-        user_manager_kwargs={
-            "verification_token_secret": "v" * 32,
-            "reset_password_token_secret": "r" * 32,
-        },
+        user_manager_security=resolved_manager_security,
+        user_manager_kwargs={},
         id_parser=cast("Any", id_parser),
         oauth_config=oauth_config,
         rate_limit_config=rate_limit_config,

@@ -15,7 +15,7 @@ from litestar import Controller, Request, post
 from litestar.exceptions import ClientException, NotAuthorizedException
 
 from litestar_auth.authentication.strategy.jwt import InMemoryJWTDenylistStore, JWTDenylistStore
-from litestar_auth.config import TOTP_ENROLL_AUDIENCE, is_testing, validate_secret_length
+from litestar_auth.config import TOTP_ENROLL_AUDIENCE, validate_secret_length
 from litestar_auth.controllers._utils import (
     AccountStateValidatorProvider,
     _configure_request_body_handler,
@@ -101,6 +101,7 @@ class _TotpControllerContext[UP: UserProtocol[Any], ID]:
     totp_pending_secret: str
     effective_pending_jti_store: JWTDenylistStore | None
     id_parser: Callable[[str], ID] | None
+    unsafe_testing: bool
 
 
 def _totp_validate_replay_and_password(
@@ -109,14 +110,14 @@ def _totp_validate_replay_and_password(
     require_replay_protection: bool,
     totp_enable_requires_password: bool,
     user_manager: object | None,
+    unsafe_testing: bool = False,
 ) -> None:
     """Validate TOTP controller startup constraints.
 
     Raises:
         ConfigurationError: When replay protection or password step-up requirements are not met.
     """
-    testing_mode = is_testing()
-    if require_replay_protection and used_tokens_store is None and not testing_mode:
+    if require_replay_protection and used_tokens_store is None and not unsafe_testing:
         msg = "used_tokens_store is required when require_replay_protection=True."
         raise ConfigurationError(msg)
     if (
@@ -136,17 +137,18 @@ def _totp_validate_replay_and_password(
 def _totp_resolve_pending_jti_store(
     pending_jti_store: JWTDenylistStore | None,
     *,
-    testing_mode: bool,
+    unsafe_testing: bool,
 ) -> JWTDenylistStore | None:
     """Return a denylist store, falling back to in-memory when appropriate.
 
     Returns:
-        The caller-provided store, ``None`` in testing when unset, or a process-local
-        in-memory denylist when not testing and no shared store was configured.
+        The caller-provided store, ``None`` in explicit unsafe-testing mode when
+        unset, or a process-local in-memory denylist when not testing and no
+        shared store was configured.
     """
     if pending_jti_store is not None:
         return pending_jti_store
-    if testing_mode:
+    if unsafe_testing:
         return None
     logger.warning(
         "Falling back to process-local in-memory pending-token JTI denylist store. "
@@ -417,6 +419,7 @@ async def _totp_handle_verify[UP: UserProtocol[Any], ID](
         used_tokens_store=ctx.used_tokens_store,
         pending_jti_store=ctx.effective_pending_jti_store,
         id_parser=ctx.id_parser,
+        unsafe_testing=ctx.unsafe_testing,
     )
 
     async def validate_pending_user(user: TotpUserProtocol[Any]) -> None:
@@ -486,6 +489,7 @@ async def _totp_handle_disable[UP: UserProtocol[Any], ID](
         used_tokens_store=ctx.used_tokens_store,
         algorithm=ctx.totp_algorithm,
         require_replay_protection=ctx.require_replay_protection,
+        unsafe_testing=ctx.unsafe_testing,
     ):
         await ctx.totp_rate_limit.on_invalid_attempt("disable", request)
         msg = INVALID_TOTP_CODE_DETAIL
@@ -619,6 +623,7 @@ def create_totp_controller[UP: UserProtocol[Any], ID](  # noqa: PLR0913
     totp_pending_lifetime: timedelta | None = None,
     id_parser: Callable[[str], ID] | None = None,
     path: str = "/auth/2fa",
+    unsafe_testing: bool = False,
 ) -> type[Controller]:
     """Return a controller with TOTP enable/verify/disable endpoints.
 
@@ -632,7 +637,7 @@ def create_totp_controller[UP: UserProtocol[Any], ID](  # noqa: PLR0913
             pending-token JTIs after successful `/verify`. When omitted, JTIs
             are still required and validated structurally, but not deduplicated.
         require_replay_protection: When enabled, the controller refuses to start
-            without a used-token replay store outside testing mode.
+            without a used-token replay store unless ``unsafe_testing=True``.
         rate_limit_config: Optional auth-endpoint rate-limiter configuration.
         requires_verification: When ``True``, `/2fa/verify` applies the same
             account-state policy as `/login`, rejecting inactive users and
@@ -650,6 +655,8 @@ def create_totp_controller[UP: UserProtocol[Any], ID](  # noqa: PLR0913
         id_parser: Optional callable that converts the JWT ``sub`` string into the
             application's user ID type (e.g. ``UUID`` for UUID-keyed users).
         path: Base route prefix for the generated controller.
+        unsafe_testing: Explicit test-only escape hatch that keeps the previous
+            single-process shortcuts instance-scoped instead of process-global.
 
     Returns:
         Controller subclass with TOTP management endpoints.
@@ -667,16 +674,19 @@ def create_totp_controller[UP: UserProtocol[Any], ID](  # noqa: PLR0913
     """
     del user_manager_dependency_key
     del totp_pending_lifetime  # symmetry param; lifetime is set on the issuer side
-    if not is_testing():
+    if not unsafe_testing:
         validate_secret_length(totp_pending_secret, label="totp_pending_secret")
     _totp_validate_replay_and_password(
         used_tokens_store=used_tokens_store,
         require_replay_protection=require_replay_protection,
         totp_enable_requires_password=totp_enable_requires_password,
         user_manager=None,
+        unsafe_testing=unsafe_testing,
     )
-    testing_mode = is_testing()
-    effective_pending_jti_store = _totp_resolve_pending_jti_store(pending_jti_store, testing_mode=testing_mode)
+    effective_pending_jti_store = _totp_resolve_pending_jti_store(
+        pending_jti_store,
+        unsafe_testing=unsafe_testing,
+    )
 
     totp_rate_limit = TotpRateLimitOrchestrator(
         enable=rate_limit_config.totp_enable if rate_limit_config else None,
@@ -696,6 +706,7 @@ def create_totp_controller[UP: UserProtocol[Any], ID](  # noqa: PLR0913
         totp_pending_secret=totp_pending_secret,
         effective_pending_jti_store=effective_pending_jti_store,
         id_parser=id_parser,
+        unsafe_testing=unsafe_testing,
     )
 
     async def totp_verify_before_request(request: Request[Any, Any, Any]) -> None:

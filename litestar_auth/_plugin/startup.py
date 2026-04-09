@@ -14,7 +14,6 @@ from litestar_auth._plugin.config import _build_oauth_route_registration_contrac
 from litestar_auth._plugin.middleware import get_cookie_transports
 from litestar_auth._plugin.rate_limit import iter_rate_limit_endpoints
 from litestar_auth.authentication.strategy.jwt import JWTStrategy
-from litestar_auth.config import is_testing
 from litestar_auth.totp import InMemoryUsedTotpCodeStore, SecurityWarning
 
 if TYPE_CHECKING:
@@ -71,10 +70,10 @@ def bootstrap_bundled_token_orm_models(config: LitestarAuthConfig[Any, Any]) -> 
 def warn_insecure_plugin_startup_defaults(config: LitestarAuthConfig[Any, Any]) -> None:
     """Emit ``SecurityWarning`` for insecure production defaults.
 
-    Suppressed when ``is_testing()`` is true. Call from ``LitestarAuth.on_app_init()``
-    before guards that may raise.
+    Suppressed when ``config.unsafe_testing`` is true. Call from
+    ``LitestarAuth.on_app_init()`` before guards that may raise.
     """
-    if is_testing():
+    if config.unsafe_testing:
         return
 
     contract = _build_oauth_route_registration_contract(
@@ -91,7 +90,7 @@ def warn_insecure_plugin_startup_defaults(config: LitestarAuthConfig[Any, Any]) 
             stacklevel=2,
         )
 
-    for backend in config.resolve_backends():
+    for backend in config.startup_backends():
         strategy = getattr(backend, "strategy", None)
         if _is_jwt_strategy_instance(strategy) and not getattr(strategy, "revocation_is_durable", True):
             warnings.warn(
@@ -148,7 +147,7 @@ def has_configured_oauth_providers(config: LitestarAuthConfig[Any, Any]) -> bool
 
 def has_configured_oauth_providers_for(oauth_config: OAuthConfig) -> bool:
     """Return whether this OAuth config includes any provider integration."""
-    return bool(oauth_config.oauth_associate_providers or oauth_config.oauth_providers)
+    return bool(oauth_config.oauth_providers)
 
 
 def warn_if_insecure_oauth_redirect_in_production(
@@ -156,7 +155,7 @@ def warn_if_insecure_oauth_redirect_in_production(
     config: LitestarAuthConfig[Any, Any],
     app_config: AppConfig,
 ) -> None:
-    """Warn when OAuth associate redirect resolution falls back to localhost in production."""
+    """Warn when plugin-owned OAuth redirects target localhost in production."""
     if getattr(app_config, "debug", False):
         return
 
@@ -164,10 +163,10 @@ def warn_if_insecure_oauth_redirect_in_production(
         auth_path=config.auth_path,
         oauth_config=config.oauth_config,
     )
-    if not contract.has_plugin_owned_associate_routes:
+    if not contract.has_plugin_owned_login_routes:
         return
-    redirect_base_url = contract.associate_redirect_base_url
-    if redirect_base_url is None:  # pragma: no cover - contract guarantees this when routes exist
+    redirect_base_url = contract.redirect_base_url
+    if redirect_base_url is None:  # pragma: no cover - validation guarantees this when providers exist
         return
 
     host = urlsplit(redirect_base_url).hostname
@@ -176,9 +175,9 @@ def warn_if_insecure_oauth_redirect_in_production(
 
     logger.warning(
         "Insecure OAuth redirect_base_url detected in production. "
-        "The configured OAuth associate redirect base URL resolves to localhost (%s). "
-        "Set oauth_associate_redirect_base_url to your public HTTPS origin instead of relying on the "
-        "http://localhost fallback.",
+        "The configured plugin OAuth redirect base URL resolves to localhost (%s). "
+        "Set oauth_redirect_base_url to your public HTTPS auth origin before enabling plugin-managed "
+        "OAuth routes in production.",
         redirect_base_url,
         extra={"event": "oauth_redirect_localhost_default"},
     )
@@ -208,7 +207,7 @@ def _warn_refresh_cookie_max_age_mismatch(config: LitestarAuthConfig[Any, Any]) 
     if not config.enable_refresh:
         return
 
-    cookie_transports = get_cookie_transports(config.resolve_backends())
+    cookie_transports = get_cookie_transports(config.startup_backends())
     for transport in cookie_transports:
         if transport.refresh_max_age is None:
             warnings.warn(

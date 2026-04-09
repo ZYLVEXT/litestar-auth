@@ -12,7 +12,7 @@ from typing import TYPE_CHECKING, Any, Protocol, TypeGuard, cast
 import jwt
 from jwt import ExpiredSignatureError, InvalidTokenError
 
-from litestar_auth.config import TOTP_PENDING_AUDIENCE, is_testing
+from litestar_auth.config import TOTP_PENDING_AUDIENCE
 from litestar_auth.exceptions import ConfigurationError
 from litestar_auth.totp import SecurityWarning, TotpAlgorithm, UsedTotpCodeStore, verify_totp_with_store
 from litestar_auth.types import TotpUserProtocol
@@ -68,6 +68,7 @@ class TotpLoginFlowService[UP: TotpUserProtocol[Any], ID]:
         used_tokens_store: UsedTotpCodeStore | None = None,
         pending_jti_store: JWTDenylistStore | None = None,
         id_parser: Callable[[str], ID] | None = None,
+        unsafe_testing: bool = False,
     ) -> None:
         """Bind the dependencies used by the pending-login handshake."""
         self._user_manager = user_manager
@@ -78,6 +79,7 @@ class TotpLoginFlowService[UP: TotpUserProtocol[Any], ID]:
         self._used_tokens_store = used_tokens_store
         self._pending_jti_store = pending_jti_store
         self._id_parser = id_parser
+        self._unsafe_testing = unsafe_testing
 
     async def issue_pending_token(self, user: UP) -> str | None:
         """Return a pending-login JWT when the user has TOTP enabled."""
@@ -120,6 +122,7 @@ class TotpLoginFlowService[UP: TotpUserProtocol[Any], ID]:
             used_tokens_store=self._used_tokens_store,
             algorithm=self._totp_algorithm,
             require_replay_protection=self._require_replay_protection,
+            unsafe_testing=self._unsafe_testing,
         ):
             raise InvalidTotpCodeError
         await self._deny_pending_login(pending_login)
@@ -161,14 +164,14 @@ class TotpLoginFlowService[UP: TotpUserProtocol[Any], ID]:
 
     async def _deny_pending_login(self, pending_login: PendingTotpLogin[UP]) -> None:
         if self._pending_jti_store is None:
-            if not is_testing():
+            if not self._unsafe_testing:
                 msg = (
                     "TOTP pending-token JTI deduplication is required in production. "
                     "Configure a JWTDenylistStore for pending_jti_store."
                 )
                 raise ConfigurationError(msg)
             warnings.warn(
-                "TOTP pending-token JTI deduplication is DISABLED (testing mode).",
+                "TOTP pending-token JTI deduplication is DISABLED because unsafe_testing=True.",
                 SecurityWarning,
                 stacklevel=3,
             )

@@ -70,27 +70,6 @@ def test_manager_reexports_canonical_lifecycle_constants() -> None:
     assert manager_module._PRIVILEGED_FIELDS is PRIVILEGED_FIELDS
 
 
-def test_base_user_manager_declares_security_constructor_support() -> None:
-    """The default manager advertises support for the typed security constructor kwarg."""
-    assert BaseUserManager.accepts_security is True
-
-
-def test_base_user_manager_capability_flags_remain_inheritable_class_metadata() -> None:
-    """Capability flags remain ordinary inheritable class attributes for custom manager families."""
-
-    class _IntermediateManager(BaseUserManager[ExampleUser, UUID]):
-        accepts_security = False
-        accepts_id_parser = False
-
-    class _ConcreteManager(_IntermediateManager):
-        pass
-
-    assert "accepts_security" not in _ConcreteManager.__dict__
-    assert "accepts_id_parser" not in _ConcreteManager.__dict__
-    assert _ConcreteManager.accepts_security is False
-    assert _ConcreteManager.accepts_id_parser is False
-
-
 class TrackingUserManager(BaseUserManager[ExampleUser, UUID]):
     """Concrete manager that records hook invocations for assertions."""
 
@@ -285,7 +264,7 @@ def test_normalize_username_lookup_strips_and_lowercases() -> None:
 
 
 def test_manager_init_requires_explicit_secrets_outside_testing() -> None:
-    """Missing secrets should fail fast outside explicit testing mode."""
+    """Missing secrets should fail fast outside explicit unsafe testing."""
     user_db = AsyncMock()
     password_helper = PasswordHelper()
 
@@ -340,11 +319,8 @@ def test_manager_init_accepts_typed_security_contract() -> None:
     assert manager.id_parser is UUID
 
 
-def test_manager_init_warns_when_typed_secret_roles_are_reused_in_production(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+def test_manager_init_warns_when_typed_secret_roles_are_reused_in_production() -> None:
     """Direct manager construction warns instead of failing when roles reuse one value."""
-    monkeypatch.setattr(manager_module._config, "is_testing", lambda: False)
     user_db = AsyncMock()
     password_helper = PasswordHelper()
     shared_secret = "shared-manager-secret-role-1234567890"
@@ -390,19 +366,17 @@ def test_manager_init_rejects_mixed_typed_security_and_legacy_secret_kwargs() ->
         )
 
 
-def test_manager_init_security_contract_allows_testing_fallback_under_testing_env(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Testing-mode fallback still works when callers use the typed security bundle."""
-    monkeypatch.setenv("LITESTAR_AUTH_TESTING", "1")
+def test_manager_init_security_contract_allows_unsafe_testing_fallback() -> None:
+    """Explicit unsafe testing still works when callers use the typed security bundle."""
     user_db = AsyncMock()
     password_helper = PasswordHelper()
 
-    with pytest.warns(UserWarning, match=r"LITESTAR_AUTH_TESTING=1") as warnings:
+    with pytest.warns(UserWarning, match=r"unsafe_testing=True") as warnings:
         manager = BaseUserManager(
             user_db,
             password_helper=password_helper,
             security=UserManagerSecurity[UUID](),
+            unsafe_testing=True,
         )
 
     assert len(warnings) == EXPECTED_SECRET_FALLBACK_WARNINGS
@@ -410,18 +384,18 @@ def test_manager_init_security_contract_allows_testing_fallback_under_testing_en
     assert manager.reset_password_token_secret
 
 
-def test_manager_init_allows_insecure_fallback_under_testing_env(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Missing secrets are allowed only when LITESTAR_AUTH_TESTING=1 is set."""
-    monkeypatch.setenv("LITESTAR_AUTH_TESTING", "1")
+def test_manager_init_allows_insecure_fallback_under_explicit_unsafe_testing() -> None:
+    """Missing secrets are allowed only when ``unsafe_testing=True`` is set."""
     user_db = AsyncMock()
     password_helper = PasswordHelper()
 
-    with pytest.warns(UserWarning, match=r"LITESTAR_AUTH_TESTING=1") as warnings:
+    with pytest.warns(UserWarning, match=r"unsafe_testing=True") as warnings:
         manager = BaseUserManager(
             user_db,
             password_helper=password_helper,
             verification_token_secret=None,
             reset_password_token_secret=None,
+            unsafe_testing=True,
         )
 
     assert len(warnings) == EXPECTED_SECRET_FALLBACK_WARNINGS
@@ -429,9 +403,8 @@ def test_manager_init_allows_insecure_fallback_under_testing_env(monkeypatch: py
     assert manager.reset_password_token_secret
 
 
-def test_manager_init_testing_fallback_warning_points_to_caller(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Testing-mode fallback warnings should point at the manager instantiation site."""
-    monkeypatch.setenv("LITESTAR_AUTH_TESTING", "1")
+def test_manager_init_unsafe_testing_fallback_warning_points_to_caller() -> None:
+    """Unsafe-testing fallback warnings should point at the manager instantiation site."""
     user_db = AsyncMock()
     password_helper = PasswordHelper()
 
@@ -445,6 +418,7 @@ def test_manager_init_testing_fallback_warning_points_to_caller(monkeypatch: pyt
             password_helper=password_helper,
             verification_token_secret=None,
             reset_password_token_secret=None,
+            unsafe_testing=True,
         )
 
     assert len(caught) == EXPECTED_SECRET_FALLBACK_WARNINGS
@@ -452,27 +426,26 @@ def test_manager_init_testing_fallback_warning_points_to_caller(monkeypatch: pyt
     assert {warning.lineno for warning in caught} == {instantiation_line}
 
 
-def test_manager_testing_mode_generates_distinct_hex_secrets_when_omitted(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Under testing mode, omitted secrets resolve to unique ``secrets.token_hex(32)`` values."""
-    monkeypatch.setenv("LITESTAR_AUTH_TESTING", "1")
+def test_manager_unsafe_testing_generates_distinct_hex_secrets_when_omitted() -> None:
+    """Under unsafe testing, omitted secrets resolve to unique ``secrets.token_hex(32)`` values."""
     user_db = AsyncMock()
     password_helper = PasswordHelper()
 
-    with pytest.warns(UserWarning, match=r"LITESTAR_AUTH_TESTING=1"):
+    with pytest.warns(UserWarning, match=r"unsafe_testing=True"):
         first = BaseUserManager(
             user_db,
             password_helper=password_helper,
             verification_token_secret=None,
             reset_password_token_secret=None,
+            unsafe_testing=True,
         )
-    with pytest.warns(UserWarning, match=r"LITESTAR_AUTH_TESTING=1"):
+    with pytest.warns(UserWarning, match=r"unsafe_testing=True"):
         second = BaseUserManager(
             user_db,
             password_helper=password_helper,
             verification_token_secret=None,
             reset_password_token_secret=None,
+            unsafe_testing=True,
         )
 
     for mgr in (first, second):

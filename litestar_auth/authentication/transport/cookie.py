@@ -40,8 +40,8 @@ class CookieTransport(Transport):
             httponly: Whether to set the HttpOnly attribute on the auth cookie.
             samesite: SameSite policy for cookies.
             allow_insecure_cookie_auth: When ``True``, allow cookie auth with
-                plugin-managed CSRF disabled outside testing mode. This is unsafe for
-                browser authentication and should only be used for controlled,
+                plugin-managed CSRF disabled. This is unsafe for browser
+                authentication and should only be used for controlled,
                 non-browser scenarios.
             refresh_max_age: Optional cookie max-age in seconds for the refresh-token
                 cookie. When ``None``, falls back to ``max_age``. Set this to match

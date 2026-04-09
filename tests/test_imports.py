@@ -120,6 +120,7 @@ from litestar_auth._redis_protocols import RedisSharedAuthClient
 from litestar_auth.contrib.redis import RedisAuthPreset, RedisAuthRateLimitTier
 from litestar_auth.db import BaseOAuthAccountStore, BaseUserStore
 from litestar_auth.db.sqlalchemy import SQLAlchemyUserDatabase
+from litestar_auth.manager import UserManagerSecurity
 from litestar_auth.ratelimit import (
     AUTH_RATE_LIMIT_ENDPOINT_SLOTS,
     AUTH_RATE_LIMIT_ENDPOINT_SLOTS_BY_GROUP,
@@ -286,10 +287,10 @@ def test_root_package_exports_canonical_database_token_preset_entrypoint() -> No
         user_manager_class=_RootImportCoverageUserManager,
         session_maker=session_maker,
         user_db_factory=lambda _session: cast("Any", object()),
-        user_manager_kwargs={
-            "verification_token_secret": "x" * 32,
-            "reset_password_token_secret": "y" * 32,
-        },
+        user_manager_security=UserManagerSecurity[UUID](
+            verification_token_secret="x" * 32,
+            reset_password_token_secret="y" * 32,
+        ),
     )
 
     preset = config.database_token_auth
@@ -297,7 +298,7 @@ def test_root_package_exports_canonical_database_token_preset_entrypoint() -> No
     assert preset.token_hash_secret == "x" * 40
     assert config.session_maker is session_maker
 
-    backend = config.resolve_backends()[0]
+    backend = config.startup_backends()[0]
     assert backend.name == "database"
     assert isinstance(backend.transport, BearerTransport)
     assert isinstance(backend.strategy, litestar_auth.DatabaseTokenStrategy)

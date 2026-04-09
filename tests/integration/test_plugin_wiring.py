@@ -29,6 +29,7 @@ from litestar_auth.authentication.backend import AuthenticationBackend
 from litestar_auth.authentication.transport.bearer import BearerTransport
 from litestar_auth.authentication.transport.cookie import CookieTransport
 from litestar_auth.exceptions import ConfigurationError
+from litestar_auth.manager import UserManagerSecurity
 from litestar_auth.password import PasswordHelper
 from litestar_auth.plugin import LitestarAuth, LitestarAuthConfig
 from tests.e2e.conftest import SessionMaker as E2ESessionMaker
@@ -75,11 +76,12 @@ def _minimal_litestar_auth_config(
         user_model=ExampleUser,
         user_manager_class=PluginUserManager,
         user_db_factory=lambda _session: user_db,
-        user_manager_kwargs={
-            "verification_token_secret": "verify-secret-12345678901234567890",
-            "reset_password_token_secret": "reset-secret-123456789012345678901",
-            "id_parser": UUID,
-        },
+        user_manager_security=UserManagerSecurity[UUID](
+            verification_token_secret="verify-secret-12345678901234567890",
+            reset_password_token_secret="reset-secret-123456789012345678901",
+            id_parser=UUID,
+        ),
+        user_manager_kwargs={},
         include_users=False,
         totp_config=None,
     )
@@ -195,11 +197,13 @@ async def test_plugin_propagates_login_identifier_username_to_auth_login() -> No
         user_model=ExampleUser,
         user_manager_class=PluginUserManager,
         user_db_factory=lambda _session: user_db,
+        user_manager_security=UserManagerSecurity[UUID](
+            verification_token_secret="verify-secret-12345678901234567890",
+            reset_password_token_secret="reset-secret-123456789012345678901",
+            id_parser=UUID,
+        ),
         user_manager_kwargs={
             "password_helper": password_helper,
-            "verification_token_secret": "verify-secret-12345678901234567890",
-            "reset_password_token_secret": "reset-secret-123456789012345678901",
-            "id_parser": UUID,
         },
         include_register=False,
         include_verify=False,
@@ -222,8 +226,9 @@ def test_oauth_associate_dependency_registered_when_enabled() -> None:
     provider = ("example", object())
     config = _minimal_litestar_auth_config()
     config.oauth_config = OAuthConfig(
+        oauth_providers=[provider],
         include_oauth_associate=True,
-        oauth_associate_providers=[provider],
+        oauth_redirect_base_url="https://app.example.com/auth",
         oauth_token_encryption_key="a" * 44,
     )
     plugin = LitestarAuth(config)
@@ -239,6 +244,7 @@ def test_oauth_login_inventory_does_not_register_associate_dependency() -> None:
     config = _minimal_litestar_auth_config()
     config.oauth_config = OAuthConfig(
         oauth_providers=[("example", object())],
+        oauth_redirect_base_url="https://app.example.com/auth",
         oauth_token_encryption_key="a" * 44,
     )
     plugin = LitestarAuth(config)
@@ -248,12 +254,13 @@ def test_oauth_login_inventory_does_not_register_associate_dependency() -> None:
     assert OAUTH_ASSOCIATE_USER_MANAGER_DEPENDENCY_KEY not in result_config.dependencies
 
 
-def test_oauth_associate_requires_encryption_key_at_startup() -> None:
-    """OAuth associate startup fails closed when token encryption is not configured."""
+def test_oauth_plugin_routes_require_encryption_key_at_startup() -> None:
+    """Plugin-owned OAuth startup fails closed when token encryption is not configured."""
     config = _minimal_litestar_auth_config()
     config.oauth_config = OAuthConfig(
+        oauth_providers=[("example", object())],
         include_oauth_associate=True,
-        oauth_associate_providers=[("example", object())],
+        oauth_redirect_base_url="https://app.example.com/auth",
     )
     plugin = LitestarAuth(config)
 
@@ -266,28 +273,27 @@ def test_oauth_associate_requires_encryption_key_at_startup() -> None:
     [
         pytest.param(
             OAuthConfig(
-                oauth_associate_providers=[("github", object())],
-                oauth_token_encryption_key="a" * 44,
-            ),
-            "include_oauth_associate=True or remove oauth_associate_providers",
-            id="associate-providers-without-flag",
-        ),
-        pytest.param(
-            OAuthConfig(
                 include_oauth_associate=True,
                 oauth_token_encryption_key="a" * 44,
             ),
-            "include_oauth_associate=True requires oauth_associate_providers",
+            "include_oauth_associate=True requires oauth_providers",
             id="associate-flag-without-providers",
         ),
         pytest.param(
             OAuthConfig(
                 oauth_providers=[("github", object())],
-                oauth_associate_redirect_base_url="https://app.example.com/auth/associate",
                 oauth_token_encryption_key="a" * 44,
             ),
-            "oauth_associate_redirect_base_url requires include_oauth_associate=True",
-            id="associate-redirect-without-plugin-routes",
+            "oauth_redirect_base_url is required when oauth_providers are configured",
+            id="providers-without-redirect-base",
+        ),
+        pytest.param(
+            OAuthConfig(
+                oauth_redirect_base_url="https://app.example.com/auth",
+                oauth_token_encryption_key="a" * 44,
+            ),
+            "oauth_redirect_base_url requires oauth_providers to be configured",
+            id="redirect-base-without-providers",
         ),
     ],
 )
@@ -309,6 +315,7 @@ def test_plugin_rejects_ambiguous_oauth_route_registration_contracts(
         pytest.param(
             OAuthConfig(
                 oauth_providers=[("github", object())],
+                oauth_redirect_base_url="https://app.example.com/auth",
                 oauth_token_encryption_key="a" * 44,
             ),
             None,
@@ -316,38 +323,27 @@ def test_plugin_rejects_ambiguous_oauth_route_registration_contracts(
         ),
         pytest.param(
             OAuthConfig(
-                include_oauth_associate=True,
-                oauth_associate_providers=[("github", object())],
-                oauth_associate_redirect_base_url="https://app.example.com/auth/associate",
-                oauth_token_encryption_key="a" * 44,
-            ),
-            "/auth/associate/github",
-            id="associate-only",
-        ),
-        pytest.param(
-            OAuthConfig(
                 oauth_providers=[("github", object())],
                 include_oauth_associate=True,
-                oauth_associate_providers=[("github", object())],
-                oauth_associate_redirect_base_url="https://app.example.com/auth/associate",
+                oauth_redirect_base_url="https://app.example.com/auth",
                 oauth_token_encryption_key="a" * 44,
             ),
             "/auth/associate/github",
-            id="mixed",
+            id="login-and-associate",
         ),
     ],
 )
-def test_plugin_preserves_current_oauth_route_registration_split(
+def test_plugin_mounts_oauth_routes_from_the_single_provider_inventory(
     oauth_config: OAuthConfig,
     expected_associate_path: str | None,
 ) -> None:
-    """Plugin OAuth config auto-mounts associate routes only; login OAuth remains explicit."""
+    """Plugin OAuth config auto-mounts login routes and optionally associate routes."""
     config = _minimal_litestar_auth_config()
     config.oauth_config = oauth_config
     result_config = LitestarAuth(config).on_app_init(AppConfig())
     mounted_paths = {getattr(route_handler, "path", None) for route_handler in result_config.route_handlers}
 
-    assert "/auth/oauth/github" not in mounted_paths
+    assert "/auth/oauth/github" in mounted_paths
     if expected_associate_path is None:
         assert "/auth/associate/github" not in mounted_paths
     else:
@@ -408,11 +404,13 @@ async def test_plugin_respects_public_mount_paths_and_dependency_keys() -> None:
         user_model=ExampleUser,
         user_manager_class=PluginUserManager,
         user_db_factory=lambda _session: user_db,
+        user_manager_security=UserManagerSecurity[UUID](
+            verification_token_secret="verify-secret-12345678901234567890",
+            reset_password_token_secret="reset-secret-123456789012345678901",
+            id_parser=UUID,
+        ),
         user_manager_kwargs={
             "password_helper": password_helper,
-            "verification_token_secret": "verify-secret-12345678901234567890",
-            "reset_password_token_secret": "reset-secret-123456789012345678901",
-            "id_parser": UUID,
         },
         auth_path="/api/account",
         users_path="/api/members",
@@ -519,7 +517,12 @@ def test_totp_backend_resolves_named_backend() -> None:
         totp_backend_name="secondary",
         totp_used_tokens_store=cast("Any", object()),
     )
-    config.user_manager_kwargs["totp_secret_key"] = Fernet.generate_key().decode()
+    config.user_manager_security = UserManagerSecurity[UUID](
+        verification_token_secret="verify-secret-12345678901234567890",
+        reset_password_token_secret="reset-secret-123456789012345678901",
+        totp_secret_key=Fernet.generate_key().decode(),
+        id_parser=UUID,
+    )
     plugin = LitestarAuth(config)
 
     totp_backend = plugin._totp_backend()
@@ -541,7 +544,12 @@ def test_totp_backend_unknown_name_raises_value_error() -> None:
         totp_backend_name="unknown-backend",
         totp_used_tokens_store=cast("Any", object()),
     )
-    config.user_manager_kwargs["totp_secret_key"] = Fernet.generate_key().decode()
+    config.user_manager_security = UserManagerSecurity[UUID](
+        verification_token_secret="verify-secret-12345678901234567890",
+        reset_password_token_secret="reset-secret-123456789012345678901",
+        totp_secret_key=Fernet.generate_key().decode(),
+        id_parser=UUID,
+    )
     plugin = LitestarAuth(config)
 
     with pytest.raises(ValueError, match="unknown-backend"):
@@ -591,11 +599,11 @@ def test_database_token_preset_mounts_primary_auth_routes_without_startup_sessio
         user_manager_class=PluginUserManager,
         session_maker=cast("async_sessionmaker[AsyncSession]", session_maker),
         user_db_factory=lambda _session: InMemoryUserDatabase([]),
-        user_manager_kwargs={
-            "verification_token_secret": "verify-secret-12345678901234567890",
-            "reset_password_token_secret": "reset-secret-123456789012345678901",
-            "id_parser": UUID,
-        },
+        user_manager_security=UserManagerSecurity[UUID](
+            verification_token_secret="verify-secret-12345678901234567890",
+            reset_password_token_secret="reset-secret-123456789012345678901",
+            id_parser=UUID,
+        ),
         enable_refresh=True,
         include_register=False,
         include_verify=False,
@@ -643,11 +651,11 @@ async def test_database_token_preset_backends_dependency_uses_request_session() 
             user_manager_class=PluginUserManager,
             session_maker=session_maker,
             user_db_factory=lambda _session: InMemoryUserDatabase([]),
-            user_manager_kwargs={
-                "verification_token_secret": "verify-secret-12345678901234567890",
-                "reset_password_token_secret": "reset-secret-123456789012345678901",
-                "id_parser": UUID,
-            },
+            user_manager_security=UserManagerSecurity[UUID](
+                verification_token_secret="verify-secret-12345678901234567890",
+                reset_password_token_secret="reset-secret-123456789012345678901",
+                id_parser=UUID,
+            ),
             enable_refresh=True,
             include_register=False,
             include_verify=False,
@@ -701,11 +709,11 @@ async def test_database_token_preset_accepts_advanced_alchemy_session_maker() ->
             user_manager_class=PluginUserManager,
             session_maker=session_maker,
             user_db_factory=lambda _session: InMemoryUserDatabase([]),
-            user_manager_kwargs={
-                "verification_token_secret": "verify-secret-12345678901234567890",
-                "reset_password_token_secret": "reset-secret-123456789012345678901",
-                "id_parser": UUID,
-            },
+            user_manager_security=UserManagerSecurity[UUID](
+                verification_token_secret="verify-secret-12345678901234567890",
+                reset_password_token_secret="reset-secret-123456789012345678901",
+                id_parser=UUID,
+            ),
             enable_refresh=True,
             include_register=False,
             include_verify=False,

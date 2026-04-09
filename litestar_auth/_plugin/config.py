@@ -2,15 +2,13 @@
 
 from __future__ import annotations
 
-import inspect
 import keyword
 import sys
 from collections.abc import Callable
-from contextvars import ContextVar
 from dataclasses import dataclass, field
 from datetime import timedelta
 from functools import partial
-from typing import TYPE_CHECKING, Any, Protocol, cast
+from typing import TYPE_CHECKING, Any, Never, Protocol, cast
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -47,68 +45,56 @@ DEFAULT_DATABASE_TOKEN_BACKEND_NAME = "database"  # noqa: S105
 DEFAULT_DATABASE_TOKEN_MAX_AGE = timedelta(hours=1)
 DEFAULT_DATABASE_TOKEN_REFRESH_MAX_AGE = timedelta(days=30)
 DEFAULT_DATABASE_TOKEN_BYTES = 32
-_DATABASE_TOKEN_REQUEST_SESSION: ContextVar[AsyncSession | None] = ContextVar(
-    "litestar_auth_database_token_request_session",
-    default=None,
-)
 
 
-class _RequestScopedDatabaseTokenSessionProxy:
-    """Resolve the active DB session lazily from the current request context."""
+class _StartupOnlyDatabaseTokenSession:
+    """Fail-closed sentinel used by startup-only DB-token backends."""
 
-    @staticmethod
-    def _session() -> AsyncSession:
-        """Return the current request-local session for DB-token preset operations.
-
-        Returns:
-            The current request-local SQLAlchemy session.
+    def __getattr__(self, name: str) -> Never:
+        """Raise when startup-only backends are used for request-time DB work.
 
         Raises:
-            RuntimeError: When no request-local session has been bound yet.
+            RuntimeError: Always, because startup-only backends are not valid for request-time
+                database-token strategy work.
         """
-        session = _DATABASE_TOKEN_REQUEST_SESSION.get()
-        if session is not None:
-            return session
-
+        del name
         msg = (
-            "DatabaseTokenAuthConfig requires a LitestarAuth-managed request session at runtime. "
-            "Configure session_maker on LitestarAuthConfig or provide the DB session dependency externally."
+            "DatabaseTokenAuthConfig.startup_backends() returns startup-only backends. "
+            "Use LitestarAuthConfig.bind_request_backends(session) to obtain request-scoped "
+            "backend instances for runtime login, refresh, logout, or token validation work."
         )
         raise RuntimeError(msg)
 
-    def __getattr__(self, name: str) -> object:
-        """Forward session attribute access to the current request-local session.
 
-        Returns:
-            The requested attribute resolved from the active request-local session.
-        """
-        return getattr(self._session(), name)
-
-
-_REQUEST_SCOPED_DATABASE_TOKEN_SESSION = _RequestScopedDatabaseTokenSessionProxy()
-
-
-def bind_database_token_request_session(session: AsyncSession) -> None:
-    """Record the current request-local session for DB-token preset backends."""
-    _DATABASE_TOKEN_REQUEST_SESSION.set(session)
+_STARTUP_ONLY_DATABASE_TOKEN_SESSION = _StartupOnlyDatabaseTokenSession()
 
 
 def resolve_database_token_strategy_session(session: AsyncSession | None = None) -> AsyncSession:
-    """Return the explicit request session or the preset's request-scoped session proxy."""
-    return session if session is not None else cast("AsyncSession", _REQUEST_SCOPED_DATABASE_TOKEN_SESSION)
+    """Return the explicit request session or the startup-only sentinel session.
+
+    Returns:
+        The provided request ``AsyncSession`` when available, otherwise the startup-only
+        sentinel used by :meth:`LitestarAuthConfig.startup_backends`.
+    """
+    return session if session is not None else cast("AsyncSession", _STARTUP_ONLY_DATABASE_TOKEN_SESSION)
 
 
 def build_database_token_backend[UP: UserProtocol[Any], ID](
     database_token_auth: DatabaseTokenAuthConfig,
     *,
-    session: AsyncSession | None = None,
+    session: AsyncSession,
+    unsafe_testing: bool = False,
 ) -> AuthenticationBackend[UP, ID]:
     """Return the canonical DB-token backend for the provided request session.
 
     Returns:
         Authentication backend configured for the canonical DB bearer path.
     """
-    return _build_database_token_backend(database_token_auth, session=session)
+    return _build_database_token_backend(
+        database_token_auth,
+        session=session,
+        unsafe_testing=unsafe_testing,
+    )
 
 
 def _build_default_user_db(session: AsyncSession, *, user_model: type[Any]) -> BaseUserStore[Any, Any]:
@@ -130,6 +116,7 @@ def _build_database_token_backend[UP: UserProtocol[Any], ID](
     database_token_auth: DatabaseTokenAuthConfig,
     *,
     session: AsyncSession | None = None,
+    unsafe_testing: bool = False,
 ) -> AuthenticationBackend[UP, ID]:
     """Build the canonical bearer + database-token backend lazily.
 
@@ -156,6 +143,7 @@ def _build_database_token_backend[UP: UserProtocol[Any], ID](
                 refresh_max_age=database_token_auth.refresh_max_age,
                 token_bytes=database_token_auth.token_bytes,
                 accept_legacy_plaintext_tokens=database_token_auth.accept_legacy_plaintext_tokens,
+                unsafe_testing=unsafe_testing,
             ),
         ),
     )
@@ -175,11 +163,11 @@ class UserManagerFactory[UP: UserProtocol[Any], ID](Protocol):
 
     Implementations receive ``backends`` session-bound to the current request; pass them
     through to ``BaseUserManager`` (or equivalent) so credential changes revoke persisted
-    sessions consistently. Plugin validation remains authoritative for the config-owned
-    secret surface; if a custom factory constructs ``BaseUserManager`` with the same
-    verification/reset/TOTP secrets, manager construction suppresses the duplicate warning.
-    Factories that diverge from the validated config-owned secret surface still surface the
-    manager-owned warning for the secrets they actually wire.
+    sessions consistently. Plugin validation remains authoritative for the
+    ``user_manager_security`` surface; if a custom factory constructs ``BaseUserManager`` with
+    that same verification/reset/TOTP secret bundle, manager construction suppresses the
+    duplicate warning. Factories that diverge from the validated config-owned secret surface
+    still surface the manager-owned warning for the secrets they actually wire.
     """
 
     def __call__(
@@ -203,116 +191,90 @@ def default_password_validator_factory[UP: UserProtocol[Any], ID](
     return partial(require_password_length, minimum_length=DEFAULT_MINIMUM_PASSWORD_LENGTH)
 
 
-def user_manager_accepts_password_validator(user_manager_class: type[BaseUserManager[Any, Any]]) -> bool:
-    """Return whether the manager constructor can accept ``password_validator``.
-
-    Checks explicit ``accepts_password_validator`` metadata declared on the
-    manager class or an intermediate custom base first. Falls back to
-    ``inspect.signature`` introspection when the custom manager family does not
-    override the canonical :class:`~litestar_auth.manager.BaseUserManager`
-    default.
-    """
-    explicit_override = _resolve_user_manager_capability_override(
-        user_manager_class,
-        capability_name="accepts_password_validator",
-    )
-    if explicit_override is not None:
-        return explicit_override
-    init_signature = inspect.signature(user_manager_class.__init__)
-    accepts_kwargs = any(param.kind is inspect.Parameter.VAR_KEYWORD for param in init_signature.parameters.values())
-    return accepts_kwargs or "password_validator" in init_signature.parameters
-
-
-def _resolve_user_manager_capability_override(
-    user_manager_class: type[BaseUserManager[Any, Any]],
+def _materialize_default_user_manager_kwargs[UP: UserProtocol[Any], ID](
+    config: LitestarAuthConfig[UP, ID],
     *,
-    capability_name: str,
-) -> bool | None:
-    """Return an explicit capability flag declared on a custom manager family.
+    password_helper: object,
+    password_validator: object,
+    backends: tuple[object, ...] = (),
+) -> dict[str, Any]:
+    """Materialize the default-builder constructor kwargs for one concrete call site.
 
-    The plugin walks the manager MRO until ``BaseUserManager``. Flags declared
-    on the concrete manager or an intermediate custom base outrank constructor
-    introspection. The defaults declared on ``BaseUserManager`` itself are not
-    treated as explicit overrides so kwargs-only wrappers still rely on the
-    documented signature-based fallback rules unless that custom family
-    redeclares the flag.
+    Returns:
+        The concrete constructor kwargs for the requested default-builder surface.
+
+    Raises:
+        ConfigurationError: If plugin-managed secrets or ``id_parser`` are supplied
+            through ``user_manager_kwargs`` instead of ``user_manager_security``.
     """
-    for current_class in user_manager_class.__mro__:
-        if _is_base_user_manager_class(current_class):
-            return None
-        if capability_name in current_class.__dict__:
-            return bool(current_class.__dict__[capability_name])
-    return None
-
-
-def _is_base_user_manager_class(current_class: type[object]) -> bool:
-    """Return whether ``current_class`` is the canonical ``BaseUserManager`` type.
-
-    The canonical base class carries a private marker in its own ``__dict__``.
-    That keeps capability-walk stop conditions reload-safe without identifying
-    the class by ``__module__`` / ``__qualname__`` strings.
-    """
-    return bool(current_class.__dict__.get("_litestar_auth_capability_root", False))
-
-
-def user_manager_accepts_security(user_manager_class: type[BaseUserManager[Any, Any]]) -> bool:
-    """Return whether the manager constructor can accept ``security``.
-
-    Checks explicit ``accepts_security`` metadata declared on the manager class
-    or an intermediate custom base first. Falls back to
-    ``inspect.signature`` introspection for constructors that declare an
-    explicit ``security`` parameter. Unlike the legacy keyword-argument
-    compatibility helpers, ``**kwargs`` alone does not imply support, and the
-    canonical ``BaseUserManager.accepts_security`` default does not auto-opt a
-    kwargs-only wrapper into the typed path unless that custom manager family
-    redeclares the flag.
-    """
-    explicit_override = _resolve_user_manager_capability_override(
-        user_manager_class,
-        capability_name="accepts_security",
+    effective_manager_kwargs = dict(config.user_manager_kwargs)
+    if "password_helper" not in effective_manager_kwargs:
+        effective_manager_kwargs["password_helper"] = password_helper
+    manager_inputs = ManagerConstructorInputs(
+        manager_kwargs=effective_manager_kwargs,
+        manager_security=config.user_manager_security,
+        password_validator=cast("Callable[[str], None] | None", password_validator),
+        backends=backends,
+        login_identifier=config.login_identifier,
+        id_parser=config.id_parser,
     )
-    if explicit_override is not None:
-        return explicit_override
-    init_signature = inspect.signature(user_manager_class.__init__)
-    return "security" in init_signature.parameters
+    if manager_inputs.managed_security_keys:
+        invalid_keys = ", ".join(manager_inputs.managed_security_keys)
+        msg = (
+            "The default plugin user-manager builder only accepts verification/reset/TOTP "
+            "secrets and id_parser through user_manager_security. Remove these keys from "
+            f"user_manager_kwargs: {invalid_keys}. If you need factory-owned manager "
+            "construction, set user_manager_factory."
+        )
+        raise ConfigurationError(msg)
+    manager_kwargs = manager_inputs.build_kwargs()
+    if "password_validator" not in manager_kwargs and "password_validator" not in effective_manager_kwargs:
+        manager_kwargs["password_validator"] = password_validator
+    if "unsafe_testing" not in manager_kwargs:
+        manager_kwargs["unsafe_testing"] = config.unsafe_testing
+    return manager_kwargs
 
 
-def user_manager_accepts_login_identifier(user_manager_class: type[BaseUserManager[Any, Any]]) -> bool:
-    """Return whether the manager constructor can accept ``login_identifier``.
+def _build_default_user_manager_kwargs[UP: UserProtocol[Any], ID](
+    config: LitestarAuthConfig[UP, ID],
+    *,
+    backends: tuple[object, ...] = (),
+) -> dict[str, Any]:
+    """Materialize the exact kwargs used by the runtime default manager builder.
 
-    Checks explicit ``accepts_login_identifier`` metadata declared on the
-    manager class or an intermediate custom base first. Falls back to
-    ``inspect.signature`` introspection when the custom manager family does not
-    override the canonical ``BaseUserManager`` default.
+    Returns:
+        The concrete constructor kwargs that :func:`build_user_manager` passes to
+        ``user_manager_class(...)``.
     """
-    explicit_override = _resolve_user_manager_capability_override(
-        user_manager_class,
-        capability_name="accepts_login_identifier",
+    return _materialize_default_user_manager_kwargs(
+        config,
+        password_helper=config.build_password_helper(),
+        password_validator=resolve_password_validator(config),
+        backends=backends,
     )
-    if explicit_override is not None:
-        return explicit_override
-    init_signature = inspect.signature(user_manager_class.__init__)
-    accepts_kwargs = any(param.kind is inspect.Parameter.VAR_KEYWORD for param in init_signature.parameters.values())
-    return accepts_kwargs or "login_identifier" in init_signature.parameters
 
 
-def user_manager_accepts_id_parser(user_manager_class: type[BaseUserManager[Any, Any]]) -> bool:
-    """Return whether the manager constructor can accept ``id_parser``.
+def _build_default_user_manager_validation_kwargs[UP: UserProtocol[Any], ID](
+    config: LitestarAuthConfig[UP, ID],
+    *,
+    backends: tuple[object, ...] = (),
+) -> dict[str, Any]:
+    """Materialize constructor-shape kwargs without executing runtime validator factories.
 
-    Checks explicit ``accepts_id_parser`` metadata declared on the manager class
-    or an intermediate custom base first. Falls back to
-    ``inspect.signature`` introspection when the custom manager family does not
-    override the canonical ``BaseUserManager`` default.
+    Validation only needs the keyword surface, not the runtime validator object. The
+    default builder still reserves the ``password_validator`` slot when the caller did
+    not explicitly own it through ``user_manager_kwargs``.
+
+    Returns:
+        Constructor kwargs matching the startup validation contract for the default
+        user-manager builder.
     """
-    explicit_override = _resolve_user_manager_capability_override(
-        user_manager_class,
-        capability_name="accepts_id_parser",
+    return _materialize_default_user_manager_kwargs(
+        config,
+        password_helper=object(),
+        password_validator=None,
+        backends=backends,
     )
-    if explicit_override is not None:
-        return explicit_override
-    init_signature = inspect.signature(user_manager_class.__init__)
-    accepts_kwargs = any(param.kind is inspect.Parameter.VAR_KEYWORD for param in init_signature.parameters.values())
-    return accepts_kwargs or "id_parser" in init_signature.parameters
 
 
 def build_user_manager[UP: UserProtocol[Any], ID](
@@ -334,28 +296,15 @@ def build_user_manager[UP: UserProtocol[Any], ID](
 
     Returns:
         A request-scoped user manager instance built from the plugin config. When
-        ``user_manager_class`` accepts ``security``, the typed
-        ``config.user_manager_security`` bundle is forwarded end-to-end; otherwise
-        the builder falls back to the legacy explicit secret kwargs.
+        ``user_manager_factory`` is omitted, the default builder always calls the
+        canonical ``BaseUserManager``-style constructor surface, including the
+        plugin-managed ``unsafe_testing`` flag, and expects ``user_manager_class`` to
+        accept that contract. Custom constructors that narrow or rename that surface
+        must be built through ``user_manager_factory``.
+
     """
     del session
-    effective_manager_kwargs = dict(config.user_manager_kwargs)
-    memoized_password_helper = config.memoized_default_password_helper()
-    if memoized_password_helper is not None and "password_helper" not in effective_manager_kwargs:
-        effective_manager_kwargs["password_helper"] = memoized_password_helper
-    manager_inputs = ManagerConstructorInputs(
-        manager_kwargs=effective_manager_kwargs,
-        manager_security=config.user_manager_security,
-        password_validator=resolve_password_validator(config),
-        backends=backends,
-        login_identifier=config.login_identifier,
-        id_parser=config.id_parser,
-    )
-    manager_kwargs = manager_inputs.build_kwargs(
-        accepts_security=user_manager_accepts_security(config.user_manager_class),
-        accepts_id_parser=user_manager_accepts_id_parser(config.user_manager_class),
-        accepts_login_identifier=user_manager_accepts_login_identifier(config.user_manager_class),
-    )
+    manager_kwargs = _build_default_user_manager_kwargs(config, backends=backends)
     return config.user_manager_class(user_db, **manager_kwargs)
 
 
@@ -365,7 +314,8 @@ def resolve_password_validator[UP: UserProtocol[Any], ID](
     """Resolve the password validator requested by plugin configuration.
 
     Returns:
-        The configured password validator, or ``None`` when this manager should not receive one.
+        The explicitly configured password validator when present, otherwise the
+        plugin-owned default validator for the fixed default builder contract.
     """
     manager_inputs = ManagerConstructorInputs(manager_kwargs=config.user_manager_kwargs)
     explicit_validator = manager_inputs.explicit_password_validator
@@ -373,9 +323,7 @@ def resolve_password_validator[UP: UserProtocol[Any], ID](
         return explicit_validator
     if config.password_validator_factory is not None:
         return config.password_validator_factory(config)
-    if user_manager_accepts_password_validator(config.user_manager_class):
-        return default_password_validator_factory(config)
-    return None
+    return default_password_validator_factory(config)
 
 
 def require_session_maker[UP: UserProtocol[Any], ID](
@@ -426,34 +374,53 @@ class OAuthConfig:
     oauth_cookie_secure: bool = True
     oauth_providers: Sequence[OAuthProviderConfig] | None = None
     oauth_associate_by_email: bool = False
+    oauth_trust_provider_email_verified: bool = False
     include_oauth_associate: bool = False
-    oauth_associate_providers: Sequence[OAuthProviderConfig] | None = None
-    oauth_associate_redirect_base_url: str = ""
+    oauth_redirect_base_url: str = ""
     oauth_token_encryption_key: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
 class _OAuthRouteRegistrationContract:
-    """Internal contract describing declared and plugin-owned OAuth routes."""
+    """Internal contract describing plugin-owned OAuth login and associate routes."""
 
-    login_providers: tuple[OAuthProviderConfig, ...]
-    declared_associate_providers: tuple[OAuthProviderConfig, ...]
-    plugin_associate_providers: tuple[OAuthProviderConfig, ...]
+    providers: tuple[OAuthProviderConfig, ...]
     include_oauth_associate: bool
     oauth_cookie_secure: bool
     oauth_associate_by_email: bool
+    oauth_trust_provider_email_verified: bool
+    login_path: str
     associate_path: str
-    associate_redirect_base_url: str | None
+    redirect_base_url: str | None
 
     @property
     def has_configured_providers(self) -> bool:
-        """Return whether any OAuth provider inventory was declared."""
-        return bool(self.login_providers or self.declared_associate_providers)
+        """Return whether any plugin-owned OAuth provider inventory was declared."""
+        return bool(self.providers)
+
+    @property
+    def has_plugin_owned_login_routes(self) -> bool:
+        """Return whether the plugin will auto-mount OAuth login routes."""
+        return bool(self.providers)
 
     @property
     def has_plugin_owned_associate_routes(self) -> bool:
         """Return whether the plugin will auto-mount associate routes."""
-        return bool(self.plugin_associate_providers)
+        return bool(self.providers) and self.include_oauth_associate
+
+    @property
+    def login_redirect_base_url(self) -> str | None:
+        """Return the absolute OAuth login redirect base URL when routes are mounted."""
+        if not self.has_plugin_owned_login_routes or self.redirect_base_url is None:
+            return None
+        return f"{self.redirect_base_url.rstrip('/')}/oauth"
+
+    @property
+    def associate_redirect_base_url(self) -> str | None:
+        """Return the absolute OAuth associate redirect base URL when routes are mounted."""
+        if not self.has_plugin_owned_associate_routes or self.redirect_base_url is None:
+            return None
+        return f"{self.redirect_base_url.rstrip('/')}/associate"
 
 
 def _normalize_oauth_provider_inventory(
@@ -470,41 +437,39 @@ def _build_oauth_route_registration_contract(
 ) -> _OAuthRouteRegistrationContract:
     """Return the deterministic plugin OAuth route-registration contract.
 
-    The current contract keeps OAuth login controller registration explicit even when
-    ``oauth_providers`` is declared on ``OAuthConfig``. The plugin auto-mounts only
-    associate routes, and only when ``include_oauth_associate=True`` plus a non-empty
-    ``oauth_associate_providers`` inventory are both present.
+    ``oauth_providers`` is the single plugin-owned OAuth provider inventory. When it
+    is configured, the plugin auto-mounts provider login routes under
+    ``{auth_path}/oauth/{provider}/...``. ``include_oauth_associate=True`` extends
+    that same provider inventory with authenticated account-linking routes under
+    ``{auth_path}/associate/{provider}/...``. Redirect callbacks use the explicit
+    public ``oauth_redirect_base_url`` instead of an implicit localhost fallback.
     """
-    associate_path = f"{auth_path.rstrip('/')}/associate"
+    base_auth_path = auth_path.rstrip("/") or "/"
+    login_path = f"{base_auth_path}/oauth" if base_auth_path != "/" else "/oauth"
+    associate_path = f"{base_auth_path}/associate" if base_auth_path != "/" else "/associate"
     if oauth_config is None:
         return _OAuthRouteRegistrationContract(
-            login_providers=(),
-            declared_associate_providers=(),
-            plugin_associate_providers=(),
+            providers=(),
             include_oauth_associate=False,
             oauth_cookie_secure=True,
             oauth_associate_by_email=False,
+            oauth_trust_provider_email_verified=False,
+            login_path=login_path,
             associate_path=associate_path,
-            associate_redirect_base_url=None,
+            redirect_base_url=None,
         )
 
-    login_providers = _normalize_oauth_provider_inventory(oauth_config.oauth_providers)
-    declared_associate_providers = _normalize_oauth_provider_inventory(oauth_config.oauth_associate_providers)
-    plugin_associate_providers = declared_associate_providers if oauth_config.include_oauth_associate else ()
-    associate_redirect_base_url = None
-    if plugin_associate_providers:
-        associate_redirect_base_url = (
-            oauth_config.oauth_associate_redirect_base_url or f"http://localhost{associate_path}"
-        )
+    providers = _normalize_oauth_provider_inventory(oauth_config.oauth_providers)
+    redirect_base_url = oauth_config.oauth_redirect_base_url or None
     return _OAuthRouteRegistrationContract(
-        login_providers=login_providers,
-        declared_associate_providers=declared_associate_providers,
-        plugin_associate_providers=plugin_associate_providers,
+        providers=providers,
         include_oauth_associate=oauth_config.include_oauth_associate,
         oauth_cookie_secure=oauth_config.oauth_cookie_secure,
         oauth_associate_by_email=oauth_config.oauth_associate_by_email,
+        oauth_trust_provider_email_verified=oauth_config.oauth_trust_provider_email_verified,
+        login_path=login_path,
         associate_path=associate_path,
-        associate_redirect_base_url=associate_redirect_base_url,
+        redirect_base_url=redirect_base_url,
     )
 
 
@@ -542,8 +507,9 @@ class LitestarAuthConfig[UP: UserProtocol[Any], ID]:
         ``oauth_config`` (`OAuthConfig | None`) enables OAuth login/linking and
         provider-specific settings.
     Security and token policy:
-        ``csrf_secret``, ``csrf_header_name``, ``allow_legacy_plaintext_tokens``,
-        ``allow_nondurable_jwt_revocation``, ``id_parser``.
+        ``csrf_secret``, ``csrf_header_name``, ``unsafe_testing``,
+        ``allow_legacy_plaintext_tokens``, ``allow_nondurable_jwt_revocation``,
+        ``id_parser``.
     API schemas and DB-session dependency injection:
         ``user_read_schema``, ``user_create_schema``, ``user_update_schema``,
         ``db_session_dependency_key``, ``db_session_dependency_provided_externally``.
@@ -576,6 +542,7 @@ class LitestarAuthConfig[UP: UserProtocol[Any], ID]:
     oauth_config: OAuthConfig | None = None
     csrf_secret: str | None = None
     csrf_header_name: str = "X-CSRF-Token"
+    unsafe_testing: bool = False
     allow_legacy_plaintext_tokens: bool = False
     allow_nondurable_jwt_revocation: bool = False
     id_parser: Callable[[str], ID] | None = None
@@ -593,23 +560,41 @@ class LitestarAuthConfig[UP: UserProtocol[Any], ID]:
     )
 
     def resolve_backends(self) -> Sequence[AuthenticationBackend[UP, ID]]:
-        """Return the effective authentication backends for this config.
+        """Return the explicitly configured manual backends for this config.
 
-        When ``database_token_auth`` is configured, this synthesizes the canonical
-        bearer + DB-token backend lazily. Otherwise the explicit ``backends``
-        sequence is returned as-is.
+        This accessor is intentionally limited to the manual ``backends=...`` surface.
+        The canonical ``database_token_auth=...`` preset now exposes an explicit
+        startup-vs-request split:
+        - :meth:`startup_backends` for plugin setup and validation.
+        - :meth:`bind_request_backends` for request-scoped runtime backends.
 
         Returns:
-            Effective authentication backends for plugin setup and validation.
+            The explicit manual ``backends`` sequence.
 
         Raises:
-            ValueError: If both ``backends`` and ``database_token_auth`` are configured.
+            ValueError: If both ``backends`` and ``database_token_auth`` are configured, or if
+                callers attempt to use this manual-backend accessor with
+                ``database_token_auth=...``.
         """
+        self._validate_backend_configuration()
         if self.database_token_auth is not None:
-            if self.backends:
-                msg = "Configure authentication backends via database_token_auth=... or backends=..., not both."
-                raise ValueError(msg)
-            return (_build_database_token_backend(self.database_token_auth),)
+            msg = (
+                "resolve_backends() only returns explicit backends=... entries. "
+                "Use startup_backends() during plugin setup or bind_request_backends(session) "
+                "for request-scoped backend instances when database_token_auth is configured."
+            )
+            raise ValueError(msg)
+        return self.backends
+
+    def startup_backends(self) -> Sequence[AuthenticationBackend[UP, ID]]:
+        """Return startup-only backends for plugin setup, validation, and route assembly.
+
+        Returns:
+            Startup-only backend templates for the current config.
+        """
+        self._validate_backend_configuration()
+        if self.database_token_auth is not None:
+            return (_build_database_token_backend(self.database_token_auth, unsafe_testing=self.unsafe_testing),)
         return self.backends
 
     def bind_request_backends(self, session: AsyncSession) -> tuple[AuthenticationBackend[UP, ID], ...]:
@@ -618,10 +603,16 @@ class LitestarAuthConfig[UP: UserProtocol[Any], ID]:
         Returns:
             Request-scoped backends aligned with the provided SQLAlchemy session.
         """
+        self._validate_backend_configuration()
         if self.database_token_auth is not None:
-            bind_database_token_request_session(session)
-            return (build_database_token_backend(self.database_token_auth, session=session),)
-        return tuple(backend.with_session(session) for backend in self.resolve_backends())
+            return (
+                build_database_token_backend(
+                    self.database_token_auth,
+                    session=session,
+                    unsafe_testing=self.unsafe_testing,
+                ),
+            )
+        return tuple(backend.with_session(session) for backend in self.startup_backends())
 
     def build_password_helper(self) -> PasswordHelper:
         """Return the helper aligned with this config, memoizing default construction.
@@ -666,14 +657,22 @@ class LitestarAuthConfig[UP: UserProtocol[Any], ID]:
         """
         if self.user_manager_security is not None and self.id_parser is None:
             self.id_parser = self.user_manager_security.id_parser
-        if self.database_token_auth is not None and self.backends:
-            msg = "Configure authentication backends via database_token_auth=... or backends=..., not both."
-            raise ValueError(msg)
+        self._validate_backend_configuration()
         if self.login_identifier not in _VALID_LOGIN_IDENTIFIERS:
             msg = f"Invalid login_identifier {self.login_identifier!r}. Expected 'email' or 'username'."
             raise ConfigurationError(msg)
         if not self.db_session_dependency_key.isidentifier() or keyword.iskeyword(self.db_session_dependency_key):
             msg = f"db_session_dependency_key must be a valid Python identifier, got {self.db_session_dependency_key!r}"
+            raise ValueError(msg)
+
+    def _validate_backend_configuration(self) -> None:
+        """Reject invalid mixed preset/manual backend configuration.
+
+        Raises:
+            ValueError: If both ``backends`` and ``database_token_auth`` are configured.
+        """
+        if self.database_token_auth is not None and self.backends:
+            msg = "Configure authentication backends via database_token_auth=... or backends=..., not both."
             raise ValueError(msg)
 
     def resolve_user_db_factory(self) -> UserDatabaseFactory[UP, ID]:

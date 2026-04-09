@@ -17,7 +17,7 @@ from sqlalchemy.orm import Session as SASession
 from litestar_auth.authentication.strategy.db_models import AccessToken
 from litestar_auth.db import BaseOAuthAccountStore, BaseUserStore
 from litestar_auth.db.sqlalchemy import SQLAlchemyUserDatabase, _build_oauth_repository, _build_user_repository
-from litestar_auth.exceptions import OAuthAccountAlreadyLinkedError
+from litestar_auth.exceptions import ConfigurationError, OAuthAccountAlreadyLinkedError
 from litestar_auth.models import (
     AccessTokenMixin,
     OAuthAccount,
@@ -27,11 +27,7 @@ from litestar_auth.models import (
     UserAuthRelationshipMixin,
     UserModelMixin,
 )
-from litestar_auth.oauth_encryption import (
-    clear_oauth_token_encryption_key,
-    oauth_token_encryption_scope,
-    register_oauth_token_encryption_key,
-)
+from litestar_auth.oauth_encryption import OAuthTokenEncryption, bind_oauth_token_encryption
 
 if TYPE_CHECKING:
     from collections.abc import Iterable, Mapping, Sequence
@@ -47,6 +43,7 @@ pytestmark = pytest.mark.integration
 
 _ = AccessToken
 EXPECTED_TOTAL_USERS = 3
+_UNSET_OAUTH_TOKEN_ENCRYPTION = object()
 
 
 class MyUser(UserModelMixin, UUIDBase):
@@ -229,6 +226,7 @@ def create_database(
     *,
     user_model: type[Any] = User,
     oauth_account_model: type[Any] | None = None,
+    oauth_token_encryption: OAuthTokenEncryption | object = _UNSET_OAUTH_TOKEN_ENCRYPTION,
 ) -> SQLAlchemyUserDatabase[Any]:
     """Create a SQLAlchemyUserDatabase backed by the adapter session.
 
@@ -239,10 +237,17 @@ def create_database(
     resolved_oauth_account_model = oauth_account_model
     if resolved_oauth_account_model is None and user_model is User:
         resolved_oauth_account_model = OAuthAccount
+    if oauth_token_encryption is _UNSET_OAUTH_TOKEN_ENCRYPTION:
+        return SQLAlchemyUserDatabase(
+            session=adapter,
+            user_model=user_model,
+            oauth_account_model=resolved_oauth_account_model,
+        )
     return SQLAlchemyUserDatabase(
         session=adapter,
         user_model=user_model,
         oauth_account_model=resolved_oauth_account_model,
+        oauth_token_encryption=cast("OAuthTokenEncryption | None", oauth_token_encryption),
     )
 
 
@@ -427,6 +432,10 @@ async def test_sqlalchemy_user_database_list_users_empty_page(session: SASession
 async def test_sqlalchemy_user_database_get_by_oauth_account(session: SASession) -> None:
     """OAuth account lookups return the linked user."""
     database = create_database(session)
+    bind_oauth_token_encryption(
+        session,
+        OAuthTokenEncryption(base64.urlsafe_b64encode(b"3" * 32).decode()),
+    )
     user = await database.create(
         {
             "email": "oauth-db@example.com",
@@ -452,29 +461,27 @@ async def test_sqlalchemy_user_database_get_by_oauth_account(session: SASession)
 
 async def test_sqlalchemy_user_database_custom_oauth_model_mixin_contract(session: SASession) -> None:
     """The adapter supports a custom OAuth model composed from the library mixin."""
-    database = create_database(session, user_model=MyOAuthUser, oauth_account_model=MyOAuthAccount)
+    database = create_database(
+        session,
+        user_model=MyOAuthUser,
+        oauth_account_model=MyOAuthAccount,
+        oauth_token_encryption=OAuthTokenEncryption(base64.urlsafe_b64encode(b"1" * 32).decode()),
+    )
     user = await database.create(
         {
             "email": "custom-oauth@example.com",
             "hashed_password": "hashed-password",
         },
     )
-    scope = object()
-    oauth_token_encryption_key = base64.urlsafe_b64encode(b"1" * 32).decode()
-    register_oauth_token_encryption_key(scope, oauth_token_encryption_key)
-    try:
-        with oauth_token_encryption_scope(scope):
-            await database.upsert_oauth_account(
-                user,
-                oauth_name="github",
-                account_id="custom-gh-1",
-                account_email=user.email,
-                access_token="custom-access-token",
-                expires_at=3_600,
-                refresh_token="custom-refresh-token",
-            )
-    finally:
-        clear_oauth_token_encryption_key(scope)
+    await database.upsert_oauth_account(
+        user,
+        oauth_name="github",
+        account_id="custom-gh-1",
+        account_email=user.email,
+        access_token="custom-access-token",
+        expires_at=3_600,
+        refresh_token="custom-refresh-token",
+    )
 
     resolved_user = await database.get_by_oauth_account("github", "custom-gh-1")
     assert resolved_user is not None
@@ -511,6 +518,7 @@ async def test_sqlalchemy_user_database_supports_relationship_option_override_mo
         session,
         user_model=ConfiguredUser,
         oauth_account_model=ConfiguredOAuthAccount,
+        oauth_token_encryption=OAuthTokenEncryption(base64.urlsafe_b64encode(b"2" * 32).decode()),
     )
     user = await database.create(
         {
@@ -518,22 +526,15 @@ async def test_sqlalchemy_user_database_supports_relationship_option_override_mo
             "hashed_password": "hashed-password",
         },
     )
-    scope = object()
-    oauth_token_encryption_key = base64.urlsafe_b64encode(b"2" * 32).decode()
-    register_oauth_token_encryption_key(scope, oauth_token_encryption_key)
-    try:
-        with oauth_token_encryption_scope(scope):
-            await database.upsert_oauth_account(
-                user,
-                oauth_name="github",
-                account_id="configured-gh-1",
-                account_email=user.email,
-                access_token="configured-access-token",
-                expires_at=7_200,
-                refresh_token="configured-refresh-token",
-            )
-    finally:
-        clear_oauth_token_encryption_key(scope)
+    await database.upsert_oauth_account(
+        user,
+        oauth_name="github",
+        account_id="configured-gh-1",
+        account_email=user.email,
+        access_token="configured-access-token",
+        expires_at=7_200,
+        refresh_token="configured-refresh-token",
+    )
 
     resolved_user = await database.get_by_oauth_account("github", "configured-gh-1")
     assert resolved_user is not None
@@ -550,119 +551,132 @@ async def test_sqlalchemy_user_database_supports_relationship_option_override_mo
 
 async def test_sqlalchemy_user_database_upsert_oauth_account_create(session: SASession) -> None:
     """upsert_oauth_account creates a new OAuthAccount when none exists."""
-    database = create_database(session)
+    oauth_token_encryption = OAuthTokenEncryption(base64.urlsafe_b64encode(b"0" * 32).decode())
+    database = create_database(session, oauth_token_encryption=oauth_token_encryption)
     user = await database.create(
         {"email": "upsert-create@example.com", "hashed_password": "hashed"},
     )
-    scope = object()
-    oauth_token_encryption_key = base64.urlsafe_b64encode(b"0" * 32).decode()
-    register_oauth_token_encryption_key(scope, oauth_token_encryption_key)
-    try:
-        with oauth_token_encryption_scope(scope):
-            await database.upsert_oauth_account(
-                user,
-                oauth_name="github",
-                account_id="gh-1",
-                account_email=user.email,
-                access_token="at-1",
-                expires_at=3600,
-                refresh_token="rt-1",
-            )
-    finally:
-        clear_oauth_token_encryption_key(scope)
+    await database.upsert_oauth_account(
+        user,
+        oauth_name="github",
+        account_id="gh-1",
+        account_email=user.email,
+        access_token="at-1",
+        expires_at=3600,
+        refresh_token="rt-1",
+    )
 
     resolved = await database.get_by_oauth_account("github", "gh-1")
     assert resolved is not None
     assert resolved.id == user.id
+    stored_access_token, stored_refresh_token = session.execute(
+        select(
+            OAuthAccount.__table__.c.access_token,
+            OAuthAccount.__table__.c.refresh_token,
+        ).where(OAuthAccount.__table__.c.user_id == user.id),
+    ).one()
+    assert stored_access_token != "at-1"
+    assert stored_refresh_token != "rt-1"
+
+
+async def test_sqlalchemy_user_database_upsert_oauth_account_requires_explicit_encryption_policy(
+    session: SASession,
+) -> None:
+    """OAuth token writes fail closed until a direct adapter receives an explicit policy."""
+    database = create_database(session)
+    user = await database.create({"email": "missing-oauth-policy@example.com", "hashed_password": "hashed"})
+
+    with pytest.raises(ConfigurationError, match="OAuth token writes require oauth_token_encryption"):
+        await database.upsert_oauth_account(
+            user,
+            oauth_name="github",
+            account_id="missing-policy",
+            account_email=user.email,
+            access_token="token",
+            expires_at=60,
+            refresh_token=None,
+        )
 
 
 async def test_sqlalchemy_user_database_upsert_oauth_account_update(session: SASession) -> None:
     """upsert_oauth_account updates existing OAuthAccount (email, tokens) without duplicating."""
-    database = create_database(session)
+    database = create_database(
+        session,
+        oauth_token_encryption=OAuthTokenEncryption(base64.urlsafe_b64encode(b"0" * 32).decode()),
+    )
     user = await database.create(
         {"email": "upsert-update@example.com", "hashed_password": "hashed"},
     )
-    scope = object()
-    oauth_token_encryption_key = base64.urlsafe_b64encode(b"0" * 32).decode()
-    register_oauth_token_encryption_key(scope, oauth_token_encryption_key)
-    try:
-        with oauth_token_encryption_scope(scope):
-            await database.upsert_oauth_account(
-                user,
-                oauth_name="google",
-                account_id="go-1",
-                account_email="first@example.com",
-                access_token="at-old",
-                expires_at=1800,
-                refresh_token="rt-old",
-            )
+    await database.upsert_oauth_account(
+        user,
+        oauth_name="google",
+        account_id="go-1",
+        account_email="first@example.com",
+        access_token="at-old",
+        expires_at=1800,
+        refresh_token="rt-old",
+    )
 
-            await database.upsert_oauth_account(
-                user,
-                oauth_name="google",
-                account_id="go-1",
-                account_email="updated@example.com",
-                access_token="at-new",
-                expires_at=7200,
-                refresh_token="rt-new",
-            )
+    await database.upsert_oauth_account(
+        user,
+        oauth_name="google",
+        account_id="go-1",
+        account_email="updated@example.com",
+        access_token="at-new",
+        expires_at=7200,
+        refresh_token="rt-new",
+    )
 
-            resolved = await database.get_by_oauth_account("google", "go-1")
-            assert resolved is not None
-            assert resolved.id == user.id
-            result = session.execute(select(OAuthAccount).where(OAuthAccount.user_id == user.id))
-            oauth_accounts = list(result.scalars().all())
-            assert len(oauth_accounts) == 1
-            oauth_account = oauth_accounts[0]
-            expected_expires_at = 7200
-            assert oauth_account.account_email == "updated@example.com"
-            assert oauth_account.access_token == "at-new"
-            assert oauth_account.expires_at == expected_expires_at
-            assert oauth_account.refresh_token == "rt-new"
-    finally:
-        clear_oauth_token_encryption_key(scope)
+    resolved = await database.get_by_oauth_account("google", "go-1")
+    assert resolved is not None
+    assert resolved.id == user.id
+    result = session.execute(select(OAuthAccount).where(OAuthAccount.user_id == user.id))
+    oauth_accounts = list(result.scalars().all())
+    assert len(oauth_accounts) == 1
+    oauth_account = oauth_accounts[0]
+    expected_expires_at = 7200
+    assert oauth_account.account_email == "updated@example.com"
+    assert oauth_account.access_token == "at-new"
+    assert oauth_account.expires_at == expected_expires_at
+    assert oauth_account.refresh_token == "rt-new"
 
 
 async def test_sqlalchemy_user_database_upsert_oauth_account_rejects_cross_user_rebinding(
     session: SASession,
 ) -> None:
     """upsert_oauth_account raises OAuthAccountAlreadyLinkedError when provider identity is already linked to another user."""
-    database = create_database(session)
+    database = create_database(
+        session,
+        oauth_token_encryption=OAuthTokenEncryption(base64.urlsafe_b64encode(b"0" * 32).decode()),
+    )
     user_a = await database.create(
         {"email": "user-a-oauth@example.com", "hashed_password": "hashed"},
     )
     user_b = await database.create(
         {"email": "user-b-oauth@example.com", "hashed_password": "hashed"},
     )
-    scope = object()
-    oauth_token_encryption_key = base64.urlsafe_b64encode(b"0" * 32).decode()
-    register_oauth_token_encryption_key(scope, oauth_token_encryption_key)
-    try:
-        with oauth_token_encryption_scope(scope):
-            await database.upsert_oauth_account(
-                user_a,
-                oauth_name="google",
-                account_id="shared-id",
-                account_email=user_a.email,
-                access_token="at-a",
-                expires_at=3600,
-                refresh_token="rt-a",
-            )
-            with pytest.raises(OAuthAccountAlreadyLinkedError):
-                await database.upsert_oauth_account(
-                    user_b,
-                    oauth_name="google",
-                    account_id="shared-id",
-                    account_email=user_b.email,
-                    access_token="at-b",
-                    expires_at=3600,
-                    refresh_token="rt-b",
-                )
-            resolved = await database.get_by_oauth_account("google", "shared-id")
-            assert resolved is not None
-            assert resolved.id == user_a.id
-    finally:
-        clear_oauth_token_encryption_key(scope)
+    await database.upsert_oauth_account(
+        user_a,
+        oauth_name="google",
+        account_id="shared-id",
+        account_email=user_a.email,
+        access_token="at-a",
+        expires_at=3600,
+        refresh_token="rt-a",
+    )
+    with pytest.raises(OAuthAccountAlreadyLinkedError):
+        await database.upsert_oauth_account(
+            user_b,
+            oauth_name="google",
+            account_id="shared-id",
+            account_email=user_b.email,
+            access_token="at-b",
+            expires_at=3600,
+            refresh_token="rt-b",
+        )
+    resolved = await database.get_by_oauth_account("google", "shared-id")
+    assert resolved is not None
+    assert resolved.id == user_a.id
 
 
 async def test_sqlalchemy_user_database_delete_missing_user_raises_not_found(session: SASession) -> None:

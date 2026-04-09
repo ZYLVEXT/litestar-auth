@@ -21,7 +21,7 @@ Call that helper explicitly during metadata bootstrap or Alembic-style autogener
 
 The canonical opaque DB-token entrypoint is exported from both the root package and `litestar_auth.plugin` as `DatabaseTokenAuthConfig`.
 
-For OAuth, treat root-package re-exports as compatibility aliases. The canonical login-helper import is `litestar_auth.oauth.create_provider_oauth_controller`, while `litestar_auth.controllers.create_oauth_controller` and `create_oauth_associate_controller` are the advanced escape hatch for custom route tables.
+For OAuth, treat root-package re-exports as compatibility aliases. Plugin-managed apps should configure `OAuthConfig` on `LitestarAuthConfig`; `litestar_auth.oauth.create_provider_oauth_controller` plus `litestar_auth.controllers.create_oauth_controller` / `create_oauth_associate_controller` remain the manual escape hatch for custom route tables.
 
 Canonical opaque DB-token wiring:
 
@@ -35,6 +35,7 @@ from litestar_auth import (
     LitestarAuth,
     LitestarAuthConfig,
 )
+from litestar_auth.manager import UserManagerSecurity
 from litestar_auth.models import User
 
 config = LitestarAuthConfig[User, UUID](
@@ -44,10 +45,10 @@ config = LitestarAuthConfig[User, UUID](
     user_model=User,
     user_manager_class=YourUserManager,
     session_maker=session_maker,
-    user_manager_kwargs={
-        "verification_token_secret": "replace-with-32+-char-secret",
-        "reset_password_token_secret": "replace-with-32+-char-secret",
-    },
+    user_manager_security=UserManagerSecurity(
+        verification_token_secret="replace-with-32+-char-secret",
+        reset_password_token_secret="replace-with-32+-char-secret",
+    ),
 )
 app = Litestar(plugins=[LitestarAuth(config)])
 ```
@@ -56,7 +57,7 @@ In that example, `session_maker` is any compatible request-session factory calla
 
 If you previously built the DB bearer backend by hand with `AuthenticationBackend(..., BearerTransport(), DatabaseTokenStrategy(...))`, migrate to the direct `database_token_auth=DatabaseTokenAuthConfig(...)` form above. Keep manual backends for multi-backend or custom-transport cases.
 
-`backends` remains the explicit manual-backend field. For the canonical `database_token_auth=...` path, call `config.resolve_backends()` when you need the effective setup-time backend sequence.
+`backends` remains the explicit manual-backend field. For the canonical `database_token_auth=...` path, call `config.startup_backends()` when you need the setup-time backend templates used during plugin assembly, and `config.bind_request_backends(session)` when you need request-scoped runtime backend instances.
 
 ## Public surface (high level)
 
@@ -70,7 +71,7 @@ If you previously built the DB bearer backend by hand with `AuthenticationBacken
 | Errors | `ErrorCode`, `LitestarAuthError`, typed subclasses |
 | Protocols | `UserProtocol`, `GuardedUserProtocol`, `TotpUserProtocol` — [Types](types.md) |
 | Controllers (advanced) | `create_*_controller` factories for custom route tables — [Controllers API](controllers.md) |
-| OAuth helpers | Canonical login helper: `litestar_auth.oauth.create_provider_oauth_controller`; lazy client loader: `load_httpx_oauth_client` |
+| OAuth helpers | Plugin-managed route table via `OAuthConfig`; manual login helper: `litestar_auth.oauth.create_provider_oauth_controller`; lazy client loader: `load_httpx_oauth_client` |
 | TOTP | `generate_totp_secret`, `generate_totp_uri`, `verify_totp`, stores, … |
 | Rate limit | `AuthRateLimitConfig`, `EndpointRateLimit`, `InMemoryRateLimiter`, `RedisRateLimiter` |
 

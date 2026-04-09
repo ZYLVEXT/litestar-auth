@@ -48,7 +48,7 @@ from litestar_auth.controllers.totp import (
 )
 from litestar_auth.controllers.totp import logger as totp_logger
 from litestar_auth.exceptions import ConfigurationError, ErrorCode
-from litestar_auth.manager import BaseUserManager
+from litestar_auth.manager import BaseUserManager, UserManagerSecurity
 from litestar_auth.password import PasswordHelper
 from litestar_auth.plugin import LitestarAuth, LitestarAuthConfig
 from litestar_auth.ratelimit import AuthRateLimitConfig, EndpointRateLimit
@@ -141,6 +141,7 @@ def build_app(  # noqa: PLR0913
     totp_enable_requires_password: bool = True,
     account_state: AccountState | None = None,
     login_identifier: Literal["email", "username"] = "email",
+    unsafe_testing: bool = False,
 ) -> tuple[Litestar, InMemoryUserDatabase, InMemoryTokenStrategy, TrackingUserManager]:
     """Create a test application with optional 2FA support.
 
@@ -178,6 +179,7 @@ def build_app(  # noqa: PLR0913
         totp_pending_secret=pending_secret,
         requires_verification=requires_verification,
         login_identifier=login_identifier,
+        unsafe_testing=unsafe_testing,
     )
     totp_controller = create_totp_controller(
         backend=backend,
@@ -190,6 +192,7 @@ def build_app(  # noqa: PLR0913
         totp_issuer="Test App",
         id_parser=UUID,
         requires_verification=requires_verification,
+        unsafe_testing=unsafe_testing,
     )
     middleware = DefineMiddleware(
         LitestarAuthMiddleware[ExampleUser, UUID],
@@ -237,6 +240,7 @@ def _build_direct_totp_context(
         totp_pending_secret=TOTP_PENDING_SECRET,
         effective_pending_jti_store=cast("Any", effective_pending_jti_store),
         id_parser=UUID,
+        unsafe_testing=False,
     )
     return ctx, rate_limit, backend
 
@@ -261,12 +265,8 @@ def test_totp_controller_module_executes_under_coverage() -> None:
     assert reloaded_module.TotpUserManagerProtocol.__name__.endswith("Protocol")
 
 
-def test_validate_replay_and_password_requires_replay_store_outside_testing(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+def test_validate_replay_and_password_requires_replay_store_outside_testing() -> None:
     """Production mode refuses replay protection without a used-code store."""
-    monkeypatch.delenv("LITESTAR_AUTH_TESTING", raising=False)
-
     with pytest.raises(ConfigurationError, match="used_tokens_store is required"):
         _totp_validate_replay_and_password(
             used_tokens_store=None,
@@ -472,12 +472,12 @@ def test_decode_enrollment_token_rejects_missing_secret() -> None:
         _decode_enrollment_token(token, signing_key=TOTP_PENDING_SECRET, expected_user_id="user-123")
 
 
-def test_resolve_pending_jti_store_handles_explicit_and_testing_modes() -> None:
-    """Pending-JTI resolution preserves configured stores and skips fallback in tests."""
+def test_resolve_pending_jti_store_handles_explicit_and_unsafe_testing_modes() -> None:
+    """Pending-JTI resolution preserves configured stores and skips fallback in explicit unsafe testing."""
     configured_store = InMemoryJWTDenylistStore()
 
-    assert _totp_resolve_pending_jti_store(configured_store, testing_mode=False) is configured_store
-    assert _totp_resolve_pending_jti_store(None, testing_mode=True) is None
+    assert _totp_resolve_pending_jti_store(configured_store, unsafe_testing=False) is configured_store
+    assert _totp_resolve_pending_jti_store(None, unsafe_testing=True) is None
 
 
 async def test_handle_enable_requires_authenticated_totp_user() -> None:
@@ -1016,19 +1016,18 @@ async def test_plugin_mounts_totp_routes_under_custom_auth_path() -> None:
                     user_model=ExampleUser,
                     user_manager_class=PluginUserManager,
                     user_db_factory=lambda _session: user_db,
-                    user_manager_kwargs={
-                        "password_helper": password_helper,
-                        "verification_token_secret": "verify-secret-12345678901234567890",
-                        "reset_password_token_secret": "reset-secret-123456789012345678901",
-                        "id_parser": UUID,
-                        "totp_secret_key": Fernet.generate_key().decode(),
-                    },
+                    user_manager_security=UserManagerSecurity[UUID](
+                        verification_token_secret="verify-secret-12345678901234567890",
+                        reset_password_token_secret="reset-secret-123456789012345678901",
+                        totp_secret_key=Fernet.generate_key().decode(),
+                        id_parser=UUID,
+                    ),
+                    user_manager_kwargs={"password_helper": password_helper},
                     auth_path="/api/auth",
                     totp_config=TotpConfig(
                         totp_pending_secret=TOTP_PENDING_SECRET,
                         totp_used_tokens_store=InMemoryUsedTotpCodeStore(),
                     ),
-                    id_parser=UUID,
                 ),
             ),
         ],
@@ -1101,19 +1100,18 @@ async def test_plugin_allows_opt_out_of_totp_step_up_enrollment() -> None:
                     user_model=ExampleUser,
                     user_manager_class=PluginUserManager,
                     user_db_factory=lambda _session: user_db,
-                    user_manager_kwargs={
-                        "password_helper": password_helper,
-                        "verification_token_secret": "verify-secret-12345678901234567890",
-                        "reset_password_token_secret": "reset-secret-123456789012345678901",
-                        "id_parser": UUID,
-                        "totp_secret_key": Fernet.generate_key().decode(),
-                    },
+                    user_manager_security=UserManagerSecurity[UUID](
+                        verification_token_secret="verify-secret-12345678901234567890",
+                        reset_password_token_secret="reset-secret-123456789012345678901",
+                        totp_secret_key=Fernet.generate_key().decode(),
+                        id_parser=UUID,
+                    ),
+                    user_manager_kwargs={"password_helper": password_helper},
                     totp_config=TotpConfig(
                         totp_pending_secret=TOTP_PENDING_SECRET,
                         totp_used_tokens_store=InMemoryUsedTotpCodeStore(),
                         totp_enable_requires_password=False,
                     ),
-                    id_parser=UUID,
                 ),
             ),
         ],
@@ -1835,12 +1833,9 @@ async def test_verify_rejects_replayed_pending_jti_when_store_enabled() -> None:
 
 
 @pytest.mark.filterwarnings("ignore::litestar_auth.totp.SecurityWarning")
-async def test_verify_allows_replayed_pending_token_when_pending_jti_store_is_disabled_in_testing(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+async def test_verify_allows_replayed_pending_token_when_pending_jti_store_is_disabled_in_unsafe_testing() -> None:
     """Without a pending-token denylist or used-code store, the same pending token can be replayed."""
-    monkeypatch.setenv("LITESTAR_AUTH_TESTING", "1")
-    app, _, _, _ = build_app(used_tokens_store=None, pending_jti_store=None)
+    app, _, _, _ = build_app(used_tokens_store=None, pending_jti_store=None, unsafe_testing=True)
 
     async with AsyncTestClient(app=app) as client:
         secret = await _enable_totp_and_get_secret(client)

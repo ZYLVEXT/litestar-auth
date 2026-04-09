@@ -69,6 +69,7 @@ class _UsersControllerContext[UP: UsersControllerUserProtocol[Any], ID]:
     hard_delete: bool
     default_limit: int
     max_limit: int
+    unsafe_testing: bool
 
 
 async def _users_get_user_or_404[UP: UsersControllerUserProtocol[Any], ID](
@@ -116,7 +117,7 @@ async def _users_handle_get_me[UP: UsersControllerUserProtocol[Any], ID](
         msg = "Authentication credentials were not provided."
         raise NotAuthorizedException(detail=msg)
     await _require_account_state(user, user_manager=user_manager, require_verified=False)
-    return _to_user_schema(user, ctx.user_read_schema_type)
+    return _to_user_schema(user, ctx.user_read_schema_type, unsafe_testing=ctx.unsafe_testing)
 
 
 async def _users_handle_update_me[UP: UsersControllerUserProtocol[Any], ID](
@@ -146,7 +147,7 @@ async def _users_handle_update_me[UP: UsersControllerUserProtocol[Any], ID](
         },
     ):
         updated_user = await user_manager.update(_build_safe_self_update(data), user)
-    return _to_user_schema(updated_user, ctx.user_read_schema_type)
+    return _to_user_schema(updated_user, ctx.user_read_schema_type, unsafe_testing=ctx.unsafe_testing)
 
 
 async def _users_handle_delete_user[UP: UsersControllerUserProtocol[Any], ID](
@@ -179,9 +180,9 @@ async def _users_handle_delete_user[UP: UsersControllerUserProtocol[Any], ID](
         )
     if ctx.hard_delete:
         await user_manager.delete(user.id)
-        return _to_user_schema(user, ctx.user_read_schema_type)
+        return _to_user_schema(user, ctx.user_read_schema_type, unsafe_testing=ctx.unsafe_testing)
     updated_user = await user_manager.update(UserUpdate(is_active=False), user)
-    return _to_user_schema(updated_user, ctx.user_read_schema_type)
+    return _to_user_schema(updated_user, ctx.user_read_schema_type, unsafe_testing=ctx.unsafe_testing)
 
 
 def _define_users_controller_class_di[UP: UsersControllerUserProtocol[Any], ID](
@@ -229,7 +230,7 @@ def _define_users_controller_class_di[UP: UsersControllerUserProtocol[Any], ID](
                 user_manager=litestar_auth_user_manager,
                 id_parser=ctx.id_parser,
             )
-            return _to_user_schema(loaded, ctx.user_read_schema_type)
+            return _to_user_schema(loaded, ctx.user_read_schema_type, unsafe_testing=ctx.unsafe_testing)
 
         @patch("/{user_id:str}", guards=[is_superuser])
         async def update_user(  # noqa: PLR6301
@@ -250,7 +251,7 @@ def _define_users_controller_class_di[UP: UsersControllerUserProtocol[Any], ID](
                 },
             ):
                 updated_user = await litestar_auth_user_manager.update(data, user)
-            return _to_user_schema(updated_user, ctx.user_read_schema_type)
+            return _to_user_schema(updated_user, ctx.user_read_schema_type, unsafe_testing=ctx.unsafe_testing)
 
         @delete("/{user_id:str}", guards=[is_superuser], status_code=200)
         async def delete_user(  # noqa: PLR6301
@@ -276,7 +277,10 @@ def _define_users_controller_class_di[UP: UsersControllerUserProtocol[Any], ID](
         ) -> msgspec.Struct:
             users, total = await litestar_auth_user_manager.list_users(offset=offset, limit=limit)
             return ctx.users_page_schema_type(
-                items=[_to_user_schema(user, ctx.user_read_schema_type) for user in users],
+                items=[
+                    _to_user_schema(user, ctx.user_read_schema_type, unsafe_testing=ctx.unsafe_testing)
+                    for user in users
+                ],
                 total=total,
                 limit=limit,
                 offset=offset,
@@ -299,6 +303,7 @@ def create_users_controller[UP: UsersControllerUserProtocol[Any], ID](  # noqa: 
     hard_delete: bool = False,
     user_read_schema: type[msgspec.Struct] = UserRead,
     user_update_schema: type[msgspec.Struct] = UserUpdate,
+    unsafe_testing: bool = False,
 ) -> type[Controller]:
     """Return a controller subclass that resolves the user manager via Litestar DI.
 
@@ -310,6 +315,8 @@ def create_users_controller[UP: UsersControllerUserProtocol[Any], ID](  # noqa: 
         hard_delete: When ``True``, admin deletes remove users permanently.
         user_read_schema: Custom msgspec struct used for public user responses.
         user_update_schema: Custom msgspec struct used for update requests.
+        unsafe_testing: Explicit test-only escape hatch that allows response
+            schemas with sensitive fields for isolated fixtures.
 
     Returns:
         Controller subclass exposing self-service and admin user endpoints.
@@ -354,6 +361,7 @@ def create_users_controller[UP: UsersControllerUserProtocol[Any], ID](  # noqa: 
         hard_delete=hard_delete,
         default_limit=default_limit,
         max_limit=max_limit,
+        unsafe_testing=unsafe_testing,
     )
     controller_cls = _define_users_controller_class_di(ctx)
     controller_cls.path = path

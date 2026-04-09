@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 import sqlite3
 import subprocess
 import sys
@@ -34,11 +35,14 @@ from litestar_auth.models import (
 from litestar_auth.models import (
     import_token_orm_models as import_token_orm_models_from_models,
 )
+from litestar_auth.oauth_encryption import OAuthTokenEncryption, bind_oauth_token_encryption
 
 if TYPE_CHECKING:
     from sqlalchemy.engine import Engine
 
 pytestmark = pytest.mark.unit
+
+OAUTH_TOKEN_ENCRYPTION_KEY = base64.urlsafe_b64encode(b"0" * 32).decode()
 
 
 @pytest.mark.imports
@@ -229,6 +233,7 @@ def test_oauth_account_model_creates_schema_and_relationship() -> None:
         assert foreign_keys[0]["referred_table"] == "user"
 
         with Session(engine) as session:
+            bind_oauth_token_encryption(session, OAuthTokenEncryption(key=OAUTH_TOKEN_ENCRYPTION_KEY))
             user = User(email="oauth@example.com", hashed_password="hashed-password")
             oauth_account = OAuthAccount(
                 user=user,
@@ -258,6 +263,7 @@ def test_oauth_account_model_enforces_foreign_key_constraint() -> None:
         User.metadata.create_all(engine)
 
         with Session(engine) as session:
+            bind_oauth_token_encryption(session, OAuthTokenEncryption(key=OAUTH_TOKEN_ENCRYPTION_KEY))
             session.add(
                 OAuthAccount(
                     user_id=UUID("00000000-0000-0000-0000-000000000001"),
@@ -959,6 +965,7 @@ def test_plugin_runtime_bootstrap_is_idempotent_with_models_helper() -> None:
         "import sys\n"
         "from typing import Any, cast\n"
         "from litestar.config.app import AppConfig\n"
+        "from litestar_auth.manager import UserManagerSecurity\n"
         "from litestar_auth.plugin import LitestarAuth, LitestarAuthConfig\n"
         "from litestar_auth._plugin.config import DatabaseTokenAuthConfig\n"
         "class UserModel:\n"
@@ -975,10 +982,10 @@ def test_plugin_runtime_bootstrap_is_idempotent_with_models_helper() -> None:
         "    user_model=UserModel,\n"
         "    user_manager_class=cast(Any, UserManager),\n"
         "    session_maker=cast(Any, DummySessionMaker()),\n"
-        "    user_manager_kwargs={\n"
-        "        'verification_token_secret': 'y' * 32,\n"
-        "        'reset_password_token_secret': 'z' * 32,\n"
-        "    },\n"
+        "    user_manager_security=UserManagerSecurity(\n"
+        "        verification_token_secret='y' * 32,\n"
+        "        reset_password_token_secret='z' * 32,\n"
+        "    ),\n"
         ")\n"
         "plugin = LitestarAuth(config)\n"
         "plugin.on_app_init(AppConfig())\n"

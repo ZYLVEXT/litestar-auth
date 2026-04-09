@@ -38,7 +38,7 @@ from litestar_auth.authentication.strategy.jwt import JWTStrategy
 from litestar_auth.authentication.transport.bearer import BearerTransport
 from litestar_auth.authentication.transport.cookie import CookieTransport
 from litestar_auth.manager import UserManagerSecurity, require_password_length
-from litestar_auth.oauth_encryption import get_oauth_encryption_key_callable, oauth_token_encryption_scope
+from litestar_auth.oauth_encryption import OAuthTokenEncryption
 from litestar_auth.password import PasswordHelper
 from litestar_auth.plugin import DatabaseTokenAuthConfig, LitestarAuth, LitestarAuthConfig, OAuthConfig, TotpConfig
 from litestar_auth.ratelimit import AuthRateLimitConfig, EndpointRateLimit, InMemoryRateLimiter, RedisRateLimiter
@@ -53,7 +53,7 @@ from tests.integration.test_orchestrator import (
 )
 
 if TYPE_CHECKING:
-    from collections.abc import Iterator
+    from collections.abc import Callable, Iterator
 
 pytestmark = pytest.mark.unit
 
@@ -100,11 +100,12 @@ def _minimal_config(
         user_model=ExampleUser,
         user_manager_class=user_manager_class or PluginUserManager,
         user_db_factory=lambda _session: user_db,
-        user_manager_kwargs={
-            "verification_token_secret": "verify-secret-12345678901234567890",
-            "reset_password_token_secret": "reset-secret-123456789012345678901",
-            "id_parser": UUID,
-        },
+        user_manager_security=UserManagerSecurity[UUID](
+            verification_token_secret="verify-secret-12345678901234567890",
+            reset_password_token_secret="reset-secret-123456789012345678901",
+            id_parser=UUID,
+        ),
+        user_manager_kwargs={},
         include_users=include_users,
         login_identifier=login_identifier,
     )
@@ -213,10 +214,10 @@ def test_on_app_init_bootstraps_bundled_token_models_for_db_token_preset(
         user_manager_class=PluginUserManager,
         session_maker=cast("Any", DummySessionMaker()),
         user_db_factory=lambda _session: InMemoryUserDatabase([]),
-        user_manager_kwargs={
-            "verification_token_secret": "x" * 32,
-            "reset_password_token_secret": "y" * 32,
-        },
+        user_manager_security=UserManagerSecurity[UUID](
+            verification_token_secret="x" * 32,
+            reset_password_token_secret="y" * 32,
+        ),
     )
     plugin = LitestarAuth(config)
     bootstrap_calls: list[object] = []
@@ -363,9 +364,8 @@ def test_on_app_init_does_not_warn_for_inmemory_rate_limiter_in_testing(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Testing-mode lifecycle suppresses the in-memory rate-limit startup warning."""
-    monkeypatch.setenv("LITESTAR_AUTH_TESTING", "1")
-    monkeypatch.setenv("PYTEST_CURRENT_TEST", "tests/unit/test_plugin_orchestrator.py::test_example")
     config = _minimal_config()
+    config.unsafe_testing = True
     config.rate_limit_config = AuthRateLimitConfig(
         login=EndpointRateLimit(
             backend=InMemoryRateLimiter(max_attempts=3, window_seconds=60),
@@ -426,7 +426,10 @@ def test_on_app_init_accepts_multiple_matching_cookie_transports() -> None:
 def test_on_app_init_requires_oauth_token_encryption_key_for_oauth_providers() -> None:
     """OAuth-enabled startup fails closed without an encryption key in non-test runtime."""
     config = _minimal_config()
-    config.oauth_config = OAuthConfig(oauth_providers=[("github", object())])
+    config.oauth_config = OAuthConfig(
+        oauth_providers=[("github", object())],
+        oauth_redirect_base_url="https://app.example.com/auth",
+    )
     plugin = LitestarAuth(config)
 
     with (
@@ -443,6 +446,7 @@ def test_on_app_init_allows_oauth_providers_when_encryption_key_is_configured() 
     config = _minimal_config()
     config.oauth_config = OAuthConfig(
         oauth_providers=[("github", object())],
+        oauth_redirect_base_url="https://app.example.com/auth",
         oauth_token_encryption_key="a" * 44,
     )
     plugin = LitestarAuth(config)
@@ -459,13 +463,17 @@ def test_on_app_init_warns_security_warning_for_inmemory_totp_used_store(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Production startup warns when the TOTP replay store is process-local."""
-    monkeypatch.delenv("LITESTAR_AUTH_TESTING", raising=False)
     config = _minimal_config()
     config.totp_config = TotpConfig(
         totp_pending_secret="x" * 32,
         totp_used_tokens_store=InMemoryUsedTotpCodeStore(),
     )
-    config.user_manager_kwargs["totp_secret_key"] = Fernet.generate_key().decode()
+    config.user_manager_security = UserManagerSecurity[UUID](
+        verification_token_secret="verify-secret-12345678901234567890",
+        reset_password_token_secret="reset-secret-123456789012345678901",
+        totp_secret_key=Fernet.generate_key().decode(),
+        id_parser=UUID,
+    )
     plugin = LitestarAuth(config)
 
     with pytest.warns(SecurityWarning, match="InMemoryUsedTotpCodeStore"):
@@ -476,9 +484,12 @@ def test_on_app_init_allows_missing_oauth_token_encryption_key_in_testing(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Testing mode bypasses the OAuth token-encryption startup guard."""
-    monkeypatch.setenv("LITESTAR_AUTH_TESTING", "1")
     config = _minimal_config()
-    config.oauth_config = OAuthConfig(oauth_providers=[("github", object())])
+    config.unsafe_testing = True
+    config.oauth_config = OAuthConfig(
+        oauth_providers=[("github", object())],
+        oauth_redirect_base_url="https://app.example.com/auth",
+    )
     plugin = LitestarAuth(config)
 
     with warnings.catch_warnings(record=True) as records:
@@ -492,9 +503,7 @@ def test_on_app_init_allows_missing_oauth_token_encryption_key_in_testing(
 def test_on_app_init_testing_recipe_suppresses_single_process_security_warnings(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Pytest-only testing mode keeps the documented single-process recipe warning-free."""
-    monkeypatch.setenv("LITESTAR_AUTH_TESTING", "1")
-    monkeypatch.setenv("PYTEST_CURRENT_TEST", "tests/unit/test_plugin_orchestrator.py::test_example")
+    """Explicit unsafe testing keeps the documented single-process recipe warning-free."""
     config = _minimal_config(
         backends=[
             AuthenticationBackend[ExampleUser, UUID](
@@ -509,8 +518,12 @@ def test_on_app_init_testing_recipe_suppresses_single_process_security_warnings(
             ),
         ],
     )
+    config.unsafe_testing = True
     config.csrf_secret = "c" * 32
-    config.oauth_config = OAuthConfig(oauth_providers=[("github", object())])
+    config.oauth_config = OAuthConfig(
+        oauth_providers=[("github", object())],
+        oauth_redirect_base_url="https://app.example.com/auth",
+    )
     config.rate_limit_config = AuthRateLimitConfig(
         login=EndpointRateLimit(
             backend=InMemoryRateLimiter(max_attempts=3, window_seconds=60),
@@ -522,7 +535,12 @@ def test_on_app_init_testing_recipe_suppresses_single_process_security_warnings(
         totp_pending_secret="x" * 32,
         totp_used_tokens_store=InMemoryUsedTotpCodeStore(),
     )
-    config.user_manager_kwargs["totp_secret_key"] = Fernet.generate_key().decode()
+    config.user_manager_security = UserManagerSecurity[UUID](
+        verification_token_secret="verify-secret-12345678901234567890",
+        reset_password_token_secret="reset-secret-123456789012345678901",
+        totp_secret_key=Fernet.generate_key().decode(),
+        id_parser=UUID,
+    )
     plugin = LitestarAuth(config)
 
     with warnings.catch_warnings(record=True) as records:
@@ -665,7 +683,7 @@ def test_register_controllers_extends_route_handlers() -> None:
 @dataclass(slots=True)
 class _ScopedProxyRecorder:
     user_db: object
-    oauth_scope: object
+    oauth_token_encryption: object | None
 
 
 @dataclass(slots=True)
@@ -715,7 +733,10 @@ def test_build_user_manager_wraps_user_db_and_passes_bound_backends(monkeypatch:
     assert manager == "manager"
     assert captured["session"] is session
     assert captured["config"] is plugin.config
-    assert captured["user_db"] == _ScopedProxyRecorder(user_db=raw_user_db, oauth_scope=plugin)
+    assert captured["user_db"] == _ScopedProxyRecorder(
+        user_db=raw_user_db,
+        oauth_token_encryption=plugin._oauth_token_encryption,
+    )
     assert captured["backends"] == (f"backend-for-{id(session)}",)
 
 
@@ -808,6 +829,7 @@ def test_build_user_manager_passes_typed_security_to_security_only_manager() -> 
             password_validator: object | None = None,
             backends: tuple[object, ...] = (),
             login_identifier: Literal["email", "username"] = "email",
+            unsafe_testing: bool = False,
         ) -> None:
             self.received_security = security
             super().__init__(
@@ -817,6 +839,7 @@ def test_build_user_manager_passes_typed_security_to_security_only_manager() -> 
                 password_validator=cast("Any", password_validator),
                 backends=backends,
                 login_identifier=login_identifier,
+                unsafe_testing=unsafe_testing,
             )
 
     backend = _FakeSessionBoundBackend(strategy=object())
@@ -862,58 +885,61 @@ def test_build_user_manager_uses_explicit_password_validator_factory() -> None:
         manager.password_validator("short")
 
 
-def test_build_user_manager_preserves_legacy_manager_without_password_validator_parameter() -> None:
-    """Compatibility builder still supports legacy manager constructors."""
+def test_build_user_manager_allows_nonstandard_manager_contract_through_factory() -> None:
+    """`user_manager_factory` remains the escape hatch for non-canonical constructors."""
 
-    class LegacyManagerWithoutPasswordValidator(PluginUserManager):
-        def __init__(
+    class LegacyManagerWithoutSecurity(PluginUserManager):
+        def __init__(  # noqa: PLR0913
             self,
             user_db: object,
             *,
+            password_helper: PasswordHelper | None = None,
+            password_validator: object | None = None,
             verification_token_secret: str,
             reset_password_token_secret: str,
+            id_parser: Callable[[str], UUID] | None = None,
             backends: tuple[object, ...] = (),
+            login_identifier: Literal["email", "username"] = "email",
         ) -> None:
             super().__init__(
                 cast("Any", user_db),
+                password_helper=password_helper,
+                password_validator=cast("Any", password_validator),
                 verification_token_secret=verification_token_secret,
                 reset_password_token_secret=reset_password_token_secret,
+                id_parser=id_parser,
                 backends=backends,
+                login_identifier=login_identifier,
             )
 
-    config = _minimal_config(user_manager_class=LegacyManagerWithoutPasswordValidator)
-    config.user_manager_kwargs.pop("id_parser")
+    config = _minimal_config(user_manager_class=LegacyManagerWithoutSecurity, login_identifier="username")
+    config.password_validator_factory = lambda _config: lambda password: require_password_length(password, 10)
+
+    def _factory(**kwargs: object) -> LegacyManagerWithoutSecurity:
+        session_config = cast("LitestarAuthConfig[ExampleUser, UUID]", kwargs["config"])
+        security = session_config.user_manager_security
+        assert security is not None
+        return LegacyManagerWithoutSecurity(
+            cast("Any", kwargs["user_db"]),
+            password_helper=session_config.build_password_helper(),
+            password_validator=plugin_module._plugin_config.resolve_password_validator(session_config),
+            verification_token_secret=cast("str", security.verification_token_secret),
+            reset_password_token_secret=cast("str", security.reset_password_token_secret),
+            id_parser=session_config.id_parser,
+            backends=cast("tuple[object, ...]", kwargs["backends"]),
+            login_identifier=session_config.login_identifier,
+        )
+
+    config.user_manager_factory = _factory
     plugin = LitestarAuth(config)
 
     manager = plugin._build_user_manager(cast("Any", object()))
 
-    assert isinstance(manager, LegacyManagerWithoutPasswordValidator)
-    assert manager.password_validator is None
-
-
-def test_build_user_manager_skips_legacy_id_parser_for_inherited_opt_out() -> None:
-    """Inherited id_parser opt-outs should suppress legacy kwargs injection in the plugin path."""
-
-    class _IntermediateIdParserOptOutManager(PluginUserManager):
-        accepts_id_parser = False
-
-        def __init__(self, user_db: object, **kwargs: object) -> None:
-            self.received_manager_kwargs = dict(kwargs)
-            super().__init__(cast("Any", user_db), **cast("Any", self.received_manager_kwargs))
-
-    class _ConcreteIdParserOptOutManager(_IntermediateIdParserOptOutManager):
-        pass
-
-    config = _minimal_config(user_manager_class=_ConcreteIdParserOptOutManager)
-    config.user_manager_kwargs.pop("id_parser")
-    config.id_parser = UUID
-    plugin = LitestarAuth(config)
-
-    manager = plugin._build_user_manager(cast("Any", DummySession()))
-    typed_manager = cast("Any", manager)
-
-    assert "id_parser" not in typed_manager.received_manager_kwargs
-    assert manager.id_parser is None
+    assert isinstance(manager, LegacyManagerWithoutSecurity)
+    assert manager.id_parser is UUID
+    assert manager.login_identifier == "username"
+    with pytest.raises(ValueError, match="at least 10"):
+        manager.password_validator("short")
 
 
 @pytest.mark.asyncio
@@ -933,10 +959,10 @@ async def test_session_bound_user_manager_update_triggers_strategy_invalidation_
         user_manager_class=PluginUserManager,
         session_maker=cast("Any", DummySessionMaker()),
         user_db_factory=lambda _session: user_db,
-        user_manager_kwargs={
-            "verification_token_secret": "x" * 32,
-            "reset_password_token_secret": "y" * 32,
-        },
+        user_manager_security=UserManagerSecurity[UUID](
+            verification_token_secret="x" * 32,
+            reset_password_token_secret="y" * 32,
+        ),
     )
     plugin = LitestarAuth(config)
 
@@ -1050,10 +1076,10 @@ def test_session_bound_backends_realizes_database_token_preset_from_request_sess
         user_manager_class=PluginUserManager,
         session_maker=cast("Any", DummySessionMaker()),
         user_db_factory=lambda _session: InMemoryUserDatabase([]),
-        user_manager_kwargs={
-            "verification_token_secret": "x" * 32,
-            "reset_password_token_secret": "y" * 32,
-        },
+        user_manager_security=UserManagerSecurity[UUID](
+            verification_token_secret="x" * 32,
+            reset_password_token_secret="y" * 32,
+        ),
         enable_refresh=True,
     )
     config.allow_legacy_plaintext_tokens = True
@@ -1061,7 +1087,7 @@ def test_session_bound_backends_realizes_database_token_preset_from_request_sess
     active_session = type("_ActiveSession", (), {"marker": "request-session"})()
 
     rebound_backends = plugin._session_bound_backends(cast("Any", active_session))
-    template_backend = config.resolve_backends()[0]
+    template_backend = config.startup_backends()[0]
     template_strategy = cast("Any", template_backend.strategy)
     rebound_strategy = cast("Any", rebound_backends[0].strategy)
 
@@ -1069,7 +1095,8 @@ def test_session_bound_backends_realizes_database_token_preset_from_request_sess
     assert rebound_backends[0] is not template_backend
     assert type(rebound_strategy) is type(template_strategy)
     assert rebound_strategy.session is active_session
-    assert template_strategy.session.marker == "request-session"
+    with pytest.raises(RuntimeError, match="startup_backends\\(\\) returns startup-only backends"):
+        _ = template_strategy.session.marker
     assert rebound_strategy.refresh_max_age == timedelta(days=14)
     assert rebound_strategy.accept_legacy_plaintext_tokens is True
 
@@ -1238,16 +1265,16 @@ def test_provide_request_backends_realizes_database_token_preset_from_request_se
         user_manager_class=PluginUserManager,
         session_maker=cast("Any", DummySessionMaker()),
         user_db_factory=lambda _session: InMemoryUserDatabase([]),
-        user_manager_kwargs={
-            "verification_token_secret": "x" * 32,
-            "reset_password_token_secret": "y" * 32,
-        },
+        user_manager_security=UserManagerSecurity[UUID](
+            verification_token_secret="x" * 32,
+            reset_password_token_secret="y" * 32,
+        ),
         enable_refresh=True,
     )
     config.allow_legacy_plaintext_tokens = True
     plugin = LitestarAuth(config)
     active_session = type("_ActiveSession", (), {"marker": "request-session"})()
-    template_backend = config.resolve_backends()[0]
+    template_backend = config.startup_backends()[0]
 
     rebound_backends = cast("Any", plugin._provide_request_backends)(db_session=active_session)
 
@@ -1316,9 +1343,8 @@ def test_public_aliases_reexport_nested_config_types() -> None:
     assert TotpConfig.__name__ == "TotpConfig"
 
 
-def test_plugins_hold_distinct_oauth_encryption_keys() -> None:
-    """Separate plugin instances keep independent OAuth encryption-key scopes."""
-    key_provider = get_oauth_encryption_key_callable()
+def test_plugins_hold_distinct_explicit_oauth_token_policies() -> None:
+    """Separate plugin instances keep independent explicit OAuth token policies."""
     first_config = _minimal_config()
     second_config = _minimal_config()
     first_config.oauth_config = OAuthConfig(oauth_token_encryption_key="a" * 44)
@@ -1327,8 +1353,6 @@ def test_plugins_hold_distinct_oauth_encryption_keys() -> None:
     first_plugin = LitestarAuth(first_config)
     second_plugin = LitestarAuth(second_config)
 
-    with oauth_token_encryption_scope(first_plugin):
-        assert key_provider() == "a" * 44
-
-    with oauth_token_encryption_scope(second_plugin):
-        assert key_provider() == "b" * 44
+    assert first_plugin._oauth_token_encryption == OAuthTokenEncryption("a" * 44)
+    assert second_plugin._oauth_token_encryption == OAuthTokenEncryption("b" * 44)
+    assert first_plugin._oauth_token_encryption is not second_plugin._oauth_token_encryption

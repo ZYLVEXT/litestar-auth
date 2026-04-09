@@ -8,19 +8,22 @@ On `OAuthConfig`:
 
 ```python
 OAuthConfig(
+    oauth_providers=[("github", oauth_client), ...],
+    oauth_redirect_base_url="https://your.app/auth",
     include_oauth_associate=True,
-    oauth_associate_providers=[("github", oauth_client), ...],
-    oauth_associate_redirect_base_url="https://your.app/auth/associate",
     oauth_token_encryption_key="...",  # required when OAuth is on
 )
 ```
 
-The plugin mounts:
+The plugin mounts login plus associate routes for the same provider inventory:
+
+- `GET {auth_path}/oauth/{provider}/authorize`
+- `GET {auth_path}/oauth/{provider}/callback`
 
 - `GET {auth_path}/associate/{provider}/authorize`
 - `GET {auth_path}/associate/{provider}/callback`
 
-This cookbook covers the plugin-owned associate flow only. OAuth login routes remain an explicit helper path mounted separately with `litestar_auth.oauth.create_provider_oauth_controller(...)`.
+This cookbook focuses on the authenticated associate flow. If you need associate-only routing or a different OAuth path layout, switch to manual controller factories instead of the plugin-owned OAuth route table.
 
 ## Security defaults
 

@@ -42,13 +42,12 @@ def _minimal_config() -> LitestarAuthConfig[ExampleUser, UUID]:
 
 
 def test_oauth_redirect_localhost_warns_in_production(caplog: pytest.LogCaptureFixture) -> None:
-    """Warn when localhost redirect base URL is used with debug=False."""
+    """Warn when plugin-owned OAuth redirects target localhost with debug=False."""
     config = _minimal_config()
     config.oauth_config = OAuthConfig(
-        include_oauth_associate=True,
-        oauth_associate_providers=[("example", object())],
+        oauth_providers=[("example", object())],
         oauth_token_encryption_key="a" * 44,
-        oauth_associate_redirect_base_url="",
+        oauth_redirect_base_url="http://localhost/auth",
     )
     plugin = LitestarAuth(config)
 
@@ -56,17 +55,16 @@ def test_oauth_redirect_localhost_warns_in_production(caplog: pytest.LogCaptureF
         plugin.on_app_init(AppConfig(debug=False))
 
     assert "localhost" in caplog.text
-    assert "oauth_associate_redirect_base_url" in caplog.text
+    assert "oauth_redirect_base_url" in caplog.text
 
 
 def test_oauth_redirect_localhost_does_not_warn_in_debug(caplog: pytest.LogCaptureFixture) -> None:
     """Do not warn when running in debug mode."""
     config = _minimal_config()
     config.oauth_config = OAuthConfig(
-        include_oauth_associate=True,
-        oauth_associate_providers=[("example", object())],
+        oauth_providers=[("example", object())],
         oauth_token_encryption_key="a" * 44,
-        oauth_associate_redirect_base_url="",
+        oauth_redirect_base_url="http://localhost/auth",
     )
     plugin = LitestarAuth(config)
 

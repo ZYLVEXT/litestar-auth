@@ -18,7 +18,7 @@ from litestar_auth.authentication.backend import AuthenticationBackend
 from litestar_auth.authentication.strategy.jwt import JWTStrategy
 from litestar_auth.authentication.transport.bearer import BearerTransport
 from litestar_auth.guards import is_authenticated
-from litestar_auth.manager import BaseUserManager
+from litestar_auth.manager import BaseUserManager, UserManagerSecurity
 from litestar_auth.models import User
 from litestar_auth.password import PasswordHelper
 from litestar_auth.plugin import LitestarAuth, LitestarAuthConfig
@@ -108,18 +108,17 @@ def app() -> Iterator[Litestar]:
         user_model=User,
         user_manager_class=TOTPUserManager,
         allow_nondurable_jwt_revocation=True,
-        user_manager_kwargs={
-            "password_helper": password_helper,
-            "verification_token_secret": "verify-secret-1234567890-1234567890",
-            "reset_password_token_secret": "reset-secret-1234567890-1234567890",
-            "id_parser": UUID,
-            "totp_secret_key": Fernet.generate_key().decode(),
-        },
+        user_manager_security=UserManagerSecurity[UUID](
+            verification_token_secret="verify-secret-1234567890-1234567890",
+            reset_password_token_secret="reset-secret-1234567890-1234567890",
+            totp_secret_key=Fernet.generate_key().decode(),
+            id_parser=UUID,
+        ),
+        user_manager_kwargs={"password_helper": password_helper},
         totp_config=TotpConfig(
             totp_pending_secret=TOTP_PENDING_SECRET,
             totp_used_tokens_store=InMemoryUsedTotpCodeStore(),
         ),
-        id_parser=UUID,
     )
     yield Litestar(route_handlers=[protected_route], plugins=[LitestarAuth(config)])
     engine.dispose()

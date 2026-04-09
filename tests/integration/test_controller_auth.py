@@ -23,7 +23,7 @@ from litestar_auth.exceptions import ErrorCode
 if TYPE_CHECKING:
     from litestar_auth.db.base import BaseUserStore
 from litestar_auth.guards import is_active
-from litestar_auth.manager import BaseUserManager
+from litestar_auth.manager import BaseUserManager, UserManagerSecurity
 from litestar_auth.password import PasswordHelper
 from litestar_auth.plugin import LitestarAuth, LitestarAuthConfig
 from tests._helpers import auth_middleware_get_request_session, litestar_app_with_user_manager
@@ -286,17 +286,38 @@ def build_cookie_plugin_app(*, login_identifier: Literal["email", "username"] = 
         transport=CookieTransport(cookie_name="auth-cookie", secure=False),
         strategy=cast("Any", InMemoryTokenStrategy()),
     )
+
+    def _build_user_manager(
+        *,
+        session: object,
+        user_db: object,
+        config: LitestarAuthConfig[ExampleUser, UUID],
+        backends: tuple[object, ...] = (),
+    ) -> TrackingUserManager:
+        del session
+        security = config.user_manager_security
+        assert security is not None
+        return TrackingUserManager(
+            user_db=cast("BaseUserStore[ExampleUser, UUID]", user_db),
+            password_helper=config.build_password_helper(),
+            verification_token_secret=security.verification_token_secret,
+            reset_password_token_secret=security.reset_password_token_secret,
+            backends=backends,
+            login_identifier=config.login_identifier,
+        )
+
     config = LitestarAuthConfig[ExampleUser, UUID](
         backends=[backend],
         session_maker=cast("Any", DummySessionMaker()),
         user_model=ExampleUser,
         user_manager_class=TrackingUserManager,
+        user_manager_factory=_build_user_manager,
         user_db_factory=lambda _session: user_db,
-        user_manager_kwargs={
-            "password_helper": password_helper,
-            "verification_token_secret": "test-secret-12345-verify-secret-12345",
-            "reset_password_token_secret": "test-secret-12345-reset-secret-12345",
-        },
+        user_manager_security=UserManagerSecurity[UUID](
+            verification_token_secret="test-secret-12345-verify-secret-12345",
+            reset_password_token_secret="test-secret-12345-reset-secret-12345",
+        ),
+        user_manager_kwargs={"password_helper": password_helper},
         csrf_secret="c" * 32,
         include_register=False,
         include_verify=False,

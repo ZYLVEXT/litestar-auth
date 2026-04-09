@@ -14,7 +14,6 @@ from litestar_auth._manager.construction import (
     ManagerConstructorInputs,
     SecretFactory,
     resolve_account_token_secrets,
-    user_manager_security_from_mapping,
 )
 from litestar_auth.manager import UserManagerSecurity
 
@@ -37,17 +36,14 @@ def test_manager_construction_module_executes_under_coverage() -> None:
     reloaded_module = importlib.reload(construction_module)
 
     assert reloaded_module.ManagerConstructorInputs.__name__ == ManagerConstructorInputs.__name__
-    assert reloaded_module.user_manager_security_from_mapping.__name__ == user_manager_security_from_mapping.__name__
 
 
-def test_user_manager_security_from_mapping_and_resolve_wraps_account_token_secrets() -> None:
-    """Legacy manager kwargs now flow through the canonical concrete security bundle."""
-    manager_security = user_manager_security_from_mapping(
-        {
-            "verification_token_secret": "v" * 32,
-            "reset_password_token_secret": "r" * 32,
-            "totp_secret_key": "t" * 32,
-        },
+def test_resolve_account_token_secrets_wraps_account_token_secrets() -> None:
+    """Typed manager security still resolves and wraps account-token secrets."""
+    manager_security = UserManagerSecurity[UUID](
+        verification_token_secret="v" * 32,
+        reset_password_token_secret="r" * 32,
+        totp_secret_key="t" * 32,
     )
 
     resolved = resolve_account_token_secrets(
@@ -65,8 +61,10 @@ def test_user_manager_security_from_mapping_and_resolve_wraps_account_token_secr
 
 
 def test_manager_constructor_inputs_preserve_explicit_kwargs_without_typed_security() -> None:
-    """Legacy explicit kwargs remain authoritative when no typed security bundle is present."""
-    explicit_id_parser = UUID
+    """Generic manager kwargs stay intact without becoming plugin-managed security."""
+
+    def explicit_id_parser(raw: str) -> UUID:
+        return UUID(raw)
 
     def generated_password_validator(_password: str) -> None:
         return None
@@ -88,38 +86,35 @@ def test_manager_constructor_inputs_preserve_explicit_kwargs_without_typed_secur
 
     assert inputs.has_explicit_password_validator is True
     assert inputs.explicit_password_validator is None
-    assert inputs.has_explicit_id_parser is True
-    assert inputs.explicit_id_parser is explicit_id_parser
+    assert inputs.managed_security_keys == (
+        "id_parser",
+        "reset_password_token_secret",
+        "totp_secret_key",
+        "verification_token_secret",
+    )
     assert inputs.resolved_security_id_parser is None
     assert inputs.security_overlap_keys == ()
     assert inputs.build_manager_security() is None
     effective_security = inputs.effective_security
-    assert effective_security.verification_token_secret == "v" * 32
-    assert effective_security.reset_password_token_secret == "r" * 32
-    assert effective_security.totp_secret_key == "t" * 32
-    assert effective_security.id_parser is explicit_id_parser
-    assert (
-        inputs._build_manager_id_parser_kwargs(
-            accepts_security=False,
-            accepts_id_parser=False,
-        )
-        == {}
-    )
+    assert effective_security.verification_token_secret is None
+    assert effective_security.reset_password_token_secret is None
+    assert effective_security.totp_secret_key is None
+    assert effective_security.id_parser is UUID
+    assert inputs._build_manager_id_parser_kwargs() == {}
 
-    kwargs = inputs.build_kwargs(
-        accepts_security=False,
-        accepts_id_parser=True,
-        accepts_login_identifier=True,
-    )
+    kwargs = inputs.build_kwargs()
 
     assert kwargs["password_validator"] is None
     assert kwargs["id_parser"] is explicit_id_parser
+    assert kwargs["verification_token_secret"] == "v" * 32
+    assert kwargs["reset_password_token_secret"] == "r" * 32
+    assert kwargs["totp_secret_key"] == "t" * 32
     assert kwargs["login_identifier"] == "email"
     assert kwargs["backends"] == ("bound-backend",)
 
 
 def test_manager_constructor_inputs_inject_top_level_password_validator_and_id_parser() -> None:
-    """Top-level helper inputs fill missing legacy kwargs only when constructors support them."""
+    """Top-level helper inputs fill missing default-builder kwargs."""
 
     def generated_password_validator(_password: str) -> None:
         return None
@@ -132,13 +127,9 @@ def test_manager_constructor_inputs_inject_top_level_password_validator_and_id_p
         id_parser=UUID,
     )
 
-    kwargs = inputs.build_kwargs(
-        accepts_security=False,
-        accepts_id_parser=True,
-        accepts_login_identifier=True,
-    )
-
+    kwargs = inputs.build_kwargs()
     effective_security = inputs.effective_security
+
     assert effective_security.verification_token_secret is None
     assert effective_security.reset_password_token_secret is None
     assert effective_security.totp_secret_key is None
@@ -164,7 +155,7 @@ def test_manager_constructor_inputs_reuse_typed_dataclass_security_when_parser_m
 
 
 def test_manager_constructor_inputs_fill_missing_parser_on_typed_dataclass_security() -> None:
-    """Typed security dataclasses inherit the top-level parser before security-aware injection."""
+    """Typed security dataclasses inherit the top-level parser before `security=` injection."""
     security = UserManagerSecurity[UUID](
         verification_token_secret="v" * 32,
         reset_password_token_secret="r" * 32,
@@ -203,11 +194,7 @@ def test_manager_constructor_inputs_fill_missing_parser_on_typed_dataclass_secur
         "verification_token_secret",
     )
 
-    kwargs = inputs.build_kwargs(
-        accepts_security=True,
-        accepts_id_parser=True,
-        accepts_login_identifier=False,
-    )
+    kwargs = inputs.build_kwargs()
 
     assert kwargs["security"] == built_security
     assert kwargs["password_validator"] is generated_password_validator
@@ -218,8 +205,8 @@ def test_manager_constructor_inputs_fill_missing_parser_on_typed_dataclass_secur
     assert "totp_secret_key" not in kwargs
 
 
-def test_manager_constructor_inputs_build_legacy_security_kwargs_from_canonical_bundle() -> None:
-    """Legacy manager constructors still receive explicit kwargs from the canonical bundle."""
+def test_manager_constructor_inputs_build_security_kwarg_from_canonical_bundle() -> None:
+    """The default builder forwards the typed security bundle as one `security` kwarg."""
     security = UserManagerSecurity[UUID](
         verification_token_secret="v" * 32,
         totp_secret_key="t" * 32,
@@ -231,6 +218,7 @@ def test_manager_constructor_inputs_build_legacy_security_kwargs_from_canonical_
     )
 
     built_security = inputs.build_manager_security()
+
     assert built_security is not None
     assert isinstance(built_security, UserManagerSecurity)
     assert built_security.verification_token_secret == "v" * 32
@@ -238,42 +226,29 @@ def test_manager_constructor_inputs_build_legacy_security_kwargs_from_canonical_
     assert built_security.totp_secret_key == "t" * 32
     assert built_security.id_parser is UUID
 
-    kwargs = inputs.build_kwargs(
-        accepts_security=False,
-        accepts_id_parser=True,
-        accepts_login_identifier=False,
-    )
+    kwargs = inputs.build_kwargs()
 
-    assert kwargs["verification_token_secret"] == "v" * 32
-    assert "reset_password_token_secret" not in kwargs
-    assert kwargs["totp_secret_key"] == "t" * 32
-    assert kwargs["id_parser"] is UUID
+    assert kwargs["security"] == built_security
     assert kwargs["backends"] == ()
+    assert "id_parser" not in kwargs
+    assert "verification_token_secret" not in kwargs
+    assert "reset_password_token_secret" not in kwargs
+    assert "totp_secret_key" not in kwargs
 
     no_parser_inputs = ManagerConstructorInputs[UUID](manager_kwargs={}, manager_security=security)
-    assert (
-        no_parser_inputs._build_manager_id_parser_kwargs(
-            accepts_security=False,
-            accepts_id_parser=True,
-        )
-        == {}
-    )
+    assert no_parser_inputs._build_manager_id_parser_kwargs() == {}
 
 
-def test_manager_constructor_inputs_skip_missing_legacy_security_kwargs() -> None:
-    """Legacy compatibility kwargs include only the non-null secrets from typed security."""
+def test_manager_constructor_inputs_keep_single_typed_security_kwarg_when_only_one_secret_is_set() -> None:
+    """Partial typed security still stays on the single `security=` contract."""
     security = UserManagerSecurity[UUID](reset_password_token_secret="r" * 32)
     inputs = ManagerConstructorInputs[UUID](
         manager_kwargs={},
         manager_security=security,
     )
 
-    kwargs = inputs.build_kwargs(
-        accepts_security=False,
-        accepts_id_parser=False,
-        accepts_login_identifier=False,
-    )
+    kwargs = inputs.build_kwargs()
 
-    assert "verification_token_secret" not in kwargs
-    assert kwargs["reset_password_token_secret"] == "r" * 32
-    assert "totp_secret_key" not in kwargs
+    assert kwargs["security"] == security
+    assert kwargs["backends"] == ()
+    assert "id_parser" not in kwargs

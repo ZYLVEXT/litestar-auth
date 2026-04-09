@@ -98,7 +98,24 @@ Keep the same models-owned workflow described in [Configuration](../configuratio
 
 ## Token encryption
 
-Set **`oauth_token_encryption_key`** on `OAuthConfig` in production when providers are configured. The same scope machinery applies as for the default models; use `oauth_token_encryption_scope` / `get_oauth_encryption_key_callable` consistently with the plugin (see [OAuth guide](../guides/oauth.md) and [Security](../security.md)).
+Set **`oauth_token_encryption_key`** on `OAuthConfig` in production when providers are configured. Plugin-managed OAuth flows bind that key onto each request-scoped `SQLAlchemyUserDatabase` automatically.
+
+If you instantiate `SQLAlchemyUserDatabase` directly for OAuth persistence outside the plugin-managed request path, pass an explicit policy yourself:
+
+```python
+from litestar_auth.db.sqlalchemy import SQLAlchemyUserDatabase
+from litestar_auth.oauth_encryption import OAuthTokenEncryption
+
+def user_db_factory(session):
+    return SQLAlchemyUserDatabase(
+        session,
+        user_model=MyUser,
+        oauth_account_model=MyOAuthAccount,
+        oauth_token_encryption=OAuthTokenEncryption("your-fernet-key"),
+    )
+```
+
+For direct ORM session usage that loads `MyOAuthAccount` rows without going through the adapter, call `bind_oauth_token_encryption(session, OAuthTokenEncryption(...))` first so token columns decrypt on load. In tests, `OAuthTokenEncryption(key=None)` is the explicit plaintext/testing policy.
 
 ## Optional relationship tuning
 

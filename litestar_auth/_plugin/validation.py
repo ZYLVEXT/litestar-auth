@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import inspect
 import logging
 import warnings
 from typing import Any, cast
@@ -12,8 +13,8 @@ from litestar_auth._manager.construction import ManagerConstructorInputs
 from litestar_auth._plugin.config import (
     LitestarAuthConfig,
     TotpConfig,
+    _build_default_user_manager_validation_kwargs,
     _build_oauth_route_registration_contract,
-    user_manager_accepts_password_validator,
 )
 from litestar_auth._plugin.middleware import get_cookie_transports
 from litestar_auth._plugin.rate_limit import iter_rate_limit_endpoints
@@ -24,10 +25,8 @@ from litestar_auth.authentication.strategy.db import (
 from litestar_auth.authentication.strategy.jwt import JWTStrategy
 from litestar_auth.config import (
     MINIMUM_SECRET_LENGTH,
-    is_testing,
     resolve_trusted_proxy_setting,
     validate_secret_length,
-    validate_testing_mode_for_startup,
     warn_if_secret_roles_are_reused,
 )
 from litestar_auth.exceptions import ConfigurationError
@@ -93,9 +92,7 @@ def validate_core_session_config[UP: UserProtocol[Any], ID](config: LitestarAuth
     Raises:
         ValueError: If the plugin lacks a backend or a supported DB-session source.
     """
-    validate_testing_mode_for_startup()
-
-    if not config.resolve_backends():
+    if not config.startup_backends():
         msg = "LitestarAuth requires at least one authentication backend."
         raise ValueError(msg)
 
@@ -110,6 +107,7 @@ def validate_credential_config[UP: UserProtocol[Any], ID](config: LitestarAuthCo
     """
     validate_user_manager_security_config(config)
     validate_password_validator_config(config)
+    validate_default_user_manager_constructor_contract(config)
     validate_user_model_login_identifier_fields(config)
 
     if config.include_users and not callable(getattr(config.user_manager_class, "list_users", None)):
@@ -132,7 +130,7 @@ def validate_oauth_route_registration_config[UP: UserProtocol[Any], ID](config: 
     """Validate the deterministic plugin OAuth route-registration contract.
 
     Raises:
-        ValueError: If declared OAuth inventories imply ambiguous or no-op route ownership.
+        ValueError: If plugin-owned OAuth routes are declared with incomplete config.
     """
     oauth_config = config.oauth_config
     if oauth_config is None:
@@ -143,38 +141,30 @@ def validate_oauth_route_registration_config[UP: UserProtocol[Any], ID](config: 
         oauth_config=oauth_config,
     )
     _validate_unique_oauth_provider_names(
-        providers=contract.login_providers,
+        providers=contract.providers,
         field_name="oauth_providers",
     )
-    _validate_unique_oauth_provider_names(
-        providers=contract.declared_associate_providers,
-        field_name="oauth_associate_providers",
-    )
 
-    if contract.declared_associate_providers and not contract.include_oauth_associate:
-        msg = (
-            "oauth_associate_providers are configured but include_oauth_associate=False, so the plugin would "
-            "not mount any /associate/{provider}/... routes. Set include_oauth_associate=True or remove "
-            "oauth_associate_providers."
-        )
+    if contract.include_oauth_associate and not contract.providers:
+        msg = "include_oauth_associate=True requires oauth_providers to be configured."
         raise ValueError(msg)
 
-    if contract.include_oauth_associate and not contract.declared_associate_providers:
-        msg = "include_oauth_associate=True requires oauth_associate_providers to be configured."
+    if oauth_config.oauth_redirect_base_url and not contract.providers:
+        msg = "oauth_redirect_base_url requires oauth_providers to be configured."
         raise ValueError(msg)
 
-    if oauth_config.oauth_associate_redirect_base_url and not contract.has_plugin_owned_associate_routes:
-        msg = (
-            "oauth_associate_redirect_base_url requires include_oauth_associate=True with "
-            "oauth_associate_providers configured."
-        )
+    if contract.providers and contract.redirect_base_url is None:
+        msg = "oauth_redirect_base_url is required when oauth_providers are configured."
         raise ValueError(msg)
 
-    if contract.oauth_associate_by_email and not contract.login_providers:
+    if contract.oauth_associate_by_email and not contract.providers:
+        msg = "oauth_associate_by_email only affects plugin-owned OAuth login routes configured via oauth_providers."
+        raise ValueError(msg)
+
+    if contract.oauth_trust_provider_email_verified and not contract.providers:
         msg = (
-            "oauth_associate_by_email only affects explicitly mounted OAuth login controllers. Configure "
-            "oauth_providers and mount create_provider_oauth_controller(...) explicitly, or leave "
-            "oauth_associate_by_email=False."
+            "oauth_trust_provider_email_verified only affects plugin-owned OAuth login routes configured "
+            "via oauth_providers."
         )
         raise ValueError(msg)
 
@@ -227,7 +217,7 @@ def _validate_totp_pending_secret_config[UP: UserProtocol[Any], ID](config: Lite
     if not getattr(totp_config, "totp_algorithm", None):
         msg = "totp_algorithm must be configured when totp_config is set."
         raise ValueError(msg)
-    if totp_config.totp_algorithm == "SHA1" and not is_testing():
+    if totp_config.totp_algorithm == "SHA1" and not config.unsafe_testing:
         logger.warning(
             "TOTP is configured with SHA1. For new deployments, consider using SHA256 or SHA512 "
             "if supported by your authenticator clients.",
@@ -237,13 +227,13 @@ def _validate_totp_pending_secret_config[UP: UserProtocol[Any], ID](config: Lite
 
 def _validate_backend_strategy_security[UP: UserProtocol[Any], ID](config: LitestarAuthConfig[UP, ID]) -> None:
     """Validate backend strategy security posture for non-test environments."""
-    for backend in config.resolve_backends():
+    for backend in config.startup_backends():
         _warn_backend_name_strategy_mismatch(
             backend_name=getattr(backend, "name", None),
             strategy=getattr(backend, "strategy", None),
         )
 
-    for backend in config.resolve_backends():
+    for backend in config.startup_backends():
         strategy = getattr(backend, "strategy", None)
         _validate_database_strategy_legacy_mode(config=config, strategy=strategy)
         if isinstance(strategy, JWTStrategy):
@@ -279,7 +269,7 @@ def _validate_database_strategy_legacy_mode[UP: UserProtocol[Any], ID](
         isinstance(strategy, DatabaseTokenStrategy)
         and strategy.accept_legacy_plaintext_tokens
         and not _database_strategy_legacy_rollout_enabled(config)
-        and not is_testing()
+        and not config.unsafe_testing
     ):
         return
 
@@ -318,7 +308,11 @@ def _validate_jwt_strategy_revocation[UP: UserProtocol[Any], ID](
     Raises:
         ValueError: If JWT revocation storage is nondurable in production.
     """
-    if getattr(strategy, "revocation_is_durable", False) or config.allow_nondurable_jwt_revocation or is_testing():
+    if (
+        getattr(strategy, "revocation_is_durable", False)
+        or config.allow_nondurable_jwt_revocation
+        or config.unsafe_testing
+    ):
         return
 
     msg = (
@@ -335,13 +329,17 @@ def _validate_totp_encryption_key[UP: UserProtocol[Any], ID](config: LitestarAut
 
     Raises:
         ConfigurationError: If TOTP is configured but ``totp_secret_key`` is missing
-            outside of testing mode.
+            while ``config.unsafe_testing`` is false.
     """
-    if config.totp_config is None or is_testing():
+    if config.totp_config is None or config.unsafe_testing:
         return
+    if config.user_manager_factory is not None and config.user_manager_security is None:
+        return
+
     manager_inputs = ManagerConstructorInputs(
         manager_kwargs=config.user_manager_kwargs,
         manager_security=config.user_manager_security,
+        id_parser=config.id_parser,
     )
     if not manager_inputs.effective_security.totp_secret_key:
         msg = (
@@ -362,6 +360,7 @@ def validate_user_manager_security_config[UP: UserProtocol[Any], ID](config: Lit
     manager_inputs = ManagerConstructorInputs(
         manager_kwargs=config.user_manager_kwargs,
         manager_security=config.user_manager_security,
+        id_parser=config.id_parser,
     )
     manager_security = config.user_manager_security
     if manager_security is not None:
@@ -369,7 +368,7 @@ def validate_user_manager_security_config[UP: UserProtocol[Any], ID](config: Lit
             overlap = ", ".join(manager_inputs.security_overlap_keys)
             msg = (
                 "user_manager_security is the canonical plugin-managed path for manager secrets and id_parser. "
-                "Remove the overlapping legacy entries from user_manager_kwargs: "
+                "Remove the overlapping entries from user_manager_kwargs: "
                 f"{overlap}."
             )
             raise ConfigurationError(msg)
@@ -385,7 +384,17 @@ def validate_user_manager_security_config[UP: UserProtocol[Any], ID](config: Lit
             )
             raise ConfigurationError(msg)
 
-    if is_testing():
+    if config.user_manager_factory is None and manager_inputs.managed_security_keys:
+        invalid_keys = ", ".join(manager_inputs.managed_security_keys)
+        msg = (
+            "user_manager_security is the canonical plugin-managed path for manager secrets and "
+            "id_parser. Remove these keys from user_manager_kwargs: "
+            f"{invalid_keys}. If you need custom manager construction, configure "
+            "user_manager_factory."
+        )
+        raise ConfigurationError(msg)
+
+    if config.unsafe_testing:
         return
 
     effective_security = manager_inputs.effective_security
@@ -402,8 +411,7 @@ def validate_password_validator_config[UP: UserProtocol[Any], ID](config: Litest
     """Validate password-validator wiring for the configured user-manager builder.
 
     Raises:
-        ValueError: If explicit and legacy password-validator configuration are mixed, or if an
-            explicit password-validator factory targets a manager without a compatible builder.
+        ValueError: If explicit and legacy password-validator configuration are mixed.
     """
     if config.password_validator_factory is None:
         return
@@ -419,14 +427,47 @@ def validate_password_validator_config[UP: UserProtocol[Any], ID](config: Litest
     if config.user_manager_factory is not None:
         return
 
-    if user_manager_accepts_password_validator(config.user_manager_class):
+
+def validate_default_user_manager_constructor_contract[UP: UserProtocol[Any], ID](
+    config: LitestarAuthConfig[UP, ID],
+) -> None:
+    """Fail fast when ``user_manager_class`` is incompatible with the default builder.
+
+    Raises:
+        ConfigurationError: If ``user_manager_factory`` is unset and the configured
+            ``user_manager_class`` does not accept the default builder contract.
+    """
+    if config.user_manager_factory is not None:
         return
 
-    msg = (
-        "password_validator_factory requires user_manager_class to accept password_validator or "
-        "user_manager_factory to build the manager explicitly."
-    )
-    raise ValueError(msg)
+    manager_class = config.user_manager_class
+    manager_name = getattr(manager_class, "__name__", repr(manager_class))
+    try:
+        constructor_signature = inspect.signature(manager_class)
+    except (TypeError, ValueError) as exc:
+        msg = (
+            f"{manager_name!r} (user_manager_class) must expose an introspectable constructor when "
+            "user_manager_factory is unset. Configure user_manager_factory for non-canonical "
+            "manager construction."
+        )
+        raise ConfigurationError(msg) from exc
+
+    try:
+        constructor_signature.bind(
+            object(),
+            **_build_default_user_manager_validation_kwargs(config),
+        )
+    except TypeError as exc:
+        msg = (
+            f"{manager_name!r} (user_manager_class) is incompatible with the default plugin "
+            "builder contract. Without user_manager_factory, the plugin calls "
+            "user_manager_class(user_db, *, password_helper=..., security=..., "
+            "password_validator=..., backends=..., login_identifier=..., unsafe_testing=...). "
+            "When user_manager_security is unset, the plugin passes id_parser=... directly "
+            f"instead of folding it into security. Configure user_manager_factory for non-canonical "
+            f"constructors. Original error: {exc}"
+        )
+        raise ConfigurationError(msg) from exc
 
 
 def _validate_unique_oauth_provider_names(
@@ -475,7 +516,7 @@ def validate_cookie_auth_config[UP: UserProtocol[Any], ID](config: LitestarAuthC
     Raises:
         ConfigurationError: If cookie auth is enabled without a safe CSRF configuration.
     """
-    cookie_transports = get_cookie_transports(config.resolve_backends())
+    cookie_transports = get_cookie_transports(config.startup_backends())
     if not cookie_transports:
         return
 
@@ -487,7 +528,7 @@ def validate_cookie_auth_config[UP: UserProtocol[Any], ID](config: LitestarAuthC
         )
 
     unsafe_cookie_transports = [transport for transport in cookie_transports if transport.allow_insecure_cookie_auth]
-    if config.csrf_secret is not None or unsafe_cookie_transports or is_testing():
+    if config.csrf_secret is not None or unsafe_cookie_transports or config.unsafe_testing:
         return
 
     msg = (
@@ -502,9 +543,13 @@ def validate_totp_config[UP: UserProtocol[Any], ID](config: LitestarAuthConfig[U
     """Validate TOTP-specific configuration knobs."""
     if config.totp_config is None:
         return
-    validate_totp_sub_config(config.totp_config, user_manager_class=config.user_manager_class)
-    if not is_testing():
-        cookie_transports = get_cookie_transports(config.resolve_backends())
+    validate_totp_sub_config(
+        config.totp_config,
+        user_manager_class=config.user_manager_class,
+        unsafe_testing=config.unsafe_testing,
+    )
+    if not config.unsafe_testing:
+        cookie_transports = get_cookie_transports(config.startup_backends())
         if cookie_transports and not all(t.secure for t in cookie_transports):
             warnings.warn(
                 "TOTP is enabled but CookieTransport.secure=False; TOTP secrets returned by "
@@ -518,6 +563,7 @@ def validate_totp_sub_config[UP: UserProtocol[Any]](
     totp_config: TotpConfig,
     *,
     user_manager_class: type[object],
+    unsafe_testing: bool = False,
 ) -> None:
     """Validate a concrete ``TotpConfig`` payload.
 
@@ -527,7 +573,7 @@ def validate_totp_sub_config[UP: UserProtocol[Any]](
     if not totp_config.totp_pending_secret:
         msg = "totp_config requires totp_pending_secret."
         raise ValueError(msg)
-    if totp_config.totp_require_replay_protection and totp_config.totp_used_tokens_store is None and not is_testing():
+    if totp_config.totp_require_replay_protection and totp_config.totp_used_tokens_store is None and not unsafe_testing:
         msg = "totp_require_replay_protection=True requires totp_used_tokens_store to be configured."
         raise ValueError(msg)
     if totp_config.totp_enable_requires_password and not callable(

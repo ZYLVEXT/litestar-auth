@@ -24,6 +24,7 @@ from litestar_auth._plugin.config import (
     DEFAULT_USER_MODEL_DEPENDENCY_KEY,
     OAUTH_ASSOCIATE_USER_MANAGER_DEPENDENCY_KEY,
     LitestarAuthConfig,
+    _build_oauth_route_registration_contract,
 )
 from litestar_auth._plugin.scoped_session import SessionFactory, get_or_create_scoped_session
 from litestar_auth.types import UserProtocol
@@ -238,8 +239,11 @@ def register_dependencies[UP: UserProtocol[Any], ID](
     }
     if config.session_maker is not None and not config.db_session_dependency_provided_externally:
         dependency_providers[config.db_session_dependency_key] = _make_db_session_provide(config.session_maker)
-    oauth_config = config.oauth_config
-    if oauth_config is not None and oauth_config.include_oauth_associate and oauth_config.oauth_associate_providers:
+    oauth_contract = _build_oauth_route_registration_contract(
+        auth_path=config.auth_path,
+        oauth_config=config.oauth_config,
+    )
+    if oauth_contract.has_plugin_owned_associate_routes:
         dependency_providers[OAUTH_ASSOCIATE_USER_MANAGER_DEPENDENCY_KEY] = providers.oauth_associate_user_manager
     collisions = sorted(set(dependency_providers).intersection(app_config.dependencies))
     if collisions:
@@ -257,6 +261,8 @@ def register_dependencies[UP: UserProtocol[Any], ID](
                 sync_to_thread=False,
                 use_cache=False,
             )
+        elif key == DEFAULT_BACKENDS_DEPENDENCY_KEY:
+            app_config.dependencies[key] = _to_dependency_provider(provider, use_cache=False)
         else:
             app_config.dependencies[key] = _to_dependency_provider(provider)
 
@@ -264,14 +270,14 @@ def register_dependencies[UP: UserProtocol[Any], ID](
         app_config.before_send.append(async_autocommit_handler_maker())
 
 
-def _to_dependency_provider(provider: object) -> Provide:
+def _to_dependency_provider(provider: object, *, use_cache: bool | None = None) -> Provide:
     """Wrap dependency callables in explicit Litestar providers.
 
     Returns:
         Litestar provider configured with caching when the callable is not a generator dependency.
     """
-    use_cache = not inspect.isasyncgenfunction(provider)
+    effective_use_cache = not inspect.isasyncgenfunction(provider) if use_cache is None else use_cache
     is_async = inspect.iscoroutinefunction(provider) or inspect.isasyncgenfunction(provider)
     if is_async:
-        return Provide(cast("Any", provider), use_cache=use_cache)
-    return Provide(cast("Any", provider), use_cache=use_cache, sync_to_thread=False)
+        return Provide(cast("Any", provider), use_cache=effective_use_cache)
+    return Provide(cast("Any", provider), use_cache=effective_use_cache, sync_to_thread=False)

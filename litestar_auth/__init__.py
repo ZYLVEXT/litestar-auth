@@ -3,11 +3,12 @@
 This package re-exports controllers, strategies, transports, the ``LitestarAuth``
 plugin, user manager base types, guards, and shared schemas. Import stable symbols
 from ``litestar_auth`` for compatibility, but prefer the more specific public
-submodules when guidance names one canonical entrypoint. For OAuth, the canonical
-login-helper import is ``litestar_auth.oauth.create_provider_oauth_controller``,
-while ``litestar_auth.controllers.create_oauth_controller`` and
-``create_oauth_associate_controller`` remain the advanced escape hatch for custom
-route tables.
+submodules when guidance names one canonical entrypoint. For OAuth,
+plugin-managed apps typically configure ``OAuthConfig`` on ``LitestarAuthConfig``;
+``litestar_auth.oauth.create_provider_oauth_controller`` plus
+``litestar_auth.controllers.create_oauth_controller`` /
+``create_oauth_associate_controller`` remain the advanced escape hatch for
+custom route tables.
 
 Examples:
     Wire the canonical database-backed bearer preset when building a Litestar application::
@@ -16,6 +17,7 @@ Examples:
 
         from litestar import Litestar
         from litestar_auth import DatabaseTokenAuthConfig, LitestarAuth, LitestarAuthConfig
+        from litestar_auth.manager import UserManagerSecurity
         from litestar_auth.models import User
 
         config = LitestarAuthConfig[User, UUID](
@@ -25,10 +27,10 @@ Examples:
             user_model=User,
             user_manager_class=YourUserManager,
             session_maker=session_maker,  # e.g. async_sessionmaker(...)
-            user_manager_kwargs={
-                "verification_token_secret": "replace-with-32+-char-secret",
-                "reset_password_token_secret": "replace-with-32+-char-secret",
-            },
+            user_manager_security=UserManagerSecurity(
+                verification_token_secret="replace-with-32+-char-secret",
+                reset_password_token_secret="replace-with-32+-char-secret",
+            ),
         )
         app = Litestar(plugins=[LitestarAuth(config)])
 """

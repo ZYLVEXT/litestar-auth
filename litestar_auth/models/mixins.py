@@ -15,6 +15,7 @@ from litestar_auth._auth_model_mixins import (
     UserModelMixin,
 )
 from litestar_auth.models._oauth_encrypted_types import oauth_access_token_type, oauth_refresh_token_type
+from litestar_auth.oauth_encryption import register_oauth_model_encryption_events
 
 __all__ = (
     "AccessTokenMixin",
@@ -84,3 +85,6 @@ class OAuthAccountMixin:
             back_populates=cls.auth_user_back_populates,
             foreign_keys=lambda: [cast("Mapped[Any]", cls.user_id)],
         )
+
+
+register_oauth_model_encryption_events(OAuthAccountMixin)

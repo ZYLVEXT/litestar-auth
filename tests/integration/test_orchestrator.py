@@ -20,7 +20,7 @@ from litestar_auth.authentication.backend import AuthenticationBackend
 from litestar_auth.authentication.strategy.base import Strategy, UserManagerProtocol
 from litestar_auth.authentication.transport.bearer import BearerTransport
 from litestar_auth.controllers.totp import INVALID_TOTP_TOKEN_DETAIL
-from litestar_auth.manager import BaseUserManager, require_password_length
+from litestar_auth.manager import BaseUserManager, UserManagerSecurity, require_password_length
 from litestar_auth.password import PasswordHelper
 from litestar_auth.plugin import LitestarAuth, LitestarAuthConfig
 from litestar_auth.totp import InMemoryUsedTotpCodeStore, _current_counter, _generate_totp_code
@@ -283,12 +283,12 @@ def build_app() -> tuple[
         user_model=ExampleUser,
         user_manager_class=PluginUserManager,
         user_db_factory=lambda _session: user_db,
-        user_manager_kwargs={
-            "password_helper": password_helper,
-            "verification_token_secret": manager.verification_token_secret.get_secret_value(),
-            "reset_password_token_secret": manager.reset_password_token_secret.get_secret_value(),
-            "id_parser": UUID,
-        },
+        user_manager_security=UserManagerSecurity[UUID](
+            verification_token_secret=manager.verification_token_secret.get_secret_value(),
+            reset_password_token_secret=manager.reset_password_token_secret.get_secret_value(),
+            id_parser=UUID,
+        ),
+        user_manager_kwargs={"password_helper": password_helper},
         include_users=True,
     )
     plugin = LitestarAuth(config)
@@ -346,13 +346,12 @@ def build_app_with_user_manager_kwargs(
         user_model=ExampleUser,
         user_manager_class=PluginUserManager,
         user_db_factory=lambda _session: user_db,
-        user_manager_kwargs={
-            "password_helper": password_helper,
-            "verification_token_secret": manager.verification_token_secret.get_secret_value(),
-            "reset_password_token_secret": manager.reset_password_token_secret.get_secret_value(),
-            "id_parser": UUID,
-            **overrides,
-        },
+        user_manager_security=UserManagerSecurity[UUID](
+            verification_token_secret=manager.verification_token_secret.get_secret_value(),
+            reset_password_token_secret=manager.reset_password_token_secret.get_secret_value(),
+            id_parser=UUID,
+        ),
+        user_manager_kwargs={"password_helper": password_helper, **overrides},
         include_users=True,
     )
     plugin = LitestarAuth(config)
@@ -426,13 +425,13 @@ def build_advanced_app() -> tuple[
         user_model=ExampleUser,
         user_manager_class=PluginUserManager,
         user_db_factory=lambda _session: user_db,
-        user_manager_kwargs={
-            "password_helper": password_helper,
-            "verification_token_secret": "verify-secret-12345678901234567890",
-            "reset_password_token_secret": "reset-secret-123456789012345678901",
-            "id_parser": UUID,
-            "totp_secret_key": Fernet.generate_key().decode(),
-        },
+        user_manager_security=UserManagerSecurity[UUID](
+            verification_token_secret="verify-secret-12345678901234567890",
+            reset_password_token_secret="reset-secret-123456789012345678901",
+            totp_secret_key=Fernet.generate_key().decode(),
+            id_parser=UUID,
+        ),
+        user_manager_kwargs={"password_helper": password_helper},
         include_users=True,
         totp_config=TotpConfig(
             totp_pending_secret="plugin-totp-pending-secret-thirty-two!",
@@ -440,7 +439,6 @@ def build_advanced_app() -> tuple[
         ),
         enable_refresh=True,
         hard_delete=True,
-        id_parser=UUID,
         user_read_schema=PluginUserRead,
         user_create_schema=PluginUserCreate,
         user_update_schema=PluginUserUpdate,

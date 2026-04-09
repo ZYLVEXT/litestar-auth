@@ -15,7 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_scoped_session
 from litestar_auth.authentication.strategy._opaque_tokens import digest_opaque_token
 from litestar_auth.authentication.strategy.base import RefreshableStrategy, Strategy, UserManagerProtocol
 from litestar_auth.authentication.strategy.db_models import AccessToken, DatabaseTokenModels, RefreshToken
-from litestar_auth.config import is_testing, validate_secret_length
+from litestar_auth.config import validate_secret_length
 from litestar_auth.exceptions import ConfigurationError
 from litestar_auth.types import UserProtocol
 
@@ -77,6 +77,7 @@ class DatabaseTokenStrategy[UP: UserProtocol[Any], ID](Strategy[UP, ID], Refresh
         refresh_max_age: timedelta = DEFAULT_REFRESH_MAX_AGE,
         token_bytes: int = DEFAULT_TOKEN_BYTES,
         accept_legacy_plaintext_tokens: bool = False,
+        unsafe_testing: bool = False,
     ) -> None:
         """Initialize the strategy.
 
@@ -90,6 +91,9 @@ class DatabaseTokenStrategy[UP: UserProtocol[Any], ID](Strategy[UP, ID], Refresh
             token_bytes: Number of random bytes used for token generation.
             accept_legacy_plaintext_tokens: When enabled, accept previously persisted raw tokens
                 stored before digest-at-rest hardening. This is intended for migrations only.
+            unsafe_testing: Explicit per-instance escape hatch for tests that need to
+                suppress production-only warnings around temporary insecure
+                compatibility modes.
 
         Raises:
             ConfigurationError: When ``token_hash_secret`` fails minimum-length requirements.
@@ -110,7 +114,8 @@ class DatabaseTokenStrategy[UP: UserProtocol[Any], ID](Strategy[UP, ID], Refresh
         self.refresh_max_age = refresh_max_age
         self.token_bytes = token_bytes
         self.accept_legacy_plaintext_tokens = accept_legacy_plaintext_tokens
-        if accept_legacy_plaintext_tokens and not is_testing():
+        self.unsafe_testing = unsafe_testing
+        if accept_legacy_plaintext_tokens and not unsafe_testing:
             logger.warning(
                 build_legacy_plaintext_tokens_warning_message(),
                 extra={"event": "db_tokens_accept_legacy_plaintext"},
@@ -126,6 +131,7 @@ class DatabaseTokenStrategy[UP: UserProtocol[Any], ID](Strategy[UP, ID], Refresh
             refresh_max_age=self.refresh_max_age,
             token_bytes=self.token_bytes,
             accept_legacy_plaintext_tokens=self.accept_legacy_plaintext_tokens,
+            unsafe_testing=self.unsafe_testing,
         )
 
     def _repository(self) -> SQLAlchemyAsyncRepository[Any]:

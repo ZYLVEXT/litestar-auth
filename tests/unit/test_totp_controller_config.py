@@ -25,10 +25,8 @@ pytestmark = pytest.mark.unit
 
 
 @pytest.mark.unit
-def test_create_totp_controller_requires_replay_store_by_default(monkeypatch: pytest.MonkeyPatch) -> None:
-    """TOTP controller requires a replay store by default outside testing."""
-    monkeypatch.delenv("LITESTAR_AUTH_TESTING", raising=False)
-
+def test_create_totp_controller_requires_replay_store_by_default() -> None:
+    """TOTP controller requires a replay store by default outside explicit unsafe testing."""
     backend = AsyncMock()
     with pytest.raises(ConfigurationError, match=r"used_tokens_store is required"):
         create_totp_controller(
@@ -40,9 +38,8 @@ def test_create_totp_controller_requires_replay_store_by_default(monkeypatch: py
 
 
 @pytest.mark.unit
-def test_create_totp_controller_step_up_requires_authenticate(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_create_totp_controller_step_up_requires_authenticate() -> None:
     """Step-up enrollment requires user_manager.authenticate."""
-    monkeypatch.setenv("LITESTAR_AUTH_TESTING", "1")
 
     class _NoAuthManager:  # pragma: no cover - shape-only for validation
         async def get(self, _user_id: object) -> object: ...
@@ -59,17 +56,15 @@ def test_create_totp_controller_step_up_requires_authenticate(monkeypatch: pytes
             require_replay_protection=False,
             totp_enable_requires_password=True,
             user_manager=_NoAuthManager(),
+            unsafe_testing=True,
         )
 
 
 @pytest.mark.unit
 def test_create_totp_controller_uses_inmemory_pending_jti_fallback_outside_testing(
-    monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     """Production mode falls back to an in-memory pending-token denylist and logs a warning."""
-    monkeypatch.delenv("LITESTAR_AUTH_TESTING", raising=False)
-
     backend = AsyncMock()
 
     with caplog.at_level(logging.WARNING, logger=totp_controller_logger.name):
@@ -89,12 +84,9 @@ def test_create_totp_controller_uses_inmemory_pending_jti_fallback_outside_testi
 
 @pytest.mark.unit
 def test_create_totp_controller_does_not_fallback_pending_jti_store_in_testing(
-    monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     """Testing mode preserves the no-store behavior and skips the fallback warning."""
-    monkeypatch.setenv("LITESTAR_AUTH_TESTING", "1")
-
     backend = AsyncMock()
 
     with caplog.at_level(logging.WARNING, logger=totp_controller_logger.name):
@@ -105,6 +97,7 @@ def test_create_totp_controller_does_not_fallback_pending_jti_store_in_testing(
             pending_jti_store=None,
             totp_pending_secret="test-totp-pending-secret-thirty-two!",
             require_replay_protection=False,
+            unsafe_testing=True,
         )
 
     assert controller is not None

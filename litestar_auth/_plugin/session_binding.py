@@ -5,7 +5,6 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any, Protocol, cast
 
 from litestar_auth.db.base import BaseOAuthAccountStore, BaseUserStore
-from litestar_auth.oauth_encryption import oauth_token_encryption_scope
 from litestar_auth.types import UserProtocol
 
 if TYPE_CHECKING:
@@ -14,6 +13,7 @@ if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
 
     from litestar_auth.manager import BaseUserManager
+    from litestar_auth.oauth_encryption import OAuthTokenEncryption
 
 
 class _UserManagerFactory[UP: UserProtocol[Any], ID](Protocol):  # noqa: PYI046
@@ -28,8 +28,17 @@ class _AccountStateValidator[UP](Protocol):  # noqa: PYI046
     def __call__(self, user: UP, *, require_verified: bool = False) -> None: ...  # pragma: no cover
 
 
+class _OAuthTokenEncryptionBindable(Protocol):
+    """Store contract that accepts an explicit OAuth token encryption policy."""
+
+    def bind_oauth_token_encryption(
+        self,
+        oauth_token_encryption: OAuthTokenEncryption,
+    ) -> object: ...  # pragma: no cover
+
+
 class _ScopedUserDatabaseProxy[UP: UserProtocol[Any], ID](BaseUserStore[UP, ID]):
-    """Wrap OAuth-account persistence calls in the plugin's OAuth encryption scope.
+    """Wrap a store and bind any explicit plugin-owned OAuth token policy once.
 
     The wrapped store must implement :class:`~litestar_auth.db.base.BaseUserStore`.
     OAuth methods (:meth:`get_by_oauth_account`, :meth:`upsert_oauth_account`)
@@ -38,10 +47,23 @@ class _ScopedUserDatabaseProxy[UP: UserProtocol[Any], ID](BaseUserStore[UP, ID])
     that does not implement those methods raises ``AttributeError`` at runtime.
     """
 
-    def __init__(self, user_db: BaseUserStore[UP, ID], *, oauth_scope: object) -> None:
-        """Wrap ``user_db`` and route OAuth calls through the encryption scope."""
+    def __init__(
+        self,
+        user_db: BaseUserStore[UP, ID],
+        *,
+        oauth_token_encryption: OAuthTokenEncryption | None,
+    ) -> None:
+        """Wrap ``user_db`` and bind any explicit OAuth token policy."""
+        if oauth_token_encryption is not None:
+            bind = getattr(user_db, "bind_oauth_token_encryption", None)
+            if callable(bind):
+                user_db = cast(
+                    "BaseUserStore[UP, ID]",
+                    cast("_OAuthTokenEncryptionBindable", user_db).bind_oauth_token_encryption(
+                        oauth_token_encryption,
+                    ),
+                )
         self._user_db = user_db
-        self._oauth_scope = oauth_scope
 
     async def get(self, user_id: ID) -> UP | None:
         """Return the user with the given identifier, if present."""
@@ -80,14 +102,13 @@ class _ScopedUserDatabaseProxy[UP: UserProtocol[Any], ID](BaseUserStore[UP, ID])
         await self._user_db.delete(user_id)
 
     async def get_by_oauth_account(self, oauth_name: str, account_id: str) -> UP | None:
-        """Load a linked OAuth account within the plugin's encryption scope.
+        """Load a linked OAuth account through the wrapped store.
 
         Returns:
             The linked user when the provider account exists, otherwise ``None``.
         """
         oauth_store = cast("BaseOAuthAccountStore[UP, ID]", self._user_db)
-        with oauth_token_encryption_scope(self._oauth_scope):
-            return await oauth_store.get_by_oauth_account(oauth_name, account_id)
+        return await oauth_store.get_by_oauth_account(oauth_name, account_id)
 
     async def upsert_oauth_account(  # noqa: PLR0913
         self,
@@ -100,15 +121,14 @@ class _ScopedUserDatabaseProxy[UP: UserProtocol[Any], ID](BaseUserStore[UP, ID])
         expires_at: int | None,
         refresh_token: str | None,
     ) -> None:
-        """Persist a linked OAuth account within the plugin's encryption scope."""
+        """Persist a linked OAuth account through the wrapped store."""
         oauth_store = cast("BaseOAuthAccountStore[UP, ID]", self._user_db)
-        with oauth_token_encryption_scope(self._oauth_scope):
-            await oauth_store.upsert_oauth_account(
-                user,
-                oauth_name=oauth_name,
-                account_id=account_id,
-                account_email=account_email,
-                access_token=access_token,
-                expires_at=expires_at,
-                refresh_token=refresh_token,
-            )
+        await oauth_store.upsert_oauth_account(
+            user,
+            oauth_name=oauth_name,
+            account_id=account_id,
+            account_email=account_email,
+            access_token=access_token,
+            expires_at=expires_at,
+            refresh_token=refresh_token,
+        )

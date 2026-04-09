@@ -6,12 +6,12 @@ For plugin-managed apps, the authoritative wiring for `user_manager_security`,
 [Configuration](../configuration.md#canonical-manager-password-surface). This page focuses on the
 direct `BaseUserManager` API once those inputs have already been resolved.
 
-The default plugin builder now forwards `user_manager_security` all the way into
-`user_manager_class(..., security=UserManagerSecurity(...))` when that constructor supports the
-typed kwarg. Older manager constructors that still expose only
-`verification_token_secret` / `reset_password_token_secret` / `totp_secret_key` / `id_parser`
-remain supported through the plugin's explicit-kwargs compatibility path; the builder does not mix
-both styles in one call.
+The default plugin builder now treats `user_manager_security` as an end-to-end constructor
+contract. When that typed bundle is present, the plugin calls
+`user_manager_class(..., password_helper=..., security=UserManagerSecurity(...), password_validator=..., backends=..., login_identifier=..., unsafe_testing=...)`
+and folds the effective `id_parser` into `security` first. If your manager narrows or renames that
+canonical `BaseUserManager`-style constructor surface, `user_manager_factory` is the explicit
+escape hatch.
 
 When you instantiate `BaseUserManager` yourself, you can either pass the legacy explicit
 `verification_token_secret` / `reset_password_token_secret` / `totp_secret_key` / `id_parser`

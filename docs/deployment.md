@@ -66,7 +66,7 @@ When `rate_limit_config` is set, throttled endpoints return **429** with **`Retr
 
 - Set **`oauth_token_encryption_key`** for any configured providers.
 - Use **`https`** redirect URIs in production; review startup warnings for insecure redirect bases.
-- **`oauth_associate_by_email`**: keep `False` unless you understand identity linking risk. If `True`, you must use **`trust_provider_email_verified=True`** only with providers that cryptographically assert email ownership (see [OAuth guide](guides/oauth.md)).
+- **`oauth_associate_by_email`**: keep `False` unless you understand identity linking risk. If `True` on the plugin-owned route table, pair it with **`oauth_trust_provider_email_verified=True`** only for providers that cryptographically assert email ownership. Manual OAuth controllers use the lower-level **`trust_provider_email_verified=True`** flag instead (see [OAuth guide](guides/oauth.md)).
 
 ## Cookies
 
@@ -81,9 +81,9 @@ When `rate_limit_config` is set, throttled endpoints return **429** with **`Retr
 ## Testing vs production
 
 - See the [testing guide](guides/testing.md) for the canonical plugin-backed pytest recipe.
-- `LITESTAR_AUTH_TESTING=1` is **only** for automated tests; the library rejects non-pytest use at startup.
+- `unsafe_testing=True` is a per-instance test-only escape hatch. Keep it out of local manual runs, staging, and production traffic.
 - Request-scoped DB-session sharing is still per HTTP request in tests. Separate login, refresh, authenticated, and logout requests each get their own request-local session.
-- Single-process testing conveniences such as in-memory JWT revocation, in-memory rate limiting, and relaxed TOTP store requirements do not become production-safe because testing mode is enabled.
+- Single-process testing conveniences such as in-memory JWT revocation, in-memory rate limiting, and relaxed TOTP store requirements do not become production-safe because `unsafe_testing` is enabled.
 
 ## Documentation builds
 

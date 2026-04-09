@@ -16,7 +16,7 @@ from litestar_auth.authentication.backend import AuthenticationBackend
 from litestar_auth.authentication.strategy.jwt import JWTStrategy
 from litestar_auth.authentication.transport.bearer import BearerTransport
 from litestar_auth.exceptions import ErrorCode
-from litestar_auth.manager import BaseUserManager
+from litestar_auth.manager import BaseUserManager, UserManagerSecurity
 from litestar_auth.models import User
 from litestar_auth.password import PasswordHelper
 from litestar_auth.plugin import LitestarAuth, LitestarAuthConfig
@@ -262,14 +262,13 @@ def app() -> Iterator[tuple[Litestar, Engine, PasswordHelper, dict[str, UUID]]]:
         user_model=User,
         user_manager_class=UsersFlowManager,
         allow_nondurable_jwt_revocation=True,
-        user_manager_kwargs={
-            "password_helper": password_helper,
-            "verification_token_secret": "verify-secret-1234567890-1234567890",
-            "reset_password_token_secret": "reset-secret-1234567890-1234567890",
-            "id_parser": UUID,
-        },
+        user_manager_security=UserManagerSecurity[UUID](
+            verification_token_secret="verify-secret-1234567890-1234567890",
+            reset_password_token_secret="reset-secret-1234567890-1234567890",
+            id_parser=UUID,
+        ),
+        user_manager_kwargs={"password_helper": password_helper},
         include_users=True,
-        id_parser=UUID,
     )
     yield Litestar(plugins=[LitestarAuth(config)]), engine, password_helper, user_ids
     engine.dispose()

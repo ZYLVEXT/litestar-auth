@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from functools import cache
-from typing import TYPE_CHECKING, Any, Protocol, cast, override
+from typing import TYPE_CHECKING, Any, Protocol, Self, cast, override
 from uuid import UUID
 
 from advanced_alchemy.base import ModelProtocol
@@ -13,8 +13,12 @@ from advanced_alchemy.repository import SQLAlchemyAsyncRepository
 from sqlalchemy import select
 
 from litestar_auth.db.base import BaseUserStore
-from litestar_auth.exceptions import OAuthAccountAlreadyLinkedError
-from litestar_auth.oauth_encryption import require_oauth_token_encryption_key
+from litestar_auth.exceptions import ConfigurationError, OAuthAccountAlreadyLinkedError
+from litestar_auth.oauth_encryption import (
+    OAuthTokenEncryption,
+    bind_oauth_token_encryption,
+    require_oauth_token_encryption,
+)
 from litestar_auth.types import UserProtocol
 
 if TYPE_CHECKING:
@@ -159,6 +163,7 @@ class SQLAlchemyUserDatabase[UP: SQLAlchemyUserModelProtocol](BaseUserStore[UP, 
         *,
         user_model: UserModelT[UP],
         oauth_account_model: type[Any] | None = None,
+        oauth_token_encryption: OAuthTokenEncryption | None = None,
     ) -> None:
         """Initialize the database adapter.
 
@@ -169,13 +174,51 @@ class SQLAlchemyUserDatabase[UP: SQLAlchemyUserModelProtocol](BaseUserStore[UP, 
                 when using OAuth methods (``get_by_oauth_account``, ``upsert_oauth_account``).
                 Models built from ``OAuthAccountMixin`` must point back to the
                 same user class, table, and registry as ``user_model``.
+            oauth_token_encryption: Explicit OAuth token encryption policy for this
+                adapter's session path. Use
+                ``OAuthTokenEncryption(key=None, unsafe_testing=True)`` for the
+                explicit plaintext test policy; omitting the argument leaves OAuth
+                token writes unconfigured and they will fail closed.
         """
         self.session = session
         self.user_model = user_model
         if oauth_account_model is not None:
             _validate_oauth_account_model_contract(user_model, oauth_account_model)
         self.oauth_account_model = oauth_account_model
+        self._oauth_token_encryption = oauth_token_encryption
         self._user_repository_type = _build_user_repository(self.user_model)
+        if oauth_token_encryption is not None:
+            self.bind_oauth_token_encryption(oauth_token_encryption)
+
+    def bind_oauth_token_encryption(self, oauth_token_encryption: OAuthTokenEncryption) -> Self:
+        """Bind an explicit OAuth token encryption policy to this adapter's session path.
+
+        Returns:
+            ``self`` for fluent handoff from plugin/session wiring.
+        """
+        self._oauth_token_encryption = oauth_token_encryption
+        bind_oauth_token_encryption(self.session, oauth_token_encryption)
+        return self
+
+    def _require_oauth_token_encryption(self) -> OAuthTokenEncryption:
+        """Return the explicit OAuth token encryption policy or fail closed.
+
+        Raises:
+            ConfigurationError: When OAuth token writes are attempted without an
+                explicit policy, or with a keyless policy while
+                ``oauth_token_encryption.unsafe_testing`` is false.
+        """
+        if self._oauth_token_encryption is None:
+            msg = (
+                "OAuth token writes require oauth_token_encryption. "
+                "Pass oauth_token_encryption=OAuthTokenEncryption(...) to "
+                "SQLAlchemyUserDatabase() or call bind_oauth_token_encryption(...)."
+            )
+            raise ConfigurationError(msg)
+        return require_oauth_token_encryption(
+            self._oauth_token_encryption,
+            context="persisting OAuth access and refresh tokens",
+        )
 
     def _require_oauth_account_model(self) -> type[Any]:
         """Return the OAuth account model or raise if not configured.
@@ -258,14 +301,14 @@ class SQLAlchemyUserDatabase[UP: SQLAlchemyUserModelProtocol](BaseUserStore[UP, 
 
         Provider identity (oauth_name, account_id) is the global invariant: lookup
         is by provider identity first. Cross-user rebinding is refused.
-        Access and refresh tokens are encrypted at rest via EncryptedString when
-        ``oauth_token_encryption_key`` is configured for the auth plugin.
+        Access and refresh tokens are encrypted at rest when this adapter has an
+        explicit ``oauth_token_encryption`` policy bound to its session path.
 
         Raises:
             OAuthAccountAlreadyLinkedError: When the provider identity is already
                 linked to a different user.
         """
-        require_oauth_token_encryption_key()
+        self._require_oauth_token_encryption()
         oa_model = self._require_oauth_account_model()
         oauth_repo_type = _build_oauth_repository(oa_model)
         oauth_model = cast("Any", oa_model)

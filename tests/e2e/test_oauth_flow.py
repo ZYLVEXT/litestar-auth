@@ -24,10 +24,10 @@ from litestar_auth.controllers import create_oauth_associate_controller
 from litestar_auth.db.sqlalchemy import SQLAlchemyUserDatabase
 from litestar_auth.exceptions import ErrorCode, InactiveUserError, UnverifiedUserError
 from litestar_auth.guards import is_authenticated
-from litestar_auth.manager import BaseUserManager
+from litestar_auth.manager import BaseUserManager, UserManagerSecurity
 from litestar_auth.models import OAuthAccount, User
 from litestar_auth.oauth import create_provider_oauth_controller
-from litestar_auth.oauth_encryption import oauth_token_encryption_scope
+from litestar_auth.oauth_encryption import OAuthTokenEncryption, bind_oauth_token_encryption
 from litestar_auth.password import PasswordHelper
 from litestar_auth.plugin import LitestarAuth, LitestarAuthConfig
 from tests.e2e.conftest import SessionMaker
@@ -55,10 +55,10 @@ class OAuthUserManager(BaseUserManager[User, UUID]):
 class OAuthUserDatabaseProxy:
     """Session-per-call proxy exposing OAuth user DB operations."""
 
-    def __init__(self, session_maker: SessionMaker, *, oauth_scope: object) -> None:
-        """Store the session factory."""
+    def __init__(self, session_maker: SessionMaker, *, oauth_token_encryption: OAuthTokenEncryption) -> None:
+        """Store the session factory and explicit OAuth token policy."""
         self._session_maker = session_maker
-        self._oauth_scope = oauth_scope
+        self._oauth_token_encryption = oauth_token_encryption
 
     async def get_by_email(self, email: str) -> User | None:
         """Load a user by email.
@@ -67,12 +67,12 @@ class OAuthUserDatabaseProxy:
             The matching user, if any.
         """
         async with self._session_maker() as session:
-            with oauth_token_encryption_scope(self._oauth_scope):
-                return await SQLAlchemyUserDatabase(
-                    session,
-                    user_model=User,
-                    oauth_account_model=OAuthAccount,
-                ).get_by_email(email)
+            return await SQLAlchemyUserDatabase(
+                session,
+                user_model=User,
+                oauth_account_model=OAuthAccount,
+                oauth_token_encryption=self._oauth_token_encryption,
+            ).get_by_email(email)
 
     async def get_by_oauth_account(self, oauth_name: str, account_id: str) -> User | None:
         """Load a user by linked OAuth account.
@@ -81,12 +81,12 @@ class OAuthUserDatabaseProxy:
             The matching user, if any.
         """
         async with self._session_maker() as session:
-            with oauth_token_encryption_scope(self._oauth_scope):
-                return await SQLAlchemyUserDatabase(
-                    session,
-                    user_model=User,
-                    oauth_account_model=OAuthAccount,
-                ).get_by_oauth_account(oauth_name, account_id)
+            return await SQLAlchemyUserDatabase(
+                session,
+                user_model=User,
+                oauth_account_model=OAuthAccount,
+                oauth_token_encryption=self._oauth_token_encryption,
+            ).get_by_oauth_account(oauth_name, account_id)
 
     async def upsert_oauth_account(  # noqa: PLR0913
         self,
@@ -101,30 +101,43 @@ class OAuthUserDatabaseProxy:
     ) -> None:
         """Create or update a persisted OAuth account."""
         async with self._session_maker() as session:
-            with oauth_token_encryption_scope(self._oauth_scope):
-                user_db = SQLAlchemyUserDatabase(session, user_model=User, oauth_account_model=OAuthAccount)
-                persistent_user = await user_db.get(user.id)
-                assert persistent_user is not None
-                await user_db.upsert_oauth_account(
-                    persistent_user,
-                    oauth_name=oauth_name,
-                    account_id=account_id,
-                    account_email=account_email,
-                    access_token=access_token,
-                    expires_at=expires_at,
-                    refresh_token=refresh_token,
-                )
+            user_db = SQLAlchemyUserDatabase(
+                session,
+                user_model=User,
+                oauth_account_model=OAuthAccount,
+                oauth_token_encryption=self._oauth_token_encryption,
+            )
+            persistent_user = await user_db.get(user.id)
+            assert persistent_user is not None
+            await user_db.upsert_oauth_account(
+                persistent_user,
+                oauth_name=oauth_name,
+                account_id=account_id,
+                account_email=account_email,
+                access_token=access_token,
+                expires_at=expires_at,
+                refresh_token=refresh_token,
+            )
 
 
 class OAuthManagerProxy:
     """Session-per-call proxy matching the OAuth controller contract."""
 
-    def __init__(self, session_maker: SessionMaker, password_helper: PasswordHelper, *, oauth_scope: object) -> None:
+    def __init__(
+        self,
+        session_maker: SessionMaker,
+        password_helper: PasswordHelper,
+        *,
+        oauth_token_encryption: OAuthTokenEncryption,
+    ) -> None:
         """Store collaborators used to build real managers."""
         self._session_maker = session_maker
         self._password_helper = password_helper
-        self._oauth_scope = oauth_scope
-        self.user_db = OAuthUserDatabaseProxy(session_maker, oauth_scope=oauth_scope)
+        self._oauth_token_encryption = oauth_token_encryption
+        self.user_db = OAuthUserDatabaseProxy(
+            session_maker,
+            oauth_token_encryption=oauth_token_encryption,
+        )
         self.oauth_account_store = self.user_db
 
     def _build_manager(self, session: AsyncSession) -> OAuthUserManager:
@@ -133,14 +146,18 @@ class OAuthManagerProxy:
         Returns:
             A session-bound user manager.
         """
-        with oauth_token_encryption_scope(self._oauth_scope):
-            return OAuthUserManager(
-                user_db=SQLAlchemyUserDatabase(session, user_model=User, oauth_account_model=OAuthAccount),
-                password_helper=self._password_helper,
-                verification_token_secret="verify-secret-1234567890-1234567890",
-                reset_password_token_secret="reset-secret-1234567890-1234567890",
-                id_parser=UUID,
-            )
+        return OAuthUserManager(
+            user_db=SQLAlchemyUserDatabase(
+                session,
+                user_model=User,
+                oauth_account_model=OAuthAccount,
+                oauth_token_encryption=self._oauth_token_encryption,
+            ),
+            password_helper=self._password_helper,
+            verification_token_secret="verify-secret-1234567890-1234567890",
+            reset_password_token_secret="reset-secret-1234567890-1234567890",
+            id_parser=UUID,
+        )
 
     async def create(
         self,
@@ -168,7 +185,12 @@ class OAuthManagerProxy:
             The updated user.
         """
         async with self._session_maker() as session:
-            user_db = SQLAlchemyUserDatabase(session, user_model=User, oauth_account_model=OAuthAccount)
+            user_db = SQLAlchemyUserDatabase(
+                session,
+                user_model=User,
+                oauth_account_model=OAuthAccount,
+                oauth_token_encryption=self._oauth_token_encryption,
+            )
             persistent_user = await user_db.get(user.id)
             assert persistent_user is not None
             return await self._build_manager(session).update(user_update, persistent_user)
@@ -176,7 +198,12 @@ class OAuthManagerProxy:
     async def on_after_login(self, user: User) -> None:
         """Delegate post-login hooks to the real manager."""
         async with self._session_maker() as session:
-            user_db = SQLAlchemyUserDatabase(session, user_model=User, oauth_account_model=OAuthAccount)
+            user_db = SQLAlchemyUserDatabase(
+                session,
+                user_model=User,
+                oauth_account_model=OAuthAccount,
+                oauth_token_encryption=self._oauth_token_encryption,
+            )
             persistent_user = await user_db.get(user.id)
             assert persistent_user is not None
             await self._build_manager(session).on_after_login(persistent_user)
@@ -255,7 +282,7 @@ class AppState:
     session_maker: SessionMaker
     oauth_client: FakeOAuthClient
     password_helper: PasswordHelper
-    oauth_scope: object
+    oauth_token_encryption: OAuthTokenEncryption
 
 
 @get("/protected", guards=[is_authenticated], sync_to_thread=False)
@@ -269,10 +296,11 @@ def build_app(
     *,
     oauth_client: FakeOAuthClient | None = None,
     associate_by_email: bool = False,
+    include_login_controller: bool = True,
     include_associate_controller: bool = False,
     plugin_oauth_config: OAuthConfig | None = None,
 ) -> tuple[Litestar, AppState]:
-    """Create a Litestar app wired with the auth plugin and OAuth controller.
+    """Create a Litestar app wired with the auth plugin and optional OAuth controllers.
 
     Returns:
         The configured app and its shared test state.
@@ -306,6 +334,8 @@ def build_app(
             configured_plugin_oauth,
             oauth_token_encryption_key=oauth_token_encryption_key,
         )
+    assert configured_plugin_oauth.oauth_token_encryption_key is not None
+    oauth_token_encryption = OAuthTokenEncryption(configured_plugin_oauth.oauth_token_encryption_key)
     backend = AuthenticationBackend[User, UUID](
         name="bearer",
         transport=BearerTransport(),
@@ -322,12 +352,12 @@ def build_app(
             user_model=User,
             oauth_account_model=OAuthAccount,
         ),
-        user_manager_kwargs={
-            "password_helper": password_helper,
-            "verification_token_secret": "verify-secret-1234567890-1234567890",
-            "reset_password_token_secret": "reset-secret-1234567890-1234567890",
-            "id_parser": UUID,
-        },
+        user_manager_security=UserManagerSecurity[UUID](
+            verification_token_secret="verify-secret-1234567890-1234567890",
+            reset_password_token_secret="reset-secret-1234567890-1234567890",
+            id_parser=UUID,
+        ),
+        user_manager_kwargs={"password_helper": password_helper},
         oauth_config=configured_plugin_oauth,
         include_register=False,
         include_verify=False,
@@ -335,18 +365,26 @@ def build_app(
         include_users=False,
     )
     plugin = LitestarAuth(config)
-    oauth_manager = OAuthManagerProxy(session_maker, password_helper, oauth_scope=plugin)
-    fake_oauth_client = oauth_client or FakeOAuthClient()
-    oauth_controller = create_provider_oauth_controller(
-        provider_name="github",
-        backend=backend,
-        user_manager=oauth_manager,
-        oauth_client=fake_oauth_client,
-        redirect_base_url="https://testserver.local/auth/oauth",
-        associate_by_email=associate_by_email,
-        trust_provider_email_verified=True,
+    oauth_manager = OAuthManagerProxy(
+        session_maker,
+        password_helper,
+        oauth_token_encryption=oauth_token_encryption,
     )
-    route_handlers: list[ControllerRouterHandler] = [oauth_controller, protected_route]
+    fake_oauth_client = oauth_client or FakeOAuthClient()
+    route_handlers: list[ControllerRouterHandler] = []
+    if include_login_controller:
+        route_handlers.append(
+            create_provider_oauth_controller(
+                provider_name="github",
+                backend=backend,
+                user_manager=oauth_manager,
+                oauth_client=fake_oauth_client,
+                redirect_base_url="https://testserver.local/auth/oauth",
+                associate_by_email=associate_by_email,
+                trust_provider_email_verified=True,
+            ),
+        )
+    route_handlers.append(protected_route)
     if include_associate_controller:
         route_handlers.append(
             create_oauth_associate_controller(
@@ -362,7 +400,7 @@ def build_app(
         session_maker=session_maker,
         oauth_client=fake_oauth_client,
         password_helper=password_helper,
-        oauth_scope=plugin,
+        oauth_token_encryption=oauth_token_encryption,
     )
 
 
@@ -373,9 +411,8 @@ async def get_user_by_email(state: AppState, email: str) -> User | None:
         The matching user, if any.
     """
     async with state.session_maker() as session:
-        with oauth_token_encryption_scope(state.oauth_scope):
-            result = cast("Any", await session.execute(select(User).where(User.email == email)))
-            return cast("User | None", result.scalar_one_or_none())
+        result = cast("Any", await session.execute(select(User).where(User.email == email)))
+        return cast("User | None", result.scalar_one_or_none())
 
 
 async def get_oauth_account(state: AppState, oauth_name: str, account_id: str) -> OAuthAccount | None:
@@ -385,17 +422,17 @@ async def get_oauth_account(state: AppState, oauth_name: str, account_id: str) -
         The matching OAuth account, if any.
     """
     async with state.session_maker() as session:
-        with oauth_token_encryption_scope(state.oauth_scope):
-            result = cast(
-                "Any",
-                await session.execute(
-                    select(OAuthAccount).where(
-                        OAuthAccount.oauth_name == oauth_name,
-                        OAuthAccount.account_id == account_id,
-                    ),
+        bind_oauth_token_encryption(session, state.oauth_token_encryption)
+        result = cast(
+            "Any",
+            await session.execute(
+                select(OAuthAccount).where(
+                    OAuthAccount.oauth_name == oauth_name,
+                    OAuthAccount.account_id == account_id,
                 ),
-            )
-            return cast("OAuthAccount | None", result.scalar_one_or_none())
+            ),
+        )
+        return cast("OAuthAccount | None", result.scalar_one_or_none())
 
 
 async def create_local_user(
@@ -412,23 +449,27 @@ async def create_local_user(
         The persisted local user.
     """
     async with state.session_maker() as session:
-        with oauth_token_encryption_scope(state.oauth_scope):
-            manager = OAuthUserManager(
-                user_db=SQLAlchemyUserDatabase(session, user_model=User, oauth_account_model=OAuthAccount),
-                password_helper=state.password_helper,
-                verification_token_secret="verify-secret-1234567890-1234567890",
-                reset_password_token_secret="reset-secret-1234567890-1234567890",
-                id_parser=UUID,
-            )
-            user = await manager.create({"email": email, "password": password})
-            if not is_active:
-                user = await manager.update({"is_active": False}, user)
-            if is_verified:
-                user = await manager.update({"is_verified": True}, user)
-            await session.commit()
-            await session.refresh(user)
-            session.expunge(user)
-            return user
+        manager = OAuthUserManager(
+            user_db=SQLAlchemyUserDatabase(
+                session,
+                user_model=User,
+                oauth_account_model=OAuthAccount,
+                oauth_token_encryption=state.oauth_token_encryption,
+            ),
+            password_helper=state.password_helper,
+            verification_token_secret="verify-secret-1234567890-1234567890",
+            reset_password_token_secret="reset-secret-1234567890-1234567890",
+            id_parser=UUID,
+        )
+        user = await manager.create({"email": email, "password": password})
+        if not is_active:
+            user = await manager.update({"is_active": False}, user)
+        if is_verified:
+            user = await manager.update({"is_verified": True}, user)
+        await session.commit()
+        await session.refresh(user)
+        session.expunge(user)
+        return user
 
 
 @pytest.fixture
@@ -596,17 +637,21 @@ async def test_oauth_callback_returns_existing_user_when_provider_identity_alrea
         password="password-bbbb",
     )
     async with state.session_maker() as session:
-        with oauth_token_encryption_scope(state.oauth_scope):
-            user_db = SQLAlchemyUserDatabase(session, user_model=User, oauth_account_model=OAuthAccount)
-            await user_db.upsert_oauth_account(
-                user_a,
-                oauth_name="github",
-                account_id="shared-provider-id",
-                account_email="first@example.com",
-                access_token="stored-token",
-                expires_at=0,
-                refresh_token=None,
-            )
+        user_db = SQLAlchemyUserDatabase(
+            session,
+            user_model=User,
+            oauth_account_model=OAuthAccount,
+            oauth_token_encryption=state.oauth_token_encryption,
+        )
+        await user_db.upsert_oauth_account(
+            user_a,
+            oauth_name="github",
+            account_id="shared-provider-id",
+            account_email="first@example.com",
+            access_token="stored-token",
+            expires_at=0,
+            refresh_token=None,
+        )
 
     async with AsyncTestClient(app=app, base_url="https://testserver.local") as client:
         authorize_response = await client.get("/auth/oauth/github/authorize", follow_redirects=False)
@@ -705,14 +750,15 @@ async def test_oauth_associate_links_provider_to_authenticated_user() -> None:
 
 
 async def test_plugin_managed_oauth_associate_routes_link_provider_to_authenticated_user() -> None:
-    """Plugin-owned associate routes preserve the documented prefix and linking flow."""
+    """Plugin-owned associate routes reuse the shared provider inventory and linking flow."""
     oauth_client = FakeOAuthClient(account_id="plugin-associate-provider-id", email="provider@example.com")
     app, state = build_app(
         oauth_client=oauth_client,
+        include_login_controller=False,
         plugin_oauth_config=OAuthConfig(
+            oauth_providers=[("github", oauth_client)],
+            oauth_redirect_base_url="https://testserver.local/auth",
             include_oauth_associate=True,
-            oauth_associate_providers=[("github", oauth_client)],
-            oauth_associate_redirect_base_url="https://testserver.local/auth/associate",
         ),
     )
     existing_user = await create_local_user(
@@ -753,13 +799,15 @@ async def test_plugin_managed_oauth_associate_routes_link_provider_to_authentica
     state.engine.dispose()
 
 
-async def test_plugin_oauth_provider_inventory_keeps_login_route_registration_explicit() -> None:
-    """OAuthConfig login providers do not auto-mount associate routes or alter explicit login helper paths."""
+async def test_plugin_oauth_provider_inventory_auto_mounts_login_routes_and_keeps_associate_optional() -> None:
+    """The single plugin-owned provider inventory mounts login routes without implying associate routes."""
     oauth_client = FakeOAuthClient(account_id="provider-user-login-only", email="oauth@example.com")
     app, state = build_app(
         oauth_client=oauth_client,
+        include_login_controller=False,
         plugin_oauth_config=OAuthConfig(
             oauth_providers=[("github", oauth_client)],
+            oauth_redirect_base_url="https://testserver.local/auth",
         ),
     )
 

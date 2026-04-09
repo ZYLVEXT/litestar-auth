@@ -8,6 +8,7 @@ from uuid import UUID
 
 import msgspec
 import pytest
+from litestar.exceptions import ValidationException
 
 import litestar_auth._plugin.controllers as controllers_module
 from litestar_auth._plugin.config import (
@@ -18,6 +19,7 @@ from litestar_auth._plugin.config import (
 )
 from litestar_auth._plugin.controllers import (
     _append_oauth_associate_controllers,
+    _append_oauth_login_controllers,
     _append_optional_feature_controllers,
     _build_auth_controllers,
     build_controllers,
@@ -29,6 +31,7 @@ from litestar_auth._plugin.controllers import (
 )
 from litestar_auth.authentication.backend import AuthenticationBackend
 from litestar_auth.authentication.transport.bearer import BearerTransport
+from litestar_auth.manager import UserManagerSecurity
 from tests.integration.test_orchestrator import (
     DummySessionMaker,
     ExampleUser,
@@ -112,8 +115,10 @@ def test_build_auth_controllers_builds_backend_specific_paths_and_totp_secret(
     assert _build_auth_controllers(config=config) == ["/auth", "/auth/secondary"]
     assert calls[0]["backend"] is primary_backend
     assert calls[0]["totp_pending_secret"] == "p" * 32
+    assert calls[0]["unsafe_testing"] is False
     assert calls[1]["backend"] is secondary_backend
     assert calls[1]["path"] == "/auth/secondary"
+    assert calls[1]["unsafe_testing"] is False
 
 
 def test_build_totp_controller_raises_when_totp_config_missing() -> None:
@@ -158,6 +163,20 @@ def test_build_totp_controller_forwards_named_backend_and_config(monkeypatch: py
     assert captured["totp_issuer"] == "Example Issuer"
     assert captured["totp_algorithm"] == "SHA512"
     assert captured["path"] == "/auth/2fa"
+    assert captured["unsafe_testing"] is False
+
+
+def test_build_totp_controller_raises_for_unknown_named_backend_after_index_scan() -> None:
+    """The TOTP controller path still fails closed after scanning startup backends for an index."""
+    config = _minimal_config(
+        totp_config=TotpConfig(
+            totp_pending_secret="p" * 32,
+            totp_backend_name="missing",
+        ),
+    )
+
+    with pytest.raises(ValueError, match="Unknown TOTP backend: missing"):
+        build_totp_controller(config)
 
 
 def test_totp_backend_raises_for_unknown_backend_name() -> None:
@@ -171,6 +190,48 @@ def test_totp_backend_raises_for_unknown_backend_name() -> None:
 
     with pytest.raises(ValueError, match="Unknown TOTP backend: missing"):
         totp_backend(config)
+
+
+def test_resolve_request_backend_raises_when_backend_index_is_missing() -> None:
+    """Request backend resolution fails closed when the startup index is absent at runtime."""
+    backend = _backend(name="primary", token_prefix="primary")
+
+    with pytest.raises(RuntimeError, match="Missing backend index 1 for 'primary'"):
+        controllers_module._resolve_request_backend(
+            [backend],
+            backend_index=1,
+            backend_name="primary",
+        )
+
+
+def test_resolve_request_backend_raises_when_backend_name_changes() -> None:
+    """Request backend resolution fails closed when backend ordering no longer matches startup."""
+    backend = _backend(name="secondary", token_prefix="secondary")
+
+    with pytest.raises(RuntimeError, match="Expected backend 'primary' at index 0, got 'secondary'"):
+        controllers_module._resolve_request_backend(
+            [backend],
+            backend_index=0,
+            backend_name="primary",
+        )
+
+
+async def test_create_totp_controller_enable_validation_callback_runs_background_task() -> None:
+    """Plugin TOTP enable handlers keep the invalid-payload background callback wired."""
+    controller_cls = controllers_module.create_totp_controller(
+        backend=_backend(name="primary", token_prefix="primary"),
+        backend_index=0,
+        user_manager_dependency_key="litestar_auth_user_manager",
+        require_replay_protection=False,
+        totp_pending_secret="p" * 32,
+        totp_enable_requires_password=True,
+    )
+    controller_handler = cast("Any", controller_cls).enable
+    exception_handler = controller_handler.exception_handlers[ValidationException]
+    response = exception_handler(cast("Any", object()), object())
+
+    assert response.background is not None
+    await response.background()
 
 
 def test_schema_kwargs_include_non_null_custom_schemas() -> None:
@@ -212,6 +273,11 @@ def test_append_optional_feature_controllers_skips_totp_and_oauth_when_not_confi
         "create_oauth_associate_controller",
         lambda **_kwargs: pytest.fail("create_oauth_associate_controller should not be called"),
     )
+    monkeypatch.setattr(
+        controllers_module,
+        "create_oauth_login_controller",
+        lambda **_kwargs: pytest.fail("create_oauth_login_controller should not be called"),
+    )
 
     _append_optional_feature_controllers(controllers=controllers, config=config)
 
@@ -226,11 +292,12 @@ def test_append_optional_feature_controllers_appends_enabled_features_in_order(
     gitlab_client = object()
     config = _minimal_config(
         oauth_config=OAuthConfig(
-            include_oauth_associate=True,
-            oauth_associate_providers=[
+            oauth_providers=[
                 ("github", github_client),
                 ("gitlab", gitlab_client),
             ],
+            oauth_redirect_base_url="https://app.example/auth",
+            include_oauth_associate=True,
             oauth_cookie_secure=False,
         ),
         totp_config=TotpConfig(totp_pending_secret="p" * 32),
@@ -254,9 +321,19 @@ def test_append_optional_feature_controllers_appends_enabled_features_in_order(
     monkeypatch.setattr(controllers_module, "create_users_controller", _record("users"))
     monkeypatch.setattr(controllers_module, "build_totp_controller", lambda _config: "totp")
 
-    def _create_oauth_associate_controller(**kwargs: object) -> str:
-        calls.append(("oauth", dict(kwargs)))
+    def _create_oauth_login_controller(**kwargs: object) -> str:
+        calls.append(("oauth-login", dict(kwargs)))
         return cast("str", kwargs["provider_name"])
+
+    def _create_oauth_associate_controller(**kwargs: object) -> str:
+        calls.append(("oauth-associate", dict(kwargs)))
+        return f"associate-{kwargs['provider_name']}"
+
+    monkeypatch.setattr(
+        controllers_module,
+        "create_oauth_login_controller",
+        _create_oauth_login_controller,
+    )
 
     monkeypatch.setattr(
         controllers_module,
@@ -267,12 +344,23 @@ def test_append_optional_feature_controllers_appends_enabled_features_in_order(
     controllers: list[ControllerRouterHandler] = []
     _append_optional_feature_controllers(controllers=controllers, config=config)
 
-    assert controllers == ["register", "verify", "reset", "users", "totp", "github", "gitlab"]
+    assert controllers == [
+        "register",
+        "verify",
+        "reset",
+        "users",
+        "totp",
+        "github",
+        "gitlab",
+        "associate-github",
+        "associate-gitlab",
+    ]
     assert calls[0] == (
         "register",
         {
             "rate_limit_config": None,
             "path": "/auth",
+            "unsafe_testing": False,
             "user_read_schema": _ReadSchema,
             "user_create_schema": _CreateSchema,
         },
@@ -282,6 +370,7 @@ def test_append_optional_feature_controllers_appends_enabled_features_in_order(
         {
             "rate_limit_config": None,
             "path": "/auth",
+            "unsafe_testing": False,
             "user_read_schema": _ReadSchema,
         },
     )
@@ -290,6 +379,7 @@ def test_append_optional_feature_controllers_appends_enabled_features_in_order(
         {
             "rate_limit_config": None,
             "path": "/auth",
+            "unsafe_testing": False,
             "user_read_schema": _ReadSchema,
         },
     )
@@ -299,12 +389,64 @@ def test_append_optional_feature_controllers_appends_enabled_features_in_order(
             "id_parser": UUID,
             "path": "/users",
             "hard_delete": False,
+            "unsafe_testing": False,
             "user_read_schema": _ReadSchema,
             "user_update_schema": _UpdateSchema,
         },
     )
-    assert calls[4] == ("oauth", _oauth_call("github", github_client))
-    assert calls[5] == ("oauth", _oauth_call("gitlab", gitlab_client))
+    primary_backend = config.backends[0]
+    assert calls[4] == ("oauth-login", _oauth_login_call("github", github_client, primary_backend))
+    assert calls[5] == ("oauth-login", _oauth_login_call("gitlab", gitlab_client, primary_backend))
+    assert calls[6] == ("oauth-associate", _oauth_associate_call("github", github_client))
+    assert calls[7] == ("oauth-associate", _oauth_associate_call("gitlab", gitlab_client))
+
+
+def test_append_oauth_login_controllers_uses_explicit_redirect_base_url_and_primary_backend(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Plugin OAuth login assembly uses the shared provider inventory and primary backend."""
+    primary_backend = _backend(name="primary", token_prefix="primary")
+    secondary_backend = _backend(name="secondary", token_prefix="secondary")
+    client = object()
+    config = _minimal_config(
+        backends=[primary_backend, secondary_backend],
+        oauth_config=OAuthConfig(
+            oauth_providers=[("github", client)],
+            oauth_redirect_base_url="https://app.example/auth",
+            oauth_cookie_secure=False,
+            oauth_associate_by_email=True,
+            oauth_trust_provider_email_verified=True,
+        ),
+    )
+    captured: list[dict[str, object]] = []
+
+    def _create_oauth_login_controller(**kwargs: object) -> str:
+        captured.append(dict(kwargs))
+        return "github"
+
+    monkeypatch.setattr(
+        controllers_module,
+        "create_oauth_login_controller",
+        _create_oauth_login_controller,
+    )
+
+    controllers: list[ControllerRouterHandler] = []
+    _append_oauth_login_controllers(controllers=controllers, config=config)
+
+    assert controllers == ["github"]
+    assert captured == [
+        {
+            "provider_name": "github",
+            "oauth_client": client,
+            "backend": primary_backend,
+            "backend_index": 0,
+            "redirect_base_url": "https://app.example/auth/oauth",
+            "path": "/auth/oauth",
+            "cookie_secure": False,
+            "associate_by_email": True,
+            "trust_provider_email_verified": True,
+        },
+    ]
 
 
 def test_append_oauth_associate_controllers_uses_explicit_redirect_base_url(
@@ -314,9 +456,9 @@ def test_append_oauth_associate_controllers_uses_explicit_redirect_base_url(
     client = object()
     config = _minimal_config(
         oauth_config=OAuthConfig(
+            oauth_providers=[("github", client)],
             include_oauth_associate=True,
-            oauth_associate_providers=[("github", client)],
-            oauth_associate_redirect_base_url="https://app.example/auth/associate",
+            oauth_redirect_base_url="https://app.example/auth",
         ),
     )
     captured: list[dict[str, object]] = []
@@ -347,17 +489,16 @@ def test_append_oauth_associate_controllers_uses_explicit_redirect_base_url(
     ]
 
 
-def test_append_oauth_associate_controllers_ignores_oauth_login_provider_inventory(
+def test_append_oauth_associate_controllers_uses_shared_provider_inventory(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Plugin OAuth route assembly reads only the associate-provider inventory."""
-    login_client = object()
-    associate_client = object()
+    """Plugin OAuth associate assembly reuses the single plugin-owned provider inventory."""
+    oauth_client = object()
     config = _minimal_config(
         oauth_config=OAuthConfig(
-            oauth_providers=[("github", login_client)],
+            oauth_providers=[("github", oauth_client)],
             include_oauth_associate=True,
-            oauth_associate_providers=[("gitlab", associate_client)],
+            oauth_redirect_base_url="https://app.example/auth",
             oauth_cookie_secure=False,
         ),
     )
@@ -376,8 +517,8 @@ def test_append_oauth_associate_controllers_ignores_oauth_login_provider_invento
     controllers: list[ControllerRouterHandler] = []
     _append_oauth_associate_controllers(controllers=controllers, config=config)
 
-    assert controllers == ["gitlab"]
-    assert captured == [_oauth_call("gitlab", associate_client)]
+    assert controllers == ["github"]
+    assert captured == [_oauth_associate_call("github", oauth_client)]
 
 
 def _minimal_config(
@@ -405,12 +546,12 @@ def _minimal_config(
         user_model=ExampleUser,
         user_manager_class=PluginUserManager,
         user_db_factory=lambda _session: user_db,
-        user_manager_kwargs={
-            "verification_token_secret": "v" * 32,
-            "reset_password_token_secret": "r" * 32,
-            "id_parser": UUID,
-        },
-        id_parser=UUID,
+        user_manager_security=UserManagerSecurity[UUID](
+            verification_token_secret="v" * 32,
+            reset_password_token_secret="r" * 32,
+            id_parser=UUID,
+        ),
+        user_manager_kwargs={},
         oauth_config=oauth_config,
         totp_config=totp_config,
     )
@@ -429,7 +570,30 @@ def _backend(*, name: str, token_prefix: str) -> AuthenticationBackend[ExampleUs
     )
 
 
-def _oauth_call(provider_name: str, oauth_client: object) -> dict[str, object]:
+def _oauth_login_call(
+    provider_name: str,
+    oauth_client: object,
+    backend: AuthenticationBackend[ExampleUser, UUID],
+) -> dict[str, object]:
+    """Build the expected kwargs for plugin-owned OAuth login controller factories.
+
+    Returns:
+        Expected controller-factory keyword arguments for a provider binding.
+    """
+    return {
+        "provider_name": provider_name,
+        "oauth_client": oauth_client,
+        "backend": backend,
+        "backend_index": 0,
+        "redirect_base_url": "https://app.example/auth/oauth",
+        "path": "/auth/oauth",
+        "cookie_secure": False,
+        "associate_by_email": False,
+        "trust_provider_email_verified": False,
+    }
+
+
+def _oauth_associate_call(provider_name: str, oauth_client: object) -> dict[str, object]:
     """Build the expected kwargs for OAuth-associate controller factories.
 
     Returns:
@@ -439,7 +603,7 @@ def _oauth_call(provider_name: str, oauth_client: object) -> dict[str, object]:
         "provider_name": provider_name,
         "user_manager_dependency_key": OAUTH_ASSOCIATE_USER_MANAGER_DEPENDENCY_KEY,
         "oauth_client": oauth_client,
-        "redirect_base_url": "http://localhost/auth/associate",
+        "redirect_base_url": "https://app.example/auth/associate",
         "path": "/auth/associate",
         "cookie_secure": False,
     }

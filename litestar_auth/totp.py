@@ -18,7 +18,6 @@ from urllib.parse import quote, urlencode
 
 from litestar_auth._optional_deps import _require_redis_asyncio
 from litestar_auth._redis_protocols import RedisConditionalSetClient
-from litestar_auth.config import is_testing
 from litestar_auth.exceptions import ConfigurationError
 
 if TYPE_CHECKING:
@@ -249,6 +248,7 @@ async def verify_totp_with_store(  # noqa: PLR0913
     used_tokens_store: UsedTotpCodeStore | None = None,
     algorithm: TotpAlgorithm = TOTP_ALGORITHM,
     require_replay_protection: bool = True,
+    unsafe_testing: bool = False,
 ) -> bool:
     """Validate a TOTP code and optionally reject same-window replays.
 
@@ -257,7 +257,7 @@ async def verify_totp_with_store(  # noqa: PLR0913
 
     Raises:
         ConfigurationError: If ``require_replay_protection=True`` and no replay store is configured
-            outside testing mode.
+            outside ``unsafe_testing`` mode.
     """
     counter = _verify_totp_counter(secret, code, algorithm=algorithm)
     if counter is None:
@@ -265,7 +265,7 @@ async def verify_totp_with_store(  # noqa: PLR0913
         return False
 
     if used_tokens_store is None:
-        if require_replay_protection and not is_testing():
+        if require_replay_protection and not unsafe_testing:
             msg = "TOTP replay protection is required in production. Configure a UsedTotpCodeStore."
             raise ConfigurationError(msg)
         warnings.warn(

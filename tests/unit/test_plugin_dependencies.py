@@ -37,6 +37,7 @@ from litestar_auth._plugin.dependencies import (
 from litestar_auth._plugin.scoped_session import SessionFactory
 from litestar_auth.authentication.backend import AuthenticationBackend
 from litestar_auth.authentication.transport.bearer import BearerTransport
+from litestar_auth.manager import UserManagerSecurity
 from tests.e2e.conftest import assert_structural_session_factory
 from tests.integration.test_orchestrator import (
     DummySessionMaker,
@@ -83,11 +84,12 @@ def _minimal_config() -> LitestarAuthConfig[ExampleUser, UUID]:
         user_model=ExampleUser,
         user_manager_class=PluginUserManager,
         user_db_factory=lambda _session: user_db,
-        user_manager_kwargs={
-            "verification_token_secret": "verify-secret-12345678901234567890",
-            "reset_password_token_secret": "reset-secret-123456789012345678901",
-            "id_parser": UUID,
-        },
+        user_manager_security=UserManagerSecurity[UUID](
+            verification_token_secret="verify-secret-12345678901234567890",
+            reset_password_token_secret="reset-secret-123456789012345678901",
+            id_parser=UUID,
+        ),
+        user_manager_kwargs={},
         include_users=False,
     )
 
@@ -337,6 +339,12 @@ async def test_register_dependencies_registers_core_providers_and_autocommit_han
         await generator.aclose()
     assert user_manager == ("manager", first_session)
 
+    backends_provider = app_config.dependencies[DEFAULT_BACKENDS_DEPENDENCY_KEY]
+    assert isinstance(backends_provider, Provide)
+    assert backends_provider.use_cache is False
+    assert backends_provider.sync_to_thread is False
+    assert backends_provider.dependency() == ("primary",)
+
 
 def test_register_dependencies_adds_oauth_associate_provider_only_when_configured() -> None:
     """OAuth associate DI is registered only when the matching config surface is enabled."""
@@ -350,8 +358,9 @@ def test_register_dependencies_adds_oauth_associate_provider_only_when_configure
     present_app_config = AppConfig()
     present_config = _minimal_config()
     present_config.oauth_config = OAuthConfig(
+        oauth_providers=[("example", object())],
         include_oauth_associate=True,
-        oauth_associate_providers=[("example", object())],
+        oauth_redirect_base_url="https://app.example.com/auth",
         oauth_token_encryption_key="a" * 44,
     )
 

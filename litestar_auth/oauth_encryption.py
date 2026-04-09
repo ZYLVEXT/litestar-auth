@@ -1,18 +1,21 @@
-"""OAuth token encryption at rest using Advanced Alchemy EncryptedString and a Fernet key.
+"""Explicit OAuth token encryption helpers for SQLAlchemy-backed persistence.
 
-When ``oauth_token_encryption_key`` is set on the auth plugin config, OAuth
-access_token and refresh_token are stored encrypted in the database. The key
-must be a URL-safe base64-encoded Fernet key (e.g. from ``Fernet.generate_key().decode()``).
+OAuth token storage is bound to a concrete session via
+``bind_oauth_token_encryption(...)`` or by passing ``oauth_token_encryption=...``
+to ``SQLAlchemyUserDatabase``. Mapped ``OAuthAccount`` instances keep plaintext
+tokens in memory while mapper events encrypt them before writes and decrypt them
+after loads/refreshes.
 """
 
 from __future__ import annotations
 
-from collections.abc import Callable, Iterator
-from contextlib import contextmanager
-from contextvars import ContextVar
-from typing import Any, override
+from dataclasses import dataclass
+from typing import Any, cast, override
 
-from litestar_auth.config import is_pytest_runtime, is_testing
+from sqlalchemy import event
+from sqlalchemy import inspect as sa_inspect
+from sqlalchemy.orm import attributes, object_session
+
 from litestar_auth.exceptions import ConfigurationError
 
 try:
@@ -22,62 +25,26 @@ except ImportError:
 
 from advanced_alchemy.types.encrypted_string import EncryptionBackend
 
-type OAuthEncryptionScope = object
-
-_current_oauth_encryption_scope: ContextVar[OAuthEncryptionScope | None] = ContextVar(
-    "current_oauth_encryption_scope",
-    default=None,
-)
+_OAUTH_TOKEN_ENCRYPTION_INFO_KEY = "litestar_auth_oauth_token_encryption"  # noqa: S105
+_OAUTH_TOKEN_ENCRYPTION_INSTANCE_KEY = "_litestar_auth_oauth_token_encryption"  # noqa: S105
+_OAUTH_TOKEN_ENCRYPTION_SNAPSHOT_KEY = "_litestar_auth_oauth_token_snapshot"  # noqa: S105
+_OAUTH_TOKEN_FIELDS: tuple[str, str] = ("access_token", "refresh_token")
 
 
-class OAuthTokenEncryptionRegistry:
-    """Registry of OAuth token encryption keys keyed by app/plugin scope."""
+@dataclass(frozen=True, slots=True)
+class OAuthTokenEncryption:
+    """Explicit OAuth token encryption policy for one session-bound persistence path."""
 
-    def __init__(self) -> None:
-        """Initialize an empty scope-to-key mapping."""
-        self._keys_by_scope: dict[OAuthEncryptionScope, str | None] = {}
+    key: str | bytes | None = None
+    unsafe_testing: bool = False
 
-    def register(self, scope: OAuthEncryptionScope, key: str | None) -> None:
-        """Register or validate the encryption key for a specific scope.
+    def require_configured(self, *, context: str = "OAuth token persistence") -> None:
+        """Fail closed when encryption is required but no key is configured.
 
         Raises:
-            ConfigurationError: If the scope already has a different key outside testing runtime.
+            ConfigurationError: When ``unsafe_testing=False`` and no encryption key is configured.
         """
-        current = self._keys_by_scope.get(scope)
-        if current is None:
-            self._keys_by_scope[scope] = key
-            return
-
-        if current == key:
-            return
-
-        if is_testing() or is_pytest_runtime():
-            self._keys_by_scope[scope] = key
-            return
-
-        msg = "Conflicting oauth_token_encryption_key values detected for the same app scope."
-        raise ConfigurationError(msg)
-
-    def clear(self, scope: OAuthEncryptionScope) -> None:
-        """Remove the registered key for a scope."""
-        self._keys_by_scope.pop(scope, None)
-
-    def get(self, scope: OAuthEncryptionScope | None = None) -> str | bytes | None:
-        """Return the configured key for a scope or the active scope."""
-        resolved_scope = _current_oauth_encryption_scope.get() if scope is None else scope
-        if resolved_scope is None:
-            return None
-        return self._keys_by_scope.get(resolved_scope)
-
-    def require(self, scope: OAuthEncryptionScope | None = None, *, context: str = "OAuth token persistence") -> None:
-        """Fail closed when OAuth token encryption is required but not configured.
-
-        Raises:
-            ConfigurationError: When not in testing mode and no encryption key is configured.
-        """
-        if is_testing():
-            return
-        if self.get(scope) is not None:
+        if self.unsafe_testing or self.key is not None:
             return
         msg = (
             f"oauth_token_encryption_key is required when {context}. "
@@ -86,83 +53,78 @@ class OAuthTokenEncryptionRegistry:
         )
         raise ConfigurationError(msg)
 
+    def encrypt(self, value: str | None) -> str | None:
+        """Return the value encrypted with this policy, or plaintext when disabled."""
+        if value is None:
+            return None
+        backend = _RawFernetBackend()
+        backend.mount_vault(self.key)
+        return backend.encrypt(value)
 
-_oauth_token_encryption_registry = OAuthTokenEncryptionRegistry()
-
-
-def register_oauth_token_encryption_key(scope: OAuthEncryptionScope, key: str | None) -> None:
-    """Configure the OAuth token encryption key for a specific scope.
-
-    Security:
-        Each app/plugin scope maintains its own Fernet key. In production,
-        conflicting re-registration for the same scope fails closed.
-    """
-    _oauth_token_encryption_registry.register(scope, key)
-
-
-def clear_oauth_token_encryption_key(scope: OAuthEncryptionScope) -> None:
-    """Remove the registered key for a specific scope."""
-    _oauth_token_encryption_registry.clear(scope)
+    def decrypt(self, value: str | None) -> str | None:
+        """Return the value decrypted with this policy, or plaintext when disabled."""
+        if value is None:
+            return None
+        backend = _RawFernetBackend()
+        backend.mount_vault(self.key)
+        return backend.decrypt(value)
 
 
-@contextmanager
-def oauth_token_encryption_scope(scope: OAuthEncryptionScope) -> Iterator[None]:
-    """Activate the given scope while interacting with encrypted OAuth columns."""
-    token = _current_oauth_encryption_scope.set(scope)
-    try:
-        yield
-    finally:
-        _current_oauth_encryption_scope.reset(token)
+def bind_oauth_token_encryption(session: object, oauth_token_encryption: OAuthTokenEncryption) -> None:
+    """Bind an explicit OAuth token encryption policy to a SQLAlchemy session path."""
+    for target in _iter_session_targets(session):
+        info = getattr(target, "info", None)
+        if isinstance(info, dict):
+            info[_OAUTH_TOKEN_ENCRYPTION_INFO_KEY] = oauth_token_encryption
 
 
-# May return None for plaintext mode; EncryptedString typings omit None — narrow at integration sites.
-OAuthEncryptionKeyCallable = Callable[[], str | bytes | None]
+def get_bound_oauth_token_encryption(session: object) -> OAuthTokenEncryption | None:
+    """Return the OAuth token encryption policy bound to the given session path."""
+    for target in _iter_session_targets(session):
+        info = getattr(target, "info", None)
+        if isinstance(info, dict):
+            policy = _coerce_oauth_token_encryption(info.get(_OAUTH_TOKEN_ENCRYPTION_INFO_KEY))
+            if policy is not None:
+                return policy
+    return None
 
 
-def get_oauth_encryption_key_callable() -> OAuthEncryptionKeyCallable:
-    """Return a callable that resolves the active scope key (may be ``None``).
-
-    Advanced Alchemy :class:`~advanced_alchemy.types.EncryptedString` expects
-    ``Callable[[], str | bytes]`` for ``key``. When wiring this loader into
-    ``EncryptedString``, use ``typing.cast`` as in
-    ``litestar_auth.models._oauth_encrypted_types``; :class:`_RawFernetBackend`
-    still handles a ``None`` key at runtime.
-    """
-    return _get_oauth_token_encryption_key
-
-
-def _get_oauth_token_encryption_key() -> str | bytes | None:
-    """Return the active scope key for use by EncryptedString."""
-    return _oauth_token_encryption_registry.get()
-
-
-def require_oauth_token_encryption_key(
-    scope: OAuthEncryptionScope | None = None,
+def require_oauth_token_encryption(
+    oauth_token_encryption: OAuthTokenEncryption | None,
     *,
     context: str = "OAuth token persistence",
-) -> None:
-    """Fail closed when OAuth token encryption is required but not configured.
+) -> OAuthTokenEncryption:
+    """Return the explicit policy or fail when persistence would rely on ambient state.
 
-    This is intentionally a runtime guard so that applications that do not use
-    OAuth token persistence are not forced to configure an encryption key.
+    Raises:
+        ConfigurationError: When no explicit policy was supplied, or when a policy without a
+            configured key is used while ``unsafe_testing=False``.
     """
-    _oauth_token_encryption_registry.require(scope, context=context)
+    if oauth_token_encryption is None:
+        msg = (
+            f"{context} requires an explicit oauth_token_encryption policy. "
+            "Pass oauth_token_encryption=OAuthTokenEncryption(...) to SQLAlchemyUserDatabase() "
+            "or call bind_oauth_token_encryption(session, OAuthTokenEncryption(...))."
+        )
+        raise ConfigurationError(msg)
+    oauth_token_encryption.require_configured(context=context)
+    return oauth_token_encryption
 
 
 class _RawFernetBackend(EncryptionBackend):
     """Encryption backend that uses the configured key directly as a Fernet key (no hashing).
 
-    When key is None, values are stored and returned as plain text (no encryption).
+    When key is ``None``, values are stored and returned as plain text (no encryption).
     """
 
     def __init__(self) -> None:
         self._fernet: Any = None
 
     def mount_vault(self, key: str | bytes | None) -> None:
-        """Use the given key as the Fernet key, or None to disable encryption.
+        """Use the given key as the Fernet key, or ``None`` to disable encryption.
 
         Raises:
-            ImportError: If cryptography is not installed and a non-None key is passed.
+            ImportError: If cryptography is not installed and a non-``None`` key is passed.
         """
         if key is None:
             self._fernet = None
@@ -175,20 +137,14 @@ class _RawFernetBackend(EncryptionBackend):
 
     @override
     def init_engine(self, key: bytes | str) -> None:
-        """No-op; mount_vault does the work."""
-        return
+        """No-op; ``mount_vault()`` does the work."""
+        del key
 
     def encrypt(self, value: object) -> str:
-        """Encrypt the value, or return as-is if encryption is disabled.
-
-        Security:
-            When ``self._fernet`` is ``None`` (no ``oauth_token_encryption_key``
-            configured), values are stored in plaintext. Production deployments
-            SHOULD supply a Fernet key via ``oauth_token_encryption_key`` so that
-            OAuth access and refresh tokens are protected at rest.
+        """Encrypt the value, or return it as plaintext if encryption is disabled.
 
         Returns:
-            Encrypted or plain string.
+            The encrypted token string, or the original plaintext when encryption is disabled.
 
         Raises:
             TypeError: If the value cannot be represented as a token string.
@@ -208,13 +164,13 @@ class _RawFernetBackend(EncryptionBackend):
         return self._fernet.encrypt(value.encode()).decode("utf-8")
 
     def decrypt(self, value: object) -> str:
-        """Decrypt the value, or return as-is if encryption is disabled.
+        """Decrypt the value, or return it as plaintext if encryption is disabled.
 
         Returns:
-            Decrypted or plain string.
+            The decrypted token string, or the original plaintext when encryption is disabled.
 
         Raises:
-            TypeError: If the value is not a string or bytes (including when encryption is enabled).
+            TypeError: If the value is not a string or bytes.
         """
         if self._fernet is None or value is None:
             if value is None:
@@ -233,3 +189,160 @@ class _RawFernetBackend(EncryptionBackend):
             msg = "OAuth token values must be strings or bytes."
             raise TypeError(msg)
         return decrypted.decode("utf-8") if isinstance(decrypted, bytes) else decrypted
+
+
+def register_oauth_model_encryption_events(model_base: type[Any]) -> None:
+    """Register mapper events that keep OAuth token attributes plaintext in memory."""
+    listeners: tuple[tuple[str, object], ...] = (
+        ("load", _decrypt_loaded_oauth_tokens),
+        ("refresh", _decrypt_refreshed_oauth_tokens),
+        ("before_insert", _encrypt_oauth_tokens_before_insert),
+        ("before_update", _encrypt_oauth_tokens_before_update),
+        ("after_insert", _restore_oauth_tokens_after_write),
+        ("after_update", _restore_oauth_tokens_after_write),
+    )
+    for identifier, listener in listeners:
+        if not event.contains(model_base, identifier, listener):
+            event.listen(model_base, identifier, listener, propagate=True)
+
+
+def _iter_session_targets(session: object) -> tuple[object, ...]:
+    """Return the concrete session objects that may carry encryption state."""
+    targets: list[object] = []
+    stack = [session]
+    seen: set[int] = set()
+    while stack:
+        current = stack.pop()
+        current_id = id(current)
+        if current_id in seen:
+            continue
+        seen.add(current_id)
+        targets.append(current)
+        for attribute_name in ("sync_session", "_proxied", "_session"):
+            wrapped = getattr(current, attribute_name, None)
+            if wrapped is not None:
+                stack.append(wrapped)
+    return tuple(targets)
+
+
+def _set_instance_oauth_token_encryption(target: object, oauth_token_encryption: OAuthTokenEncryption) -> None:
+    """Cache the session-bound policy on a loaded instance."""
+    setattr(target, _OAUTH_TOKEN_ENCRYPTION_INSTANCE_KEY, oauth_token_encryption)
+
+
+def _coerce_oauth_token_encryption(policy: object) -> OAuthTokenEncryption | None:
+    """Normalize structurally compatible policy objects across module reloads.
+
+    Returns:
+        The current module's ``OAuthTokenEncryption`` instance when the input is
+        compatible, otherwise ``None``.
+    """
+    if isinstance(policy, OAuthTokenEncryption):
+        return policy
+
+    key = getattr(policy, "key", None)
+    unsafe_testing = getattr(policy, "unsafe_testing", False)
+    encrypt = getattr(policy, "encrypt", None)
+    decrypt = getattr(policy, "decrypt", None)
+    require_configured = getattr(policy, "require_configured", None)
+    if callable(encrypt) and callable(decrypt) and callable(require_configured):
+        return OAuthTokenEncryption(
+            key=cast("str | bytes | None", key),
+            unsafe_testing=cast("bool", unsafe_testing),
+        )
+    return None
+
+
+def _resolve_instance_oauth_token_encryption(
+    target: object,
+    *,
+    session: object | None = None,
+) -> OAuthTokenEncryption | None:
+    """Return the policy for one ORM instance, preferring the active session binding."""
+    if session is None:
+        session = object_session(target)
+    if session is not None:
+        session_policy = get_bound_oauth_token_encryption(session)
+        if session_policy is not None:
+            _set_instance_oauth_token_encryption(target, session_policy)
+            return session_policy
+    cached_policy = _coerce_oauth_token_encryption(getattr(target, _OAUTH_TOKEN_ENCRYPTION_INSTANCE_KEY, None))
+    if cached_policy is not None:
+        return cached_policy
+    return None
+
+
+def _require_instance_oauth_token_encryption(target: object) -> OAuthTokenEncryption:
+    """Return the explicit policy for a mapped OAuth instance before persistence."""
+    policy = _resolve_instance_oauth_token_encryption(target)
+    return require_oauth_token_encryption(policy, context="persisting OAuth access and refresh tokens")
+
+
+def _decrypt_loaded_oauth_tokens(
+    target: object,
+    context: object,
+    *,
+    field_names: tuple[str, ...] = _OAUTH_TOKEN_FIELDS,
+) -> None:
+    """Decrypt persisted OAuth token fields after the ORM loads an instance."""
+    session = getattr(context, "session", None)
+    policy = _resolve_instance_oauth_token_encryption(target, session=session)
+    if policy is None:
+        return
+    state = cast("Any", sa_inspect(target))
+    for field_name in field_names:
+        if state.attrs[field_name].history.has_changes():
+            continue
+        attributes.set_committed_value(target, field_name, policy.decrypt(getattr(target, field_name)))
+
+
+def _decrypt_refreshed_oauth_tokens(target: object, context: object, attrs: object) -> None:
+    """Decrypt persisted OAuth token fields after a refresh operation."""
+    field_names = _OAUTH_TOKEN_FIELDS
+    if isinstance(attrs, tuple | list | set | frozenset):
+        field_names = tuple(field_name for field_name in _OAUTH_TOKEN_FIELDS if field_name in attrs)
+    _decrypt_loaded_oauth_tokens(target, context, field_names=field_names)
+
+
+def _encrypt_oauth_tokens_before_insert(mapper: object, connection: object, target: object) -> None:
+    """Encrypt OAuth token fields immediately before INSERT statements."""
+    del mapper, connection
+    policy = _require_instance_oauth_token_encryption(target)
+    snapshot: dict[str, str | None] = {}
+    for field_name in _OAUTH_TOKEN_FIELDS:
+        value = cast("str | None", getattr(target, field_name))
+        snapshot[field_name] = value
+        setattr(target, field_name, policy.encrypt(value))
+    setattr(target, _OAUTH_TOKEN_ENCRYPTION_SNAPSHOT_KEY, snapshot)
+
+
+def _encrypt_oauth_tokens_before_update(mapper: object, connection: object, target: object) -> None:
+    """Encrypt changed OAuth token fields immediately before UPDATE statements."""
+    del mapper, connection
+    state = cast("Any", sa_inspect(target))
+    changed_fields = tuple(
+        field_name for field_name in _OAUTH_TOKEN_FIELDS if state.attrs[field_name].history.has_changes()
+    )
+    if not changed_fields:
+        return
+    policy = _require_instance_oauth_token_encryption(target)
+    snapshot: dict[str, str | None] = {}
+    for field_name in changed_fields:
+        value = cast("str | None", getattr(target, field_name))
+        snapshot[field_name] = value
+        setattr(target, field_name, policy.encrypt(value))
+    setattr(target, _OAUTH_TOKEN_ENCRYPTION_SNAPSHOT_KEY, snapshot)
+
+
+def _restore_oauth_tokens_after_write(mapper: object, connection: object, target: object) -> None:
+    """Restore plaintext OAuth token fields after a successful INSERT/UPDATE."""
+    del mapper, connection
+    snapshot = cast(
+        "dict[str, str | None] | None",
+        getattr(target, _OAUTH_TOKEN_ENCRYPTION_SNAPSHOT_KEY, None),
+    )
+    if snapshot is None:
+        return
+    for field_name, value in snapshot.items():
+        attributes.set_committed_value(target, field_name, value)
+    delattr(target, _OAUTH_TOKEN_ENCRYPTION_SNAPSHOT_KEY)

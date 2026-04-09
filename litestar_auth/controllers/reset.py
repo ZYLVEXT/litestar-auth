@@ -49,6 +49,7 @@ def create_reset_password_controller[UP: ResetPasswordControllerUserProtocol[Any
     rate_limit_config: AuthRateLimitConfig | None = None,
     path: str = "/auth",
     user_read_schema: type[msgspec.Struct] = UserRead,
+    unsafe_testing: bool = False,
 ) -> type[Controller]:
     """Return a controller subclass that resolves the user manager via Litestar DI.
 
@@ -56,6 +57,8 @@ def create_reset_password_controller[UP: ResetPasswordControllerUserProtocol[Any
         rate_limit_config: Optional auth-endpoint rate-limiter configuration.
         path: Base route prefix for the generated controller.
         user_read_schema: Custom msgspec struct used for public reset-password responses.
+        unsafe_testing: Explicit test-only escape hatch that allows response
+            schemas with sensitive fields for isolated fixtures.
 
     Returns:
         Controller subclass exposing reset-password endpoints.
@@ -116,7 +119,7 @@ def create_reset_password_controller[UP: ResetPasswordControllerUserProtocol[Any
                 user = await litestar_auth_user_manager.reset_password(data.token, data.password)
 
             await reset_password_rate_limit_reset(request)
-            return _to_user_schema(user, user_read_schema_type)
+            return _to_user_schema(user, user_read_schema_type, unsafe_testing=unsafe_testing)
 
     reset_cls = ResetPasswordController
     _configure_request_body_handler(reset_cls.reset_password, schema=ResetPassword)

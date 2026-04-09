@@ -42,7 +42,7 @@ Here, `session_maker` means a callable session factory the plugin can invoke as 
 
 If you previously hand-assembled `AuthenticationBackend(..., transport=BearerTransport(), strategy=DatabaseTokenStrategy(...))`, migrate that setup to the direct `database_token_auth=DatabaseTokenAuthConfig(...)` form above. Keep manual `backends=` assembly only when you need multiple backends, custom token models, or another non-canonical transport/strategy mix.
 
-When you use `database_token_auth=...`, `config.backends` stays empty by design. Call `config.resolve_backends()` if you need the effective setup-time backend sequence, or `config.bind_request_backends(session)` when you need request-scoped backend instances bound to the active `AsyncSession`.
+When you use `database_token_auth=...`, `config.backends` stays empty by design. Call `config.startup_backends()` when you need the setup-time backend templates used for plugin assembly and validation, or `config.bind_request_backends(session)` when you need request-scoped backend instances bound to the active `AsyncSession`. `config.resolve_backends()` is now limited to the explicit manual `backends=` surface.
 
 ## Custom SQLAlchemy `User` and token models
 
@@ -245,8 +245,8 @@ On the `LitestarAuthConfig` dataclass, `session_maker` is typed as optional for 
 | ----- | ------- | ---- |
 | `user_db_factory` | `None` → built from `user_model` | `Callable[[AsyncSession], BaseUserStore]`. When `None`, the plugin builds a default factory using `config.user_model`. Override for custom persistence. |
 | `user_manager_security` | `None` | Canonical typed contract for verification/reset secrets, optional TOTP encryption, and optional `id_parser`. |
-| `user_manager_kwargs` | `{}` | Additional manager constructor kwargs for non-security dependencies such as `password_helper`; legacy secret keys remain supported only as a compatibility path. |
-| `password_validator_factory` | `None` | Build custom password policy; else default length validator when manager accepts it. |
+| `user_manager_kwargs` | `{}` | Additional manager constructor kwargs for non-security dependencies such as `password_helper`. The default plugin builder no longer reads manager secrets or `id_parser` from this mapping; use `user_manager_factory` when a custom builder must own that wiring instead. |
+| `password_validator_factory` | `None` | Build custom password policy; otherwise the default builder injects the shared minimum-length validator. |
 | `user_manager_factory` | `None` | Full control over request-scoped manager construction (`UserManagerFactory`). |
 | `rate_limit_config` | `None` | `AuthRateLimitConfig` for auth endpoint throttling. For the common one-client Redis recipe, build it through `litestar_auth.contrib.redis.RedisAuthPreset`; keep `AuthRateLimitConfig.from_shared_backend()` for lower-level shared-backend wiring. |
 
@@ -258,6 +258,8 @@ For plugin-managed apps, keep the manager/password surface on one path:
 2. Use `password_validator_factory` when the plugin should own runtime password policy.
 3. Call `config.build_password_helper()` only when app-owned code outside `BaseUserManager` also hashes or verifies passwords.
 4. Reuse `litestar_auth.schemas.UserEmailField` and `litestar_auth.schemas.UserPasswordField` in app-owned `msgspec.Struct` registration/update schemas.
+
+For non-standard manager construction, keep the plugin-owned security surface on `user_manager_security` and switch to `user_manager_factory` instead of smuggling manager secrets or `id_parser` through `user_manager_kwargs`.
 
 One integrated example:
 
@@ -305,26 +307,25 @@ The detailed contracts for each surface are:
 
 | Surface | Current contract | Notes |
 | ------- | ---------------- | ----- |
-| `user_manager_security.verification_token_secret` | Signs email-verification tokens. | Required in production unless testing mode is active. |
-| `user_manager_security.reset_password_token_secret` | Signs reset-password tokens and password fingerprints. | Required in production unless testing mode is active. |
+| `user_manager_security.verification_token_secret` | Signs email-verification tokens. | Required in production unless the owning manager/config explicitly sets `unsafe_testing=True`. |
+| `user_manager_security.reset_password_token_secret` | Signs reset-password tokens and password fingerprints. | Required in production unless the owning manager/config explicitly sets `unsafe_testing=True`. |
 | `user_manager_security.totp_secret_key` | Encrypts persisted TOTP secrets at rest. | Required in production when `totp_config` is enabled. |
 | `totp_config.totp_pending_secret` | Signs pending/enrollment TOTP JWTs. | Required when `totp_config` is enabled; configured on `TotpConfig`, not `UserManagerSecurity`. |
 | `user_manager_security.id_parser` | Supplies the manager/controller JWT subject parser once. | When set, `LitestarAuthConfig.id_parser` defaults to the same callable. Do not configure both with different values. |
 | `user_manager_kwargs["password_helper"]` | Injects the `PasswordHelper` instance used by `BaseUserManager`. | Prefer `config.build_password_helper()` to memoize the default helper, or set this key explicitly when you intentionally use a custom pwdlib policy. |
-| `password_validator_factory` | Builds the runtime password validator for plugin-managed managers. | When omitted and the manager accepts `password_validator`, the plugin injects the default `require_password_length` validator. |
+| `password_validator_factory` | Builds the runtime password validator for plugin-managed managers. | When omitted, the default plugin builder injects the default `require_password_length` validator. |
 | `user_manager_kwargs["password_validator"]` | Legacy direct runtime validator override. | Mutually exclusive with `password_validator_factory`; keep it only for compatibility. |
 | `litestar_auth.schemas.UserEmailField` | Shares the built-in email regex and max-length metadata with app-owned `msgspec.Struct` schemas. | Schema metadata only; it does not add manager-side normalization or custom app policy. |
 | `litestar_auth.schemas.UserPasswordField` | Shares built-in password-length metadata with app-owned `msgspec.Struct` schemas. | Schema metadata only; it does not replace the runtime validator. |
 
-The default plugin builder now treats `user_manager_security` as an end-to-end constructor contract. When
-`user_manager_class` accepts `security` (or the manager class or an intermediate custom base explicitly sets
-`accepts_security = True` for a `**kwargs` pass-through constructor), the plugin passes
-`security=UserManagerSecurity(...)` and does not also send the legacy `verification_token_secret` /
+The default plugin builder now treats `user_manager_security` as an end-to-end constructor contract. When that
+typed bundle is present, the plugin always passes `security=UserManagerSecurity(...)`, folds the effective
+`id_parser` into that bundle first, and does not also send `verification_token_secret` /
 `reset_password_token_secret` / `totp_secret_key` / `id_parser` kwargs in the same call. Managers that do not
-support `security` stay on the explicit-kwargs compatibility path.
+follow the canonical `BaseUserManager` constructor surface must be built through `user_manager_factory`.
 
 The supported production posture is one distinct high-entropy value per secret role. Outside
-testing, `LitestarAuth(config)` validation is the authoritative warning owner for the
+explicit `unsafe_testing`, `LitestarAuth(config)` validation is the authoritative warning owner for the
 config-managed secret surface: it warns once when one configured value is reused across
 verification, reset-password, and TOTP roles, including `totp_config.totp_pending_secret` when
 that controller flow is enabled. Request-scoped `BaseUserManager` construction receives the same
@@ -350,22 +351,19 @@ coupling unrelated rotation events.
 
 Compatibility and migration:
 
-- Existing `user_manager_kwargs["verification_token_secret"]`, `user_manager_kwargs["reset_password_token_secret"]`,
-  `user_manager_kwargs["totp_secret_key"]`, and `user_manager_kwargs["id_parser"]` continue to work when
-  `user_manager_security` is omitted. Do not mix those legacy keys with `user_manager_security`; the plugin now
-  rejects overlapping declarations instead of guessing.
-- Capability flags such as `accepts_security`, `accepts_id_parser`, `accepts_login_identifier`, and
-  `accepts_password_validator` are inheritable compatibility metadata within a custom manager family. The plugin
-  consults explicit declarations on the concrete manager and its intermediate custom bases before it falls back to
-  constructor introspection. The defaults on `BaseUserManager` still describe the canonical base constructor rather
-  than auto-opting every `**kwargs` wrapper into those paths, so kwargs-only wrappers that forward `security` should
-  redeclare `accepts_security = True` on their custom family base.
+- Configure plugin-managed `verification_token_secret`, `reset_password_token_secret`, `totp_secret_key`, and
+  `id_parser` through `user_manager_security`. The default plugin builder now rejects those keys in
+  `user_manager_kwargs` instead of treating them as a second config-owned security surface.
+- If you intentionally need factory-owned security wiring, set `user_manager_factory` and read whatever extra
+  kwargs your factory owns from `user_manager_kwargs` there.
+- The default plugin builder now calls the canonical `BaseUserManager`-style constructor surface:
+  `user_manager_class(user_db, *, password_helper=..., security=..., password_validator=..., backends=..., login_identifier=..., unsafe_testing=...)`.
+  When `user_manager_security` is unset, it passes `id_parser=...` directly instead of folding it into `security`.
+  If your manager narrows or renames that surface, configure `user_manager_factory`.
 - When `user_manager_security` is present, the effective manager parser comes from
-  `user_manager_security.id_parser` first and otherwise falls back to `LitestarAuthConfig.id_parser`. Security-aware
-  managers receive that parser inside `security=UserManagerSecurity(...)`; legacy managers receive it through the
-  compatibility `id_parser` kwarg.
-- When `user_manager_security` is omitted, `user_manager_kwargs["id_parser"]` remains the legacy override path and
-  continues to suppress automatic injection from top-level `id_parser`.
+  `user_manager_security.id_parser` first and otherwise falls back to `LitestarAuthConfig.id_parser`. The default
+  builder folds that parser into `security=UserManagerSecurity(...)`; without `user_manager_security`, it passes
+  `LitestarAuthConfig.id_parser` directly.
 - Existing `UserPasswordField` imports remain valid. Add `UserEmailField` only when you also want the built-in
   email regex/max-length contract on app-owned schemas.
 - Existing `PasswordHelper()` and `PasswordHelper(password_hash=...)` call sites remain source-compatible. Prefer
@@ -382,9 +380,12 @@ with bcrypt fallback. The user-provided `user_manager_kwargs` mapping is left un
 helper path does not inherit anything from `password_validator_factory`, `user_manager_security`,
 or token settings; it only resolves the password-hash policy itself.
 
+If app-owned code never hashes or verifies passwords directly, you can skip calling
+`config.build_password_helper()`: the default plugin builder still materializes and injects the
+shared helper for each request-scoped manager on demand.
+
 Use `password_validator_factory` when the plugin should own runtime password-policy construction.
-If you do not provide it, the plugin injects the default `require_password_length` validator for
-managers that accept `password_validator`. Keep `user_manager_kwargs["password_validator"]` only
+If you do not provide it, the default plugin builder injects the default `require_password_length` validator. Keep `user_manager_kwargs["password_validator"]` only
 for legacy direct overrides, and do not mix it with `password_validator_factory`.
 
 For app-owned `user_create_schema` / `user_update_schema` structs, import `UserEmailField` and
@@ -635,8 +636,8 @@ shared-backend builder surface remain on `litestar_auth.ratelimit`.
 | `totp_backend_name` | `None` | Which named `AuthenticationBackend` issues tokens after 2FA. |
 | `totp_issuer` | `"litestar-auth"` | Issuer in otpauth URI. |
 | `totp_algorithm` | `"SHA256"` | TOTP hash algorithm. |
-| `totp_used_tokens_store` | `None` | Replay store for consumed TOTP codes (required outside tests when replay protection is on). See [Canonical Redis-backed auth surface](#canonical-redis-backed-auth-surface) for the Redis setup and import paths. |
-| `totp_require_replay_protection` | `True` | Fail startup without a store when not in testing mode. |
+| `totp_used_tokens_store` | `None` | Replay store for consumed TOTP codes (required unless the owning config/controller explicitly sets `unsafe_testing=True`). See [Canonical Redis-backed auth surface](#canonical-redis-backed-auth-surface) for the Redis setup and import paths. |
+| `totp_require_replay_protection` | `True` | Fail startup without a store unless `unsafe_testing=True`. |
 | `totp_enable_requires_password` | `True` | Step-up password for `/2fa/enable`. |
 
 Routes: `{auth_path}/2fa/...`. See [TOTP guide](guides/totp.md).
@@ -653,20 +654,20 @@ the user record.
 | Field | Default | Meaning |
 | ----- | ------- | ------- |
 | `oauth_cookie_secure` | `True` | Secure flag for OAuth cookies. |
-| `oauth_providers` | `None` | Declared login-provider inventory for explicit login-controller registration. The canonical helper mounts `GET {auth_path}/oauth/{provider}/authorize` and `GET {auth_path}/oauth/{provider}/callback` when you pass `auth_path=config.auth_path`; the plugin does **not** auto-mount those routes from this field. |
-| `oauth_associate_by_email` | `False` | Login-controller policy for explicit OAuth login helpers. Only meaningful when `oauth_providers` is declared and you mount login controllers explicitly. It does not affect plugin-owned associate routes. |
-| `include_oauth_associate` | `False` | Enable plugin-owned associate flow routes. |
-| `oauth_associate_providers` | `None` | Providers auto-mounted by the plugin under `GET {auth_path}/associate/{provider}/authorize` and `GET {auth_path}/associate/{provider}/callback` when `include_oauth_associate=True`. |
-| `oauth_associate_redirect_base_url` | `""` | Public redirect base for plugin-owned associate callbacks. Invalid unless the plugin owns associate routes. |
+| `oauth_providers` | `None` | Single plugin-owned OAuth provider inventory. Each provider auto-mounts `GET {auth_path}/oauth/{provider}/authorize` and `GET {auth_path}/oauth/{provider}/callback`. |
+| `oauth_associate_by_email` | `False` | Policy for plugin-owned OAuth login routes. When enabled, login callbacks may associate an existing local user by email if provider email ownership is also trusted. |
+| `oauth_trust_provider_email_verified` | `False` | Trust provider `email_verified` claims for plugin-owned OAuth login routes. Use only with providers that cryptographically assert email ownership. |
+| `include_oauth_associate` | `False` | Also auto-mount authenticated associate routes for the same `oauth_providers` inventory under `GET {auth_path}/associate/{provider}/authorize` and `GET {auth_path}/associate/{provider}/callback`. |
+| `oauth_redirect_base_url` | `""` | Required public redirect base for plugin-owned OAuth callbacks. The plugin derives `{oauth_redirect_base_url}/oauth/{provider}/callback` and, when associate routes are enabled, `{oauth_redirect_base_url}/associate/{provider}/callback`. |
 | `oauth_token_encryption_key` | `None` | **Required** for any declared provider inventory in production — encrypts OAuth tokens at rest. |
 
-Explicit login controllers may take **`trust_provider_email_verified`** (see [OAuth guide](guides/oauth.md)).
+For manual custom controllers, `create_provider_oauth_controller(...)` / `create_oauth_controller(...)` still take **`trust_provider_email_verified`** directly (see [OAuth guide](guides/oauth.md)). The plugin-owned route table maps `OAuthConfig.oauth_trust_provider_email_verified` onto the same runtime behavior.
 
 Route-registration contract:
 
-- `oauth_providers` declares login-provider inventory only; mount login controllers explicitly with `litestar_auth.oauth.create_provider_oauth_controller(..., auth_path=config.auth_path)`.
-- `include_oauth_associate=True` plus non-empty `oauth_associate_providers` is the plugin-owned OAuth auto-mount path for `{auth_path}/associate/{provider}/...`.
-- Ambiguous associate-only no-op configs now fail during plugin construction instead of silently producing no routes.
+- `oauth_providers` is the single plugin-owned provider inventory; there is no separate associate-only provider list.
+- `oauth_redirect_base_url` is required whenever `oauth_providers` is configured. The plugin appends `/oauth` and `/associate` per route family instead of guessing a localhost fallback.
+- `include_oauth_associate=True` extends that same provider inventory with authenticated account-linking routes. If you need a custom route table, custom prefixes, or manual manager wiring, mount the controller factories yourself instead of mixing plugin-owned and manual ownership.
 
 ## Security and token policy
 
@@ -674,6 +675,7 @@ Route-registration contract:
 | ----- | ------- | ------- |
 | `csrf_secret` | `None` | Enables Litestar CSRF config when cookie transports are used. |
 | `csrf_header_name` | `"X-CSRF-Token"` | Header Litestar expects for CSRF token. |
+| `unsafe_testing` | `False` | Explicit per-config test-only escape hatch for generated fallback secrets, single-process validation shortcuts, and startup-warning suppression. Never enable it for production traffic. |
 | `allow_legacy_plaintext_tokens` | `False` | **Migration only** — accept legacy plaintext DB tokens for manual `DatabaseTokenStrategy` setups. The canonical preset reads this from `DatabaseTokenAuthConfig.accept_legacy_plaintext_tokens` instead. |
 | `allow_nondurable_jwt_revocation` | `False` | Opt-in to in-memory JWT denylist semantics. |
 | `id_parser` | `None` | Parse path/query user ids (e.g. `UUID`). Defaults from `user_manager_security.id_parser` when that typed contract is configured. |
@@ -706,7 +708,7 @@ Used by the plugin internally; override only if you integrate custom controllers
 
 ## Shared helpers — `litestar_auth.config`
 
-`validate_secret_length`, `is_testing`, `MINIMUM_SECRET_LENGTH`, etc., keep token and testing behavior consistent.
+`validate_secret_length`, `_resolve_token_secret`, `MINIMUM_SECRET_LENGTH`, and the secret-role helpers keep token validation and explicit unsafe-testing behavior consistent.
 
 ## Related
 

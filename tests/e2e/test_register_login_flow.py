@@ -17,7 +17,7 @@ from litestar_auth.authentication.strategy.jwt import JWTStrategy
 from litestar_auth.authentication.transport.bearer import BearerTransport
 from litestar_auth.authentication.transport.cookie import CookieTransport
 from litestar_auth.guards import is_authenticated
-from litestar_auth.manager import BaseUserManager
+from litestar_auth.manager import BaseUserManager, UserManagerSecurity
 from litestar_auth.models import User
 from litestar_auth.password import PasswordHelper
 from litestar_auth.plugin import LitestarAuth, LitestarAuthConfig
@@ -129,18 +129,41 @@ def app() -> Iterator[tuple[Litestar, VerificationTracker]]:
             JWTStrategy[User, UUID](secret="jwt-cookie-secret-1234567890-extra", subject_decoder=UUID),
         ),
     )
+
+    def _build_user_manager(
+        *,
+        session: object,
+        user_db: object,
+        config: LitestarAuthConfig[User, UUID],
+        backends: tuple[object, ...] = (),
+    ) -> E2EUserManager:
+        del session
+        security = config.user_manager_security
+        assert security is not None
+        return E2EUserManager(
+            user_db=user_db,
+            verification_tracker=verification_tracker,
+            password_helper=config.build_password_helper(),
+            verification_token_secret=cast("str", security.verification_token_secret),
+            reset_password_token_secret=cast("str", security.reset_password_token_secret),
+            backends=backends,
+        )
+
     config = LitestarAuthConfig[User, UUID](
         backends=[bearer_backend, cookie_backend],
         session_maker=cast("Any", SessionMaker(engine)),
         user_model=User,
         user_manager_class=E2EUserManager,
+        user_manager_factory=_build_user_manager,
         csrf_secret="c" * 32,
         allow_nondurable_jwt_revocation=True,
+        user_manager_security=UserManagerSecurity[UUID](
+            verification_token_secret="verify-secret-1234567890-1234567890",
+            reset_password_token_secret="reset-secret-1234567890-1234567890",
+        ),
         user_manager_kwargs={
             "verification_tracker": verification_tracker,
             "password_helper": password_helper,
-            "verification_token_secret": "verify-secret-1234567890-1234567890",
-            "reset_password_token_secret": "reset-secret-1234567890-1234567890",
         },
     )
     yield Litestar(route_handlers=[protected_route], plugins=[LitestarAuth(config)]), verification_tracker

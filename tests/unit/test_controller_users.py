@@ -164,6 +164,7 @@ def build_context(
         hard_delete=hard_delete,
         default_limit=50,
         max_limit=100,
+        unsafe_testing=False,
     )
 
 

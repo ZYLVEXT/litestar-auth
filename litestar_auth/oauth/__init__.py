@@ -1,11 +1,11 @@
 """Stable public OAuth helpers.
 
-Use ``create_provider_oauth_controller`` from this package for the canonical
-provider-login route-registration path, typically with
-``auth_path=config.auth_path``. ``OAuthConfig.oauth_providers`` remains
-declarative inventory only; the plugin never auto-mounts login routes from it.
-Plugin-owned OAuth auto-mounting is limited to associate routes configured with
-``include_oauth_associate=True`` plus ``oauth_associate_providers``.
+Use ``create_provider_oauth_controller`` from this package when you need a
+manual OAuth login controller, typically with ``auth_path=config.auth_path``.
+Plugin-managed apps can instead declare ``OAuthConfig.oauth_providers`` plus
+``oauth_redirect_base_url`` to auto-mount login routes, and
+``include_oauth_associate=True`` extends that same provider inventory with
+associate routes.
 
 Advanced custom route tables still use ``litestar_auth.controllers`` directly.
 """

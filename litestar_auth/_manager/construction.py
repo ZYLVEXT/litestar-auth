@@ -59,30 +59,12 @@ def _build_user_manager_security[ID](
     )
 
 
-def user_manager_security_from_mapping[ID](
-    manager_kwargs: Mapping[str, Any],
-    *,
-    id_parser: Callable[[str], ID] | None = None,
-) -> UserManagerSecurity[ID]:
-    """Build the canonical manager-security bundle from legacy kwargs.
-
-    Returns:
-        Concrete ``UserManagerSecurity`` synthesized from the provided mapping.
-    """
-    explicit_id_parser = cast("Callable[[str], ID] | None", manager_kwargs.get("id_parser"))
-    return _build_user_manager_security(
-        verification_token_secret=cast("str | None", manager_kwargs.get("verification_token_secret")),
-        reset_password_token_secret=cast("str | None", manager_kwargs.get("reset_password_token_secret")),
-        totp_secret_key=cast("str | None", manager_kwargs.get("totp_secret_key")),
-        id_parser=explicit_id_parser if explicit_id_parser is not None else id_parser,
-    )
-
-
 def resolve_account_token_secrets[ID](
     manager_security: UserManagerSecurity[ID],
     *,
     secret_factory: SecretFactory,
     warning_stacklevel: int = 2,
+    unsafe_testing: bool = False,
 ) -> AccountTokenSecrets:
     """Resolve verify/reset secrets from the canonical manager-security bundle.
 
@@ -93,11 +75,13 @@ def resolve_account_token_secrets[ID](
         manager_security.verification_token_secret,
         label="verification_token_secret",
         warning_stacklevel=warning_stacklevel,
+        unsafe_testing=unsafe_testing,
     )
     reset_password_token_secret = _resolve_token_secret(
         manager_security.reset_password_token_secret,
         label="reset_password_token_secret",
         warning_stacklevel=warning_stacklevel,
+        unsafe_testing=unsafe_testing,
     )
     return AccountTokenSecrets(
         verification_token_secret=secret_factory(verification_token_secret),
@@ -127,14 +111,9 @@ class ManagerConstructorInputs[ID]:
         return cast("PasswordValidator | None", self.manager_kwargs.get("password_validator"))
 
     @property
-    def has_explicit_id_parser(self) -> bool:
-        """Return whether ``user_manager_kwargs`` declares ``id_parser``."""
-        return "id_parser" in self.manager_kwargs
-
-    @property
-    def explicit_id_parser(self) -> Callable[[str], ID] | None:
-        """Return the explicit ID parser declared through ``user_manager_kwargs``."""
-        return cast("Callable[[str], ID] | None", self.manager_kwargs.get("id_parser"))
+    def managed_security_keys(self) -> tuple[str, ...]:
+        """Return legacy plugin-managed security keys present in ``user_manager_kwargs``."""
+        return tuple(sorted(set(self.manager_kwargs).intersection(_MANAGED_SECURITY_KEYS)))
 
     @property
     def resolved_security_id_parser(self) -> Callable[[str], ID] | None:
@@ -148,14 +127,13 @@ class ManagerConstructorInputs[ID]:
         """Return managed security keys present in legacy kwargs alongside the typed contract."""
         if self.manager_security is None:
             return ()
-        return tuple(sorted(set(self.manager_kwargs).intersection(_MANAGED_SECURITY_KEYS)))
+        return self.managed_security_keys
 
     @property
     def effective_security(self) -> UserManagerSecurity[ID]:
-        """Return the canonical manager-security bundle for the current constructor inputs."""
+        """Return the canonical plugin-managed security bundle for the current inputs."""
         if self.manager_security is None:
-            resolved_id_parser = self.explicit_id_parser if self.has_explicit_id_parser else self.id_parser
-            return user_manager_security_from_mapping(self.manager_kwargs, id_parser=resolved_id_parser)
+            return _build_user_manager_security(id_parser=self.id_parser)
 
         resolved_id_parser = self.resolved_security_id_parser
         if self.manager_security.id_parser is resolved_id_parser:
@@ -163,66 +141,29 @@ class ManagerConstructorInputs[ID]:
         return replace(self.manager_security, id_parser=resolved_id_parser)
 
     def build_manager_security(self) -> UserManagerSecurity[ID] | None:
-        """Return the typed security bundle passed to security-aware managers."""
+        """Return the typed security bundle passed through the default builder."""
         if self.manager_security is None:
             return None
         return self.effective_security
 
-    def _build_manager_id_parser_kwargs(
-        self,
-        *,
-        accepts_security: bool,
-        accepts_id_parser: bool,
-    ) -> dict[str, Any]:
-        """Return the manager-specific ``id_parser`` kwargs for this constructor."""
-        if not accepts_id_parser:
+    def _build_manager_id_parser_kwargs(self) -> dict[str, Any]:
+        """Return the explicit ``id_parser`` kwarg when the default contract needs it."""
+        if self.manager_security is not None or self.id_parser is None or "id_parser" in self.manager_kwargs:
             return {}
+        return {"id_parser": self.id_parser}
 
-        if self.manager_security is None:
-            resolved_id_parser = self.explicit_id_parser if self.has_explicit_id_parser else self.id_parser
-            if resolved_id_parser is None or self.has_explicit_id_parser:
-                return {}
-            return {"id_parser": resolved_id_parser}
+    def _build_manager_security_kwargs(self) -> dict[str, Any]:
+        """Return the canonical typed security kwarg for the default builder."""
+        manager_security = self.build_manager_security()
+        return {"security": manager_security} if manager_security is not None else {}
 
-        if accepts_security:
-            return {}
-
-        resolved_id_parser = self.resolved_security_id_parser
-        if resolved_id_parser is None:
-            return {}
-        return {"id_parser": resolved_id_parser}
-
-    def _build_manager_security_kwargs(self, *, accepts_security: bool) -> dict[str, Any]:
-        """Return security-related kwargs for the target manager constructor."""
-        if self.manager_security is None:
-            return {}
-
-        if accepts_security:
-            manager_security = self.build_manager_security()
-            return {"security": manager_security} if manager_security is not None else {}
-
-        manager_kwargs: dict[str, Any] = {}
-        if self.manager_security.verification_token_secret is not None:
-            manager_kwargs["verification_token_secret"] = self.manager_security.verification_token_secret
-        if self.manager_security.reset_password_token_secret is not None:
-            manager_kwargs["reset_password_token_secret"] = self.manager_security.reset_password_token_secret
-        if self.manager_security.totp_secret_key is not None:
-            manager_kwargs["totp_secret_key"] = self.manager_security.totp_secret_key
-        return manager_kwargs
-
-    def build_kwargs(
-        self,
-        *,
-        accepts_security: bool,
-        accepts_id_parser: bool,
-        accepts_login_identifier: bool,
-    ) -> dict[str, Any]:
+    def build_kwargs(self) -> dict[str, Any]:
         """Materialize constructor kwargs for the target manager class.
 
-        The typed ``user_manager_security`` bundle is passed through as ``security=...``
-        when the target constructor supports it. Otherwise the builder falls back to
-        the legacy explicit secret kwargs while preserving the documented top-level
-        ``id_parser`` compatibility path.
+        The default plugin builder now assumes the canonical ``BaseUserManager``-style
+        constructor contract. Custom managers that narrow or rename this surface must
+        be built through ``user_manager_factory`` instead of relying on compatibility
+        probing in the plugin path.
 
         Returns:
             A concrete kwargs dictionary ready for ``user_manager_class(...)``.
@@ -231,16 +172,11 @@ class ManagerConstructorInputs[ID]:
         if self.manager_security is not None:
             for key in _MANAGED_SECURITY_KEYS:
                 manager_kwargs.pop(key, None)
-        manager_kwargs.update(self._build_manager_security_kwargs(accepts_security=accepts_security))
+        manager_kwargs.update(self._build_manager_security_kwargs())
         if self.password_validator is not None and not self.has_explicit_password_validator:
             manager_kwargs["password_validator"] = self.password_validator
         manager_kwargs["backends"] = self.backends
-        manager_kwargs.update(
-            self._build_manager_id_parser_kwargs(
-                accepts_security=accepts_security,
-                accepts_id_parser=accepts_id_parser,
-            ),
-        )
-        if accepts_login_identifier and "login_identifier" not in manager_kwargs and self.login_identifier is not None:
+        manager_kwargs.update(self._build_manager_id_parser_kwargs())
+        if "login_identifier" not in manager_kwargs and self.login_identifier is not None:
             manager_kwargs["login_identifier"] = self.login_identifier
         return manager_kwargs

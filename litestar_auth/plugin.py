@@ -38,8 +38,8 @@ from litestar_auth._plugin.validation import validate_config
 from litestar_auth.authentication import Authenticator, LitestarAuthMiddleware
 from litestar_auth.config import plugin_secret_role_warning_owner
 from litestar_auth.oauth_encryption import (
-    register_oauth_token_encryption_key,
-    require_oauth_token_encryption_key,
+    OAuthTokenEncryption,
+    require_oauth_token_encryption,
 )
 from litestar_auth.types import UserProtocol
 
@@ -78,10 +78,14 @@ class LitestarAuth[UP: UserProtocol[Any], ID](InitPlugin):
                 user manager factory, optional OAuth/TOTP settings).
         """
         self.config = config
-        oauth_token_encryption_key = (
-            self.config.oauth_config.oauth_token_encryption_key if self.config.oauth_config is not None else None
+        self._oauth_token_encryption = (
+            None
+            if self.config.oauth_config is None
+            else OAuthTokenEncryption(
+                self.config.oauth_config.oauth_token_encryption_key,
+                unsafe_testing=self.config.unsafe_testing,
+            )
         )
-        register_oauth_token_encryption_key(self, oauth_token_encryption_key)
         validate_config(self.config)
         self._session_maker = _plugin_config.require_session_maker(self.config)
         self._user_manager_factory = _plugin_config.resolve_user_manager_factory(self.config)
@@ -108,7 +112,7 @@ class LitestarAuth[UP: UserProtocol[Any], ID](InitPlugin):
         warn_insecure_plugin_startup_defaults(self.config)
         require_oauth_token_encryption_for_configured_providers(
             config=self.config,
-            require_key=partial(require_oauth_token_encryption_key, self),
+            require_key=partial(require_oauth_token_encryption, self._oauth_token_encryption),
         )
         warn_if_insecure_oauth_redirect_in_production(config=self.config, app_config=app_config)
         bootstrap_bundled_token_orm_models(self.config)
@@ -133,7 +137,10 @@ class LitestarAuth[UP: UserProtocol[Any], ID](InitPlugin):
         backends: Sequence[AuthenticationBackend[UP, ID]] | None = None,
     ) -> BaseUserManager[UP, ID]:
         user_db_factory = self.config.resolve_user_db_factory()
-        user_db = ScopedUserDatabaseProxyImpl(user_db_factory(session), oauth_scope=self)
+        user_db = ScopedUserDatabaseProxyImpl(
+            user_db_factory(session),
+            oauth_token_encryption=self._oauth_token_encryption,
+        )
         manager_inputs = _plugin_config.ManagerConstructorInputs(
             manager_kwargs=self.config.user_manager_kwargs,
             manager_security=self.config.user_manager_security,
@@ -206,7 +213,7 @@ class LitestarAuth[UP: UserProtocol[Any], ID](InitPlugin):
         )
 
     def _register_middleware(self, app_config: AppConfig) -> None:
-        cookie_transports = get_cookie_transports(self.config.resolve_backends())
+        cookie_transports = get_cookie_transports(self.config.startup_backends())
         if cookie_transports:
             app_config.csrf_config = build_csrf_config(self.config, cookie_transports)
 
@@ -227,7 +234,7 @@ class LitestarAuth[UP: UserProtocol[Any], ID](InitPlugin):
         )
 
     def _provide_backends(self) -> object:
-        return self.config.resolve_backends()
+        return self.config.startup_backends()
 
     def _provide_config(self) -> object:
         return self.config

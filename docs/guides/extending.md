@@ -8,25 +8,25 @@ Subclass the provided [`User`](../api/models.md) (or follow the same column cont
 
 Subclass [`BaseUserManager`](../api/manager.md) to implement **lifecycle hooks** and custom rules. See the dedicated [Hooks](hooks.md) page for when each hook runs and timing considerations (`on_after_forgot_password`).
 
-The plugin injects a request-scoped manager built with your `user_db_factory`, `backends`, and optional `password_validator`.
+The plugin injects a request-scoped manager built with your `user_db_factory`, `backends`, and the canonical `BaseUserManager`-style constructor kwargs.
 
-### Constructor compatibility
+### Default builder contract
 
-If your manager needs **`password_validator`** or **`login_identifier`**, either accept them in `__init__` or set class attributes `accepts_password_validator` / `accepts_login_identifier` so the plugin can detect support.
+Without `user_manager_factory`, the plugin calls `user_manager_class(user_db, *, password_helper=..., security=..., password_validator=..., backends=..., login_identifier=..., unsafe_testing=...)`. When `user_manager_security` is unset, the default builder passes `id_parser=...` directly instead of folding it into `security`.
+
+If your manager narrows or renames that constructor surface, configure `user_manager_factory` instead of relying on plugin-side capability detection.
 
 ### Custom factory
 
-Set `user_manager_factory` on `LitestarAuthConfig` for full control over manager construction (must
-match the `UserManagerFactory` contract).
+Set `user_manager_factory` on `LitestarAuthConfig` for full control over manager construction when your manager does not follow the default builder contract (must match the `UserManagerFactory` contract).
 
 Plugin-managed manager construction inherits the plugin-owned secret-role reuse baseline. If your
 custom factory instantiates `BaseUserManager` (or a subclass) with the same
 verification/reset/TOTP secrets that were already validated during `LitestarAuth(config)`, manager
 construction suppresses the duplicate warning. If the custom factory diverges from that
 config-owned surface, the manager constructor surfaces the additional warning for the manager-owned
-roles it actually wires. Keep custom factories aligned with `user_manager_security` / legacy
-config-owned secret kwargs unless you intentionally want the factory-built manager to carry that
-additional warning.
+roles it actually wires. Keep custom factories aligned with `user_manager_security` unless you
+intentionally want the factory-built manager to carry that additional warning.
 
 ## Controllers and DTOs
 

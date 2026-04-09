@@ -10,7 +10,7 @@ This page summarizes protections and **conscious trade-offs** shipped by the lib
 - **Session fingerprint** — optional claim on JWT tying tokens to current password/email state.
 - **Cookie auth** — secure defaults (`HttpOnly`, `Secure`, `SameSite`); CSRF for unsafe methods when wired (see [Guides — Security](guides/security.md)).
 - **TOTP** — replay protection when a `totp_used_tokens_store` is configured; fail-fast in production without a store when replay protection is required.
-- **OAuth** — state in `HttpOnly` cookie; strict validation; optional encryption at rest for provider tokens (`oauth_token_encryption_key`); guarded associate-by-email rules (`trust_provider_email_verified`, `oauth_associate_by_email`).
+- **OAuth** — state in `HttpOnly` cookie; strict validation; optional encryption at rest for provider tokens (`oauth_token_encryption_key`); guarded associate-by-email rules (`oauth_trust_provider_email_verified` on plugin-owned routes, `trust_provider_email_verified` on manual controllers, and `oauth_associate_by_email`).
 - **Opaque DB tokens** — keyed digest at rest; the canonical plugin path is `DatabaseTokenAuthConfig` plus `LitestarAuthConfig(..., database_token_auth=...)`, and legacy plaintext acceptance is migration-only and unsafe for production.
 - **Rate limiting** — optional per-endpoint limits; in-memory backend is single-process only.
 

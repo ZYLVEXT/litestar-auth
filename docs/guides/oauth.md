@@ -4,30 +4,46 @@ OAuth is optional and configured through `OAuthConfig` on `LitestarAuthConfig`.
 
 ## Canonical route registration
 
-OAuth has two distinct route-registration paths:
+OAuth has one plugin-owned route-registration contract plus a manual escape hatch:
 
-- **OAuth login stays explicit.** Declare `oauth_providers` on `OAuthConfig`, then mount one login controller per provider with `litestar_auth.oauth.create_provider_oauth_controller(..., auth_path=config.auth_path)`. With the default `auth_path="/auth"`, the routes are:
+- **Plugin-owned login routes.** Declare `oauth_providers` plus `oauth_redirect_base_url` on `OAuthConfig`. With the default `auth_path="/auth"`, the plugin auto-mounts:
   - `GET /auth/oauth/{provider}/authorize`
   - `GET /auth/oauth/{provider}/callback`
-- **OAuth associate can be plugin-owned.** Set `include_oauth_associate=True` and configure `oauth_associate_providers`. The plugin then auto-mounts:
+- **Plugin-owned associate routes.** Set `include_oauth_associate=True` to extend that same provider inventory with:
   - `GET /auth/associate/{provider}/authorize`
   - `GET /auth/associate/{provider}/callback`
-- **Advanced escape hatch.** If you need a custom route table, custom path prefixes, or direct user-manager wiring, mount `create_oauth_controller()` / `create_oauth_associate_controller()` from `litestar_auth.controllers` yourself instead of using the canonical helper + plugin split.
+- **Advanced escape hatch.** If you need a custom route table, custom path prefixes, or direct user-manager wiring, mount `create_provider_oauth_controller()` / `create_oauth_controller()` / `create_oauth_associate_controller()` yourself instead of using the plugin-owned route table.
 
-The plugin does **not** auto-mount login routes from `oauth_providers`.
+The plugin no longer treats `oauth_providers` as inert metadata: if providers are declared, login routes are part of the plugin-owned HTTP surface.
 
 ## Account association
 
 For logged-in users linking another identity:
 
 - Set `include_oauth_associate=True`.
-- Configure `oauth_associate_providers`, `oauth_associate_redirect_base_url`, etc.
+- Configure `oauth_providers` and `oauth_redirect_base_url`.
 
-Routes use the `/auth/associate/{provider}/...` prefix by default.
+Routes use the `/auth/associate/{provider}/...` prefix by default, and the same provider inventory also owns the `/auth/oauth/{provider}/...` login routes. If you need associate-only plugin wiring or a different path layout, switch to manual controller factories for the whole OAuth route table.
 
 ## Token encryption
 
-OAuth access and refresh tokens persisted on `OAuthAccount` should be protected. When providers are configured, set **`oauth_token_encryption_key`** on `OAuthConfig`. The plugin validates that encryption is available for configured providers in normal (non-testing) operation.
+OAuth access and refresh tokens persisted on `OAuthAccount` should be protected. When providers are configured, set **`oauth_token_encryption_key`** on `OAuthConfig`. The plugin validates that encryption is available for configured providers in normal (non-testing) operation and now binds that key explicitly onto each request-scoped SQLAlchemy user-store path.
+
+If you bypass the plugin and instantiate `SQLAlchemyUserDatabase` directly for OAuth persistence, supply an explicit policy yourself:
+
+```python
+from litestar_auth.db.sqlalchemy import SQLAlchemyUserDatabase
+from litestar_auth.oauth_encryption import OAuthTokenEncryption
+
+user_db = SQLAlchemyUserDatabase(
+    session,
+    user_model=User,
+    oauth_account_model=OAuthAccount,
+    oauth_token_encryption=OAuthTokenEncryption("your-fernet-key"),
+)
+```
+
+For ad-hoc ORM queries against `OAuthAccount`, bind the same policy to the session with `bind_oauth_token_encryption(session, OAuthTokenEncryption(...))` before loading encrypted token columns. In tests you can use `OAuthTokenEncryption(key=None)` as the explicit plaintext policy; production OAuth deployments should always supply a Fernet key.
 
 ## Cookies
 
@@ -35,17 +51,18 @@ OAuth access and refresh tokens persisted on `OAuthAccount` should be protected.
 
 ## Provider email trust
 
-For explicit OAuth login helpers, **`trust_provider_email_verified`** controls whether a provider's `email_verified` claim can drive auto-verification or login-time associate-by-email behavior. Enable it **only** for providers that cryptographically assert email ownership. Mismatched configuration yields **400** responses with `OAUTH_EMAIL_NOT_VERIFIED` or related codes (see [Errors](../errors.md)).
+For plugin-owned OAuth login routes, set **`oauth_trust_provider_email_verified=True`** when a provider's `email_verified` claim can safely drive auto-verification or login-time associate-by-email behavior. Manual controller factories use the lower-level **`trust_provider_email_verified`** flag directly. Enable either form **only** for providers that cryptographically assert email ownership. Mismatched configuration yields **400** responses with `OAUTH_EMAIL_NOT_VERIFIED` or related codes (see [Errors](../errors.md)).
 
-Default **`oauth_associate_by_email=False`** avoids implicit login-time linking by email alone. This flag affects explicit login controllers only; it does not change the plugin-owned associate routes.
+Default **`oauth_associate_by_email=False`** avoids implicit login-time linking by email alone. On the plugin-owned route table, this flag applies to the login callbacks derived from `oauth_providers`; it does not change the authenticated associate routes.
 
 ## Code entry points
 
-- Canonical login helper: `litestar_auth.oauth.create_provider_oauth_controller`
+- Canonical plugin-managed path: `LitestarAuthConfig(..., oauth_config=OAuthConfig(...))`
+- Manual login helper: `litestar_auth.oauth.create_provider_oauth_controller`
 - Advanced custom-controller escape hatch: `litestar_auth.controllers.create_oauth_controller` and `create_oauth_associate_controller`
 - Lazy client loader: `litestar_auth.oauth.load_httpx_oauth_client`
 
-Use `create_provider_oauth_controller(...)` plus plugin-managed associate routes unless you intentionally assemble a custom route table.
+Use `OAuthConfig` on `LitestarAuthConfig` for the default plugin-owned route table. Reach for `create_provider_oauth_controller(...)` or the lower-level controller factories only when you intentionally assemble a custom OAuth route layout.
 
 ## Custom `User` and `OAuthAccount`
 

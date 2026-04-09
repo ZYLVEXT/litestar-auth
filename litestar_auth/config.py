@@ -1,13 +1,12 @@
 """Central configuration helpers for litestar-auth.
 
 This module contains small, shared primitives used across the library to keep
-security-relevant validation consistent (e.g. secret length requirements and
-testing-mode toggles).
+security-relevant validation consistent, including secret-length checks and
+explicit unsafe-testing overrides.
 """
 
 from __future__ import annotations
 
-import os
 import secrets
 import warnings
 from contextlib import contextmanager
@@ -85,32 +84,6 @@ _PLUGIN_SECRET_ROLE_WARNING_OWNER = ContextVar[_PluginSecretRoleWarningState | N
 )
 
 
-def is_testing() -> bool:
-    """Return whether litestar-auth is running in testing mode."""
-    return os.getenv("LITESTAR_AUTH_TESTING", "0") == "1"
-
-
-def is_pytest_runtime() -> bool:
-    """Return whether current process is executing under pytest."""
-    return os.getenv("PYTEST_CURRENT_TEST") is not None
-
-
-def validate_testing_mode_for_startup() -> None:
-    """Fail fast when testing mode is enabled outside pytest runtimes.
-
-    Raises:
-        ConfigurationError: When ``LITESTAR_AUTH_TESTING=1`` is active in a non-test runtime.
-    """
-    if not is_testing() or is_pytest_runtime():
-        return
-
-    msg = (
-        "LITESTAR_AUTH_TESTING=1 is intended for automated tests only and cannot be enabled "
-        "for non-test runtime startup."
-    )
-    raise ConfigurationError(msg)
-
-
 def validate_secret_length(secret: str, *, label: str, minimum_length: int = MINIMUM_SECRET_LENGTH) -> None:
     """Validate the configured secret length.
 
@@ -158,26 +131,30 @@ def _resolve_token_secret(
     *,
     label: str,
     warning_stacklevel: int = 2,
+    unsafe_testing: bool = False,
 ) -> str:
-    """Resolve a configured token secret or a testing-only generated secret.
+    """Resolve a configured token secret or an explicit unsafe-testing fallback.
 
     Args:
         secret: Configured token secret, if any.
         label: Human-readable label used in warnings and exceptions.
-        warning_stacklevel: Stacklevel used for testing-mode warnings.
+        warning_stacklevel: Stacklevel used for unsafe-testing warnings.
+        unsafe_testing: When ``True``, allow generated temporary secrets and skip
+            production minimum-length enforcement.
 
     Returns:
         The configured token secret, or a cryptographically random hex string when
-        testing mode is enabled and no secret was provided.
+        ``unsafe_testing=True`` and no secret was provided.
 
     Raises:
-        ConfigurationError: If the secret is missing outside testing mode or too short outside testing mode.
+        ConfigurationError: If the secret is missing outside explicit
+            ``unsafe_testing`` mode or too short outside that mode.
     """
     if secret is None:
-        if is_testing():
+        if unsafe_testing:
             warnings.warn(
                 f"{label} not provided; using a randomly generated secret because "
-                "LITESTAR_AUTH_TESTING=1 is set. Set an explicit secret in production.",
+                "unsafe_testing=True. Set an explicit secret for production.",
                 UserWarning,
                 stacklevel=warning_stacklevel,
             )
@@ -189,7 +166,7 @@ def _resolve_token_secret(
         )
         raise ConfigurationError(msg)
 
-    if not is_testing():
+    if not unsafe_testing:
         validate_secret_length(secret, label=label)
 
     return secret

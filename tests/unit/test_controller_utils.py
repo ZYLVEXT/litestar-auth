@@ -367,17 +367,13 @@ def test_require_msgspec_struct_rejects_non_msgspec_types() -> None:
         _require_msgspec_struct(dict, parameter_name="schema")
 
 
-def test_to_user_schema_detects_multiple_sensitive_fields_outside_testing(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+def test_to_user_schema_detects_multiple_sensitive_fields_outside_testing() -> None:
     """Production mode rejects any sensitive response fields present on the schema."""
 
     class _SensitivePasswordSchema(msgspec.Struct):
         id: str
         password: str
         totp_secret: str
-
-    monkeypatch.setattr(_utils, "is_testing", lambda: False)
 
     with pytest.raises(ConfigurationError, match="includes sensitive fields"):
         _to_user_schema(_DummyUser(), _SensitivePasswordSchema)
@@ -390,25 +386,18 @@ def test_to_user_schema_builds_safe_payload() -> None:
     assert _to_user_schema(user, _UserReadSchema) == _UserReadSchema(id=user.id, email=user.email)
 
 
-def test_to_user_schema_rejects_sensitive_fields_outside_testing(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+def test_to_user_schema_rejects_sensitive_fields_outside_testing() -> None:
     """Sensitive response fields are rejected in production mode."""
-    monkeypatch.setattr(_utils, "is_testing", lambda: False)
-
     with pytest.raises(ConfigurationError, match="includes sensitive fields"):
         _to_user_schema(_DummyUser(), _SensitiveUserReadSchema)
 
 
 def test_to_user_schema_allows_sensitive_fields_in_testing_with_warning(
-    monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     """Testing mode keeps legacy behavior but emits a warning."""
-    monkeypatch.setattr(_utils, "is_testing", lambda: True)
-
     with caplog.at_level("WARNING"):
-        result = _to_user_schema(_DummyUser(), _SensitiveUserReadSchema)
+        result = _to_user_schema(_DummyUser(), _SensitiveUserReadSchema, unsafe_testing=True)
 
     assert result == _SensitiveUserReadSchema(id="user-id", hashed_password="hashed-secret")
     assert "sensitive fields" in caplog.text

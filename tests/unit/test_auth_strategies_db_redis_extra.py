@@ -14,6 +14,7 @@ from litestar_auth.authentication.strategy.base import SessionBindable
 from litestar_auth.authentication.strategy.db import DatabaseTokenStrategy
 from litestar_auth.authentication.strategy.redis import RedisTokenStrategy
 from litestar_auth.authentication.transport.bearer import BearerTransport
+from litestar_auth.manager import UserManagerSecurity
 from litestar_auth.models import User
 from litestar_auth.plugin import LitestarAuth, LitestarAuthConfig
 from tests.integration.test_orchestrator import (
@@ -139,10 +140,10 @@ def _minimal_plugin_config(
         user_model=ExampleUser,
         user_manager_class=PluginUserManager,
         user_db_factory=lambda _session: user_db,
-        user_manager_kwargs={
-            "verification_token_secret": "x" * 32,
-            "reset_password_token_secret": "y" * 32,
-        },
+        user_manager_security=UserManagerSecurity[UUID](
+            verification_token_secret="x" * 32,
+            reset_password_token_secret="y" * 32,
+        ),
         allow_legacy_plaintext_tokens=allow_legacy_plaintext_tokens,
     )
 
@@ -188,10 +189,8 @@ def test_database_token_strategy_accepts_user_uuid_type_parameters() -> None:
 
 def test_database_token_strategy_warns_when_accepting_legacy_plaintext_tokens(
     caplog: pytest.LogCaptureFixture,
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """accept_legacy_plaintext_tokens should emit a warning outside testing mode."""
-    monkeypatch.delenv("LITESTAR_AUTH_TESTING", raising=False)
+    """accept_legacy_plaintext_tokens should emit a warning outside explicit unsafe testing."""
     caplog.clear()
     with caplog.at_level("WARNING"):
         DatabaseTokenStrategy(
@@ -206,11 +205,8 @@ def test_database_token_strategy_warns_when_accepting_legacy_plaintext_tokens(
     )
 
 
-def test_plugin_rejects_legacy_plaintext_tokens_without_explicit_rollout_flag(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+def test_plugin_rejects_legacy_plaintext_tokens_without_explicit_rollout_flag() -> None:
     """Plugin config fails fast when legacy plaintext mode is enabled without explicit opt-in."""
-    monkeypatch.delenv("LITESTAR_AUTH_TESTING", raising=False)
     strategy = DatabaseTokenStrategy(
         session=cast("Any", _FakeSession()),
         token_hash_secret="test-token-hash-secret-1234567890-1234567890",
@@ -227,11 +223,8 @@ def test_plugin_rejects_legacy_plaintext_tokens_without_explicit_rollout_flag(
         LitestarAuth(config)
 
 
-def test_plugin_allows_legacy_plaintext_tokens_with_explicit_rollout_flag(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+def test_plugin_allows_legacy_plaintext_tokens_with_explicit_rollout_flag() -> None:
     """Plugin config allows migration mode only when explicitly acknowledged."""
-    monkeypatch.delenv("LITESTAR_AUTH_TESTING", raising=False)
     strategy = DatabaseTokenStrategy(
         session=cast("Any", _FakeSession()),
         token_hash_secret="test-token-hash-secret-1234567890-1234567890",
@@ -251,11 +244,8 @@ def test_plugin_allows_legacy_plaintext_tokens_with_explicit_rollout_flag(
     assert plugin is not None
 
 
-def test_plugin_allows_database_token_preset_legacy_plaintext_tokens_without_top_level_rollout_flag(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+def test_plugin_allows_database_token_preset_legacy_plaintext_tokens_without_top_level_rollout_flag() -> None:
     """The canonical DB-token preset no longer requires a duplicate top-level rollout flag."""
-    monkeypatch.delenv("LITESTAR_AUTH_TESTING", raising=False)
     config = LitestarAuthConfig[ExampleUser, UUID](
         database_token_auth=DatabaseTokenAuthConfig(
             token_hash_secret="test-token-hash-secret-1234567890-1234567890",
@@ -265,10 +255,10 @@ def test_plugin_allows_database_token_preset_legacy_plaintext_tokens_without_top
         user_manager_class=PluginUserManager,
         session_maker=cast("Any", DummySessionMaker()),
         user_db_factory=lambda _session: InMemoryUserDatabase([]),
-        user_manager_kwargs={
-            "verification_token_secret": "x" * 32,
-            "reset_password_token_secret": "y" * 32,
-        },
+        user_manager_security=UserManagerSecurity[UUID](
+            verification_token_secret="x" * 32,
+            reset_password_token_secret="y" * 32,
+        ),
     )
 
     plugin = LitestarAuth(config)

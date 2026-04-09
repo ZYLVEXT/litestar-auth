@@ -11,6 +11,7 @@ from litestar import Litestar
 
 from litestar_auth.authentication.backend import AuthenticationBackend
 from litestar_auth.authentication.transport.bearer import BearerTransport
+from litestar_auth.manager import UserManagerSecurity
 from litestar_auth.password import PasswordHelper
 from litestar_auth.plugin import LitestarAuth, LitestarAuthConfig
 from tests._helpers import ExampleUser
@@ -126,12 +127,12 @@ def _build_plugin_openapi_app() -> Litestar:
         user_model=ExampleUser,
         user_manager_class=PluginUserManager,
         user_db_factory=lambda _session: InMemoryUserDatabase([]),
-        user_manager_kwargs={
-            "password_helper": PasswordHelper(),
-            "verification_token_secret": "verify-secret-12345678901234567890",
-            "reset_password_token_secret": "reset-secret-123456789012345678901",
-            "id_parser": UUID,
-        },
+        user_manager_security=UserManagerSecurity[UUID](
+            verification_token_secret="verify-secret-12345678901234567890",
+            reset_password_token_secret="reset-secret-123456789012345678901",
+            id_parser=UUID,
+        ),
+        user_manager_kwargs={"password_helper": PasswordHelper()},
         auth_path="/auth/jwt",
         enable_refresh=True,
         include_users=False,

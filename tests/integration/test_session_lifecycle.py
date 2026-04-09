@@ -14,6 +14,7 @@ import litestar_auth._plugin.config as plugin_config_module
 from litestar_auth._plugin.config import DatabaseTokenAuthConfig
 from litestar_auth.authentication.backend import AuthenticationBackend
 from litestar_auth.authentication.transport.bearer import BearerTransport
+from litestar_auth.manager import UserManagerSecurity
 from litestar_auth.password import PasswordHelper
 from litestar_auth.plugin import LitestarAuth, LitestarAuthConfig
 from tests.integration.conftest import CountingSessionMaker, ExampleUser, InMemoryUserDatabase
@@ -260,12 +261,12 @@ def _build_app_with_counting_session_maker() -> tuple[Litestar, CountingSessionM
         user_model=ExampleUser,
         user_manager_class=PluginUserManager,
         user_db_factory=lambda _session: user_db,
-        user_manager_kwargs={
-            "password_helper": password_helper,
-            "verification_token_secret": "verify-secret-12345678901234567890",
-            "reset_password_token_secret": "reset-secret-123456789012345678901",
-            "id_parser": UUID,
-        },
+        user_manager_security=UserManagerSecurity[UUID](
+            verification_token_secret="verify-secret-12345678901234567890",
+            reset_password_token_secret="reset-secret-123456789012345678901",
+            id_parser=UUID,
+        ),
+        user_manager_kwargs={"password_helper": password_helper},
         include_users=True,
     )
     plugin = LitestarAuth(config)
@@ -300,12 +301,12 @@ def _build_refresh_app_with_counting_session_maker() -> tuple[Litestar, Counting
         user_model=ExampleUser,
         user_manager_class=PluginUserManager,
         user_db_factory=lambda _session: user_db,
-        user_manager_kwargs={
-            "password_helper": password_helper,
-            "verification_token_secret": "verify-secret-12345678901234567890",
-            "reset_password_token_secret": "reset-secret-123456789012345678901",
-            "id_parser": UUID,
-        },
+        user_manager_security=UserManagerSecurity[UUID](
+            verification_token_secret="verify-secret-12345678901234567890",
+            reset_password_token_secret="reset-secret-123456789012345678901",
+            id_parser=UUID,
+        ),
+        user_manager_kwargs={"password_helper": password_helper},
         enable_refresh=True,
         include_users=False,
     )
@@ -327,12 +328,14 @@ def _install_preset_backend_builder(
         database_token_auth: DatabaseTokenAuthConfig,
         *,
         session: object | None = None,
+        unsafe_testing: bool = False,
     ) -> AuthenticationBackend[ExampleUser, UUID]:
         """Build a fake preset backend bound to the provided request session.
 
         Returns:
             Authentication backend that shares the preset's in-memory token state.
         """
+        del unsafe_testing
         state = states.setdefault(id(database_token_auth), _PresetStrategyState())
         strategy = _PresetSessionStrategy(
             state=state,
@@ -378,12 +381,12 @@ def _build_database_token_preset_app(
         user_model=ExampleUser,
         user_manager_class=PluginUserManager,
         user_db_factory=lambda _session: user_db,
-        user_manager_kwargs={
-            "password_helper": password_helper,
-            "verification_token_secret": "verify-secret-12345678901234567890",
-            "reset_password_token_secret": "reset-secret-123456789012345678901",
-            "id_parser": UUID,
-        },
+        user_manager_security=UserManagerSecurity[UUID](
+            verification_token_secret="verify-secret-12345678901234567890",
+            reset_password_token_secret="reset-secret-123456789012345678901",
+            id_parser=UUID,
+        ),
+        user_manager_kwargs={"password_helper": password_helper},
         enable_refresh=enable_refresh,
         include_users=False,
     )

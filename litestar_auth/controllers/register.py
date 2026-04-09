@@ -50,6 +50,7 @@ def create_register_controller[UP: RegisterControllerUserProtocol[Any], ID](
     path: str = "/auth",
     user_read_schema: type[msgspec.Struct] = UserRead,
     user_create_schema: type[msgspec.Struct] = UserCreate,
+    unsafe_testing: bool = False,
 ) -> type[Controller]:
     """Return a controller subclass that resolves the user manager via Litestar DI.
 
@@ -58,6 +59,8 @@ def create_register_controller[UP: RegisterControllerUserProtocol[Any], ID](
         path: Base route prefix for the generated controller.
         user_read_schema: Custom msgspec struct used for public registration responses.
         user_create_schema: Custom msgspec struct used for registration requests.
+        unsafe_testing: Explicit test-only escape hatch that allows response
+            schemas with sensitive fields for isolated fixtures.
 
     Returns:
         Controller subclass exposing the registration endpoint.
@@ -116,7 +119,7 @@ def create_register_controller[UP: RegisterControllerUserProtocol[Any], ID](
             if register_rate_limit is not None:
                 await register_rate_limit.reset(request)
 
-            return _to_user_schema(user, user_read_schema_type)
+            return _to_user_schema(user, user_read_schema_type, unsafe_testing=unsafe_testing)
 
     register_cls = RegisterController
     _configure_request_body_handler(register_cls.register, schema=user_create_schema_type)

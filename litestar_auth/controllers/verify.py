@@ -48,6 +48,7 @@ def create_verify_controller[UP: VerifyControllerUserProtocol[Any], ID](
     rate_limit_config: AuthRateLimitConfig | None = None,
     path: str = "/auth",
     user_read_schema: type[msgspec.Struct] = UserRead,
+    unsafe_testing: bool = False,
 ) -> type[Controller]:
     """Return a controller subclass that resolves the user manager via Litestar DI.
 
@@ -56,6 +57,8 @@ def create_verify_controller[UP: VerifyControllerUserProtocol[Any], ID](
             ``request_verify_token`` requests are subject to rate limiting.
         path: Base route prefix for the generated controller.
         user_read_schema: Custom msgspec struct used for public verification responses.
+        unsafe_testing: Explicit test-only escape hatch that allows response
+            schemas with sensitive fields for isolated fixtures.
 
     Returns:
         Controller subclass exposing verification-related endpoints.
@@ -95,7 +98,7 @@ def create_verify_controller[UP: VerifyControllerUserProtocol[Any], ID](
                 ) from exc
 
             await verify_rate_limit_reset(request)
-            return _to_user_schema(user, user_read_schema_type)
+            return _to_user_schema(user, user_read_schema_type, unsafe_testing=unsafe_testing)
 
         @post(
             "/request-verify-token",

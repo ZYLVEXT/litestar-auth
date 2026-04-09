@@ -10,7 +10,7 @@ import re
 import secrets
 from datetime import timedelta
 from threading import Lock
-from typing import TYPE_CHECKING, Any, ClassVar, cast
+from typing import TYPE_CHECKING, Any, cast
 from weakref import WeakKeyDictionary
 
 from litestar_auth import config as _config
@@ -165,15 +165,6 @@ class BaseUserManager[UP: UserProtocol[Any], ID](  # noqa: PLR0904
 ):
     """Coordinate user persistence, password hashing, and account tokens."""
 
-    # Internal marker used by plugin capability resolution to stop walking the
-    # MRO at the canonical manager root even after importlib.reload() creates a
-    # fresh BaseUserManager class object.
-    _litestar_auth_capability_root: ClassVar[bool] = True
-    accepts_security: bool = True
-    accepts_password_validator: bool = True
-    accepts_login_identifier: bool = True
-    accepts_id_parser: bool = True
-
     @staticmethod
     def _normalize_email(email: str) -> str:
         """Normalize and validate an email address.
@@ -209,6 +200,7 @@ class BaseUserManager[UP: UserProtocol[Any], ID](  # noqa: PLR0904
         totp_secret_key: str | None = None,
         backends: tuple[object, ...] = (),
         login_identifier: LoginIdentifier = "email",
+        unsafe_testing: bool = False,
     ) -> None:
         """Initialize the user manager.
 
@@ -222,9 +214,9 @@ class BaseUserManager[UP: UserProtocol[Any], ID](  # noqa: PLR0904
                 dedicated values per secret role instead of reusing one value across
                 verification, reset-password, and TOTP flows.
             verification_token_secret: Secret used to sign email-verification tokens.
-                If omitted, ``ConfigurationError`` is raised unless ``LITESTAR_AUTH_TESTING=1``.
+                If omitted, ``ConfigurationError`` is raised unless ``unsafe_testing=True``.
             reset_password_token_secret: Secret used to sign password-reset tokens.
-                If omitted, ``ConfigurationError`` is raised unless ``LITESTAR_AUTH_TESTING=1``.
+                If omitted, ``ConfigurationError`` is raised unless ``unsafe_testing=True``.
             verification_token_lifetime: Lifetime applied to verification tokens.
             reset_password_token_lifetime: Lifetime applied to password-reset tokens.
             id_parser: Optional callable that converts JWT ``sub`` strings into user identifiers.
@@ -236,10 +228,14 @@ class BaseUserManager[UP: UserProtocol[Any], ID](  # noqa: PLR0904
                 keeps credential updates aligned with the same backends used for request auth.
             login_identifier: Which field ``authenticate`` uses for credential lookup by default
                 when ``login_identifier`` is not passed explicitly to ``authenticate``.
+            unsafe_testing: Explicit per-instance escape hatch for tests that need
+                generated fallback secrets or other single-process shortcuts. Do not
+                enable this for production traffic.
 
         Raises:
             ConfigurationError: If the typed ``security`` bundle is combined with explicit
-                secret kwargs, or if required secrets are omitted outside testing mode.
+                secret kwargs, or if required secrets are omitted outside
+                ``unsafe_testing`` mode.
 
         """
         if security is not None:
@@ -272,10 +268,11 @@ class BaseUserManager[UP: UserProtocol[Any], ID](  # noqa: PLR0904
             resolved_security,
             secret_factory=cast("SecretFactory", _SecretValue),
             warning_stacklevel=4,
+            unsafe_testing=unsafe_testing,
         )
         resolved_verification_token_secret = account_token_secrets.verification_token_secret.get_secret_value()
         resolved_reset_password_token_secret = account_token_secrets.reset_password_token_secret.get_secret_value()
-        if not _config.is_testing():
+        if not unsafe_testing:
             should_warn_about_reused_secret_roles = True
             if _config.plugin_owns_secret_role_reuse_warning():
                 should_warn_about_reused_secret_roles = not _config.plugin_secret_role_warning_matches_manager_surface(
@@ -303,6 +300,7 @@ class BaseUserManager[UP: UserProtocol[Any], ID](  # noqa: PLR0904
         self.totp_secret_key = resolved_security.totp_secret_key
         self.backends: tuple[object, ...] = backends
         self.login_identifier: LoginIdentifier = login_identifier
+        self.unsafe_testing = unsafe_testing
         resolved_password_helper = password_helper or PasswordHelper.from_defaults()
         self.policy = UserPolicy(
             password_helper=resolved_password_helper,

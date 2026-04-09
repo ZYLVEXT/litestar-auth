@@ -20,7 +20,7 @@ from litestar_auth.authentication.strategy.base import (
     UserManagerProtocol,
 )
 from litestar_auth.authentication.transport.cookie import CookieTransport
-from litestar_auth.config import is_testing, validate_secret_length
+from litestar_auth.config import validate_secret_length
 from litestar_auth.controllers._utils import (
     AccountStateValidatorProvider,
     RequestHandler,
@@ -373,6 +373,7 @@ def create_auth_controller[UP: UserProtocol[Any], ID](  # noqa: PLR0913
     totp_pending_secret: str | None = None,
     totp_pending_lifetime: timedelta = _DEFAULT_PENDING_TOKEN_LIFETIME,
     path: str = "/auth",
+    unsafe_testing: bool = False,
 ) -> type[Controller]:
     """Return a controller subclass bound to the provided backend (DI user manager).
 
@@ -391,6 +392,8 @@ def create_auth_controller[UP: UserProtocol[Any], ID](  # noqa: PLR0913
             Must match the value passed to ``create_totp_controller``.
         totp_pending_lifetime: Maximum age of the intermediate pending token.
         path: Base route prefix for the generated controller.
+        unsafe_testing: Explicit test-only escape hatch that skips production
+            validation for short-lived single-process fixtures.
 
     Returns:
         Controller subclass with backend-specific login and logout handlers.
@@ -405,7 +408,7 @@ def create_auth_controller[UP: UserProtocol[Any], ID](  # noqa: PLR0913
         )
         ```
     """
-    if totp_pending_secret is not None and not is_testing():
+    if totp_pending_secret is not None and not unsafe_testing:
         validate_secret_length(totp_pending_secret, label="totp_pending_secret")
     ctx = _make_auth_controller_context(
         backend=backend,
