@@ -3,42 +3,22 @@
 Optional **per-endpoint** limits protect login, registration, token flows, and TOTP surfaces from
 brute force and abuse. Configure **`AuthRateLimitConfig`** on
 **`LitestarAuthConfig.rate_limit_config`**. For the current Redis-backed contract, including the
-stable slot and group inventory, migration recipe, and `RedisUsedTotpCodeStore` pairing, use
+stable slot and group inventory, migration recipe, and the paired TOTP Redis-store wiring, use
 [Configuration](../configuration.md#canonical-redis-backed-auth-surface) as the maintained source
 of truth. This guide focuses on how the rate-limit surface maps onto the HTTP routes you expose.
 
 ## Canonical shared-backend setup
 
-```python
-from litestar_auth import TotpConfig
-from litestar_auth.contrib.redis import RedisAuthPreset, RedisAuthRateLimitTier
-from litestar_auth.ratelimit import AUTH_RATE_LIMIT_VERIFICATION_SLOTS
+Use [Configuration](../configuration.md#canonical-redis-backed-auth-surface) for the maintained
+production Redis/TOTP recipe. That canonical snippet is the single source of truth for wiring
+`RedisAuthPreset`, `AUTH_RATE_LIMIT_VERIFICATION_SLOTS`, `TotpConfig.totp_pending_jti_store`, and
+`TotpConfig.totp_used_tokens_store` from one shared async Redis client.
 
-redis_auth = RedisAuthPreset(
-    redis=redis_client,
-    rate_limit_tier=RedisAuthRateLimitTier(max_attempts=5, window_seconds=60),
-    group_rate_limit_tiers={
-        "refresh": RedisAuthRateLimitTier(max_attempts=10, window_seconds=300),
-        "totp": RedisAuthRateLimitTier(max_attempts=5, window_seconds=300),
-    },
-)
-rate_limit_config = redis_auth.build_rate_limit_config(
-    disabled=AUTH_RATE_LIMIT_VERIFICATION_SLOTS,
-    namespace_style="snake_case",
-)
-totp_config = TotpConfig(
-    totp_pending_secret="replace-with-32+-char-secret",
-    totp_used_tokens_store=redis_auth.build_totp_used_tokens_store(),
-)
-```
-
-`RedisAuthPreset` is the preferred one-client Redis path when auth rate limiting and the TOTP
-replay store should share the same async Redis client. Keep
+This guide deliberately does not repeat the full snippet, because the slot inventory, namespace
+families, and one-client TOTP wiring now live in one canonical place. Keep
 `AuthRateLimitConfig.from_shared_backend()` plus direct `RedisRateLimiter(...)` /
-`RedisUsedTotpCodeStore(...)` construction as the advanced escape hatch for applications that need
-separate backends or deeper per-slot customization. For the exact slot names, groups, default
-scopes, namespace families, helper exports, override precedence, and migration recipe, follow
-[Configuration](../configuration.md#canonical-redis-backed-auth-surface).
+`RedisJWTDenylistStore(...)` / `RedisUsedTotpCodeStore(...)` construction as the advanced escape
+hatch when applications intentionally need separate backends or deeper per-slot customization.
 
 `enabled` and `disabled` remain the underlying builder inputs. When app code needs the supported
 slot inventory directly, import `AUTH_RATE_LIMIT_ENDPOINT_SLOTS`,
@@ -53,6 +33,9 @@ verification routes stay off.
 
 - When a limit is exceeded, clients receive **429 Too Many Requests** with **`Retry-After`**.
 - Backends: **`InMemoryRateLimiter`** (single process / dev) or **`RedisRateLimiter`** (production, multiple workers). See [Deployment](../deployment.md).
+- For the production shared-client Redis path, use the canonical configuration recipe so rate
+  limiting stays aligned with both TOTP replay stores instead of hand-maintaining a partial copy in
+  this guide.
 - For pytest-driven plugin tests, `InMemoryRateLimiter` is the canonical single-process choice described in the [testing guide](testing.md). Keep limiter state isolated per test when counters must not leak.
 
 ## Config fields → HTTP surface

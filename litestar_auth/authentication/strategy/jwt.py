@@ -27,6 +27,8 @@ _load_redis_asyncio = partial(_require_redis_asyncio, feature_name="RedisJWTDeny
 if TYPE_CHECKING:
     from collections.abc import Callable
 
+    from litestar_auth._redis_protocols import RedisExpiringValueStoreClient
+
 DEFAULT_ALGORITHM = "HS256"
 DEFAULT_LIFETIME = timedelta(minutes=15)
 _ALLOWED_ALGORITHMS = frozenset(
@@ -128,19 +130,25 @@ class InMemoryJWTDenylistStore:
             )
 
 
-class _RedisClientProtocol(Protocol):
-    """Minimal async Redis surface required for JWT revocation."""
-
-    async def get(self, name: str, /) -> bytes | str | None: ...  # pragma: no cover
-
-    async def setex(self, name: str, time: int, value: str, /) -> object: ...  # pragma: no cover
-
-
 class RedisJWTDenylistStore:
     """Redis-backed denylist store keyed by `jti` with TTL."""
 
-    def __init__(self, *, redis: _RedisClientProtocol, key_prefix: str = "litestar_auth:jwt:denylist:") -> None:
-        """Initialize the store with a Redis client and key prefix."""
+    def __init__(
+        self,
+        *,
+        redis: RedisExpiringValueStoreClient,
+        key_prefix: str = "litestar_auth:jwt:denylist:",
+    ) -> None:
+        """Initialize the store with a Redis client and key prefix.
+
+        Args:
+            redis: Async Redis client supporting ``get(name)`` plus
+                ``setex(name, ttl_seconds, value)``. The same client may also
+                be annotated as
+                :class:`litestar_auth.contrib.redis.RedisAuthClientProtocol`
+                when it backs the contrib preset or TOTP replay store.
+            key_prefix: Prefix used to namespace denylist keys by JTI.
+        """
         _load_redis_asyncio()
         self.redis = redis
         self.key_prefix = key_prefix

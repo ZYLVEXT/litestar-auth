@@ -51,8 +51,15 @@ from litestar_auth.plugin import (
     OAuthConfig,
     TotpConfig,
 )
-from litestar_auth.ratelimit import AuthRateLimitConfig, EndpointRateLimit, InMemoryRateLimiter, RedisRateLimiter
+from litestar_auth.ratelimit import (
+    AuthRateLimitConfig,
+    EndpointRateLimit,
+    InMemoryRateLimiter,
+    RedisClientProtocol,
+    RedisRateLimiter,
+)
 from litestar_auth.totp import InMemoryUsedTotpCodeStore, SecurityWarning
+from tests._helpers import cast_fakeredis
 from tests.integration.test_orchestrator import (
     DummySession,
     DummySessionMaker,
@@ -64,6 +71,8 @@ from tests.integration.test_orchestrator import (
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterator
+
+    from tests._helpers import AsyncFakeRedis
 
 pytestmark = pytest.mark.unit
 
@@ -347,21 +356,25 @@ def test_on_app_init_warns_security_warning_for_inmemory_rate_limiter_in_product
         plugin.on_app_init(AppConfig())
 
 
-def test_on_app_init_does_not_warn_for_redis_rate_limiter() -> None:
+def test_on_app_init_does_not_warn_for_redis_rate_limiter(
+    monkeypatch: pytest.MonkeyPatch,
+    async_fakeredis: AsyncFakeRedis,
+) -> None:
     """Shared Redis-backed rate limiting stays silent during app init."""
 
-    class _RedisStub:
-        async def delete(self, *names: str) -> int:
-            return len(names)
+    def load_redis_asyncio() -> object:
+        return object()
 
-        async def eval(self, script: str, numkeys: int, *keys_and_args: object) -> int:
-            del script, numkeys, keys_and_args
-            return 0
+    monkeypatch.setattr("litestar_auth.ratelimit._load_redis_asyncio", load_redis_asyncio)
 
     config = _minimal_config()
     config.rate_limit_config = AuthRateLimitConfig(
         login=EndpointRateLimit(
-            backend=RedisRateLimiter(redis=_RedisStub(), max_attempts=3, window_seconds=60),
+            backend=RedisRateLimiter(
+                redis=cast_fakeredis(async_fakeredis, RedisClientProtocol),
+                max_attempts=3,
+                window_seconds=60,
+            ),
             scope="ip",
             namespace="login",
         ),

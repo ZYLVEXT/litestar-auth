@@ -1,4 +1,4 @@
-"""Shared typing vocabulary for optional async Redis integrations."""
+"""Internal shared typing vocabulary for optional async Redis integrations."""
 
 from __future__ import annotations
 
@@ -46,6 +46,17 @@ class RedisConditionalSetClient(Protocol):
         """Set a key, optionally requiring absence and/or a millisecond TTL."""
 
 
+class RedisExpiringValueWriteClient(Protocol):
+    """Async Redis client supporting ``SETEX`` writes."""
+
+    async def setex(self, name: RedisKey, time: RedisTTLSeconds, value: str, /) -> object:
+        """Store a Redis value with an expiration time in seconds."""
+
+
+class RedisExpiringValueStoreClient(RedisValueReadClient, RedisExpiringValueWriteClient, Protocol):
+    """Async Redis client supporting string reads plus expiring string writes."""
+
+
 class RedisScriptEvalClient(Protocol):
     """Async Redis client supporting Lua script evaluation."""
 
@@ -54,19 +65,17 @@ class RedisScriptEvalClient(Protocol):
 
 
 class RedisRateLimiterClient(RedisDeleteClient, RedisScriptEvalClient, Protocol):
-    """Async Redis client supporting the ``RedisRateLimiter`` contract."""
+    """Internal async Redis client supporting the ``RedisRateLimiter`` contract."""
 
 
 @runtime_checkable
-class RedisSharedAuthClient(RedisRateLimiterClient, RedisConditionalSetClient, Protocol):
-    """Async Redis client supporting both Redis auth rate limiting and TOTP replay protection."""
-
-
-class RedisExpiringValueWriteClient(Protocol):
-    """Async Redis client supporting ``SETEX`` writes."""
-
-    async def setex(self, name: RedisKey, time: RedisTTLSeconds, value: str, /) -> object:
-        """Store a Redis value with an expiration time in seconds."""
+class RedisSharedAuthClient(
+    RedisRateLimiterClient,
+    RedisConditionalSetClient,
+    RedisExpiringValueStoreClient,
+    Protocol,
+):
+    """Internal composite client backing the public contrib auth Redis protocol."""
 
 
 class RedisSetMembershipClient(Protocol):

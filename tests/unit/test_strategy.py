@@ -7,19 +7,16 @@ import hmac
 import importlib
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any, cast
-from unittest.mock import AsyncMock
 from uuid import UUID, uuid4
 
 import jwt
 import pytest
 
 from litestar_auth.authentication.strategy import base as strategy_base_module
-from litestar_auth.authentication.strategy import redis as redis_strategy_module
-from litestar_auth.authentication.strategy._opaque_tokens import build_opaque_token_key
 from litestar_auth.authentication.strategy.base import Strategy
 from litestar_auth.authentication.strategy.db import DatabaseTokenStrategy
 from litestar_auth.authentication.strategy.jwt import JWT_ACCESS_TOKEN_AUDIENCE, JWTStrategy
-from litestar_auth.authentication.strategy.redis import DEFAULT_KEY_PREFIX, RedisTokenStrategy
+from litestar_auth.authentication.strategy.redis import RedisTokenStrategy
 from litestar_auth.config import validate_secret_length
 from litestar_auth.exceptions import ConfigurationError
 from tests._helpers import ExampleUser
@@ -69,14 +66,6 @@ F8JestFI8H0X0mqw8w1gxQ/IqgkqFFtTjxJhWX5jK6gez3CkwT/gSmfksmj01LDV
 
 if TYPE_CHECKING:
     from collections.abc import Callable
-
-
-def _redis_token_key(token: str) -> str:
-    return build_opaque_token_key(
-        key_prefix=DEFAULT_KEY_PREFIX,
-        token_hash_secret=REDIS_TOKEN_HASH_SECRET.encode(),
-        token=token,
-    )
 
 
 class ExampleUserManager:
@@ -540,96 +529,6 @@ def test_jwt_strategy_rejects_disallowed_algorithm() -> None:
         JWTStrategy(secret=DEFAULT_SECRET, algorithm="none")
 
 
-async def test_redis_strategy_writes_token_with_ttl(monkeypatch: pytest.MonkeyPatch) -> None:
-    """RedisTokenStrategy stores a token with the configured TTL."""
-
-    def load_redis() -> object:
-        return object()
-
-    monkeypatch.setattr(redis_strategy_module, "_load_redis_asyncio", load_redis)
-    redis_client = AsyncMock()
-    user = ExampleUser(id=uuid4())
-    strategy = RedisTokenStrategy[ExampleUser, UUID](
-        redis=redis_client,
-        token_hash_secret=REDIS_TOKEN_HASH_SECRET,
-        lifetime=timedelta(minutes=5),
-        token_bytes=16,
-    )
-
-    token = await strategy.write_token(user)
-
-    assert isinstance(strategy, Strategy)
-    assert token
-    redis_client.setex.assert_awaited_once_with(
-        _redis_token_key(token),
-        300,
-        str(user.id),
-    )
-
-
-async def test_redis_strategy_reads_token_via_user_manager(monkeypatch: pytest.MonkeyPatch) -> None:
-    """RedisTokenStrategy resolves users from stored Redis values."""
-
-    def load_redis() -> object:
-        return object()
-
-    monkeypatch.setattr(redis_strategy_module, "_load_redis_asyncio", load_redis)
-    user = ExampleUser(id=uuid4())
-    user_manager = ExampleUserManager(user)
-    redis_client = AsyncMock()
-    redis_client.get.return_value = str(user.id).encode()
-    strategy = RedisTokenStrategy[ExampleUser, UUID](
-        redis=redis_client,
-        token_hash_secret=REDIS_TOKEN_HASH_SECRET,
-        subject_decoder=UUID,
-    )
-
-    resolved_user = await strategy.read_token("token-1", user_manager)
-
-    assert resolved_user == user
-    redis_client.get.assert_awaited_once_with(_redis_token_key("token-1"))
-    assert user_manager.seen_user_ids == [user.id]
-
-
-@pytest.mark.parametrize("stored_value", [None, "not-a-uuid"])
-async def test_redis_strategy_returns_none_for_missing_or_invalid_user_id(
-    monkeypatch: pytest.MonkeyPatch,
-    stored_value: str | None,
-) -> None:
-    """RedisTokenStrategy rejects missing or undecodable Redis payloads."""
-
-    def load_redis() -> object:
-        return object()
-
-    monkeypatch.setattr(redis_strategy_module, "_load_redis_asyncio", load_redis)
-    user = ExampleUser(id=uuid4())
-    user_manager = ExampleUserManager(user)
-    redis_client = AsyncMock()
-    redis_client.get.return_value = stored_value
-    strategy = RedisTokenStrategy[ExampleUser, UUID](
-        redis=redis_client,
-        token_hash_secret=REDIS_TOKEN_HASH_SECRET,
-        subject_decoder=UUID,
-    )
-
-    assert await strategy.read_token("token-2", user_manager) is None
-
-
-async def test_redis_strategy_destroy_token_deletes_key(monkeypatch: pytest.MonkeyPatch) -> None:
-    """RedisTokenStrategy removes the token key on logout."""
-
-    def load_redis() -> object:
-        return object()
-
-    monkeypatch.setattr(redis_strategy_module, "_load_redis_asyncio", load_redis)
-    redis_client = AsyncMock()
-    user = ExampleUser(id=uuid4())
-    strategy = RedisTokenStrategy[ExampleUser, UUID](redis=redis_client, token_hash_secret=REDIS_TOKEN_HASH_SECRET)
-
-    assert await strategy.destroy_token("token-3", user) is None
-    redis_client.delete.assert_awaited_once_with(_redis_token_key("token-3"))
-
-
 def test_redis_strategy_lazy_import_error_message(monkeypatch: pytest.MonkeyPatch) -> None:
     """RedisTokenStrategy explains how to install the optional dependency."""
 
@@ -639,4 +538,4 @@ def test_redis_strategy_lazy_import_error_message(monkeypatch: pytest.MonkeyPatc
     monkeypatch.setattr(importlib, "import_module", fail_import)
 
     with pytest.raises(ImportError, match="Install litestar-auth\\[redis\\] to use RedisTokenStrategy"):
-        RedisTokenStrategy(redis=AsyncMock(), token_hash_secret=REDIS_TOKEN_HASH_SECRET)
+        RedisTokenStrategy(redis=cast("Any", object()), token_hash_secret=REDIS_TOKEN_HASH_SECRET)

@@ -432,24 +432,32 @@ By default, built-in TOTP routes publish `TotpEnableRequest`, `TotpConfirmEnable
 
 This section is the canonical Redis integration guide for the currently implemented auth surface.
 Use it for the shared-backend rate-limit contract, migration of existing Redis key shapes, TOTP
-replay protection, and the stable split between `litestar_auth.ratelimit` and
-`litestar_auth.contrib.redis`.
+replay protection, pending-login-token JTI deduplication, and the stable split between
+`litestar_auth.ratelimit` and `litestar_auth.contrib.redis`.
 
 ### Shared-backend rate limiting
 
-For the usual Redis deployment where one async Redis client should back both auth rate limiting and
-TOTP replay protection, start with `litestar_auth.contrib.redis.RedisAuthPreset` plus the
-verification-slot helper from `litestar_auth.ratelimit`:
+For the usual Redis deployment where one async Redis client should back auth rate limiting, TOTP
+replay protection, and pending-login-token JTI deduplication, start with
+`litestar_auth.contrib.redis.RedisAuthPreset` plus the verification-slot helper from
+`litestar_auth.ratelimit`:
 
-For strict typing, `RedisAuthPreset(redis=...)` accepts any async client that satisfies the
-combined `RedisRateLimiter` plus `RedisUsedTotpCodeStore` contract:
-`eval(...)`, `delete(...)`, and `set(name, value, nx=True, px=ttl_ms)`.
+For strict typing, annotate the shared client with
+`litestar_auth.contrib.redis.RedisAuthClientProtocol`. The canonical one-client recipe assumes a
+`redis.asyncio.Redis`-compatible runtime client. The shared protocol covers the combined operations
+used by the preset's rate-limiter, used-code replay, and pending-token denylist helpers:
+`eval(...)`, `delete(...)`, `set(name, value, nx=True, px=ttl_ms)`, `get(...)`, and `setex(...)`.
 
 ```python
 from litestar_auth import TotpConfig
-from litestar_auth.contrib.redis import RedisAuthPreset, RedisAuthRateLimitTier
+from litestar_auth.contrib.redis import (
+    RedisAuthClientProtocol,
+    RedisAuthPreset,
+    RedisAuthRateLimitTier,
+)
 from litestar_auth.ratelimit import AUTH_RATE_LIMIT_VERIFICATION_SLOTS
 
+redis_client: RedisAuthClientProtocol
 redis_auth = RedisAuthPreset(
     redis=redis_client,
     rate_limit_tier=RedisAuthRateLimitTier(max_attempts=5, window_seconds=60),
@@ -464,6 +472,7 @@ rate_limit_config = redis_auth.build_rate_limit_config(
 )
 totp_config = TotpConfig(
     totp_pending_secret="replace-with-32+-char-secret",
+    totp_pending_jti_store=redis_auth.build_totp_pending_jti_store(),
     totp_used_tokens_store=redis_auth.build_totp_used_tokens_store(),
 )
 ```
@@ -471,7 +480,7 @@ totp_config = TotpConfig(
 `RedisAuthPreset` is the preferred one-client Redis path. Keep the module split explicit:
 
 - `litestar_auth.contrib.redis` owns the higher-level convenience entrypoints such as `RedisAuthPreset`,
-  `RedisAuthRateLimitTier`, `RedisTokenStrategy`, and `RedisUsedTotpCodeStore`.
+  `RedisAuthRateLimitTier`, `RedisAuthClientProtocol`, `RedisTokenStrategy`, and `RedisUsedTotpCodeStore`.
 - `litestar_auth.ratelimit` owns the lower-level shared-builder surface such as
   `AuthRateLimitConfig.from_shared_backend()`, `RedisRateLimiter`, the typed slot/group aliases, and
   the slot-set helpers.
@@ -482,6 +491,9 @@ totp_config = TotpConfig(
 preset `group_rate_limit_tiers`. `RedisAuthPreset.group_rate_limit_tiers` is snapshotted into a
 read-only mapping at construction time, so later mutations to the caller's source `dict` do not
 silently change the preset's runtime budget layout.
+`build_totp_used_tokens_store()` and `build_totp_pending_jti_store()` follow the same precedence:
+per-call `key_prefix=` wins over the preset default, and `None` preserves each low-level store's
+current built-in prefix.
 
 The shared builder itself exposes typed public identifiers and slot-set helpers from
 `litestar_auth.ratelimit`:
@@ -510,9 +522,9 @@ from litestar_auth.ratelimit import (
 
 ### Low-level Redis builder path
 
-Keep direct `AuthRateLimitConfig.from_shared_backend()` plus direct `RedisRateLimiter(...)` and
-`RedisUsedTotpCodeStore(...)` construction as the low-level escape hatch when you need separate
-backends, bespoke key prefixes, or fully manual wiring:
+Keep direct `AuthRateLimitConfig.from_shared_backend()` plus direct `RedisRateLimiter(...)`,
+`RedisUsedTotpCodeStore(...)`, and `RedisJWTDenylistStore(...)` construction as the low-level
+escape hatch when you need separate backends, bespoke key prefixes, or fully manual wiring:
 
 ```python
 from litestar_auth.ratelimit import (
@@ -598,20 +610,23 @@ Add `namespace_overrides` only when an existing deployment needs names that do n
 supported family. Add `scope_overrides` only when an existing key shape also depends on a
 non-default scope for a specific slot.
 
-### Redis TOTP replay protection
+### Redis TOTP replay protection and pending-token deduplication
 
 Use `RedisUsedTotpCodeStore` for `TotpConfig.totp_used_tokens_store` when TOTP codes must not be
-reusable across workers or restarts. `RedisAuthPreset.build_totp_used_tokens_store()` is the
-preferred one-client path when the same Redis client also backs auth rate limiting. The stable
-convenience alias still lives in `litestar_auth.contrib.redis`, and the direct implementation
-remains available from `litestar_auth.totp`.
+reusable across workers or restarts, and use `RedisJWTDenylistStore` for
+`TotpConfig.totp_pending_jti_store` when pending login tokens must not be replayed across workers
+or restarts. `RedisAuthPreset.build_totp_used_tokens_store()` plus
+`RedisAuthPreset.build_totp_pending_jti_store()` is the preferred one-client path when the same
+Redis client also backs auth rate limiting. The direct low-level store implementations remain
+available when you intentionally want bespoke wiring or separate Redis backends.
 
 ```python
-from litestar_auth import TotpConfig
+from litestar_auth import RedisJWTDenylistStore, TotpConfig
 from litestar_auth.contrib.redis import RedisUsedTotpCodeStore
 
 totp_config = TotpConfig(
     totp_pending_secret="replace-with-32+-char-secret",
+    totp_pending_jti_store=RedisJWTDenylistStore(redis=redis_client),
     totp_used_tokens_store=RedisUsedTotpCodeStore(redis=redis_client),
 )
 ```
@@ -623,7 +638,8 @@ deduplication and `TotpConfig.totp_used_tokens_store` for TOTP-code replay prote
 ### Redis contrib import boundary
 
 `litestar_auth.contrib.redis` is the public Redis convenience boundary. It exposes
-`RedisAuthPreset`, `RedisAuthRateLimitTier`, `RedisTokenStrategy`, and `RedisUsedTotpCodeStore`.
+`RedisAuthClientProtocol`, `RedisAuthPreset`, `RedisAuthRateLimitTier`, `RedisTokenStrategy`, and
+`RedisUsedTotpCodeStore`.
 The high-level one-client preset lives there, while the typed slot/group aliases and low-level
 shared-backend builder surface remain on `litestar_auth.ratelimit`.
 

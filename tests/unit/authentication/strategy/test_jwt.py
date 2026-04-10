@@ -13,6 +13,7 @@ from uuid import UUID, uuid4
 import jwt
 import pytest
 
+from litestar_auth._redis_protocols import RedisExpiringValueStoreClient
 from litestar_auth.authentication.strategy import jwt as jwt_strategy_module
 from litestar_auth.authentication.strategy.jwt import (
     JWT_ACCESS_TOKEN_AUDIENCE,
@@ -20,9 +21,8 @@ from litestar_auth.authentication.strategy.jwt import (
     JWTStrategy,
     RedisJWTDenylistStore,
     _default_session_fingerprint,
-    _RedisClientProtocol,
 )
-from tests._helpers import ExampleUser
+from tests._helpers import ExampleUser, cast_fakeredis, record_async_redis_call_args
 from tests.unit.test_strategy import DEFAULT_SECRET, ExampleUserManager
 
 if TYPE_CHECKING:
@@ -30,6 +30,7 @@ if TYPE_CHECKING:
     from types import ModuleType
 
     from litestar_auth.types import ID
+    from tests._helpers import AsyncFakeRedis
 
 pytestmark = pytest.mark.unit
 
@@ -59,29 +60,6 @@ class _RecordingDenylistStore:
     async def is_denied(self, jti: str) -> bool:
         """Return whether the given JTI has been recorded."""
         return jti in self.denied
-
-
-class _FakeRedis:
-    """Minimal async Redis stub for denylist storage tests."""
-
-    def __init__(self) -> None:
-        """Initialize an empty key-value map."""
-        self.storage: dict[str, str] = {}
-        self.setex_calls: list[tuple[str, int, str]] = []
-
-    async def get(self, name: str, /) -> str | None:
-        """Return the stored value for ``name``."""
-        return self.storage.get(name)
-
-    async def setex(self, name: str, time: int, value: str, /) -> object:
-        """Persist ``value`` and record the TTL used.
-
-        Returns:
-            Placeholder object mirroring a Redis client response.
-        """
-        self.setex_calls.append((name, time, value))
-        self.storage[name] = value
-        return object()
 
 
 class _MissingUserManager:
@@ -243,34 +221,43 @@ def test_default_session_fingerprint_returns_none_when_required_fields_are_missi
     assert getter(incomplete_user) is None
 
 
-async def test_redis_jwt_denylist_store_round_trips_keys() -> None:
+async def test_redis_jwt_denylist_store_round_trips_keys(
+    monkeypatch: pytest.MonkeyPatch,
+    async_fakeredis: AsyncFakeRedis,
+) -> None:
     """Redis-backed denylist storage uses the configured prefix and TTL."""
-    redis = _FakeRedis()
-    store = RedisJWTDenylistStore(redis=cast("Any", redis), key_prefix="test:")
+    setex_calls = record_async_redis_call_args(monkeypatch, async_fakeredis, "setex")
+    store = RedisJWTDenylistStore(
+        redis=cast_fakeredis(async_fakeredis, RedisExpiringValueStoreClient),
+        key_prefix="test:",
+    )
 
     await store.deny("revoked-jti", ttl_seconds=30)
 
-    assert redis.setex_calls == [("test:revoked-jti", 30, "1")]
+    assert setex_calls == [(("test:revoked-jti", 30, "1"), {})]
     assert await store.is_denied("revoked-jti") is True
     assert await store.is_denied("active-jti") is False
 
 
-async def test_jwt_redis_protocol_stubs_are_callable() -> None:
+async def test_jwt_redis_denylist_protocol_stubs_are_callable() -> None:
     """The protocol placeholder methods remain awaitable no-ops."""
-    protocol_client = cast("_RedisClientProtocol", object())
+    protocol_client = cast("RedisExpiringValueStoreClient", object())
 
-    assert await _RedisClientProtocol.get(protocol_client, "jti-key") is None
-    assert await _RedisClientProtocol.setex(protocol_client, "jti-key", 60, "1") is None
+    assert await RedisExpiringValueStoreClient.get(protocol_client, "jti-key") is None
+    assert await RedisExpiringValueStoreClient.setex(protocol_client, "jti-key", 60, "1") is None
 
 
-async def test_redis_jwt_denylist_store_enforces_minimum_ttl() -> None:
+async def test_redis_jwt_denylist_store_enforces_minimum_ttl(
+    monkeypatch: pytest.MonkeyPatch,
+    async_fakeredis: AsyncFakeRedis,
+) -> None:
     """Redis denylist writes clamp non-positive TTLs to one second."""
-    redis = _FakeRedis()
-    store = RedisJWTDenylistStore(redis=cast("Any", redis))
+    setex_calls = record_async_redis_call_args(monkeypatch, async_fakeredis, "setex")
+    store = RedisJWTDenylistStore(redis=cast_fakeredis(async_fakeredis, RedisExpiringValueStoreClient))
 
     await store.deny("revoked-jti", ttl_seconds=0)
 
-    assert redis.setex_calls == [("litestar_auth:jwt:denylist:revoked-jti", 1, "1")]
+    assert setex_calls == [(("litestar_auth:jwt:denylist:revoked-jti", 1, "1"), {})]
 
 
 def test_jwt_strategy_rejects_unsupported_algorithms() -> None:
@@ -291,9 +278,9 @@ def test_jwt_strategy_revocation_posture_reports_inmemory_compatibility_mode() -
     assert strategy.revocation_posture.startup_warning is not None
 
 
-def test_jwt_strategy_revocation_posture_reports_shared_store_mode() -> None:
+def test_jwt_strategy_revocation_posture_reports_shared_store_mode(async_fakeredis: AsyncFakeRedis) -> None:
     """Shared denylist backends expose the durable shared-store posture."""
-    shared_store = RedisJWTDenylistStore(redis=cast("Any", _FakeRedis()))
+    shared_store = RedisJWTDenylistStore(redis=cast_fakeredis(async_fakeredis, RedisExpiringValueStoreClient))
     strategy = JWTStrategy(secret=DEFAULT_SECRET, denylist_store=shared_store)
 
     assert strategy.revocation_posture.key == "shared_store"
@@ -304,9 +291,9 @@ def test_jwt_strategy_revocation_posture_reports_shared_store_mode() -> None:
     assert strategy.revocation_posture.startup_warning is None
 
 
-def test_jwt_strategy_revocation_is_durable_reflects_store_backend() -> None:
+def test_jwt_strategy_revocation_is_durable_reflects_store_backend(async_fakeredis: AsyncFakeRedis) -> None:
     """Shared denylist backends report durable revocation."""
-    shared_store = RedisJWTDenylistStore(redis=cast("Any", _FakeRedis()))
+    shared_store = RedisJWTDenylistStore(redis=cast_fakeredis(async_fakeredis, RedisExpiringValueStoreClient))
 
     assert JWTStrategy(secret=DEFAULT_SECRET).revocation_is_durable is False
     assert JWTStrategy(secret=DEFAULT_SECRET, denylist_store=shared_store).revocation_is_durable is True

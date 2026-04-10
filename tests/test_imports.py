@@ -20,7 +20,6 @@ import pytest
 
 import litestar_auth
 import litestar_auth._plugin as plugin_internals
-import litestar_auth._redis_protocols as redis_protocols_module
 import litestar_auth.authentication.strategy as strategy_module
 import litestar_auth.config as config_module
 import litestar_auth.contrib.redis as redis_contrib_module
@@ -116,8 +115,7 @@ from litestar_auth import (
     verify_totp,
     verify_totp_with_store,
 )
-from litestar_auth._redis_protocols import RedisSharedAuthClient
-from litestar_auth.contrib.redis import RedisAuthPreset, RedisAuthRateLimitTier
+from litestar_auth.contrib.redis import RedisAuthClientProtocol, RedisAuthPreset, RedisAuthRateLimitTier
 from litestar_auth.db import BaseOAuthAccountStore, BaseUserStore
 from litestar_auth.db.sqlalchemy import SQLAlchemyUserDatabase
 from litestar_auth.manager import UserManagerSecurity
@@ -129,12 +127,14 @@ from litestar_auth.ratelimit import (
     AuthRateLimitEndpointSlot,
     AuthRateLimitNamespaceStyle,
 )
-from tests._helpers import ExampleUser
+from tests._helpers import ExampleUser, cast_fakeredis, record_async_redis_call_args
 from tests.conftest import project_version_from_pyproject
 
 if TYPE_CHECKING:
     import msgspec
     from sqlalchemy.ext.asyncio import AsyncSession
+
+    from tests._helpers import AsyncFakeRedis, AsyncFakeRedisFactory
 
 SHARED_MAX_ATTEMPTS = 5
 SHARED_WINDOW_SECONDS = 60
@@ -191,40 +191,6 @@ class _RootImportCoverageSessionFactory:
     def __call__(self) -> AsyncSession:
         """Return a request-scoped session stub."""
         return cast("AsyncSession", _RootImportCoverageSession())
-
-
-class _PublicImportRedisClient:
-    """Minimal async Redis double for public import coverage."""
-
-    def __init__(self) -> None:
-        """Initialize recorded store calls."""
-        self.set_calls: list[tuple[str, str, bool, int | None]] = []
-
-    async def eval(self, script: str, numkeys: int, *keys_and_args: object) -> int:
-        """Return a neutral Lua result for constructor-only rate-limit coverage."""
-        del script, numkeys, keys_and_args
-        return 0
-
-    async def delete(self, *names: str) -> int:
-        """Return a successful delete count for protocol conformance."""
-        del names
-        return 1
-
-    async def set(
-        self,
-        name: str,
-        value: str,
-        *,
-        nx: bool = False,
-        px: int | None = None,
-    ) -> bool | None:
-        """Record a TOTP replay-store write.
-
-        Returns:
-            ``True`` to simulate a successful first-write reservation.
-        """
-        self.set_calls.append((name, value, nx, px))
-        return True
 
 
 def test_root_package_reexports_public_api() -> None:
@@ -506,6 +472,7 @@ def test_ratelimit_module_exposes_canonical_shared_backend_builder() -> None:
 
 async def test_root_package_supports_documented_redis_migration_recipe_and_totp_replay_store(
     monkeypatch: pytest.MonkeyPatch,
+    async_fakeredis_factory: AsyncFakeRedisFactory,
 ) -> None:
     """Public imports remain sufficient for the documented Redis migration recipe."""
     current_plugin_module = importlib.reload(plugin_module)
@@ -518,8 +485,12 @@ async def test_root_package_supports_documented_redis_migration_recipe_and_totp_
     monkeypatch.setattr(totp_module, "_load_redis_asyncio", load_optional_redis)
 
     current_endpoint_class = ratelimit_module.EndpointRateLimit
-    rate_limit_redis = _PublicImportRedisClient()
-    totp_redis = _PublicImportRedisClient()
+    rate_limit_redis_client = async_fakeredis_factory()
+    rate_limit_redis = cast_fakeredis(rate_limit_redis_client, RedisAuthClientProtocol)
+    totp_redis_client = async_fakeredis_factory()
+    set_calls = record_async_redis_call_args(monkeypatch, totp_redis_client, "set")
+    setex_calls = record_async_redis_call_args(monkeypatch, totp_redis_client, "setex")
+    totp_redis = cast_fakeredis(totp_redis_client, RedisAuthClientProtocol)
     credential_backend = RedisRateLimiter(redis=rate_limit_redis, max_attempts=5, window_seconds=60)
     refresh_backend = RedisRateLimiter(redis=rate_limit_redis, max_attempts=10, window_seconds=300)
     totp_backend = RedisRateLimiter(redis=rate_limit_redis, max_attempts=5, window_seconds=300)
@@ -530,9 +501,10 @@ async def test_root_package_supports_documented_redis_migration_recipe_and_totp_
         namespace_style="snake_case",
     )
     used_tokens_store = RedisUsedTotpCodeStore(redis=totp_redis)
+    pending_jti_store = RedisJWTDenylistStore(redis=totp_redis)
     totp_config = TotpConfig(
         totp_pending_secret="p" * 32,
-        totp_pending_jti_store=RedisJWTDenylistStore(redis=cast("Any", totp_redis)),
+        totp_pending_jti_store=pending_jti_store,
         totp_used_tokens_store=used_tokens_store,
     )
 
@@ -562,9 +534,13 @@ async def test_root_package_supports_documented_redis_migration_recipe_and_totp_
     )
     assert rate_limit_config.verify_token is None
     assert rate_limit_config.request_verify_token is None
+    assert totp_config.totp_pending_jti_store is pending_jti_store
     assert totp_config.totp_used_tokens_store is used_tokens_store
     assert await used_tokens_store.mark_used("user-1", 7, 60.0) is True
-    assert totp_redis.set_calls == [("litestar_auth:totp:used:user-1:7", "1", True, 60_000)]
+    await pending_jti_store.deny("pending-jti", ttl_seconds=60)
+    assert await pending_jti_store.is_denied("pending-jti") is True
+    assert set_calls == [(("litestar_auth:totp:used:user-1:7", "1"), {"nx": True, "px": 60_000})]
+    assert setex_calls == [(("litestar_auth:jwt:denylist:pending-jti", 60, "1"), {})]
 
 
 def test_contrib_redis_module_exposes_high_level_preset_without_root_reexport() -> None:
@@ -574,31 +550,39 @@ def test_contrib_redis_module_exposes_high_level_preset_without_root_reexport() 
     assert redis_contrib_module.RedisAuthPreset is RedisAuthPreset
     assert redis_contrib_module.RedisAuthRateLimitTier is RedisAuthRateLimitTier
     assert redis_contrib_module.__all__ == (
+        "RedisAuthClientProtocol",
         "RedisAuthPreset",
         "RedisAuthRateLimitTier",
         "RedisTokenStrategy",
         "RedisUsedTotpCodeStore",
     )
-    assert preset_hints["redis"] is RedisSharedAuthClient
-    assert RedisSharedAuthClient.__module__ == redis_protocols_module.__name__
+    assert redis_contrib_module.RedisAuthClientProtocol is RedisAuthClientProtocol
+    assert preset_hints["redis"] is RedisAuthClientProtocol
+    assert hasattr(RedisAuthPreset, "build_totp_pending_jti_store")
+    assert "RedisAuthClientProtocol" not in __all__
     assert "RedisAuthPreset" not in __all__
     assert "RedisAuthRateLimitTier" not in __all__
+    assert not hasattr(litestar_auth, "RedisAuthClientProtocol")
     assert not hasattr(litestar_auth, "RedisAuthPreset")
     assert not hasattr(litestar_auth, "RedisAuthRateLimitTier")
 
 
 async def test_contrib_redis_preset_supports_documented_shared_client_recipe(
     monkeypatch: pytest.MonkeyPatch,
+    async_fakeredis: AsyncFakeRedis,
 ) -> None:
-    """The contrib preset derives both Redis auth helpers from one shared client."""
+    """The canonical contrib preset recipe derives rate limiting plus both TOTP Redis stores."""
 
     def load_optional_redis() -> object:
         return object()
 
     monkeypatch.setattr(ratelimit_module, "_load_redis_asyncio", load_optional_redis)
     monkeypatch.setattr(totp_module, "_load_redis_asyncio", load_optional_redis)
-    redis_client: RedisSharedAuthClient = _PublicImportRedisClient()
-    assert isinstance(redis_client, RedisSharedAuthClient)
+    monkeypatch.setattr("litestar_auth.authentication.strategy.jwt._load_redis_asyncio", load_optional_redis)
+    set_calls = record_async_redis_call_args(monkeypatch, async_fakeredis, "set")
+    setex_calls = record_async_redis_call_args(monkeypatch, async_fakeredis, "setex")
+    redis_client = cast_fakeredis(async_fakeredis, RedisAuthClientProtocol)
+    assert isinstance(redis_client, RedisAuthClientProtocol)
     preset = RedisAuthPreset(
         redis=redis_client,
         rate_limit_tier=RedisAuthRateLimitTier(
@@ -617,6 +601,7 @@ async def test_contrib_redis_preset_supports_documented_shared_client_recipe(
             ),
         },
         totp_used_tokens_key_prefix="used:",
+        totp_pending_jti_key_prefix="pending:",
     )
 
     rate_limit_config = preset.build_rate_limit_config(
@@ -624,6 +609,12 @@ async def test_contrib_redis_preset_supports_documented_shared_client_recipe(
         namespace_style="snake_case",
     )
     used_tokens_store = preset.build_totp_used_tokens_store()
+    pending_jti_store = preset.build_totp_pending_jti_store()
+    totp_config = TotpConfig(
+        totp_pending_secret="p" * 32,
+        totp_pending_jti_store=pending_jti_store,
+        totp_used_tokens_store=used_tokens_store,
+    )
 
     assert rate_limit_config.login is not None
     assert rate_limit_config.login.backend.__class__ is ratelimit_module.RedisRateLimiter
@@ -641,9 +632,15 @@ async def test_contrib_redis_preset_supports_documented_shared_client_recipe(
     assert AUTH_RATE_LIMIT_ENDPOINT_SLOTS_BY_GROUP["verification"] == AUTH_RATE_LIMIT_VERIFICATION_SLOTS
     assert rate_limit_config.verify_token is None
     assert rate_limit_config.request_verify_token is None
+    assert totp_config.totp_pending_jti_store is pending_jti_store
+    assert totp_config.totp_used_tokens_store is used_tokens_store
     assert used_tokens_store._redis is redis_client
+    assert pending_jti_store.redis is redis_client
     assert await used_tokens_store.mark_used("user-1", 7, 60.0) is True
-    assert redis_client.set_calls == [("used:user-1:7", "1", True, 60_000)]
+    await pending_jti_store.deny("pending-jti", ttl_seconds=60)
+    assert await pending_jti_store.is_denied("pending-jti") is True
+    assert set_calls == [(("used:user-1:7", "1"), {"nx": True, "px": 60_000})]
+    assert setex_calls == [(("pending:pending-jti", 60, "1"), {})]
 
 
 def test_ratelimit_identifier_contract_stays_on_the_public_ratelimit_module() -> None:

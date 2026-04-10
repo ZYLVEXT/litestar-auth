@@ -25,12 +25,27 @@ Pending login JWTs use a JTI denylist internally. In production, configure **`To
 
 Production deployments should configure **`totp_used_tokens_store`** so codes cannot be reused. Without it, the library fails fast unless the owning config/controller explicitly opts into `unsafe_testing=True`.
 
+When the same async Redis client should back auth rate limiting plus both TOTP replay stores, use
+the canonical recipe in
+[Configuration](../configuration.md#canonical-redis-backed-auth-surface). That is the maintained
+one-client `RedisAuthPreset` flow for `build_rate_limit_config()`,
+`build_totp_pending_jti_store()`, and `build_totp_used_tokens_store()` together. Keep manual
+`pending_jti_store` / `totp_used_tokens_store` wiring as the escape hatch when you intentionally
+use separate backends or bespoke key prefixes.
+
+The two production stores are still distinct even in the shared-client recipe:
+
+- **`totp_pending_jti_store`** prevents pending-login JWT replay.
+- **`totp_used_tokens_store`** prevents consumed TOTP-code replay.
+
 For pytest-driven plugin tests, see the [testing guide](testing.md). Under **`unsafe_testing=True`**, the plugin can run without **`totp_used_tokens_store`**, but that is a single-process testing convenience rather than a production-safe replay-protection setup.
 
 Algorithm defaults to **SHA256** (`totp_algorithm`).
 
 ## Related
 
+- [Configuration](../configuration.md#canonical-redis-backed-auth-surface) — canonical Redis-backed
+  production recipe for rate limiting plus both TOTP Redis stores.
 - [Configuration](../configuration.md) — `TotpConfig`.
 - [TOTP API](../api/totp.md) — helpers and types.
 - [Manager API](../api/manager.md) — manager hooks for secrets and lifecycle.

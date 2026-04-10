@@ -4,7 +4,12 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any, Protocol, Self, runtime_checkable
 
-from litestar_auth._redis_protocols import RedisKey, RedisRateLimiterClient, RedisTTLSeconds
+from litestar_auth._redis_protocols import (
+    RedisDeleteClient,
+    RedisKey,
+    RedisScriptEvalClient,
+    RedisTTLSeconds,
+)
 
 if TYPE_CHECKING:
     from types import TracebackType
@@ -46,8 +51,12 @@ class RedisPipelineProtocol(Protocol):
         """Execute queued pipeline commands."""
 
 
-class RedisClientProtocol(RedisRateLimiterClient, Protocol):
-    """Minimal async Redis client interface used by the rate limiter."""
+class RedisClientProtocol(RedisDeleteClient, RedisScriptEvalClient, Protocol):
+    """Minimal async Redis client interface used by the rate limiter.
+
+    The higher-level Redis contrib shared-client protocol adds ``set(...)`` on
+    top of this rate-limiter contract.
+    """
 
 
 @runtime_checkable

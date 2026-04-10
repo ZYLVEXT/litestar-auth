@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from types import MappingProxyType
-from typing import Any, cast, get_type_hints
+from typing import TYPE_CHECKING, Any, cast, get_type_hints
 from unittest.mock import AsyncMock
 from uuid import uuid4
 
@@ -12,13 +12,13 @@ import pytest
 import litestar_auth.contrib.redis as redis_module
 import litestar_auth.contrib.redis._surface as redis_surface_module
 import litestar_auth.ratelimit as ratelimit_module
-from litestar_auth._redis_protocols import RedisSharedAuthClient
 from litestar_auth.authentication.backend import AuthenticationBackend
 from litestar_auth.authentication.strategy.redis import RedisTokenStrategy as BaseRedisTokenStrategy
 from litestar_auth.authentication.transport.bearer import BearerTransport
 from litestar_auth.contrib.oauth import __all__ as oauth_all
 from litestar_auth.contrib.oauth import create_provider_oauth_controller
 from litestar_auth.contrib.redis import (
+    RedisAuthClientProtocol,
     RedisAuthPreset,
     RedisAuthRateLimitTier,
     RedisTokenStrategy,
@@ -33,7 +33,10 @@ from litestar_auth.ratelimit import (
     AuthRateLimitEndpointGroup,
 )
 from litestar_auth.totp import RedisUsedTotpCodeStore as BaseRedisUsedTotpCodeStore
-from tests._helpers import ExampleUser
+from tests._helpers import ExampleUser, cast_fakeredis, record_async_redis_call_args
+
+if TYPE_CHECKING:
+    from tests._helpers import AsyncFakeRedis
 
 pytestmark = pytest.mark.unit
 REDIS_TOKEN_HASH_SECRET = "redis-token-hash-secret-1234567890"
@@ -88,40 +91,6 @@ class ExampleUserManager(OAuthControllerUserManagerProtocol[ExampleUser, str]):
         del user
 
 
-class PresetRedisClient:
-    """Minimal async Redis double for contrib preset coverage."""
-
-    def __init__(self) -> None:
-        """Initialize recorded TOTP replay-store calls."""
-        self.set_calls: list[tuple[str, str, bool, int | None]] = []
-
-    async def delete(self, *names: str) -> int:
-        """Return a successful delete count for protocol compatibility."""
-        del names
-        return 1
-
-    async def eval(self, script: str, numkeys: int, *keys_and_args: object) -> int:
-        """Return a neutral Lua result for constructor-only coverage."""
-        del script, numkeys, keys_and_args
-        return 0
-
-    async def set(
-        self,
-        name: str,
-        value: str,
-        *,
-        nx: bool = False,
-        px: int | None = None,
-    ) -> bool | None:
-        """Record a TOTP replay-store write and simulate success.
-
-        Returns:
-            ``True`` to simulate a successful first-write reservation.
-        """
-        self.set_calls.append((name, value, nx, px))
-        return True
-
-
 def test_contrib_packages_reexport_public_symbols() -> None:
     """Contrib packages expose the documented convenience imports."""
     assert RedisTokenStrategy is BaseRedisTokenStrategy
@@ -131,13 +100,20 @@ def test_contrib_packages_reexport_public_symbols() -> None:
 
 def test_contrib_packages_define_all() -> None:
     """Contrib packages publish only their intended public symbols."""
-    assert redis_all == ("RedisAuthPreset", "RedisAuthRateLimitTier", "RedisTokenStrategy", "RedisUsedTotpCodeStore")
+    assert redis_all == (
+        "RedisAuthClientProtocol",
+        "RedisAuthPreset",
+        "RedisAuthRateLimitTier",
+        "RedisTokenStrategy",
+        "RedisUsedTotpCodeStore",
+    )
     assert oauth_all == ("create_provider_oauth_controller",)
 
 
 @pytest.mark.imports
 def test_contrib_redis_public_boundary_tracks_internal_surface() -> None:
     """The public Redis contrib package re-exports the dedicated internal surface."""
+    assert redis_module.RedisAuthClientProtocol is redis_surface_module.RedisAuthClientProtocol
     assert redis_module.RedisAuthPreset is redis_surface_module.RedisAuthPreset
     assert redis_module.RedisAuthRateLimitTier is redis_surface_module.RedisAuthRateLimitTier
     assert redis_module.RedisTokenStrategy is redis_surface_module.RedisTokenStrategy
@@ -145,15 +121,17 @@ def test_contrib_redis_public_boundary_tracks_internal_surface() -> None:
     assert redis_module.__all__ == redis_surface_module.__all__
 
 
-def test_contrib_redis_preset_exposes_shared_client_protocol() -> None:
-    """The preset's public client annotation matches the shared low-level Redis contract."""
+def test_contrib_redis_preset_exposes_public_shared_client_protocol(async_fakeredis: AsyncFakeRedis) -> None:
+    """The preset's public client annotation points at the stable contrib protocol."""
     preset_hints = get_type_hints(RedisAuthPreset, include_extras=True)
 
-    assert preset_hints["redis"] is RedisSharedAuthClient
-    assert isinstance(PresetRedisClient(), RedisSharedAuthClient)
+    assert preset_hints["redis"] is RedisAuthClientProtocol
+    assert isinstance(async_fakeredis, RedisAuthClientProtocol)
 
 
-def test_contrib_redis_preset_snapshots_group_rate_limit_tiers_as_read_only_mapping() -> None:
+def test_contrib_redis_preset_snapshots_group_rate_limit_tiers_as_read_only_mapping(
+    async_fakeredis: AsyncFakeRedis,
+) -> None:
     """The preset stores group tiers as a read-only snapshot detached from caller-owned mappings."""
     source_tiers: dict[AuthRateLimitEndpointGroup, RedisAuthRateLimitTier] = {
         "refresh": RedisAuthRateLimitTier(
@@ -163,7 +141,7 @@ def test_contrib_redis_preset_snapshots_group_rate_limit_tiers_as_read_only_mapp
     }
 
     preset = RedisAuthPreset(
-        redis=PresetRedisClient(),
+        redis=cast_fakeredis(async_fakeredis, RedisAuthClientProtocol),
         group_rate_limit_tiers=source_tiers,
     )
     source_tiers["totp"] = RedisAuthRateLimitTier(
@@ -180,16 +158,22 @@ def test_contrib_redis_preset_snapshots_group_rate_limit_tiers_as_read_only_mapp
         )
 
 
-async def test_contrib_redis_preset_builds_shared_client_auth_components(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The contrib preset derives both auth rate limiting and TOTP replay protection."""
+async def test_contrib_redis_preset_builds_shared_client_auth_components(
+    monkeypatch: pytest.MonkeyPatch,
+    async_fakeredis: AsyncFakeRedis,
+) -> None:
+    """The contrib preset derives auth rate limiting plus both Redis-backed TOTP stores."""
 
     def load_optional_redis() -> object:
         return object()
 
     monkeypatch.setattr(ratelimit_module, "_load_redis_asyncio", load_optional_redis)
     monkeypatch.setattr("litestar_auth.totp._load_redis_asyncio", load_optional_redis)
-    redis_client: RedisSharedAuthClient = PresetRedisClient()
-    assert isinstance(redis_client, RedisSharedAuthClient)
+    monkeypatch.setattr("litestar_auth.authentication.strategy.jwt._load_redis_asyncio", load_optional_redis)
+    set_calls = record_async_redis_call_args(monkeypatch, async_fakeredis, "set")
+    setex_calls = record_async_redis_call_args(monkeypatch, async_fakeredis, "setex")
+    redis_client = cast_fakeredis(async_fakeredis, RedisAuthClientProtocol)
+    assert isinstance(redis_client, RedisAuthClientProtocol)
     preset = RedisAuthPreset(
         redis=redis_client,
         rate_limit_tier=RedisAuthRateLimitTier(
@@ -209,6 +193,7 @@ async def test_contrib_redis_preset_builds_shared_client_auth_components(monkeyp
             ),
         },
         totp_used_tokens_key_prefix="used:",
+        totp_pending_jti_key_prefix="pending:",
     )
 
     config = preset.build_rate_limit_config(
@@ -218,6 +203,7 @@ async def test_contrib_redis_preset_builds_shared_client_auth_components(monkeyp
         trusted_headers=("X-Real-IP",),
     )
     store = preset.build_totp_used_tokens_store()
+    pending_store = preset.build_totp_pending_jti_store()
 
     assert config.login is not None
     assert isinstance(config.login.backend, ratelimit_module.RedisRateLimiter)
@@ -245,12 +231,18 @@ async def test_contrib_redis_preset_builds_shared_client_auth_components(monkeyp
     assert config.verify_token is None
     assert config.request_verify_token is None
     assert store._redis is redis_client
+    assert pending_store.redis is redis_client
+    assert pending_store.key_prefix == "pending:"
     assert await store.mark_used("user-1", 7, 1.25) is True
-    assert redis_client.set_calls == [("used:user-1:7", "1", True, 1250)]
+    await pending_store.deny("pending-jti", ttl_seconds=30)
+    assert await pending_store.is_denied("pending-jti") is True
+    assert set_calls == [(("used:user-1:7", "1"), {"nx": True, "px": 1250})]
+    assert setex_calls == [(("pending:pending-jti", 30, "1"), {})]
 
 
 def test_contrib_redis_preset_covers_optional_identity_and_proxy_header_branches(
     monkeypatch: pytest.MonkeyPatch,
+    async_fakeredis: AsyncFakeRedis,
 ) -> None:
     """The preset forwards either optional builder input independently."""
 
@@ -258,7 +250,7 @@ def test_contrib_redis_preset_covers_optional_identity_and_proxy_header_branches
         return object()
 
     monkeypatch.setattr(ratelimit_module, "_load_redis_asyncio", load_optional_redis)
-    preset = RedisAuthPreset(redis=PresetRedisClient())
+    preset = RedisAuthPreset(redis=cast_fakeredis(async_fakeredis, RedisAuthClientProtocol))
 
     config_with_headers = preset.build_rate_limit_config(trusted_headers=("X-Real-IP",))
     config_with_identity_fields = preset.build_rate_limit_config(identity_fields=("email",))
@@ -283,7 +275,10 @@ def test_contrib_redis_preserves_lazy_dependency_error(monkeypatch: pytest.Monke
         RedisTokenStrategy(redis=AsyncMock(), token_hash_secret=REDIS_TOKEN_HASH_SECRET)
 
 
-def test_contrib_redis_preset_preserves_rate_limit_lazy_dependency_error(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_contrib_redis_preset_preserves_rate_limit_lazy_dependency_error(
+    monkeypatch: pytest.MonkeyPatch,
+    async_fakeredis: AsyncFakeRedis,
+) -> None:
     """The contrib preset defers Redis rate-limit imports until config construction."""
 
     def fail_load_redis() -> object:
@@ -291,13 +286,16 @@ def test_contrib_redis_preset_preserves_rate_limit_lazy_dependency_error(monkeyp
         raise ImportError(msg)
 
     monkeypatch.setattr(ratelimit_module, "_load_redis_asyncio", fail_load_redis)
-    preset = RedisAuthPreset(redis=PresetRedisClient())
+    preset = RedisAuthPreset(redis=cast_fakeredis(async_fakeredis, RedisAuthClientProtocol))
 
     with pytest.raises(ImportError, match="Install litestar-auth\\[redis\\] to use RedisRateLimiter"):
         preset.build_rate_limit_config()
 
 
-def test_contrib_redis_preset_preserves_totp_lazy_dependency_error(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_contrib_redis_preset_preserves_totp_lazy_dependency_error(
+    monkeypatch: pytest.MonkeyPatch,
+    async_fakeredis: AsyncFakeRedis,
+) -> None:
     """The contrib preset defers TOTP Redis imports until replay-store construction."""
 
     def fail_load_redis() -> object:
@@ -305,10 +303,27 @@ def test_contrib_redis_preset_preserves_totp_lazy_dependency_error(monkeypatch: 
         raise ImportError(msg)
 
     monkeypatch.setattr("litestar_auth.totp._load_redis_asyncio", fail_load_redis)
-    preset = RedisAuthPreset(redis=PresetRedisClient())
+    preset = RedisAuthPreset(redis=cast_fakeredis(async_fakeredis, RedisAuthClientProtocol))
 
     with pytest.raises(ImportError, match="Install litestar-auth\\[redis\\] to use RedisUsedTotpCodeStore"):
         preset.build_totp_used_tokens_store()
+
+
+def test_contrib_redis_preset_preserves_pending_jti_lazy_dependency_error(
+    monkeypatch: pytest.MonkeyPatch,
+    async_fakeredis: AsyncFakeRedis,
+) -> None:
+    """The contrib preset defers pending-token denylist imports until store construction."""
+
+    def fail_load_redis() -> object:
+        msg = "Install litestar-auth[redis] to use RedisJWTDenylistStore"
+        raise ImportError(msg)
+
+    monkeypatch.setattr("litestar_auth.authentication.strategy.jwt._load_redis_asyncio", fail_load_redis)
+    preset = RedisAuthPreset(redis=cast_fakeredis(async_fakeredis, RedisAuthClientProtocol))
+
+    with pytest.raises(ImportError, match="Install litestar-auth\\[redis\\] to use RedisJWTDenylistStore"):
+        preset.build_totp_pending_jti_store()
 
 
 def test_contrib_oauth_preserves_lazy_dependency_error(monkeypatch: pytest.MonkeyPatch) -> None:

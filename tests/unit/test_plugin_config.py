@@ -375,6 +375,41 @@ def test_startup_backends_wrap_manual_backends_in_startup_templates() -> None:
     assert startup_backend.strategy is backend.strategy
 
 
+def test_startup_backend_template_eq_identity_short_circuits() -> None:
+    """StartupBackendTemplate.__eq__ returns True for the same instance."""
+    backend = AuthenticationBackend[ExampleUser, UUID](
+        name="a",
+        transport=BearerTransport(),
+        strategy=cast("Any", InMemoryTokenStrategy(token_prefix="a")),
+    )
+    template = plugin_config_module.StartupBackendTemplate.from_runtime_backend(backend)
+    assert template == template  # noqa: PLR0124
+
+
+def test_startup_backend_template_eq_rejects_foreign_type() -> None:
+    """StartupBackendTemplate.__eq__ returns NotImplemented for non-template types."""
+    backend = AuthenticationBackend[ExampleUser, UUID](
+        name="a",
+        transport=BearerTransport(),
+        strategy=cast("Any", InMemoryTokenStrategy(token_prefix="a")),
+    )
+    template = plugin_config_module.StartupBackendTemplate.from_runtime_backend(backend)
+    assert template != "not-a-template"
+
+
+def test_startup_backend_template_hash_consistent_with_eq() -> None:
+    """Equal StartupBackendTemplate instances produce the same hash."""
+    backend = AuthenticationBackend[ExampleUser, UUID](
+        name="a",
+        transport=BearerTransport(),
+        strategy=cast("Any", InMemoryTokenStrategy(token_prefix="a")),
+    )
+    t1 = plugin_config_module.StartupBackendTemplate.from_runtime_backend(backend)
+    t2 = plugin_config_module.StartupBackendTemplate.from_runtime_backend(backend)
+    assert t1 == t2
+    assert hash(t1) == hash(t2)
+
+
 def test_startup_database_token_session_sentinel_requires_request_bound_backends() -> None:
     """Startup-only DB-token backends fail closed when used for runtime session work."""
     startup_session = plugin_config_module.resolve_database_token_strategy_session()

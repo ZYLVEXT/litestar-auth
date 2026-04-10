@@ -4,19 +4,23 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from typing import Any, cast
+from typing import TYPE_CHECKING, Any, cast
 from uuid import UUID, uuid4
 
 import jwt
 import pytest
 
+from litestar_auth._redis_protocols import RedisExpiringValueStoreClient
 from litestar_auth.authentication.strategy.jwt import (
     InMemoryJWTDenylistStore,
     JWTStrategy,
     RedisJWTDenylistStore,
-    _RedisClientProtocol,
 )
 from litestar_auth.password import PasswordHelper
+from tests._helpers import cast_fakeredis
+
+if TYPE_CHECKING:
+    from tests._helpers import AsyncFakeRedis
 
 DENYLIST_CAP = 2
 
@@ -36,19 +40,6 @@ class _UserManager:
 
     async def get(self, user_id: Any) -> _User | None:  # noqa: ANN401
         return self.user if str(user_id) == str(self.user.id) else None
-
-
-class _FakeRedis:
-    def __init__(self) -> None:
-        self.values: dict[str, bytes] = {}
-
-    async def get(self, name: str, /) -> bytes | str | None:
-        return self.values.get(name)
-
-    async def setex(self, name: str, time: int, value: str, /) -> object:
-        del time
-        self.values[name] = value.encode()
-        return object()
 
 
 class _RecordingDenylistStore:
@@ -71,14 +62,13 @@ class _MissingUserManager:
 
 @pytest.mark.unit
 @pytest.mark.asyncio
-async def test_jwt_revocation_is_durable_across_strategy_instances() -> None:
+async def test_jwt_revocation_is_durable_across_strategy_instances(async_fakeredis: AsyncFakeRedis) -> None:
     """Revoking a token in one instance is enforced in another when using Redis denylist."""
     password_helper = PasswordHelper()
     user = _User(id=uuid4(), email="user@example.com", hashed_password=password_helper.hash("pw"))
     user_manager = _UserManager(user)
 
-    redis = _FakeRedis()
-    store = RedisJWTDenylistStore(redis=redis)
+    store = RedisJWTDenylistStore(redis=cast_fakeredis(async_fakeredis, RedisExpiringValueStoreClient))
 
     strategy_a = JWTStrategy(secret="secret-1234567890-1234567890-1234567890", denylist_store=store)
     strategy_b = JWTStrategy(secret="secret-1234567890-1234567890-1234567890", denylist_store=store)
@@ -346,9 +336,9 @@ async def test_jwt_strategy_read_token_returns_none_for_missing_input() -> None:
 
 
 @pytest.mark.unit
-def test_jwt_strategy_revocation_is_durable_reflects_store_backend() -> None:
+def test_jwt_strategy_revocation_is_durable_reflects_store_backend(async_fakeredis: AsyncFakeRedis) -> None:
     """revocation_is_durable depends on whether the denylist backend is shared."""
-    shared_store = RedisJWTDenylistStore(redis=_FakeRedis())
+    shared_store = RedisJWTDenylistStore(redis=cast_fakeredis(async_fakeredis, RedisExpiringValueStoreClient))
 
     assert JWTStrategy(secret="secret-1234567890-1234567890-1234567890").revocation_is_durable is False
     assert (
@@ -361,12 +351,12 @@ def test_jwt_strategy_revocation_is_durable_reflects_store_backend() -> None:
 
 
 @pytest.mark.unit
-async def test_jwt_redis_protocol_stubs_are_callable() -> None:
+async def test_jwt_redis_denylist_protocol_stubs_are_callable() -> None:
     """The minimal Redis protocol stub methods remain awaitable placeholders."""
-    protocol_client = cast("_RedisClientProtocol", object())
+    protocol_client = cast("RedisExpiringValueStoreClient", object())
 
-    assert await _RedisClientProtocol.get(protocol_client, "jti-key") is None
-    assert await _RedisClientProtocol.setex(protocol_client, "jti-key", 60, "1") is None
+    assert await RedisExpiringValueStoreClient.get(protocol_client, "jti-key") is None
+    assert await RedisExpiringValueStoreClient.setex(protocol_client, "jti-key", 60, "1") is None
 
 
 @pytest.mark.unit

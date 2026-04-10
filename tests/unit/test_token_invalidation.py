@@ -10,14 +10,15 @@ from uuid import UUID, uuid4
 import pytest
 
 from litestar_auth.authentication.strategy.db import AsyncSessionT, DatabaseTokenStrategy
-from litestar_auth.authentication.strategy.redis import RedisTokenStrategy
+from litestar_auth.authentication.strategy.redis import RedisClientProtocol, RedisTokenStrategy
 from litestar_auth.manager import BaseUserManager
 from litestar_auth.models import User
 from litestar_auth.password import PasswordHelper
 from litestar_auth.schemas import UserUpdate
+from tests._helpers import cast_fakeredis, record_async_redis_call_args
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncIterator
+    from tests._helpers import AsyncFakeRedis
 
 REDIS_TOKEN_HASH_SECRET = "redis-token-hash-secret-1234567890"
 
@@ -115,101 +116,40 @@ async def test_manager_update_invalidates_tokens_only_on_email_or_password_chang
     invalidate.assert_awaited_once_with(updated_password_user)
 
 
-class _FakeRedis:
-    """Minimal async Redis double with scan support."""
-
-    def __init__(self) -> None:
-        self.values: dict[str, bytes] = {}
-        self.sets: dict[str, set[str]] = {}
-        self.deleted: list[str] = []
-
-    async def get(self, name: str, /) -> bytes | str | None:
-        return self.values.get(name)
-
-    async def setex(self, name: str, time: int, value: str, /) -> object:
-        del time
-        self.values[name] = value.encode()
-        return object()
-
-    async def delete(self, *names: str) -> int:
-        for name in names:
-            self.deleted.append(name)
-            self.values.pop(name, None)
-            self.sets.pop(name, None)
-        return len(names)
-
-    async def sadd(self, name: str, *values: str) -> int:
-        bucket = self.sets.setdefault(name, set())
-        before = len(bucket)
-        bucket.update(values)
-        return len(bucket) - before
-
-    async def srem(self, name: str, *values: str) -> int:
-        bucket = self.sets.get(name)
-        if not bucket:
-            return 0
-        before = len(bucket)
-        for value in values:
-            bucket.discard(value)
-        return before - len(bucket)
-
-    async def smembers(self, name: str) -> set[bytes]:
-        return {member.encode() for member in self.sets.get(name, set())}
-
-    async def expire(self, name: str, time: int) -> bool:
-        del name, time
-        return True
-
-    def scan_iter(
-        self,
-        match: object | None = None,
-        count: int | None = None,
-        _type: str | None = None,
-        **kwargs: object,
-    ) -> AsyncIterator[str]:
-        del count
-        del _type
-        del kwargs
-
-        async def iterator() -> AsyncIterator[str]:  # noqa: RUF029
-            if not isinstance(match, str):
-                return
-
-            prefix = match.removesuffix("*")
-            for key in list(self.values):
-                if key.startswith(prefix):
-                    yield key
-
-        return iterator()
-
-
 @pytest.mark.unit
-async def test_redis_strategy_invalidate_all_tokens_deletes_only_matching_subjects() -> None:
+async def test_redis_strategy_invalidate_all_tokens_deletes_only_matching_subjects(
+    monkeypatch: pytest.MonkeyPatch,
+    async_fakeredis: AsyncFakeRedis,
+) -> None:
     """Redis invalidation scans keys and removes those belonging to the user."""
-    redis = _FakeRedis()
+    delete_calls = record_async_redis_call_args(monkeypatch, async_fakeredis, "delete")
     strategy = RedisTokenStrategy(
-        redis=redis,
+        redis=cast_fakeredis(async_fakeredis, RedisClientProtocol),
         token_hash_secret=REDIS_TOKEN_HASH_SECRET,
         key_prefix="litestar_auth:token:",
     )
 
     user = _User(id=uuid4(), email="user@example.com", hashed_password="hashed")
-
     other_user = _User(id=uuid4(), email="other@example.com", hashed_password="hashed")
 
-    await redis.setex("litestar_auth:token:token-a", 10, str(user.id))
-    await redis.setex("litestar_auth:token:token-b", 10, str(other_user.id))
-    await redis.setex("litestar_auth:token:token-c", 10, str(user.id))
-    await redis.setex("other-prefix:token-d", 10, str(user.id))
+    assert await async_fakeredis.setex("litestar_auth:token:token-a", 10, str(user.id)) is True
+    assert await async_fakeredis.setex("litestar_auth:token:token-b", 10, str(other_user.id)) is True
+    assert await async_fakeredis.setex("litestar_auth:token:token-c", 10, str(user.id)) is True
+    assert await async_fakeredis.setex("other-prefix:token-d", 10, str(user.id)) is True
 
     await strategy.invalidate_all_tokens(user)
 
-    assert sorted(redis.deleted) == sorted(
+    deleted_names = sorted(
+        name.decode() if isinstance(name, bytes) else str(name) for call_args, _ in delete_calls for name in call_args
+    )
+    assert deleted_names == sorted(
         [
             "litestar_auth:token:token-a",
             "litestar_auth:token:token-c",
         ],
     )
+    assert await async_fakeredis.get("litestar_auth:token:token-b") == str(other_user.id).encode()
+    assert await async_fakeredis.get("other-prefix:token-d") == str(user.id).encode()
 
 
 @pytest.mark.unit

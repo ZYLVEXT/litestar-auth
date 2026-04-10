@@ -170,7 +170,7 @@ def _iter_plugin_security_tradeoff_policies() -> tuple[_PluginSecurityTradeoffPo
     )
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True, slots=True, eq=False)
 class StartupBackendTemplate[UP: UserProtocol[Any], ID]:
     """Startup-only backend template used for plugin assembly and validation."""
 
@@ -179,8 +179,17 @@ class StartupBackendTemplate[UP: UserProtocol[Any], ID]:
     strategy: StrategyProtocol[UP, ID]
     _runtime_backend_factory: Callable[[AsyncSession], AuthenticationBackend[UP, ID]] = field(
         repr=False,
-        compare=False,
     )
+
+    def __eq__(self, other: object) -> bool:
+        if self is other:
+            return True
+        if not isinstance(other, StartupBackendTemplate):
+            return NotImplemented
+        return self.name == other.name and self.transport is other.transport and self.strategy is other.strategy
+
+    def __hash__(self) -> int:
+        return hash((self.name, id(self.transport), id(self.strategy)))
 
     @classmethod
     def from_runtime_backend(

@@ -16,10 +16,21 @@ from sqlalchemy.orm import Session as SASession
 from sqlalchemy.pool import StaticPool
 
 from litestar_auth.models import User
+from tests._helpers import (
+    DEFAULT_FAKEREDIS_VERSION,
+    AsyncFakeRedisFactory,
+    FakeRedisServerFactory,
+    FakeRedisServerType,
+    aclose_fakeredis_clients,
+    make_async_fakeredis,
+    make_fakeredis_server,
+)
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator, Callable, Iterator
 
+    import fakeredis
+    from fakeredis import FakeAsyncRedis as AsyncFakeRedis
     from sqlalchemy.schema import MetaData
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -133,6 +144,70 @@ def sqlalchemy_metadata() -> tuple[MetaData, ...]:
         Metadata collections that should be created before yielding the session.
     """
     return (User.metadata,)
+
+
+@pytest.fixture
+def fakeredis_server() -> fakeredis.FakeServer:
+    """Create an isolated fakeredis server for the current test.
+
+    Returns:
+        Fakeredis server backing clients created in this test.
+    """
+    return make_fakeredis_server()
+
+
+@pytest.fixture
+def fakeredis_server_factory() -> FakeRedisServerFactory:
+    """Create extra isolated fakeredis servers within a test when needed.
+
+    Returns:
+        Factory that builds isolated fakeredis server instances.
+    """
+    return make_fakeredis_server
+
+
+@pytest.fixture
+async def async_fakeredis_factory(
+    fakeredis_server: fakeredis.FakeServer,
+) -> AsyncIterator[AsyncFakeRedisFactory]:
+    """Create async fakeredis clients backed by the test's isolated server by default.
+
+    Yields:
+        Factory that creates async fakeredis clients and closes them after the test.
+    """
+    clients: list[AsyncFakeRedis] = []
+
+    def factory(
+        *,
+        server: fakeredis.FakeServer | None = None,
+        version: tuple[int, ...] = DEFAULT_FAKEREDIS_VERSION,
+        server_type: FakeRedisServerType = "redis",
+        decode_responses: bool = False,
+    ) -> AsyncFakeRedis:
+        client = make_async_fakeredis(
+            server=fakeredis_server if server is None else server,
+            version=version,
+            server_type=server_type,
+            decode_responses=decode_responses,
+        )
+        clients.append(client)
+        return client
+
+    yield factory
+
+    await aclose_fakeredis_clients(clients)
+
+
+@pytest.fixture
+def async_fakeredis(
+    async_fakeredis_factory: AsyncFakeRedisFactory,
+) -> AsyncFakeRedis:
+    """Create an async fakeredis client with isolated server state.
+
+    Returns:
+        Async fakeredis client using the test's default isolated server.
+    """
+    return async_fakeredis_factory()
 
 
 @pytest.fixture

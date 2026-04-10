@@ -1,3 +1,21 @@
+## Unreleased
+
+### Added
+
+- **`RedisAuthClientProtocol` public typing contract** — new runtime-checkable protocol exported from `litestar_auth.contrib.redis` for annotating the shared async Redis client passed to `RedisAuthPreset` and the Redis-backed rate-limit, TOTP replay, and JWT denylist stores.
+- **`RedisAuthPreset.build_totp_pending_jti_store()`** — builds `RedisJWTDenylistStore` from the preset's shared Redis client with optional per-call `key_prefix` override and fallback to `totp_pending_jti_key_prefix`.
+- **`RedisAuthPreset.totp_pending_jti_key_prefix` field** — optional default Redis key prefix for the pending-login-token JTI denylist built by the preset.
+- **`fakeredis[lua]` dev dependency** — test suite now uses `fakeredis` for Redis integration testing instead of hand-built async doubles.
+
+### Changed
+
+- **`RedisJWTDenylistStore` now uses the shared `RedisExpiringValueStoreClient` protocol** — the private `_RedisClientProtocol` is removed; the store's `redis` parameter accepts any client satisfying the shared internal `get()` + `setex()` protocol, which aligns with the composite `RedisAuthClientProtocol` contract.
+- **`RedisAuthPreset.redis` field type is now `RedisAuthClientProtocol`** instead of the internal `RedisSharedAuthClient`, giving callers a stable public typing contract for the shared async Redis client.
+- **Internal `RedisSharedAuthClient` composite now covers `get()` + `setex()`** — the protocol composition includes `RedisExpiringValueStoreClient` alongside the existing rate-limiter and conditional-set protocols, so the shared client backs the pending-token denylist without a separate client annotation.
+- **Rate-limiter `RedisClientProtocol` no longer inherits from `RedisRateLimiterClient`** — `litestar_auth.ratelimit.RedisClientProtocol` now composes `RedisDeleteClient` + `RedisScriptEvalClient` directly, decoupling the public rate-limiter protocol from the internal auth client hierarchy.
+- **Docs consolidate the canonical Redis/TOTP recipe into Configuration** — the rate-limiting guide and TOTP guide now reference `Configuration > Canonical Redis-backed auth surface` instead of duplicating the `RedisAuthPreset` snippet, and the canonical recipe itself now includes `build_totp_pending_jti_store()` alongside `build_rate_limit_config()` and `build_totp_used_tokens_store()`.
+- **Test suite uses `fakeredis` instead of manual async Redis doubles** — all Redis-touching tests now run against `fakeredis[lua]` backends with shared test fixtures and typed factory protocols, replacing hand-written `AsyncMock`-based doubles that did not enforce the real Redis command contract.
+
 ## 1.4.0 (2026-04-09)
 
 ### Added

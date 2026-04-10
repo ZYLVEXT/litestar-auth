@@ -17,12 +17,13 @@ from unittest.mock import AsyncMock, call
 import pytest
 from litestar.connection import Request
 from litestar.exceptions import TooManyRequestsException
+from redis.exceptions import ConnectionError as RedisConnectionError
 
 import litestar_auth.ratelimit as ratelimit_module
 import litestar_auth.ratelimit._config as ratelimit_config_module
-from litestar_auth._redis_protocols import RedisSharedAuthClient
+from litestar_auth.authentication.strategy.redis import RedisClientProtocol as RedisTokenClientProtocol
 from litestar_auth.authentication.strategy.redis import RedisTokenStrategy
-from litestar_auth.contrib.redis import RedisAuthPreset, RedisAuthRateLimitTier
+from litestar_auth.contrib.redis import RedisAuthClientProtocol, RedisAuthPreset, RedisAuthRateLimitTier
 from litestar_auth.exceptions import ConfigurationError
 from litestar_auth.ratelimit import (
     AUTH_RATE_LIMIT_ENDPOINT_SLOTS,
@@ -36,19 +37,23 @@ from litestar_auth.ratelimit import (
     EndpointRateLimit,
     InMemoryRateLimiter,
     RateLimiterBackend,
+    RedisClientProtocol,
     RedisRateLimiter,
 )
 from litestar_auth.ratelimit import (
     logger as ratelimit_logger,
 )
+from tests._helpers import cast_fakeredis, record_async_redis_call_args
 
 pytestmark = pytest.mark.unit
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncIterator
     from types import ModuleType
 
+    import fakeredis
     from litestar.types import HTTPScope
+
+    from tests._helpers import AsyncFakeRedis
 
 FULL_RETRY_AFTER = 10
 PARTIAL_RETRY_AFTER = 8
@@ -61,7 +66,6 @@ REFRESH_MAX_ATTEMPTS = 10
 REFRESH_WINDOW_SECONDS = 300
 TOTP_MAX_ATTEMPTS = 5
 TOTP_WINDOW_SECONDS = 300
-type RedisEvalNumber = str | bytes | bytearray | float | int
 
 AUTH_RATE_LIMIT_SLOT_IDENTIFIERS: tuple[AuthRateLimitEndpointSlot, ...] = (
     "login",
@@ -107,22 +111,6 @@ def _reload_module(module_path: str) -> ModuleType:
         The reloaded module object.
     """
     return importlib.reload(importlib.import_module(module_path))
-
-
-def _as_number(value: object, *, name: str) -> RedisEvalNumber:
-    """Validate a Redis script argument can be converted to a numeric value.
-
-    Returns:
-        The original value narrowed to a number-like Redis eval argument.
-
-    Raises:
-        TypeError: If the value is not compatible with ``float()`` / ``int()`` conversion.
-    """
-    if isinstance(value, str | bytes | bytearray | float | int):
-        return value
-
-    msg = f"{name} must be numeric"
-    raise TypeError(msg)
 
 
 def _unwrap_optional(annotation: object) -> object:
@@ -599,10 +587,11 @@ async def test_auth_rate_limit_config_from_shared_backend_preserves_downstream_m
 
 
 def test_auth_rate_limit_config_from_shared_backend_preserves_documented_redis_migration_recipe(
+    async_fakeredis: AsyncFakeRedis,
     patch_redis_loader: None,
 ) -> None:
     """The documented Redis migration recipe stays expressible through the shared builder."""
-    redis_client = make_fake_redis()
+    redis_client = cast_fakeredis(async_fakeredis, RedisClientProtocol)
     credential_backend = RedisRateLimiter(redis=redis_client, max_attempts=5, window_seconds=60)
     refresh_backend = RedisRateLimiter(redis=redis_client, max_attempts=10, window_seconds=300)
     totp_backend = RedisRateLimiter(redis=redis_client, max_attempts=5, window_seconds=300)
@@ -640,12 +629,22 @@ def test_auth_rate_limit_config_from_shared_backend_preserves_documented_redis_m
 
 
 async def test_contrib_redis_preset_builds_rate_limit_config_with_shared_client_tiers(
+    async_fakeredis: AsyncFakeRedis,
+    monkeypatch: pytest.MonkeyPatch,
     patch_redis_loader: None,
 ) -> None:
-    """The contrib preset preserves group tiers, backend overrides, and namespace selection."""
+    """The contrib preset preserves group tiers, overrides, and both TOTP Redis store builders."""
     del patch_redis_loader
-    redis_client: RedisSharedAuthClient = make_fake_redis()
-    assert isinstance(redis_client, RedisSharedAuthClient)
+
+    def load_optional_redis() -> object:
+        return object()
+
+    monkeypatch.setattr("litestar_auth.totp._load_redis_asyncio", load_optional_redis)
+    monkeypatch.setattr("litestar_auth.authentication.strategy.jwt._load_redis_asyncio", load_optional_redis)
+    set_calls = record_async_redis_call_args(monkeypatch, async_fakeredis, "set")
+    setex_calls = record_async_redis_call_args(monkeypatch, async_fakeredis, "setex")
+    redis_client = cast_fakeredis(async_fakeredis, RedisAuthClientProtocol)
+    assert isinstance(redis_client, RedisAuthClientProtocol)
     preset = RedisAuthPreset(
         redis=redis_client,
         rate_limit_tier=RedisAuthRateLimitTier(
@@ -680,6 +679,7 @@ async def test_contrib_redis_preset_builds_rate_limit_config_with_shared_client_
         namespace_style="snake_case",
     )
     store = preset.build_totp_used_tokens_store(key_prefix="used:")
+    pending_store = preset.build_totp_pending_jti_store(key_prefix="pending:")
 
     assert config.login is not None
     assert isinstance(config.login.backend, RedisRateLimiter)
@@ -707,8 +707,15 @@ async def test_contrib_redis_preset_builds_rate_limit_config_with_shared_client_
     assert config.verify_token is None
     assert config.request_verify_token is None
     assert store._redis is redis_client
+    assert pending_store.redis is redis_client
+    assert pending_store.key_prefix == "pending:"
     assert await store.mark_used("user-1", 7, 1.25) is True
-    assert redis_client.set_calls == [("used:user-1:7", "1", True, 1250)]
+    await pending_store.deny("pending-jti", ttl_seconds=30)
+    assert await pending_store.is_denied("pending-jti") is True
+    assert set_calls == [(("used:user-1:7", "1"), {"nx": True, "px": 1250})]
+    assert setex_calls == [(("pending:pending-jti", 30, "1"), {})]
+    assert await async_fakeredis.get("used:user-1:7") == b"1"
+    assert await async_fakeredis.get("pending:pending-jti") == b"1"
 
 
 def test_auth_rate_limit_config_from_shared_backend_rejects_unknown_enabled_slot() -> None:
@@ -1053,186 +1060,6 @@ async def test_memory_rate_limiter_is_async_safe_under_concurrent_increments() -
     assert limiter.is_shared_across_workers is False
 
 
-@dataclass(slots=True)
-class FakeRedisClient:
-    """Minimal async Redis client test double with sliding-window state."""
-
-    delete_mock: AsyncMock
-    eval_mock: AsyncMock
-    set_mock: AsyncMock
-    windows: dict[str, list[tuple[str, float]]]
-    deleted_keys: list[str]
-    set_calls: list[tuple[str, str, bool, int | None]]
-
-    async def delete(self, *names: str) -> int:
-        """Delete the configured keys.
-
-        Returns:
-            Number of deleted keys.
-        """
-        self.deleted_keys.extend(names)
-        for name in names:
-            self.windows.pop(name, None)
-        return await self.delete_mock(*names)
-
-    async def eval(
-        self,
-        script: str,
-        numkeys: int,
-        *keys_and_args: object,
-    ) -> ratelimit_module.RedisScriptResult:
-        """Emulate the Redis Lua scripts used by ``RedisRateLimiter``.
-
-        Returns:
-            The scalar result produced by the emulated script.
-
-        Raises:
-            AssertionError: If the script uses an unsupported key count or script body.
-            TypeError: If the Redis key is not a string.
-        """
-        if numkeys != 1:
-            msg = "FakeRedisClient only supports single-key scripts"
-            raise AssertionError(msg)
-
-        await self.eval_mock(script, numkeys, *keys_and_args)
-        key = keys_and_args[0]
-        if not isinstance(key, str):
-            msg = "Redis keys must be strings"
-            raise TypeError(msg)
-
-        if script == RedisRateLimiter._CHECK_SCRIPT:
-            return self._check(
-                key,
-                _as_number(keys_and_args[1], name="now"),
-                _as_number(keys_and_args[2], name="window_seconds"),
-                _as_number(keys_and_args[3], name="max_attempts"),
-            )
-        if script == RedisRateLimiter._INCREMENT_SCRIPT:
-            return self._increment(
-                key,
-                _as_number(keys_and_args[1], name="now"),
-                _as_number(keys_and_args[2], name="window_seconds"),
-                keys_and_args[3],
-                _as_number(keys_and_args[4], name="ttl"),
-            )
-        if script == RedisRateLimiter._RETRY_AFTER_SCRIPT:
-            return self._retry_after(
-                key,
-                _as_number(keys_and_args[1], name="now"),
-                _as_number(keys_and_args[2], name="window_seconds"),
-                _as_number(keys_and_args[3], name="max_attempts"),
-            )
-
-        msg = "Unexpected Lua script"
-        raise AssertionError(msg)
-
-    async def set(
-        self,
-        name: str,
-        value: str,
-        *,
-        nx: bool = False,
-        px: int | None = None,
-    ) -> bool | None:
-        """Record TOTP replay-store writes and return the mocked Redis result.
-
-        Returns:
-            The mocked Redis ``SET`` result.
-        """
-        self.set_calls.append((name, value, nx, px))
-        return await self.set_mock(name, value, nx=nx, px=px)
-
-    def _prune(self, key: str, *, now: float, window_seconds: float) -> list[tuple[str, float]]:
-        """Remove expired entries from a sorted-set window.
-
-        Returns:
-            The active entries that remain after pruning.
-        """
-        cutoff = now - window_seconds
-        entries = [(member, score) for member, score in self.windows.get(key, []) if score > cutoff]
-        if entries:
-            self.windows[key] = entries
-            return entries
-
-        self.windows.pop(key, None)
-        self.deleted_keys.append(key)
-        return []
-
-    def _check(
-        self,
-        key: str,
-        now: RedisEvalNumber,
-        window_seconds: RedisEvalNumber,
-        max_attempts: RedisEvalNumber,
-    ) -> int:
-        """Emulate the check Lua script.
-
-        Returns:
-            The number of active attempts in the sliding window.
-        """
-        del max_attempts
-        entries = self._prune(key, now=float(now), window_seconds=float(window_seconds))
-        return len(entries)
-
-    def _increment(
-        self,
-        key: str,
-        now: RedisEvalNumber,
-        window_seconds: RedisEvalNumber,
-        member: object,
-        ttl: RedisEvalNumber,
-    ) -> int:
-        """Emulate the increment Lua script.
-
-        Returns:
-            The number of active attempts after recording the new one.
-        """
-        del ttl
-        entries = self._prune(key, now=float(now), window_seconds=float(window_seconds))
-        entries.append((str(member), float(now)))
-        self.windows[key] = entries
-        return len(entries)
-
-    def _retry_after(
-        self,
-        key: str,
-        now: RedisEvalNumber,
-        window_seconds: RedisEvalNumber,
-        max_attempts: RedisEvalNumber,
-    ) -> int:
-        """Emulate the retry-after Lua script.
-
-        Returns:
-            Whole seconds until the oldest active attempt leaves the window.
-        """
-        entries = self._prune(key, now=float(now), window_seconds=float(window_seconds))
-        if len(entries) < int(max_attempts):
-            return 0
-
-        oldest_score = min(score for _, score in entries)
-        remaining = float(window_seconds) - (float(now) - oldest_score)
-        return max(int(-(-remaining // 1)), 0)
-
-
-def make_fake_redis() -> FakeRedisClient:
-    """Build a fake Redis client with in-memory sliding-window behavior.
-
-    Returns:
-        A fake Redis client for unit tests.
-    """
-    delete_mock = AsyncMock(return_value=1)
-    eval_mock = AsyncMock(return_value=0)
-    set_mock = AsyncMock(return_value=True)
-    return FakeRedisClient(
-        delete_mock=delete_mock,
-        eval_mock=eval_mock,
-        set_mock=set_mock,
-        windows={},
-        deleted_keys=[],
-        set_calls=[],
-    )
-
-
 @pytest.fixture
 def patch_redis_loader(monkeypatch: pytest.MonkeyPatch) -> None:
     """Patch the Redis loader to return a dummy client for RedisRateLimiter tests."""
@@ -1424,75 +1251,107 @@ async def test_memory_rate_limiter_evicts_least_recently_active_key_at_capacity(
 
 
 def test_redis_rate_limiter_implements_shared_backend_protocol(
+    async_fakeredis: AsyncFakeRedis,
     patch_redis_loader: None,
 ) -> None:
     """The Redis limiter matches the shared backend interface."""
-    limiter = RedisRateLimiter(redis=make_fake_redis(), max_attempts=2, window_seconds=10)
+    limiter = RedisRateLimiter(
+        redis=cast_fakeredis(async_fakeredis, RedisClientProtocol),
+        max_attempts=2,
+        window_seconds=10,
+    )
 
     assert isinstance(limiter, RateLimiterBackend)
 
 
 async def test_redis_rate_limiter_blocks_after_max_attempts(
+    async_fakeredis: AsyncFakeRedis,
     patch_redis_loader: None,
 ) -> None:
     """The Redis limiter rejects requests after the sliding window fills."""
     clock = FakeClock()
-    redis_client = make_fake_redis()
-    limiter = RedisRateLimiter(redis=redis_client, max_attempts=2, window_seconds=30, clock=clock)
+    limiter = RedisRateLimiter(
+        redis=cast_fakeredis(async_fakeredis, RedisClientProtocol),
+        max_attempts=2,
+        window_seconds=30,
+        clock=clock,
+    )
 
     await limiter.increment("127.0.0.1")
     await limiter.increment("127.0.0.1")
 
     assert await limiter.check("127.0.0.1") is False
-    redis_client.eval_mock.assert_awaited()
+    assert await async_fakeredis.zcard(f"{DEFAULT_KEY_PREFIX}127.0.0.1") == limiter.max_attempts
 
 
 async def test_redis_rate_limiter_check_and_retry_after_use_lua_scripts(
+    async_fakeredis: AsyncFakeRedis,
+    monkeypatch: pytest.MonkeyPatch,
     patch_redis_loader: None,
 ) -> None:
-    """Check and retry-after delegate to their Lua scripts and decode bytes."""
+    """Check and retry-after delegate to the shipped Lua scripts through fakeredis."""
     clock = FakeClock(now=12.5)
-    redis_client = AsyncMock()
-    redis_client.eval = AsyncMock(side_effect=[b"1", str(REDIS_RETRY_AFTER).encode()])
-    redis_client.delete = AsyncMock(return_value=1)
+    eval_calls = record_async_redis_call_args(monkeypatch, async_fakeredis, "eval")
     limiter = RedisRateLimiter(
-        redis=cast("ratelimit_module.RedisClientProtocol", redis_client),
+        redis=cast_fakeredis(async_fakeredis, RedisClientProtocol),
         max_attempts=3,
         window_seconds=REDIS_WINDOW_SECONDS,
         clock=clock,
     )
+    check_key = "127.0.0.1"
+    retry_after_key = "127.0.0.2"
+
+    await limiter.increment(check_key)
+    clock.now = 11.0
+    await limiter.increment(retry_after_key)
+    clock.now = 12.0
+    await limiter.increment(retry_after_key)
+    clock.now = 12.5
+    await limiter.increment(retry_after_key)
 
     assert limiter.is_shared_across_workers is True
-    assert await limiter.check("127.0.0.1") is True
-    assert await limiter.retry_after("127.0.0.1") == REDIS_RETRY_AFTER
+    assert await limiter.check(check_key) is True
+    assert await limiter.retry_after(retry_after_key) == REDIS_RETRY_AFTER
 
-    expected_key = f"{DEFAULT_KEY_PREFIX}127.0.0.1"
-    assert redis_client.eval.await_args_list[0].args == (
-        RedisRateLimiter._CHECK_SCRIPT,
-        1,
-        expected_key,
-        clock.now,
-        REDIS_WINDOW_SECONDS,
-        3,
+    assert eval_calls[-2] == (
+        (
+            RedisRateLimiter._CHECK_SCRIPT,
+            1,
+            f"{DEFAULT_KEY_PREFIX}{check_key}",
+            clock.now,
+            REDIS_WINDOW_SECONDS,
+            3,
+        ),
+        {},
     )
-    assert redis_client.eval.await_args_list[1].args == (
-        RedisRateLimiter._RETRY_AFTER_SCRIPT,
-        1,
-        expected_key,
-        clock.now,
-        REDIS_WINDOW_SECONDS,
-        3,
+    assert eval_calls[-1] == (
+        (
+            RedisRateLimiter._RETRY_AFTER_SCRIPT,
+            1,
+            f"{DEFAULT_KEY_PREFIX}{retry_after_key}",
+            clock.now,
+            REDIS_WINDOW_SECONDS,
+            3,
+        ),
+        {},
     )
+
+
+def test_redis_rate_limiter_decode_integer_accepts_bytes() -> None:
+    """Redis script results may arrive as bytes and still decode cleanly."""
+    assert RedisRateLimiter._decode_integer(str(REDIS_RETRY_AFTER).encode()) == REDIS_RETRY_AFTER
 
 
 async def test_redis_rate_limiter_increments_with_atomic_pipeline(
+    async_fakeredis: AsyncFakeRedis,
+    monkeypatch: pytest.MonkeyPatch,
     patch_redis_loader: None,
 ) -> None:
-    """The Redis limiter records attempts with a single Lua script."""
+    """The Redis limiter records attempts by running its increment Lua script."""
     clock = FakeClock(now=12.5)
-    redis_client = make_fake_redis()
+    eval_calls = record_async_redis_call_args(monkeypatch, async_fakeredis, "eval")
     limiter = RedisRateLimiter(
-        redis=redis_client,
+        redis=cast_fakeredis(async_fakeredis, RedisClientProtocol),
         max_attempts=3,
         window_seconds=REDIS_WINDOW_SECONDS,
         clock=clock,
@@ -1500,24 +1359,41 @@ async def test_redis_rate_limiter_increments_with_atomic_pipeline(
 
     await limiter.increment("127.0.0.1:user@example.com")
 
-    redis_client.eval_mock.assert_awaited_once()
-    script, numkeys, redis_key, score, window_seconds, member, ttl = redis_client.eval_mock.await_args.args
+    assert len(eval_calls) == 1
+    (script, numkeys, redis_key, score, window_seconds, member, ttl), kwargs = eval_calls[0]
+    assert kwargs == {}
     assert script == RedisRateLimiter._INCREMENT_SCRIPT
     assert numkeys == 1
+    assert isinstance(redis_key, str)
     assert redis_key == f"{DEFAULT_KEY_PREFIX}127.0.0.1:user@example.com"
     assert score == clock.now
     assert window_seconds == REDIS_WINDOW_SECONDS
     assert isinstance(member, str)
     assert ttl == REDIS_WINDOW_SECONDS
 
+    entries = await async_fakeredis.zrange(redis_key, 0, -1, withscores=True)
+    assert len(entries) == 1
+    stored_member, stored_score = entries[0]
+    assert stored_member.decode() == member
+    assert stored_score == clock.now
+    ttl_seconds = await async_fakeredis.ttl(redis_key)
+    assert 0 < ttl_seconds <= REDIS_WINDOW_SECONDS
+
 
 async def test_redis_rate_limiter_retry_after_and_reset_delegate_to_redis(
+    async_fakeredis: AsyncFakeRedis,
+    monkeypatch: pytest.MonkeyPatch,
     patch_redis_loader: None,
 ) -> None:
     """The Redis limiter reports retry-after from the oldest active attempt."""
     clock = FakeClock()
-    redis_client = make_fake_redis()
-    limiter = RedisRateLimiter(redis=redis_client, max_attempts=2, window_seconds=10, clock=clock)
+    delete_calls = record_async_redis_call_args(monkeypatch, async_fakeredis, "delete")
+    limiter = RedisRateLimiter(
+        redis=cast_fakeredis(async_fakeredis, RedisClientProtocol),
+        max_attempts=2,
+        window_seconds=10,
+        clock=clock,
+    )
 
     await limiter.increment("127.0.0.1")
     clock.advance(2.2)
@@ -1526,18 +1402,19 @@ async def test_redis_rate_limiter_retry_after_and_reset_delegate_to_redis(
     assert await limiter.retry_after("127.0.0.1") == PARTIAL_RETRY_AFTER
     await limiter.reset("127.0.0.1")
 
-    redis_client.delete_mock.assert_awaited_once_with(f"{DEFAULT_KEY_PREFIX}127.0.0.1")
+    assert delete_calls == [((f"{DEFAULT_KEY_PREFIX}127.0.0.1",), {})]
+    assert await async_fakeredis.exists(f"{DEFAULT_KEY_PREFIX}127.0.0.1") == 0
     assert await limiter.check("127.0.0.1") is True
 
 
 async def test_redis_rate_limiter_prunes_expired_entries_like_in_memory_backend(
+    async_fakeredis: AsyncFakeRedis,
     patch_redis_loader: None,
 ) -> None:
     """The Redis limiter drops expired attempts instead of waiting for a fixed-window reset."""
     clock = FakeClock()
-    redis_client = make_fake_redis()
     limiter = RedisRateLimiter(
-        redis=redis_client,
+        redis=cast_fakeredis(async_fakeredis, RedisClientProtocol),
         max_attempts=2,
         window_seconds=REDIS_WINDOW_SECONDS,
         clock=clock,
@@ -1545,20 +1422,36 @@ async def test_redis_rate_limiter_prunes_expired_entries_like_in_memory_backend(
 
     await limiter.increment("127.0.0.1:user@example.com")
     clock.advance(4.9)
+    second_attempt_at = clock.now
     await limiter.increment("127.0.0.1:user@example.com")
     assert await limiter.check("127.0.0.1:user@example.com") is False
 
     clock.advance(0.2)
     assert await limiter.check("127.0.0.1:user@example.com") is True
 
+    entries = await async_fakeredis.zrange(
+        f"{DEFAULT_KEY_PREFIX}127.0.0.1:user@example.com",
+        0,
+        -1,
+        withscores=True,
+    )
+    assert len(entries) == 1
+    assert entries[0][0].decode().startswith(f"{second_attempt_at:.9f}:")
+    assert entries[0][1] == pytest.approx(second_attempt_at)
+
 
 async def test_redis_rate_limiter_blocks_fixed_window_boundary_burst(
+    async_fakeredis: AsyncFakeRedis,
     patch_redis_loader: None,
 ) -> None:
     """The Redis limiter prevents a burst split across a fixed-window boundary."""
     clock = FakeClock()
-    redis_client = make_fake_redis()
-    limiter = RedisRateLimiter(redis=redis_client, max_attempts=2, window_seconds=10, clock=clock)
+    limiter = RedisRateLimiter(
+        redis=cast_fakeredis(async_fakeredis, RedisClientProtocol),
+        max_attempts=2,
+        window_seconds=10,
+        clock=clock,
+    )
 
     await limiter.increment("127.0.0.1")
     clock.advance(9.9)
@@ -1586,129 +1479,38 @@ def test_redis_rate_limiter_lazy_import_error_message(monkeypatch: pytest.Monkey
         ratelimit_module._load_redis_asyncio()
 
 
-@dataclass(slots=True)
-class RedisClientWithConnectionError:
-    """Redis client that always fails with ConnectionError."""
-
-    async def delete(self, *names: str) -> int:
-        """Always fail to simulate a dropped Redis connection.
-
-        Raises:
-            ConnectionError: Always raised.
-        """
-        raise ConnectionError
-
-    async def eval(self, script: str, numkeys: int, *keys_and_args: object) -> ratelimit_module.RedisScriptResult:
-        """Always fail to simulate a dropped Redis connection.
-
-        Raises:
-            ConnectionError: Always raised.
-        """
-        raise ConnectionError
-
-
-@dataclass(slots=True)
-class RedisTokenClientWithConnectionError:
-    """Redis token client that always fails with ConnectionError."""
-
-    async def get(self, name: str, /) -> bytes | str | None:
-        """Always fail to simulate a dropped Redis connection.
-
-        Raises:
-            ConnectionError: Always raised.
-        """
-        raise ConnectionError
-
-    async def setex(self, name: str, time: int, value: str, /) -> object:
-        """Always fail to simulate a dropped Redis connection.
-
-        Raises:
-            ConnectionError: Always raised.
-        """
-        raise ConnectionError
-
-    async def delete(self, *names: str) -> int:
-        """Always fail to simulate a dropped Redis connection.
-
-        Raises:
-            ConnectionError: Always raised.
-        """
-        raise ConnectionError
-
-    async def sadd(self, name: str, *values: str) -> int:
-        """Always fail to simulate a dropped Redis connection.
-
-        Raises:
-            ConnectionError: Always raised.
-        """
-        del name, values
-        raise ConnectionError
-
-    async def srem(self, name: str, *values: str) -> int:
-        """Always fail to simulate a dropped Redis connection.
-
-        Raises:
-            ConnectionError: Always raised.
-        """
-        del name, values
-        raise ConnectionError
-
-    async def smembers(self, name: str) -> set[bytes]:
-        """Always fail to simulate a dropped Redis connection.
-
-        Raises:
-            ConnectionError: Always raised.
-        """
-        del name
-        raise ConnectionError
-
-    async def expire(self, name: str, time: int) -> bool:
-        """Always fail to simulate a dropped Redis connection.
-
-        Raises:
-            ConnectionError: Always raised.
-        """
-        del name, time
-        raise ConnectionError
-
-    def scan_iter(
-        self,
-        match: object | None = None,
-        count: int | None = None,
-        _type: str | None = None,
-        **kwargs: object,
-    ) -> AsyncIterator[str]:
-        """Always fail to simulate a dropped Redis connection.
-
-        Raises:
-            ConnectionError: Always raised.
-        """
-        del match
-        del count
-        del _type
-        del kwargs
-        raise ConnectionError
-
-
-async def test_redis_rate_limiter_propagates_connection_error(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_redis_rate_limiter_propagates_connection_error(
+    async_fakeredis: AsyncFakeRedis,
+    fakeredis_server: fakeredis.FakeServer,
+    patch_redis_loader: None,
+) -> None:
     """RedisRateLimiter does not swallow connection errors from Redis."""
-    limiter = RedisRateLimiter(redis=RedisClientWithConnectionError(), max_attempts=2, window_seconds=10)
+    limiter = RedisRateLimiter(
+        redis=cast_fakeredis(async_fakeredis, RedisClientProtocol),
+        max_attempts=2,
+        window_seconds=10,
+    )
+    fakeredis_server.connected = False
 
-    with pytest.raises(ConnectionError):
+    with pytest.raises(RedisConnectionError):
         await limiter.check("127.0.0.1")
 
 
-async def test_redis_token_strategy_propagates_connection_error() -> None:
+async def test_redis_token_strategy_propagates_connection_error(
+    async_fakeredis: AsyncFakeRedis,
+    fakeredis_server: fakeredis.FakeServer,
+) -> None:
     """RedisTokenStrategy does not swallow connection errors from Redis."""
     user_manager = AsyncMock()
     user_manager.get = AsyncMock()
+    fakeredis_server.connected = False
 
     strategy = RedisTokenStrategy(
-        redis=RedisTokenClientWithConnectionError(),
+        redis=cast_fakeredis(async_fakeredis, RedisTokenClientProtocol),
         token_hash_secret=REDIS_TOKEN_HASH_SECRET,
     )
 
-    with pytest.raises(ConnectionError):
+    with pytest.raises(RedisConnectionError):
         await strategy.read_token("token", user_manager)
 
 

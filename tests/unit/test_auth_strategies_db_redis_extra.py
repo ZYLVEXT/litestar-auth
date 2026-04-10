@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, cast
+from typing import TYPE_CHECKING, Any, cast
 from uuid import UUID, uuid4
 
 import pytest
@@ -12,17 +12,21 @@ from litestar_auth._plugin.config import DatabaseTokenAuthConfig
 from litestar_auth.authentication.backend import AuthenticationBackend
 from litestar_auth.authentication.strategy.base import SessionBindable
 from litestar_auth.authentication.strategy.db import DatabaseTokenStrategy
-from litestar_auth.authentication.strategy.redis import RedisTokenStrategy
+from litestar_auth.authentication.strategy.redis import RedisClientProtocol, RedisTokenStrategy
 from litestar_auth.authentication.transport.bearer import BearerTransport
 from litestar_auth.manager import UserManagerSecurity
 from litestar_auth.models import User
 from litestar_auth.plugin import LitestarAuth, LitestarAuthConfig
+from tests._helpers import cast_fakeredis, inject_scan_orphan
 from tests.integration.test_orchestrator import (
     DummySessionMaker,
     ExampleUser,
     InMemoryUserDatabase,
     PluginUserManager,
 )
+
+if TYPE_CHECKING:
+    from tests._helpers import AsyncFakeRedis
 
 REDIS_TOKEN_HASH_SECRET = "redis-token-hash-secret-1234567890"
 
@@ -59,73 +63,6 @@ class _FakeSession:
 
     async def commit(self) -> None:
         self.committed = True
-
-
-class _FakeRedisClient:
-    """Redis client double implementing the small protocol RedisTokenStrategy relies on."""
-
-    def __init__(self) -> None:
-        self.values: dict[str, str | bytes | None] = {}
-        self.sets: dict[str, set[str]] = {}
-        self.deleted: list[str] = []
-
-    async def get(self, name: str, /) -> bytes | str | None:
-        value = self.values.get(name)
-        if isinstance(value, str):
-            return value.encode()
-        return value
-
-    async def setex(self, name: str, time: int, value: str, /) -> object:
-        del time
-        self.values[name] = value
-        return object()
-
-    async def delete(self, *names: str) -> int:
-        for name in names:
-            self.deleted.append(name)
-            self.values.pop(name, None)
-            self.sets.pop(name, None)
-        return len(names)
-
-    async def sadd(self, name: str, *values: str) -> int:
-        bucket = self.sets.setdefault(name, set())
-        before = len(bucket)
-        bucket.update(values)
-        return len(bucket) - before
-
-    async def srem(self, name: str, *values: str) -> int:
-        bucket = self.sets.get(name)
-        if not bucket:
-            return 0
-        before = len(bucket)
-        for value in values:
-            bucket.discard(value)
-        return before - len(bucket)
-
-    async def smembers(self, name: str) -> set[bytes]:
-        return {member.encode() for member in self.sets.get(name, set())}
-
-    async def expire(self, name: str, time: int) -> bool:
-        del name, time
-        return True
-
-    def scan_iter(
-        self,
-        match: Any | None = None,  # noqa: ANN401
-        count: int | None = None,
-        _type: str | None = None,
-        **kwargs: Any,  # noqa: ANN401
-    ) -> object:
-        del count, _type, kwargs
-        pattern = str(match or "*")
-        prefix = pattern.removesuffix("*")
-
-        async def _gen() -> object:  # noqa: RUF029
-            for key in list(self.values):
-                if key.startswith(prefix):
-                    yield key
-
-        return _gen()
 
 
 def _minimal_plugin_config(
@@ -286,10 +223,15 @@ async def test_database_token_strategy_cleanup_expired_tokens_uses_rowcount_and_
 
 
 @pytest.mark.asyncio
-async def test_redis_token_strategy_read_token_none_and_invalidate_all_tokens() -> None:
+async def test_redis_token_strategy_read_token_none_and_invalidate_all_tokens(
+    monkeypatch: pytest.MonkeyPatch,
+    async_fakeredis: AsyncFakeRedis,
+) -> None:
     """RedisTokenStrategy.read_token(None) and invalidate_all_tokens should cover remaining branches."""
-    redis_client = _FakeRedisClient()
-    strategy = RedisTokenStrategy(redis=cast("Any", redis_client), token_hash_secret=REDIS_TOKEN_HASH_SECRET)
+    strategy = RedisTokenStrategy(
+        redis=cast_fakeredis(async_fakeredis, RedisClientProtocol),
+        token_hash_secret=REDIS_TOKEN_HASH_SECRET,
+    )
     user_manager = _DummyUserManager()
 
     # read_token(None, ...) early-return branch.
@@ -297,42 +239,49 @@ async def test_redis_token_strategy_read_token_none_and_invalidate_all_tokens() 
 
     user = _DummyUser(uuid4())
     token = await strategy.write_token(user)
-    redis_client.sets.clear()
-
-    # Add a key with no stored user id to hit the "stored_user_id is None" continue branch.
-    redis_client.values[strategy._key("orphan")] = None
+    orphan_key = strategy._key("orphan")
+    inject_scan_orphan(monkeypatch, async_fakeredis, orphan_key)
+    assert await async_fakeredis.delete(strategy._user_index_key(str(user.id))) == 1
 
     await strategy.invalidate_all_tokens(user)
 
-    # The user's token key should be deleted; the orphan remains untouched.
-    assert strategy._key(token) not in redis_client.values
-    assert strategy._key("orphan") in redis_client.values
+    # The user's token key should be deleted; the orphan remains untouched because it never existed.
+    assert await async_fakeredis.get(strategy._key(token)) is None
+    assert await async_fakeredis.exists(orphan_key) == 0
 
 
 @pytest.mark.asyncio
-async def test_redis_token_strategy_invalidate_all_tokens_uses_index_when_present() -> None:
+async def test_redis_token_strategy_invalidate_all_tokens_uses_index_when_present(
+    async_fakeredis: AsyncFakeRedis,
+) -> None:
     """invalidate_all_tokens() should prefer the per-user index when it exists."""
-    redis_client = _FakeRedisClient()
-    strategy = RedisTokenStrategy(redis=cast("Any", redis_client), token_hash_secret=REDIS_TOKEN_HASH_SECRET)
+    strategy = RedisTokenStrategy(
+        redis=cast_fakeredis(async_fakeredis, RedisClientProtocol),
+        token_hash_secret=REDIS_TOKEN_HASH_SECRET,
+    )
     user = _DummyUser(uuid4())
     token = await strategy.write_token(user)
 
     await strategy.invalidate_all_tokens(user)
 
-    assert strategy._key(token) not in redis_client.values
-    assert strategy._user_index_key(str(user.id)) not in redis_client.sets
+    assert await async_fakeredis.get(strategy._key(token)) is None
+    assert await async_fakeredis.exists(strategy._user_index_key(str(user.id))) == 0
 
 
 @pytest.mark.asyncio
-async def test_redis_token_strategy_invalidate_all_tokens_scan_skips_foreign_keys() -> None:
+async def test_redis_token_strategy_invalidate_all_tokens_scan_skips_foreign_keys(
+    async_fakeredis: AsyncFakeRedis,
+) -> None:
     """Fallback scanning should ignore keys that belong to other users."""
-    redis_client = _FakeRedisClient()
-    strategy = RedisTokenStrategy(redis=cast("Any", redis_client), token_hash_secret=REDIS_TOKEN_HASH_SECRET)
+    strategy = RedisTokenStrategy(
+        redis=cast_fakeredis(async_fakeredis, RedisClientProtocol),
+        token_hash_secret=REDIS_TOKEN_HASH_SECRET,
+    )
     user = _DummyUser(uuid4())
     other_user = _DummyUser(uuid4())
     token = await strategy.write_token(other_user)
-    redis_client.sets.clear()
+    assert await async_fakeredis.delete(strategy._user_index_key(str(other_user.id))) == 1
 
     await strategy.invalidate_all_tokens(user)
 
-    assert strategy._key(token) in redis_client.values
+    assert await async_fakeredis.get(strategy._key(token)) == str(other_user.id).encode()

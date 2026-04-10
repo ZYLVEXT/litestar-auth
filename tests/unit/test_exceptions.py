@@ -153,10 +153,15 @@ def _error_code_members() -> dict[str, str]:
 
 def test_exception_module_executes_under_coverage() -> None:
     """Reload the module in-test so coverage records class-body execution."""
+    saved = dict(exceptions_module.__dict__)
     reloaded_module = importlib.reload(exceptions_module)
 
     assert reloaded_module.LitestarAuthError.default_code == LitestarAuthError.default_code
     assert reloaded_module.OAuthAccountAlreadyLinkedError.default_code == ErrorCode.OAUTH_ACCOUNT_ALREADY_LINKED
+
+    # Restore original class references so downstream coverage-reload tests
+    # that re-import from this module don't create class-identity splits.
+    exceptions_module.__dict__.update(saved)
 
 
 @pytest.mark.parametrize(("exception_type", "expected_message", "expected_code", "expected_base"), EXCEPTION_CASES)
