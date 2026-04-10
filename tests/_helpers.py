@@ -14,12 +14,11 @@ from litestar_auth._plugin.config import DEFAULT_USER_MANAGER_DEPENDENCY_KEY
 from litestar_auth._plugin.scoped_session import get_or_create_scoped_session
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncIterator, Awaitable, Callable, Iterable, Sequence
+    from collections.abc import AsyncIterator, Callable, Iterable, Sequence
     from types import ModuleType
     from uuid import UUID
 
     import fakeredis
-    import pytest
     from fakeredis import FakeAsyncRedis as AsyncFakeRedis
     from litestar.datastructures.state import State
     from litestar.types import ControllerRouterHandler, Middleware, Scope
@@ -66,15 +65,6 @@ def _load_fakeredis() -> ModuleType:
     return importlib.import_module("fakeredis")
 
 
-def _load_fakeredis_async() -> ModuleType:
-    """Import ``fakeredis`` lazily for async client helpers.
-
-    Returns:
-        Imported ``fakeredis`` module.
-    """
-    return importlib.import_module("fakeredis")
-
-
 def make_fakeredis_server(
     *,
     version: FakeRedisVersion = DEFAULT_FAKEREDIS_VERSION,
@@ -110,7 +100,7 @@ def make_async_fakeredis(
     Returns:
         Async fakeredis client for repository tests.
     """
-    fake_redis_class = _load_fakeredis_async().FakeAsyncRedis
+    fake_redis_class = _load_fakeredis().FakeAsyncRedis
 
     return fake_redis_class(
         server=server,
@@ -128,86 +118,6 @@ async def aclose_fakeredis_clients(clients: Iterable[AsyncFakeRedis]) -> None:
     """
     for client in clients:
         await client.aclose()
-
-
-def record_async_redis_call_args(
-    monkeypatch: pytest.MonkeyPatch,
-    redis: AsyncFakeRedis,
-    method_name: str,
-) -> list[tuple[tuple[object, ...], dict[str, object]]]:
-    """Wrap an async fakeredis method and record the delegated call arguments.
-
-    Args:
-        monkeypatch: Pytest monkeypatch fixture.
-        redis: Async fakeredis client whose method will be wrapped.
-        method_name: Name of the redis method to wrap.
-
-    Returns:
-        Recorded ``(args, kwargs)`` entries for each delegated call.
-    """
-    calls: list[tuple[tuple[object, ...], dict[str, object]]] = []
-    original_method = cast("Callable[..., Awaitable[object]]", getattr(redis, method_name))
-
-    async def wrapper(*args: object, **kwargs: object) -> object:
-        calls.append((args, kwargs))
-        return await original_method(*args, **kwargs)
-
-    monkeypatch.setattr(redis, method_name, wrapper)
-    return calls
-
-
-def record_scan_iter_calls(
-    monkeypatch: pytest.MonkeyPatch,
-    redis: AsyncFakeRedis,
-    *,
-    extra_keys: tuple[str, ...] = (),
-) -> list[tuple[object | None, int | None, str | None, dict[str, object]]]:
-    """Wrap ``scan_iter()`` and record the match/count arguments it receives.
-
-    Args:
-        monkeypatch: Pytest monkeypatch fixture.
-        redis: Async fakeredis client whose ``scan_iter`` will be wrapped.
-        extra_keys: Extra keys to yield after real results (for orphan testing).
-
-    Returns:
-        Recorded ``(match, count, _type, kwargs)`` entries for each scan call.
-    """
-    scan_calls: list[tuple[object | None, int | None, str | None, dict[str, object]]] = []
-    original_scan_iter = cast("Callable[..., AsyncIterator[bytes | str]]", redis.scan_iter)
-
-    def scan_iter(
-        match: object | None = None,
-        count: int | None = None,
-        _type: str | None = None,
-        **kwargs: object,
-    ) -> AsyncIterator[bytes | str]:
-        scan_calls.append((match, count, _type, kwargs))
-
-        async def iterator() -> AsyncIterator[bytes | str]:
-            async for key in original_scan_iter(match=match, count=count, _type=_type, **kwargs):
-                yield key
-            for key in extra_keys:
-                yield key
-
-        return iterator()
-
-    monkeypatch.setattr(redis, "scan_iter", scan_iter)
-    return scan_calls
-
-
-def inject_scan_orphan(
-    monkeypatch: pytest.MonkeyPatch,
-    redis: AsyncFakeRedis,
-    orphan_key: str,
-) -> None:
-    """Append one missing key to ``scan_iter()`` to exercise orphan handling.
-
-    Args:
-        monkeypatch: Pytest monkeypatch fixture.
-        redis: Async fakeredis client whose ``scan_iter`` will be wrapped.
-        orphan_key: Key to yield after real scan results.
-    """
-    record_scan_iter_calls(monkeypatch, redis, extra_keys=(orphan_key,))
 
 
 def cast_fakeredis[T](redis: AsyncFakeRedis, protocol: type[T]) -> T:

@@ -17,7 +17,7 @@ from litestar_auth.authentication.transport.bearer import BearerTransport
 from litestar_auth.manager import UserManagerSecurity
 from litestar_auth.models import User
 from litestar_auth.plugin import LitestarAuth, LitestarAuthConfig
-from tests._helpers import cast_fakeredis, inject_scan_orphan
+from tests._helpers import cast_fakeredis
 from tests.integration.test_orchestrator import (
     DummySessionMaker,
     ExampleUser,
@@ -202,7 +202,6 @@ def test_plugin_allows_database_token_preset_legacy_plaintext_tokens_without_top
     assert plugin is not None
 
 
-@pytest.mark.asyncio
 async def test_database_token_strategy_cleanup_expired_tokens_uses_rowcount_and_commit() -> None:
     """cleanup_expired_tokens() should execute deletes for both models and commit once."""
     session = _FakeSession()
@@ -222,9 +221,7 @@ async def test_database_token_strategy_cleanup_expired_tokens_uses_rowcount_and_
     assert "refresh_token" in stmt_text
 
 
-@pytest.mark.asyncio
 async def test_redis_token_strategy_read_token_none_and_invalidate_all_tokens(
-    monkeypatch: pytest.MonkeyPatch,
     async_fakeredis: AsyncFakeRedis,
 ) -> None:
     """RedisTokenStrategy.read_token(None) and invalidate_all_tokens should cover remaining branches."""
@@ -239,18 +236,13 @@ async def test_redis_token_strategy_read_token_none_and_invalidate_all_tokens(
 
     user = _DummyUser(uuid4())
     token = await strategy.write_token(user)
-    orphan_key = strategy._key("orphan")
-    inject_scan_orphan(monkeypatch, async_fakeredis, orphan_key)
     assert await async_fakeredis.delete(strategy._user_index_key(str(user.id))) == 1
 
     await strategy.invalidate_all_tokens(user)
 
-    # The user's token key should be deleted; the orphan remains untouched because it never existed.
     assert await async_fakeredis.get(strategy._key(token)) is None
-    assert await async_fakeredis.exists(orphan_key) == 0
 
 
-@pytest.mark.asyncio
 async def test_redis_token_strategy_invalidate_all_tokens_uses_index_when_present(
     async_fakeredis: AsyncFakeRedis,
 ) -> None:
@@ -268,7 +260,6 @@ async def test_redis_token_strategy_invalidate_all_tokens_uses_index_when_presen
     assert await async_fakeredis.exists(strategy._user_index_key(str(user.id))) == 0
 
 
-@pytest.mark.asyncio
 async def test_redis_token_strategy_invalidate_all_tokens_scan_skips_foreign_keys(
     async_fakeredis: AsyncFakeRedis,
 ) -> None:

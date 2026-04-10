@@ -61,7 +61,6 @@ class _MissingUserManager:
 
 
 @pytest.mark.unit
-@pytest.mark.asyncio
 async def test_jwt_revocation_is_durable_across_strategy_instances(async_fakeredis: AsyncFakeRedis) -> None:
     """Revoking a token in one instance is enforced in another when using Redis denylist."""
     password_helper = PasswordHelper()
@@ -81,7 +80,6 @@ async def test_jwt_revocation_is_durable_across_strategy_instances(async_fakered
 
 
 @pytest.mark.unit
-@pytest.mark.asyncio
 async def test_jwt_session_fingerprint_invalidates_after_email_change() -> None:
     """Tokens minted with a session fingerprint must be rejected after email changes."""
     password_helper = PasswordHelper()
@@ -97,7 +95,6 @@ async def test_jwt_session_fingerprint_invalidates_after_email_change() -> None:
 
 
 @pytest.mark.unit
-@pytest.mark.asyncio
 async def test_jwt_without_fingerprint_claim_is_rejected_when_user_fingerprint_is_available() -> None:
     """Tokens without a fingerprint claim must fail closed for fingerprint-aware users."""
     password_helper = PasswordHelper()
@@ -121,7 +118,6 @@ async def test_jwt_without_fingerprint_claim_is_rejected_when_user_fingerprint_i
 
 
 @pytest.mark.unit
-@pytest.mark.asyncio
 async def test_jwt_with_non_string_fingerprint_claim_is_rejected_when_user_fingerprint_is_available() -> None:
     """Non-string fingerprint claims must fail closed for fingerprint-aware users."""
     password_helper = PasswordHelper()
@@ -146,7 +142,6 @@ async def test_jwt_with_non_string_fingerprint_claim_is_rejected_when_user_finge
 
 
 @pytest.mark.unit
-@pytest.mark.asyncio
 async def test_jwt_without_fingerprint_claim_keeps_graceful_degradation_when_user_fingerprint_is_unavailable() -> None:
     """Missing fingerprint claims are still allowed when the server cannot compute one."""
     user = _User(id=uuid4(), email="user@example.com", hashed_password="hashed")
@@ -168,7 +163,6 @@ async def test_jwt_without_fingerprint_claim_keeps_graceful_degradation_when_use
 
 
 @pytest.mark.unit
-@pytest.mark.asyncio
 async def test_in_memory_jwt_denylist_honors_ttl(monkeypatch: pytest.MonkeyPatch) -> None:
     """In-memory denylist entries expire after their configured TTL."""
     fake_now = 1_000.0
@@ -360,7 +354,6 @@ async def test_jwt_redis_denylist_protocol_stubs_are_callable() -> None:
 
 
 @pytest.mark.unit
-@pytest.mark.asyncio
 async def test_jwt_strategy_is_token_denied_false_without_string_jti() -> None:
     """Denylist lookup runs only when ``jti`` is a string."""
     strategy = JWTStrategy(secret="secret-1234567890-1234567890-1234567890")
@@ -370,7 +363,6 @@ async def test_jwt_strategy_is_token_denied_false_without_string_jti() -> None:
 
 
 @pytest.mark.unit
-@pytest.mark.asyncio
 async def test_jwt_strategy_is_token_denied_delegates_to_store() -> None:
     """``_is_token_denied`` mirrors the configured denylist store."""
     store = InMemoryJWTDenylistStore()

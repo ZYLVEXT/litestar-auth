@@ -34,3 +34,18 @@ async def test_async_fakeredis_factory_shares_default_state_and_isolates_servers
     assert await shared_client.set("shared:key", "shared-value") is True
     assert await shared_peer.get("shared:key") == b"shared-value"
     assert await isolated_client.get("shared:key") is None
+
+
+@pytest.mark.parametrize(("response_mode", "expected_key"), [("bytes", b"orphan:key"), ("str", "orphan:key")])
+async def test_async_fakeredis_scan_iter_matches_client_response_mode(
+    async_fakeredis_factory: AsyncFakeRedisFactory,
+    response_mode: str,
+    expected_key: bytes | str,
+) -> None:
+    """scan_iter() should return keys using the client's configured response type."""
+    redis = async_fakeredis_factory(decode_responses=response_mode == "str")
+    assert await redis.set("orphan:key", "1") is True
+
+    keys = [key async for key in redis.scan_iter(match="orphan:*", count=100)]
+
+    assert keys == [expected_key]

@@ -15,7 +15,7 @@ from litestar_auth.manager import BaseUserManager
 from litestar_auth.models import User
 from litestar_auth.password import PasswordHelper
 from litestar_auth.schemas import UserUpdate
-from tests._helpers import cast_fakeredis, record_async_redis_call_args
+from tests._helpers import cast_fakeredis
 
 if TYPE_CHECKING:
     from tests._helpers import AsyncFakeRedis
@@ -118,11 +118,9 @@ async def test_manager_update_invalidates_tokens_only_on_email_or_password_chang
 
 @pytest.mark.unit
 async def test_redis_strategy_invalidate_all_tokens_deletes_only_matching_subjects(
-    monkeypatch: pytest.MonkeyPatch,
     async_fakeredis: AsyncFakeRedis,
 ) -> None:
     """Redis invalidation scans keys and removes those belonging to the user."""
-    delete_calls = record_async_redis_call_args(monkeypatch, async_fakeredis, "delete")
     strategy = RedisTokenStrategy(
         redis=cast_fakeredis(async_fakeredis, RedisClientProtocol),
         token_hash_secret=REDIS_TOKEN_HASH_SECRET,
@@ -139,15 +137,8 @@ async def test_redis_strategy_invalidate_all_tokens_deletes_only_matching_subjec
 
     await strategy.invalidate_all_tokens(user)
 
-    deleted_names = sorted(
-        name.decode() if isinstance(name, bytes) else str(name) for call_args, _ in delete_calls for name in call_args
-    )
-    assert deleted_names == sorted(
-        [
-            "litestar_auth:token:token-a",
-            "litestar_auth:token:token-c",
-        ],
-    )
+    assert await async_fakeredis.get("litestar_auth:token:token-a") is None
+    assert await async_fakeredis.get("litestar_auth:token:token-c") is None
     assert await async_fakeredis.get("litestar_auth:token:token-b") == str(other_user.id).encode()
     assert await async_fakeredis.get("other-prefix:token-d") == str(user.id).encode()
 

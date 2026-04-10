@@ -127,7 +127,7 @@ from litestar_auth.ratelimit import (
     AuthRateLimitEndpointSlot,
     AuthRateLimitNamespaceStyle,
 )
-from tests._helpers import ExampleUser, cast_fakeredis, record_async_redis_call_args
+from tests._helpers import ExampleUser, cast_fakeredis
 from tests.conftest import project_version_from_pyproject
 
 if TYPE_CHECKING:
@@ -142,6 +142,9 @@ REFRESH_MAX_ATTEMPTS = 10
 REFRESH_WINDOW_SECONDS = 300
 TOTP_MAX_ATTEMPTS = 5
 TOTP_WINDOW_SECONDS = 300
+ONE_MINUTE_TTL_SECONDS = 60
+ONE_MINUTE_TTL_FLOOR = ONE_MINUTE_TTL_SECONDS - 1
+ONE_MINUTE_TTL_MS = ONE_MINUTE_TTL_SECONDS * 1000
 
 pytestmark = [pytest.mark.unit, pytest.mark.imports]
 EMAIL_PATTERN = r"^[^@\s]+@[^@\s]+\.[^@\s]+$"
@@ -488,8 +491,6 @@ async def test_root_package_supports_documented_redis_migration_recipe_and_totp_
     rate_limit_redis_client = async_fakeredis_factory()
     rate_limit_redis = cast_fakeredis(rate_limit_redis_client, RedisAuthClientProtocol)
     totp_redis_client = async_fakeredis_factory()
-    set_calls = record_async_redis_call_args(monkeypatch, totp_redis_client, "set")
-    setex_calls = record_async_redis_call_args(monkeypatch, totp_redis_client, "setex")
     totp_redis = cast_fakeredis(totp_redis_client, RedisAuthClientProtocol)
     credential_backend = RedisRateLimiter(redis=rate_limit_redis, max_attempts=5, window_seconds=60)
     refresh_backend = RedisRateLimiter(redis=rate_limit_redis, max_attempts=10, window_seconds=300)
@@ -537,10 +538,16 @@ async def test_root_package_supports_documented_redis_migration_recipe_and_totp_
     assert totp_config.totp_pending_jti_store is pending_jti_store
     assert totp_config.totp_used_tokens_store is used_tokens_store
     assert await used_tokens_store.mark_used("user-1", 7, 60.0) is True
-    await pending_jti_store.deny("pending-jti", ttl_seconds=60)
+    await pending_jti_store.deny("pending-jti", ttl_seconds=ONE_MINUTE_TTL_SECONDS)
     assert await pending_jti_store.is_denied("pending-jti") is True
-    assert set_calls == [(("litestar_auth:totp:used:user-1:7", "1"), {"nx": True, "px": 60_000})]
-    assert setex_calls == [(("litestar_auth:jwt:denylist:pending-jti", 60, "1"), {})]
+    assert await totp_redis_client.get("litestar_auth:totp:used:user-1:7") == b"1"
+    assert await totp_redis_client.get("litestar_auth:jwt:denylist:pending-jti") == b"1"
+    assert 0 < await totp_redis_client.pttl("litestar_auth:totp:used:user-1:7") <= ONE_MINUTE_TTL_MS
+    assert (
+        ONE_MINUTE_TTL_FLOOR
+        <= await totp_redis_client.ttl("litestar_auth:jwt:denylist:pending-jti")
+        <= ONE_MINUTE_TTL_SECONDS
+    )
 
 
 def test_contrib_redis_module_exposes_high_level_preset_without_root_reexport() -> None:
@@ -579,8 +586,6 @@ async def test_contrib_redis_preset_supports_documented_shared_client_recipe(
     monkeypatch.setattr(ratelimit_module, "_load_redis_asyncio", load_optional_redis)
     monkeypatch.setattr(totp_module, "_load_redis_asyncio", load_optional_redis)
     monkeypatch.setattr("litestar_auth.authentication.strategy.jwt._load_redis_asyncio", load_optional_redis)
-    set_calls = record_async_redis_call_args(monkeypatch, async_fakeredis, "set")
-    setex_calls = record_async_redis_call_args(monkeypatch, async_fakeredis, "setex")
     redis_client = cast_fakeredis(async_fakeredis, RedisAuthClientProtocol)
     assert isinstance(redis_client, RedisAuthClientProtocol)
     preset = RedisAuthPreset(
@@ -637,10 +642,12 @@ async def test_contrib_redis_preset_supports_documented_shared_client_recipe(
     assert used_tokens_store._redis is redis_client
     assert pending_jti_store.redis is redis_client
     assert await used_tokens_store.mark_used("user-1", 7, 60.0) is True
-    await pending_jti_store.deny("pending-jti", ttl_seconds=60)
+    await pending_jti_store.deny("pending-jti", ttl_seconds=ONE_MINUTE_TTL_SECONDS)
     assert await pending_jti_store.is_denied("pending-jti") is True
-    assert set_calls == [(("used:user-1:7", "1"), {"nx": True, "px": 60_000})]
-    assert setex_calls == [(("pending:pending-jti", 60, "1"), {})]
+    assert await async_fakeredis.get("used:user-1:7") == b"1"
+    assert await async_fakeredis.get("pending:pending-jti") == b"1"
+    assert 0 < await async_fakeredis.pttl("used:user-1:7") <= ONE_MINUTE_TTL_MS
+    assert ONE_MINUTE_TTL_FLOOR <= await async_fakeredis.ttl("pending:pending-jti") <= ONE_MINUTE_TTL_SECONDS
 
 
 def test_ratelimit_identifier_contract_stays_on_the_public_ratelimit_module() -> None:

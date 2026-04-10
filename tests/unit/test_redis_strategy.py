@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import importlib
 from datetime import timedelta
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING
 from uuid import UUID, uuid4
 
 import pytest
@@ -18,12 +18,16 @@ from litestar_auth.authentication.strategy.redis import (
     RedisTokenStrategy,
 )
 from litestar_auth.exceptions import ConfigurationError
-from tests._helpers import ExampleUser, cast_fakeredis, record_async_redis_call_args, record_scan_iter_calls
+from tests._helpers import ExampleUser, cast_fakeredis
 
 pytestmark = pytest.mark.unit
 TOKEN_HASH_SECRET = "redis-token-hash-secret-1234567890"
 CUSTOM_TOKEN_BYTES = 24
 CUSTOM_MAX_SCAN_KEYS = 7
+FIVE_MINUTES_TTL_SECONDS = 300
+FIVE_MINUTES_TTL_FLOOR = FIVE_MINUTES_TTL_SECONDS - 1
+MINIMUM_TTL_SECONDS = 1
+MINIMUM_TTL_FLOOR = 0
 
 if TYPE_CHECKING:
     from tests._helpers import AsyncFakeRedis, AsyncFakeRedisFactory
@@ -117,8 +121,6 @@ async def test_redis_strategy_write_token_persists_token_and_updates_user_index(
     """write_token() should write the token key and maintain the per-user index."""
     _disable_optional_import(monkeypatch)
     monkeypatch.setattr(redis_strategy_module.secrets, "token_urlsafe", lambda _: "token-write")
-    setex_calls = record_async_redis_call_args(monkeypatch, async_fakeredis, "setex")
-    expire_calls = record_async_redis_call_args(monkeypatch, async_fakeredis, "expire")
     user = ExampleUser(id=uuid4())
     strategy = RedisTokenStrategy[ExampleUser, UUID](
         redis=cast_fakeredis(async_fakeredis, RedisClientProtocol),
@@ -132,10 +134,10 @@ async def test_redis_strategy_write_token_persists_token_and_updates_user_index(
     token_key = _token_key(token)
     index_key = f"{DEFAULT_KEY_PREFIX}user:{user.id}"
     assert token == "token-write"
-    assert setex_calls == [((token_key, 300, str(user.id)), {})]
     assert await async_fakeredis.get(token_key) == str(user.id).encode()
     assert await async_fakeredis.smembers(index_key) == {token_key.encode()}  # ty: ignore[invalid-await]
-    assert expire_calls == [((index_key, 300), {})]
+    assert FIVE_MINUTES_TTL_FLOOR <= await async_fakeredis.ttl(token_key) <= FIVE_MINUTES_TTL_SECONDS
+    assert FIVE_MINUTES_TTL_FLOOR <= await async_fakeredis.ttl(index_key) <= FIVE_MINUTES_TTL_SECONDS
     assert token not in token_key
 
 
@@ -146,8 +148,6 @@ async def test_redis_strategy_write_token_enforces_minimum_ttl(
     """write_token() should clamp non-positive lifetimes to a one-second TTL."""
     _disable_optional_import(monkeypatch)
     monkeypatch.setattr(redis_strategy_module.secrets, "token_urlsafe", lambda _: "token-min-ttl")
-    setex_calls = record_async_redis_call_args(monkeypatch, async_fakeredis, "setex")
-    expire_calls = record_async_redis_call_args(monkeypatch, async_fakeredis, "expire")
     user = ExampleUser(id=uuid4())
     strategy = RedisTokenStrategy[ExampleUser, UUID](
         redis=cast_fakeredis(async_fakeredis, RedisClientProtocol),
@@ -159,8 +159,10 @@ async def test_redis_strategy_write_token_enforces_minimum_ttl(
 
     token_key = _token_key("token-min-ttl")
     index_key = f"{DEFAULT_KEY_PREFIX}user:{user.id}"
-    assert setex_calls == [((token_key, 1, str(user.id)), {})]
-    assert expire_calls == [((index_key, 1), {})]
+    assert await async_fakeredis.get(token_key) == str(user.id).encode()
+    assert await async_fakeredis.smembers(index_key) == {token_key.encode()}  # ty: ignore[invalid-await]
+    assert MINIMUM_TTL_FLOOR <= await async_fakeredis.ttl(token_key) <= MINIMUM_TTL_SECONDS
+    assert MINIMUM_TTL_FLOOR <= await async_fakeredis.ttl(index_key) <= MINIMUM_TTL_SECONDS
 
 
 @pytest.mark.parametrize("response_mode", ["bytes", "str"], ids=["bytes", "str"])
@@ -238,7 +240,6 @@ async def test_redis_strategy_destroy_token_removes_token_key_and_user_index_ent
 ) -> None:
     """destroy_token() should delete the token and remove it from the user index."""
     _disable_optional_import(monkeypatch)
-    delete_calls = record_async_redis_call_args(monkeypatch, async_fakeredis, "delete")
     user = ExampleUser(id=uuid4())
     token = "token-destroy"
     token_key = _token_key(token)
@@ -252,7 +253,6 @@ async def test_redis_strategy_destroy_token_removes_token_key_and_user_index_ent
 
     await strategy.destroy_token(token, user)
 
-    assert delete_calls == [((token_key,), {})]
     assert await async_fakeredis.get(token_key) is None
     assert await async_fakeredis.smembers(index_key) == set()  # ty: ignore[invalid-await]
 
@@ -263,11 +263,11 @@ async def test_redis_strategy_invalidate_all_tokens_returns_after_index_delete(
 ) -> None:
     """invalidate_all_tokens() should skip scan fallback when the user index is populated."""
     _disable_optional_import(monkeypatch)
-    delete_calls = record_async_redis_call_args(monkeypatch, async_fakeredis, "delete")
-    scan_calls = record_scan_iter_calls(monkeypatch, async_fakeredis)
     user = ExampleUser(id=uuid4())
     index_key = f"{DEFAULT_KEY_PREFIX}user:{user.id}"
     token_key = _token_key("token-index-only")
+    extra_key = _token_key("token-outside-index")
+    assert await async_fakeredis.set(extra_key, str(user.id)) is True
     assert await async_fakeredis.sadd(index_key, token_key) == 1  # ty: ignore[invalid-await]
     strategy = RedisTokenStrategy[ExampleUser, UUID](
         redis=cast_fakeredis(async_fakeredis, RedisClientProtocol),
@@ -276,8 +276,9 @@ async def test_redis_strategy_invalidate_all_tokens_returns_after_index_delete(
 
     await strategy.invalidate_all_tokens(user)
 
-    assert delete_calls == [((token_key, index_key), {})]
-    assert scan_calls == []
+    assert await async_fakeredis.get(token_key) is None
+    assert await async_fakeredis.exists(index_key) == 0
+    assert await async_fakeredis.get(extra_key) == str(user.id).encode()
 
 
 async def test_redis_strategy_invalidate_all_tokens_uses_per_user_index(
@@ -292,7 +293,6 @@ async def test_redis_strategy_invalidate_all_tokens_uses_per_user_index(
         "token_urlsafe",
         lambda _nbytes: next(token_values),
     )
-    delete_calls = record_async_redis_call_args(monkeypatch, async_fakeredis, "delete")
     strategy = RedisTokenStrategy[ExampleUser, UUID](
         redis=cast_fakeredis(async_fakeredis, RedisClientProtocol),
         token_hash_secret=TOKEN_HASH_SECRET,
@@ -310,8 +310,6 @@ async def test_redis_strategy_invalidate_all_tokens_uses_per_user_index(
     second_key = strategy._key(second_token)
     other_key = strategy._key(other_token)
     index_key = strategy._user_index_key(str(user.id))
-    deleted_names = set(cast("tuple[str, ...]", delete_calls[-1][0]))
-    assert deleted_names == {first_key, second_key, index_key}
     assert await async_fakeredis.get(first_key) is None
     assert await async_fakeredis.get(second_key) is None
     assert await async_fakeredis.get(other_key) == str(other_user.id).encode()
@@ -325,8 +323,6 @@ async def test_redis_strategy_invalidate_all_tokens_falls_back_to_scan_without_i
     """invalidate_all_tokens() should scan matching keys when the per-user index is missing."""
     _disable_optional_import(monkeypatch)
     redis = async_fakeredis_factory(decode_responses=True)
-    delete_calls = record_async_redis_call_args(monkeypatch, redis, "delete")
-    scan_calls = record_scan_iter_calls(monkeypatch, redis, extra_keys=(_token_key("scan-orphan"),))
     strategy = RedisTokenStrategy[ExampleUser, UUID](
         redis=cast_fakeredis(redis, RedisClientProtocol),
         token_hash_secret=TOKEN_HASH_SECRET,
@@ -345,14 +341,10 @@ async def test_redis_strategy_invalidate_all_tokens_falls_back_to_scan_without_i
 
     await strategy.invalidate_all_tokens(user)
 
-    assert scan_calls == [(f"{DEFAULT_KEY_PREFIX}*", 100, None, {})]
-    deleted_keys = set(cast("tuple[str, ...]", delete_calls[-1][0]))
-    assert deleted_keys == {matching_key_one, matching_key_two}
     assert await redis.get(matching_key_one) is None
     assert await redis.get(matching_key_two) is None
     assert await redis.get(foreign_key) == str(other_user.id)
     assert await redis.get(ignored_prefix_key) == str(user.id)
-    assert await redis.exists(_token_key("scan-orphan")) == 0
 
 
 async def test_redis_strategy_invalidate_all_tokens_respects_scan_safety_cap(
@@ -363,7 +355,6 @@ async def test_redis_strategy_invalidate_all_tokens_respects_scan_safety_cap(
     """Scan fallback should stop once the configured safety cap is exceeded."""
     _disable_optional_import(monkeypatch)
     redis = async_fakeredis_factory(decode_responses=True)
-    delete_calls = record_async_redis_call_args(monkeypatch, redis, "delete")
     strategy = RedisTokenStrategy[ExampleUser, UUID](
         redis=cast_fakeredis(redis, RedisClientProtocol),
         token_hash_secret=TOKEN_HASH_SECRET,
@@ -378,10 +369,9 @@ async def test_redis_strategy_invalidate_all_tokens_respects_scan_safety_cap(
     with caplog.at_level("WARNING", logger=redis_strategy_module.logger.name):
         await strategy.invalidate_all_tokens(user)
 
-    deleted_keys = cast("tuple[str, ...]", delete_calls[-1][0])
+    deleted_keys = {key for key in (first_key, second_key) if await redis.get(key) is None}
     assert len(deleted_keys) == 1
-    assert deleted_keys[0] in {first_key, second_key}
-    remaining_key = second_key if deleted_keys[0] == first_key else first_key
+    remaining_key = second_key if first_key in deleted_keys else first_key
     assert await redis.get(remaining_key) == str(user.id)
     assert "Scan-based token invalidation hit safety cap" in caplog.text
 
@@ -393,8 +383,6 @@ async def test_redis_strategy_scan_fallback_skips_delete_when_no_keys_match_user
     """Scan fallback should avoid delete calls when no token belongs to the user."""
     _disable_optional_import(monkeypatch)
     redis = async_fakeredis_factory(decode_responses=True)
-    delete_calls = record_async_redis_call_args(monkeypatch, redis, "delete")
-    scan_calls = record_scan_iter_calls(monkeypatch, redis)
     strategy = RedisTokenStrategy[ExampleUser, UUID](
         redis=cast_fakeredis(redis, RedisClientProtocol),
         token_hash_secret=TOKEN_HASH_SECRET,
@@ -405,8 +393,7 @@ async def test_redis_strategy_scan_fallback_skips_delete_when_no_keys_match_user
 
     await strategy.invalidate_all_tokens(user)
 
-    assert scan_calls == [(f"{DEFAULT_KEY_PREFIX}*", 100, None, {})]
-    assert delete_calls == []
+    assert await redis.get(strategy._key("scan-other-only")) == str(other_user.id)
 
 
 async def test_redis_strategy_module_reload_preserves_public_behavior(

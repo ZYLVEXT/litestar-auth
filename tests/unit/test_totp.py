@@ -6,15 +6,14 @@ import binascii
 import importlib
 import logging
 import warnings
-from typing import TYPE_CHECKING
-from unittest.mock import AsyncMock
+from typing import TYPE_CHECKING, cast
 from urllib.parse import parse_qs, urlparse
 
 import pytest
 
 from litestar_auth import totp
 from litestar_auth.contrib.redis import RedisAuthClientProtocol, RedisAuthPreset
-from tests._helpers import cast_fakeredis, record_async_redis_call_args
+from tests._helpers import cast_fakeredis
 
 if TYPE_CHECKING:
     from tests._helpers import AsyncFakeRedis
@@ -25,6 +24,9 @@ RFC_SECRET = "GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ"
 EXPECTED_MIN_SECRET_LENGTH = 32
 EXPECTED_COUNTER_AT_91_SECONDS = 3
 STORE_CAP = 2
+USED_TOTP_TTL_MS = 1_250
+PENDING_JTI_TTL_SECONDS = 30
+PENDING_JTI_TTL_FLOOR = PENDING_JTI_TTL_SECONDS - 1
 
 
 def test_totp_module_executes_under_coverage() -> None:
@@ -435,21 +437,17 @@ def test_in_memory_used_totp_store_rejects_non_positive_max_entries() -> None:
 
 
 async def test_redis_used_totp_code_store_first_call_true_second_false(
-    monkeypatch: pytest.MonkeyPatch,
     async_fakeredis: AsyncFakeRedis,
 ) -> None:
     """RedisUsedTotpCodeStore: first mark_used for (user_id, counter) returns True, second returns False."""
     ttl_seconds = 60.0
-    expected_ttl_ms = int(ttl_seconds * 1000)
-    set_calls = record_async_redis_call_args(monkeypatch, async_fakeredis, "set")
     store = totp.RedisUsedTotpCodeStore(redis=cast_fakeredis(async_fakeredis, totp.RedisUsedTotpCodeStoreClient))
+    key = "litestar_auth:totp:used:user-1:42"
 
     assert await store.mark_used("user-1", 42, ttl_seconds) is True
     assert await store.mark_used("user-1", 42, ttl_seconds) is False
-    assert set_calls == [
-        (("litestar_auth:totp:used:user-1:42", "1"), {"nx": True, "px": expected_ttl_ms}),
-        (("litestar_auth:totp:used:user-1:42", "1"), {"nx": True, "px": expected_ttl_ms}),
-    ]
+    assert await async_fakeredis.get(key) == b"1"
+    assert 0 < await async_fakeredis.pttl(key) <= int(ttl_seconds * 1000)
 
 
 def test_redis_used_totp_code_store_preserves_lazy_dependency_error(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -461,36 +459,25 @@ def test_redis_used_totp_code_store_preserves_lazy_dependency_error(monkeypatch:
 
     monkeypatch.setattr(totp, "_load_redis_asyncio", fail_load_redis)
 
+    redis_client_sentinel = cast("totp.RedisUsedTotpCodeStoreClient", object())
     with pytest.raises(ImportError, match="Install litestar-auth\\[redis\\] to use RedisUsedTotpCodeStore"):
-        totp.RedisUsedTotpCodeStore(redis=AsyncMock())
+        totp.RedisUsedTotpCodeStore(redis=redis_client_sentinel)
 
 
 async def test_redis_used_totp_code_store_uses_custom_prefix_and_none_result(
-    monkeypatch: pytest.MonkeyPatch,
     async_fakeredis: AsyncFakeRedis,
 ) -> None:
-    """Custom prefixes are applied and a missing Redis write is treated as replay."""
-    calls: list[tuple[str, str, bool, int | None]] = []
-
-    def set_side_effect(
-        name: str,
-        value: str,
-        *,
-        nx: bool = False,
-        px: int | None = None,
-    ) -> None:
-        calls.append((name, value, nx, px))
-
-    monkeypatch.setattr(async_fakeredis, "set", AsyncMock(side_effect=set_side_effect))
-
+    """Custom prefixes are applied and Redis NX replays return ``False``."""
     store = totp.RedisUsedTotpCodeStore(
         redis=cast_fakeredis(async_fakeredis, totp.RedisUsedTotpCodeStoreClient),
         key_prefix="custom:",
     )
+    key = store._key("user-1", 7)
 
-    assert store._key("user-1", 7) == "custom:user-1:7"
+    assert key == "custom:user-1:7"
+    assert await async_fakeredis.set(key, "1") is True
     assert await store.mark_used("user-1", 7, 1.25) is False
-    assert calls == [("custom:user-1:7", "1", True, 1250)]
+    assert await async_fakeredis.get(key) == b"1"
 
 
 async def test_contrib_redis_preset_builds_totp_store_with_prefix_override(
@@ -504,8 +491,6 @@ async def test_contrib_redis_preset_builds_totp_store_with_prefix_override(
 
     monkeypatch.setattr(totp, "_load_redis_asyncio", load_optional_redis)
     monkeypatch.setattr("litestar_auth.authentication.strategy.jwt._load_redis_asyncio", load_optional_redis)
-    set_calls = record_async_redis_call_args(monkeypatch, async_fakeredis, "set")
-    setex_calls = record_async_redis_call_args(monkeypatch, async_fakeredis, "setex")
 
     preset = RedisAuthPreset(
         redis=cast_fakeredis(async_fakeredis, RedisAuthClientProtocol),
@@ -518,10 +503,12 @@ async def test_contrib_redis_preset_builds_totp_store_with_prefix_override(
     assert store._key("user-1", 7) == "override-used:user-1:7"
     assert pending_store.key_prefix == "override-pending:"
     assert await store.mark_used("user-1", 7, 1.25) is True
-    await pending_store.deny("pending-jti", ttl_seconds=30)
+    await pending_store.deny("pending-jti", ttl_seconds=PENDING_JTI_TTL_SECONDS)
     assert await pending_store.is_denied("pending-jti") is True
-    assert set_calls == [(("override-used:user-1:7", "1"), {"nx": True, "px": 1250})]
-    assert setex_calls == [(("override-pending:pending-jti", 30, "1"), {})]
+    assert await async_fakeredis.get("override-used:user-1:7") == b"1"
+    assert await async_fakeredis.get("override-pending:pending-jti") == b"1"
+    assert 0 < await async_fakeredis.pttl("override-used:user-1:7") <= USED_TOTP_TTL_MS
+    assert PENDING_JTI_TTL_FLOOR <= await async_fakeredis.ttl("override-pending:pending-jti") <= PENDING_JTI_TTL_SECONDS
 
 
 def test_current_counter_uses_time_step(monkeypatch: pytest.MonkeyPatch) -> None:

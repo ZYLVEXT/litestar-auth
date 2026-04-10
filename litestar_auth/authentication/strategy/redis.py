@@ -214,9 +214,7 @@ class RedisTokenStrategy(Strategy[UP, ID]):
                 )
                 break
             stored_user_id = await self.redis.get(key)
-            if stored_user_id is None:
-                continue
-            if self._decode_user_id(stored_user_id) == user_id:
+            if stored_user_id is not None and self._decode_user_id(stored_user_id) == user_id:
                 keys_to_delete.append(key)
         if keys_to_delete:
             await self.redis.delete(*keys_to_delete)

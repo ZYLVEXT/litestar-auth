@@ -22,7 +22,7 @@ from litestar_auth.authentication.strategy.jwt import (
     RedisJWTDenylistStore,
     _default_session_fingerprint,
 )
-from tests._helpers import ExampleUser, cast_fakeredis, record_async_redis_call_args
+from tests._helpers import ExampleUser, cast_fakeredis
 from tests.unit.test_strategy import DEFAULT_SECRET, ExampleUserManager
 
 if TYPE_CHECKING:
@@ -33,6 +33,10 @@ if TYPE_CHECKING:
     from tests._helpers import AsyncFakeRedis
 
 pytestmark = pytest.mark.unit
+REDIS_DENYLIST_TTL_SECONDS = 30
+REDIS_DENYLIST_TTL_FLOOR = REDIS_DENYLIST_TTL_SECONDS - 1
+MINIMUM_TTL_SECONDS = 1
+MINIMUM_TTL_FLOOR = 0
 
 
 def _jwt_module() -> ModuleType:
@@ -222,19 +226,18 @@ def test_default_session_fingerprint_returns_none_when_required_fields_are_missi
 
 
 async def test_redis_jwt_denylist_store_round_trips_keys(
-    monkeypatch: pytest.MonkeyPatch,
     async_fakeredis: AsyncFakeRedis,
 ) -> None:
     """Redis-backed denylist storage uses the configured prefix and TTL."""
-    setex_calls = record_async_redis_call_args(monkeypatch, async_fakeredis, "setex")
     store = RedisJWTDenylistStore(
         redis=cast_fakeredis(async_fakeredis, RedisExpiringValueStoreClient),
         key_prefix="test:",
     )
 
-    await store.deny("revoked-jti", ttl_seconds=30)
+    await store.deny("revoked-jti", ttl_seconds=REDIS_DENYLIST_TTL_SECONDS)
 
-    assert setex_calls == [(("test:revoked-jti", 30, "1"), {})]
+    assert await async_fakeredis.get("test:revoked-jti") == b"1"
+    assert REDIS_DENYLIST_TTL_FLOOR <= await async_fakeredis.ttl("test:revoked-jti") <= REDIS_DENYLIST_TTL_SECONDS
     assert await store.is_denied("revoked-jti") is True
     assert await store.is_denied("active-jti") is False
 
@@ -248,16 +251,16 @@ async def test_jwt_redis_denylist_protocol_stubs_are_callable() -> None:
 
 
 async def test_redis_jwt_denylist_store_enforces_minimum_ttl(
-    monkeypatch: pytest.MonkeyPatch,
     async_fakeredis: AsyncFakeRedis,
 ) -> None:
     """Redis denylist writes clamp non-positive TTLs to one second."""
-    setex_calls = record_async_redis_call_args(monkeypatch, async_fakeredis, "setex")
     store = RedisJWTDenylistStore(redis=cast_fakeredis(async_fakeredis, RedisExpiringValueStoreClient))
 
     await store.deny("revoked-jti", ttl_seconds=0)
 
-    assert setex_calls == [(("litestar_auth:jwt:denylist:revoked-jti", 1, "1"), {})]
+    key = "litestar_auth:jwt:denylist:revoked-jti"
+    assert await async_fakeredis.get(key) == b"1"
+    assert MINIMUM_TTL_FLOOR <= await async_fakeredis.ttl(key) <= MINIMUM_TTL_SECONDS
 
 
 def test_jwt_strategy_rejects_unsupported_algorithms() -> None:

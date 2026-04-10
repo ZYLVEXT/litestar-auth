@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, cast, get_type_hints
-from unittest.mock import AsyncMock
 from uuid import uuid4
 
 import pytest
@@ -33,7 +32,7 @@ from litestar_auth.ratelimit import (
     AuthRateLimitEndpointGroup,
 )
 from litestar_auth.totp import RedisUsedTotpCodeStore as BaseRedisUsedTotpCodeStore
-from tests._helpers import ExampleUser, cast_fakeredis, record_async_redis_call_args
+from tests._helpers import ExampleUser, cast_fakeredis
 
 if TYPE_CHECKING:
     from tests._helpers import AsyncFakeRedis
@@ -46,6 +45,9 @@ REFRESH_MAX_ATTEMPTS = 10
 REFRESH_WINDOW_SECONDS = 300
 TOTP_MAX_ATTEMPTS = 5
 TOTP_WINDOW_SECONDS = 300
+USED_TOTP_TTL_MS = 1_250
+PENDING_JTI_TTL_SECONDS = 30
+PENDING_JTI_TTL_FLOOR = PENDING_JTI_TTL_SECONDS - 1
 
 
 class ExampleStrategy:
@@ -170,8 +172,6 @@ async def test_contrib_redis_preset_builds_shared_client_auth_components(
     monkeypatch.setattr(ratelimit_module, "_load_redis_asyncio", load_optional_redis)
     monkeypatch.setattr("litestar_auth.totp._load_redis_asyncio", load_optional_redis)
     monkeypatch.setattr("litestar_auth.authentication.strategy.jwt._load_redis_asyncio", load_optional_redis)
-    set_calls = record_async_redis_call_args(monkeypatch, async_fakeredis, "set")
-    setex_calls = record_async_redis_call_args(monkeypatch, async_fakeredis, "setex")
     redis_client = cast_fakeredis(async_fakeredis, RedisAuthClientProtocol)
     assert isinstance(redis_client, RedisAuthClientProtocol)
     preset = RedisAuthPreset(
@@ -234,10 +234,12 @@ async def test_contrib_redis_preset_builds_shared_client_auth_components(
     assert pending_store.redis is redis_client
     assert pending_store.key_prefix == "pending:"
     assert await store.mark_used("user-1", 7, 1.25) is True
-    await pending_store.deny("pending-jti", ttl_seconds=30)
+    await pending_store.deny("pending-jti", ttl_seconds=PENDING_JTI_TTL_SECONDS)
     assert await pending_store.is_denied("pending-jti") is True
-    assert set_calls == [(("used:user-1:7", "1"), {"nx": True, "px": 1250})]
-    assert setex_calls == [(("pending:pending-jti", 30, "1"), {})]
+    assert await async_fakeredis.get("used:user-1:7") == b"1"
+    assert await async_fakeredis.get("pending:pending-jti") == b"1"
+    assert 0 < await async_fakeredis.pttl("used:user-1:7") <= USED_TOTP_TTL_MS
+    assert PENDING_JTI_TTL_FLOOR <= await async_fakeredis.ttl("pending:pending-jti") <= PENDING_JTI_TTL_SECONDS
 
 
 def test_contrib_redis_preset_covers_optional_identity_and_proxy_header_branches(
@@ -271,8 +273,9 @@ def test_contrib_redis_preserves_lazy_dependency_error(monkeypatch: pytest.Monke
 
     monkeypatch.setattr("litestar_auth.authentication.strategy.redis.importlib.import_module", fail_import)
 
+    redis_client_sentinel = cast("Any", object())
     with pytest.raises(ImportError, match="Install litestar-auth\\[redis\\] to use RedisTokenStrategy"):
-        RedisTokenStrategy(redis=AsyncMock(), token_hash_secret=REDIS_TOKEN_HASH_SECRET)
+        RedisTokenStrategy(redis=redis_client_sentinel, token_hash_secret=REDIS_TOKEN_HASH_SECRET)
 
 
 def test_contrib_redis_preset_preserves_rate_limit_lazy_dependency_error(

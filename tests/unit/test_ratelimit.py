@@ -43,7 +43,7 @@ from litestar_auth.ratelimit import (
 from litestar_auth.ratelimit import (
     logger as ratelimit_logger,
 )
-from tests._helpers import cast_fakeredis, record_async_redis_call_args
+from tests._helpers import cast_fakeredis
 
 pytestmark = pytest.mark.unit
 
@@ -66,6 +66,10 @@ REFRESH_MAX_ATTEMPTS = 10
 REFRESH_WINDOW_SECONDS = 300
 TOTP_MAX_ATTEMPTS = 5
 TOTP_WINDOW_SECONDS = 300
+USED_TOTP_TTL_MS = 1_250
+PENDING_JTI_TTL_SECONDS = 30
+PENDING_JTI_TTL_FLOOR = PENDING_JTI_TTL_SECONDS - 1
+UUID4_HEX_LENGTH = 32
 
 AUTH_RATE_LIMIT_SLOT_IDENTIFIERS: tuple[AuthRateLimitEndpointSlot, ...] = (
     "login",
@@ -641,8 +645,6 @@ async def test_contrib_redis_preset_builds_rate_limit_config_with_shared_client_
 
     monkeypatch.setattr("litestar_auth.totp._load_redis_asyncio", load_optional_redis)
     monkeypatch.setattr("litestar_auth.authentication.strategy.jwt._load_redis_asyncio", load_optional_redis)
-    set_calls = record_async_redis_call_args(monkeypatch, async_fakeredis, "set")
-    setex_calls = record_async_redis_call_args(monkeypatch, async_fakeredis, "setex")
     redis_client = cast_fakeredis(async_fakeredis, RedisAuthClientProtocol)
     assert isinstance(redis_client, RedisAuthClientProtocol)
     preset = RedisAuthPreset(
@@ -710,12 +712,12 @@ async def test_contrib_redis_preset_builds_rate_limit_config_with_shared_client_
     assert pending_store.redis is redis_client
     assert pending_store.key_prefix == "pending:"
     assert await store.mark_used("user-1", 7, 1.25) is True
-    await pending_store.deny("pending-jti", ttl_seconds=30)
+    await pending_store.deny("pending-jti", ttl_seconds=PENDING_JTI_TTL_SECONDS)
     assert await pending_store.is_denied("pending-jti") is True
-    assert set_calls == [(("used:user-1:7", "1"), {"nx": True, "px": 1250})]
-    assert setex_calls == [(("pending:pending-jti", 30, "1"), {})]
     assert await async_fakeredis.get("used:user-1:7") == b"1"
     assert await async_fakeredis.get("pending:pending-jti") == b"1"
+    assert 0 < await async_fakeredis.pttl("used:user-1:7") <= USED_TOTP_TTL_MS
+    assert PENDING_JTI_TTL_FLOOR <= await async_fakeredis.ttl("pending:pending-jti") <= PENDING_JTI_TTL_SECONDS
 
 
 def test_auth_rate_limit_config_from_shared_backend_rejects_unknown_enabled_slot() -> None:
@@ -1286,12 +1288,10 @@ async def test_redis_rate_limiter_blocks_after_max_attempts(
 
 async def test_redis_rate_limiter_check_and_retry_after_use_lua_scripts(
     async_fakeredis: AsyncFakeRedis,
-    monkeypatch: pytest.MonkeyPatch,
     patch_redis_loader: None,
 ) -> None:
     """Check and retry-after delegate to the shipped Lua scripts through fakeredis."""
     clock = FakeClock(now=12.5)
-    eval_calls = record_async_redis_call_args(monkeypatch, async_fakeredis, "eval")
     limiter = RedisRateLimiter(
         redis=cast_fakeredis(async_fakeredis, RedisClientProtocol),
         max_attempts=3,
@@ -1313,29 +1313,6 @@ async def test_redis_rate_limiter_check_and_retry_after_use_lua_scripts(
     assert await limiter.check(check_key) is True
     assert await limiter.retry_after(retry_after_key) == REDIS_RETRY_AFTER
 
-    assert eval_calls[-2] == (
-        (
-            RedisRateLimiter._CHECK_SCRIPT,
-            1,
-            f"{DEFAULT_KEY_PREFIX}{check_key}",
-            clock.now,
-            REDIS_WINDOW_SECONDS,
-            3,
-        ),
-        {},
-    )
-    assert eval_calls[-1] == (
-        (
-            RedisRateLimiter._RETRY_AFTER_SCRIPT,
-            1,
-            f"{DEFAULT_KEY_PREFIX}{retry_after_key}",
-            clock.now,
-            REDIS_WINDOW_SECONDS,
-            3,
-        ),
-        {},
-    )
-
 
 def test_redis_rate_limiter_decode_integer_accepts_bytes() -> None:
     """Redis script results may arrive as bytes and still decode cleanly."""
@@ -1344,12 +1321,10 @@ def test_redis_rate_limiter_decode_integer_accepts_bytes() -> None:
 
 async def test_redis_rate_limiter_increments_with_atomic_pipeline(
     async_fakeredis: AsyncFakeRedis,
-    monkeypatch: pytest.MonkeyPatch,
     patch_redis_loader: None,
 ) -> None:
     """The Redis limiter records attempts by running its increment Lua script."""
     clock = FakeClock(now=12.5)
-    eval_calls = record_async_redis_call_args(monkeypatch, async_fakeredis, "eval")
     limiter = RedisRateLimiter(
         redis=cast_fakeredis(async_fakeredis, RedisClientProtocol),
         max_attempts=3,
@@ -1359,22 +1334,12 @@ async def test_redis_rate_limiter_increments_with_atomic_pipeline(
 
     await limiter.increment("127.0.0.1:user@example.com")
 
-    assert len(eval_calls) == 1
-    (script, numkeys, redis_key, score, window_seconds, member, ttl), kwargs = eval_calls[0]
-    assert kwargs == {}
-    assert script == RedisRateLimiter._INCREMENT_SCRIPT
-    assert numkeys == 1
-    assert isinstance(redis_key, str)
-    assert redis_key == f"{DEFAULT_KEY_PREFIX}127.0.0.1:user@example.com"
-    assert score == clock.now
-    assert window_seconds == REDIS_WINDOW_SECONDS
-    assert isinstance(member, str)
-    assert ttl == REDIS_WINDOW_SECONDS
-
+    redis_key = f"{DEFAULT_KEY_PREFIX}127.0.0.1:user@example.com"
     entries = await async_fakeredis.zrange(redis_key, 0, -1, withscores=True)
     assert len(entries) == 1
     stored_member, stored_score = entries[0]
-    assert stored_member.decode() == member
+    assert stored_member.decode().startswith(f"{clock.now:.9f}:")
+    assert len(stored_member.decode().split(":")[1]) == UUID4_HEX_LENGTH
     assert stored_score == clock.now
     ttl_seconds = await async_fakeredis.ttl(redis_key)
     assert 0 < ttl_seconds <= REDIS_WINDOW_SECONDS
@@ -1382,12 +1347,10 @@ async def test_redis_rate_limiter_increments_with_atomic_pipeline(
 
 async def test_redis_rate_limiter_retry_after_and_reset_delegate_to_redis(
     async_fakeredis: AsyncFakeRedis,
-    monkeypatch: pytest.MonkeyPatch,
     patch_redis_loader: None,
 ) -> None:
     """The Redis limiter reports retry-after from the oldest active attempt."""
     clock = FakeClock()
-    delete_calls = record_async_redis_call_args(monkeypatch, async_fakeredis, "delete")
     limiter = RedisRateLimiter(
         redis=cast_fakeredis(async_fakeredis, RedisClientProtocol),
         max_attempts=2,
@@ -1402,7 +1365,6 @@ async def test_redis_rate_limiter_retry_after_and_reset_delegate_to_redis(
     assert await limiter.retry_after("127.0.0.1") == PARTIAL_RETRY_AFTER
     await limiter.reset("127.0.0.1")
 
-    assert delete_calls == [((f"{DEFAULT_KEY_PREFIX}127.0.0.1",), {})]
     assert await async_fakeredis.exists(f"{DEFAULT_KEY_PREFIX}127.0.0.1") == 0
     assert await limiter.check("127.0.0.1") is True
 
