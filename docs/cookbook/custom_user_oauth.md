@@ -2,7 +2,10 @@
 
 Use this when your application maps auth tables to **your own** SQLAlchemy models (same Advanced Alchemy / declarative registry as the rest of the app) and you want to reuse the **library OAuth account contract** without copying mapper wiring from the reference models.
 
-This page focuses on the custom user + OAuth pair and adapter wiring. For the bundled token bootstrap lifecycle, `DatabaseTokenModels(...)`, and the supported password-column hook, use [Configuration](../configuration.md#custom-sqlalchemy-user-and-token-models).
+This page focuses on the custom user + OAuth pair and adapter wiring. For the bundled token
+bootstrap lifecycle, relational role composition, `DatabaseTokenModels(...)`, and the supported
+password-column hook, use
+[Configuration](../configuration.md#custom-sqlalchemy-user-and-token-models).
 
 ## Supported paths
 
@@ -40,6 +43,12 @@ class MyOAuthAccount(OAuthAccountMixin, AppUUIDBase):
     auth_user_model = "MyUser"
     auth_user_table = "my_user"
 ```
+
+If the same custom user also needs the library-managed role contract, compose
+`UserRoleRelationshipMixin` on `MyUser` and add sibling `RoleMixin` / `UserRoleAssociationMixin`
+classes for your `role` and `user_role` tables. That keeps `user.roles` as the normalized flat
+API while persisting membership relationally. The full pattern lives in
+[Configuration](../configuration.md#custom-sqlalchemy-user-and-token-models).
 
 If the same custom user keeps a legacy password-hash column name, leave the runtime attribute as `hashed_password` and set the supported hook instead of redefining the field:
 

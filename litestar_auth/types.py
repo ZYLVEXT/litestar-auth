@@ -5,6 +5,8 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any, Literal, Protocol, TypeVar, runtime_checkable
 
 if TYPE_CHECKING:
+    from collections.abc import Sequence
+
     from litestar.connection import ASGIConnection
     from litestar.response import Response
 
@@ -25,6 +27,13 @@ class GuardedUserProtocol(UserProtocol[ID], Protocol[ID]):
     is_active: bool
     is_verified: bool
     is_superuser: bool
+
+
+@runtime_checkable
+class RoleCapableUserProtocol(UserProtocol[ID], Protocol[ID]):
+    """Protocol for user models that expose normalized flat role membership."""
+
+    roles: Sequence[str]
 
 
 @runtime_checkable

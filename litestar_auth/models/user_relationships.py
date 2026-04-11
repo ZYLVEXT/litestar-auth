@@ -1,7 +1,7 @@
-"""Compatibility re-export for the shared user-side auth relationship mixin."""
+"""Compatibility re-exports for the shared user-side relationship mixins."""
 
 from __future__ import annotations
 
-from litestar_auth.models.mixins import UserAuthRelationshipMixin
+from litestar_auth.models.mixins import UserAuthRelationshipMixin, UserRoleRelationshipMixin
 
-__all__ = ("UserAuthRelationshipMixin",)
+__all__ = ("UserAuthRelationshipMixin", "UserRoleRelationshipMixin")

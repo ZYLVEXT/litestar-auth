@@ -33,6 +33,7 @@ class UserRead(msgspec.Struct):
     is_active: bool
     is_verified: bool
     is_superuser: bool
+    roles: list[str]
 
 
 class UserCreate(msgspec.Struct):
@@ -50,6 +51,7 @@ class UserUpdate(msgspec.Struct, omit_defaults=True):
     is_active: bool | None = None
     is_verified: bool | None = None
     is_superuser: bool | None = None
+    roles: list[str] | None = None
 
 
 __all__ = ("UserCreate", "UserEmailField", "UserPasswordField", "UserRead", "UserUpdate")

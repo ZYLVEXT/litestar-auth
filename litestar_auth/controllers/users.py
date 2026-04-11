@@ -22,18 +22,18 @@ from litestar_auth.controllers._utils import (
 from litestar_auth.exceptions import ErrorCode, InvalidPasswordError, UserAlreadyExistsError
 from litestar_auth.guards import is_authenticated, is_superuser
 from litestar_auth.schemas import UserRead, UserUpdate
-from litestar_auth.types import UserProtocol
+from litestar_auth.types import RoleCapableUserProtocol
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Mapping, Sequence
 
     from litestar.openapi.spec import SecurityRequirement
 
-SELF_UPDATE_FORBIDDEN_FIELDS = frozenset({"is_active", "is_verified", "is_superuser"})
-_PRIVILEGED_FIELDS = frozenset({"is_active", "is_verified", "is_superuser", "hashed_password"})
+SELF_UPDATE_FORBIDDEN_FIELDS = frozenset({"is_active", "is_verified", "is_superuser", "roles"})
+_PRIVILEGED_FIELDS = SELF_UPDATE_FORBIDDEN_FIELDS | frozenset({"hashed_password"})
 
 
-class UsersControllerUserProtocol[ID](UserProtocol[ID], Protocol):
+class UsersControllerUserProtocol[ID](RoleCapableUserProtocol[ID], Protocol):
     """Protocol describing the public user fields returned by the users controller."""
 
     email: str
@@ -335,11 +335,13 @@ def create_users_controller[UP: UsersControllerUserProtocol[Any], ID](  # noqa: 
             is_active: bool
             is_verified: bool
             is_superuser: bool
+            roles: list[str]
             bio: str
 
         class ExtendedUserUpdate(msgspec.Struct, omit_defaults=True):
             email: str | None = None
             password: str | None = None
+            roles: list[str] | None = None
             bio: str | None = None
 
         controller = create_users_controller(
@@ -382,7 +384,7 @@ def _build_safe_self_update(data: msgspec.Struct) -> dict[str, Any]:
     Uses a deny-list of privileged fields rather than an allow-list so
     that custom ``UserUpdate`` schemas with extra safe fields work
     out-of-the-box.  The deny-list is intentionally broad to cover
-    any field that could grant elevated privileges.
+    any field that could grant elevated privileges, including ``roles``.
 
     Returns:
         A plain update mapping with privileged fields removed.

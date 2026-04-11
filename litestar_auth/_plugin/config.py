@@ -485,16 +485,14 @@ def _build_startup_only_database_token_strategy[UP: UserProtocol[Any], ID](
     Returns:
         Startup-only strategy carrying DB-token metadata without a placeholder session.
     """
-    from litestar_auth.authentication.strategy import (  # noqa: PLC0415
-        DatabaseTokenModels,
-        DatabaseTokenStrategy,
-    )
     from litestar_auth.authentication.strategy.db import (  # noqa: PLC0415
+        DatabaseTokenStrategy,
         build_legacy_plaintext_tokens_warning_message,
     )
     from litestar_auth.authentication.strategy.db import (  # noqa: PLC0415
         logger as database_token_logger,
     )
+    from litestar_auth.authentication.strategy.db_models import DatabaseTokenModels  # noqa: PLC0415
 
     class _StartupOnlyDatabaseTokenStrategy(_StartupOnlyDatabaseTokenStrategyMixin, DatabaseTokenStrategy):
         """Concrete startup-only DB-token strategy tied to the current strategy module."""
@@ -605,9 +603,9 @@ def _build_database_token_backend[UP: UserProtocol[Any], ID](
     Returns:
         Authentication backend configured for the canonical DB bearer path.
     """
-    from litestar_auth.authentication import AuthenticationBackend  # noqa: PLC0415
-    from litestar_auth.authentication.strategy import DatabaseTokenStrategy  # noqa: PLC0415
-    from litestar_auth.authentication.transport import BearerTransport  # noqa: PLC0415
+    from litestar_auth.authentication.backend import AuthenticationBackend  # noqa: PLC0415
+    from litestar_auth.authentication.strategy.db import DatabaseTokenStrategy  # noqa: PLC0415
+    from litestar_auth.authentication.transport.bearer import BearerTransport  # noqa: PLC0415
 
     strategy: StrategyProtocol[UP, ID]
     if session is None:

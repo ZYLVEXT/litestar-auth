@@ -2,7 +2,25 @@
 
 ## User model
 
-Subclass the provided [`User`](../api/models.md) (or follow the same column contract) and point `LitestarAuthConfig.user_model` at your class. Keep sensitive fields out of public schemas via `user_read_schema` / msgspec structs.
+Subclass the provided [`User`](../api/models.md) (or follow the same contract) and point
+`LitestarAuthConfig.user_model` at your class. Keep sensitive fields out of public schemas via
+`user_read_schema` / msgspec structs.
+
+The bundled user contract now includes a non-null flat `roles` collection in addition to the
+existing email/password/account-state fields. The bundled `User` gets that surface from
+`UserRoleRelationshipMixin`, and the bundled persistence layer now stores membership in sibling
+`Role` / `UserRole` tables instead of a JSON column on the user row. `RoleCapableUserProtocol` is
+the dedicated typing surface for that capability.
+
+Migration note: if you previously persisted the bundled `user.roles` JSON column, or copied that
+column shape onto an app-owned model, create relational role tables, normalize and deduplicate the
+stored role names, backfill one association row per `(user, role)` pair, and then switch the app
+to the bundled `Role` / `UserRole` models or a custom `UserRoleRelationshipMixin` +
+`RoleMixin` / `UserRoleAssociationMixin` family. Keep `user.roles: Sequence[str]` as the boundary
+seen by DTOs, managers, and guards even when storage becomes relational.
+
+This redesign preserves the existing flat role guards and payloads. It does not add permission
+matrices, role-management endpoints, or a policy DSL.
 
 ## User manager
 
@@ -62,6 +80,39 @@ If you already use `UserPasswordField`, keep that import and switch only the `em
 `UserEmailField` when you want the built-in email validation contract. Those aliases only keep schema metadata aligned
 with the built-in `UserCreate` and `UserUpdate` structs. Runtime password policy still lives on the manager side
 through `password_validator_factory` or the default `require_password_length` validator.
+
+When you want custom DTOs to stay aligned with the built-in role-aware user contract, add `roles` to
+your read/update structs and keep registration schemas non-privileged:
+
+```python
+import uuid
+
+import msgspec
+
+from litestar_auth.schemas import UserEmailField, UserPasswordField
+
+
+class ExtendedUserRead(msgspec.Struct):
+    id: uuid.UUID
+    email: str
+    is_active: bool
+    is_verified: bool
+    is_superuser: bool
+    roles: list[str]
+    display_name: str
+
+
+class ExtendedUserUpdate(msgspec.Struct, omit_defaults=True):
+    email: UserEmailField | None = None
+    password: UserPasswordField | None = None
+    roles: list[str] | None = None
+    display_name: str | None = None
+```
+
+With that shape, the built-in controllers stay fail-closed: public registration still strips
+`roles`, `PATCH /users/me` removes `roles` and other privileged fields before calling the manager,
+and superuser `PATCH /users/{user_id}` can persist validated role membership through the same
+`user_update_schema`.
 
 If app-owned services, background jobs, or CLI commands also hash or verify passwords directly, call
 `config.build_password_helper()` once after constructing `LitestarAuthConfig(...)` and reuse the returned helper

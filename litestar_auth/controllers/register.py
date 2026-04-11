@@ -17,13 +17,13 @@ from litestar_auth.controllers._utils import (
 )
 from litestar_auth.exceptions import ErrorCode, InvalidPasswordError, UserAlreadyExistsError
 from litestar_auth.schemas import UserCreate, UserRead
-from litestar_auth.types import UserProtocol
+from litestar_auth.types import RoleCapableUserProtocol
 
 if TYPE_CHECKING:
     from litestar_auth.ratelimit import AuthRateLimitConfig
 
 
-class RegisterControllerUserProtocol[ID](UserProtocol[ID], Protocol):
+class RegisterControllerUserProtocol[ID](RoleCapableUserProtocol[ID], Protocol):
     """Protocol describing the public user fields returned after registration."""
 
     email: str
@@ -79,6 +79,7 @@ def create_register_controller[UP: RegisterControllerUserProtocol[Any], ID](
             is_active: bool
             is_verified: bool
             is_superuser: bool
+            roles: list[str]
             bio: str
 
         controller = create_register_controller(

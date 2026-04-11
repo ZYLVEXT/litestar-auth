@@ -81,8 +81,8 @@ def test_import_plugin_public_module_does_not_load_models() -> None:
     assert proc.returncode == 0, proc.stdout + proc.stderr
 
 
-def test_import_models_package_keeps_user_and_oauth_submodules_lazy() -> None:
-    """Importing ``litestar_auth.models`` keeps both concrete ORM submodules deferred."""
+def test_import_models_package_keeps_concrete_orm_submodules_lazy() -> None:
+    """Importing ``litestar_auth.models`` keeps concrete ORM submodules deferred."""
     proc = _run_isolated(
         "import sys\n"
         "import litestar_auth.models as models\n"
@@ -91,13 +91,19 @@ def test_import_models_package_keeps_user_and_oauth_submodules_lazy() -> None:
         "    'OAuthAccount',\n"
         "    'OAuthAccountMixin',\n"
         "    'RefreshTokenMixin',\n"
+        "    'Role',\n"
+        "    'RoleMixin',\n"
         "    'User',\n"
         "    'UserAuthRelationshipMixin',\n"
         "    'UserModelMixin',\n"
+        "    'UserRole',\n"
+        "    'UserRoleAssociationMixin',\n"
+        "    'UserRoleRelationshipMixin',\n"
         "    'import_token_orm_models',\n"
         "]\n"
         "assert 'litestar_auth.models.user' not in sys.modules\n"
-        "assert 'litestar_auth.models.oauth' not in sys.modules\n",
+        "assert 'litestar_auth.models.oauth' not in sys.modules\n"
+        "assert 'litestar_auth.models.role' not in sys.modules\n",
     )
     assert proc.returncode == 0, proc.stdout + proc.stderr
 
@@ -121,6 +127,21 @@ def test_accessing_oauth_account_from_models_package_only_loads_oauth_submodule(
         "oauth_model = models.OAuthAccount\n"
         "assert oauth_model.__module__ == 'litestar_auth.models.oauth'\n"
         "assert 'litestar_auth.models.oauth' in sys.modules\n"
+        "assert 'litestar_auth.models.user' not in sys.modules\n",
+    )
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+
+
+def test_accessing_role_models_from_models_package_only_loads_role_submodule() -> None:
+    """Lazy role-model access loads ``models.role`` without importing the reference ``User`` model."""
+    proc = _run_isolated(
+        "import sys\n"
+        "import litestar_auth.models as models\n"
+        "role_model = models.Role\n"
+        "user_role_model = models.UserRole\n"
+        "assert role_model.__module__ == 'litestar_auth.models.role'\n"
+        "assert user_role_model.__module__ == 'litestar_auth.models.role'\n"
+        "assert 'litestar_auth.models.role' in sys.modules\n"
         "assert 'litestar_auth.models.user' not in sys.modules\n",
     )
     assert proc.returncode == 0, proc.stdout + proc.stderr
@@ -221,6 +242,7 @@ def test_canonical_db_bearer_plugin_setup_keeps_models_and_adapter_lazy() -> Non
         ")\n"
         "class UserModel:\n"
         "    email = 'user@example.com'\n"
+        "    roles = []\n"
         "class UserManager:\n"
         "    def __init__(self, user_db: object, **kwargs: object) -> None:\n"
         "        self.user_db = user_db\n"
@@ -289,6 +311,7 @@ def test_db_bearer_preset_config_keeps_models_and_adapter_lazy() -> None:
         "from litestar_auth._plugin.config import DatabaseTokenAuthConfig\n"
         "class UserModel:\n"
         "    email = 'user@example.com'\n"
+        "    roles = []\n"
         "class UserManager:\n"
         "    def __init__(self, user_db: object, **kwargs: object) -> None:\n"
         "        self.user_db = user_db\n"
@@ -323,6 +346,7 @@ def test_db_bearer_plugin_runtime_bootstrap_loads_models_package_without_referen
         "from litestar_auth._plugin.config import DatabaseTokenAuthConfig\n"
         "class UserModel:\n"
         "    email = 'user@example.com'\n"
+        "    roles = []\n"
         "class UserManager:\n"
         "    def __init__(self, user_db: object, **kwargs: object) -> None:\n"
         "        self.user_db = user_db\n"

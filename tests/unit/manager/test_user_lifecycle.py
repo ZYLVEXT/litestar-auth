@@ -100,6 +100,31 @@ async def test_create_rejects_duplicate_email_after_normalization() -> None:
     assert manager.registration_events == []
 
 
+async def test_create_normalizes_roles_when_privileged_payload_allows_them() -> None:
+    """create() uses the shared role-normalization path when roles survive filtering."""
+    user_db = AsyncMock()
+    password_helper = PasswordHelper()
+    manager = TrackingUserManager(user_db, password_helper)
+    service = UserLifecycleService(manager)
+    created_user = _build_user(password_helper, email="roles@example.com")
+    user_db.get_by_email.return_value = None
+    user_db.create.return_value = created_user
+
+    result = await service.create(
+        {
+            "email": "roles@example.com",
+            "password": "test-password",
+            "roles": [" Billing ", "admin", "ADMIN"],
+        },
+        safe=False,
+        allow_privileged=True,
+    )
+
+    assert result is created_user
+    create_payload = user_db.create.await_args.args[0]
+    assert create_payload["roles"] == ["admin", "billing"]
+
+
 async def test_create_with_policy_uses_policy_helpers_instead_of_manager_privates() -> None:
     """create() should use the injected policy helpers when provided."""
     user_db = AsyncMock()
@@ -273,6 +298,23 @@ async def test_update_rejects_duplicate_email_for_another_user() -> None:
     assert manager.after_update_events == []
 
 
+async def test_update_normalizes_roles_from_mapping_payload() -> None:
+    """update() uses the same normalized role contract as create()."""
+    user_db = AsyncMock()
+    password_helper = PasswordHelper()
+    manager = TrackingUserManager(user_db, password_helper)
+    service = UserLifecycleService(manager)
+    user = _build_user(password_helper, email="user@example.com")
+    updated_user = replace(user)
+    user_db.update.return_value = updated_user
+
+    result = await service.update({"roles": [" Support ", "admin", "ADMIN"]}, user)
+
+    assert result is updated_user
+    user_db.update.assert_awaited_once_with(user, {"roles": ["admin", "support"]})
+    assert manager.after_update_events == [(updated_user, {"roles": ["admin", "support"]})]
+
+
 async def test_update_allows_same_normalized_email_without_side_effects() -> None:
     """update() should not invalidate tokens when the normalized email is unchanged."""
     user_db = AsyncMock()
@@ -402,6 +444,7 @@ def test_policy_helper_methods_are_used_for_validation_and_hashing() -> None:
     with patch.object(policy, "validate_password") as validate_password:
         assert service._normalize_email("  User@Example.COM ") == "user@example.com"
         assert service._normalize_username_lookup("  UserName ") == "username"
+        assert service._normalize_roles([" Billing ", "admin", "ADMIN"]) == ["admin", "billing"]
         service._validate_password("secret-password")
 
     validate_password.assert_called_once_with("secret-password")

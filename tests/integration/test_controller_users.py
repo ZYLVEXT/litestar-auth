@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import asyncio
 from typing import TYPE_CHECKING, Any, cast
 from unittest.mock import AsyncMock
 from uuid import UUID, uuid4
 
 import pytest
+from litestar import Request, get
 from litestar.exceptions import NotAuthorizedException
 from litestar.middleware import DefineMiddleware
 
@@ -17,6 +19,7 @@ from litestar_auth.authentication.middleware import LitestarAuthMiddleware
 from litestar_auth.authentication.transport.bearer import BearerTransport
 from litestar_auth.controllers import create_users_controller
 from litestar_auth.exceptions import ErrorCode, InvalidPasswordError, UserAlreadyExistsError
+from litestar_auth.guards import has_all_roles, has_any_role
 from litestar_auth.manager import BaseUserManager
 from litestar_auth.password import PasswordHelper
 from litestar_auth.schemas import UserUpdate
@@ -39,6 +42,28 @@ HTTP_FORBIDDEN = 403
 HTTP_NOT_FOUND = 404
 HTTP_UNPROCESSABLE_ENTITY = 422
 HTTP_UNAUTHORIZED = 401
+
+
+@get("/role-guarded/any", guards=[has_any_role("admin")])
+async def role_guarded_any() -> dict[str, bool]:
+    """Return success when the request user has any required role."""
+    await asyncio.sleep(0)
+    return {"ok": True}
+
+
+@get("/role-guarded/all", guards=[has_all_roles("admin", "billing")])
+async def role_guarded_all() -> dict[str, bool]:
+    """Return success when the request user has all required roles."""
+    await asyncio.sleep(0)
+    return {"ok": True}
+
+
+@get("/role-guarded/runtime", guards=[has_all_roles("admin", "billing")], sync_to_thread=False)
+def role_guarded_runtime(request: Request[ExampleUser, Any, Any]) -> dict[str, list[str]]:
+    """Return the authenticated user's role membership from the request object."""
+    user = request.user
+    assert user is not None
+    return {"roles": list(user.roles)}
 
 
 class UsersControllerManager(BaseUserManager[ExampleUser, UUID]):
@@ -93,6 +118,7 @@ def build_app(
         hashed_password=password_helper.hash("admin-password"),
         is_superuser=True,
         is_verified=True,
+        roles=["admin"],
     )
     regular_user = ExampleUser(
         id=uuid4(),
@@ -100,12 +126,14 @@ def build_app(
         hashed_password=password_helper.hash("user-password"),
         totp_secret="sensitive-secret",
         is_verified=True,
+        roles=["member"],
     )
     extra_user = ExampleUser(
         id=uuid4(),
         email="extra@example.com",
         hashed_password=password_helper.hash("extra-password"),
         is_verified=True,
+        roles=["support"],
     )
     user_db = InMemoryUserDatabase([admin_user, regular_user, extra_user])
     user_manager = UsersControllerManager(user_db, password_helper=password_helper)
@@ -124,7 +152,14 @@ def build_app(
         get_request_session=auth_middleware_get_request_session(cast("Any", DummySessionMaker())),
         authenticator_factory=lambda _session: Authenticator([backend], user_manager),
     )
-    app = litestar_app_with_user_manager(user_manager, controller, middleware=[middleware])
+    app = litestar_app_with_user_manager(
+        user_manager,
+        controller,
+        role_guarded_any,
+        role_guarded_all,
+        role_guarded_runtime,
+        middleware=[middleware],
+    )
     return app, user_db, user_manager, strategy, admin_user, regular_user
 
 
@@ -180,6 +215,7 @@ def test_users_patch_routes_publish_request_body_in_openapi(
     assert next(iter(admin_request_body.content.values())).schema.ref == "#/components/schemas/UserUpdate"
     assert "email" in (update_schema.properties or {})
     assert "password" in (update_schema.properties or {})
+    assert "roles" in (update_schema.properties or {})
 
 
 async def test_me_endpoints_return_public_payload_and_ignore_restricted_self_updates(
@@ -207,6 +243,7 @@ async def test_me_endpoints_return_public_payload_and_ignore_restricted_self_upd
             "password": "new-password",
             "is_superuser": True,
             "is_verified": False,
+            "roles": [" Billing ", "ADMIN"],
         },
     )
 
@@ -217,6 +254,7 @@ async def test_me_endpoints_return_public_payload_and_ignore_restricted_self_upd
         "is_active": True,
         "is_verified": True,
         "is_superuser": False,
+        "roles": ["member"],
     }
     assert "hashed_password" not in get_response.json()
     assert "totp_secret" not in get_response.json()
@@ -228,12 +266,14 @@ async def test_me_endpoints_return_public_payload_and_ignore_restricted_self_upd
         "is_active": True,
         "is_verified": False,
         "is_superuser": False,
+        "roles": ["member"],
     }
     stored_user = await user_db.get(regular_user.id)
     assert stored_user is not None
     assert stored_user.email == "updated-user@example.com"
     assert stored_user.is_superuser is False
     assert stored_user.is_verified is False
+    assert stored_user.roles == ["member"]
     assert PasswordHelper().verify("new-password", stored_user.hashed_password) is True
 
 
@@ -542,6 +582,67 @@ async def test_admin_endpoints_require_superuser(
     assert delete_response.status_code == HTTP_FORBIDDEN
 
 
+async def test_role_guard_factories_enforce_normalized_membership_at_runtime(
+    client: tuple[
+        AsyncTestClient[Litestar],
+        InMemoryUserDatabase,
+        UsersControllerManager,
+        InMemoryTokenStrategy,
+        ExampleUser,
+        ExampleUser,
+    ],
+) -> None:
+    """Runtime requests honor any-role and all-role guards using normalized membership."""
+    test_client, user_db, _, strategy, admin_user, regular_user = client
+    await user_db.update(admin_user, {"roles": [" Billing ", "ADMIN"]})
+    await user_db.update(regular_user, {"roles": ["support"]})
+    admin_headers = {"Authorization": f"Bearer {await strategy.write_token(admin_user)}"}
+    member_headers = {"Authorization": f"Bearer {await strategy.write_token(regular_user)}"}
+
+    any_admin_response = await test_client.get("/role-guarded/any", headers=admin_headers)
+    all_admin_response = await test_client.get("/role-guarded/all", headers=admin_headers)
+    any_member_response = await test_client.get("/role-guarded/any", headers=member_headers)
+    all_member_response = await test_client.get("/role-guarded/all", headers=member_headers)
+
+    assert any_admin_response.status_code == HTTP_OK
+    assert any_admin_response.json() == {"ok": True}
+    assert all_admin_response.status_code == HTTP_OK
+    assert all_admin_response.json() == {"ok": True}
+    assert any_member_response.status_code == HTTP_FORBIDDEN
+    assert all_member_response.status_code == HTTP_FORBIDDEN
+
+
+async def test_admin_role_updates_feed_request_user_role_contract_at_runtime(
+    client: tuple[
+        AsyncTestClient[Litestar],
+        InMemoryUserDatabase,
+        UsersControllerManager,
+        InMemoryTokenStrategy,
+        ExampleUser,
+        ExampleUser,
+    ],
+) -> None:
+    """Admin role updates are visible as normalized ``list[str]`` membership on ``request.user``."""
+    test_client, user_db, _, strategy, admin_user, regular_user = client
+    admin_headers = {"Authorization": f"Bearer {await strategy.write_token(admin_user)}"}
+
+    patch_response = await test_client.patch(
+        f"/users/{regular_user.id}",
+        headers=admin_headers,
+        json={"roles": [" Billing ", "ADMIN"]},
+    )
+    member_headers = {"Authorization": f"Bearer {await strategy.write_token(regular_user)}"}
+    runtime_response = await test_client.get("/role-guarded/runtime", headers=member_headers)
+
+    assert patch_response.status_code == HTTP_OK
+    assert patch_response.json()["roles"] == ["admin", "billing"]
+    assert runtime_response.status_code == HTTP_OK
+    assert runtime_response.json() == {"roles": ["admin", "billing"]}
+    stored_user = await user_db.get(regular_user.id)
+    assert stored_user is not None
+    assert stored_user.roles == ["admin", "billing"]
+
+
 async def test_superuser_can_read_update_and_soft_delete_users(
     client: tuple[
         AsyncTestClient[Litestar],
@@ -561,7 +662,7 @@ async def test_superuser_can_read_update_and_soft_delete_users(
     patch_response = await test_client.patch(
         f"/users/{regular_user.id}",
         headers=headers,
-        json={"is_verified": False, "is_superuser": True},
+        json={"is_verified": False, "is_superuser": True, "roles": [" Billing ", "admin", "ADMIN"]},
     )
     delete_response = await test_client.delete(f"/users/{regular_user.id}", headers=headers)
 
@@ -573,12 +674,14 @@ async def test_superuser_can_read_update_and_soft_delete_users(
     assert patch_response.status_code == HTTP_OK
     assert patch_response.json()["is_verified"] is False
     assert patch_response.json()["is_superuser"] is True
+    assert patch_response.json()["roles"] == ["admin", "billing"]
 
     assert delete_response.status_code == HTTP_OK
     assert delete_response.json()["is_active"] is False
     stored_user = await user_db.get(regular_user.id)
     assert stored_user is not None
     assert stored_user.is_active is False
+    assert stored_user.roles == ["admin", "billing"]
     assert user_manager.deleted_users == []
 
 
@@ -633,6 +736,7 @@ async def test_superuser_can_hard_delete_users(
         "is_active": True,
         "is_verified": True,
         "is_superuser": False,
+        "roles": ["member"],
     }
     assert await user_db.get(regular_user.id) is None
     assert regular_user.email not in user_db.user_ids_by_email
@@ -665,6 +769,7 @@ async def test_users_list_returns_paginated_public_payload(
                 "is_active": True,
                 "is_verified": True,
                 "is_superuser": False,
+                "roles": ["member"],
             },
         ],
         "total": 3,

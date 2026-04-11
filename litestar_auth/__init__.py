@@ -78,7 +78,7 @@ from litestar_auth.exceptions import (
     UserAlreadyExistsError,
     UserNotExistsError,
 )
-from litestar_auth.guards import is_active, is_authenticated, is_superuser, is_verified
+from litestar_auth.guards import has_all_roles, has_any_role, is_active, is_authenticated, is_superuser, is_verified
 from litestar_auth.manager import BaseUserManager, require_password_length
 from litestar_auth.oauth import create_provider_oauth_controller, load_httpx_oauth_client
 from litestar_auth.password import PasswordHelper
@@ -113,7 +113,7 @@ from litestar_auth.totp import (
     verify_totp,
     verify_totp_with_store,
 )
-from litestar_auth.types import GuardedUserProtocol, TotpUserProtocol, UserProtocol
+from litestar_auth.types import GuardedUserProtocol, RoleCapableUserProtocol, TotpUserProtocol, UserProtocol
 
 logging.getLogger(__name__).addHandler(logging.NullHandler())  # noqa: RUF067
 
@@ -160,6 +160,7 @@ __all__ = (
     "RefreshTokenRequest",
     "RequestVerifyToken",
     "ResetPassword",
+    "RoleCapableUserProtocol",
     "Strategy",
     "TokenError",
     "TotpConfig",
@@ -190,6 +191,8 @@ __all__ = (
     "create_verify_controller",
     "generate_totp_secret",
     "generate_totp_uri",
+    "has_all_roles",
+    "has_any_role",
     "is_active",
     "is_authenticated",
     "is_superuser",

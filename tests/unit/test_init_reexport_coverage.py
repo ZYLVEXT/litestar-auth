@@ -166,9 +166,14 @@ def test_models_and_strategy_token_registration_helpers_share_the_same_db_models
         "OAuthAccount",
         "OAuthAccountMixin",
         "RefreshTokenMixin",
+        "Role",
+        "RoleMixin",
         "User",
         "UserAuthRelationshipMixin",
         "UserModelMixin",
+        "UserRole",
+        "UserRoleAssociationMixin",
+        "UserRoleRelationshipMixin",
         "import_token_orm_models",
     )
     assert strategy_module.__all__ == (

@@ -20,13 +20,13 @@ from litestar_auth.controllers._utils import (
 from litestar_auth.exceptions import ErrorCode, InvalidPasswordError, InvalidResetPasswordTokenError
 from litestar_auth.payloads import ForgotPassword, ResetPassword
 from litestar_auth.schemas import UserRead
-from litestar_auth.types import UserProtocol
+from litestar_auth.types import RoleCapableUserProtocol
 
 if TYPE_CHECKING:
     from litestar_auth.ratelimit import AuthRateLimitConfig
 
 
-class ResetPasswordControllerUserProtocol[ID](UserProtocol[ID], Protocol):
+class ResetPasswordControllerUserProtocol[ID](RoleCapableUserProtocol[ID], Protocol):
     """Protocol describing the public user fields returned after password reset."""
 
     email: str

@@ -75,6 +75,7 @@ from litestar_auth import (
     RefreshTokenRequest,
     RequestVerifyToken,
     ResetPassword,
+    RoleCapableUserProtocol,
     Strategy,
     TokenError,
     TotpConfig,
@@ -106,6 +107,8 @@ from litestar_auth import (
     create_verify_controller,
     generate_totp_secret,
     generate_totp_uri,
+    has_all_roles,
+    has_any_role,
     is_active,
     is_authenticated,
     is_superuser,
@@ -196,6 +199,12 @@ class _RootImportCoverageSessionFactory:
         return cast("AsyncSession", _RootImportCoverageSession())
 
 
+def _current_database_token_strategy_type() -> type[Any]:
+    """Return the current DB-token strategy class after cross-test module reloads."""
+    db_strategy_module = importlib.import_module("litestar_auth.authentication.strategy.db")
+    return cast("type[Any]", db_strategy_module.DatabaseTokenStrategy)
+
+
 def test_root_package_reexports_public_api() -> None:
     """The package root exposes the documented public auth API."""
     assert __version__ == project_version_from_pyproject()
@@ -210,6 +219,7 @@ def test_root_package_reexports_public_api() -> None:
     assert Strategy is not None
     assert UserProtocol is not None
     assert GuardedUserProtocol is not None
+    assert RoleCapableUserProtocol is not None
     assert TotpUserProtocol is not None
     assert BearerTransport is not None
     assert CookieTransport is not None
@@ -233,9 +243,9 @@ def test_root_package_reexports_public_api() -> None:
     assert BaseUserStore is not None
     assert SQLAlchemyUserDatabase is not None
     assert BaseUserManager is not None
-    assert UserRead.__struct_fields__ == ("id", "email", "is_active", "is_verified", "is_superuser")
+    assert UserRead.__struct_fields__ == ("id", "email", "is_active", "is_verified", "is_superuser", "roles")
     assert UserCreate.__struct_fields__ == ("email", "password")
-    assert UserUpdate.__struct_fields__ == ("password", "email", "is_active", "is_verified", "is_superuser")
+    assert UserUpdate.__struct_fields__ == ("password", "email", "is_active", "is_verified", "is_superuser", "roles")
     assert callable(is_authenticated)
     assert callable(is_active)
     assert callable(is_verified)
@@ -245,6 +255,12 @@ def test_root_package_reexports_public_api() -> None:
     assert callable(load_httpx_oauth_client)
     assert callable(require_password_length)
     assert ErrorCode is not None
+
+
+def test_root_package_reexports_role_guard_factories() -> None:
+    """The package root exposes the documented role guard factories."""
+    assert callable(has_any_role)
+    assert callable(has_all_roles)
 
 
 def test_root_package_exports_canonical_database_token_preset_entrypoint() -> None:
@@ -270,10 +286,12 @@ def test_root_package_exports_canonical_database_token_preset_entrypoint() -> No
     backend = config.startup_backends()[0]
     current_plugin_module = importlib.import_module("litestar_auth.plugin")
     current_root_module = importlib.import_module("litestar_auth")
+    database_token_strategy_type = _current_database_token_strategy_type()
     assert isinstance(backend, current_plugin_module.StartupBackendTemplate)
     assert backend.name == "database"
     assert isinstance(backend.transport, BearerTransport)
-    assert isinstance(backend.strategy, current_root_module.DatabaseTokenStrategy)
+    assert current_root_module.DatabaseTokenStrategy is not None
+    assert isinstance(backend.strategy, database_token_strategy_type)
 
 
 def test_public_user_schema_reuse_surface_stays_importable() -> None:
@@ -282,6 +300,8 @@ def test_public_user_schema_reuse_surface_stays_importable() -> None:
     user_update_email_meta = _field_meta(UserUpdate, "email")
     user_create_meta = _field_meta(UserCreate, "password")
     user_update_meta = _field_meta(UserUpdate, "password")
+    user_read_roles_annotation = get_type_hints(UserRead, include_extras=True)["roles"]
+    user_update_roles_annotation = get_type_hints(UserUpdate, include_extras=True)["roles"]
     user_create_email_annotation = get_type_hints(UserCreate, include_extras=True)["email"]
     user_update_email_annotation = get_type_hints(UserUpdate, include_extras=True)["email"]
     user_create_annotation = get_type_hints(UserCreate, include_extras=True)["password"]
@@ -308,6 +328,9 @@ def test_public_user_schema_reuse_surface_stays_importable() -> None:
         == password_field_value
     )
     assert get_args(user_update_annotation)[1] is type(None)
+    assert user_read_roles_annotation == list[str]
+    assert get_args(user_update_roles_annotation)[0] == list[str]
+    assert get_args(user_update_roles_annotation)[1] is type(None)
     assert user_create_email_meta.max_length == EMAIL_MAX_LENGTH
     assert user_update_email_meta.max_length == EMAIL_MAX_LENGTH
     assert user_create_email_meta.pattern == EMAIL_PATTERN
@@ -332,9 +355,14 @@ def test_models_and_strategy_modules_expose_documented_orm_setup_surface() -> No
         "OAuthAccount",
         "OAuthAccountMixin",
         "RefreshTokenMixin",
+        "Role",
+        "RoleMixin",
         "User",
         "UserAuthRelationshipMixin",
         "UserModelMixin",
+        "UserRole",
+        "UserRoleAssociationMixin",
+        "UserRoleRelationshipMixin",
         "import_token_orm_models",
     )
     assert strategy_module.__all__ == (
@@ -350,8 +378,13 @@ def test_models_and_strategy_modules_expose_documented_orm_setup_surface() -> No
     assert models_module.AccessTokenMixin.__name__ == "AccessTokenMixin"
     assert models_module.OAuthAccountMixin.__name__ == "OAuthAccountMixin"
     assert models_module.RefreshTokenMixin.__name__ == "RefreshTokenMixin"
+    assert models_module.Role.__name__ == "Role"
+    assert models_module.RoleMixin.__name__ == "RoleMixin"
     assert models_module.UserAuthRelationshipMixin.__name__ == "UserAuthRelationshipMixin"
     assert models_module.UserModelMixin.__name__ == "UserModelMixin"
+    assert models_module.UserRole.__name__ == "UserRole"
+    assert models_module.UserRoleAssociationMixin.__name__ == "UserRoleAssociationMixin"
+    assert models_module.UserRoleRelationshipMixin.__name__ == "UserRoleRelationshipMixin"
     assert models_module.import_token_orm_models.__module__ == "litestar_auth.models.tokens"
     assert strategy_module.import_token_orm_models.__module__ == "litestar_auth.authentication.strategy.db_models"
     assert strategy_module.import_token_orm_models() == (access_token_model, refresh_token_model)
@@ -368,9 +401,11 @@ def test_root_package_does_not_promote_token_orm_bootstrap_helper() -> None:
 
 def test_root_and_db_packages_keep_orm_symbols_on_documented_modules() -> None:
     """The package root and ``litestar_auth.db`` keep ORM wiring on the documented modules."""
+    assert "Role" not in __all__
     assert "User" not in __all__
     assert "OAuthAccount" not in __all__
     assert "SQLAlchemyUserDatabase" not in __all__
+    assert not hasattr(litestar_auth, "Role")
     assert not hasattr(litestar_auth, "User")
     assert not hasattr(litestar_auth, "OAuthAccount")
     assert not hasattr(litestar_auth, "SQLAlchemyUserDatabase")
@@ -813,6 +848,8 @@ def test_root_package_all_excludes_private_symbols() -> None:
     assert "generate_totp_uri" in __all__
     assert "verify_totp" in __all__
     assert "verify_totp_with_store" in __all__
+    assert "has_any_role" in __all__
+    assert "has_all_roles" in __all__
     assert "InMemoryJWTDenylistStore" in __all__
     assert "InMemoryUsedTotpCodeStore" in __all__
     assert "JWTDenylistStore" in __all__
@@ -820,6 +857,7 @@ def test_root_package_all_excludes_private_symbols() -> None:
     assert "RedisUsedTotpCodeStore" in __all__
     assert "UserProtocol" in __all__
     assert "GuardedUserProtocol" in __all__
+    assert "RoleCapableUserProtocol" in __all__
     assert "TotpUserProtocol" in __all__
     assert "TotpUserManagerProtocol" in __all__
     assert "Authenticator" in __all__

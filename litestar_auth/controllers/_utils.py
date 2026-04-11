@@ -332,7 +332,16 @@ def _to_user_schema(
             "UserRead schema includes sensitive fields %s; these will appear in API responses",
             sorted(leaked),
         )
-    payload = {field_name: getattr(user, field_name) for field_name in schema.__struct_fields__}
+    payload: dict[str, object] = {}
+    for field_name in schema.__struct_fields__:
+        if not hasattr(user, field_name):
+            msg = (
+                f"User schema {schema.__name__!r} requires field {field_name!r}, but "
+                f"{type(user).__name__!r} does not define it. Align your public user schema "
+                "with the configured user model."
+            )
+            raise ConfigurationError(msg)
+        payload[field_name] = getattr(user, field_name)
     return schema(**payload)
 
 

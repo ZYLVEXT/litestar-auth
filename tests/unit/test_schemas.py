@@ -67,6 +67,7 @@ def test_user_read_round_trips_without_sensitive_fields() -> None:
         is_active=True,
         is_verified=False,
         is_superuser=False,
+        roles=["member"],
     )
 
     encoded = msgspec.json.encode(payload)
@@ -75,6 +76,7 @@ def test_user_read_round_trips_without_sensitive_fields() -> None:
     assert decoded == payload
     assert b"hashed_password" not in encoded
     assert b"totp_secret" not in encoded
+    assert b'"roles":["member"]' in encoded
 
 
 def test_user_create_decodes_plain_text_password_payload() -> None:
@@ -236,13 +238,13 @@ def test_public_email_alias_reuses_internal_metadata_source() -> None:
 
 def test_user_update_omits_unset_optional_fields() -> None:
     """UserUpdate excludes defaulted optional fields from serialized output."""
-    payload = UserUpdate(email="updated@example.com", is_verified=True)
+    payload = UserUpdate(email="updated@example.com", is_verified=True, roles=["admin"])
 
     encoded = msgspec.json.encode(payload)
     decoded = msgspec.json.decode(encoded, type=UserUpdate)
 
     assert decoded == payload
-    assert encoded == b'{"email":"updated@example.com","is_verified":true}'
+    assert encoded == b'{"email":"updated@example.com","is_verified":true,"roles":["admin"]}'
 
 
 @pytest.mark.parametrize("schema_type", [ForgotPassword, RequestVerifyToken])

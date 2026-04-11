@@ -44,6 +44,7 @@ class DummyUser(msgspec.Struct):
     is_active: bool = True
     is_verified: bool = False
     is_superuser: bool = False
+    roles: list[str] = msgspec.field(default_factory=lambda: ["member"])
 
 
 class DummyUserManager:
@@ -195,5 +196,6 @@ async def test_verify_success_resets_rate_limit() -> None:
 
     assert status_code == HTTP_200_OK
     assert payload["email"] == "verified@example.com"
+    assert payload["roles"] == ["member"]
     backend.increment.assert_not_awaited()
     backend.reset.assert_awaited_once()

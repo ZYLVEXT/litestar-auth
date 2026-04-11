@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING, Any, Self, cast
 from uuid import UUID
 
 import pytest
-from litestar import Litestar
+from litestar import Litestar, Request, get
 from sqlalchemy import create_engine, event, select
 from sqlalchemy.orm import Session as SASession
 from sqlalchemy.pool import StaticPool
@@ -16,6 +16,7 @@ from litestar_auth.authentication.backend import AuthenticationBackend
 from litestar_auth.authentication.strategy.jwt import JWTStrategy
 from litestar_auth.authentication.transport.bearer import BearerTransport
 from litestar_auth.exceptions import ErrorCode
+from litestar_auth.guards import has_all_roles, has_any_role
 from litestar_auth.manager import BaseUserManager, UserManagerSecurity
 from litestar_auth.models import User
 from litestar_auth.password import PasswordHelper
@@ -41,6 +42,26 @@ HTTP_UNAUTHORIZED = 401
 PAGINATION_LIMIT = 2
 PAGINATION_OFFSET = 1
 TOTAL_USERS = 3
+
+
+@get("/role-guarded/any", guards=[has_any_role("admin")], sync_to_thread=False)
+def role_guarded_any() -> dict[str, bool]:
+    """Return success when the request user has any required role."""
+    return {"ok": True}
+
+
+@get("/role-guarded/all", guards=[has_all_roles("admin", "billing")], sync_to_thread=False)
+def role_guarded_all() -> dict[str, bool]:
+    """Return success when the request user has all required roles."""
+    return {"ok": True}
+
+
+@get("/role-guarded/runtime", guards=[has_all_roles("admin", "billing")], sync_to_thread=False)
+def role_guarded_runtime(request: Request[User, Any, Any]) -> dict[str, list[str]]:
+    """Return normalized role membership from the runtime request user."""
+    user = request.user
+    assert user is not None
+    return {"roles": list(user.roles)}
 
 
 class AsyncSessionAdapter:
@@ -223,16 +244,19 @@ def app() -> Iterator[tuple[Litestar, Engine, PasswordHelper, dict[str, UUID]]]:
             hashed_password=password_helper.hash("admin-password"),
             is_verified=True,
             is_superuser=True,
+            roles=["admin"],
         )
         regular_user = User(
             email="member@example.com",
             hashed_password=password_helper.hash("member-password"),
             is_verified=True,
+            roles=["member"],
         )
         extra_user = User(
             email="extra@example.com",
             hashed_password=password_helper.hash("extra-password"),
             is_verified=True,
+            roles=["support"],
         )
         session.add_all([admin_user, regular_user, extra_user])
         session.commit()
@@ -270,7 +294,15 @@ def app() -> Iterator[tuple[Litestar, Engine, PasswordHelper, dict[str, UUID]]]:
         user_manager_kwargs={"password_helper": password_helper},
         include_users=True,
     )
-    yield Litestar(plugins=[LitestarAuth(config)]), engine, password_helper, user_ids
+    yield (
+        Litestar(
+            route_handlers=[role_guarded_any, role_guarded_all, role_guarded_runtime],
+            plugins=[LitestarAuth(config)],
+        ),
+        engine,
+        password_helper,
+        user_ids,
+    )
     engine.dispose()
 
 
@@ -309,6 +341,7 @@ async def test_users_crud_flow_via_plugin(
             "is_active": True,
             "is_verified": True,
             "is_superuser": False,
+            "roles": ["member"],
         },
     )
 
@@ -319,6 +352,7 @@ async def test_users_crud_flow_via_plugin(
             "email": "member-updated@example.com",
             "password": "member-new-password",
             "is_superuser": True,
+            "roles": [" Billing ", "ADMIN"],
         },
     )
     assert response.status_code == HTTP_OK
@@ -330,6 +364,7 @@ async def test_users_crud_flow_via_plugin(
             "is_active": True,
             "is_verified": False,
             "is_superuser": False,
+            "roles": ["member"],
         },
     )
 
@@ -378,13 +413,14 @@ async def test_users_crud_flow_via_plugin(
             "is_active": True,
             "is_verified": False,
             "is_superuser": False,
+            "roles": ["member"],
         },
     )
 
     response = await test_client.patch(
         f"/users/{user_ids['member']}",
         headers=admin_headers,
-        json={"email": "vip@example.com", "is_superuser": True, "is_verified": False},
+        json={"email": "vip@example.com", "is_superuser": True, "is_verified": False, "roles": [" Billing ", "ADMIN"]},
     )
     assert response.status_code == HTTP_OK
     _assert_public_user(
@@ -395,6 +431,7 @@ async def test_users_crud_flow_via_plugin(
             "is_active": True,
             "is_verified": False,
             "is_superuser": True,
+            "roles": ["admin", "billing"],
         },
     )
 
@@ -414,6 +451,7 @@ async def test_users_crud_flow_via_plugin(
             "is_active": True,
             "is_verified": True,
             "is_superuser": False,
+            "roles": ["support"],
         },
         {
             "id": str(user_ids["admin"]),
@@ -421,6 +459,7 @@ async def test_users_crud_flow_via_plugin(
             "is_active": True,
             "is_verified": True,
             "is_superuser": True,
+            "roles": ["admin"],
         },
     ]
 
@@ -434,6 +473,7 @@ async def test_users_crud_flow_via_plugin(
             "is_active": False,
             "is_verified": False,
             "is_superuser": True,
+            "roles": ["admin", "billing"],
         },
     )
 
@@ -445,6 +485,7 @@ async def test_users_crud_flow_via_plugin(
     assert stored_member.is_active is False
     assert stored_member.is_verified is False
     assert stored_member.is_superuser is True
+    assert stored_member.roles == ["admin", "billing"]
     assert password_helper.verify("member-new-password", stored_member.hashed_password)
 
 
@@ -472,3 +513,44 @@ async def test_users_me_rejects_deactivated_user_with_existing_session(
     assert me_response.status_code == HTTP_BAD_REQUEST
     assert me_response.json()["detail"] == "The user account is inactive."
     assert me_response.json()["code"] == ErrorCode.LOGIN_USER_INACTIVE
+
+
+async def test_role_guards_and_request_user_roles_survive_relational_storage(
+    client: tuple[AsyncTestClient[Litestar], Engine, PasswordHelper, dict[str, UUID]],
+) -> None:
+    """Role guards and request-time role access keep working after relation-backed admin updates."""
+    test_client, engine, _, user_ids = client
+    admin_headers = await _login_headers(
+        test_client,
+        email="admin@example.com",
+        password="admin-password",
+    )
+    member_headers = await _login_headers(
+        test_client,
+        email="member@example.com",
+        password="member-password",
+    )
+
+    patch_response = await test_client.patch(
+        f"/users/{user_ids['member']}",
+        headers=admin_headers,
+        json={"roles": [" Billing ", "ADMIN"]},
+    )
+    any_response = await test_client.get("/role-guarded/any", headers=member_headers)
+    all_response = await test_client.get("/role-guarded/all", headers=member_headers)
+    runtime_response = await test_client.get("/role-guarded/runtime", headers=member_headers)
+
+    assert patch_response.status_code == HTTP_OK
+    assert patch_response.json()["roles"] == ["admin", "billing"]
+    assert any_response.status_code == HTTP_OK
+    assert any_response.json() == {"ok": True}
+    assert all_response.status_code == HTTP_OK
+    assert all_response.json() == {"ok": True}
+    assert runtime_response.status_code == HTTP_OK
+    assert runtime_response.json() == {"roles": ["admin", "billing"]}
+
+    with SASession(engine) as session:
+        stored_member = session.scalar(select(User).where(User.id == user_ids["member"]))
+
+    assert stored_member is not None
+    assert stored_member.roles == ["admin", "billing"]

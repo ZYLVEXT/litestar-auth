@@ -57,6 +57,7 @@ class _MinimalStruct(msgspec.Struct):
 class _UserReadSchema(msgspec.Struct):
     id: str
     email: str
+    roles: list[str]
 
 
 class _SensitiveUserReadSchema(msgspec.Struct):
@@ -78,6 +79,7 @@ class _DummyUser(msgspec.Struct):
     is_active: bool = True
     is_verified: bool = True
     is_superuser: bool = False
+    roles: list[str] = msgspec.field(default_factory=lambda: ["member"])
     hashed_password: str = "hashed-secret"
 
 
@@ -417,7 +419,22 @@ def test_to_user_schema_builds_safe_payload() -> None:
     """Public schemas are populated directly from user attributes."""
     user = _DummyUser()
 
-    assert _to_user_schema(user, _UserReadSchema) == _UserReadSchema(id=user.id, email=user.email)
+    assert _to_user_schema(user, _UserReadSchema) == _UserReadSchema(
+        id=user.id,
+        email=user.email,
+        roles=["member"],
+    )
+
+
+def test_to_user_schema_rejects_schema_fields_missing_from_user_object() -> None:
+    """Misaligned public user schemas fail with a configuration error instead of raw AttributeError."""
+
+    class _RolelessUser(msgspec.Struct):
+        id: str = "user-id"
+        email: str = "user@example.com"
+
+    with pytest.raises(ConfigurationError, match=r"requires field 'roles'"):
+        _to_user_schema(_RolelessUser(), _UserReadSchema)
 
 
 def test_to_user_schema_rejects_sensitive_fields_outside_testing() -> None:

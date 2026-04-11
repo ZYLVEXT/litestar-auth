@@ -61,6 +61,24 @@ def _current_startup_backend_template_type() -> type[Any]:
     return cast("type[Any]", importlib.import_module("litestar_auth._plugin.config").StartupBackendTemplate)
 
 
+def _current_authentication_backend_type() -> type[Any]:
+    """Resolve the current AuthenticationBackend class to survive cross-test module reloads.
+
+    Returns:
+        The current AuthenticationBackend type.
+    """
+    return cast("type[Any]", importlib.import_module("litestar_auth.authentication.backend").AuthenticationBackend)
+
+
+def _current_database_token_strategy_type() -> type[Any]:
+    """Resolve the current DB-token strategy class to survive cross-test module reloads.
+
+    Returns:
+        The current DatabaseTokenStrategy type.
+    """
+    return cast("type[Any]", importlib.import_module("litestar_auth.authentication.strategy.db").DatabaseTokenStrategy)
+
+
 def test_plugin_config_module_executes_under_coverage() -> None:
     """Reload the module in-test so coverage records module and dataclass execution."""
     reloaded_module = importlib.reload(plugin_config_module)
@@ -356,11 +374,11 @@ def test_database_token_auth_field_builds_canonical_db_bearer_backend() -> None:
     assert preset.accept_legacy_plaintext_tokens is True
 
     backend = config.startup_backends()[0]
+    database_token_strategy_type = _current_database_token_strategy_type()
     assert isinstance(backend, _current_startup_backend_template_type())
     assert backend.name == "database"
     assert isinstance(backend.transport, BearerTransport)
-    current_strategy_module = importlib.import_module("litestar_auth.authentication.strategy")
-    assert isinstance(backend.strategy, current_strategy_module.DatabaseTokenStrategy)
+    assert isinstance(backend.strategy, database_token_strategy_type)
     assert backend.strategy.max_age == timedelta(minutes=5)
     assert backend.strategy.refresh_max_age == timedelta(hours=12)
     assert backend.strategy.token_bytes == configured_token_bytes
@@ -553,10 +571,10 @@ def test_build_database_token_backend_binds_the_explicit_runtime_session() -> No
         session=cast("Any", active_session),
         unsafe_testing=True,
     )
-    current_strategy_module = importlib.import_module("litestar_auth.authentication.strategy")
+    database_token_strategy_type = _current_database_token_strategy_type()
 
     assert backend.name == "opaque-db"
-    assert isinstance(backend.strategy, current_strategy_module.DatabaseTokenStrategy)
+    assert isinstance(backend.strategy, database_token_strategy_type)
     assert cast("Any", backend.strategy).session is active_session
     assert cast("Any", backend.strategy).refresh_max_age == timedelta(days=14)
     assert cast("Any", backend.strategy).accept_legacy_plaintext_tokens is True
@@ -682,18 +700,19 @@ def test_bind_request_backends_realizes_database_token_preset_from_request_sessi
         enable_refresh=True,
     )
     active_session = DummySession()
+    authentication_backend_type = _current_authentication_backend_type()
+    database_token_strategy_type = _current_database_token_strategy_type()
 
     startup_backend = config.startup_backends()[0]
     runtime_backends = config.bind_request_backends(cast("Any", active_session))
-    current_strategy_module = importlib.import_module("litestar_auth.authentication.strategy")
 
     assert isinstance(startup_backend, _current_startup_backend_template_type())
     assert len(runtime_backends) == 1
-    assert isinstance(runtime_backends[0], AuthenticationBackend)
+    assert isinstance(runtime_backends[0], authentication_backend_type)
     assert runtime_backends[0].name == "opaque-db"
     assert runtime_backends[0] is not startup_backend
-    assert isinstance(startup_backend.strategy, current_strategy_module.DatabaseTokenStrategy)
-    assert isinstance(runtime_backends[0].strategy, current_strategy_module.DatabaseTokenStrategy)
+    assert isinstance(startup_backend.strategy, database_token_strategy_type)
+    assert isinstance(runtime_backends[0].strategy, database_token_strategy_type)
     assert cast("Any", runtime_backends[0].strategy).session is active_session
     assert cast("Any", runtime_backends[0].strategy).refresh_max_age == timedelta(days=14)
     assert cast("Any", runtime_backends[0].strategy).accept_legacy_plaintext_tokens is True

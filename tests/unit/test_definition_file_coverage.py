@@ -10,7 +10,7 @@ import types
 import uuid
 import warnings
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, cast, get_args
+from typing import TYPE_CHECKING, Any, cast, get_args, get_type_hints
 from uuid import uuid4
 
 import pytest
@@ -20,6 +20,7 @@ from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 import litestar_auth._auth_model_mixins as auth_model_mixins_module
 import litestar_auth._manager._protocols as manager_protocols_module
+import litestar_auth._roles as roles_module
 import litestar_auth.authentication.strategy.base as strategy_base_module
 import litestar_auth.authentication.transport.base as transport_base_module
 import litestar_auth.db.base as db_base_module
@@ -33,10 +34,15 @@ from litestar_auth.models.mixins import (
     AccessTokenMixin,
     OAuthAccountMixin,
     RefreshTokenMixin,
+    RoleMixin,
     UserAuthRelationshipMixin,
     UserModelMixin,
+    UserRoleAssociationMixin,
+    UserRoleRelationshipMixin,
 )
 from litestar_auth.models.oauth import OAuthAccount as ModelsOAuthAccount
+from litestar_auth.models.role import Role as ModelsRole
+from litestar_auth.models.role import UserRole as ModelsUserRole
 from litestar_auth.models.user import User as ModelsUser
 from tests._helpers import ExampleUser
 
@@ -155,18 +161,36 @@ def test_types_module_reload_preserves_protocol_exports() -> None:
     """Reload the shared typing module and verify its public protocols remain usable."""
     reloaded_module = _reload_module(types_module)
 
+    class _RoleCapableUser:
+        id = uuid4()
+        roles = ("admin",)
+
     assert reloaded_module.UserProtocol.__name__ == "UserProtocol"
     assert reloaded_module.GuardedUserProtocol.__name__ == "GuardedUserProtocol"
+    assert reloaded_module.RoleCapableUserProtocol.__name__ == "RoleCapableUserProtocol"
     assert reloaded_module.TotpUserProtocol.__name__ == "TotpUserProtocol"
     assert reloaded_module.TransportProtocol.__name__ == "TransportProtocol"
     assert reloaded_module.StrategyProtocol.__name__ == "StrategyProtocol"
     assert get_args(reloaded_module.LoginIdentifier.__value__) == ("email", "username")
     assert isinstance(ExampleUser(id=uuid4()), reloaded_module.GuardedUserProtocol)
+    assert isinstance(_RoleCapableUser(), reloaded_module.RoleCapableUserProtocol)
+
+
+def test_roles_module_reload_preserves_normalized_roles_contract() -> None:
+    """Reload the roles helper module and exercise its public normalization surface."""
+    reloaded_module = _reload_module(roles_module)
+
+    assert reloaded_module.normalize_roles([" Billing ", "admin", "ADMIN"]) == ["admin", "billing"]
+    assert reloaded_module.normalize_roles((" Support ", "ADMIN")) == ["admin", "support"]
+    assert reloaded_module.normalize_roles(None) == []
+    assert reloaded_module.normalize_role_name(" Support ") == "support"
 
 
 def test_schemas_module_reload_preserves_struct_definitions() -> None:
     """Reload msgspec schema definitions and verify their fields remain stable."""
     reloaded_module = _reload_module(schemas_module)
+    user_read_hints = get_type_hints(reloaded_module.UserRead, include_extras=True)
+    user_update_hints = get_type_hints(reloaded_module.UserUpdate, include_extras=True)
 
     assert reloaded_module.UserRead.__struct_fields__ == (
         "id",
@@ -174,6 +198,7 @@ def test_schemas_module_reload_preserves_struct_definitions() -> None:
         "is_active",
         "is_verified",
         "is_superuser",
+        "roles",
     )
     assert reloaded_module.UserCreate.__struct_fields__ == ("email", "password")
     assert reloaded_module.UserUpdate.__struct_fields__ == (
@@ -182,7 +207,11 @@ def test_schemas_module_reload_preserves_struct_definitions() -> None:
         "is_active",
         "is_verified",
         "is_superuser",
+        "roles",
     )
+    assert user_read_hints["roles"] == list[str]
+    assert get_args(user_update_hints["roles"])[0] == list[str]
+    assert get_args(user_update_hints["roles"])[1] is type(None)
 
 
 def test_strategy_base_module_reload_preserves_abstract_contracts() -> None:
@@ -296,6 +325,26 @@ def test_models_oauth_module_reload_executes_under_coverage(monkeypatch: pytest.
     assert reloaded_module.OAuthAccount.__table__.c.user_id.foreign_keys
 
 
+def test_models_role_module_reload_executes_under_coverage(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Reload ``models/role.py`` in isolation and verify the bundled role tables."""
+    reloaded_module = _load_reloaded_alias(
+        alias_name="_coverage_alias_models_role",
+        source_path=REPO_ROOT / "litestar_auth" / "models" / "role.py",
+        monkeypatch=monkeypatch,
+    )
+
+    assert reloaded_module.Role.__name__ == "Role"
+    assert reloaded_module.UserRole.__name__ == "UserRole"
+    assert reloaded_module.Role.__tablename__ == "role"
+    assert reloaded_module.UserRole.__tablename__ == "user_role"
+    assert set(reloaded_module.Role.__table__.c.keys()) == {"name"}
+    assert set(reloaded_module.UserRole.__table__.c.keys()) == {"role_name", "user_id"}
+    assert issubclass(reloaded_module.Role, RoleMixin)
+    assert issubclass(reloaded_module.UserRole, UserRoleAssociationMixin)
+    assert next(iter(reloaded_module.UserRole.__table__.c.user_id.foreign_keys)).target_fullname == "user.id"
+    assert next(iter(reloaded_module.UserRole.__table__.c.role_name.foreign_keys)).target_fullname == "role.name"
+
+
 def test_models_mixins_module_reload_preserves_contract_exports() -> None:
     """Reload the side-effect-free auth mixin module and verify its export surface."""
     reloaded_module = _reload_module(model_mixins_module)
@@ -304,14 +353,21 @@ def test_models_mixins_module_reload_preserves_contract_exports() -> None:
         "AccessTokenMixin",
         "OAuthAccountMixin",
         "RefreshTokenMixin",
+        "RoleMixin",
         "UserAuthRelationshipMixin",
         "UserModelMixin",
+        "UserRoleAssociationMixin",
+        "UserRoleRelationshipMixin",
     )
     assert hasattr(reloaded_module.UserModelMixin, "email")
     assert hasattr(reloaded_module.OAuthAccountMixin, "access_token")
+    assert hasattr(reloaded_module.RoleMixin, "name")
+    assert hasattr(reloaded_module.UserRoleRelationshipMixin, "roles")
     assert not hasattr(reloaded_module, "_TokenModelMixin")
     assert issubclass(ModelsUser, UserModelMixin)
     assert issubclass(ModelsOAuthAccount, OAuthAccountMixin)
+    assert issubclass(ModelsRole, RoleMixin)
+    assert issubclass(ModelsUserRole, UserRoleAssociationMixin)
     assert issubclass(ModelsAccessToken, AccessTokenMixin)
     assert issubclass(ModelsRefreshToken, RefreshTokenMixin)
 
@@ -329,11 +385,15 @@ def test_internal_auth_model_mixins_module_reload_preserves_contract_exports(
     assert reloaded_module.__all__ == (
         "AccessTokenMixin",
         "RefreshTokenMixin",
+        "RoleMixin",
         "UserAuthRelationshipMixin",
         "UserModelMixin",
+        "UserRoleAssociationMixin",
+        "UserRoleRelationshipMixin",
         "_TokenModelMixin",
     )
     assert reloaded_module._USER_RELATIONSHIP_NAME == "user"
+    assert reloaded_module._ROLE_ASSIGNMENTS_RELATIONSHIP_NAME == "role_assignments"
     assert sorted(reloaded_module.UserModelMixin.__annotations__) == [
         "email",
         "hashed_password",
@@ -342,6 +402,9 @@ def test_internal_auth_model_mixins_module_reload_preserves_contract_exports(
         "is_verified",
         "totp_secret",
     ]
+    assert reloaded_module.UserRoleRelationshipMixin.auth_user_role_model == "UserRole"
+    assert reloaded_module.RoleMixin.auth_user_role_model == "UserRole"
+    assert reloaded_module.UserRoleAssociationMixin.auth_role_model == "Role"
     assert reloaded_module.AccessTokenMixin.auth_user_back_populates == "access_tokens"
     assert reloaded_module.RefreshTokenMixin.auth_user_back_populates == "refresh_tokens"
     assert reloaded_module.AccessTokenMixin.__mro__[1].__name__ == "_TokenModelMixin"
@@ -553,21 +616,25 @@ def test_models_user_relationships_module_reload_preserves_contract_exports() ->
     """Reload the shared user-relationship contract module and verify its declarative surface."""
     reloaded_module = _reload_module(user_relationships_module)
 
-    assert reloaded_module.__all__ == ("UserAuthRelationshipMixin",)
+    assert reloaded_module.__all__ == ("UserAuthRelationshipMixin", "UserRoleRelationshipMixin")
     assert sorted(
         name
         for name in ("access_tokens", "oauth_accounts", "refresh_tokens")
         if name in reloaded_module.UserAuthRelationshipMixin.__dict__
     ) == ["access_tokens", "oauth_accounts", "refresh_tokens"]
     assert issubclass(ModelsUser, UserAuthRelationshipMixin)
+    assert issubclass(ModelsUser, UserRoleRelationshipMixin)
 
 
 def test_models_user_module_columns_and_relationships() -> None:
-    """Reference ``User`` model (real package) keeps expected columns and OAuth inverse."""
+    """Reference ``User`` model keeps relational role tables behind a flat roles property."""
     user_relationships = inspect(ModelsUser).relationships
 
     assert issubclass(ModelsUser, UserModelMixin)
+    assert issubclass(ModelsUser, UserRoleRelationshipMixin)
     assert issubclass(ModelsUser, UserAuthRelationshipMixin)
+    assert issubclass(ModelsRole, RoleMixin)
+    assert issubclass(ModelsUserRole, UserRoleAssociationMixin)
     assert issubclass(ModelsOAuthAccount, OAuthAccountMixin)
     assert issubclass(ModelsAccessToken, AccessTokenMixin)
     assert issubclass(ModelsRefreshToken, RefreshTokenMixin)
@@ -575,6 +642,7 @@ def test_models_user_module_columns_and_relationships() -> None:
     assert set(ModelsUser.__table__.c.keys()).issuperset(
         {"email", "hashed_password", "id", "is_active", "is_superuser", "is_verified", "totp_secret"},
     )
+    assert "roles" not in ModelsUser.__table__.c
     assert sorted(UserModelMixin.__annotations__) == [
         "email",
         "hashed_password",
@@ -583,13 +651,24 @@ def test_models_user_module_columns_and_relationships() -> None:
         "is_verified",
         "totp_secret",
     ]
-    assert sorted(user_relationships.keys()) == ["access_tokens", "oauth_accounts", "refresh_tokens"]
+    assert set(ModelsRole.__table__.c.keys()) == {"name"}
+    assert set(ModelsUserRole.__table__.c.keys()) == {"role_name", "user_id"}
+    assert sorted(user_relationships.keys()) == [
+        "access_tokens",
+        "oauth_accounts",
+        "refresh_tokens",
+        "role_assignments",
+    ]
     assert user_relationships["access_tokens"].mapper.class_.__name__ == "AccessToken"
     assert user_relationships["access_tokens"].back_populates == "user"
     assert user_relationships["refresh_tokens"].mapper.class_.__name__ == "RefreshToken"
     assert user_relationships["refresh_tokens"].back_populates == "user"
     assert user_relationships["oauth_accounts"].mapper.class_.__name__ == "OAuthAccount"
     assert user_relationships["oauth_accounts"].back_populates == "user"
+    assert user_relationships["role_assignments"].mapper.class_.__name__ == "UserRole"
+    assert user_relationships["role_assignments"].back_populates == "user"
+    assert inspect(ModelsUserRole).relationships["role"].mapper.class_ is ModelsRole
+    assert inspect(ModelsRole).relationships["user_assignments"].mapper.class_ is ModelsUserRole
 
 
 def test_db_models_module_reload_executes_under_coverage(monkeypatch: pytest.MonkeyPatch) -> None:

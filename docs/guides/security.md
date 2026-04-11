@@ -6,7 +6,7 @@ litestar-auth separates **authentication** (who is the caller?) from **authoriza
 
 `LitestarAuthMiddleware` runs early in the stack. It tries each configured `AuthenticationBackend` in order; the first backend that yields a user wins. **Unauthenticated requests do not automatically fail**—`request.user` may be unset or anonymous depending on your Litestar setup.
 
-Use **guards** on routes that require a logged-in user, verified email, active account, or superuser role. See [Guards API](../api/guards.md).
+Use **guards** on routes that require a logged-in user, verified email, active account, superuser access, or flat role membership via `has_any_role(...)` / `has_all_roles(...)`. See [Guards API](../api/guards.md).
 
 ## Protecting app-owned routes
 
@@ -38,6 +38,35 @@ protected_api = Router(
 )
 ```
 
+For flat role membership checks on app-owned routes, use the built-in role
+guard factories instead of reaching into `request.user.roles` directly:
+
+```python
+from litestar import get
+
+from litestar_auth.guards import has_all_roles, has_any_role
+
+
+@get("/reports", guards=[has_any_role("admin", "support")])
+async def reports() -> dict[str, bool]:
+    return {"ok": True}
+
+
+@get("/billing/export", guards=[has_all_roles("admin", "billing")])
+async def billing_export() -> dict[str, bool]:
+    return {"ok": True}
+```
+
+These guards require an authenticated active user and a `roles` collection
+compatible with `RoleCapableUserProtocol`. Both configured roles and runtime
+user roles are normalized with the same trim/lowercase/deduplicate semantics as
+the persistence and manager layers.
+
+Whether those roles are backed by the bundled `Role` / `UserRole` tables or an equivalent custom
+model family, authorization still sees only the normalized flat `roles` contract. These guard
+factories are intentionally limited to flat membership checks; they are not a full RBAC framework,
+permission matrix, or object-level policy DSL.
+
 With the default `include_openapi_security=True`, the plugin also registers the corresponding security schemes globally, so application-defined routes can reuse the same requirements without hard-coding backend names.
 
 If you intentionally disable plugin-managed OpenAPI security, register `auth_config.resolve_openapi_security_schemes()` yourself in `OpenAPIConfig.components` before using those requirements.
@@ -66,7 +95,7 @@ When `rate_limit_config` is set, sensitive endpoints may return **429** with `Re
 ## What the library does not provide
 
 - No built-in email sender (use hooks).
-- No admin UI or full RBAC.
+- No admin UI or full RBAC. The shipped relational role tables only back flat membership checks.
 - No WebAuthn/passkeys out of the box.
 
 Treat those as application responsibilities.

@@ -8,6 +8,7 @@ import unicodedata
 from typing import TYPE_CHECKING, Any
 
 from litestar_auth._manager._coercions import _account_state_user
+from litestar_auth._roles import normalize_roles as _normalize_roles
 from litestar_auth.config import DEFAULT_MINIMUM_PASSWORD_LENGTH, require_password_length
 from litestar_auth.exceptions import InactiveUserError, InvalidPasswordError, UnverifiedUserError
 from litestar_auth.password import PasswordHelper
@@ -60,6 +61,15 @@ class UserPolicy:
             Stripped, lowercased username string (may be empty).
         """
         return username.strip().lower()
+
+    @staticmethod
+    def normalize_roles(roles: object) -> list[str]:
+        """Normalize a flat role collection into a deterministic persisted form.
+
+        Returns:
+            Sorted, deduplicated, lowercased role names.
+        """
+        return _normalize_roles(roles)
 
     def validate_password(self, password: str) -> None:
         """Validate a plain-text password and normalize errors.

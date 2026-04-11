@@ -10,7 +10,7 @@ from litestar.connection import ASGIConnection
 from litestar.response import Response
 
 from litestar_auth.models import User
-from litestar_auth.types import GuardedUserProtocol, StrategyProtocol, TransportProtocol
+from litestar_auth.types import GuardedUserProtocol, RoleCapableUserProtocol, StrategyProtocol, TransportProtocol
 from tests._helpers import ExampleUser
 
 if TYPE_CHECKING:
@@ -90,6 +90,19 @@ class IncompleteGuardedUser:
     is_verified = False
 
 
+class RoleCapableExampleUser:
+    """Object exposing the dedicated role-capable user contract."""
+
+    id = uuid4()
+    roles = ("admin",)
+
+
+class RolelessUser:
+    """Object missing the dedicated roles collection."""
+
+    id = uuid4()
+
+
 def _build_connection(token: str) -> ASGIConnection[Any, Any, Any, State]:
     """Create a minimal ASGI connection with auth headers.
 
@@ -146,3 +159,21 @@ def test_guarded_user_protocol_orm_user_model() -> None:
     )
     user.id = uid
     assert isinstance(user, GuardedUserProtocol)
+
+
+def test_role_capable_user_protocol_runtime_check() -> None:
+    """Role-capable users expose the dedicated runtime protocol."""
+    assert isinstance(RoleCapableExampleUser(), RoleCapableUserProtocol)
+    assert not isinstance(RolelessUser(), RoleCapableUserProtocol)
+
+
+def test_role_capable_user_protocol_orm_user_model() -> None:
+    """Bundled SQLAlchemy ``User`` model satisfies `RoleCapableUserProtocol` at runtime."""
+    uid = uuid4()
+    user = User(
+        email="orm-roles@example.com",
+        hashed_password="hashed",
+        roles=["admin"],
+    )
+    user.id = uid
+    assert isinstance(user, RoleCapableUserProtocol)

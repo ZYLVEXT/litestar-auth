@@ -46,6 +46,7 @@ class DummyUser(msgspec.Struct):
     is_active: bool = True
     is_verified: bool = False
     is_superuser: bool = False
+    roles: list[str] = msgspec.field(default_factory=list)
 
 
 class DummyUserManager:
@@ -106,6 +107,7 @@ class RecordingUserManager:
             is_active=bool(payload.get("is_active", user.is_active)),
             is_verified=bool(payload.get("is_verified", user.is_verified)),
             is_superuser=bool(payload.get("is_superuser", user.is_superuser)),
+            roles=list(cast("list[str]", payload.get("roles", user.roles))),
         )
 
     async def delete(self, user_id: UUID) -> None:
@@ -134,6 +136,7 @@ class ExtendedSelfUpdate(msgspec.Struct, omit_defaults=True):
     is_active: bool | None = None
     is_verified: bool | None = None
     is_superuser: bool | None = None
+    roles: list[str] | None = None
     hashed_password: str | None = None
     bio: str | None = None
 
@@ -142,7 +145,7 @@ def build_context(
     *,
     hard_delete: bool = False,
     user_update_schema: type[msgspec.Struct] = UserUpdate,
-) -> _UsersControllerContext[DummyUser, UUID]:
+) -> _UsersControllerContext[Any, UUID]:
     """Create a controller context for direct helper tests.
 
     Returns:
@@ -228,7 +231,7 @@ async def test_users_handle_get_me_requires_authenticated_user() -> None:
 
 async def test_users_handle_get_me_validates_account_state_and_serializes_user() -> None:
     """The self-read helper validates state and returns the configured schema."""
-    user = DummyUser(id=uuid4(), email="user@example.com", is_verified=True)
+    user = DummyUser(id=uuid4(), email="user@example.com", is_verified=True, roles=["member"])
     manager = RecordingUserManager(user_to_get=user)
 
     result = await _users_handle_get_me(
@@ -243,13 +246,14 @@ async def test_users_handle_get_me_validates_account_state_and_serializes_user()
         is_active=True,
         is_verified=True,
         is_superuser=False,
+        roles=["member"],
     )
     assert manager.require_account_state_calls == [(user, False)]
 
 
 async def test_users_handle_update_me_strips_privileged_fields() -> None:
     """Self-updates only forward safe fields to the manager."""
-    user = DummyUser(id=uuid4(), email="user@example.com", is_verified=True)
+    user = DummyUser(id=uuid4(), email="user@example.com", is_verified=True, roles=["member"])
     manager = RecordingUserManager(user_to_get=user)
 
     result = await _users_handle_update_me(
@@ -260,6 +264,7 @@ async def test_users_handle_update_me_strips_privileged_fields() -> None:
             is_active=False,
             is_verified=False,
             is_superuser=True,
+            roles=[" Billing ", "ADMIN"],
         ),
         ctx=build_context(),
         user_manager=cast("Any", manager),
@@ -271,6 +276,7 @@ async def test_users_handle_update_me_strips_privileged_fields() -> None:
         is_active=True,
         is_verified=True,
         is_superuser=False,
+        roles=["member"],
     )
     assert manager.require_account_state_calls == [(user, False)]
     assert manager.update_calls == [({"email": "updated@example.com", "password": "new-password"}, user)]
@@ -296,7 +302,7 @@ async def test_users_handle_delete_user_rejects_superuser_self_delete() -> None:
 
 async def test_users_handle_delete_user_soft_deletes_by_disabling_user() -> None:
     """Soft-delete mode updates the user instead of calling hard delete."""
-    user = DummyUser(id=uuid4(), email="user@example.com", is_verified=True)
+    user = DummyUser(id=uuid4(), email="user@example.com", is_verified=True, roles=["member"])
     manager = RecordingUserManager(user_to_get=user)
 
     result = await _users_handle_delete_user(
@@ -312,6 +318,7 @@ async def test_users_handle_delete_user_soft_deletes_by_disabling_user() -> None
         is_active=False,
         is_verified=True,
         is_superuser=False,
+        roles=["member"],
     )
     assert len(manager.update_calls) == 1
     assert manager.delete_calls == []
@@ -323,7 +330,7 @@ async def test_users_handle_delete_user_soft_deletes_by_disabling_user() -> None
 
 async def test_users_handle_delete_user_hard_deletes_when_enabled() -> None:
     """Hard-delete mode calls the manager delete hook and returns the original user schema."""
-    user = DummyUser(id=uuid4(), email="user@example.com", is_verified=True)
+    user = DummyUser(id=uuid4(), email="user@example.com", is_verified=True, roles=["member"])
     manager = RecordingUserManager(user_to_get=user)
 
     result = await _users_handle_delete_user(
@@ -339,6 +346,7 @@ async def test_users_handle_delete_user_hard_deletes_when_enabled() -> None:
         is_active=True,
         is_verified=True,
         is_superuser=False,
+        roles=["member"],
     )
     assert manager.delete_calls == [user.id]
     assert manager.update_calls == []
@@ -353,6 +361,7 @@ def test_build_safe_self_update_strips_privileged_fields_and_preserves_custom_sa
             is_active=False,
             is_verified=False,
             is_superuser=True,
+            roles=[" Billing ", "ADMIN"],
             hashed_password="forbidden",
             bio="still-allowed",
         ),

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import importlib
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from functools import partial
 from typing import TYPE_CHECKING, Literal, Protocol, cast
 
@@ -176,6 +176,7 @@ class ExampleUser:
     is_active: bool = True
     is_verified: bool = False
     is_superuser: bool = False
+    roles: list[str] = field(default_factory=list)
     totp_secret: str | None = None
     login_hint: str = ""
     bio: str = ""

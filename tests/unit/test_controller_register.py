@@ -39,6 +39,7 @@ class DummyUser(msgspec.Struct):
     is_active: bool = True
     is_verified: bool = False
     is_superuser: bool = False
+    roles: list[str] = msgspec.field(default_factory=list)
 
 
 class DummyUserManager:
@@ -163,6 +164,7 @@ async def test_register_success_returns_201_and_resets_rate_limit() -> None:
     assert payload is not None
     assert payload["email"] == "new@example.com"
     assert "id" in payload
+    assert payload["roles"] == []
     assert manager.safe_values == [True]
     assert manager.allow_privileged_values == [False]
     assert backend.increment.await_count == 0
@@ -183,6 +185,7 @@ async def test_register_success_without_rate_limit_no_increment() -> None:
     assert status_code == HTTP_201_CREATED
     assert payload is not None
     assert payload["email"] == "norate@example.com"
+    assert payload["roles"] == []
     assert manager.safe_values == [True]
     assert manager.allow_privileged_values == [False]
 

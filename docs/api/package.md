@@ -1,13 +1,20 @@
 # Package overview
 
-The `litestar_auth` package re-exports stable symbols for application code. ORM models (`User`, `OAuthAccount`) and the SQLAlchemy adapter (`SQLAlchemyUserDatabase`) are **not** re-exported from the root — import them from their own modules to keep imports explicit and avoid accidental mapper registration:
+The `litestar_auth` package re-exports stable symbols for application code. ORM models (`User`,
+`Role`, `UserRole`, `OAuthAccount`) and the SQLAlchemy adapter (`SQLAlchemyUserDatabase`) are
+**not** re-exported from the root. Import them from the models package or submodules to keep
+imports explicit and avoid accidental mapper registration:
 
 ```python
-from litestar_auth.models import User, OAuthAccount
+from litestar_auth.models import User
+from litestar_auth.models.oauth import OAuthAccount
+from litestar_auth.models.role import Role, UserRole
 from litestar_auth.db.sqlalchemy import SQLAlchemyUserDatabase
 ```
 
 For the detailed ORM integration contract, use [Configuration](../configuration.md#custom-sqlalchemy-user-and-token-models) and the [Custom user + OAuth cookbook](../cookbook/custom_user_oauth.md). This page only names the stable import boundaries.
+Import `Role` / `UserRole` from `litestar_auth.models.role` when you need the bundled relational
+role tables without registering the reference `User` mapper.
 
 For the bundled `AccessToken` / `RefreshToken` ORM tables, keep explicit mapper registration under the models package:
 
@@ -63,6 +70,10 @@ For app-owned protected routes, reuse `config.resolve_openapi_security_requireme
 
 Treat the startup templates as plugin-assembly inventory only: they preserve backend names plus transport/strategy metadata for validation and controller wiring, but DB-token runtime work still has to go through `bind_request_backends(session)` so the realized backend carries the active `AsyncSession`. Controller selection follows the startup inventory order: the primary backend mounts at `/auth`, later backends mount at `/auth/{backend.name}`, plugin-owned OAuth login routes use the primary backend, and TOTP uses the primary backend unless `totp_backend_name` selects another named startup backend.
 
+The relational-role redesign changes storage only. Public HTTP payloads, managers, and guard
+factories still work with one normalized flat `roles` collection, and the library still does not
+ship permission matrices or standalone role-management endpoints.
+
 ## Public surface (high level)
 
 | Area | Types / functions |
@@ -70,10 +81,10 @@ Treat the startup templates as plugin-assembly inventory only: they preserve bac
 | Plugin | `LitestarAuth`, `LitestarAuthConfig`, `DatabaseTokenAuthConfig`, `OAuthConfig`, `TotpConfig` |
 | Backends | `AuthenticationBackend`, `BearerTransport`, `CookieTransport`, `JWTStrategy`, `DatabaseTokenStrategy`, `RedisTokenStrategy`, … |
 | Manager | `BaseUserManager`, `require_password_length`, `PasswordHelper` |
-| Persistence | `User`, `OAuthAccount` (from `litestar_auth.models`), `AccessToken`, `RefreshToken`, `SQLAlchemyUserDatabase` (from `litestar_auth.db.sqlalchemy`) |
-| Guards | `is_authenticated`, `is_active`, `is_verified`, `is_superuser` |
+| Persistence | `User`, `Role`, `UserRole`, `OAuthAccount` (from `litestar_auth.models` / submodules), `AccessToken`, `RefreshToken`, `SQLAlchemyUserDatabase` (from `litestar_auth.db.sqlalchemy`) |
+| Guards | `is_authenticated`, `is_active`, `is_verified`, `is_superuser`, `has_any_role`, `has_all_roles` |
 | Errors | `ErrorCode`, `LitestarAuthError`, typed subclasses |
-| Protocols | `UserProtocol`, `GuardedUserProtocol`, `TotpUserProtocol` — [Types](types.md) |
+| Protocols | `UserProtocol`, `GuardedUserProtocol`, `RoleCapableUserProtocol`, `TotpUserProtocol` — [Types](types.md) |
 | Controllers (advanced) | `create_*_controller` factories for custom route tables — [Controllers API](controllers.md) |
 | OAuth helpers | Plugin-managed route table via `OAuthConfig`; manual login helper: `litestar_auth.oauth.create_provider_oauth_controller`; lazy client loader: `load_httpx_oauth_client` |
 | TOTP | `generate_totp_secret`, `generate_totp_uri`, `verify_totp`, stores, … |

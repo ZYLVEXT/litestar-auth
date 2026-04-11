@@ -35,6 +35,14 @@ enforces password length through `require_password_length`. See
 [Configuration](configuration.md#canonical-manager-password-surface) for the full schema-helper,
 password-validator, and shared-helper contract.
 
+Built-in user-returning responses from `POST {auth}/register`, `POST {auth}/verify`, and
+`POST {auth}/reset-password` use `UserRead`, which now serializes `id`, `email`, `is_active`,
+`is_verified`, `is_superuser`, and normalized `roles`.
+
+That response contract is intentionally unchanged by the relational-role migration. The HTTP API
+still exposes one flat `roles` array, not raw `role` / `user_role` rows, permission matrices, or
+role-management endpoints.
+
 ## Password reset
 
 | Method | Path | Request body | Enabled when | Description |
@@ -87,6 +95,14 @@ When `include_users=True`, routes are under `{users}`.
 | PATCH | `{users}/{id}` | Superuser |
 | DELETE | `{users}/{id}` | Superuser |
 | GET | `{users}` | Superuser (list) |
+
+The built-in users surface also serializes `UserRead`, so all `/users` reads include normalized
+`roles`. `PATCH {users}/me` strips `roles` and the other privileged fields from self-service
+payloads even when a custom `user_update_schema` includes them, while superuser
+`PATCH {users}/{id}` can persist validated `roles` through the same schema.
+
+The storage redesign does not add separate CRUD endpoints for the relational role tables. Built-in
+users routes continue to manage only the normalized flat `roles` contract on the user boundary.
 
 ## Multiple backends
 

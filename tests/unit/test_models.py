@@ -1,4 +1,4 @@
-"""Tests for SQLAlchemy user, OAuth, access-token, and refresh-token models."""
+"""Tests for SQLAlchemy user, role, OAuth, access-token, and refresh-token models."""
 
 from __future__ import annotations
 
@@ -6,7 +6,7 @@ import base64
 import sqlite3
 import subprocess
 import sys
-from typing import TYPE_CHECKING, get_type_hints
+from typing import TYPE_CHECKING, Any, Self, cast, get_type_hints
 from uuid import UUID
 
 import pytest
@@ -16,7 +16,9 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column
 from sqlalchemy.pool import StaticPool
 
+import litestar_auth._auth_model_mixins as auth_model_mixins_module
 import litestar_auth.models as litestar_auth_models
+from litestar_auth._roles import normalize_role_name, normalize_roles
 from litestar_auth.authentication.strategy import (
     DatabaseTokenModels as DatabaseTokenModelsFromStrategy,
 )
@@ -28,9 +30,14 @@ from litestar_auth.models import (
     OAuthAccount,
     OAuthAccountMixin,
     RefreshTokenMixin,
+    Role,
+    RoleMixin,
     User,
     UserAuthRelationshipMixin,
     UserModelMixin,
+    UserRole,
+    UserRoleAssociationMixin,
+    UserRoleRelationshipMixin,
 )
 from litestar_auth.models import (
     import_token_orm_models as import_token_orm_models_from_models,
@@ -77,9 +84,14 @@ def test_models_package_dir_lists_lazy_exports() -> None:
         "OAuthAccount",
         "OAuthAccountMixin",
         "RefreshTokenMixin",
+        "Role",
+        "RoleMixin",
         "User",
         "UserAuthRelationshipMixin",
         "UserModelMixin",
+        "UserRole",
+        "UserRoleAssociationMixin",
+        "UserRoleRelationshipMixin",
         "import_token_orm_models",
     ]
 
@@ -93,16 +105,23 @@ def test_models_package_mixins_do_not_load_reference_model_modules() -> None:
         "    AccessTokenMixin,\n"
         "    OAuthAccountMixin,\n"
         "    RefreshTokenMixin,\n"
+        "    RoleMixin,\n"
         "    UserAuthRelationshipMixin,\n"
         "    UserModelMixin,\n"
+        "    UserRoleAssociationMixin,\n"
+        "    UserRoleRelationshipMixin,\n"
         ")\n"
         "assert AccessTokenMixin.__name__ == 'AccessTokenMixin'\n"
         "assert OAuthAccountMixin.__name__ == 'OAuthAccountMixin'\n"
         "assert RefreshTokenMixin.__name__ == 'RefreshTokenMixin'\n"
+        "assert RoleMixin.__name__ == 'RoleMixin'\n"
         "assert UserAuthRelationshipMixin.__name__ == 'UserAuthRelationshipMixin'\n"
         "assert UserModelMixin.__name__ == 'UserModelMixin'\n"
+        "assert UserRoleAssociationMixin.__name__ == 'UserRoleAssociationMixin'\n"
+        "assert UserRoleRelationshipMixin.__name__ == 'UserRoleRelationshipMixin'\n"
         'assert "litestar_auth.models.user" not in sys.modules\n'
         'assert "litestar_auth.models.oauth" not in sys.modules\n'
+        'assert "litestar_auth.models.role" not in sys.modules\n'
     )
     result = subprocess.run(
         [sys.executable, "-c", code],
@@ -142,16 +161,19 @@ def create_test_engine() -> Engine:
 
 
 def test_user_model_creates_schema_with_expected_columns() -> None:
-    """The user model can create its table and exposes the required schema."""
+    """The bundled model family creates the expected relational role schema."""
     engine = create_test_engine()
     try:
         User.metadata.create_all(engine)
 
         inspector = inspect(engine)
         columns = {column["name"]: column for column in inspector.get_columns("user")}
+        role_columns = {column["name"]: column for column in inspector.get_columns("role")}
+        user_role_columns = {column["name"]: column for column in inspector.get_columns("user_role")}
         email_indexes = inspector.get_indexes("user")
+        user_role_foreign_keys = inspector.get_foreign_keys("user_role")
 
-        assert "user" in inspector.get_table_names()
+        assert {"role", "user", "user_role"} <= set(inspector.get_table_names())
         assert set(columns).issuperset(
             {
                 "id",
@@ -163,7 +185,11 @@ def test_user_model_creates_schema_with_expected_columns() -> None:
                 "totp_secret",
             },
         )
+        assert "roles" not in columns
+        assert role_columns["name"]["nullable"] is False
+        assert set(user_role_columns) == {"role_name", "user_id"}
         assert columns["totp_secret"]["nullable"] is True
+        assert {foreign_key["referred_table"] for foreign_key in user_role_foreign_keys} == {"role", "user"}
         assert any(index["name"] == "ix_user_email" and index["unique"] == 1 for index in email_indexes)
     finally:
         engine.dispose()
@@ -185,9 +211,185 @@ def test_user_model_persists_defaults_and_generated_uuid() -> None:
         assert user.is_active is True
         assert user.is_verified is False
         assert user.is_superuser is False
+        assert user.roles == []
         assert user.totp_secret is None
     finally:
         engine.dispose()
+
+
+def test_role_normalization_helpers_preserve_flat_membership_contract() -> None:
+    """The shared role helpers normalize iterables and scalar names consistently."""
+    assert normalize_roles([" Billing ", "admin", "ADMIN"]) == ["admin", "billing"]
+    assert normalize_roles((" Support ", "admin", "ADMIN")) == ["admin", "support"]
+    assert normalize_roles(None) == []
+    assert normalize_role_name(" Support ") == "support"
+
+
+def test_user_model_normalizes_roles_and_persists_relational_membership() -> None:
+    """Bundled users persist deterministic roles through role and user-role tables."""
+    engine = create_test_engine()
+    try:
+        User.metadata.create_all(engine)
+
+        with Session(engine) as session:
+            user = User(
+                email="roles@example.com",
+                hashed_password="hashed-password",
+                roles=[" Billing ", "admin", "ADMIN"],
+            )
+            session.add(user)
+            session.commit()
+            session.refresh(user)
+
+            assert user.roles == ["admin", "billing"]
+            assert isinstance(user.roles, list)
+            assert session.execute(select(Role.name).order_by(Role.name)).scalars().all() == ["admin", "billing"]
+            assert session.execute(select(UserRole.role_name).order_by(UserRole.role_name)).scalars().all() == [
+                "admin",
+                "billing",
+            ]
+    finally:
+        engine.dispose()
+
+
+def test_user_model_role_reassignment_replaces_assignment_rows() -> None:
+    """Assigning a new role iterable replaces the stored association rows."""
+    engine = create_test_engine()
+    try:
+        User.metadata.create_all(engine)
+
+        with Session(engine) as session:
+            user = User(email="reassign@example.com", hashed_password="hashed-password", roles=["admin", "billing"])
+            session.add(user)
+            session.commit()
+
+            user.roles = [" Support ", "admin", "ADMIN"]
+            session.commit()
+            session.refresh(user)
+
+            assert user.roles == ["admin", "support"]
+            assert session.execute(select(UserRole.role_name).order_by(UserRole.role_name)).scalars().all() == [
+                "admin",
+                "support",
+            ]
+    finally:
+        engine.dispose()
+
+
+def test_role_catalog_rows_are_global_and_unique_across_users() -> None:
+    """Repeated role names reuse one role row while keeping per-user assignment rows."""
+    engine = create_test_engine()
+    try:
+        User.metadata.create_all(engine)
+
+        with Session(engine) as session:
+            session.add_all(
+                [
+                    User(email="first@example.com", hashed_password="first-hash", roles=["admin"]),
+                    User(email="second@example.com", hashed_password="second-hash", roles=["ADMIN", "support"]),
+                ],
+            )
+            session.commit()
+
+            assert session.execute(select(Role.name).order_by(Role.name)).scalars().all() == ["admin", "support"]
+            assert session.execute(
+                select(UserRole.role_name).order_by(UserRole.role_name, UserRole.user_id),
+            ).scalars().all() == [
+                "admin",
+                "admin",
+                "support",
+            ]
+    finally:
+        engine.dispose()
+
+
+def test_pending_role_catalog_rows_are_reused_during_user_role_flush() -> None:
+    """Pre-created pending role rows satisfy assignment flushes without duplicates."""
+    engine = create_test_engine()
+    try:
+        User.metadata.create_all(engine)
+
+        with Session(engine) as session:
+            session.add(Role(name=" Admin "))
+            session.add(User(email="pending-role@example.com", hashed_password="hashed-password", roles=["admin"]))
+            session.commit()
+
+            assert session.execute(select(Role.name)).scalars().all() == ["admin"]
+            assert session.execute(select(UserRole.role_name)).scalars().all() == ["admin"]
+    finally:
+        engine.dispose()
+
+
+def test_insert_missing_role_row_ignores_duplicate_role_race_when_role_now_exists() -> None:
+    """Concurrent duplicate role creation is tolerated when the winner row now exists."""
+
+    class _Savepoint:
+        def __enter__(self) -> Self:
+            return self
+
+        def __exit__(self, exc_type: object, exc: object, traceback: object) -> bool:
+            del exc_type, exc, traceback
+            return False
+
+    class _Connection:
+        def begin_nested(self) -> _Savepoint:
+            return _Savepoint()
+
+        def execute(self, statement: object) -> None:
+            del statement
+            statement_text = "INSERT INTO role (name) VALUES (?)"
+            raise IntegrityError(statement_text, {"name": "admin"}, sqlite3.IntegrityError())
+
+    class _Session:
+        def connection(self) -> _Connection:
+            return _Connection()
+
+        def scalar(self, statement: object) -> str:
+            del statement
+            return "admin"
+
+    auth_model_mixins_module._insert_missing_role_row(
+        cast("Any", _Session()),
+        role_model=Role,
+        role_name_column=Role.name,
+        role_name="admin",
+    )
+
+
+def test_insert_missing_role_row_reraises_non_duplicate_integrity_errors() -> None:
+    """Unexpected role-row insert failures are not silently swallowed."""
+
+    class _Savepoint:
+        def __enter__(self) -> Self:
+            return self
+
+        def __exit__(self, exc_type: object, exc: object, traceback: object) -> bool:
+            del exc_type, exc, traceback
+            return False
+
+    class _Connection:
+        def begin_nested(self) -> _Savepoint:
+            return _Savepoint()
+
+        def execute(self, statement: object) -> None:
+            del statement
+            statement_text = "INSERT INTO role (name) VALUES (?)"
+            raise IntegrityError(statement_text, {"name": "admin"}, sqlite3.IntegrityError())
+
+    class _Session:
+        def connection(self) -> _Connection:
+            return _Connection()
+
+        def scalar(self, statement: object) -> None:
+            del statement
+
+    with pytest.raises(IntegrityError):
+        auth_model_mixins_module._insert_missing_role_row(
+            cast("Any", _Session()),
+            role_model=Role,
+            role_name_column=Role.name,
+            role_name="admin",
+        )
 
 
 def test_user_model_enforces_unique_email_constraint() -> None:
@@ -597,6 +799,82 @@ def test_custom_user_model_can_map_hashed_password_to_legacy_column_via_supporte
         engine.dispose()
 
 
+def test_custom_role_mixins_round_trip_normalized_membership() -> None:
+    """App-owned role-capable users can compose the supported relational role mixins."""
+
+    class CustomRolesBase(DeclarativeBase):
+        """App-owned registry for custom-role coverage."""
+
+        registry = create_registry()
+        metadata = registry.metadata
+        __abstract__ = True
+
+    class CustomRolesUUIDBase(UUIDPrimaryKey, CustomRolesBase):
+        """UUID primary-key base for custom-role coverage."""
+
+        __abstract__ = True
+
+    class CustomRolesUser(UserModelMixin, UserRoleRelationshipMixin, CustomRolesUUIDBase):
+        """Custom user model using the shared relational role contract."""
+
+        __tablename__ = "custom_roles_user"
+
+        auth_user_role_model = "CustomUserRole"
+        auth_user_role_relationship_lazy = ""
+
+    class CustomRole(RoleMixin, CustomRolesBase):
+        """Custom global role catalog row."""
+
+        __tablename__ = "custom_role"
+
+        auth_user_role_model = "CustomUserRole"
+        auth_user_role_relationship_lazy = "selectin"
+
+    class CustomUserRole(UserRoleAssociationMixin, CustomRolesBase):
+        """Custom user-role association row."""
+
+        __tablename__ = "custom_user_role"
+
+        auth_user_model = "CustomRolesUser"
+        auth_user_table = "custom_roles_user"
+        auth_role_model = "CustomRole"
+        auth_role_table = "custom_role"
+
+    engine = create_test_engine()
+    try:
+        CustomRolesUser.metadata.create_all(engine)
+
+        inspector = inspect(engine)
+        user_columns = {column["name"] for column in inspector.get_columns("custom_roles_user")}
+        role_columns = {column["name"] for column in inspector.get_columns("custom_role")}
+        user_role_columns = {column["name"] for column in inspector.get_columns("custom_user_role")}
+
+        assert "roles" not in user_columns
+        assert role_columns == {"name"}
+        assert user_role_columns == {"role_name", "user_id"}
+        assert inspect(CustomRolesUser).relationships["role_assignments"].lazy == "select"
+        assert inspect(CustomRole).relationships["user_assignments"].lazy == "selectin"
+
+        with Session(engine) as session:
+            user = CustomRolesUser(
+                email="custom-roles@example.com",
+                hashed_password="custom-hash",
+                roles=[" Support ", "admin", "ADMIN"],
+            )
+            session.add(user)
+            session.commit()
+            session.refresh(user)
+
+            assert user.roles == ["admin", "support"]
+            assert isinstance(user.roles, list)
+            assert session.execute(select(CustomRole.name).order_by(CustomRole.name)).scalars().all() == [
+                "admin",
+                "support",
+            ]
+    finally:
+        engine.dispose()
+
+
 def test_explicit_hashed_password_column_override_remains_supported_for_compatibility() -> None:
     """Explicit ``hashed_password = mapped_column(...)`` overrides still work for older custom models."""
 
@@ -720,11 +998,19 @@ def test_reference_user_model_inverse_relationship_contracts_are_stable() -> Non
     user_relationships = inspect(User).relationships
 
     assert issubclass(User, UserModelMixin)
+    assert issubclass(User, UserRoleRelationshipMixin)
     assert issubclass(User, UserAuthRelationshipMixin)
+    assert issubclass(Role, RoleMixin)
+    assert issubclass(UserRole, UserRoleAssociationMixin)
     assert issubclass(OAuthAccount, OAuthAccountMixin)
     assert issubclass(AccessToken, AccessTokenMixin)
     assert issubclass(RefreshToken, RefreshTokenMixin)
-    assert sorted(user_relationships.keys()) == ["access_tokens", "oauth_accounts", "refresh_tokens"]
+    assert sorted(user_relationships.keys()) == [
+        "access_tokens",
+        "oauth_accounts",
+        "refresh_tokens",
+        "role_assignments",
+    ]
     assert user_relationships["access_tokens"].mapper.class_ is AccessToken
     assert user_relationships["access_tokens"].back_populates == "user"
     assert user_relationships["access_tokens"].lazy == "select"
@@ -749,12 +1035,26 @@ def test_reference_user_model_inverse_relationship_contracts_are_stable() -> Non
         ("id", "user_id"),
     ]
     assert user_relationships["oauth_accounts"].uselist is True
+    assert user_relationships["role_assignments"].mapper.class_ is UserRole
+    assert user_relationships["role_assignments"].back_populates == "user"
+    assert user_relationships["role_assignments"].lazy == "selectin"
+    assert user_relationships["role_assignments"]._user_defined_foreign_keys == set()
+    assert [(left.key, right.key) for left, right in user_relationships["role_assignments"].synchronize_pairs] == [
+        ("id", "user_id"),
+    ]
+    assert user_relationships["role_assignments"].uselist is True
     assert inspect(AccessToken).relationships["user"].mapper.class_ is User
     assert inspect(AccessToken).relationships["user"].back_populates == "access_tokens"
     assert inspect(RefreshToken).relationships["user"].mapper.class_ is User
     assert inspect(RefreshToken).relationships["user"].back_populates == "refresh_tokens"
     assert inspect(OAuthAccount).relationships["user"].mapper.class_ is User
     assert inspect(OAuthAccount).relationships["user"].back_populates == "oauth_accounts"
+    assert inspect(UserRole).relationships["user"].mapper.class_ is User
+    assert inspect(UserRole).relationships["user"].back_populates == "role_assignments"
+    assert inspect(UserRole).relationships["role"].mapper.class_ is Role
+    assert inspect(UserRole).relationships["role"].back_populates == "user_assignments"
+    assert inspect(Role).relationships["user_assignments"].mapper.class_ is UserRole
+    assert inspect(Role).relationships["user_assignments"].back_populates == "role"
 
 
 @pytest.mark.imports
@@ -970,6 +1270,7 @@ def test_plugin_runtime_bootstrap_is_idempotent_with_models_helper() -> None:
         "from litestar_auth._plugin.config import DatabaseTokenAuthConfig\n"
         "class UserModel:\n"
         "    email = 'user@example.com'\n"
+        "    roles = []\n"
         "class UserManager:\n"
         "    def __init__(self, user_db: object, **kwargs: object) -> None:\n"
         "        self.user_db = user_db\n"

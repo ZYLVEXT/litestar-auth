@@ -13,6 +13,7 @@ This page summarizes protections and **conscious trade-offs** shipped by the lib
 - **OAuth** — state in `HttpOnly` cookie; strict validation; optional encryption at rest for provider tokens (`oauth_token_encryption_key`); guarded associate-by-email rules (`oauth_trust_provider_email_verified` on plugin-owned routes, `trust_provider_email_verified` on manual controllers, and `oauth_associate_by_email`).
 - **Opaque DB tokens** — keyed digest at rest; the canonical plugin path is `DatabaseTokenAuthConfig` plus `LitestarAuthConfig(..., database_token_auth=...)`, and legacy plaintext acceptance is migration-only and unsafe for production.
 - **Rate limiting** — optional per-endpoint limits; in-memory backend is single-process only.
+- **Route-level role checks** — `has_any_role(...)` and `has_all_roles(...)` reuse the same normalized flat-role semantics as persistence and manager writes, and they fail closed if the authenticated user does not expose the documented role-capable contract.
 
 ## Plugin-managed downgrade paths
 
@@ -42,7 +43,7 @@ If you are migrating from a hand-assembled DB bearer backend, move that setup to
 ## Limitations (by design)
 
 - No built-in **email** sending — you must implement hooks.
-- No **RBAC** or **WebAuthn** in core — extend in your application.
+- No **RBAC** or **WebAuthn** in core — the built-in role guards are flat membership checks only; extend in your application for permission matrices or object-level policy.
 - **Durable JWT revocation** is not automatic for every deployment mode — the default `JWTStrategy(secret=...)` posture remains compatibility-grade and process-local. Use Redis (or equivalent) denylist for multi-worker production if you rely on revoke.
 
 ## Further reading

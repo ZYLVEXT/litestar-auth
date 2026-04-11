@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, cast
 from uuid import UUID
 
+import msgspec
 import pytest
 from litestar.config.app import AppConfig
 
@@ -669,6 +670,76 @@ def test_validate_user_model_login_identifier_fields_accepts_present_orm_email()
     config.login_identifier = "email"
 
     validate_user_model_login_identifier_fields(config)
+
+
+def test_validate_config_rejects_role_aware_builtin_surfaces_for_roleless_user_model() -> None:
+    """Plugin validation fails fast when built-in role-aware schemas target a role-less user model."""
+
+    class _RolelessUserModel:
+        id = UUID(int=0)
+        email = "roleless@example.com"
+        hashed_password = "hashed-password"
+        is_active = True
+        is_verified = False
+        is_superuser = False
+
+    config = _minimal_config()
+    config.user_model = cast("type[ExampleUser]", _RolelessUserModel)
+
+    with pytest.raises(validation_module.ConfigurationError, match=r"has no 'roles'.*schema fields that include"):
+        validate_config(config)
+
+
+def test_validate_config_allows_roleless_user_model_with_roleless_custom_schemas() -> None:
+    """Custom schemas that omit roles keep the supported role-less user-model path valid."""
+
+    class _RolelessUserModel:
+        id = UUID(int=0)
+        email = "roleless@example.com"
+        hashed_password = "hashed-password"
+        is_active = True
+        is_verified = False
+        is_superuser = False
+
+    class _RolelessUserRead(msgspec.Struct):
+        id: UUID
+        email: str
+        is_active: bool
+        is_verified: bool
+        is_superuser: bool
+
+    class _RolelessUserUpdate(msgspec.Struct, omit_defaults=True):
+        email: str | None = None
+
+    config = _minimal_config()
+    config.user_model = cast("type[ExampleUser]", _RolelessUserModel)
+    config.user_read_schema = _RolelessUserRead
+    config.user_update_schema = _RolelessUserUpdate
+    config.include_users = True
+
+    validate_config(config)
+
+
+def test_validate_config_rejects_roleless_user_model_for_users_surface_with_role_aware_schemas() -> None:
+    """The users controller also fails fast when its effective schemas still require roles."""
+
+    class _RolelessUserModel:
+        id = UUID(int=0)
+        email = "roleless@example.com"
+        hashed_password = "hashed-password"
+        is_active = True
+        is_verified = False
+        is_superuser = False
+
+    config = _minimal_config()
+    config.user_model = cast("type[ExampleUser]", _RolelessUserModel)
+    config.include_register = False
+    config.include_verify = False
+    config.include_reset_password = False
+    config.include_users = True
+
+    with pytest.raises(validation_module.ConfigurationError, match=r"users responses, users update requests"):
+        validate_config(config)
 
 
 def test_validate_password_validator_config_rejects_mixed_configuration() -> None:

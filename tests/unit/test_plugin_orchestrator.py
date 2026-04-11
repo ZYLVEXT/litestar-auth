@@ -85,8 +85,14 @@ def _current_startup_backend_template_type() -> type[Any]:
 
 def _current_database_token_strategy_type() -> type[Any]:
     """Return the current DB-token strategy class after reload-oriented tests."""
-    strategy_module = importlib.import_module("litestar_auth.authentication.strategy")
-    return cast("type[Any]", strategy_module.DatabaseTokenStrategy)
+    db_strategy_module = importlib.import_module("litestar_auth.authentication.strategy.db")
+    return cast("type[Any]", db_strategy_module.DatabaseTokenStrategy)
+
+
+def _current_authentication_backend_type() -> type[Any]:
+    """Return the current backend class after reload-oriented tests."""
+    backend_module = importlib.import_module("litestar_auth.authentication.backend")
+    return cast("type[Any]", backend_module.AuthenticationBackend)
 
 
 def test_plugin_module_executes_under_coverage() -> None:
@@ -1175,38 +1181,38 @@ def test_session_bound_backends_rebinds_each_backend_to_current_session() -> Non
 
 def test_session_bound_backends_rebinds_database_token_backends_in_order_and_preserves_names() -> None:
     """Canonical DB bearer backends keep public names/order while rebinding strategies per request."""
-    first_backend = AuthenticationBackend[ExampleUser, UUID](
+    database_token_strategy_type = _current_database_token_strategy_type()
+    authentication_backend_type = _current_authentication_backend_type()
+    first_backend = authentication_backend_type(
         name="primary",
         transport=BearerTransport(),
-        strategy=cast(
-            "Any",
-            DatabaseTokenStrategy(
-                session=cast("Any", object()),
-                token_hash_secret="a" * 40,
-                max_age=timedelta(minutes=10),
-            ),
+        strategy=database_token_strategy_type(
+            session=cast("Any", object()),
+            token_hash_secret="a" * 40,
+            max_age=timedelta(minutes=10),
         ),
     )
-    second_strategy = DatabaseTokenStrategy(
+    second_strategy = database_token_strategy_type(
         session=cast("Any", object()),
         token_hash_secret="b" * 40,
         refresh_max_age=timedelta(days=14),
         accept_legacy_plaintext_tokens=True,
     )
-    second_backend = AuthenticationBackend[ExampleUser, UUID](
+    second_backend = authentication_backend_type(
         name="secondary",
         transport=BearerTransport(),
-        strategy=cast("Any", second_strategy),
+        strategy=second_strategy,
     )
     config = _minimal_config(backends=[first_backend, second_backend])
     config.allow_legacy_plaintext_tokens = True
     plugin = LitestarAuth(config)
     active_session = object()
-    database_token_strategy_type = _current_database_token_strategy_type()
 
     rebound_backends = plugin._session_bound_backends(cast("Any", active_session))
 
     assert [backend.name for backend in rebound_backends] == ["primary", "secondary"]
+    assert isinstance(rebound_backends[0], authentication_backend_type)
+    assert isinstance(rebound_backends[1], authentication_backend_type)
     assert rebound_backends[0] is not first_backend
     assert rebound_backends[1] is not second_backend
     assert rebound_backends[0].transport is first_backend.transport
@@ -1243,6 +1249,7 @@ def test_session_bound_backends_realizes_database_token_preset_from_request_sess
     active_session = type("_ActiveSession", (), {"marker": "request-session"})()
     startup_backend_template_type = _current_startup_backend_template_type()
     database_token_strategy_type = _current_database_token_strategy_type()
+    authentication_backend_type = _current_authentication_backend_type()
 
     rebound_backends = plugin._session_bound_backends(cast("Any", active_session))
     template_backend = config.startup_backends()[0]
@@ -1251,7 +1258,7 @@ def test_session_bound_backends_realizes_database_token_preset_from_request_sess
 
     assert [backend.name for backend in rebound_backends] == ["database"]
     assert isinstance(template_backend, startup_backend_template_type)
-    assert isinstance(rebound_backends[0], AuthenticationBackend)
+    assert isinstance(rebound_backends[0], authentication_backend_type)
     assert rebound_backends[0] is not template_backend
     assert isinstance(template_strategy, database_token_strategy_type)
     assert isinstance(rebound_strategy, database_token_strategy_type)
@@ -1532,13 +1539,14 @@ def test_provide_request_backends_realizes_database_token_preset_from_request_se
     active_session = type("_ActiveSession", (), {"marker": "request-session"})()
     startup_backend_template_type = _current_startup_backend_template_type()
     database_token_strategy_type = _current_database_token_strategy_type()
+    authentication_backend_type = _current_authentication_backend_type()
     template_backend = config.startup_backends()[0]
 
     rebound_backends = cast("Any", plugin._provide_request_backends)(db_session=active_session)
 
     assert isinstance(template_backend, startup_backend_template_type)
     assert [backend.name for backend in rebound_backends] == ["database"]
-    assert isinstance(rebound_backends[0], AuthenticationBackend)
+    assert isinstance(rebound_backends[0], authentication_backend_type)
     assert isinstance(template_backend.strategy, database_token_strategy_type)
     assert isinstance(rebound_backends[0].strategy, database_token_strategy_type)
     assert rebound_backends[0].strategy.session is active_session

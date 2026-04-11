@@ -56,6 +56,7 @@ class ExtendedUserRead(msgspec.Struct):
     is_active: bool
     is_verified: bool
     is_superuser: bool
+    roles: list[str]
     bio: str
 
 
@@ -67,6 +68,7 @@ class ExtendedUserUpdate(msgspec.Struct, omit_defaults=True):
     is_active: bool | None = None
     is_verified: bool | None = None
     is_superuser: bool | None = None
+    roles: list[str] | None = None
     bio: str | None = None
 
 
@@ -97,6 +99,7 @@ def build_app() -> tuple[
         hashed_password=password_helper.hash("admin-password"),
         bio="admin-bio",
         is_superuser=True,
+        roles=["admin"],
     )
     user_db = InMemoryUserDatabase([admin_user])
     user_manager = UsersControllerManager(
@@ -184,6 +187,7 @@ def test_custom_msgspec_schemas_publish_request_bodies_in_openapi(
     assert next(iter(update_user_request_body.content.values())).schema.ref == "#/components/schemas/ExtendedUserUpdate"
     assert "bio" in (register_schema.properties or {})
     assert "bio" in (update_schema.properties or {})
+    assert "roles" in (update_schema.properties or {})
     assert register_email_schema.max_length == EMAIL_MAX_LENGTH
     assert register_email_schema.pattern == EMAIL_PATTERN
     assert register_schema.properties["password"].min_length == DEFAULT_MINIMUM_PASSWORD_LENGTH
@@ -225,6 +229,7 @@ async def test_custom_msgspec_schemas_extend_register_and_users_responses(
         "is_active": True,
         "is_verified": False,
         "is_superuser": False,
+        "roles": [],
         "bio": "",
     }
 
@@ -238,25 +243,38 @@ async def test_custom_msgspec_schemas_extend_register_and_users_responses(
     patch_me_response = await test_client.patch(
         "/users/me",
         headers=headers,
-        json={"bio": "updated-bio", "is_superuser": True},
+        json={"bio": "updated-bio", "is_superuser": True, "roles": [" Support ", "ADMIN"]},
     )
 
     assert get_me_response.status_code == HTTP_OK
     assert not get_me_response.json()["bio"]
+    assert get_me_response.json()["roles"] == []
 
     assert patch_me_response.status_code == HTTP_OK
     assert patch_me_response.json()["bio"] == "updated-bio"
     assert patch_me_response.json()["is_superuser"] is False
+    assert patch_me_response.json()["roles"] == []
 
     stored_user = await user_db.get(created_user.id)
     assert stored_user is not None
     assert stored_user.bio == "updated-bio"
     assert stored_user.is_superuser is False
+    assert stored_user.roles == []
 
     admin_token = await strategy.write_token(admin_user)
+    admin_headers = {"Authorization": f"Bearer {admin_token}"}
+    admin_patch_response = await test_client.patch(
+        f"/users/{created_user.id}",
+        headers=admin_headers,
+        json={"roles": [" Support ", "ADMIN"]},
+    )
+    assert admin_patch_response.status_code == HTTP_OK
+    assert admin_patch_response.json()["roles"] == ["admin", "support"]
+
     list_response = await test_client.get("/users", headers={"Authorization": f"Bearer {admin_token}"})
     assert list_response.status_code == HTTP_OK
     assert list_response.json()["items"][1]["bio"] == "updated-bio"
+    assert list_response.json()["items"][1]["roles"] == ["admin", "support"]
 
 
 async def test_custom_registration_schema_reuses_builtin_email_and_password_contract(

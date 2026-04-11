@@ -16,16 +16,23 @@ from sqlalchemy.orm import Session as SASession
 
 from litestar_auth.authentication.strategy.db_models import AccessToken
 from litestar_auth.db import BaseOAuthAccountStore, BaseUserStore
-from litestar_auth.db.sqlalchemy import SQLAlchemyUserDatabase, _build_oauth_repository, _build_user_repository
+from litestar_auth.db.sqlalchemy import (
+    SQLAlchemyUserDatabase,
+    _build_oauth_repository,
+    _build_user_load,
+    _build_user_repository,
+)
 from litestar_auth.exceptions import ConfigurationError, OAuthAccountAlreadyLinkedError
 from litestar_auth.models import (
     AccessTokenMixin,
     OAuthAccount,
     OAuthAccountMixin,
     RefreshTokenMixin,
+    Role,
     User,
     UserAuthRelationshipMixin,
     UserModelMixin,
+    UserRole,
 )
 from litestar_auth.oauth_encryption import OAuthTokenEncryption, bind_oauth_token_encryption
 
@@ -283,6 +290,15 @@ def test_build_oauth_repository_returns_cached_repository_type() -> None:
     assert oauth_repository.model_type is OAuthAccount
 
 
+def test_build_user_load_returns_empty_tuple_for_non_inspectable_models() -> None:
+    """Non-SQLAlchemy user classes do not raise when load options are requested."""
+
+    class PlainUser:
+        """Deliberately unmapped class used to exercise the inspection fallback."""
+
+    assert _build_user_load(cast("Any", PlainUser)) == ()
+
+
 def test_custom_user_relationship_option_overrides_keep_mapper_contract_stable() -> None:
     """Custom relationship overrides keep inverse mapper wiring intact while exposing explicit relationship options."""
     configured_relationships = inspect(ConfiguredUser).relationships
@@ -399,6 +415,69 @@ async def test_sqlalchemy_user_database_update_merges_detached_instances(session
     assert resolved_user.is_active is False
 
 
+async def test_sqlalchemy_user_database_hydrates_relation_backed_roles_on_create_and_lookup(session: SASession) -> None:
+    """Create and lookup paths return users whose role snapshots survive session detachment."""
+    database = create_database(session)
+
+    created_user = await database.create(
+        {
+            "email": "role-create@example.com",
+            "hashed_password": "hashed-password",
+            "roles": [" Billing ", "ADMIN", "admin"],
+        },
+    )
+    fetched_by_id = await database.get(created_user.id)
+    fetched_by_email = await database.get_by_email(created_user.email)
+    fetched_by_field = await database.get_by_field("email", created_user.email)
+
+    assert fetched_by_id is not None
+    assert fetched_by_email is not None
+    assert fetched_by_field is not None
+    session.expunge_all()
+    assert created_user.roles == ["admin", "billing"]
+    assert fetched_by_id.roles == ["admin", "billing"]
+    assert fetched_by_email.roles == ["admin", "billing"]
+    assert fetched_by_field.roles == ["admin", "billing"]
+    assert list(session.execute(select(Role.name).order_by(Role.name)).scalars()) == ["admin", "billing"]
+    assert list(
+        session.execute(
+            select(UserRole.role_name).where(UserRole.user_id == created_user.id).order_by(UserRole.role_name),
+        ).scalars(),
+    ) == ["admin", "billing"]
+
+
+async def test_sqlalchemy_user_database_update_replaces_role_assignments_without_duplicates(session: SASession) -> None:
+    """Updating roles replaces association rows deterministically and keeps the flat list contract."""
+    database = create_database(session)
+    created_user = await database.create(
+        {
+            "email": "role-update@example.com",
+            "hashed_password": "hashed-password",
+            "roles": ["member"],
+        },
+    )
+    session.expunge(created_user)
+
+    updated_user = await database.update(
+        created_user,
+        {
+            "roles": [" Support ", "admin", "ADMIN"],
+        },
+    )
+    refreshed_user = await database.get(updated_user.id)
+
+    assert refreshed_user is not None
+    session.expunge_all()
+    assert updated_user.roles == ["admin", "support"]
+    assert refreshed_user.roles == ["admin", "support"]
+    assert list(
+        session.execute(
+            select(UserRole.role_name).where(UserRole.user_id == updated_user.id).order_by(UserRole.role_name),
+        ).scalars(),
+    ) == ["admin", "support"]
+    assert list(session.execute(select(Role.name).order_by(Role.name)).scalars()) == ["admin", "member", "support"]
+
+
 async def test_sqlalchemy_user_database_list_users(session: SASession) -> None:
     """The SQLAlchemy adapter returns paginated users with a total count."""
     database = create_database(session)
@@ -415,6 +494,29 @@ async def test_sqlalchemy_user_database_list_users(session: SASession) -> None:
     assert total == EXPECTED_TOTAL_USERS
     assert len(users) == 1
     assert users[0].email == "page-user-2@example.com"
+
+
+async def test_sqlalchemy_user_database_list_users_hydrates_role_membership(session: SASession) -> None:
+    """Paginated user listings can expose relation-backed role membership after detachment."""
+    database = create_database(session)
+    for index, roles in enumerate((["admin"], ["member"], ["support"]), start=1):
+        await database.create(
+            {
+                "email": f"roles-page-{index}@example.com",
+                "hashed_password": f"hash-{index}",
+                "roles": roles,
+            },
+        )
+
+    users, total = await database.list_users(offset=0, limit=10)
+
+    assert total == EXPECTED_TOTAL_USERS
+    session.expunge_all()
+    assert sorted((user.email, user.roles) for user in users) == [
+        ("roles-page-1@example.com", ["admin"]),
+        ("roles-page-2@example.com", ["member"]),
+        ("roles-page-3@example.com", ["support"]),
+    ]
 
 
 async def test_sqlalchemy_user_database_list_users_empty_page(session: SASession) -> None:

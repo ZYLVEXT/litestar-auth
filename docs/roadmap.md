@@ -10,7 +10,8 @@ Registration, login/logout, email verification and password reset, Bearer and Co
 
 - Built-in **email transport** (use hooks).
 - **UI** or admin panel.
-- Full **RBAC** / permissions framework.
+- Full **RBAC** / permissions framework, including permission matrices or policy DSLs. The shipped
+  `role` / `user_role` tables are only the persistence layer behind flat role membership.
 - **WebAuthn** / passkeys.
 - Built-in **audit log** storage.
 - End-user **session dashboard** API.

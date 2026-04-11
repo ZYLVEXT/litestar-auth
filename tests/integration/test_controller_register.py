@@ -68,6 +68,7 @@ class PrivilegedRegistrationCreate(msgspec.Struct):
     is_superuser: bool = False
     is_active: bool = True
     is_verified: bool = False
+    roles: list[str] | None = None
 
 
 class ExtendedRegistrationCreate(msgspec.Struct):
@@ -145,6 +146,7 @@ async def test_register_creates_user_returns_public_payload_and_calls_hook(
     assert payload["is_active"] is True
     assert payload["is_verified"] is False
     assert payload["is_superuser"] is False
+    assert payload["roles"] == []
     assert "hashed_password" not in payload
 
     created_user = await user_db.get_by_email("new@example.com")
@@ -311,6 +313,7 @@ async def test_register_ignores_privileged_fields_from_custom_schema(
                 "is_superuser": True,
                 "is_active": False,
                 "is_verified": True,
+                "roles": [" Billing ", "ADMIN"],
             },
         )
 
@@ -319,12 +322,14 @@ async def test_register_ignores_privileged_fields_from_custom_schema(
     assert payload["is_superuser"] is False
     assert payload["is_active"] is True
     assert payload["is_verified"] is False
+    assert payload["roles"] == []
 
     created_user = await user_db.get_by_email("privileged@example.com")
     assert created_user is not None
     assert created_user.is_superuser is False
     assert created_user.is_active is True
     assert created_user.is_verified is False
+    assert created_user.roles == []
 
 
 async def test_register_ignores_non_safe_fields_from_custom_schema(

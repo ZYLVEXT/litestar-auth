@@ -53,7 +53,8 @@ Multiple backends can be configured; the first successful authentication wins fo
 ## Middleware vs guards
 
 - **Middleware** attempts authentication and sets `request.user` when a backend recognizes the request. It does **not** automatically return 401 for anonymous users.
-- **Guards** (`is_authenticated`, `is_active`, `is_verified`, `is_superuser`) enforce access on handlers and route groups.
+- **Guards** (`is_authenticated`, `is_active`, `is_verified`, `is_superuser`, `has_any_role(...)`, `has_all_roles(...)`) enforce access on handlers and route groups.
+- Role guards stay intentionally narrow: they operate on flat normalized role membership and fail closed if the authenticated user does not expose the documented role-capable contract.
 
 This matches Litestar’s pattern: authentication is ambient; authorization is explicit.
 

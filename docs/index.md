@@ -11,7 +11,9 @@ Teams building on [Litestar](https://litestar.dev/) who need registration, login
 - **Plugin entry point** — `LitestarAuth` registers middleware, DI, controllers, and exception handling from one config object.
 - **Backends** — `AuthenticationBackend` combines a **transport** (Bearer or Cookie) with a **strategy** (JWT, database, or Redis tokens).
 - **User manager** — `BaseUserManager` centralizes password hashing, tokens, hooks, and session invalidation.
-- **Guards** — `is_authenticated`, `is_active`, `is_verified`, `is_superuser` for route-level authorization.
+- **Role contract** — bundled and custom SQLAlchemy model families now persist roles through dedicated `role` / `user_role` tables, while built-in responses and guards still expose one normalized flat `roles` collection.
+- **User DTOs** — the built-in register/verify/reset/users responses expose normalized `roles`; self-service updates keep those fields privileged by default.
+- **Guards** — `is_authenticated`, `is_active`, `is_verified`, `is_superuser`, plus `has_any_role(...)` / `has_all_roles(...)` for route-level authorization over flat normalized roles.
 - **Optional** — TOTP, OAuth login and account linking, auth endpoint rate limits.
 
 ## Documentation map

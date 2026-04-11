@@ -29,10 +29,14 @@ if TYPE_CHECKING:
         AccessTokenMixin,
         OAuthAccountMixin,
         RefreshTokenMixin,
+        RoleMixin,
         UserAuthRelationshipMixin,
         UserModelMixin,
+        UserRoleAssociationMixin,
+        UserRoleRelationshipMixin,
     )
     from litestar_auth.models.oauth import OAuthAccount
+    from litestar_auth.models.role import Role, UserRole
     from litestar_auth.models.user import User
 
 __all__ = (
@@ -40,9 +44,14 @@ __all__ = (
     "OAuthAccount",
     "OAuthAccountMixin",
     "RefreshTokenMixin",
+    "Role",
+    "RoleMixin",
     "User",
     "UserAuthRelationshipMixin",
     "UserModelMixin",
+    "UserRole",
+    "UserRoleAssociationMixin",
+    "UserRoleRelationshipMixin",
     "import_token_orm_models",
 )
 
@@ -61,9 +70,14 @@ def __getattr__(name: str) -> object:
         "OAuthAccount": "litestar_auth.models.oauth",
         "OAuthAccountMixin": "litestar_auth.models.mixins",
         "RefreshTokenMixin": "litestar_auth.models.mixins",
+        "Role": "litestar_auth.models.role",
+        "RoleMixin": "litestar_auth.models.mixins",
         "User": "litestar_auth.models.user",
         "UserAuthRelationshipMixin": "litestar_auth.models.mixins",
         "UserModelMixin": "litestar_auth.models.mixins",
+        "UserRole": "litestar_auth.models.role",
+        "UserRoleAssociationMixin": "litestar_auth.models.mixins",
+        "UserRoleRelationshipMixin": "litestar_auth.models.mixins",
     }.get(name)
     if module_name is None:
         msg = f"module {__name__!r} has no attribute {name!r}"

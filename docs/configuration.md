@@ -62,15 +62,25 @@ Controller selection follows that startup inventory:
 
 ## Custom SQLAlchemy `User` and token models
 
-`LitestarAuthConfig.user_model` must satisfy **`UserProtocol`** (see [Types](types.md)): at minimum the fields and behaviors your chosen `BaseUserManager` and strategies use (`id`, `email`, `hashed_password`, `is_active`, `is_verified`, `is_superuser`, `totp_secret` as applicable).
+`LitestarAuthConfig.user_model` must satisfy **`UserProtocol`** (see [Types](types.md)): at minimum the fields and behaviors your chosen `BaseUserManager` and strategies use (`id`, `email`, `hashed_password`, `is_active`, `is_verified`, `is_superuser`, `totp_secret` as applicable). When your app wants the library's flat role-membership contract, expose `roles: Sequence[str]` and satisfy **`RoleCapableUserProtocol`** instead of inferring role support from arbitrary attributes. The bundled `User` already provides that `roles` collection, and custom SQLAlchemy model families can add it with `UserRoleRelationshipMixin`.
 
-This section is the canonical ORM integration guide for bundled token bootstrap, mixin-composed custom model families, `SQLAlchemyUserDatabase`, and the supported password-column hook.
+The built-in `UserRead` / `UserUpdate` schemas now also assume that same `roles` attribute. Apps
+that keep the default register/verify/reset/users controllers should either expose
+`roles: Sequence[str]` on the user model or provide custom `user_read_schema` / `user_update_schema`
+types that intentionally omit role fields. Plugin validation fails fast when an enabled built-in
+route surface still uses a schema with `roles` against a `user_model` that does not expose that
+attribute.
+
+This section is the canonical ORM integration guide for bundled token bootstrap, mixin-composed
+custom model families, relational role composition, `SQLAlchemyUserDatabase`, and the supported
+password-column hook.
 
 | Need | Canonical path | Notes |
 | ---- | -------------- | ----- |
 | Bundled token metadata bootstrap | `from litestar_auth.models import import_token_orm_models` | Explicit helper for metadata registration and Alembic-style autogenerate. |
 | Bundled token runtime bootstrap | `DatabaseTokenAuthConfig` / `LitestarAuthConfig(..., database_token_auth=...)` | `LitestarAuth.on_app_init()` calls the same helper lazily when bundled DB-token models are active. |
-| App-owned ORM classes | `UserModelMixin`, `UserAuthRelationshipMixin`, `AccessTokenMixin`, `RefreshTokenMixin`, `OAuthAccountMixin` | Compose them on the application's own registry instead of copying mapper wiring. |
+| App-owned ORM classes | `UserModelMixin`, `UserAuthRelationshipMixin`, `UserRoleRelationshipMixin`, `RoleMixin`, `UserRoleAssociationMixin`, `AccessTokenMixin`, `RefreshTokenMixin`, `OAuthAccountMixin` | Compose them on the application's own registry instead of copying mapper wiring. |
+| App-owned relational role tables | `UserRoleRelationshipMixin`, `RoleMixin`, `UserRoleAssociationMixin` | Optional role persistence path that keeps `user.roles` as the normalized flat contract. |
 | Custom token strategy tables | `DatabaseTokenModels(...)` | Only needed when `DatabaseTokenStrategy` should use custom token models at runtime. |
 | SQLAlchemy user store | `litestar_auth.db.sqlalchemy.SQLAlchemyUserDatabase` | `user_model` is required; `oauth_account_model` is optional unless OAuth methods are used. |
 | Legacy password column name | `UserModelMixin.auth_hashed_password_column_name` | Keeps the runtime attribute contract on `user.hashed_password`. |
@@ -113,6 +123,83 @@ class User(UserModelMixin, UserAuthRelationshipMixin, UUIDBase):
 ```
 
 `UserModelMixin` provides the bundled email / password / account-state columns, while `UserAuthRelationshipMixin` provides the `access_tokens`, `refresh_tokens`, and `oauth_accounts` relationships with the same `back_populates="user"` wiring the bundled models expect. Leave its relationship-option hooks unset to keep the default contract: SQLAlchemy's normal loader behavior plus inferred foreign-key linkage for `oauth_accounts`. Set any `auth_*_model` hook to `None` when a custom user only composes part of the auth model family instead of all three relationships.
+
+### Optional relational role contract
+
+`UserModelMixin` no longer stores roles on the user row. When your app wants the library-managed
+role contract, compose `UserRoleRelationshipMixin` on the user class and add the sibling role
+tables with `RoleMixin` and `UserRoleAssociationMixin`. That keeps the public
+`user.roles -> list[str]` surface while persisting membership through dedicated relational rows.
+
+```python
+from advanced_alchemy.base import UUIDPrimaryKey, create_registry
+from sqlalchemy.orm import DeclarativeBase
+
+from litestar_auth.models import (
+    RoleMixin,
+    UserModelMixin,
+    UserRoleAssociationMixin,
+    UserRoleRelationshipMixin,
+)
+
+
+class RolesBase(DeclarativeBase):
+    registry = create_registry()
+    metadata = registry.metadata
+    __abstract__ = True
+
+
+class RolesUUIDBase(UUIDPrimaryKey, RolesBase):
+    __abstract__ = True
+
+
+class MyUser(UserModelMixin, UserRoleRelationshipMixin, RolesUUIDBase):
+    __tablename__ = "my_user"
+
+    auth_user_role_model = "MyUserRole"
+
+
+class MyRole(RoleMixin, RolesBase):
+    __tablename__ = "my_role"
+
+    auth_user_role_model = "MyUserRole"
+
+
+class MyUserRole(UserRoleAssociationMixin, RolesBase):
+    __tablename__ = "my_user_role"
+
+    auth_user_model = "MyUser"
+    auth_user_table = "my_user"
+    auth_role_model = "MyRole"
+    auth_role_table = "my_role"
+```
+
+That custom model family persists one normalized global role row per name plus one association row
+per `(user, role)` pair. Managers, schemas, and guards still consume the flat normalized
+`roles: list[str]` user contract.
+
+Migration note: existing deployments that previously used the bundled `user.roles` JSON column (or
+an app-owned copy of that column) should create the new `role` and `user_role` tables, normalize
+and deduplicate existing role arrays, backfill association rows, and then remove or ignore the
+legacy JSON column once application code points at the relational model family. Custom user models
+that want role-capable typing and the built-in role-aware surfaces should compose the mixins above
+or provide an equivalent normalized flat `roles` contract.
+
+Recommended upgrade sequence:
+
+1. Create the new `role` and `user_role` tables, or the equivalent custom tables built from
+   `RoleMixin` and `UserRoleAssociationMixin`.
+2. Read every legacy JSON roles array, trim/lowercase/deduplicate/sort the values with the same
+   normalization semantics the manager uses, and upsert one `role` row per normalized name.
+3. Backfill one association row per `(user_id, role_name)` pair.
+4. Switch application imports and mappings to the bundled `Role` / `UserRole` models or the custom
+   mixin-composed role family.
+5. Drop or ignore the legacy JSON column after the application is fully reading from relational
+   membership.
+
+This redesign changes persistence only. Guards, DTOs, and manager APIs still exchange the same flat
+normalized `user.roles` values, and the library still does not add permission matrices, policy
+DSLs, or role-management endpoints.
 
 If the user table is not `user`, or if you want app-owned token / OAuth tables, compose the sibling mixins on your own declarative base and point the hooks at the app's class names and table names instead of copying relationship code:
 
@@ -739,13 +826,17 @@ For direct/manual wiring, these flags only decide whether plugin-managed validat
 
 | Field | Default | Meaning |
 | ----- | ------- | ------- |
-| `user_read_schema` | `None` | msgspec struct for safe user responses returned by register/verify/reset/users flows. |
+| `user_read_schema` | `None` | msgspec struct for safe user responses returned by register/verify/reset/users flows. The built-in `UserRead` includes normalized `roles`. |
 | `user_create_schema` | `None` | msgspec struct for registration/create request bodies; built-in registration defaults to `UserCreate`. |
-| `user_update_schema` | `None` | msgspec struct for user PATCH bodies. |
+| `user_update_schema` | `None` | msgspec struct for user PATCH bodies. The built-in `UserUpdate` accepts optional `roles`; `/users/me` still strips them while admin `PATCH /users/{id}` can persist them. |
 | `db_session_dependency_key` | `"db_session"` | Litestar DI key for `AsyncSession`. Must be a valid non-keyword Python identifier because Litestar matches dependency keys to callable parameter names. |
 | `db_session_dependency_provided_externally` | `False` | Skip plugin session provider when your app already registers the key. |
 
 `user_*_schema` customizes registration and user CRUD surfaces. It does not rename the built-in auth lifecycle request structs: `LoginCredentials`, `RefreshTokenRequest`, `RequestVerifyToken`, `VerifyToken`, `ForgotPassword`, `ResetPassword`, or the TOTP payloads.
+
+If you keep the built-in role-aware user surface, align custom read/update schemas with that
+contract by adding `roles` to both types. If you intentionally omit `roles`, treat that as a
+deliberate compatibility shim for role-less user models rather than the default library contract.
 
 When app-owned `user_create_schema` or `user_update_schema` structs keep `email` or `password`
 fields, import `UserEmailField` / `UserPasswordField` from `litestar_auth.schemas` instead of

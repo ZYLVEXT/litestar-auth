@@ -33,8 +33,11 @@ Handlers (or routers) use **guards**:
 - `is_active` — `is_active` on the user model.
 - `is_verified` — `is_verified` on the user model.
 - `is_superuser` — admin-only operations.
+- `has_any_role(...)` / `has_all_roles(...)` — flat normalized role membership on an authenticated active user.
 
-When a guard fails, Litestar returns **401** or **403** with the library’s structured error payload where applicable.
+Role guards fail closed when `request.user` does not expose the documented
+role-capable surface. When a guard fails, Litestar returns **401** or **403**
+with the library’s structured error payload where applicable.
 
 ## Logout and refresh
 

@@ -739,6 +739,7 @@ async def test_create_defaults_to_safe_and_strips_non_safe_fields() -> None:
         "password": "test-password",
         "is_superuser": True,
         "is_active": False,
+        "roles": ["admin"],
     }
     result = await manager.create(payload)
 
@@ -746,6 +747,7 @@ async def test_create_defaults_to_safe_and_strips_non_safe_fields() -> None:
     create_payload = user_db.create.await_args.args[0]
     assert "is_superuser" not in create_payload
     assert "is_active" not in create_payload
+    assert "roles" not in create_payload
     assert "password" not in create_payload
     assert create_payload["email"] == created_user.email
 
@@ -766,6 +768,7 @@ async def test_create_safe_false_still_strips_privilege_fields_by_default() -> N
         "is_superuser": True,
         "is_active": False,
         "is_verified": True,
+        "roles": [" Billing ", "admin", "ADMIN"],
     }
     result = await manager.create(payload, safe=False)
 
@@ -792,6 +795,7 @@ async def test_create_allow_privileged_true_preserves_privilege_fields() -> None
         "is_superuser": True,
         "is_active": False,
         "is_verified": True,
+        "roles": [" Billing ", "admin", "ADMIN"],
     }
     result = await manager.create(payload, safe=False, allow_privileged=True)
 
@@ -800,6 +804,8 @@ async def test_create_allow_privileged_true_preserves_privilege_fields() -> None
     assert create_payload["is_superuser"] is True
     assert create_payload["is_active"] is False
     assert create_payload["is_verified"] is True
+    assert create_payload["roles"] == ["admin", "billing"]
+    assert isinstance(create_payload["roles"], list)
     assert "password" not in create_payload
     assert create_payload["email"] == created_user.email
 
@@ -1561,6 +1567,38 @@ async def test_update_calls_on_after_update_with_correct_arguments() -> None:
     event_user, event_dict = manager.after_update_events[0]
     assert event_user is updated_user
     assert event_dict == {"is_active": False}
+
+
+async def test_update_normalizes_roles_from_mapping_payload() -> None:
+    """update() applies the shared normalized role contract for mapping inputs."""
+    user_db = AsyncMock()
+    password_helper = PasswordHelper()
+    manager = TrackingUserManager(user_db, password_helper)
+    user = _build_user(password_helper)
+    updated_user = replace(user)
+    user_db.update.return_value = updated_user
+
+    result = await manager.update({"roles": [" Support ", "admin", "ADMIN"]}, user)
+
+    assert result is updated_user
+    user_db.update.assert_awaited_once_with(user, {"roles": ["admin", "support"]})
+    assert manager.after_update_events == [(updated_user, {"roles": ["admin", "support"]})]
+
+
+async def test_update_normalizes_roles_from_builtin_update_schema() -> None:
+    """update() preserves the normalized ``list[str]`` role contract for built-in DTO payloads."""
+    user_db = AsyncMock()
+    password_helper = PasswordHelper()
+    manager = TrackingUserManager(user_db, password_helper)
+    user = _build_user(password_helper)
+    updated_user = replace(user)
+    user_db.update.return_value = updated_user
+
+    result = await manager.update(UserUpdate(roles=[" Support ", "admin", "ADMIN"]), user)
+
+    assert result is updated_user
+    user_db.update.assert_awaited_once_with(user, {"roles": ["admin", "support"]})
+    assert manager.after_update_events == [(updated_user, {"roles": ["admin", "support"]})]
 
 
 async def test_update_rejects_weak_password_before_hashing() -> None:

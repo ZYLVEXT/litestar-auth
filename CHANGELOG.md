@@ -1,3 +1,38 @@
+## Unreleased
+
+### Added
+
+- **Bundled relational role models and mixins are now part of the public ORM surface** — `Role`,
+  `UserRole`, `RoleMixin`, `UserRoleAssociationMixin`, and `UserRoleRelationshipMixin` are now
+  exported from `litestar_auth.models` so bundled and custom SQLAlchemy model families can use
+  first-class role tables without copying mapper wiring.
+- **Built-in role guard factories are now exported** — `has_any_role(*roles)` and `has_all_roles(*roles)` return Litestar-compatible guard callables for flat normalized role membership on app-owned routes and custom controller/router surfaces.
+
+### Changed
+
+- **Bundled role persistence now uses relational tables instead of a JSON column** — the bundled
+  `User` and the supported custom-model path now persist global role membership through `role` and
+  `user_role` rows, while `user.roles` remains the normalized flat `list[str]` contract consumed by
+  managers, schemas, and guards.
+- **Manager create/update flows now share one role-normalization path** — when role membership is persisted through `BaseUserManager`, the library normalizes it to trimmed, lowercased, deduplicated, sorted strings, and create-time safe/default registration semantics keep `roles` privileged unless callers explicitly opt into privileged input.
+- **Built-in auth and users DTOs are now role-aware** — default `UserRead` responses from register, verify, reset-password, and `/users/*` routes now include normalized `roles`, and default `UserUpdate` accepts optional `roles` so superuser `PATCH /users/{id}` can manage them while `/users/me` continues stripping privileged fields.
+- **Route-level role authorization now has a canonical guard surface** — `has_any_role(...)` / `has_all_roles(...)` require authenticated active users, fail closed for role-incapable user objects, and compare runtime/user-configured role names with the same normalization semantics as persistence and manager writes.
+
+### Migration
+
+- Existing deployments that previously stored roles in the bundled `user.roles` JSON column (or an
+  app-owned copy of that column) should create `role` and `user_role` tables, normalize and
+  deduplicate current role arrays, backfill association rows, and then remove or ignore the legacy
+  column once the application points at the relational model family.
+- Custom user models that want the same role-capable typing and built-in role-aware surfaces should
+  compose `UserRoleRelationshipMixin` plus sibling `RoleMixin` / `UserRoleAssociationMixin`
+  classes, or provide an equivalent normalized flat `roles` contract.
+- Import the bundled relational role tables from `litestar_auth.models.role` when you need them
+  without registering the reference `User` mapper, or compose the mixins on your own declarative
+  base for app-owned table names and registries.
+- Clients using the built-in register/verify/reset/users responses should expect a new `roles` array in the default payload shape. Apps that keep the built-in controllers with role-less user models should provide custom `user_read_schema` / `user_update_schema` types that intentionally omit `roles`.
+- Applications that want to use the built-in role guard factories on app-owned routes should ensure their authenticated user type satisfies `RoleCapableUserProtocol`; otherwise the guards now fail closed with **403** instead of relying on ad hoc `user.roles` access.
+
 ## 1.6.1 (2026-04-11)
 
 ### Added

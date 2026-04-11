@@ -48,7 +48,7 @@ class _StrategyBackendProtocol[UP](Protocol):
 
 
 SAFE_FIELDS = frozenset({"email", "password"})
-PRIVILEGED_FIELDS = frozenset({"is_superuser", "is_active", "is_verified"})
+PRIVILEGED_FIELDS = frozenset({"is_superuser", "is_active", "is_verified", "roles"})
 
 
 class UserLifecycleService[UP, ID]:
@@ -104,6 +104,7 @@ class UserLifecycleService[UP, ID]:
             "hashed_password": hashed_password,
         }
         create_dict.pop("password", None)
+        self._normalize_roles_payload(create_dict)
         user = await self._manager.user_db.create(create_dict)
         token = self._manager.write_verify_token(user)
         await self._manager.on_after_register(user, token)
@@ -156,6 +157,7 @@ class UserLifecycleService[UP, ID]:
         if not update_dict:
             return user
 
+        self._normalize_roles_payload(update_dict)
         new_email = await self._normalize_and_validate_email_change(update_dict=update_dict, user=user)
         email_changed = new_email is not None and new_email != _managed_user(user).email
         if email_changed and self._manager.reset_verification_on_email_change:
@@ -205,6 +207,13 @@ class UserLifecycleService[UP, ID]:
         update_dict.pop("password", None)
         return True
 
+    def _normalize_roles_payload(self, update_dict: dict[str, Any]) -> None:
+        """Normalize roles when a payload includes explicit role membership."""
+        if "roles" not in update_dict:
+            return
+
+        update_dict["roles"] = self._normalize_roles(update_dict["roles"])
+
     async def _run_post_update_side_effects(
         self,
         *,
@@ -238,6 +247,11 @@ class UserLifecycleService[UP, ID]:
         if self._policy is not None:
             return self._policy.normalize_username_lookup(username)
         return self._manager._normalize_username_lookup(username)
+
+    def _normalize_roles(self, roles: object) -> list[str]:
+        if self._policy is not None:
+            return self._policy.normalize_roles(roles)
+        return UserPolicy.normalize_roles(roles)
 
     def _validate_password(self, password: str) -> None:
         if self._policy is not None:

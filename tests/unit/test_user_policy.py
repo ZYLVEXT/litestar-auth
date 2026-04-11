@@ -100,6 +100,34 @@ def test_normalize_username_empty_returns_empty() -> None:
     assert not _user_policy_cls().normalize_username_lookup("   ")
 
 
+def test_normalize_roles_returns_empty_list_for_none() -> None:
+    """Missing role collections normalize to the empty persisted default."""
+    assert _user_policy_cls().normalize_roles(None) == []
+
+
+def test_normalize_roles_trims_lowercases_deduplicates_and_sorts() -> None:
+    """Role normalization keeps one deterministic lowercase value per membership."""
+    assert _user_policy_cls().normalize_roles([" Billing ", "admin", "ADMIN", "\uff22illing"]) == [
+        "admin",
+        "billing",
+    ]
+
+
+@pytest.mark.parametrize(
+    ("roles", "expected_exception"),
+    [
+        pytest.param("admin", TypeError, id="string"),
+        pytest.param(123, TypeError, id="non-iterable"),
+        pytest.param(["admin", 1], TypeError, id="non-string-item"),
+        pytest.param(["admin", "   "], ValueError, id="blank-item"),
+    ],
+)
+def test_normalize_roles_rejects_invalid_inputs(roles: object, expected_exception: type[Exception]) -> None:
+    """Role normalization fails closed for malformed role inputs."""
+    with pytest.raises(expected_exception, match="iterable of non-empty strings"):
+        _user_policy_cls().normalize_roles(roles)
+
+
 def test_validate_password_rejects_empty() -> None:
     """Zero-length passwords are rejected."""
     policy = _make_policy()

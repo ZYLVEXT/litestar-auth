@@ -11,8 +11,11 @@ from sqlalchemy.orm import Mapped, declared_attr, mapped_column, relationship
 from litestar_auth._auth_model_mixins import (
     AccessTokenMixin,
     RefreshTokenMixin,
+    RoleMixin,
     UserAuthRelationshipMixin,
     UserModelMixin,
+    UserRoleAssociationMixin,
+    UserRoleRelationshipMixin,
 )
 from litestar_auth.models._oauth_encrypted_types import oauth_access_token_type, oauth_refresh_token_type
 from litestar_auth.oauth_encryption import register_oauth_model_encryption_events
@@ -21,8 +24,11 @@ __all__ = (
     "AccessTokenMixin",
     "OAuthAccountMixin",
     "RefreshTokenMixin",
+    "RoleMixin",
     "UserAuthRelationshipMixin",
     "UserModelMixin",
+    "UserRoleAssociationMixin",
+    "UserRoleRelationshipMixin",
 )
 
 _OAUTH_EVENTS_REGISTERED_ATTR = "_litestar_auth_oauth_events_registered"

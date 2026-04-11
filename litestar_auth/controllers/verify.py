@@ -19,13 +19,13 @@ from litestar_auth.controllers._utils import (
 from litestar_auth.exceptions import ErrorCode, InvalidVerifyTokenError
 from litestar_auth.payloads import RequestVerifyToken, VerifyToken  # noqa: TC001
 from litestar_auth.schemas import UserRead
-from litestar_auth.types import UserProtocol
+from litestar_auth.types import RoleCapableUserProtocol
 
 if TYPE_CHECKING:
     from litestar_auth.ratelimit import AuthRateLimitConfig
 
 
-class VerifyControllerUserProtocol[ID](UserProtocol[ID], Protocol):
+class VerifyControllerUserProtocol[ID](RoleCapableUserProtocol[ID], Protocol):
     """Protocol describing the public user fields returned after verification."""
 
     email: str

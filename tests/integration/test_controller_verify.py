@@ -113,6 +113,7 @@ async def test_verify_marks_user_as_verified(
         id=uuid4(),
         email="verify@example.com",
         hashed_password=PasswordHelper().hash("plain-password"),
+        roles=["member"],
     )
     user_db.users_by_id[user.id] = user
     user_db.user_ids_by_email[user.email] = user.id
@@ -124,6 +125,7 @@ async def test_verify_marks_user_as_verified(
     payload = response.json()
     assert payload["email"] == user.email
     assert payload["is_verified"] is True
+    assert payload["roles"] == ["member"]
     stored_user = await user_db.get(user.id)
     assert stored_user is not None
     assert stored_user.is_verified is True
@@ -158,6 +160,7 @@ async def test_verify_rate_limit_is_optional_and_valid_requests_still_succeed() 
         id=uuid4(),
         email="verify-rate-limit@example.com",
         hashed_password=PasswordHelper().hash("plain-password"),
+        roles=["member"],
     )
     user_db.users_by_id[user.id] = user
     user_db.user_ids_by_email[user.email] = user.id
@@ -246,6 +249,7 @@ async def test_verify_flows_stay_email_and_token_based_under_username_login_mode
         email="username-verify@example.com",
         username="verifyuser",
         hashed_password=PasswordHelper().hash("plain-password"),
+        roles=["member"],
     )
     user_db.users_by_id[user.id] = user
     user_db.user_ids_by_email[user.email] = user.id
@@ -260,6 +264,7 @@ async def test_verify_flows_stay_email_and_token_based_under_username_login_mode
     assert verify_response.status_code == HTTP_OK
     assert verify_response.json()["email"] == user.email
     assert verify_response.json()["is_verified"] is True
+    assert verify_response.json()["roles"] == ["member"]
 
 
 async def test_verify_supports_custom_user_read_schema() -> None:

@@ -35,6 +35,7 @@ from litestar_auth.config import (
     warn_if_secret_roles_are_reused,
 )
 from litestar_auth.exceptions import ConfigurationError
+from litestar_auth.schemas import UserRead, UserUpdate
 from litestar_auth.totp import SecurityWarning
 from litestar_auth.types import UserProtocol
 
@@ -62,17 +63,46 @@ def validate_session_maker_or_external_db_session[UP: UserProtocol[Any], ID](
         raise ValueError(msg)
 
 
-def _user_model_defines_login_field(model_cls: object, field_name: str) -> bool:
-    """Return whether ``user_model`` exposes ``field_name`` for credential lookup.
+def _user_model_defines_field(model_cls: object, field_name: str) -> bool:
+    """Return whether ``user_model`` exposes ``field_name`` as a mapped or plain attribute.
 
     For SQLAlchemy ORM-mapped classes, use :meth:`sqlalchemy.orm.Mapper.has_property`
     so mapped columns, hybrids, and similar mapper properties are recognized. Plain
     dataclasses and other types fall back to :func:`hasattr`.
     """
     mapper = sa_inspect(model_cls, raiseerr=False)
-    if mapper is not None and hasattr(mapper, "has_property"):
-        return bool(mapper.has_property(field_name))
+    if mapper is not None and hasattr(mapper, "has_property") and mapper.has_property(field_name):
+        return True
     return hasattr(model_cls, field_name)
+
+
+def _schema_declares_field(schema: type[object], field_name: str) -> bool:
+    """Return whether a msgspec schema declares ``field_name`` on its public contract."""
+    return field_name in cast("tuple[str, ...]", getattr(schema, "__struct_fields__", ()))
+
+
+def _role_schema_surfaces_requiring_role_capability[UP: UserProtocol[Any], ID](
+    config: LitestarAuthConfig[UP, ID],
+) -> tuple[str, ...]:
+    """Return plugin-owned schema surfaces that require ``user_model.roles``."""
+    read_schema = config.user_read_schema or UserRead
+    update_schema = config.user_update_schema or UserUpdate
+    required_surfaces: list[str] = []
+
+    if _schema_declares_field(read_schema, "roles"):
+        if config.include_register:
+            required_surfaces.append("register responses")
+        if config.include_verify:
+            required_surfaces.append("verify responses")
+        if config.include_reset_password:
+            required_surfaces.append("reset-password responses")
+        if config.include_users:
+            required_surfaces.append("users responses")
+
+    if config.include_users and _schema_declares_field(update_schema, "roles"):
+        required_surfaces.append("users update requests")
+
+    return tuple(required_surfaces)
 
 
 def validate_user_model_login_identifier_fields[UP: UserProtocol[Any], ID](
@@ -86,12 +116,36 @@ def validate_user_model_login_identifier_fields[UP: UserProtocol[Any], ID](
     """
     field_name = config.login_identifier
     model_cls = config.user_model
-    if not _user_model_defines_login_field(model_cls, field_name):
+    if not _user_model_defines_field(model_cls, field_name):
         msg = (
             f"LitestarAuthConfig.login_identifier is {field_name!r}, but user_model "
             f"{getattr(model_cls, '__name__', model_cls)!r} has no {field_name!r} mapped field or attribute."
         )
         raise ConfigurationError(msg)
+
+
+def validate_role_capable_user_model_surfaces[UP: UserProtocol[Any], ID](config: LitestarAuthConfig[UP, ID]) -> None:
+    """Fail fast when plugin-owned schemas require ``roles`` but ``user_model`` does not expose it.
+
+    Raises:
+        ConfigurationError: If an enabled plugin-owned route surface uses a schema that includes
+            ``roles`` while ``user_model`` has no matching mapped field or attribute.
+    """
+    if _user_model_defines_field(config.user_model, "roles"):
+        return
+
+    required_surfaces = _role_schema_surfaces_requiring_role_capability(config)
+    if not required_surfaces:
+        return
+
+    user_model_name = getattr(config.user_model, "__name__", config.user_model)
+    msg = (
+        f"user_model {user_model_name!r} has no 'roles' mapped field or attribute, but "
+        f"{', '.join(required_surfaces)} use schema fields that include 'roles'. "
+        "Compose UserRoleRelationshipMixin (or an equivalent normalized roles attribute), "
+        "or provide user_read_schema/user_update_schema types that omit 'roles'."
+    )
+    raise ConfigurationError(msg)
 
 
 def validate_core_session_config[UP: UserProtocol[Any], ID](config: LitestarAuthConfig[UP, ID]) -> None:
@@ -117,6 +171,7 @@ def validate_credential_config[UP: UserProtocol[Any], ID](config: LitestarAuthCo
     validate_password_validator_config(config)
     validate_default_user_manager_constructor_contract(config)
     validate_user_model_login_identifier_fields(config)
+    validate_role_capable_user_model_surfaces(config)
 
     if config.include_users and not callable(getattr(config.user_manager_class, "list_users", None)):
         msg = "include_users=True requires user_manager_class to define list_users()."

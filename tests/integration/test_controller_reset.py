@@ -154,6 +154,7 @@ async def test_reset_password_updates_hash_for_valid_token(
         email="reset@example.com",
         hashed_password=password_helper.hash("old-password"),
         is_verified=True,
+        roles=["member"],
     )
     user_db.users_by_id[user.id] = user
     user_db.user_ids_by_email[user.email] = user.id
@@ -171,6 +172,7 @@ async def test_reset_password_updates_hash_for_valid_token(
         "is_active": True,
         "is_verified": True,
         "is_superuser": False,
+        "roles": ["member"],
     }
     stored_user = await user_db.get(user.id)
     assert stored_user is user
@@ -368,6 +370,7 @@ async def test_reset_password_rate_limit_is_optional_and_valid_requests_still_su
         email="rate-limit-optional@example.com",
         hashed_password=password_helper.hash("old-password"),
         is_verified=True,
+        roles=["member"],
     )
     user_db.users_by_id[user.id] = user
     user_db.user_ids_by_email[user.email] = user.id

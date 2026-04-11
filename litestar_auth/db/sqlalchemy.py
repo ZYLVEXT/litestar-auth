@@ -10,7 +10,8 @@ from uuid import UUID
 from advanced_alchemy.base import ModelProtocol
 from advanced_alchemy.filters import LimitOffset
 from advanced_alchemy.repository import SQLAlchemyAsyncRepository
-from sqlalchemy import select
+from sqlalchemy import inspect, select
+from sqlalchemy.exc import NoInspectionAvailable
 
 from litestar_auth.db.base import BaseUserStore
 from litestar_auth.exceptions import ConfigurationError, OAuthAccountAlreadyLinkedError
@@ -187,6 +188,7 @@ class SQLAlchemyUserDatabase[UP: SQLAlchemyUserModelProtocol](BaseUserStore[UP, 
         self.oauth_account_model = oauth_account_model
         self._oauth_token_encryption = oauth_token_encryption
         self._user_repository_type = _build_user_repository(self.user_model)
+        self._user_load = _build_user_load(self.user_model)
         if oauth_token_encryption is not None:
             self.bind_oauth_token_encryption(oauth_token_encryption)
 
@@ -247,17 +249,21 @@ class SQLAlchemyUserDatabase[UP: SQLAlchemyUserModelProtocol](BaseUserStore[UP, 
         Returns:
             User repository instance.
         """
-        return self._user_repository_type(session=self.session, statement=statement)
+        return self._user_repository_type(
+            session=self.session,
+            statement=statement,
+            load=self._user_load or None,
+        )
 
     @override
     async def get(self, user_id: UUID) -> UP | None:
         """Return a user by identifier when present."""
-        return await self._repository().get_one_or_none(id=user_id)
+        return await self._repository().get_one_or_none(id=user_id, load=self._user_load or None)
 
     @override
     async def get_by_email(self, email: str) -> UP | None:
         """Return a user by email address when present."""
-        return await self._repository().get_one_or_none(email=email)
+        return await self._repository().get_one_or_none(email=email, load=self._user_load or None)
 
     _ALLOWED_LOOKUP_FIELDS: frozenset[str] = frozenset({"email", "username"})
 
@@ -274,7 +280,7 @@ class SQLAlchemyUserDatabase[UP: SQLAlchemyUserModelProtocol](BaseUserStore[UP, 
         return await cast(
             "Any",
             self._repository().get_one_or_none,
-        )(**{field_name: value})
+        )(**{field_name: value}, load=self._user_load or None)
 
     async def get_by_oauth_account(self, oauth_name: str, account_id: str) -> UP | None:
         """Return a user linked to the given OAuth account, if present."""
@@ -284,6 +290,7 @@ class SQLAlchemyUserDatabase[UP: SQLAlchemyUserModelProtocol](BaseUserStore[UP, 
         return await self._repository(statement=statement).get_one_or_none(
             oauth_model.oauth_name == oauth_name,
             oauth_model.account_id == account_id,
+            load=self._user_load or None,
         )
 
     async def upsert_oauth_account(  # noqa: PLR0913
@@ -347,7 +354,8 @@ class SQLAlchemyUserDatabase[UP: SQLAlchemyUserModelProtocol](BaseUserStore[UP, 
             Newly persisted user instance.
         """
         user = cast("UP", self.user_model(**dict(user_dict)))
-        return await self._repository().add(user, auto_refresh=True)
+        created_user = await self._repository().add(user, auto_refresh=True)
+        return await self._reload_with_relationships(created_user)
 
     @override
     async def list_users(self, *, offset: int, limit: int) -> tuple[list[UP], int]:
@@ -355,6 +363,7 @@ class SQLAlchemyUserDatabase[UP: SQLAlchemyUserModelProtocol](BaseUserStore[UP, 
         return await self._repository().list_and_count(
             LimitOffset(limit=limit, offset=offset),
             order_by=("email", True),
+            load=self._user_load or None,
         )
 
     @override
@@ -368,9 +377,36 @@ class SQLAlchemyUserDatabase[UP: SQLAlchemyUserModelProtocol](BaseUserStore[UP, 
         for field_name, value in update_dict.items():
             setattr(persistent_user, field_name, value)
 
-        return await self._repository().update(persistent_user, auto_refresh=True)
+        updated_user = await self._repository().update(
+            persistent_user,
+            auto_refresh=True,
+            load=self._user_load or None,
+        )
+        return await self._reload_with_relationships(updated_user)
 
     @override
     async def delete(self, user_id: UUID) -> None:
         """Delete the provided user from storage."""
         await self._repository().delete(user_id)
+
+    async def _reload_with_relationships(self, user: UP) -> UP:
+        """Return ``user`` with any configured relationship loads hydrated."""
+        if not self._user_load:
+            return user
+
+        reloaded_user = await self.get(user.id)
+        return user if reloaded_user is None else reloaded_user
+
+
+@cache
+def _build_user_load[UP: SQLAlchemyUserModelProtocol](
+    user_model: UserModelT[UP],
+) -> tuple[Any, ...]:
+    """Return repository load options required by the configured user model."""
+    try:
+        relationships = inspect(user_model).relationships
+    except NoInspectionAvailable:
+        return ()
+    if "role_assignments" not in relationships:
+        return ()
+    return (cast("Any", user_model).role_assignments,)
