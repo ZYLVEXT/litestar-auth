@@ -5,13 +5,12 @@ from __future__ import annotations
 import asyncio
 import inspect
 from dataclasses import dataclass
-from importlib import import_module
 from typing import TYPE_CHECKING, Any, Self, cast
 from uuid import UUID, uuid4
 
 import pytest
-from litestar import Litestar, Router
-from litestar.exceptions import ClientException
+from litestar import Litestar
+from litestar.di import Provide
 from litestar.middleware import DefineMiddleware
 from litestar.testing import AsyncTestClient
 
@@ -23,13 +22,6 @@ from litestar_auth.controllers import (
     create_oauth_associate_controller,
     create_oauth_controller,
 )
-from litestar_auth.controllers.oauth import (
-    _as_mapping,
-    _get_access_token,
-    _get_account_identity,
-    _get_authorization_url,
-    _validate_state,
-)
 from litestar_auth.db.base import BaseUserStore
 from litestar_auth.exceptions import (
     ConfigurationError,
@@ -38,13 +30,13 @@ from litestar_auth.exceptions import (
     UnverifiedUserError,
 )
 from litestar_auth.manager import BaseUserManager
-from litestar_auth.oauth import create_provider_oauth_controller, load_httpx_oauth_client
+from litestar_auth.oauth import create_provider_oauth_controller
 from litestar_auth.password import PasswordHelper
 from tests._helpers import ExampleUser, auth_middleware_get_request_session
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
-    from types import ModuleType, TracebackType
+    from types import TracebackType
 
 pytestmark = pytest.mark.integration
 HTTP_CREATED = 201
@@ -267,10 +259,12 @@ class FakeOAuthProfileClient:
         *,
         account_id: str = "provider-user-1",
         email: str | None = "oauth@example.com",
+        email_verified: bool | str | None = None,
     ) -> None:
         """Store deterministic profile details for the callback flow."""
         self.account_id = account_id
         self.email = email
+        self.email_verified = email_verified
         self.authorization_calls: list[tuple[str, str, str | None]] = []
         self.access_token_calls: list[tuple[str, str]] = []
         self.profile_calls: list[str] = []
@@ -304,6 +298,8 @@ class FakeOAuthProfileClient:
         payload: dict[str, object] = {"id": self.account_id}
         if self.email is not None:
             payload["email"] = self.email
+        if self.email_verified is not None:
+            payload["email_verified"] = self.email_verified
         return payload
 
 
@@ -468,6 +464,49 @@ def build_app_with_associate(
     )
     app = Litestar(
         route_handlers=[login_controller, associate_controller],
+        middleware=[middleware],
+    )
+    return app, user_db, user_manager, strategy, client
+
+
+def build_app_with_dependency_key_associate(
+    *,
+    users: list[ExampleUser] | None = None,
+    oauth_client: FakeOAuthClient | None = None,
+    cookie_secure: bool = True,
+    user_manager_dependency_key: str = "custom_manager_key",
+) -> tuple[Litestar, InMemoryOAuthUserDatabase, TrackingUserManager, InMemoryTokenStrategy, FakeOAuthClient]:
+    """Build an app whose manual associate controller resolves its manager through Litestar DI.
+
+    Returns:
+        App, user_db, user_manager, strategy, and fake OAuth client.
+    """
+    password_helper = PasswordHelper()
+    user_db = InMemoryOAuthUserDatabase(users)
+    user_manager = TrackingUserManager(user_db, password_helper)
+    strategy = InMemoryTokenStrategy()
+    backend = AuthenticationBackend[ExampleUser, UUID](
+        name="oauth-bearer",
+        transport=BearerTransport(),
+        strategy=cast("Any", strategy),
+    )
+    client = oauth_client or FakeOAuthClient()
+    associate_controller = create_oauth_associate_controller(
+        provider_name="github",
+        user_manager_dependency_key=user_manager_dependency_key,
+        oauth_client=client,
+        redirect_base_url=MANUAL_ASSOCIATE_REDIRECT_BASE_URL,
+        path="/auth/associate",
+        cookie_secure=cookie_secure,
+    )
+    middleware = DefineMiddleware(
+        LitestarAuthMiddleware[ExampleUser, UUID],
+        get_request_session=auth_middleware_get_request_session(cast("Any", _DummySessionMaker())),
+        authenticator_factory=lambda _session: Authenticator([backend], user_manager),
+    )
+    app = Litestar(
+        route_handlers=[associate_controller],
+        dependencies={user_manager_dependency_key: Provide(lambda: user_manager, sync_to_thread=False)},
         middleware=[middleware],
     )
     return app, user_db, user_manager, strategy, client
@@ -1029,6 +1068,39 @@ async def test_callback_rejects_new_user_when_provider_email_is_unverified() -> 
     assert user_db.oauth_accounts == {}
 
 
+async def test_callback_accepts_profile_only_client_when_trusted_verification_claim_is_present() -> None:
+    """Trusted profile-only clients can supply identity and verification from one profile payload."""
+    app, user_db, user_manager, strategy, oauth_client = build_app(
+        oauth_client=cast(
+            "Any",
+            FakeOAuthProfileClient(
+                account_id="profile-only-provider-id",
+                email="oauth@example.com",
+                email_verified="true",
+            ),
+        ),
+        trust_provider_email_verified=True,
+    )
+
+    async with AsyncTestClient(app=app) as client:
+        authorize_response = await client.get("/auth/oauth/github/authorize", follow_redirects=False)
+        state = authorize_response.cookies["__oauth_state_github"]
+        client.cookies.set("__oauth_state_github", state, domain="testserver.local", path="/auth/oauth/github")
+        callback_response = await client.get(
+            "/auth/oauth/github/callback",
+            params={"code": "provider-code", "state": state},
+        )
+
+    assert callback_response.status_code == HTTP_OK
+    created_user = await user_db.get_by_email("oauth@example.com")
+    assert created_user is not None
+    assert created_user.is_verified is True
+    assert user_manager.created_users == [created_user]
+    assert user_manager.logged_in_users == [created_user]
+    assert strategy.tokens == {"oauth-token-1": created_user.id}
+    assert oauth_client.profile_calls == ["provider-access-token"]
+
+
 async def test_callback_rejects_new_user_when_provider_verification_claim_missing() -> None:
     """New-account callback rejects sign-in when provider omits verified-email evidence."""
     app, user_db, user_manager, strategy, _ = build_app(
@@ -1276,154 +1348,6 @@ async def test_create_provider_oauth_controller_uses_oauth_client_factory() -> N
     created = await user_db2.get_by_email("factory@example.com")
     assert created is not None
     assert strategy2.tokens == {"oauth-token-1": created.id}
-
-
-def test_load_httpx_oauth_client_raises_for_invalid_class_path() -> None:
-    """load_httpx_oauth_client raises ConfigurationError when oauth_client_class is not fully qualified."""
-    with pytest.raises(ConfigurationError, match="fully qualified module path"):
-        load_httpx_oauth_client("NotQualified", client_id="id", client_secret="secret")
-    with pytest.raises(ConfigurationError, match="fully qualified module path"):
-        load_httpx_oauth_client("", client_id="id")
-
-
-def test_load_httpx_oauth_client_raises_when_class_not_in_module() -> None:
-    """load_httpx_oauth_client raises ConfigurationError when the class does not exist in the module."""
-    with pytest.raises(ConfigurationError, match="could not be imported"):
-        load_httpx_oauth_client("litestar_auth.controllers.oauth.NonExistentOAuthClass", client_id="id")
-
-
-async def test_get_authorization_url_raises_when_client_lacks_method() -> None:
-    """_get_authorization_url raises ConfigurationError when client has no get_authorization_url."""
-
-    class NoAuthUrlClient:
-        pass
-
-    with pytest.raises(ConfigurationError, match="get_authorization_url"):
-        await _get_authorization_url(
-            oauth_client=NoAuthUrlClient(),
-            redirect_uri="http://localhost/callback",
-            state="state",
-        )
-
-
-async def test_get_access_token_raises_when_client_lacks_method() -> None:
-    """_get_access_token raises ConfigurationError when client has no get_access_token."""
-
-    class NoGetTokenClient:
-        pass
-
-    with pytest.raises(ConfigurationError, match="get_access_token"):
-        await _get_access_token(
-            oauth_client=NoGetTokenClient(),
-            code="code",
-            redirect_uri="http://localhost/callback",
-        )
-
-
-async def test_get_account_identity_raises_when_get_id_email_returns_invalid() -> None:
-    """_get_account_identity raises ConfigurationError when get_id_email returns invalid shape."""
-
-    class BadIdEmailClient:
-        async def get_id_email(self, access_token: str) -> tuple[str, str]:
-            return ("", "a@b.com")  # empty account_id is invalid
-
-    with pytest.raises(ConfigurationError, match="invalid account identity"):
-        await _get_account_identity(BadIdEmailClient(), "token")
-
-
-def test_as_mapping_raises_when_payload_not_mapping_or_dict_like() -> None:
-    """_as_mapping raises ConfigurationError when payload is not a mapping and has no __dict__."""
-    with pytest.raises(ConfigurationError, match="invalid"):
-        _as_mapping(42, message="invalid")
-
-
-def test_validate_state_raises_when_cookie_missing_or_mismatch() -> None:
-    """_validate_state raises ClientException when cookie is None or does not match query state."""
-    with pytest.raises(ClientException, match="Invalid OAuth state"):
-        _validate_state(None, "query-state")
-    with pytest.raises(ClientException, match="Invalid OAuth state"):
-        _validate_state("cookie-state", "different-query")
-
-
-async def test_get_access_token_raises_when_payload_missing_access_token() -> None:
-    """_get_access_token raises ConfigurationError when payload has no non-empty access_token."""
-
-    class NoAccessTokenClient:
-        async def get_access_token(self, code: str, redirect_uri: str) -> dict[str, object]:
-            return {"expires_at": None, "refresh_token": None}
-
-    with pytest.raises(ConfigurationError, match="non-empty access_token"):
-        await _get_access_token(
-            oauth_client=NoAccessTokenClient(),
-            code="c",
-            redirect_uri="http://localhost/cb",
-        )
-
-
-async def test_get_access_token_raises_when_expires_at_invalid_type() -> None:
-    """_get_access_token raises ConfigurationError when expires_at is not int."""
-
-    class BadExpiresClient:
-        async def get_access_token(self, code: str, redirect_uri: str) -> dict[str, object]:
-            return {"access_token": "tok", "expires_at": "not-an-int", "refresh_token": None}
-
-    with pytest.raises(ConfigurationError, match="invalid expires_at"):
-        await _get_access_token(
-            oauth_client=BadExpiresClient(),
-            code="c",
-            redirect_uri="http://localhost/cb",
-        )
-
-
-async def test_get_access_token_raises_when_refresh_token_invalid_type() -> None:
-    """_get_access_token raises ConfigurationError when refresh_token is not str."""
-
-    class BadRefreshClient:
-        async def get_access_token(self, code: str, redirect_uri: str) -> dict[str, object]:
-            return {"access_token": "tok", "expires_at": None, "refresh_token": 123}
-
-    with pytest.raises(ConfigurationError, match="invalid refresh_token"):
-        await _get_access_token(
-            oauth_client=BadRefreshClient(),
-            code="c",
-            redirect_uri="http://localhost/cb",
-        )
-
-
-async def test_get_authorization_url_raises_when_client_returns_invalid_url() -> None:
-    """_get_authorization_url raises ConfigurationError when client returns non-string or empty URL."""
-
-    class EmptyUrlClient:
-        async def get_authorization_url(self, redirect_uri: str, state: str) -> str:
-            return ""
-
-    with pytest.raises(ConfigurationError, match="invalid authorization URL"):
-        await _get_authorization_url(
-            oauth_client=EmptyUrlClient(),
-            redirect_uri="http://localhost/cb",
-            state="s",
-        )
-
-
-def test_load_httpx_oauth_client_raises_clear_error_when_dependency_is_missing(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Lazy httpx-oauth import failures surface a clear installation hint."""
-
-    def fail_httpx_oauth(module_name: str, package: str | None = None) -> ModuleType:
-        if module_name.startswith("httpx_oauth"):
-            msg = f"No module named {module_name!r}"
-            raise ModuleNotFoundError(msg, name=module_name)
-        return import_module(module_name, package)
-
-    monkeypatch.setattr(
-        "litestar_auth.oauth.router.import_module",
-        fail_httpx_oauth,
-    )
-    with pytest.raises(ImportError, match=r"Install litestar-auth\[oauth\]") as exc_info:
-        load_httpx_oauth_client("httpx_oauth.clients.github.GitHubOAuth2", client_id="id", client_secret="secret")
-
-    assert exc_info.value.__cause__ is not None
 
 
 # --- OAuth associate controller (link OAuth to authenticated user) ---
@@ -1715,8 +1639,8 @@ def test_associate_flow_uses_di_key_variant_and_clears_state_cookie() -> None:
     assert controller.__name__.endswith("OAuthAssociateController")
 
 
-def test_associate_di_key_variant_preserves_dependency_injection_callback_signature() -> None:
-    """DI-key variant keeps the injected manager callback parameter name without a signature override."""
+def test_associate_di_key_variant_exposes_configured_dependency_parameter_name() -> None:
+    """DI-key variant exposes the configured Litestar callback parameter name."""
     dependency_parameter_name = "custom_manager_key"
     controller = create_oauth_associate_controller(
         provider_name="github",
@@ -1731,7 +1655,6 @@ def test_associate_di_key_variant_preserves_dependency_injection_callback_signat
     callback_handler = controller_type.callback.fn
     parameters = inspect.signature(callback_handler).parameters
     assert dependency_parameter_name in parameters
-    assert "__signature__" not in callback_handler.__dict__
 
 
 def test_associate_direct_variant_omits_dependency_injection_callback_parameter() -> None:
@@ -1786,8 +1709,8 @@ async def test_provider_helper_mounts_login_routes_under_custom_auth_path() -> N
     assert "path=/identity/oauth/github" in response.headers["set-cookie"].lower()
 
 
-async def test_associate_di_key_variant_links_oauth() -> None:
-    """DI-key variant can link an OAuth account for an authenticated user."""
+async def test_associate_di_key_variant_links_oauth_via_litestar_dependency_injection() -> None:
+    """DI-key variant links an OAuth account when Litestar injects the configured manager dependency."""
     password_helper = PasswordHelper()
     user = ExampleUser(
         id=uuid4(),
@@ -1795,43 +1718,39 @@ async def test_associate_di_key_variant_links_oauth() -> None:
         hashed_password=password_helper.hash("pw"),
         is_verified=True,
     )
-    user_db = InMemoryOAuthUserDatabase([user])
-    user_manager = TrackingUserManager(user_db, password_helper)
     oauth_client = FakeOAuthClient(account_id="provider-user-99", email="linked@example.com")
-    controller_class = create_oauth_associate_controller(
-        provider_name="github",
-        user_manager_dependency_key="litestar_auth_oauth_associate_user_manager",
+    dependency_parameter_name = "custom_manager_key"
+    app, user_db, _, strategy, _ = build_app_with_dependency_key_associate(
+        users=[user],
         oauth_client=oauth_client,
-        redirect_base_url=MANUAL_ASSOCIATE_REDIRECT_BASE_URL,
-        path="/auth/associate",
-        cookie_secure=True,
+        user_manager_dependency_key=dependency_parameter_name,
     )
-    controller = cast("Any", controller_class(owner=Router(path="/", route_handlers=[])))
-    authorize_handler = controller.authorize.fn
-    callback_handler = controller.callback.fn
+    strategy.tokens["bearer-token"] = user.id
 
-    request = cast("Any", type("Req", (), {"cookies": {}, "user": user})())
-    authorize_response = await authorize_handler(controller, request)
-    assert authorize_response.status_code == HTTP_FOUND
-    cookie_name = "__oauth_associate_state_github"
-    cookies = getattr(authorize_response, "cookies", [])
-    cookie = next(
-        (c for c in cookies if getattr(c, "key", None) == cookie_name or getattr(c, "name", None) == cookie_name),
-        None,
-    )
-    assert cookie is not None
-    state = cast("str", getattr(cookie, "value", ""))
-    assert state
-    request.cookies["__oauth_associate_state_github"] = state
+    async with AsyncTestClient(app=app) as client:
+        auth_headers = {"Authorization": "Bearer bearer-token"}
+        authorize_response = await client.get(
+            "/auth/associate/github/authorize",
+            headers=auth_headers,
+            follow_redirects=False,
+        )
 
-    callback_response = await callback_handler(
-        controller,
-        request,
-        code="associate-code",
-        oauth_state=state,
-        litestar_auth_oauth_associate_user_manager=user_manager,
-    )
-    assert callback_response.content == {"linked": True}
+        assert authorize_response.status_code == HTTP_FOUND
+        state = authorize_response.cookies["__oauth_associate_state_github"]
+        client.cookies.set(
+            "__oauth_associate_state_github",
+            state,
+            domain="testserver.local",
+            path="/auth/associate/github",
+        )
+        callback_response = await client.get(
+            "/auth/associate/github/callback",
+            params={"code": "associate-code", "state": state},
+            headers=auth_headers,
+        )
+
+    assert callback_response.status_code == HTTP_OK
+    assert callback_response.json() == {"linked": True}
 
     record = user_db.oauth_accounts.get(("github", "provider-user-99"))
     assert record is not None

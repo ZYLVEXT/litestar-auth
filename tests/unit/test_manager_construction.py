@@ -140,6 +140,30 @@ def test_manager_constructor_inputs_inject_top_level_password_validator_and_id_p
     assert kwargs["backends"] == ("bound-backend",)
 
 
+def test_manager_constructor_inputs_preserve_explicit_password_validator_callable() -> None:
+    """Explicit password-validator wiring stays owned by the configured manager kwargs."""
+
+    def explicit_password_validator(_password: str) -> None:
+        return None
+
+    def generated_password_validator(_password: str) -> None:
+        msg = "Plugin-owned password validators should not replace explicit manager wiring."
+        raise AssertionError(msg)
+
+    inputs = ManagerConstructorInputs[UUID](
+        manager_kwargs={"password_validator": explicit_password_validator},
+        password_validator=generated_password_validator,
+        backends=("bound-backend",),
+        login_identifier="username",
+    )
+
+    kwargs = inputs.build_kwargs()
+
+    assert kwargs["password_validator"] is explicit_password_validator
+    assert kwargs["login_identifier"] == "username"
+    assert kwargs["backends"] == ("bound-backend",)
+
+
 def test_manager_constructor_inputs_reuse_typed_dataclass_security_when_parser_matches() -> None:
     """Typed manager-security dataclasses pass through unchanged when parser wiring already matches."""
     security = UserManagerSecurity[UUID](

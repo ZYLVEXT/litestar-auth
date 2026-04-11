@@ -61,6 +61,15 @@ class _UpdateSchema(msgspec.Struct):
     username: str
 
 
+def _current_startup_backend_template_type() -> type[Any]:
+    """Resolve the current StartupBackendTemplate class to survive cross-test module reloads.
+
+    Returns:
+        The current StartupBackendTemplate type.
+    """
+    return cast("type[Any]", importlib.import_module("litestar_auth._plugin.config").StartupBackendTemplate)
+
+
 def test_plugin_controllers_module_executes_under_coverage() -> None:
     """Reload the module in-test so coverage records module-body execution."""
     reloaded_module = importlib.reload(controllers_module)
@@ -72,10 +81,17 @@ def test_plugin_controllers_module_executes_under_coverage() -> None:
 def test_build_controllers_combines_auth_and_optional_controllers(monkeypatch: pytest.MonkeyPatch) -> None:
     """build_controllers returns auth controllers plus appended optional controllers."""
     config = _minimal_config()
-    optional_calls: list[tuple[list[object], LitestarAuthConfig[ExampleUser, UUID]]] = []
+    optional_calls: list[tuple[list[object], LitestarAuthConfig[ExampleUser, UUID], object]] = []
+    auth_inventory: object | None = None
 
-    def _build_auth(*, config: LitestarAuthConfig[ExampleUser, UUID]) -> list[str]:
+    def _build_auth(
+        *,
+        config: LitestarAuthConfig[ExampleUser, UUID],
+        backend_inventory: object | None = None,
+    ) -> list[str]:
+        nonlocal auth_inventory
         del config
+        auth_inventory = backend_inventory
         return ["auth-controller"]
 
     monkeypatch.setattr(controllers_module, "_build_auth_controllers", _build_auth)
@@ -84,14 +100,16 @@ def test_build_controllers_combines_auth_and_optional_controllers(monkeypatch: p
         *,
         controllers: list[object],
         config: LitestarAuthConfig[ExampleUser, UUID],
+        backend_inventory: object | None = None,
     ) -> None:
-        optional_calls.append((list(controllers), config))
+        optional_calls.append((list(controllers), config, backend_inventory))
         controllers.append("optional-controller")
 
     monkeypatch.setattr(controllers_module, "_append_optional_feature_controllers", _append)
 
     assert build_controllers(config) == ["auth-controller", "optional-controller"]
-    assert optional_calls == [(["auth-controller"], config)]
+    assert auth_inventory is not None
+    assert optional_calls == [(["auth-controller"], config, auth_inventory)]
 
 
 def test_build_auth_controllers_builds_backend_specific_paths_and_totp_secret(
@@ -113,13 +131,13 @@ def test_build_auth_controllers_builds_backend_specific_paths_and_totp_secret(
     monkeypatch.setattr(controllers_module, "create_auth_controller", _create_auth_controller)
 
     assert _build_auth_controllers(config=config) == ["/auth", "/auth/secondary"]
-    assert isinstance(calls[0]["backend"], controllers_module.StartupBackendTemplate)
+    assert isinstance(calls[0]["backend"], _current_startup_backend_template_type())
     assert calls[0]["backend"].name == primary_backend.name
     assert calls[0]["backend"].transport is primary_backend.transport
     assert calls[0]["backend"].strategy is primary_backend.strategy
     assert calls[0]["totp_pending_secret"] == "p" * 32
     assert calls[0]["unsafe_testing"] is False
-    assert isinstance(calls[1]["backend"], controllers_module.StartupBackendTemplate)
+    assert isinstance(calls[1]["backend"], _current_startup_backend_template_type())
     assert calls[1]["backend"].name == secondary_backend.name
     assert calls[1]["backend"].transport is secondary_backend.transport
     assert calls[1]["backend"].strategy is secondary_backend.strategy
@@ -161,7 +179,7 @@ def test_build_totp_controller_forwards_named_backend_and_config(monkeypatch: py
     monkeypatch.setattr(controllers_module, "create_totp_controller", _create_totp_controller)
 
     assert build_totp_controller(config) == "totp-controller"
-    assert isinstance(captured["backend"], controllers_module.StartupBackendTemplate)
+    assert isinstance(captured["backend"], _current_startup_backend_template_type())
     assert captured["backend"].name == secondary_backend.name
     assert captured["backend"].transport is secondary_backend.transport
     assert captured["backend"].strategy is secondary_backend.strategy
@@ -176,6 +194,32 @@ def test_build_totp_controller_forwards_named_backend_and_config(monkeypatch: py
     assert captured["totp_algorithm"] == "SHA512"
     assert captured["path"] == "/auth/2fa"
     assert captured["unsafe_testing"] is False
+
+
+def test_build_totp_controller_defaults_to_primary_backend_when_name_is_unset(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """TOTP controller assembly falls back to the primary startup backend when no name is configured."""
+    primary_backend = _backend(name="primary", token_prefix="primary")
+    secondary_backend = _backend(name="secondary", token_prefix="secondary")
+    config = _minimal_config(
+        backends=[primary_backend, secondary_backend],
+        totp_config=TotpConfig(
+            totp_pending_secret="p" * 32,
+        ),
+    )
+    captured: dict[str, object] = {}
+
+    def _create_totp_controller(**kwargs: object) -> str:
+        captured.update(kwargs)
+        return "totp-controller"
+
+    monkeypatch.setattr(controllers_module, "create_totp_controller", _create_totp_controller)
+
+    assert build_totp_controller(config) == "totp-controller"
+    assert isinstance(captured["backend"], _current_startup_backend_template_type())
+    assert captured["backend"].name == primary_backend.name
+    assert captured["backend_index"] == 0
 
 
 def test_build_totp_controller_raises_for_unknown_named_backend_after_index_scan() -> None:
@@ -202,6 +246,23 @@ def test_totp_backend_raises_for_unknown_backend_name() -> None:
 
     with pytest.raises(ValueError, match="Unknown TOTP backend: missing"):
         totp_backend(config)
+
+
+def test_totp_backend_defaults_to_primary_startup_backend() -> None:
+    """Without a named override, TOTP uses the primary startup backend."""
+    primary_backend = _backend(name="primary", token_prefix="primary")
+    secondary_backend = _backend(name="secondary", token_prefix="secondary")
+    config = _minimal_config(
+        backends=[primary_backend, secondary_backend],
+        totp_config=TotpConfig(
+            totp_pending_secret="p" * 32,
+        ),
+    )
+
+    startup_backend = totp_backend(config)
+
+    assert isinstance(startup_backend, _current_startup_backend_template_type())
+    assert startup_backend.name == primary_backend.name
 
 
 def test_resolve_request_backend_raises_when_backend_index_is_missing() -> None:
@@ -281,7 +342,7 @@ def test_append_optional_feature_controllers_skips_totp_and_oauth_when_not_confi
     monkeypatch.setattr(
         controllers_module,
         "build_totp_controller",
-        lambda _config: pytest.fail("build_totp_controller should not be called"),
+        lambda _config, **_kwargs: pytest.fail("build_totp_controller should not be called"),
     )
     monkeypatch.setattr(
         controllers_module,
@@ -334,7 +395,7 @@ def test_append_optional_feature_controllers_appends_enabled_features_in_order(
     monkeypatch.setattr(controllers_module, "create_verify_controller", _record("verify"))
     monkeypatch.setattr(controllers_module, "create_reset_password_controller", _record("reset"))
     monkeypatch.setattr(controllers_module, "create_users_controller", _record("users"))
-    monkeypatch.setattr(controllers_module, "build_totp_controller", lambda _config: "totp")
+    monkeypatch.setattr(controllers_module, "build_totp_controller", lambda _config, **_kwargs: "totp")
 
     def _create_oauth_login_controller(**kwargs: object) -> str:
         calls.append(("oauth-login", dict(kwargs)))

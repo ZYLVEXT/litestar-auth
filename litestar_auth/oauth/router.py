@@ -7,18 +7,20 @@ from typing import TYPE_CHECKING, Any
 
 from litestar_auth.controllers.oauth import (
     OAuthControllerUserManagerProtocol,
+    _create_login_oauth_controller,
     _validate_manual_oauth_redirect_base_url,
-    create_oauth_controller,
 )
 from litestar_auth.exceptions import ConfigurationError
+from litestar_auth.oauth.client_adapter import _build_oauth_client_adapter
 from litestar_auth.types import UserProtocol
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Mapping, Sequence
+    from collections.abc import Mapping, Sequence
 
     from litestar import Controller
 
     from litestar_auth.authentication.backend import AuthenticationBackend
+    from litestar_auth.oauth.client_adapter import OAuthClientConstructor, OAuthClientFactory, OAuthClientProtocol
 
 
 def create_provider_oauth_controller[UP: UserProtocol[Any], ID](  # noqa: PLR0913
@@ -26,8 +28,8 @@ def create_provider_oauth_controller[UP: UserProtocol[Any], ID](  # noqa: PLR091
     provider_name: str,
     backend: AuthenticationBackend[UP, ID],
     user_manager: OAuthControllerUserManagerProtocol[UP, ID],
-    oauth_client: object | None = None,
-    oauth_client_factory: Callable[[], object] | None = None,
+    oauth_client: OAuthClientProtocol | None = None,
+    oauth_client_factory: OAuthClientFactory | None = None,
     oauth_client_class: str | None = None,
     oauth_client_kwargs: Mapping[str, object] | None = None,
     redirect_base_url: str,
@@ -47,34 +49,29 @@ def create_provider_oauth_controller[UP: UserProtocol[Any], ID](  # noqa: PLR091
 
     Returns:
         Generated controller class mounted under the provider-specific path.
-
-    Raises:
-        ConfigurationError: If no OAuth client configuration is provided or
-            ``redirect_base_url`` is not a public HTTPS origin.
     """
     _validate_manual_oauth_redirect_base_url(redirect_base_url)
-    client = oauth_client
-    if client is None and oauth_client_factory is not None:
-        client = oauth_client_factory()
-    if client is None and oauth_client_class is not None:
-        client = load_httpx_oauth_client(oauth_client_class, **dict(oauth_client_kwargs or {}))
-    if client is None:
-        msg = "Provide oauth_client, oauth_client_factory, or oauth_client_class."
-        raise ConfigurationError(msg)
-
+    oauth_client_adapter = _build_oauth_client_adapter(
+        oauth_client=oauth_client,
+        oauth_client_factory=oauth_client_factory,
+        oauth_client_class=oauth_client_class,
+        oauth_client_kwargs=oauth_client_kwargs,
+        oauth_client_class_loader=load_httpx_oauth_client,
+    )
     resolved_path = path if path is not None else _build_oauth_login_path(auth_path)
 
-    return create_oauth_controller(
+    return _create_login_oauth_controller(
         provider_name=provider_name,
         backend=backend,
         user_manager=user_manager,
-        oauth_client=client,
+        oauth_client_adapter=oauth_client_adapter,
         redirect_base_url=redirect_base_url,
         path=resolved_path,
         cookie_secure=cookie_secure,
         oauth_scopes=oauth_scopes,
         associate_by_email=associate_by_email,
         trust_provider_email_verified=trust_provider_email_verified,
+        validate_redirect_base_url=False,
     )
 
 
@@ -84,7 +81,7 @@ def _build_oauth_login_path(auth_path: str) -> str:
     return f"{base_path}/oauth" if base_path != "/" else "/oauth"
 
 
-def load_httpx_oauth_client(oauth_client_class: str, /, **client_kwargs: object) -> object:
+def load_httpx_oauth_client(oauth_client_class: str, /, **client_kwargs: object) -> OAuthClientProtocol:
     """Import and instantiate an ``httpx-oauth`` client lazily.
 
     Returns:
@@ -108,7 +105,7 @@ def load_httpx_oauth_client(oauth_client_class: str, /, **client_kwargs: object)
             raise ImportError(msg) from exc
         raise
 
-    oauth_client_type = getattr(module, class_name, None)
+    oauth_client_type: OAuthClientConstructor | None = getattr(module, class_name, None)
     if oauth_client_type is None:
         msg = f"OAuth client class {oauth_client_class!r} could not be imported."
         raise ConfigurationError(msg)

@@ -5,17 +5,20 @@ from __future__ import annotations
 import inspect
 import logging
 import warnings
-from typing import Any, cast
+from typing import TYPE_CHECKING, Any, cast
 
 from sqlalchemy import inspect as sa_inspect
 
 from litestar_auth._manager.construction import ManagerConstructorInputs
 from litestar_auth._plugin.config import (
+    _DEFAULT_USER_MANAGER_FACTORY_GUIDANCE,
     LitestarAuthConfig,
     TotpConfig,
+    _build_default_user_manager_contract,
     _build_default_user_manager_validation_kwargs,
     _build_oauth_route_registration_contract,
     _describe_jwt_revocation_tradeoff,
+    _format_default_user_manager_managed_security_error,
     _resolve_plugin_managed_totp_secret_storage_tradeoff,
 )
 from litestar_auth._plugin.middleware import get_cookie_transports
@@ -34,6 +37,9 @@ from litestar_auth.config import (
 from litestar_auth.exceptions import ConfigurationError
 from litestar_auth.totp import SecurityWarning
 from litestar_auth.types import UserProtocol
+
+if TYPE_CHECKING:
+    from litestar_auth._plugin.session_binding import _AccountStateValidator as PluginAccountStateValidator
 
 logger = logging.getLogger("litestar_auth.plugin")
 
@@ -379,13 +385,7 @@ def validate_user_manager_security_config[UP: UserProtocol[Any], ID](config: Lit
             raise ConfigurationError(msg)
 
     if config.user_manager_factory is None and manager_inputs.managed_security_keys:
-        invalid_keys = ", ".join(manager_inputs.managed_security_keys)
-        msg = (
-            "user_manager_security is the canonical plugin-managed path for manager secrets and "
-            "id_parser. Remove these keys from user_manager_kwargs: "
-            f"{invalid_keys}. If you need custom manager construction, configure "
-            "user_manager_factory."
-        )
+        msg = _format_default_user_manager_managed_security_error(manager_inputs.managed_security_keys)
         raise ConfigurationError(msg)
 
     if config.unsafe_testing:
@@ -436,13 +436,17 @@ def validate_default_user_manager_constructor_contract[UP: UserProtocol[Any], ID
 
     manager_class = config.user_manager_class
     manager_name = getattr(manager_class, "__name__", repr(manager_class))
+    contract = _build_default_user_manager_contract(
+        config,
+        password_helper=object(),
+        password_validator=None,
+    )
     try:
         constructor_signature = inspect.signature(manager_class)
     except (TypeError, ValueError) as exc:
         msg = (
             f"{manager_name!r} (user_manager_class) must expose an introspectable constructor when "
-            "user_manager_factory is unset. Configure user_manager_factory for non-canonical "
-            "manager construction."
+            f"user_manager_factory is unset. {_DEFAULT_USER_MANAGER_FACTORY_GUIDANCE}"
         )
         raise ConfigurationError(msg) from exc
 
@@ -452,16 +456,35 @@ def validate_default_user_manager_constructor_contract[UP: UserProtocol[Any], ID
             **_build_default_user_manager_validation_kwargs(config),
         )
     except TypeError as exc:
-        msg = (
-            f"{manager_name!r} (user_manager_class) is incompatible with the default plugin "
-            "builder contract. Without user_manager_factory, the plugin calls "
-            "user_manager_class(user_db, *, password_helper=..., security=..., "
-            "password_validator=..., backends=..., login_identifier=..., unsafe_testing=...). "
-            "When user_manager_security is unset, the plugin passes id_parser=... directly "
-            f"instead of folding it into security. Configure user_manager_factory for non-canonical "
-            f"constructors. Original error: {exc}"
-        )
+        msg = contract.build_constructor_mismatch_message(manager_name, exc)
         raise ConfigurationError(msg) from exc
+
+
+def resolve_user_manager_account_state_validator[UP: UserProtocol[Any]](
+    user_manager_class: type[object],
+) -> PluginAccountStateValidator[UP]:
+    """Resolve the plugin-managed manager-class account-state validator contract.
+
+    Returns:
+        The callable ``require_account_state(user, *, require_verified=False)``
+        exposed by ``user_manager_class``.
+
+    Raises:
+        TypeError: If ``user_manager_class`` does not expose a callable
+            ``require_account_state()``.
+    """
+    validator = getattr(user_manager_class, "require_account_state", None)
+    if callable(validator):
+        return cast("PluginAccountStateValidator[UP]", validator)
+
+    manager_name = getattr(user_manager_class, "__name__", repr(user_manager_class))
+    msg = (
+        f"{manager_name!r} (user_manager_class) must expose "
+        "require_account_state(user, *, require_verified=False). "
+        "Subclass litestar_auth.manager.BaseUserManager for the default implementation, "
+        "or define require_account_state on your manager class with the same contract."
+    )
+    raise TypeError(msg)
 
 
 def _validate_unique_oauth_provider_names(

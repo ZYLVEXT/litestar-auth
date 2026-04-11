@@ -16,16 +16,7 @@ from litestar.exceptions import ClientException, ValidationException
 from litestar.response import Response
 
 import litestar_auth._account_state as _shared_account_state
-
-# Keep exception identity stable across module reload tests.
-if "ConfigurationError" not in globals():
-    from litestar_auth.exceptions import ConfigurationError
-if "ErrorCode" not in globals():
-    from litestar_auth.exceptions import ErrorCode
-if "InactiveUserError" not in globals():
-    from litestar_auth.exceptions import InactiveUserError
-if "UnverifiedUserError" not in globals():
-    from litestar_auth.exceptions import UnverifiedUserError
+from litestar_auth.exceptions import ConfigurationError, ErrorCode, InactiveUserError, UnverifiedUserError
 
 logger = logging.getLogger(__name__)
 _ACCOUNT_STATE_ERROR_TYPES = _shared_account_state.AccountStateErrorTypes(

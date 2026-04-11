@@ -23,10 +23,12 @@ from litestar_auth.types import LoginIdentifier, UserProtocol
 
 if TYPE_CHECKING:
     from collections.abc import Mapping, Sequence
+    from logging import Logger
 
     import msgspec
 
     from litestar_auth.authentication.backend import AuthenticationBackend
+    from litestar_auth.authentication.strategy import DatabaseTokenModels
     from litestar_auth.authentication.strategy.jwt import JWTDenylistStore
     from litestar_auth.config import OAuthProviderConfig
     from litestar_auth.manager import BaseUserManager, UserManagerSecurity
@@ -218,37 +220,302 @@ class StartupBackendTemplate[UP: UserProtocol[Any], ID]:
         return self._runtime_backend_factory(session)
 
 
-class _StartupOnlyDatabaseTokenSession:
-    """Fail-closed sentinel used by startup-only DB-token backends."""
+@dataclass(frozen=True, slots=True)
+class _BackendSlot[UP: UserProtocol[Any], ID]:
+    """Stable index-and-name metadata shared across startup and request backend flows."""
 
-    def __getattr__(self, name: str) -> Never:
-        """Raise when startup-only backends are used for request-time DB work.
+    index: int
+    name: str
+
+    def resolve_request_backend(
+        self,
+        request_backends: object,
+    ) -> AuthenticationBackend[UP, ID]:
+        """Return the request-scoped backend matching this startup slot.
 
         Raises:
-            RuntimeError: Always, because startup-only backends are not valid for request-time
-                database-token strategy work.
+            RuntimeError: If the request-time backend inventory diverges from plugin startup.
         """
-        del name
-        msg = (
-            "DatabaseTokenAuthConfig.startup_backends() returns startup-only backends. "
-            "Use LitestarAuthConfig.bind_request_backends(session) to obtain request-scoped "
-            "backend instances for runtime login, refresh, logout, or token validation work."
+        backends = cast("Sequence[AuthenticationBackend[UP, ID]]", request_backends)
+        if len(backends) <= self.index:
+            msg = (
+                "litestar_auth_backends did not provide the backend sequence expected by the plugin. "
+                f"Missing backend index {self.index} for {self.name!r}."
+            )
+            raise RuntimeError(msg)
+
+        backend = backends[self.index]
+        if backend.name != self.name:
+            msg = (
+                "litestar_auth_backends no longer matches the plugin startup backend order. "
+                f"Expected backend {self.name!r} at index {self.index}, got {backend.name!r}."
+            )
+            raise RuntimeError(msg)
+        return backend
+
+
+@dataclass(frozen=True, slots=True)
+class _StartupBackendInventoryEntry[UP: UserProtocol[Any], ID]:
+    """One startup backend plus the slot metadata used to resolve runtime backends."""
+
+    startup_backend: StartupBackendTemplate[UP, ID]
+    slot: _BackendSlot[UP, ID]
+
+    @property
+    def index(self) -> int:
+        """Return the startup-order index for this backend."""
+        return self.slot.index
+
+    @property
+    def name(self) -> str:
+        """Return the backend name preserved across startup and request inventories."""
+        return self.slot.name
+
+    def bind_runtime_backend(self, session: AsyncSession) -> AuthenticationBackend[UP, ID]:
+        """Materialize the request-scoped backend for ``session``.
+
+        Returns:
+            Runtime authentication backend rebound to ``session``.
+        """
+        return self.startup_backend.bind_runtime_backend(session)
+
+
+@dataclass(frozen=True, slots=True)
+class _StartupBackendInventory[UP: UserProtocol[Any], ID]:
+    """Central startup inventory reused by plugin assembly and request binding."""
+
+    entries: tuple[_StartupBackendInventoryEntry[UP, ID], ...]
+
+    @classmethod
+    def from_startup_backends(
+        cls,
+        startup_backends: tuple[StartupBackendTemplate[UP, ID], ...],
+    ) -> _StartupBackendInventory[UP, ID]:
+        """Build a centralized inventory from startup-only backend templates.
+
+        Returns:
+            Startup inventory with stable per-backend slot metadata.
+        """
+        return cls(
+            entries=tuple(
+                _StartupBackendInventoryEntry(
+                    startup_backend=backend,
+                    slot=_BackendSlot(index=index, name=backend.name),
+                )
+                for index, backend in enumerate(startup_backends)
+            ),
         )
-        raise RuntimeError(msg)
+
+    def startup_backends(self) -> tuple[StartupBackendTemplate[UP, ID], ...]:
+        """Return the startup-only backend templates in configured order."""
+        return tuple(entry.startup_backend for entry in self.entries)
+
+    def bind_request_backends(self, session: AsyncSession) -> tuple[AuthenticationBackend[UP, ID], ...]:
+        """Return request-scoped runtime backends aligned with the startup inventory."""
+        return tuple(entry.bind_runtime_backend(session) for entry in self.entries)
+
+    def primary(self) -> _StartupBackendInventoryEntry[UP, ID]:
+        """Return the primary startup backend entry."""
+        return self.entries[0]
+
+    def resolve_named(self, backend_name: str) -> _StartupBackendInventoryEntry[UP, ID]:
+        """Return the startup backend entry matching ``backend_name``.
+
+        Raises:
+            ValueError: If ``backend_name`` is not part of the startup inventory.
+        """
+        for entry in self.entries:
+            if entry.name == backend_name:
+                return entry
+
+        msg = f"Unknown TOTP backend: {backend_name}"
+        raise ValueError(msg)
+
+    def resolve_totp(self, *, backend_name: str | None) -> _StartupBackendInventoryEntry[UP, ID]:
+        """Return the TOTP startup backend entry, defaulting to the primary backend."""
+        if backend_name is None:
+            return self.primary()
+        return self.resolve_named(backend_name)
+
+
+class _StartupOnlyDatabaseTokenSession:
+    """Fail-closed placeholder kept for test helpers and compatibility shims."""
+
+    def __getattr__(self, name: str) -> Never:
+        """Raise when startup-only backends are used for request-time DB work."""
+        del name
+        _raise_startup_only_database_token_runtime_error()
 
 
 _STARTUP_ONLY_DATABASE_TOKEN_SESSION = _StartupOnlyDatabaseTokenSession()
 
 
+def _raise_startup_only_database_token_runtime_error() -> Never:
+    """Raise the canonical fail-closed error for startup-only DB-token backends.
+
+    Raises:
+        RuntimeError: Always, because startup-only DB-token templates are not valid for
+            request-time authentication work.
+    """
+    msg = (
+        "DatabaseTokenAuthConfig.startup_backends() returns startup-only backends. "
+        "Use LitestarAuthConfig.bind_request_backends(session) to obtain request-scoped "
+        "backend instances for runtime login, refresh, logout, or token validation work."
+    )
+    raise RuntimeError(msg)
+
+
 def resolve_database_token_strategy_session(session: AsyncSession | None = None) -> AsyncSession:
-    """Return the explicit request session or the startup-only sentinel session.
+    """Return ``session`` or a fail-closed placeholder for legacy helper paths.
 
     Returns:
-        The provided request ``AsyncSession`` when available, otherwise the startup-only
-        sentinel used by :class:`StartupBackendTemplate` values from
-        :meth:`LitestarAuthConfig.startup_backends`.
+        The provided request ``AsyncSession`` when available, otherwise a placeholder that
+        raises the canonical startup-only runtime error on first use. The
+        :meth:`LitestarAuthConfig.startup_backends` path now uses an explicit startup-only
+        strategy wrapper instead of this placeholder.
     """
     return session if session is not None else cast("AsyncSession", _STARTUP_ONLY_DATABASE_TOKEN_SESSION)
+
+
+@dataclass(frozen=True, slots=True)
+class _DatabaseTokenStrategySettings:
+    """Immutable runtime settings shared by startup-only and bound DB-token strategies."""
+
+    token_hash_secret: str
+    max_age: timedelta
+    refresh_max_age: timedelta
+    token_bytes: int
+    accept_legacy_plaintext_tokens: bool
+    unsafe_testing: bool
+
+
+class _StartupOnlyDatabaseTokenStrategyMixin[UP: UserProtocol[Any], ID]:
+    """Fail-closed startup-only wrapper for the canonical DB-token strategy settings."""
+
+    def __init__(
+        self,
+        *,
+        settings: _DatabaseTokenStrategySettings,
+        token_models: DatabaseTokenModels,
+        runtime_strategy_cls: type[Any],
+        legacy_warning_message: str,
+        database_token_logger: Logger,
+    ) -> None:
+        self._runtime_strategy_settings = settings
+        self._runtime_strategy_cls = runtime_strategy_cls
+        self._token_hash_secret = settings.token_hash_secret.encode()
+        self.token_models = token_models
+        self.access_token_model = token_models.access_token_model
+        self.refresh_token_model = token_models.refresh_token_model
+        self.max_age = settings.max_age
+        self.refresh_max_age = settings.refresh_max_age
+        self.token_bytes = settings.token_bytes
+        self.accept_legacy_plaintext_tokens = settings.accept_legacy_plaintext_tokens
+        self.unsafe_testing = settings.unsafe_testing
+        if self.accept_legacy_plaintext_tokens and not self.unsafe_testing:
+            database_token_logger.warning(
+                legacy_warning_message,
+                extra={"event": "db_tokens_accept_legacy_plaintext"},
+            )
+
+    def _raise_startup_only_runtime_error(self) -> Never:
+        del self
+        return _raise_startup_only_database_token_runtime_error()
+
+    def with_session(self, session: AsyncSession) -> StrategyProtocol[UP, ID]:
+        settings = self._runtime_strategy_settings
+        return cast(
+            "StrategyProtocol[UP, ID]",
+            self._runtime_strategy_cls(
+                session=session,
+                token_hash_secret=settings.token_hash_secret,
+                token_models=self.token_models,
+                max_age=settings.max_age,
+                refresh_max_age=settings.refresh_max_age,
+                token_bytes=settings.token_bytes,
+                accept_legacy_plaintext_tokens=settings.accept_legacy_plaintext_tokens,
+                unsafe_testing=settings.unsafe_testing,
+            ),
+        )
+
+    async def read_token(self, token: str | None, user_manager: object) -> UP | None:
+        del token
+        del user_manager
+        return self._raise_startup_only_runtime_error()
+
+    async def write_token(self, user: UP) -> str:
+        del user
+        return self._raise_startup_only_runtime_error()
+
+    async def destroy_token(self, token: str, user: UP) -> None:
+        del token
+        del user
+        return self._raise_startup_only_runtime_error()
+
+    async def write_refresh_token(self, user: UP) -> str:
+        del user
+        return self._raise_startup_only_runtime_error()
+
+    async def rotate_refresh_token(
+        self,
+        refresh_token: str,
+        user_manager: object,
+    ) -> tuple[UP, str] | None:
+        del refresh_token
+        del user_manager
+        return self._raise_startup_only_runtime_error()
+
+    async def invalidate_all_tokens(self, user: UP) -> None:
+        del user
+        return self._raise_startup_only_runtime_error()
+
+    async def cleanup_expired_tokens(self, session: AsyncSession) -> int:
+        del session
+        return self._raise_startup_only_runtime_error()
+
+
+def _build_startup_only_database_token_strategy[UP: UserProtocol[Any], ID](
+    database_token_auth: DatabaseTokenAuthConfig,
+    *,
+    unsafe_testing: bool = False,
+) -> StrategyProtocol[UP, ID]:
+    """Build a startup-only DB-token strategy that fails closed until session binding.
+
+    Returns:
+        Startup-only strategy carrying DB-token metadata without a placeholder session.
+    """
+    from litestar_auth.authentication.strategy import (  # noqa: PLC0415
+        DatabaseTokenModels,
+        DatabaseTokenStrategy,
+    )
+    from litestar_auth.authentication.strategy.db import (  # noqa: PLC0415
+        build_legacy_plaintext_tokens_warning_message,
+    )
+    from litestar_auth.authentication.strategy.db import (  # noqa: PLC0415
+        logger as database_token_logger,
+    )
+
+    class _StartupOnlyDatabaseTokenStrategy(_StartupOnlyDatabaseTokenStrategyMixin, DatabaseTokenStrategy):
+        """Concrete startup-only DB-token strategy tied to the current strategy module."""
+
+    settings = _DatabaseTokenStrategySettings(
+        token_hash_secret=database_token_auth.token_hash_secret,
+        max_age=database_token_auth.max_age,
+        refresh_max_age=database_token_auth.refresh_max_age,
+        token_bytes=database_token_auth.token_bytes,
+        accept_legacy_plaintext_tokens=database_token_auth.accept_legacy_plaintext_tokens,
+        unsafe_testing=unsafe_testing,
+    )
+    return cast(
+        "StrategyProtocol[UP, ID]",
+        _StartupOnlyDatabaseTokenStrategy(
+            settings=settings,
+            token_models=DatabaseTokenModels(),
+            runtime_strategy_cls=DatabaseTokenStrategy,
+            legacy_warning_message=build_legacy_plaintext_tokens_warning_message(),
+            database_token_logger=database_token_logger,
+        ),
+    )
 
 
 def build_database_token_backend[UP: UserProtocol[Any], ID](
@@ -283,16 +550,7 @@ def _build_database_token_backend_template[UP: UserProtocol[Any], ID](
         database_token_auth,
         unsafe_testing=unsafe_testing,
     )
-    return StartupBackendTemplate[UP, ID](
-        name=startup_backend.name,
-        transport=startup_backend.transport,
-        strategy=startup_backend.strategy,
-        _runtime_backend_factory=lambda session: build_database_token_backend(
-            database_token_auth,
-            session=session,
-            unsafe_testing=unsafe_testing,
-        ),
-    )
+    return StartupBackendTemplate.from_runtime_backend(startup_backend)
 
 
 def _build_default_user_db(session: AsyncSession, *, user_model: type[Any]) -> BaseUserStore[Any, Any]:
@@ -350,13 +608,17 @@ def _build_database_token_backend[UP: UserProtocol[Any], ID](
     from litestar_auth.authentication.strategy import DatabaseTokenStrategy  # noqa: PLC0415
     from litestar_auth.authentication.transport import BearerTransport  # noqa: PLC0415
 
-    return AuthenticationBackend[UP, ID](
-        name=database_token_auth.backend_name,
-        transport=BearerTransport(),
-        strategy=cast(
-            "Any",
+    strategy: StrategyProtocol[UP, ID]
+    if session is None:
+        strategy = _build_startup_only_database_token_strategy(
+            database_token_auth,
+            unsafe_testing=unsafe_testing,
+        )
+    else:
+        strategy = cast(
+            "StrategyProtocol[UP, ID]",
             DatabaseTokenStrategy(
-                session=resolve_database_token_strategy_session(session),
+                session=session,
                 token_hash_secret=database_token_auth.token_hash_secret,
                 max_age=database_token_auth.max_age,
                 refresh_max_age=database_token_auth.refresh_max_age,
@@ -364,7 +626,12 @@ def _build_database_token_backend[UP: UserProtocol[Any], ID](
                 accept_legacy_plaintext_tokens=database_token_auth.accept_legacy_plaintext_tokens,
                 unsafe_testing=unsafe_testing,
             ),
-        ),
+        )
+
+    return AuthenticationBackend[UP, ID](
+        name=database_token_auth.backend_name,
+        transport=BearerTransport(),
+        strategy=cast("Any", strategy),
     )
 
 
@@ -375,6 +642,18 @@ class PasswordValidatorFactory[UP: UserProtocol[Any], ID](Protocol):
     """Build a password validator callable for a plugin configuration."""
 
     def __call__(self, config: LitestarAuthConfig[UP, ID], /) -> Callable[[str], None] | None: ...  # pragma: no cover
+
+
+_DEFAULT_USER_MANAGER_CONSTRUCTOR_DESCRIPTION = (
+    "user_manager_class(user_db, *, password_helper=..., security=..., "
+    "password_validator=..., backends=..., login_identifier=..., unsafe_testing=...)"
+)
+_DEFAULT_USER_MANAGER_ID_PARSER_FALLBACK_DESCRIPTION = (
+    "When user_manager_security is unset, the plugin passes id_parser=... directly instead of folding it into security."
+)
+_DEFAULT_USER_MANAGER_FACTORY_GUIDANCE = (
+    "Configure user_manager_factory for non-canonical or factory-owned manager construction."
+)
 
 
 class UserManagerFactory[UP: UserProtocol[Any], ID](Protocol):
@@ -410,48 +689,94 @@ def default_password_validator_factory[UP: UserProtocol[Any], ID](
     return partial(require_password_length, minimum_length=DEFAULT_MINIMUM_PASSWORD_LENGTH)
 
 
-def _materialize_default_user_manager_kwargs[UP: UserProtocol[Any], ID](
+def _format_default_user_manager_managed_security_error(managed_security_keys: tuple[str, ...]) -> str:
+    """Return the shared diagnostic for legacy plugin-managed security kwargs."""
+    invalid_keys = ", ".join(managed_security_keys)
+    return (
+        "The default plugin user-manager builder only accepts verification/reset/TOTP "
+        "secrets and id_parser through user_manager_security. "
+        "user_manager_security is the canonical plugin-managed path for manager secrets and id_parser. "
+        f"Remove these keys from user_manager_kwargs: {invalid_keys}. {_DEFAULT_USER_MANAGER_FACTORY_GUIDANCE}"
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class _DefaultUserManagerBuilderContract[UP: UserProtocol[Any], ID]:
+    """Shared internal contract for plugin-owned default user-manager construction."""
+
+    config: LitestarAuthConfig[UP, ID]
+    password_helper: object
+    password_validator: Callable[[str], None] | None
+    backends: tuple[object, ...] = ()
+
+    @property
+    def effective_manager_kwargs(self) -> dict[str, Any]:
+        """Return manager kwargs with the default password helper materialized."""
+        effective_manager_kwargs = dict(self.config.user_manager_kwargs)
+        if "password_helper" not in effective_manager_kwargs:
+            effective_manager_kwargs["password_helper"] = self.password_helper
+        return effective_manager_kwargs
+
+    @property
+    def manager_inputs(self) -> ManagerConstructorInputs[ID]:
+        """Return the normalized constructor inputs for the default builder."""
+        return ManagerConstructorInputs(
+            manager_kwargs=self.effective_manager_kwargs,
+            manager_security=self.config.user_manager_security,
+            password_validator=self.password_validator,
+            backends=self.backends,
+            login_identifier=self.config.login_identifier,
+            id_parser=self.config.id_parser,
+        )
+
+    def build_kwargs(self) -> dict[str, Any]:
+        """Materialize the canonical default-builder kwargs for one call site.
+
+        Returns:
+            The concrete constructor kwargs for the requested default-builder surface.
+
+        Raises:
+            ConfigurationError: If plugin-managed secrets or ``id_parser`` are supplied
+                through ``user_manager_kwargs`` instead of ``user_manager_security``.
+        """
+        manager_inputs = self.manager_inputs
+        if manager_inputs.managed_security_keys:
+            msg = _format_default_user_manager_managed_security_error(manager_inputs.managed_security_keys)
+            raise ConfigurationError(msg)
+
+        manager_kwargs = manager_inputs.build_kwargs()
+        if "password_validator" not in self.effective_manager_kwargs:
+            manager_kwargs["password_validator"] = self.password_validator
+        if "unsafe_testing" not in manager_kwargs:
+            manager_kwargs["unsafe_testing"] = self.config.unsafe_testing
+        return manager_kwargs
+
+    @staticmethod
+    def build_constructor_mismatch_message(manager_name: str, exc: TypeError) -> str:
+        """Return the shared constructor-mismatch diagnostic for the default builder."""
+        return (
+            f"{manager_name!r} (user_manager_class) is incompatible with the default plugin "
+            "builder contract. Without user_manager_factory, the plugin calls "
+            f"{_DEFAULT_USER_MANAGER_CONSTRUCTOR_DESCRIPTION}. "
+            f"{_DEFAULT_USER_MANAGER_ID_PARSER_FALLBACK_DESCRIPTION} "
+            f"{_DEFAULT_USER_MANAGER_FACTORY_GUIDANCE} Original error: {exc}"
+        )
+
+
+def _build_default_user_manager_contract[UP: UserProtocol[Any], ID](
     config: LitestarAuthConfig[UP, ID],
     *,
     password_helper: object,
-    password_validator: object,
+    password_validator: Callable[[str], None] | None,
     backends: tuple[object, ...] = (),
-) -> dict[str, Any]:
-    """Materialize the default-builder constructor kwargs for one concrete call site.
-
-    Returns:
-        The concrete constructor kwargs for the requested default-builder surface.
-
-    Raises:
-        ConfigurationError: If plugin-managed secrets or ``id_parser`` are supplied
-            through ``user_manager_kwargs`` instead of ``user_manager_security``.
-    """
-    effective_manager_kwargs = dict(config.user_manager_kwargs)
-    if "password_helper" not in effective_manager_kwargs:
-        effective_manager_kwargs["password_helper"] = password_helper
-    manager_inputs = ManagerConstructorInputs(
-        manager_kwargs=effective_manager_kwargs,
-        manager_security=config.user_manager_security,
-        password_validator=cast("Callable[[str], None] | None", password_validator),
+) -> _DefaultUserManagerBuilderContract[UP, ID]:
+    """Return the shared contract for plugin-owned default manager construction."""
+    return _DefaultUserManagerBuilderContract(
+        config=config,
+        password_helper=password_helper,
+        password_validator=password_validator,
         backends=backends,
-        login_identifier=config.login_identifier,
-        id_parser=config.id_parser,
     )
-    if manager_inputs.managed_security_keys:
-        invalid_keys = ", ".join(manager_inputs.managed_security_keys)
-        msg = (
-            "The default plugin user-manager builder only accepts verification/reset/TOTP "
-            "secrets and id_parser through user_manager_security. Remove these keys from "
-            f"user_manager_kwargs: {invalid_keys}. If you need factory-owned manager "
-            "construction, set user_manager_factory."
-        )
-        raise ConfigurationError(msg)
-    manager_kwargs = manager_inputs.build_kwargs()
-    if "password_validator" not in manager_kwargs and "password_validator" not in effective_manager_kwargs:
-        manager_kwargs["password_validator"] = password_validator
-    if "unsafe_testing" not in manager_kwargs:
-        manager_kwargs["unsafe_testing"] = config.unsafe_testing
-    return manager_kwargs
 
 
 def _build_default_user_manager_kwargs[UP: UserProtocol[Any], ID](
@@ -465,12 +790,12 @@ def _build_default_user_manager_kwargs[UP: UserProtocol[Any], ID](
         The concrete constructor kwargs that :func:`build_user_manager` passes to
         ``user_manager_class(...)``.
     """
-    return _materialize_default_user_manager_kwargs(
+    return _build_default_user_manager_contract(
         config,
         password_helper=config.build_password_helper(),
         password_validator=resolve_password_validator(config),
         backends=backends,
-    )
+    ).build_kwargs()
 
 
 def _build_default_user_manager_validation_kwargs[UP: UserProtocol[Any], ID](
@@ -488,12 +813,12 @@ def _build_default_user_manager_validation_kwargs[UP: UserProtocol[Any], ID](
         Constructor kwargs matching the startup validation contract for the default
         user-manager builder.
     """
-    return _materialize_default_user_manager_kwargs(
+    return _build_default_user_manager_contract(
         config,
         password_helper=object(),
         password_validator=None,
         backends=backends,
-    )
+    ).build_kwargs()
 
 
 def build_user_manager[UP: UserProtocol[Any], ID](
@@ -873,15 +1198,7 @@ class LitestarAuthConfig[UP: UserProtocol[Any], ID]:
         Returns:
             Startup-only backend templates for the current config.
         """
-        self._validate_backend_configuration()
-        if self.database_token_auth is not None:
-            return (
-                _build_database_token_backend_template(
-                    self.database_token_auth,
-                    unsafe_testing=self.unsafe_testing,
-                ),
-            )
-        return tuple(StartupBackendTemplate.from_runtime_backend(backend) for backend in self.backends)
+        return resolve_backend_inventory(self).startup_backends()
 
     def bind_request_backends(self, session: AsyncSession) -> tuple[AuthenticationBackend[UP, ID], ...]:
         """Return authentication backends bound to the current request session.
@@ -889,8 +1206,7 @@ class LitestarAuthConfig[UP: UserProtocol[Any], ID]:
         Returns:
             Request-scoped backends aligned with the provided SQLAlchemy session.
         """
-        self._validate_backend_configuration()
-        return tuple(backend.bind_runtime_backend(session) for backend in self.startup_backends())
+        return resolve_backend_inventory(self).bind_request_backends(session)
 
     def build_password_helper(self) -> PasswordHelper:
         """Return the helper aligned with this config, memoizing default construction.
@@ -972,6 +1288,34 @@ class LitestarAuthConfig[UP: UserProtocol[Any], ID]:
             "UserDatabaseFactory[UP, ID]",
             partial(_build_default_user_db, user_model=self.user_model),
         )
+
+
+def resolve_backend_inventory[UP: UserProtocol[Any], ID](
+    config: LitestarAuthConfig[UP, ID],
+) -> _StartupBackendInventory[UP, ID]:
+    """Return the centralized startup inventory for plugin assembly and request binding.
+
+    Returns:
+        Startup inventory for the current config, including stable slot metadata used to
+        resolve request-scoped backends.
+
+    Raises:
+        ValueError: If both ``database_token_auth`` and manual ``backends`` are configured.
+    """
+    if config.database_token_auth is not None and config.backends:
+        msg = "Configure authentication backends via database_token_auth=... or backends=..., not both."
+        raise ValueError(msg)
+    startup_backends: tuple[StartupBackendTemplate[UP, ID], ...]
+    if config.database_token_auth is not None:
+        startup_backends = (
+            _build_database_token_backend_template(
+                config.database_token_auth,
+                unsafe_testing=config.unsafe_testing,
+            ),
+        )
+    else:
+        startup_backends = tuple(StartupBackendTemplate.from_runtime_backend(backend) for backend in config.backends)
+    return _StartupBackendInventory.from_startup_backends(startup_backends)
 
 
 def _is_database_token_strategy_instance(strategy: object) -> bool:

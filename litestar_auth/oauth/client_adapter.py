@@ -3,14 +3,87 @@
 from __future__ import annotations
 
 import inspect
-from collections.abc import Callable, Mapping
-from typing import Any, TypedDict
+from collections.abc import Awaitable, Callable, Mapping
+from typing import Protocol, TypedDict, TypeGuard
 
 from litestar.exceptions import ClientException
 
 from litestar_auth.exceptions import ConfigurationError, ErrorCode
 
 ACCOUNT_IDENTITY_LENGTH = 2
+
+
+class OAuthPayloadObjectProtocol(Protocol):
+    """Attribute-based payload object supported by the manual OAuth helpers."""
+
+    __dict__: dict[str, object]
+
+
+type OAuthPayloadSource = Mapping[str, object] | OAuthPayloadObjectProtocol
+
+
+class OAuthAuthorizationURLClientProtocol(Protocol):
+    """Manual OAuth client contract for authorization URL resolution."""
+
+    async def get_authorization_url(
+        self,
+        redirect_uri: str,
+        state: str,
+        *,
+        scope: str | None = None,
+    ) -> str:
+        """Return the upstream provider authorization URL."""
+
+
+class OAuthAccessTokenClientProtocol(Protocol):
+    """Manual OAuth client contract for callback token exchange."""
+
+    async def get_access_token(self, code: str, redirect_uri: str) -> OAuthPayloadSource:
+        """Exchange a callback code for a token payload."""
+
+
+class OAuthClientBaseProtocol(
+    OAuthAuthorizationURLClientProtocol,
+    OAuthAccessTokenClientProtocol,
+    Protocol,
+):
+    """Base manual OAuth client contract used by login and associate flows."""
+
+
+class OAuthDirectIdentityClientProtocol(OAuthClientBaseProtocol, Protocol):
+    """Manual OAuth client contract with direct identity resolution.
+
+    Returning ``None`` requests the documented ``get_profile()`` fallback.
+    """
+
+    async def get_id_email(self, access_token: str) -> tuple[str, str] | None:
+        """Return provider account id and email, or ``None`` for profile fallback."""
+
+
+class OAuthProfileClientProtocol(OAuthClientBaseProtocol, Protocol):
+    """Manual OAuth client contract with profile-based identity resolution."""
+
+    async def get_profile(self, access_token: str) -> OAuthPayloadSource:
+        """Return the upstream profile payload."""
+
+
+class OAuthEmailVerificationClientProtocol(Protocol):
+    """Optional manual OAuth client contract for email verification evidence."""
+
+    def get_email_verified(self, access_token: str) -> bool | Awaitable[bool]:
+        """Return provider email-verification evidence."""
+
+
+type OAuthClientProtocol = OAuthDirectIdentityClientProtocol | OAuthProfileClientProtocol
+type OAuthClientFactory = Callable[[], OAuthClientProtocol]
+type OAuthClientConstructor = Callable[..., OAuthClientProtocol]
+
+
+class OAuthClientClassLoader(Protocol):
+    """Lazy loader contract for fully qualified manual OAuth client class paths."""
+
+    def __call__(self, oauth_client_class: str, /, **client_kwargs: object) -> OAuthClientProtocol:
+        """Load and instantiate a configured manual OAuth client."""
 
 
 class OAuthTokenPayload(TypedDict):
@@ -21,10 +94,92 @@ class OAuthTokenPayload(TypedDict):
     refresh_token: str | None
 
 
+def _resolve_oauth_client(
+    *,
+    oauth_client: OAuthClientProtocol | None = None,
+    oauth_client_factory: OAuthClientFactory | None = None,
+    oauth_client_class: str | None = None,
+    oauth_client_kwargs: Mapping[str, object] | None = None,
+    oauth_client_class_loader: OAuthClientClassLoader | None = None,
+) -> OAuthClientProtocol:
+    """Resolve the supported manual OAuth client provisioning contract.
+
+    Returns:
+        Concrete OAuth client instance resolved from the supported provisioning inputs.
+
+    Raises:
+        ConfigurationError: If no client configuration is provided.
+    """
+    client = oauth_client
+    if client is None and oauth_client_factory is not None:
+        client = oauth_client_factory()
+    if client is None and oauth_client_class is not None:
+        if oauth_client_class_loader is None:
+            msg = "oauth_client_class requires an OAuth client loader."
+            raise ConfigurationError(msg)
+        client = oauth_client_class_loader(
+            oauth_client_class,
+            **dict(oauth_client_kwargs or {}),
+        )
+    if client is None:
+        msg = "Provide oauth_client, oauth_client_factory, or oauth_client_class."
+        raise ConfigurationError(msg)
+    return client
+
+
+def _build_oauth_client_adapter(
+    *,
+    oauth_client: OAuthClientProtocol | None = None,
+    oauth_client_factory: OAuthClientFactory | None = None,
+    oauth_client_class: str | None = None,
+    oauth_client_kwargs: Mapping[str, object] | None = None,
+    oauth_client_class_loader: OAuthClientClassLoader | None = None,
+) -> OAuthClientAdapter:
+    """Resolve and wrap a manual OAuth client behind the normalized adapter.
+
+    Returns:
+        Normalized adapter bound to the resolved manual OAuth client.
+    """
+    return OAuthClientAdapter(
+        _resolve_oauth_client(
+            oauth_client=oauth_client,
+            oauth_client_factory=oauth_client_factory,
+            oauth_client_class=oauth_client_class,
+            oauth_client_kwargs=oauth_client_kwargs,
+            oauth_client_class_loader=oauth_client_class_loader,
+        ),
+    )
+
+
+def _supports_authorization_url(oauth_client: object) -> TypeGuard[OAuthAuthorizationURLClientProtocol]:
+    """Return whether the client exposes ``get_authorization_url()``."""
+    return callable(getattr(oauth_client, "get_authorization_url", None))
+
+
+def _supports_access_token(oauth_client: object) -> TypeGuard[OAuthAccessTokenClientProtocol]:
+    """Return whether the client exposes ``get_access_token()``."""
+    return callable(getattr(oauth_client, "get_access_token", None))
+
+
+def _supports_direct_identity(oauth_client: object) -> TypeGuard[OAuthDirectIdentityClientProtocol]:
+    """Return whether the client exposes ``get_id_email()``."""
+    return callable(getattr(oauth_client, "get_id_email", None))
+
+
+def _supports_profile(oauth_client: object) -> TypeGuard[OAuthProfileClientProtocol]:
+    """Return whether the client exposes ``get_profile()``."""
+    return callable(getattr(oauth_client, "get_profile", None))
+
+
+def _supports_email_verified(oauth_client: object) -> TypeGuard[OAuthEmailVerificationClientProtocol]:
+    """Return whether the client exposes ``get_email_verified()``."""
+    return callable(getattr(oauth_client, "get_email_verified", None))
+
+
 class OAuthClientAdapter:
     """Wrap a provider client behind a normalized async interface."""
 
-    def __init__(self, oauth_client: object) -> None:
+    def __init__(self, oauth_client: OAuthClientProtocol) -> None:
         """Bind the raw OAuth client implementation."""
         self._oauth_client = oauth_client
 
@@ -43,20 +198,19 @@ class OAuthClientAdapter:
         Raises:
             ConfigurationError: If the client does not expose a valid authorization-url contract.
         """
-        get_authorization_url = getattr(self._oauth_client, "get_authorization_url", None)
-        if get_authorization_url is None:
+        if not _supports_authorization_url(self._oauth_client):
             msg = "OAuth client must define get_authorization_url()."
             raise ConfigurationError(msg)
 
         if scopes:
             scope_str = " ".join(scopes)
-            authorization_url = await get_authorization_url(
+            authorization_url = await self._oauth_client.get_authorization_url(
                 redirect_uri,
                 state,
                 scope=scope_str,
             )
         else:
-            authorization_url = await get_authorization_url(redirect_uri, state)
+            authorization_url = await self._oauth_client.get_authorization_url(redirect_uri, state)
         if not isinstance(authorization_url, str) or not authorization_url:
             msg = "OAuth client returned an invalid authorization URL."
             raise ConfigurationError(msg)
@@ -71,12 +225,11 @@ class OAuthClientAdapter:
         Raises:
             ConfigurationError: If the client does not expose a valid token-exchange contract.
         """
-        get_access_token = getattr(self._oauth_client, "get_access_token", None)
-        if get_access_token is None:
+        if not _supports_access_token(self._oauth_client):
             msg = "OAuth client must define get_access_token()."
             raise ConfigurationError(msg)
 
-        raw_payload = await get_access_token(code, redirect_uri)
+        raw_payload = await self._oauth_client.get_access_token(code, redirect_uri)
         payload = _as_mapping(raw_payload, message="OAuth client returned an invalid access-token payload.")
         access_token = payload.get("access_token")
         expires_at = payload.get("expires_at")
@@ -116,11 +269,10 @@ class OAuthClientAdapter:
         Raises:
             ConfigurationError: If provider returned malformed identity payload.
         """
-        get_id_email = getattr(self._oauth_client, "get_id_email", None)
-        if get_id_email is None:
+        if not _supports_direct_identity(self._oauth_client):
             return None
 
-        account_identity = await get_id_email(access_token)
+        account_identity = await self._oauth_client.get_id_email(access_token)
         if account_identity is None:
             return None
         parsed_identity = _as_account_identity_tuple(account_identity)
@@ -139,26 +291,23 @@ class OAuthClientAdapter:
         Raises:
             ConfigurationError: If profile contract is missing or malformed.
         """
-        get_profile = getattr(self._oauth_client, "get_profile", None)
-        if get_profile is None:
+        if not _supports_profile(self._oauth_client):
             msg = "OAuth client must define get_id_email() or get_profile()."
             raise ConfigurationError(msg)
 
-        raw_profile = await get_profile(access_token)
+        raw_profile = await self._oauth_client.get_profile(access_token)
         profile = _as_mapping(raw_profile, message="OAuth client returned an invalid profile payload.")
         return _extract_identity_from_profile(profile)
 
     async def get_email_verified(self, access_token: str) -> bool | None:
         """Return a provider asserted email-verification signal for the access token."""
-        get_email_verified = getattr(self._oauth_client, "get_email_verified", None)
-        if get_email_verified is not None:
-            return await self._call_dedicated_email_verified(get_email_verified, access_token)
+        if _supports_email_verified(self._oauth_client):
+            return await self._call_dedicated_email_verified(self._oauth_client, access_token)
 
-        get_profile = getattr(self._oauth_client, "get_profile", None)
-        if get_profile is None:
+        if not _supports_profile(self._oauth_client):
             return None
 
-        raw_profile = await get_profile(access_token)
+        raw_profile = await self._oauth_client.get_profile(access_token)
         profile = _as_mapping(raw_profile, message="OAuth client returned an invalid profile payload.")
         return _parse_email_verified_from_profile(profile)
 
@@ -185,18 +334,16 @@ class OAuthClientAdapter:
             email_verified = await self.get_email_verified(access_token)
             return identity, email_verified
 
-        get_profile = getattr(self._oauth_client, "get_profile", None)
-        if get_profile is None:
+        if not _supports_profile(self._oauth_client):
             msg = "OAuth client must define get_id_email() or get_profile()."
             raise ConfigurationError(msg)
 
-        raw_profile = await get_profile(access_token)
+        raw_profile = await self._oauth_client.get_profile(access_token)
         profile = _as_mapping(raw_profile, message="OAuth client returned an invalid profile payload.")
         identity = _extract_identity_from_profile(profile)
 
-        get_email_verified_fn = getattr(self._oauth_client, "get_email_verified", None)
-        if get_email_verified_fn is not None:
-            email_verified = await self._call_dedicated_email_verified(get_email_verified_fn, access_token)
+        if _supports_email_verified(self._oauth_client):
+            email_verified = await self._call_dedicated_email_verified(self._oauth_client, access_token)
         else:
             email_verified = _parse_email_verified_from_profile(profile)
 
@@ -204,7 +351,7 @@ class OAuthClientAdapter:
 
     @staticmethod
     async def _call_dedicated_email_verified(
-        get_email_verified: Callable[..., Any],
+        oauth_client: OAuthEmailVerificationClientProtocol,
         access_token: str,
     ) -> bool:
         """Invoke the provider's dedicated ``get_email_verified`` contract.
@@ -215,7 +362,7 @@ class OAuthClientAdapter:
         Raises:
             ConfigurationError: If the return value is not a bool.
         """
-        maybe_awaitable = get_email_verified(access_token)
+        maybe_awaitable = oauth_client.get_email_verified(access_token)
         result = await maybe_awaitable if inspect.isawaitable(maybe_awaitable) else maybe_awaitable
         if isinstance(result, bool):
             return result

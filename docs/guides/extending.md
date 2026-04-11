@@ -14,11 +14,11 @@ The plugin injects a request-scoped manager built with your `user_db_factory`, `
 
 Without `user_manager_factory`, the plugin calls `user_manager_class(user_db, *, password_helper=..., security=..., password_validator=..., backends=..., login_identifier=..., unsafe_testing=...)`. When `user_manager_security` is unset, the default builder passes `id_parser=...` directly instead of folding it into `security`.
 
-If your manager narrows or renames that constructor surface, configure `user_manager_factory` instead of relying on plugin-side capability detection.
+If your manager narrows or renames that constructor surface, configure `user_manager_factory` instead of relying on plugin-side capability detection. `password_validator_factory` belongs to that default builder contract: the plugin only resolves and injects the validator automatically when it still owns the canonical manager constructor call.
 
 ### Custom factory
 
-Set `user_manager_factory` on `LitestarAuthConfig` for full control over manager construction when your manager does not follow the default builder contract (must match the `UserManagerFactory` contract).
+Set `user_manager_factory` on `LitestarAuthConfig` for full control over manager construction when your manager does not follow the default builder contract (must match the `UserManagerFactory` contract). The factory receives `session`, `user_db`, `config`, and request-bound `backends`; it does not receive side-channel `password_helper`, `password_validator`, or `security` kwargs from the plugin. If your custom builder still wants password-policy enforcement, build and pass that validator explicitly inside the factory.
 
 Plugin-managed manager construction inherits the plugin-owned secret-role reuse baseline. If your
 custom factory instantiates `BaseUserManager` (or a subclass) with the same
@@ -27,6 +27,12 @@ construction suppresses the duplicate warning. If the custom factory diverges fr
 config-owned surface, the manager constructor surfaces the additional warning for the manager-owned
 roles it actually wires. Keep custom factories aligned with `user_manager_security` unless you
 intentionally want the factory-built manager to carry that additional warning.
+
+Generated controllers and plugin-owned flows also resolve one stable account-state callable from
+`user_manager_class`: `require_account_state(user, *, require_verified=False)`. Inheriting
+`BaseUserManager` keeps the built-in policy, and custom manager classes or adapters should forward
+the same user argument and keyword-only `require_verified` flag when they customize account-state
+handling.
 
 ## Controllers and DTOs
 

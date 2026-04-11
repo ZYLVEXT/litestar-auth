@@ -20,6 +20,15 @@ The plugin keeps these downgrade paths explicit and ties them to the same runtim
 
 --8<-- "docs/snippets/plugin_security_tradeoffs.md"
 
+## Direct/manual posture contracts
+
+When you assemble `JWTStrategy` or `BaseUserManager` yourself, inspect the runtime posture objects directly instead of inferring security behavior from constructor kwargs later:
+
+- `JWTStrategy(secret=...)` keeps the compatibility-grade `compatibility_in_memory` revocation posture by default. `revocation_is_durable` stays `False` and logout / revoke remains single-process until you provide a shared denylist store.
+- `JWTStrategy(..., denylist_store=RedisJWTDenylistStore(...))` reports the durable `shared_store` posture and clears the compatibility-only warning / validation branch.
+- `BaseUserManager(..., totp_secret_key=None)` keeps the compatibility-grade `compatibility_plaintext` storage posture so existing plaintext TOTP secrets still round-trip for direct/custom integrations.
+- Providing `totp_secret_key` through either direct kwargs or `security=UserManagerSecurity(...)` flips `BaseUserManager.totp_secret_storage_posture` to `fernet_encrypted`, so newly persisted TOTP secrets are encrypted at rest.
+
 Additional explicit opt-ins to weaker behavior:
 
 | Surface | Risk |

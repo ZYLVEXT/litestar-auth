@@ -1,4 +1,4 @@
-"""Unit tests for durable JWT revocation behavior."""
+"""Unit tests for JWT revocation behavior and posture contracts."""
 
 from __future__ import annotations
 
@@ -330,18 +330,33 @@ async def test_jwt_strategy_read_token_returns_none_for_missing_input() -> None:
 
 
 @pytest.mark.unit
-def test_jwt_strategy_revocation_is_durable_reflects_store_backend(async_fakeredis: AsyncFakeRedis) -> None:
-    """revocation_is_durable depends on whether the denylist backend is shared."""
-    shared_store = RedisJWTDenylistStore(redis=cast_fakeredis(async_fakeredis, RedisExpiringValueStoreClient))
-
-    assert JWTStrategy(secret="secret-1234567890-1234567890-1234567890").revocation_is_durable is False
-    assert (
-        JWTStrategy(
-            secret="secret-1234567890-1234567890-1234567890",
-            denylist_store=shared_store,
-        ).revocation_is_durable
-        is True
+def test_jwt_strategy_revocation_posture_distinguishes_default_and_shared_store_modes(
+    async_fakeredis: AsyncFakeRedis,
+) -> None:
+    """Direct JWTStrategy wiring exposes explicit compatibility and shared-store branches."""
+    default_strategy = JWTStrategy(secret="secret-1234567890-1234567890-1234567890")
+    shared_strategy = JWTStrategy(
+        secret="secret-1234567890-1234567890-1234567890",
+        denylist_store=RedisJWTDenylistStore(redis=cast_fakeredis(async_fakeredis, RedisExpiringValueStoreClient)),
     )
+
+    default_posture = default_strategy.revocation_posture
+    assert default_posture.key == "compatibility_in_memory"
+    assert default_posture.denylist_store_type == "InMemoryJWTDenylistStore"
+    assert default_posture.revocation_is_durable is False
+    assert default_strategy.revocation_is_durable is default_posture.revocation_is_durable
+    assert default_posture.requires_explicit_production_opt_in is True
+    assert default_posture.production_validation_error is not None
+    assert default_posture.startup_warning is not None
+
+    shared_posture = shared_strategy.revocation_posture
+    assert shared_posture.key == "shared_store"
+    assert shared_posture.denylist_store_type == "RedisJWTDenylistStore"
+    assert shared_posture.revocation_is_durable is True
+    assert shared_strategy.revocation_is_durable is shared_posture.revocation_is_durable
+    assert shared_posture.requires_explicit_production_opt_in is False
+    assert shared_posture.production_validation_error is None
+    assert shared_posture.startup_warning is None
 
 
 @pytest.mark.unit

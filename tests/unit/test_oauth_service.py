@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-import importlib
+from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
 from uuid import UUID, uuid4
 
@@ -10,7 +10,7 @@ import pytest
 from litestar.exceptions import ClientException, PermissionDeniedException
 
 import litestar_auth.oauth.service as oauth_service_module
-from litestar_auth.exceptions import ConfigurationError, ErrorCode
+from litestar_auth.exceptions import ErrorCode
 from litestar_auth.oauth.client_adapter import OAuthClientAdapter
 from litestar_auth.oauth.service import (
     OAuthService,
@@ -19,6 +19,7 @@ from litestar_auth.oauth.service import (
     _resolve_account_state_validator,
 )
 from tests._helpers import ExampleUser
+from tests.unit.test_definition_file_coverage import load_reloaded_test_alias
 
 pytestmark = pytest.mark.unit
 
@@ -41,20 +42,42 @@ def _build_manager(*, existing_user: ExampleUser | None = None) -> AsyncMock:
     return manager
 
 
-def test_oauth_service_module_executes_under_coverage() -> None:
-    """Reload the module in-test so coverage records protocol and helper definitions."""
-    for name in (
-        "ConfigurationError",
-        "ErrorCode",
-        "InactiveUserError",
-        "OAuthAccountAlreadyLinkedError",
-        "UnverifiedUserError",
-    ):
-        delattr(oauth_service_module, name)
-    reloaded_module = importlib.reload(oauth_service_module)
+def test_oauth_service_module_reload_preserves_behavioral_error_contract(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Reload coverage keeps helper behavior stable without pinning exception identity."""
+    assert oauth_service_module.__file__ is not None
+    reloaded_module = load_reloaded_test_alias(
+        alias_name="_coverage_alias_oauth_service",
+        source_path=Path(oauth_service_module.__file__).resolve(),
+        monkeypatch=monkeypatch,
+    )
+    service = reloaded_module.OAuthService(
+        provider_name="github",
+        client=OAuthClientAdapter(AsyncMock()),
+        trust_provider_email_verified=True,
+    )
+
+    with pytest.raises(
+        Exception,
+        match="trust_provider_email_verified=True requires the OAuth provider to assert",
+    ) as exc_info:
+        service._require_provider_verification_signal(email_verified=None)
+
+    manager = MagicMock()
+    manager.require_account_state.side_effect = reloaded_module.InactiveUserError()
+
+    with pytest.raises(ClientException) as client_exc_info:
+        reloaded_module._require_account_state(
+            ExampleUser(id=uuid4(), email="inactive@example.com"),
+            user_manager=manager,
+        )
 
     assert reloaded_module.OAuthService.__name__ == OAuthService.__name__
     assert reloaded_module.OAuthAuthorization.__name__ == "OAuthAuthorization"
+    assert type(exc_info.value).__name__ == "ConfigurationError"
+    assert getattr(exc_info.value, "code", None) == ErrorCode.CONFIGURATION_INVALID
+    extra = client_exc_info.value.extra
+    assert (extra.get("code") if isinstance(extra, dict) else None) == ErrorCode.LOGIN_USER_INACTIVE
+    assert client_exc_info.value.detail == reloaded_module.InactiveUserError.default_message
 
 
 async def test_authorize_returns_state_and_provider_url(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -166,7 +189,8 @@ def test_require_provider_verification_signal_rejects_missing_signal_in_strict_m
     ) as exc_info:
         service._require_provider_verification_signal(email_verified=None)
 
-    assert type(exc_info.value).__name__ == ConfigurationError.__name__
+    assert type(exc_info.value).__name__ == "ConfigurationError"
+    assert getattr(exc_info.value, "code", None) == ErrorCode.CONFIGURATION_INVALID
 
 
 async def test_resolve_candidate_user_prefers_existing_oauth_link() -> None:

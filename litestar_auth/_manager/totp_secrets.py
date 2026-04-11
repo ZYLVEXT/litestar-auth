@@ -50,9 +50,7 @@ class TotpSecretStoragePosture:
         Returns:
             The explicit TOTP secret storage posture for ``totp_secret_key``.
         """
-        if totp_secret_key is None:
-            return cls.compatibility_plaintext()
-        return cls.fernet_encrypted()
+        return _resolve_totp_secret_storage_posture(cls, totp_secret_key)
 
     @property
     def production_validation_error(self) -> str | None:
@@ -66,6 +64,16 @@ class _TotpSecretsManagerProtocol[UP](UserDatabaseManagerProtocol[UP], Protocol)
     """Manager surface required by the TOTP-secret service."""
 
     totp_secret_key: str | None
+
+
+def _resolve_totp_secret_storage_posture[T: TotpSecretStoragePosture](
+    posture_cls: type[T],
+    totp_secret_key: str | None,
+) -> T:
+    """Resolve the explicit TOTP secret storage posture for ``totp_secret_key``."""
+    if totp_secret_key is None:
+        return posture_cls.compatibility_plaintext()
+    return posture_cls.fernet_encrypted()
 
 
 def _load_fernet_for_totp_secret(
@@ -85,6 +93,11 @@ class TotpSecretsService[UP]:
         """Bind the facade manager and encrypted-secret prefix."""
         self._manager = manager
         self._prefix = prefix
+
+    @property
+    def storage_posture(self) -> TotpSecretStoragePosture:
+        """Return the explicit storage posture for the manager's current key."""
+        return _resolve_totp_secret_storage_posture(TotpSecretStoragePosture, self._manager.totp_secret_key)
 
     async def set_secret(
         self,
@@ -136,8 +149,7 @@ class TotpSecretsService[UP]:
             return secret
 
         totp_secret_key = self._manager.totp_secret_key
-        posture = TotpSecretStoragePosture.from_secret_key(totp_secret_key)
-        if not posture.encrypts_at_rest:
+        if not self.storage_posture.encrypts_at_rest:
             return secret
         if totp_secret_key is None:  # pragma: no cover - posture branch above already guards this
             return secret

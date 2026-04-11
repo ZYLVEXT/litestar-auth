@@ -98,6 +98,28 @@ def test_totp_secret_storage_posture_reports_fernet_encrypted_with_key() -> None
     assert posture.production_validation_error is None
 
 
+@pytest.mark.parametrize(
+    ("totp_secret_key", "expected_key", "encrypts_at_rest"),
+    [
+        pytest.param(None, "compatibility_plaintext", False, id="plaintext"),
+        pytest.param("test-key", "fernet_encrypted", True, id="encrypted"),
+    ],
+)
+def test_service_storage_posture_tracks_manager_key(
+    *,
+    totp_secret_key: str | None,
+    expected_key: str,
+    encrypts_at_rest: bool,
+) -> None:
+    """The service resolves the same posture contract the manager reports publicly."""
+    service = TotpSecretsService(_Manager(user_db=AsyncMock(), totp_secret_key=totp_secret_key), prefix=PREFIX)
+    posture = service.storage_posture
+
+    assert posture.key == expected_key
+    assert posture.encrypts_at_rest is encrypts_at_rest
+    assert posture.requires_explicit_production_opt_in is (not encrypts_at_rest)
+
+
 async def test_set_secret_delegates_to_user_store_with_encrypted_value() -> None:
     """set_secret() should encrypt, prefix, and pass the payload to the user store."""
     user_db = AsyncMock()

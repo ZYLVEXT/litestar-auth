@@ -1,4 +1,4 @@
-"""Unit tests for encrypted TOTP secret storage."""
+"""Integration tests for direct-manager and controller TOTP secret storage."""
 
 from __future__ import annotations
 
@@ -22,7 +22,7 @@ from litestar_auth.authentication.middleware import LitestarAuthMiddleware
 from litestar_auth.authentication.strategy.jwt import InMemoryJWTDenylistStore
 from litestar_auth.authentication.transport.bearer import BearerTransport
 from litestar_auth.controllers import create_auth_controller, create_totp_controller
-from litestar_auth.manager import ENCRYPTED_TOTP_SECRET_PREFIX, BaseUserManager
+from litestar_auth.manager import ENCRYPTED_TOTP_SECRET_PREFIX, BaseUserManager, UserManagerSecurity
 from litestar_auth.password import PasswordHelper
 from litestar_auth.totp import InMemoryUsedTotpCodeStore, _current_counter, _generate_totp_code
 from tests._helpers import auth_middleware_get_request_session, litestar_app_with_user_manager
@@ -98,15 +98,32 @@ def _install_fake_cryptography(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(manager_module.importlib, "import_module", fake_import_module)
 
 
-def _build_manager(user_db: AsyncMock, *, totp_secret_key: str | None = None) -> BaseUserManager[ExampleUser, UUID]:
+def _build_manager(
+    user_db: AsyncMock,
+    *,
+    totp_secret_key: str | None = None,
+    use_security_bundle: bool = False,
+) -> BaseUserManager[ExampleUser, UUID]:
     """Create a manager with predictable test configuration.
 
     Returns:
         A configured ``BaseUserManager`` instance.
     """
+    password_helper = PasswordHelper()
+    if use_security_bundle:
+        return BaseUserManager(
+            user_db,
+            password_helper=password_helper,
+            security=UserManagerSecurity[UUID](
+                verification_token_secret="verify-secret-1234567890-1234567890",
+                reset_password_token_secret="reset-secret-1234567890-1234567890",
+                totp_secret_key=totp_secret_key,
+                id_parser=UUID,
+            ),
+        )
     return BaseUserManager(
         user_db,
-        password_helper=PasswordHelper(),
+        password_helper=password_helper,
         id_parser=UUID,
         totp_secret_key=totp_secret_key,
         verification_token_secret="verify-secret-1234567890-1234567890",
@@ -196,16 +213,37 @@ async def test_read_totp_secret_preserves_plaintext_for_backward_compatibility()
     )
 
 
-def test_manager_totp_secret_storage_posture_reports_plaintext_and_encrypted_modes() -> None:
-    """The manager exposes the explicit TOTP storage contract for both supported branches."""
-    user_db = AsyncMock()
-    plaintext_manager = _build_manager(user_db)
-    encrypted_manager = _build_manager(user_db, totp_secret_key=TOTP_SECRET_KEY)
+@pytest.mark.parametrize(
+    ("use_security_bundle", "totp_secret_key", "expected_key", "encrypts_at_rest"),
+    [
+        pytest.param(False, None, "compatibility_plaintext", False, id="explicit-kwargs-plaintext"),
+        pytest.param(False, TOTP_SECRET_KEY, "fernet_encrypted", True, id="explicit-kwargs-encrypted"),
+        pytest.param(True, None, "compatibility_plaintext", False, id="security-bundle-plaintext"),
+        pytest.param(True, TOTP_SECRET_KEY, "fernet_encrypted", True, id="security-bundle-encrypted"),
+    ],
+)
+def test_direct_base_user_manager_totp_secret_storage_posture_reports_supported_contract(
+    *,
+    use_security_bundle: bool,
+    totp_secret_key: str | None,
+    expected_key: str,
+    encrypts_at_rest: bool,
+) -> None:
+    """Direct BaseUserManager construction exposes explicit plaintext and encrypted branches."""
+    manager = _build_manager(
+        AsyncMock(),
+        totp_secret_key=totp_secret_key,
+        use_security_bundle=use_security_bundle,
+    )
 
-    assert plaintext_manager.totp_secret_storage_posture.key == "compatibility_plaintext"
-    assert plaintext_manager.totp_secret_storage_posture.encrypts_at_rest is False
-    assert encrypted_manager.totp_secret_storage_posture.key == "fernet_encrypted"
-    assert encrypted_manager.totp_secret_storage_posture.encrypts_at_rest is True
+    posture = manager.totp_secret_storage_posture
+    assert posture.key == expected_key
+    assert posture.encrypts_at_rest is encrypts_at_rest
+    assert posture.requires_explicit_production_opt_in is (not encrypts_at_rest)
+    if encrypts_at_rest:
+        assert posture.production_validation_error is None
+    else:
+        assert posture.production_validation_error is not None
 
 
 async def test_read_totp_secret_raises_runtime_error_on_decrypt_failure(

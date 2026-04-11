@@ -34,7 +34,10 @@ from litestar_auth._plugin.startup import (
     require_secure_oauth_redirect_in_production,
     warn_insecure_plugin_startup_defaults,
 )
-from litestar_auth._plugin.validation import validate_config
+from litestar_auth._plugin.validation import (
+    resolve_user_manager_account_state_validator,
+    validate_config,
+)
 from litestar_auth.authentication import Authenticator, LitestarAuthMiddleware
 from litestar_auth.config import plugin_secret_role_warning_owner
 from litestar_auth.oauth_encryption import (
@@ -169,30 +172,8 @@ class LitestarAuth[UP: UserProtocol[Any], ID](InitPlugin):
         return Authenticator(backends, manager)
 
     def _resolve_account_state_validator(self) -> PluginAccountStateValidator[UP]:
-        """Return the configured manager-class account-state validator.
-
-        Uses ``getattr`` to obtain ``require_account_state`` from the
-        manager class.  For ``BaseUserManager`` subclasses, this returns the
-        static method (already unwrapped into a plain function by the
-        descriptor protocol), which delegates to
-        ``UserPolicy.require_account_state``.
-
-        Raises:
-            TypeError: If the configured manager class does not expose
-                ``require_account_state()``.
-        """
-        manager_cls = self.config.user_manager_class
-        validator = getattr(manager_cls, "require_account_state", None)
-        if callable(validator):
-            return validator
-
-        msg = (
-            f"{manager_cls.__name__!r} (user_manager_class) must expose "
-            "require_account_state(user, *, require_verified=False). "
-            "Subclass litestar_auth.manager.BaseUserManager for the default implementation, "
-            "or define require_account_state on your manager class with the same contract."
-        )
-        raise TypeError(msg)
+        """Return the configured manager-class account-state validator contract."""
+        return resolve_user_manager_account_state_validator(self.config.user_manager_class)
 
     def _register_controllers(self, app_config: AppConfig) -> list[ControllerRouterHandler]:
         controllers = build_controllers(self.config)
@@ -218,7 +199,8 @@ class LitestarAuth[UP: UserProtocol[Any], ID](InitPlugin):
         )
 
     def _register_middleware(self, app_config: AppConfig) -> None:
-        cookie_transports = get_cookie_transports(self.config.startup_backends())
+        backend_inventory = _plugin_config.resolve_backend_inventory(self.config)
+        cookie_transports = get_cookie_transports(backend_inventory.startup_backends())
         if cookie_transports:
             app_config.csrf_config = build_csrf_config(self.config, cookie_transports)
 
@@ -239,7 +221,7 @@ class LitestarAuth[UP: UserProtocol[Any], ID](InitPlugin):
         )
 
     def _provide_backends(self) -> tuple[StartupBackendTemplate[UP, ID], ...]:
-        return self.config.startup_backends()
+        return _plugin_config.resolve_backend_inventory(self.config).startup_backends()
 
     def _provide_config(self) -> object:
         return self.config
@@ -248,7 +230,8 @@ class LitestarAuth[UP: UserProtocol[Any], ID](InitPlugin):
         return self.config.user_model
 
     def _totp_backend(self) -> StartupBackendTemplate[UP, ID]:
-        return totp_backend(self.config)
+        backend_inventory = _plugin_config.resolve_backend_inventory(self.config)
+        return totp_backend(self.config, backend_inventory=backend_inventory)
 
 
 __all__ = (

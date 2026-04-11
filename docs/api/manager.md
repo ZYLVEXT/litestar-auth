@@ -11,7 +11,9 @@ contract. When that typed bundle is present, the plugin calls
 `user_manager_class(..., password_helper=..., security=UserManagerSecurity(...), password_validator=..., backends=..., login_identifier=..., unsafe_testing=...)`
 and folds the effective `id_parser` into `security` first. If your manager narrows or renames that
 canonical `BaseUserManager`-style constructor surface, `user_manager_factory` is the explicit
-escape hatch.
+escape hatch. That escape hatch only changes who constructs the manager; it does not create a
+second implicit injection path for `password_helper`, `password_validator`, or security kwargs.
+Custom factories must wire those inputs themselves when they still want them.
 
 When you instantiate `BaseUserManager` yourself, you can either pass the legacy explicit
 `verification_token_secret` / `reset_password_token_secret` / `totp_secret_key` / `id_parser`
@@ -19,6 +21,18 @@ kwargs, or use the typed `security=UserManagerSecurity(...)` contract. Do not mi
 one constructor call. Pair that with `PasswordHelper.from_defaults()` when you want the library's
 canonical hasher policy, or pass `PasswordHelper(password_hash=...)` when you intentionally diverge
 with custom pwdlib composition.
+
+Across plugin-managed and direct-manager flows, the stable account-state policy surface remains
+`require_account_state(user, *, require_verified=False)`. The built-in implementation delegates to
+`UserPolicy.require_account_state`; custom managers or adapters should preserve the same callable
+shape and semantics when they customize account-state enforcement.
+
+`BaseUserManager.totp_secret_storage_posture` is the stable direct-manager contract for persisted
+TOTP secrets. `totp_secret_key=None` keeps the compatibility-grade `compatibility_plaintext` branch
+so legacy plaintext secrets still round-trip, while providing a Fernet key through either
+constructor surface flips the posture to `fernet_encrypted` and causes newly persisted secrets to
+be encrypted at rest. When the plugin owns TOTP wiring, its validation path reads the same posture
+contract instead of special-casing manager instances.
 
 For production, keep `verification_token_secret`, `reset_password_token_secret`, and
 `totp_secret_key` distinct. Outside testing, `BaseUserManager(...)` warns when one configured value

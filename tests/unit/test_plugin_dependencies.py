@@ -232,8 +232,8 @@ def test_make_db_session_provide_annotations_are_runtime_resolvable() -> None:
     assert hints["session_maker"] is SessionFactory
 
 
-def test_make_backends_dependency_provider_uses_configured_di_key() -> None:
-    """The generated provider exposes the configured session key to Litestar DI."""
+def test_make_backends_dependency_provider_exposes_configured_di_parameter_name() -> None:
+    """Backends providers expose the configured dependency key and accept Litestar-style injection."""
     marker = object()
     seen_sessions: list[object] = []
 
@@ -242,22 +242,26 @@ def test_make_backends_dependency_provider_uses_configured_di_key() -> None:
         return ()
 
     provider = _make_backends_dependency_provider(build_backends, "custom_db_session")
-    provider_function = cast("Any", provider)
-    parameter = inspect.signature(provider).parameters["custom_db_session"]
+    parameter_names = tuple(inspect.signature(provider).parameters)
 
     assert provider(custom_db_session=marker) == ()
     assert seen_sessions == [marker]
-    assert inspect.signature(provider).parameters.keys() == {"custom_db_session"}
-    assert parameter.kind is inspect.Parameter.POSITIONAL_OR_KEYWORD
-    assert parameter.annotation in {Any, "Any"}
-    assert provider.__annotations__["custom_db_session"] in {Any, "Any"}
-    assert "__signature__" not in provider_function.__dict__
-    assert provider.__module__ == "litestar_auth._plugin.dependencies"
-    assert provider_function.__qualname__ == "_make_backends_dependency_provider.<locals>._provide_backends"
+    assert parameter_names == ("custom_db_session",)
 
 
-async def test_make_user_manager_dependency_provider_uses_configured_di_key() -> None:
-    """The generated async generator exposes the requested DI parameter name."""
+def test_make_backends_dependency_provider_rejects_multiple_positional_sessions() -> None:
+    """Backends providers fail closed when callers supply more than one positional session."""
+
+    def build_backends(_session: AsyncSession) -> tuple[AuthenticationBackend[ExampleUser, UUID], ...]:
+        pytest.fail("build_backends should not run when too many positional dependency inputs are provided")
+
+    provider = _make_backends_dependency_provider(build_backends, "db_session")
+    with pytest.raises(TypeError, match="takes 1 positional argument but 2 were given"):
+        provider(object(), object())
+
+
+async def test_make_user_manager_dependency_provider_exposes_configured_di_parameter_name() -> None:
+    """User-manager providers expose the configured dependency key and yield the injected manager."""
     marker = object()
 
     def build_user_manager(session: object) -> object:
@@ -270,16 +274,9 @@ async def test_make_user_manager_dependency_provider_uses_configured_di_key() ->
     finally:
         await generator.aclose()
 
-    provider_function = cast("Any", provider)
-    parameter = inspect.signature(provider).parameters["custom_db_session"]
+    parameter_names = tuple(inspect.signature(provider).parameters)
     assert manager == ("manager", marker)
-    assert inspect.signature(provider).parameters.keys() == {"custom_db_session"}
-    assert parameter.kind is inspect.Parameter.POSITIONAL_OR_KEYWORD
-    assert parameter.annotation in {Any, "Any"}
-    assert provider.__annotations__["custom_db_session"] in {Any, "Any"}
-    assert "__signature__" not in provider_function.__dict__
-    assert provider.__module__ == "litestar_auth._plugin.dependencies"
-    assert provider_function.__qualname__ == "_make_user_manager_dependency_provider.<locals>._provide_user_manager"
+    assert parameter_names == ("custom_db_session",)
 
 
 def test_make_user_manager_dependency_provider_rejects_positional_and_keyword_session() -> None:
@@ -290,7 +287,7 @@ def test_make_user_manager_dependency_provider_rejects_positional_and_keyword_se
         pytest.fail("build_user_manager should not run when duplicate dependency inputs are provided")
 
     provider = _make_user_manager_dependency_provider(build_user_manager, "db_session")
-    with pytest.raises(TypeError, match="got multiple values for argument 'db_session'"):
+    with pytest.raises(TypeError, match="db_session"):
         provider(marker, db_session=marker)
 
 
@@ -316,7 +313,7 @@ def test_make_user_manager_dependency_provider_requires_session_dependency() -> 
         pytest.fail("build_user_manager should not run when the dependency is missing")
 
     provider = _make_user_manager_dependency_provider(build_user_manager, "db_session")
-    with pytest.raises(TypeError, match="missing 1 required positional argument: 'db_session'"):
+    with pytest.raises(TypeError, match="db_session"):
         provider()
 
 
@@ -328,7 +325,7 @@ def test_make_user_manager_dependency_provider_rejects_unexpected_keyword_depend
         pytest.fail("build_user_manager should not run for unexpected keyword dependencies")
 
     provider = _make_user_manager_dependency_provider(build_user_manager, "db_session")
-    with pytest.raises(TypeError, match="got an unexpected keyword argument 'other_session'"):
+    with pytest.raises(TypeError, match="other_session"):
         provider(other_session=marker)
 
 

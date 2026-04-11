@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import importlib as _importlib
 import logging
 import secrets
 from datetime import timedelta
@@ -36,7 +35,6 @@ DEFAULT_MAX_SCAN_KEYS = 10_000
 logger = logging.getLogger(__name__)
 
 _load_redis_asyncio = partial(_require_redis_asyncio, feature_name="RedisTokenStrategy")
-importlib = _importlib
 
 
 class RedisClientProtocol(

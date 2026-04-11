@@ -336,7 +336,7 @@ class BaseUserManager[UP: UserProtocol[Any], ID](  # noqa: PLR0904
     @property
     def totp_secret_storage_posture(self) -> TotpSecretStoragePosture:
         """Return the explicit storage contract for persisted TOTP secrets."""
-        return TotpSecretStoragePosture.from_secret_key(self.totp_secret_key)
+        return self._totp_secrets.storage_posture
 
     async def get(self, user_id: ID) -> UP | None:
         """Return a user by identifier.

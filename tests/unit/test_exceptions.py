@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-import importlib
 import inspect
+from pathlib import Path
 
 import pytest
 
@@ -24,6 +24,7 @@ from litestar_auth.exceptions import (
     UserAlreadyExistsError,
     UserNotExistsError,
 )
+from tests.unit.test_definition_file_coverage import load_reloaded_test_alias
 
 pytestmark = pytest.mark.unit
 
@@ -151,17 +152,24 @@ def _error_code_members() -> dict[str, str]:
     return {name: value for name, value in inspect.getmembers(ErrorCode) if name.isupper() and isinstance(value, str)}
 
 
-def test_exception_module_executes_under_coverage() -> None:
-    """Reload the module in-test so coverage records class-body execution."""
-    saved = dict(exceptions_module.__dict__)
-    reloaded_module = importlib.reload(exceptions_module)
+def test_exception_module_reload_preserves_default_message_and_code_contract(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Reload coverage keeps exception defaults stable even when class identity changes."""
+    assert exceptions_module.__file__ is not None
+    reloaded_module = load_reloaded_test_alias(
+        alias_name="_coverage_alias_exceptions",
+        source_path=Path(exceptions_module.__file__).resolve(),
+        monkeypatch=monkeypatch,
+    )
+    reloaded_configuration_error = reloaded_module.ConfigurationError()
+    reloaded_link_error = reloaded_module.OAuthAccountAlreadyLinkedError()
 
     assert reloaded_module.LitestarAuthError.default_code == LitestarAuthError.default_code
-    assert reloaded_module.OAuthAccountAlreadyLinkedError.default_code == ErrorCode.OAUTH_ACCOUNT_ALREADY_LINKED
-
-    # Restore original class references so downstream coverage-reload tests
-    # that re-import from this module don't create class-identity splits.
-    exceptions_module.__dict__.update(saved)
+    assert reloaded_module.ConfigurationError is not ConfigurationError
+    assert reloaded_module.OAuthAccountAlreadyLinkedError is not OAuthAccountAlreadyLinkedError
+    assert str(reloaded_configuration_error) == ConfigurationError.default_message
+    assert reloaded_configuration_error.code == ErrorCode.CONFIGURATION_INVALID
+    assert str(reloaded_link_error) == OAuthAccountAlreadyLinkedError.default_message
+    assert reloaded_link_error.code == ErrorCode.OAUTH_ACCOUNT_ALREADY_LINKED
 
 
 @pytest.mark.parametrize(("exception_type", "expected_message", "expected_code", "expected_base"), EXCEPTION_CASES)

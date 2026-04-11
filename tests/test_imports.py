@@ -268,10 +268,12 @@ def test_root_package_exports_canonical_database_token_preset_entrypoint() -> No
     assert config.session_maker is session_maker
 
     backend = config.startup_backends()[0]
-    assert isinstance(backend, plugin_module.StartupBackendTemplate)
+    current_plugin_module = importlib.import_module("litestar_auth.plugin")
+    current_root_module = importlib.import_module("litestar_auth")
+    assert isinstance(backend, current_plugin_module.StartupBackendTemplate)
     assert backend.name == "database"
     assert isinstance(backend.transport, BearerTransport)
-    assert isinstance(backend.strategy, litestar_auth.DatabaseTokenStrategy)
+    assert isinstance(backend.strategy, current_root_module.DatabaseTokenStrategy)
 
 
 def test_public_user_schema_reuse_surface_stays_importable() -> None:

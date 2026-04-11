@@ -7,7 +7,7 @@ from collections.abc import Callable, Sequence
 from datetime import timedelta
 from functools import partial
 from typing import TYPE_CHECKING, Any, Literal, assert_type, cast, get_args, get_origin, get_type_hints
-from uuid import UUID
+from uuid import UUID, uuid4
 
 import msgspec
 import pytest
@@ -49,6 +49,15 @@ if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 pytestmark = pytest.mark.unit
+
+
+def _current_startup_backend_template_type() -> type[Any]:
+    """Resolve the current StartupBackendTemplate class to survive cross-test module reloads.
+
+    Returns:
+        The current StartupBackendTemplate type.
+    """
+    return cast("type[Any]", importlib.import_module("litestar_auth._plugin.config").StartupBackendTemplate)
 
 
 def test_plugin_config_module_executes_under_coverage() -> None:
@@ -346,7 +355,7 @@ def test_database_token_auth_field_builds_canonical_db_bearer_backend() -> None:
     assert preset.accept_legacy_plaintext_tokens is True
 
     backend = config.startup_backends()[0]
-    assert isinstance(backend, plugin_config_module.StartupBackendTemplate)
+    assert isinstance(backend, _current_startup_backend_template_type())
     assert backend.name == "database"
     assert isinstance(backend.transport, BearerTransport)
     current_strategy_module = importlib.import_module("litestar_auth.authentication.strategy")
@@ -369,10 +378,42 @@ def test_startup_backends_wrap_manual_backends_in_startup_templates() -> None:
 
     startup_backend = config.startup_backends()[0]
 
-    assert isinstance(startup_backend, plugin_config_module.StartupBackendTemplate)
+    assert isinstance(startup_backend, _current_startup_backend_template_type())
     assert startup_backend.name == backend.name
     assert startup_backend.transport is backend.transport
     assert startup_backend.strategy is backend.strategy
+
+
+def test_startup_database_token_templates_do_not_embed_a_placeholder_session() -> None:
+    """Startup-only DB-token templates carry strategy metadata without a fake session object."""
+    config = LitestarAuthConfig[ExampleUser, UUID](
+        database_token_auth=DatabaseTokenAuthConfig(
+            token_hash_secret="x" * 40,
+        ),
+        user_model=ExampleUser,
+        user_manager_class=PluginUserManager,
+        session_maker=cast(
+            "async_sessionmaker[AsyncSession]",
+            assert_structural_session_factory(DummySessionMaker()),
+        ),
+        user_db_factory=lambda _session: InMemoryUserDatabase([]),
+        user_manager_security=UserManagerSecurity[UUID](
+            verification_token_secret="x" * 32,
+            reset_password_token_secret="y" * 32,
+        ),
+    )
+
+    startup_backend = config.startup_backends()[0]
+
+    assert "session" not in vars(cast("Any", startup_backend.strategy))
+
+
+def test_resolve_database_token_strategy_session_without_session_fails_closed() -> None:
+    """The legacy helper still returns a placeholder that raises the canonical runtime error."""
+    startup_session = plugin_config_module.resolve_database_token_strategy_session()
+
+    with pytest.raises(RuntimeError, match="startup_backends\\(\\) returns startup-only backends"):
+        _ = cast("Any", startup_session).execute
 
 
 def test_startup_backend_template_eq_identity_short_circuits() -> None:
@@ -410,12 +451,86 @@ def test_startup_backend_template_hash_consistent_with_eq() -> None:
     assert hash(t1) == hash(t2)
 
 
-def test_startup_database_token_session_sentinel_requires_request_bound_backends() -> None:
-    """Startup-only DB-token backends fail closed when used for runtime session work."""
-    startup_session = plugin_config_module.resolve_database_token_strategy_session()
+async def test_startup_database_token_templates_fail_closed_for_runtime_db_work() -> None:
+    """Startup-only DB-token templates fail closed if callers skip request-session binding."""
+    config = LitestarAuthConfig[ExampleUser, UUID](
+        database_token_auth=DatabaseTokenAuthConfig(
+            token_hash_secret="x" * 40,
+        ),
+        user_model=ExampleUser,
+        user_manager_class=PluginUserManager,
+        session_maker=cast(
+            "async_sessionmaker[AsyncSession]",
+            assert_structural_session_factory(DummySessionMaker()),
+        ),
+        user_db_factory=lambda _session: InMemoryUserDatabase([]),
+        user_manager_security=UserManagerSecurity[UUID](
+            verification_token_secret="x" * 32,
+            reset_password_token_secret="y" * 32,
+        ),
+    )
+    startup_backend = config.startup_backends()[0]
+    user = ExampleUser(id=uuid4())
 
     with pytest.raises(RuntimeError, match="startup_backends\\(\\) returns startup-only backends"):
-        _ = cast("Any", startup_session).marker
+        await cast("Any", startup_backend.strategy).write_token(user)
+
+
+async def test_startup_database_token_templates_fail_closed_for_remaining_runtime_db_methods() -> None:
+    """Startup-only DB-token templates reject the full runtime DB-token method surface."""
+    config = LitestarAuthConfig[ExampleUser, UUID](
+        database_token_auth=DatabaseTokenAuthConfig(
+            token_hash_secret="x" * 40,
+        ),
+        user_model=ExampleUser,
+        user_manager_class=PluginUserManager,
+        session_maker=cast(
+            "async_sessionmaker[AsyncSession]",
+            assert_structural_session_factory(DummySessionMaker()),
+        ),
+        user_db_factory=lambda _session: InMemoryUserDatabase([]),
+        user_manager_security=UserManagerSecurity[UUID](
+            verification_token_secret="x" * 32,
+            reset_password_token_secret="y" * 32,
+        ),
+        enable_refresh=True,
+    )
+    startup_strategy = cast("Any", config.startup_backends()[0].strategy)
+    user = ExampleUser(id=uuid4())
+    runtime_calls = (
+        startup_strategy.read_token(None, object()),
+        startup_strategy.destroy_token("token", user),
+        startup_strategy.write_refresh_token(user),
+        startup_strategy.rotate_refresh_token("refresh", object()),
+        startup_strategy.invalidate_all_tokens(user),
+        startup_strategy.cleanup_expired_tokens(cast("Any", DummySession())),
+    )
+
+    for operation in runtime_calls:
+        with pytest.raises(RuntimeError, match="startup_backends\\(\\) returns startup-only backends"):
+            await operation
+
+
+def test_build_database_token_backend_binds_the_explicit_runtime_session() -> None:
+    """The direct runtime builder still returns a real session-bound DB-token backend."""
+    active_session = DummySession()
+    backend = plugin_config_module.build_database_token_backend(
+        DatabaseTokenAuthConfig(
+            token_hash_secret="x" * 40,
+            backend_name="opaque-db",
+            refresh_max_age=timedelta(days=14),
+            accept_legacy_plaintext_tokens=True,
+        ),
+        session=cast("Any", active_session),
+        unsafe_testing=True,
+    )
+    current_strategy_module = importlib.import_module("litestar_auth.authentication.strategy")
+
+    assert backend.name == "opaque-db"
+    assert isinstance(backend.strategy, current_strategy_module.DatabaseTokenStrategy)
+    assert cast("Any", backend.strategy).session is active_session
+    assert cast("Any", backend.strategy).refresh_max_age == timedelta(days=14)
+    assert cast("Any", backend.strategy).accept_legacy_plaintext_tokens is True
 
 
 def test_database_token_auth_rejects_manual_backends() -> None:
@@ -479,6 +594,80 @@ def test_resolve_backends_returns_manual_backends_without_database_token_preset(
     config = _minimal_config(backends=[backend])
 
     assert config.resolve_backends() == [backend]
+
+
+def test_bind_request_backends_preserves_manual_backend_inventory_order() -> None:
+    """Manual backends stay on the explicit runtime surface and bind sessions in the same order."""
+
+    class _SessionAwareStrategy(InMemoryTokenStrategy):
+        def __init__(self, *, token_prefix: str) -> None:
+            super().__init__(token_prefix=token_prefix)
+            self.sessions_seen: list[object] = []
+
+        def with_session(self, session: object) -> _SessionAwareStrategy:
+            self.sessions_seen.append(session)
+            return self
+
+    primary_strategy = _SessionAwareStrategy(token_prefix="primary")
+    secondary_strategy = _SessionAwareStrategy(token_prefix="secondary")
+    primary_backend = AuthenticationBackend[ExampleUser, UUID](
+        name="primary",
+        transport=BearerTransport(),
+        strategy=cast("Any", primary_strategy),
+    )
+    secondary_backend = AuthenticationBackend[ExampleUser, UUID](
+        name="secondary",
+        transport=BearerTransport(),
+        strategy=cast("Any", secondary_strategy),
+    )
+    config = _minimal_config(backends=[primary_backend, secondary_backend])
+    active_session = DummySession()
+
+    runtime_backends = config.bind_request_backends(cast("Any", active_session))
+
+    assert runtime_backends == (primary_backend, secondary_backend)
+    assert primary_strategy.sessions_seen == [active_session]
+    assert secondary_strategy.sessions_seen == [active_session]
+
+
+def test_bind_request_backends_realizes_database_token_preset_from_request_session() -> None:
+    """The DB-token preset exposes startup templates and request-scoped runtime backends separately."""
+    config = LitestarAuthConfig[ExampleUser, UUID](
+        database_token_auth=DatabaseTokenAuthConfig(
+            token_hash_secret="x" * 40,
+            backend_name="opaque-db",
+            refresh_max_age=timedelta(days=14),
+            accept_legacy_plaintext_tokens=True,
+        ),
+        user_model=ExampleUser,
+        user_manager_class=PluginUserManager,
+        session_maker=cast(
+            "async_sessionmaker[AsyncSession]",
+            assert_structural_session_factory(DummySessionMaker()),
+        ),
+        user_db_factory=lambda _session: InMemoryUserDatabase([]),
+        user_manager_security=UserManagerSecurity[UUID](
+            verification_token_secret="x" * 32,
+            reset_password_token_secret="y" * 32,
+        ),
+        enable_refresh=True,
+    )
+    active_session = DummySession()
+
+    startup_backend = config.startup_backends()[0]
+    runtime_backends = config.bind_request_backends(cast("Any", active_session))
+    current_strategy_module = importlib.import_module("litestar_auth.authentication.strategy")
+
+    assert isinstance(startup_backend, _current_startup_backend_template_type())
+    assert len(runtime_backends) == 1
+    assert isinstance(runtime_backends[0], AuthenticationBackend)
+    assert runtime_backends[0].name == "opaque-db"
+    assert runtime_backends[0] is not startup_backend
+    assert isinstance(startup_backend.strategy, current_strategy_module.DatabaseTokenStrategy)
+    assert isinstance(runtime_backends[0].strategy, current_strategy_module.DatabaseTokenStrategy)
+    assert cast("Any", runtime_backends[0].strategy).session is active_session
+    assert cast("Any", runtime_backends[0].strategy).refresh_max_age == timedelta(days=14)
+    assert cast("Any", runtime_backends[0].strategy).accept_legacy_plaintext_tokens is True
 
 
 def test_startup_backends_reject_post_init_mixing_of_preset_and_manual_backends() -> None:

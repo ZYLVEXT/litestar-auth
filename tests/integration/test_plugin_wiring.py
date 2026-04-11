@@ -562,6 +562,55 @@ def test_session_bound_backends_applies_with_session_to_strategies() -> None:
     assert strategy.sessions_seen == [dummy_session]
 
 
+async def test_manual_backends_dependency_preserves_order_and_binds_request_session() -> None:
+    """The request DI surface returns manual backends in startup order with request-bound strategies."""
+
+    class _SessionAwareStrategy(InMemoryTokenStrategy):
+        def __init__(self, *, token_prefix: str) -> None:
+            super().__init__(token_prefix=token_prefix)
+            self.bound_session: object | None = None
+
+        def with_session(self, session: object) -> _SessionAwareStrategy:
+            self.bound_session = session
+            return self
+
+    @get("/manual-backends-probe", sync_to_thread=False)
+    def manual_backends_probe(
+        db_session: object,
+        litestar_auth_backends: object,
+    ) -> dict[str, object]:
+        backends = cast("list[AuthenticationBackend[ExampleUser, UUID]]", litestar_auth_backends)
+        return {
+            "backend_names": [configured_backend.name for configured_backend in backends],
+            "strategy_sessions_match_db_session": [
+                getattr(configured_backend.strategy, "bound_session", None) is db_session
+                for configured_backend in backends
+            ],
+        }
+
+    primary_backend = AuthenticationBackend[ExampleUser, UUID](
+        name="primary",
+        transport=BearerTransport(),
+        strategy=cast("Any", _SessionAwareStrategy(token_prefix="primary")),
+    )
+    secondary_backend = AuthenticationBackend[ExampleUser, UUID](
+        name="secondary",
+        transport=BearerTransport(),
+        strategy=cast("Any", _SessionAwareStrategy(token_prefix="secondary")),
+    )
+    config = _minimal_litestar_auth_config(backends=[primary_backend, secondary_backend])
+    app = Litestar(route_handlers=[manual_backends_probe], plugins=[LitestarAuth(config)])
+
+    async with AsyncTestClient(app=app) as client:
+        response = await client.get("/manual-backends-probe")
+
+    assert response.status_code == HTTP_OK
+    assert response.json() == {
+        "backend_names": ["primary", "secondary"],
+        "strategy_sessions_match_db_session": [True, True],
+    }
+
+
 def test_totp_backend_resolves_named_backend() -> None:
     """_totp_backend returns the backend matching the configured name."""
     primary_strategy = InMemoryTokenStrategy(token_prefix="primary")

@@ -1,3 +1,35 @@
+## Unreleased
+
+### Added
+
+- **Explicit OAuth client protocols** — `OAuthClientProtocol`, `OAuthDirectIdentityClientProtocol`, `OAuthProfileClientProtocol`, and `OAuthEmailVerificationClientProtocol` are now exported from `litestar_auth.oauth.client_adapter`, giving manual OAuth controller consumers a statically checkable contract instead of raw `object`-typed inputs. Provisioning via `oauth_client`, `oauth_client_factory`, or `oauth_client_class` + `oauth_client_kwargs` is preserved; invalid import paths, missing methods, or malformed payloads fail closed with `ConfigurationError`.
+- **Startup-only DB-token strategy wrapper** — `StartupBackendTemplate` values produced by the canonical `database_token_auth=...` path now carry a startup-only strategy wrapper that preserves DB-token metadata for plugin assembly and validation, but fails closed for runtime token operations until `bind_request_backends(session)` materializes a real request-scoped `DatabaseTokenStrategy`.
+- **Backend lifecycle contract documentation** — `docs/configuration.md` now documents the three-surface backend lifecycle (`resolve_backends()`, `startup_backends()`, `bind_request_backends(session)`) and the controller selection order (primary at `/auth`, named backends at `/auth/{name}`, OAuth login via primary, TOTP via primary or `totp_backend_name`).
+- **OAuth API contract documentation** — `docs/api/oauth.md` now documents the full manual OAuth client behavioral contract: typed protocols, provisioning modes, identity fallback (`get_id_email` vs `get_profile`), optional `get_email_verified` hooks, and fail-closed error behavior.
+
+### Changed
+
+- **Plugin DI providers no longer use `exec()`-based code generation** — `_make_user_manager_dependency_provider()` and `_make_backends_dependency_provider()` now produce signature-adapted callables that bind the configured `db_session_dependency_key` through `inspect.Parameter` manipulation instead of synthesizing source with `exec()`. The Litestar-visible parameter names, async-generator lifecycle, and fail-closed duplicate-input behavior are preserved.
+- **OAuth associate callback no longer uses `exec()`** — `create_oauth_associate_controller()` callback generation now builds a signature-adapted callable instead of generating and executing source. The configured dependency parameter name, direct-manager callback path, guard wiring, route behavior, and state-cookie handling are preserved.
+- **OAuth client resolution is centralized** — `create_provider_oauth_controller()`, manual controller assembly, and controller-level helper shims now route through a shared `_resolve_oauth_client()` / `_build_oauth_client_adapter()` boundary in `litestar_auth.oauth.client_adapter` instead of each performing their own client validation and adapter construction.
+- **Startup backend inventory resolution is centralized** — controller assembly, plugin-owned OAuth login selection, TOTP backend selection, CSRF transport discovery, and exposed startup backends now use one shared `resolve_backend_inventory()` call on the plugin config instead of rescanning `startup_backends()` or reconstructing backend slots in scattered paths.
+- **Default user-manager builder contract is centralized** — runtime kwargs materialization and startup constructor validation now share one `_DefaultUserManagerBuilderContract` boundary. Custom `user_manager_factory` remains the explicit escape hatch for non-canonical constructors.
+- **Account-state validator resolution is centralized** — `LitestarAuth._resolve_account_state_validator()` now delegates to a shared plugin validation helper instead of owning a standalone raw `getattr(...)` path. The stable callable surface remains `require_account_state(user, *, require_verified=False)`.
+- **JWT revocation-posture resolution is extracted** — the direct/manual revocation-posture resolution now lives in a dedicated helper in the JWT strategy module. The compatibility-versus-shared-store posture constructors are centralized alongside it.
+- **TOTP secret-storage posture resolution is centralized** — `BaseUserManager` now delegates to `TotpSecretsService` for persisted TOTP secret handling, sharing one explicit posture resolution path (compatibility-plaintext vs Fernet-encrypted) instead of inlining posture logic in the manager.
+- **Exception-bearing helpers use conventional imports** — `litestar_auth.controllers._utils` and `litestar_auth.oauth.service` no longer use runtime globals-preserving import guards for exception classes; they now use conventional top-level imports from `litestar_auth.exceptions`.
+- **Unused `importlib` alias removed from Redis strategy** — `litestar_auth.authentication.strategy.redis` no longer carries a module-level `importlib` alias that was a leftover from the reload-era shim layer.
+
+### Fixed
+
+- **Flaky parallel test failures under `pytest -n auto`** — ten `isinstance` checks across `test_plugin_controllers.py`, `test_plugin_config.py`, and `test_imports.py` now resolve `StartupBackendTemplate` and `DatabaseTokenStrategy` types at assertion time via `importlib.import_module()` instead of comparing against stale module-level references that could diverge after cross-test module reloads.
+- **Redis strategy test no longer patches through removed module alias** — `test_contrib_redis_preserves_lazy_dependency_error` now monkeypatches `_load_redis_asyncio` directly instead of reaching through the (now removed) `importlib` alias on the Redis strategy module.
+
+### Internal
+
+- **Test coverage reframed around behavioral contracts** — bounded-area tests for plugin dependency wiring, OAuth controller helpers, backend lifecycle, user-manager extension, manual OAuth client, security posture, and exception mapping now assert supported observable behavior (DI-key exposure, injection success, fail-closed semantics, stable error codes) instead of implementation details (`__signature__`, `__qualname__`, exec-specific artifacts).
+- **Reload coverage harness isolated** — reload-only coverage for exception-bearing helper tests now uses a shared `load_reloaded_test_alias()` helper instead of mutating imported globals or restoring `litestar_auth.exceptions` state by hand.
+
 ## 1.5.0 (2026-04-10)
 
 ### Added

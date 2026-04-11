@@ -77,6 +77,18 @@ if TYPE_CHECKING:
 pytestmark = pytest.mark.unit
 
 
+def _current_startup_backend_template_type() -> type[Any]:
+    """Return the current startup-backend template class after reload-oriented tests."""
+    plugin_config_module = importlib.import_module("litestar_auth._plugin.config")
+    return cast("type[Any]", plugin_config_module.StartupBackendTemplate)
+
+
+def _current_database_token_strategy_type() -> type[Any]:
+    """Return the current DB-token strategy class after reload-oriented tests."""
+    strategy_module = importlib.import_module("litestar_auth.authentication.strategy")
+    return cast("type[Any]", strategy_module.DatabaseTokenStrategy)
+
+
 def test_plugin_module_executes_under_coverage() -> None:
     """Reload the module in-test so coverage records the module body."""
     reloaded_module = importlib.reload(plugin_module)
@@ -825,11 +837,12 @@ EXPECTED_BOUND_BACKEND_COUNT = 2
 
 
 def test_build_user_manager_wraps_user_db_and_passes_bound_backends(monkeypatch: pytest.MonkeyPatch) -> None:
-    """User-manager construction wraps the user DB and forwards session-bound backends."""
+    """Custom factories receive the bounded build contract and own extra manager wiring."""
     plugin = LitestarAuth(_minimal_config())
     session = object()
     raw_user_db = object()
     captured: dict[str, object] = {}
+    plugin.config.password_validator_factory = lambda _config: lambda _password: None
 
     plugin.config.user_db_factory = lambda configured_session: raw_user_db if configured_session is session else None  # ty:ignore[invalid-assignment]
     monkeypatch.setattr("litestar_auth.plugin.ScopedUserDatabaseProxyImpl", _ScopedProxyRecorder)
@@ -848,6 +861,7 @@ def test_build_user_manager_wraps_user_db_and_passes_bound_backends(monkeypatch:
     manager = plugin._build_user_manager(cast("Any", session))
 
     assert manager == "manager"
+    assert set(captured) == {"session", "user_db", "config", "backends"}
     assert captured["session"] is session
     assert captured["config"] is plugin.config
     assert captured["user_db"] == _ScopedProxyRecorder(
@@ -1166,6 +1180,7 @@ def test_session_bound_backends_rebinds_database_token_backends_in_order_and_pre
     config.allow_legacy_plaintext_tokens = True
     plugin = LitestarAuth(config)
     active_session = object()
+    database_token_strategy_type = _current_database_token_strategy_type()
 
     rebound_backends = plugin._session_bound_backends(cast("Any", active_session))
 
@@ -1174,8 +1189,8 @@ def test_session_bound_backends_rebinds_database_token_backends_in_order_and_pre
     assert rebound_backends[1] is not second_backend
     assert rebound_backends[0].transport is first_backend.transport
     assert rebound_backends[1].transport is second_backend.transport
-    assert isinstance(rebound_backends[0].strategy, DatabaseTokenStrategy)
-    assert isinstance(rebound_backends[1].strategy, DatabaseTokenStrategy)
+    assert isinstance(rebound_backends[0].strategy, database_token_strategy_type)
+    assert isinstance(rebound_backends[1].strategy, database_token_strategy_type)
     assert rebound_backends[0].strategy.session is active_session
     assert rebound_backends[1].strategy.session is active_session
     assert rebound_backends[1].strategy.refresh_max_age == second_strategy.refresh_max_age
@@ -1204,6 +1219,8 @@ def test_session_bound_backends_realizes_database_token_preset_from_request_sess
     config.allow_legacy_plaintext_tokens = True
     plugin = LitestarAuth(config)
     active_session = type("_ActiveSession", (), {"marker": "request-session"})()
+    startup_backend_template_type = _current_startup_backend_template_type()
+    database_token_strategy_type = _current_database_token_strategy_type()
 
     rebound_backends = plugin._session_bound_backends(cast("Any", active_session))
     template_backend = config.startup_backends()[0]
@@ -1211,11 +1228,12 @@ def test_session_bound_backends_realizes_database_token_preset_from_request_sess
     rebound_strategy = cast("Any", rebound_backends[0].strategy)
 
     assert [backend.name for backend in rebound_backends] == ["database"]
+    assert isinstance(template_backend, startup_backend_template_type)
+    assert isinstance(rebound_backends[0], AuthenticationBackend)
     assert rebound_backends[0] is not template_backend
-    assert type(rebound_strategy) is type(template_strategy)
+    assert isinstance(template_strategy, database_token_strategy_type)
+    assert isinstance(rebound_strategy, database_token_strategy_type)
     assert rebound_strategy.session is active_session
-    with pytest.raises(RuntimeError, match="startup_backends\\(\\) returns startup-only backends"):
-        _ = template_strategy.session.marker
     assert rebound_strategy.refresh_max_age == timedelta(days=14)
     assert rebound_strategy.accept_legacy_plaintext_tokens is True
 
@@ -1260,13 +1278,75 @@ def test_register_middleware_without_cookie_transports_skips_csrf_registration()
     assert middleware.kwargs["auth_cookie_names"] == frozenset()
 
 
-def test_resolve_account_state_validator_returns_manager_method() -> None:
-    """The plugin exposes the configured manager-class account-state validator."""
+def test_resolve_account_state_validator_delegates_to_shared_validation_helper(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The orchestrator resolves manager-class account-state checks through the shared helper."""
     plugin = LitestarAuth(_minimal_config())
+
+    def _sentinel_validator(_user: ExampleUser, *, require_verified: bool = False) -> None:
+        del _user, require_verified
+
+    seen_manager_classes: list[type[object]] = []
+
+    def _resolve(manager_class: type[object]) -> object:
+        seen_manager_classes.append(manager_class)
+        return _sentinel_validator
+
+    monkeypatch.setattr(plugin_module, "resolve_user_manager_account_state_validator", _resolve)
 
     validator = plugin._resolve_account_state_validator()
 
-    assert validator is PluginUserManager.require_account_state
+    assert validator is _sentinel_validator
+    assert seen_manager_classes == [plugin.config.user_manager_class]
+
+
+def test_resolve_account_state_validator_returns_callable_account_state_contract() -> None:
+    """The plugin resolves the supported `require_account_state(user, *, require_verified=...)` callable."""
+    calls: list[tuple[ExampleUser, bool]] = []
+    user = ExampleUser(
+        id=uuid4(),
+        email="user@example.com",
+        hashed_password=PasswordHelper().hash("correct-password"),
+    )
+
+    class _CallableValidatorManager:
+        def __init__(  # noqa: PLR0913
+            self,
+            user_db: object,
+            *,
+            password_helper: PasswordHelper | None = None,
+            security: UserManagerSecurity[UUID] | None = None,
+            password_validator: object | None = None,
+            backends: tuple[object, ...] = (),
+            login_identifier: Literal["email", "username"] = "email",
+            unsafe_testing: bool = False,
+        ) -> None:
+            del (
+                user_db,
+                password_helper,
+                security,
+                password_validator,
+                backends,
+                login_identifier,
+                unsafe_testing,
+            )
+
+        @staticmethod
+        async def authenticate(identifier: str, password: str) -> None:
+            del identifier, password
+
+        @staticmethod
+        def require_account_state(user: ExampleUser, *, require_verified: bool = False) -> None:
+            calls.append((user, require_verified))
+
+    plugin = LitestarAuth(_minimal_config(user_manager_class=_CallableValidatorManager))
+
+    validator = plugin._resolve_account_state_validator()
+
+    validator(user, require_verified=True)
+
+    assert calls == [(user, True)]
 
 
 def test_resolve_account_state_validator_raises_for_missing_callable() -> None:
@@ -1286,11 +1366,38 @@ def test_provider_helpers_return_configured_objects() -> None:
     """Provider helpers expose the config values used by dependency registration."""
     plugin = LitestarAuth(_minimal_config())
     provided_backends = plugin._provide_backends()
+    startup_backend_template_type = _current_startup_backend_template_type()
 
-    assert all(backend.__class__.__name__ == "StartupBackendTemplate" for backend in provided_backends)
+    assert all(isinstance(backend, startup_backend_template_type) for backend in provided_backends)
     assert [backend.name for backend in provided_backends] == [backend.name for backend in plugin.config.backends]
     assert plugin._provide_config() is plugin.config
     assert plugin._provide_user_model() is plugin.config.user_model
+
+
+def test_provider_helpers_return_startup_templates_for_database_token_preset() -> None:
+    """Provider helpers expose startup-only templates for the canonical DB-token preset."""
+    config = LitestarAuthConfig[ExampleUser, UUID](
+        database_token_auth=plugin_module._plugin_config.DatabaseTokenAuthConfig(
+            token_hash_secret="a" * 40,
+            backend_name="opaque-db",
+        ),
+        user_model=ExampleUser,
+        user_manager_class=PluginUserManager,
+        session_maker=cast("Any", DummySessionMaker()),
+        user_db_factory=lambda _session: InMemoryUserDatabase([]),
+        user_manager_security=UserManagerSecurity[UUID](
+            verification_token_secret="x" * 32,
+            reset_password_token_secret="y" * 32,
+        ),
+    )
+    plugin = LitestarAuth(config)
+    startup_backend_template_type = _current_startup_backend_template_type()
+
+    provided_backends = plugin._provide_backends()
+
+    assert len(provided_backends) == 1
+    assert isinstance(provided_backends[0], startup_backend_template_type)
+    assert provided_backends[0].name == "opaque-db"
 
 
 @pytest.mark.asyncio
@@ -1401,12 +1508,17 @@ def test_provide_request_backends_realizes_database_token_preset_from_request_se
     config.allow_legacy_plaintext_tokens = True
     plugin = LitestarAuth(config)
     active_session = type("_ActiveSession", (), {"marker": "request-session"})()
+    startup_backend_template_type = _current_startup_backend_template_type()
+    database_token_strategy_type = _current_database_token_strategy_type()
     template_backend = config.startup_backends()[0]
 
     rebound_backends = cast("Any", plugin._provide_request_backends)(db_session=active_session)
 
+    assert isinstance(template_backend, startup_backend_template_type)
     assert [backend.name for backend in rebound_backends] == ["database"]
-    assert type(rebound_backends[0].strategy) is type(template_backend.strategy)
+    assert isinstance(rebound_backends[0], AuthenticationBackend)
+    assert isinstance(template_backend.strategy, database_token_strategy_type)
+    assert isinstance(rebound_backends[0].strategy, database_token_strategy_type)
     assert rebound_backends[0].strategy.session is active_session
 
 
@@ -1463,8 +1575,9 @@ def test_totp_backend_returns_configured_named_backend() -> None:
     )
 
     startup_backend = plugin._totp_backend()
+    startup_backend_template_type = _current_startup_backend_template_type()
 
-    assert startup_backend.__class__.__name__ == "StartupBackendTemplate"
+    assert isinstance(startup_backend, startup_backend_template_type)
     assert startup_backend.name == secondary_backend.name
     assert startup_backend.transport is secondary_backend.transport
     assert startup_backend.strategy is secondary_backend.strategy

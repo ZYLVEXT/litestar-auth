@@ -9,19 +9,14 @@ from typing import TYPE_CHECKING, Any, Protocol
 from litestar.exceptions import ClientException
 
 import litestar_auth._account_state as _shared_account_state
+from litestar_auth.exceptions import (
+    ConfigurationError,
+    ErrorCode,
+    InactiveUserError,
+    OAuthAccountAlreadyLinkedError,
+    UnverifiedUserError,
+)
 from litestar_auth.types import UserProtocol
-
-# Keep exception identity stable across module reload tests.
-if "ConfigurationError" not in globals():
-    from litestar_auth.exceptions import ConfigurationError
-if "ErrorCode" not in globals():
-    from litestar_auth.exceptions import ErrorCode
-if "InactiveUserError" not in globals():
-    from litestar_auth.exceptions import InactiveUserError
-if "OAuthAccountAlreadyLinkedError" not in globals():
-    from litestar_auth.exceptions import OAuthAccountAlreadyLinkedError
-if "UnverifiedUserError" not in globals():
-    from litestar_auth.exceptions import UnverifiedUserError
 
 if TYPE_CHECKING:
     from collections.abc import Mapping

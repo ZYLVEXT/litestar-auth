@@ -268,10 +268,11 @@ def test_contrib_redis_preset_covers_optional_identity_and_proxy_header_branches
 def test_contrib_redis_preserves_lazy_dependency_error(monkeypatch: pytest.MonkeyPatch) -> None:
     """The contrib Redis alias preserves the strategy's optional dependency guard."""
 
-    def fail_import(name: str) -> None:
-        raise ImportError(name)
+    def fail_load() -> object:
+        msg = "Install litestar-auth[redis] to use RedisTokenStrategy"
+        raise ImportError(msg)
 
-    monkeypatch.setattr("litestar_auth.authentication.strategy.redis.importlib.import_module", fail_import)
+    monkeypatch.setattr("litestar_auth.authentication.strategy.redis._load_redis_asyncio", fail_load)
 
     redis_client_sentinel = cast("Any", object())
     with pytest.raises(ImportError, match="Install litestar-auth\\[redis\\] to use RedisTokenStrategy"):

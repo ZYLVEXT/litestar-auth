@@ -28,6 +28,49 @@ OAuth scopes are **server-owned configuration**, not caller input.
 - Manual routes: pass `oauth_scopes=[...]` to `create_provider_oauth_controller()` or `create_oauth_controller()`.
 - Runtime `GET /authorize?scopes=...` overrides are rejected with **400**.
 
+## Manual OAuth client contract
+
+Manual/custom OAuth controllers accept any client object that satisfies the supported contract. You do not need to subclass a litestar-auth base class, but the client must fail the same way a normal `httpx-oauth` provider client would.
+
+The typed surface is exposed as structural protocols in `litestar_auth.oauth.client_adapter`:
+`OAuthClientProtocol` covers the supported manual client shapes, with
+`OAuthDirectIdentityClientProtocol`, `OAuthProfileClientProtocol`, and the optional
+`OAuthEmailVerificationClientProtocol` documenting the capability split used by the adapter.
+
+Supported provisioning paths:
+
+- `oauth_client=...`: pass a pre-built client instance directly.
+- `oauth_client_factory=...`: pass a zero-argument callable that returns the client instance.
+- `oauth_client_class="package.module.Client"`: pass a fully qualified import path and optional `oauth_client_kwargs={...}`. `load_httpx_oauth_client()` imports the class lazily and forwards those kwargs to its constructor.
+
+`create_provider_oauth_controller()` resolves those provisioning options through the same adapter boundary that powers `create_oauth_controller()`, `create_oauth_associate_controller()`, and the controller-level compatibility helpers, so all manual entry points enforce one normalized runtime contract.
+
+Required client methods:
+
+- `get_authorization_url(redirect_uri, state, *, scope: str | None = None) -> str`
+  The return value must be a non-empty authorization URL string.
+- `get_access_token(code, redirect_uri) -> payload`
+  The payload may be a mapping or an object with attributes. It must expose a non-empty `access_token: str`, and may expose `expires_at: int | None` and `refresh_token: str | None`.
+
+Identity resolution:
+
+- Preferred direct contract: `get_id_email(access_token) -> tuple[str, str] | None`
+  Return `(account_id, email)` as two non-empty strings, or return `None` to fall back to profile lookup.
+- Profile fallback: `get_profile(access_token) -> payload`
+  The payload may be a mapping or an object with attributes. It must expose `id` or `account_id`, plus `email` or `account_email`.
+
+Optional email-verification contract:
+
+- Dedicated hook: `get_email_verified(access_token) -> bool`
+  This hook may be async or sync, but it must resolve to a real boolean.
+- Profile fallback: `get_profile()` may expose `email_verified` as `true`/`false` or the case-insensitive strings `"true"` / `"false"`.
+
+Fail-closed behavior:
+
+- Invalid import paths, missing methods, malformed payloads, empty identifiers, and invalid `email_verified` values raise `ConfigurationError`.
+- Missing profile email still returns **400** with `OAUTH_NOT_AVAILABLE_EMAIL`, because login and account association require a usable email address.
+- When `trust_provider_email_verified=True`, sign-in and associate-by-email flows reject missing or false verification evidence with **400** `OAUTH_EMAIL_NOT_VERIFIED`.
+
 ## Account association
 
 For logged-in users linking another identity:
@@ -39,7 +82,7 @@ Routes use the `/auth/associate/{provider}/...` prefix by default, and the same 
 
 Associate callbacks enforce the same active-account checks as login callbacks before linking a provider identity.
 
-For manual `create_oauth_associate_controller(..., user_manager_dependency_key=...)` wiring, the dependency key must be a valid non-keyword Python identifier. Litestar resolves that dependency by matching the key to the generated callback parameter name.
+For manual `create_oauth_associate_controller(..., user_manager_dependency_key=...)` wiring, the dependency key must be a valid non-keyword Python identifier. Litestar resolves that dependency by matching the key to the associate callback parameter name.
 
 ## Token encryption
 

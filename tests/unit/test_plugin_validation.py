@@ -60,7 +60,7 @@ from litestar_auth.config import (
     VERIFY_TOKEN_AUDIENCE,
 )
 from litestar_auth.exceptions import ConfigurationError
-from litestar_auth.manager import TotpSecretStoragePosture, UserManagerSecurity
+from litestar_auth.manager import BaseUserManager, TotpSecretStoragePosture, UserManagerSecurity
 from litestar_auth.models import User as OrmUser
 from litestar_auth.password import PasswordHelper
 from litestar_auth.plugin import LitestarAuth
@@ -172,7 +172,7 @@ def test_plugin_security_tradeoff_docs_snippet_matches_shared_policy_wording() -
 
 
 def test_describe_jwt_revocation_tradeoff_accepts_reloaded_posture() -> None:
-    """Duck-typed JWT posture resolution survives strategy-module reloads."""
+    """Plugin validation reuses the direct JWT posture contract even after reloads."""
     reloaded_jwt_module = importlib.reload(jwt_strategy_module)
     strategy = reloaded_jwt_module.JWTStrategy(secret=JWT_SECRET)
 
@@ -181,23 +181,41 @@ def test_describe_jwt_revocation_tradeoff_accepts_reloaded_posture() -> None:
     assert notice is not None
     assert notice.policy.key == "jwt_revocation"
     assert notice.posture_key == "compatibility_in_memory"
+    assert notice.requires_explicit_production_opt_in is strategy.revocation_posture.requires_explicit_production_opt_in
     assert notice.production_validation_error == strategy.revocation_posture.production_validation_error
     assert notice.startup_warning == strategy.revocation_posture.startup_warning
 
 
+def _build_direct_manager(*, totp_secret_key: str | None = None) -> BaseUserManager[ExampleUser, UUID]:
+    """Build a direct manager instance for posture-contract comparisons.
+
+    Returns:
+        Direct ``BaseUserManager`` wired with the requested TOTP secret posture.
+    """
+    return BaseUserManager(
+        InMemoryUserDatabase([]),
+        password_helper=PasswordHelper(),
+        security=UserManagerSecurity[UUID](
+            verification_token_secret="v" * 32,
+            reset_password_token_secret="r" * 32,
+            totp_secret_key=totp_secret_key,
+            id_parser=UUID,
+        ),
+    )
+
+
 def test_resolve_plugin_managed_totp_secret_storage_tradeoff_matches_plaintext_posture() -> None:
-    """Plugin-owned TOTP wiring reuses the shared plaintext posture messaging."""
+    """Plugin-owned TOTP wiring reuses the same direct-manager plaintext posture contract."""
     config = _minimal_config(totp_config=TotpConfig(totp_pending_secret="p" * 32))
+    posture = _build_direct_manager().totp_secret_storage_posture
 
     notice = plugin_config_module._resolve_plugin_managed_totp_secret_storage_tradeoff(config)
 
     assert notice is not None
     assert notice.policy.key == "totp_secret_storage"
-    assert notice.posture_key == "compatibility_plaintext"
-    assert (
-        notice.production_validation_error
-        == TotpSecretStoragePosture.compatibility_plaintext().production_validation_error
-    )
+    assert notice.posture_key == posture.key
+    assert notice.requires_explicit_production_opt_in is posture.requires_explicit_production_opt_in
+    assert notice.production_validation_error == posture.production_validation_error
     assert notice.startup_warning is None
 
 
@@ -682,6 +700,26 @@ def test_validate_password_validator_config_allows_explicit_user_manager_factory
     validate_password_validator_config(config)
 
 
+def test_validate_config_allows_factory_owned_noncanonical_manager_surface() -> None:
+    """Non-canonical manager constructors remain valid when `user_manager_factory` owns the build."""
+
+    class _FactoryOwnedManager:
+        def __init__(self, user_db: object, *, legacy_dependency: object) -> None:
+            del user_db, legacy_dependency
+
+        @staticmethod
+        async def authenticate(identifier: str, password: str) -> None:
+            del identifier, password
+
+    config = _minimal_config()
+    config.user_manager_class = cast("type[Any]", _FactoryOwnedManager)
+    config.password_validator_factory = lambda _config: None
+    config.user_manager_factory = lambda **kwargs: cast("Any", kwargs["user_db"])
+    config.user_manager_kwargs = {"legacy_dependency": object()}
+
+    validate_config(config)
+
+
 def test_validate_password_validator_config_does_not_probe_manager_signature() -> None:
     """Validation no longer introspects custom manager constructors for password-validator support."""
 
@@ -741,6 +779,82 @@ def test_validate_config_does_not_invoke_password_validator_factory_for_construc
     validate_config(config)
 
     assert calls == 0
+
+
+def test_resolve_user_manager_account_state_validator_returns_callable_contract() -> None:
+    """The shared helper returns the supported account-state callable surface."""
+    calls: list[tuple[ExampleUser, bool]] = []
+    user = ExampleUser(
+        id=UUID(int=1),
+        email="user@example.com",
+        hashed_password=PasswordHelper().hash("correct-password"),
+    )
+
+    class _CallableValidatorManager:
+        @staticmethod
+        def require_account_state(user: ExampleUser, *, require_verified: bool = False) -> None:
+            calls.append((user, require_verified))
+
+    validator = validation_module.resolve_user_manager_account_state_validator(_CallableValidatorManager)
+
+    validator(user, require_verified=True)
+
+    assert calls == [(user, True)]
+
+
+def test_resolve_user_manager_account_state_validator_raises_for_missing_callable() -> None:
+    """Missing or non-callable account-state validators fail with the shared contract error."""
+
+    class _MissingValidatorManager:
+        require_account_state = None
+
+    with pytest.raises(TypeError, match="require_account_state"):
+        validation_module.resolve_user_manager_account_state_validator(_MissingValidatorManager)
+
+
+@pytest.mark.parametrize(("use_typed_security"), [True, False])
+def test_default_user_manager_contract_keeps_runtime_and_validation_surfaces_aligned(
+    *,
+    use_typed_security: bool,
+) -> None:
+    """The shared default-builder contract keeps runtime and validation kwargs in sync."""
+    config = _minimal_config(id_parser=UUID)
+    if not use_typed_security:
+        config.user_manager_security = None
+
+    runtime_contract = plugin_config_module._build_default_user_manager_contract(
+        config,
+        password_helper=PasswordHelper(),
+        password_validator=None,
+        backends=("bound-backend",),
+    )
+    validation_contract = plugin_config_module._build_default_user_manager_contract(
+        config,
+        password_helper=object(),
+        password_validator=None,
+        backends=("bound-backend",),
+    )
+
+    runtime_kwargs = runtime_contract.build_kwargs()
+    validation_kwargs = validation_contract.build_kwargs()
+
+    assert runtime_kwargs.keys() == validation_kwargs.keys()
+    assert runtime_kwargs["backends"] == ("bound-backend",)
+    assert validation_kwargs["backends"] == ("bound-backend",)
+    assert runtime_kwargs["unsafe_testing"] is False
+    assert validation_kwargs["unsafe_testing"] is False
+    assert runtime_kwargs["password_validator"] is None
+    assert validation_kwargs["password_validator"] is None
+
+    if use_typed_security:
+        assert runtime_kwargs["security"] == validation_kwargs["security"]
+        assert "id_parser" not in runtime_kwargs
+        assert "id_parser" not in validation_kwargs
+    else:
+        assert "security" not in runtime_kwargs
+        assert "security" not in validation_kwargs
+        assert runtime_kwargs["id_parser"] is UUID
+        assert validation_kwargs["id_parser"] is UUID
 
 
 def test_validate_config_rejects_non_canonical_default_user_manager_constructor() -> None:

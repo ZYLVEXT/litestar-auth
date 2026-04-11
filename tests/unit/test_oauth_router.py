@@ -25,6 +25,11 @@ if TYPE_CHECKING:
 pytestmark = pytest.mark.unit
 
 
+def _make_oauth_client() -> router_module.OAuthClientProtocol:
+    """Return a typed OAuth client placeholder for router assembly tests."""
+    return cast("router_module.OAuthClientProtocol", object())
+
+
 class _RouterTestUser(UserProtocol[object]):
     """Minimal user protocol implementation for OAuth router typing tests."""
 
@@ -90,6 +95,13 @@ def test_oauth_router_module_executes_under_coverage() -> None:
     assert reloaded_module.load_httpx_oauth_client.__name__ == load_httpx_oauth_client.__name__
 
 
+def test_create_provider_oauth_controller_exposes_typed_client_annotations() -> None:
+    """Router helper advertises the explicit manual OAuth client contract."""
+    annotations = router_module.create_provider_oauth_controller.__annotations__
+    assert annotations["oauth_client"] == "OAuthClientProtocol | None"
+    assert annotations["oauth_client_factory"] == "OAuthClientFactory | None"
+
+
 def test_create_provider_oauth_controller_missing_client_config_raises_configuration_error() -> None:
     """Factory without any client configuration raises `ConfigurationError`."""
     backend = _make_backend()
@@ -130,7 +142,7 @@ def test_create_provider_oauth_controller_rejects_insecure_redirect_base_url(
             provider_name="example",
             backend=backend,
             user_manager=user_manager,
-            oauth_client=object(),
+            oauth_client=_make_oauth_client(),
             redirect_base_url=redirect_base_url,
         )
 
@@ -189,34 +201,93 @@ def test_load_httpx_oauth_client_instantiates_client_from_imported_module(
 def test_create_provider_oauth_controller_uses_factory_client(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A factory-provided OAuth client should be passed through to the controller factory."""
+    """A factory-provided OAuth client should be resolved through the shared adapter builder."""
     backend = _make_backend()
     user_manager = _make_user_manager()
-    oauth_client = object()
+    oauth_client_adapter = Mock()
     controller = cast("type[Any]", object())
+
+    def oauth_client_factory() -> router_module.OAuthClientProtocol:
+        return _make_oauth_client()
+
+    build_adapter = Mock(return_value=oauth_client_adapter)
     create_controller = Mock(return_value=controller)
-    monkeypatch.setattr(router_module, "create_oauth_controller", create_controller)
+    monkeypatch.setattr(router_module, "_build_oauth_client_adapter", build_adapter)
+    monkeypatch.setattr(router_module, "_create_login_oauth_controller", create_controller)
 
     created_controller = router_module.create_provider_oauth_controller(
         provider_name="example",
         backend=backend,
         user_manager=user_manager,
-        oauth_client_factory=lambda: oauth_client,
+        oauth_client_factory=oauth_client_factory,
         redirect_base_url="https://example.test",
     )
 
     assert created_controller is controller
+    build_adapter.assert_called_once_with(
+        oauth_client=None,
+        oauth_client_factory=oauth_client_factory,
+        oauth_client_class=None,
+        oauth_client_kwargs=None,
+        oauth_client_class_loader=router_module.load_httpx_oauth_client,
+    )
     create_controller.assert_called_once_with(
         provider_name="example",
         backend=backend,
         user_manager=user_manager,
-        oauth_client=oauth_client,
+        oauth_client_adapter=oauth_client_adapter,
         redirect_base_url="https://example.test",
         path="/auth/oauth",
         cookie_secure=True,
         oauth_scopes=None,
         associate_by_email=False,
         trust_provider_email_verified=False,
+        validate_redirect_base_url=False,
+    )
+
+
+def test_create_provider_oauth_controller_uses_explicit_oauth_client(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A direct ``oauth_client`` instance is routed through the shared adapter builder."""
+    backend = _make_backend()
+    user_manager = _make_user_manager()
+    oauth_client = _make_oauth_client()
+    oauth_client_adapter = Mock()
+    controller = cast("type[Any]", object())
+    build_adapter = Mock(return_value=oauth_client_adapter)
+    create_controller = Mock(return_value=controller)
+    monkeypatch.setattr(router_module, "_build_oauth_client_adapter", build_adapter)
+    monkeypatch.setattr(router_module, "_create_login_oauth_controller", create_controller)
+
+    created_controller = router_module.create_provider_oauth_controller(
+        provider_name="example",
+        backend=backend,
+        user_manager=user_manager,
+        oauth_client=oauth_client,
+        redirect_base_url="https://example.test",
+    )
+
+    assert created_controller is controller
+    build_adapter.assert_called_once_with(
+        oauth_client=oauth_client,
+        oauth_client_factory=None,
+        oauth_client_class=None,
+        oauth_client_kwargs=None,
+        oauth_client_class_loader=router_module.load_httpx_oauth_client,
+    )
+    create_controller.assert_called_once_with(
+        provider_name="example",
+        backend=backend,
+        user_manager=user_manager,
+        oauth_client_adapter=oauth_client_adapter,
+        redirect_base_url="https://example.test",
+        path="/auth/oauth",
+        cookie_secure=True,
+        oauth_scopes=None,
+        associate_by_email=False,
+        trust_provider_email_verified=False,
+        validate_redirect_base_url=False,
     )
 
 
@@ -226,10 +297,13 @@ def test_create_provider_oauth_controller_derives_path_from_auth_path(
     """Canonical helper derives the login route prefix from ``auth_path`` when ``path`` is omitted."""
     backend = _make_backend()
     user_manager = _make_user_manager()
-    oauth_client = object()
+    oauth_client = _make_oauth_client()
+    oauth_client_adapter = Mock()
     controller = cast("type[Any]", object())
+    build_adapter = Mock(return_value=oauth_client_adapter)
     create_controller = Mock(return_value=controller)
-    monkeypatch.setattr(router_module, "create_oauth_controller", create_controller)
+    monkeypatch.setattr(router_module, "_build_oauth_client_adapter", build_adapter)
+    monkeypatch.setattr(router_module, "_create_login_oauth_controller", create_controller)
 
     created_controller = router_module.create_provider_oauth_controller(
         provider_name="example",
@@ -241,31 +315,41 @@ def test_create_provider_oauth_controller_derives_path_from_auth_path(
     )
 
     assert created_controller is controller
+    build_adapter.assert_called_once_with(
+        oauth_client=oauth_client,
+        oauth_client_factory=None,
+        oauth_client_class=None,
+        oauth_client_kwargs=None,
+        oauth_client_class_loader=router_module.load_httpx_oauth_client,
+    )
     create_controller.assert_called_once_with(
         provider_name="example",
         backend=backend,
         user_manager=user_manager,
-        oauth_client=oauth_client,
+        oauth_client_adapter=oauth_client_adapter,
         redirect_base_url="https://example.test/identity/oauth",
         path="/identity/oauth",
         cookie_secure=True,
         oauth_scopes=None,
         associate_by_email=False,
         trust_provider_email_verified=False,
+        validate_redirect_base_url=False,
     )
 
 
 def test_create_provider_oauth_controller_loads_client_from_class_path(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A client class path should be resolved lazily and forwarded to the controller factory."""
+    """A client class path should be forwarded to the shared adapter builder with the lazy loader."""
     backend = _make_backend()
     user_manager = _make_user_manager()
-    oauth_client = object()
+    oauth_client_adapter = Mock()
     controller = cast("type[Any]", object())
+    build_adapter = Mock(return_value=oauth_client_adapter)
     create_controller = Mock(return_value=controller)
-    load_client = Mock(return_value=oauth_client)
-    monkeypatch.setattr(router_module, "create_oauth_controller", create_controller)
+    load_client = Mock()
+    monkeypatch.setattr(router_module, "_build_oauth_client_adapter", build_adapter)
+    monkeypatch.setattr(router_module, "_create_login_oauth_controller", create_controller)
     monkeypatch.setattr(router_module, "load_httpx_oauth_client", load_client)
 
     created_controller = router_module.create_provider_oauth_controller(
@@ -278,18 +362,25 @@ def test_create_provider_oauth_controller_loads_client_from_class_path(
     )
 
     assert created_controller is controller
-    load_client.assert_called_once_with("tests.fake.Client", client_id="client-id")
+    build_adapter.assert_called_once_with(
+        oauth_client=None,
+        oauth_client_factory=None,
+        oauth_client_class="tests.fake.Client",
+        oauth_client_kwargs={"client_id": "client-id"},
+        oauth_client_class_loader=load_client,
+    )
     create_controller.assert_called_once_with(
         provider_name="example",
         backend=backend,
         user_manager=user_manager,
-        oauth_client=oauth_client,
+        oauth_client_adapter=oauth_client_adapter,
         redirect_base_url="https://example.test",
         path="/auth/oauth",
         cookie_secure=True,
         oauth_scopes=None,
         associate_by_email=False,
         trust_provider_email_verified=False,
+        validate_redirect_base_url=False,
     )
 
 

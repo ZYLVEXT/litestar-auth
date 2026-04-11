@@ -44,6 +44,22 @@ If you previously hand-assembled `AuthenticationBackend(..., transport=BearerTra
 
 When you use `database_token_auth=...`, `config.backends` stays empty by design. `config.startup_backends()` now returns startup-only `StartupBackendTemplate` values for plugin assembly and validation, while `config.bind_request_backends(session)` returns request-scoped runtime `AuthenticationBackend` instances bound to the active `AsyncSession`. `config.resolve_backends()` remains limited to the explicit manual `backends=` surface.
 
+### Backend lifecycle contract
+
+Treat the three backend helpers as distinct surfaces:
+
+- `config.resolve_backends()` returns only the explicit manual `backends=` inventory. It rejects the canonical `database_token_auth=...` preset so callers do not accidentally treat the preset as a ready-to-run runtime backend.
+- `config.startup_backends()` is the plugin's startup inventory. Manual backends are wrapped as `StartupBackendTemplate` values, and the canonical DB-token preset also contributes a `StartupBackendTemplate` that is valid for plugin assembly, validation, and route selection only.
+- `config.bind_request_backends(session)` realizes request-scoped `AuthenticationBackend` instances aligned with `config.startup_backends()` order. Use this surface whenever runtime login, refresh, logout, token validation, or other request-time work needs the active `AsyncSession`.
+- Startup-only DB-token templates fail closed if they are used for runtime database-token work before `bind_request_backends(session)` supplies a request session.
+
+Controller selection follows that startup inventory:
+
+- The primary backend mounts at `{auth_path}`.
+- Additional backends mount at `{auth_path}/{backend.name}` in configured order.
+- Plugin-owned OAuth login routes use the primary startup backend.
+- TOTP uses the primary startup backend unless `TotpConfig.totp_backend_name` selects another named backend from the same startup inventory.
+
 ## Custom SQLAlchemy `User` and token models
 
 `LitestarAuthConfig.user_model` must satisfy **`UserProtocol`** (see [Types](types.md)): at minimum the fields and behaviors your chosen `BaseUserManager` and strategies use (`id`, `email`, `hashed_password`, `is_active`, `is_verified`, `is_superuser`, `totp_secret` as applicable).
@@ -247,7 +263,7 @@ On the `LitestarAuthConfig` dataclass, `session_maker` is typed as optional for 
 | `user_manager_security` | `None` | Canonical typed contract for verification/reset secrets, optional TOTP encryption, and optional `id_parser`. |
 | `user_manager_kwargs` | `{}` | Additional manager constructor kwargs for non-security dependencies such as `password_helper`. The default plugin builder no longer reads manager secrets or `id_parser` from this mapping; use `user_manager_factory` when a custom builder must own that wiring instead. |
 | `password_validator_factory` | `None` | Build custom password policy; otherwise the default builder injects the shared minimum-length validator. |
-| `user_manager_factory` | `None` | Full control over request-scoped manager construction (`UserManagerFactory`). |
+| `user_manager_factory` | `None` | Full control over request-scoped manager construction (`UserManagerFactory`). When set, the factory owns any non-canonical constructor wiring, including password-validator injection and manager-specific secret handling. |
 | `rate_limit_config` | `None` | `AuthRateLimitConfig` for auth endpoint throttling. For the common one-client Redis recipe, build it through `litestar_auth.contrib.redis.RedisAuthPreset`; keep `AuthRateLimitConfig.from_shared_backend()` for lower-level shared-backend wiring. |
 
 ## Canonical manager password surface
@@ -259,7 +275,7 @@ For plugin-managed apps, keep the manager/password surface on one path:
 3. Call `config.build_password_helper()` only when app-owned code outside `BaseUserManager` also hashes or verifies passwords.
 4. Reuse `litestar_auth.schemas.UserEmailField` and `litestar_auth.schemas.UserPasswordField` in app-owned `msgspec.Struct` registration/update schemas.
 
-For non-standard manager construction, keep the plugin-owned security surface on `user_manager_security` and switch to `user_manager_factory` instead of smuggling manager secrets or `id_parser` through `user_manager_kwargs`.
+For non-standard manager construction, keep the plugin-owned security surface on `user_manager_security` and switch to `user_manager_factory` instead of smuggling manager secrets or `id_parser` through `user_manager_kwargs`. The factory receives `session`, `user_db`, `config`, and request-bound `backends`; it must opt into any custom `password_helper`, `password_validator`, or legacy secret wiring itself.
 
 One integrated example:
 
@@ -386,7 +402,13 @@ shared helper for each request-scoped manager on demand.
 
 Use `password_validator_factory` when the plugin should own runtime password-policy construction.
 If you do not provide it, the default plugin builder injects the default `require_password_length` validator. Keep `user_manager_kwargs["password_validator"]` only
-for legacy direct overrides, and do not mix it with `password_validator_factory`.
+for legacy direct overrides, and do not mix it with `password_validator_factory`. When `user_manager_factory` is set, the plugin still validates this configuration surface but does not inject a resolved validator into your factory automatically; the factory must build and pass whatever validator policy it wants to own.
+
+Plugin-managed account-state checks also rely on one stable callable surface resolved from
+`user_manager_class`: `require_account_state(user, *, require_verified=False)`.
+`BaseUserManager` supplies the default behavior, and custom manager classes or adapters should
+preserve the same user argument plus keyword-only verification flag when they customize that
+policy.
 
 For app-owned `user_create_schema` / `user_update_schema` structs, import `UserEmailField` and
 `UserPasswordField` from `litestar_auth.schemas` instead of copying the built-in email regex or raw
@@ -662,6 +684,9 @@ Routes: `{auth_path}/2fa/...`. See [TOTP guide](guides/totp.md).
 `user_manager_security.totp_secret_key`, which only encrypts the persisted TOTP secret stored on
 the user record.
 
+If `totp_backend_name` is omitted, the plugin uses the primary startup backend. Set a backend name
+only when a secondary startup backend should issue post-2FA tokens.
+
 !!! note "Pending-token JTI store"
     The plugin-owned controller forwards `TotpConfig.totp_pending_jti_store` into `create_totp_controller(..., pending_jti_store=...)`. In production, missing pending-token replay storage now fails closed unless `unsafe_testing=True`.
 
@@ -687,6 +712,7 @@ Route-registration contract:
 - In production app init, plugin-owned OAuth routes now fail closed unless `oauth_redirect_base_url` uses a non-loopback `https://...` origin. Keep localhost or plain-HTTP redirect bases behind `AppConfig(debug=True)` or `unsafe_testing=True` only.
 - Manual/custom OAuth controller factories use the same non-loopback `https://...` redirect-origin baseline, but they enforce it immediately at controller construction time with no debug/testing override.
 - Both plugin-owned and manual OAuth redirect bases must remain clean callback bases without embedded userinfo, query strings, or fragments.
+- Plugin-owned OAuth login routes always use the primary startup backend from `config.startup_backends()`. If you need provider-specific backend selection, build manual controllers instead of relying on the plugin-owned route table.
 - `include_oauth_associate=True` extends that same provider inventory with authenticated account-linking routes. If you need a custom route table, custom prefixes, or manual manager wiring, mount the controller factories yourself instead of mixing plugin-owned and manual ownership.
 
 ## Security and token policy
@@ -703,6 +729,11 @@ Route-registration contract:
 The plugin-managed JWT/TOTP downgrade surfaces use the same shared posture wording as runtime startup and validation:
 
 --8<-- "docs/snippets/plugin_security_tradeoffs.md"
+
+For direct/manual wiring, these flags only decide whether plugin-managed validation accepts a compatibility-grade branch; the underlying runtime objects still report that branch explicitly:
+
+- `JWTStrategy(secret=...)` reports `revocation_posture.key == "compatibility_in_memory"` and `revocation_is_durable == False` until you pass a shared denylist store.
+- `BaseUserManager(..., totp_secret_key=None)` reports `totp_secret_storage_posture.key == "compatibility_plaintext"`. Supplying `totp_secret_key` through either legacy kwargs or `user_manager_security` flips the direct-manager posture to `fernet_encrypted`.
 
 ## Schemas and DI
 

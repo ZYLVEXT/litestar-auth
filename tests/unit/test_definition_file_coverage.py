@@ -41,6 +41,7 @@ from litestar_auth.models.user import User as ModelsUser
 from tests._helpers import ExampleUser
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
     from types import ModuleType
 
 pytestmark = [pytest.mark.unit, pytest.mark.imports]
@@ -59,13 +60,14 @@ def _reload_module(module: ModuleType) -> ModuleType:
     return reloaded_module
 
 
-def _load_reloaded_alias(
+def load_reloaded_test_alias(
     *,
     alias_name: str,
     source_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    after_exec: Callable[[ModuleType], None] | None = None,
 ) -> ModuleType:
-    """Load a source file under an isolated module name and reload it.
+    """Load and reload a source file under an isolated alias for coverage tests.
 
     Returns:
         The reloaded alias module.
@@ -84,6 +86,31 @@ def _load_reloaded_alias(
             if fullname != alias_name:
                 return None
             return importlib.util.spec_from_file_location(alias_name, source_path)
+
+    spec = importlib.util.spec_from_file_location(alias_name, source_path)
+    assert spec is not None
+    assert spec.loader is not None
+
+    alias_module = importlib.util.module_from_spec(spec)
+    monkeypatch.setattr(sys, "meta_path", [_AliasFinder(), *sys.meta_path])
+    monkeypatch.setitem(sys.modules, alias_name, alias_module)
+    spec.loader.exec_module(alias_module)
+    if after_exec is not None:
+        after_exec(alias_module)
+    return _reload_module(alias_module)
+
+
+def _load_reloaded_alias(
+    *,
+    alias_name: str,
+    source_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> ModuleType:
+    """Load a source file under an isolated module name and reload it.
+
+    Returns:
+        The reloaded alias module.
+    """
 
     class _AliasBase(DeclarativeBase):
         """Declarative base dedicated to reload-only coverage tests."""
@@ -105,23 +132,23 @@ def _load_reloaded_alias(
     fake_base_namespace["UUIDBase"] = UUIDBase
     fake_base_namespace["DefaultBase"] = DefaultBase
 
-    monkeypatch.setattr(sys, "meta_path", [_AliasFinder(), *sys.meta_path])
     monkeypatch.setitem(sys.modules, "advanced_alchemy.base", fake_base_module)
 
-    spec = importlib.util.spec_from_file_location(alias_name, source_path)
-    assert spec is not None
-    assert spec.loader is not None
-
-    alias_module = importlib.util.module_from_spec(spec)
-    monkeypatch.setitem(sys.modules, alias_name, alias_module)
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore", category=SAWarning)
-        spec.loader.exec_module(alias_module)
+    def _remove_declared_tables(alias_module: ModuleType) -> None:
+        """Clear declared tables so the alias can be reloaded safely."""
         for value in alias_module.__dict__.values():
             table = getattr(value, "__table__", None)
             if table is not None and table.key in table.metadata.tables:
                 table.metadata.remove(table)
-        return _reload_module(alias_module)
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", category=SAWarning)
+        return load_reloaded_test_alias(
+            alias_name=alias_name,
+            source_path=source_path,
+            monkeypatch=monkeypatch,
+            after_exec=_remove_declared_tables,
+        )
 
 
 def test_types_module_reload_preserves_protocol_exports() -> None:

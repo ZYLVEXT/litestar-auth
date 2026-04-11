@@ -3,11 +3,11 @@
 from __future__ import annotations
 
 import asyncio
-import importlib
 import inspect
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, call
 
 import pytest
 from litestar import Router
@@ -16,6 +16,7 @@ from litestar.response import Response
 from litestar.response.redirect import Redirect
 from litestar.status_codes import HTTP_400_BAD_REQUEST
 
+import litestar_auth.controllers._utils as controller_utils_module
 import litestar_auth.controllers.oauth as oauth_module
 from litestar_auth.controllers._utils import _require_account_state
 from litestar_auth.controllers.oauth import (
@@ -38,8 +39,14 @@ from litestar_auth.exceptions import (
     OAuthAccountAlreadyLinkedError,
 )
 from litestar_auth.oauth.service import OAuthAuthorization
+from tests.unit.test_definition_file_coverage import load_reloaded_test_alias
 
 pytestmark = pytest.mark.unit
+
+
+def _make_oauth_client() -> oauth_module.OAuthClientProtocol:
+    """Return a typed OAuth client placeholder for controller tests."""
+    return cast("oauth_module.OAuthClientProtocol", object())
 
 
 # --- _validate_state ---
@@ -113,326 +120,138 @@ def test_validate_state_raises_when_mismatch() -> None:
     assert (extra.get("code") if isinstance(extra, dict) else None) == ErrorCode.OAUTH_STATE_INVALID
 
 
-# --- _get_authorization_url ---
+# --- manual OAuth client helper shims ---
 
 
-async def test_get_authorization_url_raises_when_client_lacks_method() -> None:
-    """Client without get_authorization_url raises ConfigurationError."""
-    client = object()
-    with pytest.raises(ConfigurationError) as exc_info:
-        await _get_authorization_url(
-            oauth_client=client,
-            redirect_uri="https://app.example/callback",
-            state="state",
-        )
-    assert "get_authorization_url" in str(exc_info.value)
-
-
-async def test_get_authorization_url_raises_when_return_not_string() -> None:
-    """Client returning non-string URL raises ConfigurationError."""
-    client = MagicMock()
-    client.get_authorization_url = AsyncMock(return_value=123)
-    with pytest.raises(ConfigurationError) as exc_info:
-        await _get_authorization_url(
-            oauth_client=client,
-            redirect_uri="https://app.example/callback",
-            state="state",
-        )
-    assert "invalid authorization url" in str(exc_info.value).lower()
-
-
-async def test_get_authorization_url_raises_when_return_empty_string() -> None:
-    """Client returning empty string raises ConfigurationError."""
-    client = MagicMock()
-    client.get_authorization_url = AsyncMock(return_value="")
-    with pytest.raises(ConfigurationError) as exc_info:
-        await _get_authorization_url(
-            oauth_client=client,
-            redirect_uri="https://app.example/callback",
-            state="state",
-        )
-    assert "invalid authorization url" in str(exc_info.value).lower()
-
-
-async def test_get_authorization_url_success_without_scopes() -> None:
-    """Valid client returns URL and calls get_authorization_url(redirect_uri, state)."""
-    client = MagicMock()
-    client.get_authorization_url = AsyncMock(return_value="https://provider.example/authorize?state=state")
-    url = await _get_authorization_url(
-        oauth_client=client,
-        redirect_uri="https://app.example/callback",
-        state="state",
+async def test_manual_oauth_helper_shims_delegate_authorization_and_token_contracts(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Controller-level compatibility helpers resolve the shared OAuth client adapter once per helper."""
+    adapter = SimpleNamespace(
+        get_authorization_url=AsyncMock(return_value="https://provider.example/authorize"),
+        get_access_token=AsyncMock(
+            return_value={"access_token": "provider-access-token", "expires_at": None, "refresh_token": None},
+        ),
     )
-    assert url == "https://provider.example/authorize?state=state"
-    client.get_authorization_url.assert_called_once_with("https://app.example/callback", "state")
+    adapter_factory = MagicMock(return_value=adapter)
+    monkeypatch.setattr(oauth_module, "_build_oauth_client_adapter", adapter_factory)
+    oauth_client = _make_oauth_client()
 
-
-async def test_get_authorization_url_success_with_scopes() -> None:
-    """With scopes list, scope string is joined and passed as scope=."""
-    client = MagicMock()
-    client.get_authorization_url = AsyncMock(return_value="https://provider.example/authorize")
-    url = await _get_authorization_url(
-        oauth_client=client,
+    authorization_url = await _get_authorization_url(
+        oauth_client=oauth_client,
         redirect_uri="https://app.example/callback",
         state="state",
         scopes=["openid", "email"],
     )
-    assert url == "https://provider.example/authorize"
-    client.get_authorization_url.assert_called_once_with(
-        "https://app.example/callback",
-        "state",
-        scope="openid email",
+    token_payload = await _get_access_token(
+        oauth_client=oauth_client,
+        code="provider-code",
+        redirect_uri="https://app.example/callback",
+    )
+
+    assert authorization_url == "https://provider.example/authorize"
+    assert token_payload == {
+        "access_token": "provider-access-token",
+        "expires_at": None,
+        "refresh_token": None,
+    }
+    assert adapter_factory.call_args_list == [
+        call(oauth_client=oauth_client),
+        call(oauth_client=oauth_client),
+    ]
+    adapter.get_authorization_url.assert_awaited_once_with(
+        redirect_uri="https://app.example/callback",
+        state="state",
+        scopes=["openid", "email"],
+    )
+    adapter.get_access_token.assert_awaited_once_with(
+        code="provider-code",
+        redirect_uri="https://app.example/callback",
     )
 
 
-# --- _get_access_token ---
-
-
-async def test_get_access_token_raises_when_client_lacks_method() -> None:
-    """Client without get_access_token raises ConfigurationError."""
-    client = object()
-    with pytest.raises(ConfigurationError) as exc_info:
-        await _get_access_token(oauth_client=client, code="code", redirect_uri="https://app.example/callback")
-    assert "get_access_token" in str(exc_info.value)
-
-
-async def test_get_access_token_raises_when_payload_missing_access_token() -> None:
-    """Payload without access_token raises ConfigurationError."""
-    client = MagicMock()
-    client.get_access_token = AsyncMock(return_value={})
-    with pytest.raises(ConfigurationError) as exc_info:
-        await _get_access_token(oauth_client=client, code="code", redirect_uri="https://app.example/callback")
-    assert "access_token" in str(exc_info.value).lower()
-
-
-async def test_get_access_token_raises_when_access_token_empty() -> None:
-    """Payload with empty access_token raises ConfigurationError."""
-    client = MagicMock()
-    client.get_access_token = AsyncMock(return_value={"access_token": ""})
-    with pytest.raises(ConfigurationError) as exc_info:
-        await _get_access_token(oauth_client=client, code="code", redirect_uri="https://app.example/callback")
-    assert "access_token" in str(exc_info.value).lower()
-
-
-async def test_get_access_token_raises_when_expires_at_not_int() -> None:
-    """Payload with non-int expires_at raises ConfigurationError."""
-    client = MagicMock()
-    client.get_access_token = AsyncMock(
-        return_value={"access_token": "at", "expires_at": "not-an-int", "refresh_token": None},
+async def test_manual_oauth_helper_shims_delegate_identity_and_email_verification(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Controller-level identity helpers reuse the shared adapter builder."""
+    adapter = SimpleNamespace(
+        get_account_identity=AsyncMock(return_value=("provider-id", "user@example.com")),
+        get_email_verified=AsyncMock(return_value=True),
     )
-    with pytest.raises(ConfigurationError) as exc_info:
-        await _get_access_token(oauth_client=client, code="code", redirect_uri="https://app.example/callback")
-    assert "expires_at" in str(exc_info.value).lower()
+    adapter_factory = MagicMock(return_value=adapter)
+    monkeypatch.setattr(oauth_module, "_build_oauth_client_adapter", adapter_factory)
+    oauth_client = _make_oauth_client()
+
+    identity = await _get_account_identity(oauth_client, "provider-access-token")
+    email_verified = await _get_email_verified(oauth_client, "provider-access-token")
+
+    assert identity == ("provider-id", "user@example.com")
+    assert email_verified is True
+    assert adapter_factory.call_args_list == [
+        call(oauth_client=oauth_client),
+        call(oauth_client=oauth_client),
+    ]
+    adapter.get_account_identity.assert_awaited_once_with("provider-access-token")
+    adapter.get_email_verified.assert_awaited_once_with("provider-access-token")
 
 
-async def test_get_access_token_raises_when_refresh_token_not_str() -> None:
-    """Payload with non-str refresh_token raises ConfigurationError."""
-    client = MagicMock()
-    client.get_access_token = AsyncMock(
-        return_value={"access_token": "at", "expires_at": 3600, "refresh_token": 123},
+def test_manual_oauth_mapping_helper_delegates_to_client_adapter_normalizer(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Controller compatibility alias reuses the adapter payload normalizer."""
+    normalize_payload = MagicMock(return_value={"access_token": "provider-access-token"})
+    monkeypatch.setattr(oauth_module, "_client_as_mapping", normalize_payload)
+    raw_payload = object()
+
+    payload = oauth_module._as_mapping(raw_payload, message="invalid")
+
+    assert payload == {"access_token": "provider-access-token"}
+    normalize_payload.assert_called_once_with(raw_payload, message="invalid")
+
+
+def test_manual_oauth_helpers_expose_typed_client_annotations() -> None:
+    """Manual controller helpers advertise the explicit OAuth client protocol."""
+    assert create_oauth_controller.__annotations__["oauth_client"] == "OAuthClientProtocol"
+    assert create_oauth_associate_controller.__annotations__["oauth_client"] == "OAuthClientProtocol"
+    assert _get_authorization_url.__annotations__["oauth_client"] == "OAuthClientProtocol"
+
+
+def test_create_oauth_controller_builds_the_shared_client_adapter_before_assembly(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Manual login controller wiring resolves the direct client through the shared adapter builder."""
+    oauth_client = _make_oauth_client()
+    oauth_client_adapter = MagicMock()
+    backend = cast("Any", MagicMock())
+    user_manager = cast("Any", MagicMock())
+    controller = cast("type[Any]", object())
+    build_adapter = MagicMock(return_value=oauth_client_adapter)
+    create_controller = MagicMock(return_value=controller)
+    monkeypatch.setattr(oauth_module, "_build_oauth_client_adapter", build_adapter)
+    monkeypatch.setattr(oauth_module, "_create_login_oauth_controller", create_controller)
+
+    created_controller = create_oauth_controller(
+        provider_name="github",
+        backend=backend,
+        user_manager=user_manager,
+        oauth_client=oauth_client,
+        redirect_base_url="https://app.example/auth/oauth",
     )
-    with pytest.raises(ConfigurationError) as exc_info:
-        await _get_access_token(oauth_client=client, code="code", redirect_uri="https://app.example/callback")
-    assert "refresh_token" in str(exc_info.value).lower()
 
-
-async def test_get_access_token_success_with_mapping() -> None:
-    """Valid mapping payload returns normalized OAuthTokenPayload."""
-    client = MagicMock()
-    client.get_access_token = AsyncMock(
-        return_value={"access_token": "at", "expires_at": 3600, "refresh_token": "rt"},
+    assert created_controller is controller
+    build_adapter.assert_called_once_with(oauth_client=oauth_client)
+    create_controller.assert_called_once_with(
+        provider_name="github",
+        backend=backend,
+        user_manager=user_manager,
+        oauth_client_adapter=oauth_client_adapter,
+        redirect_base_url="https://app.example/auth/oauth",
+        path="/auth/oauth",
+        cookie_secure=True,
+        oauth_scopes=None,
+        associate_by_email=False,
+        trust_provider_email_verified=False,
     )
-    payload = await _get_access_token(oauth_client=client, code="code", redirect_uri="https://app.example/callback")
-    assert payload["access_token"] == "at"
-    assert payload["expires_at"] == 3600  # noqa: PLR2004
-    assert payload["refresh_token"] == "rt"
-
-
-async def test_get_access_token_success_with_none_expires_and_refresh() -> None:
-    """Payload with None expires_at and refresh_token is valid."""
-    client = MagicMock()
-    client.get_access_token = AsyncMock(return_value={"access_token": "at"})
-    payload = await _get_access_token(oauth_client=client, code="code", redirect_uri="https://app.example/callback")
-    assert payload["access_token"] == "at"
-    assert payload["expires_at"] is None
-    assert payload["refresh_token"] is None
-
-
-async def test_get_access_token_success_with_object_dict_payload() -> None:
-    """Payload as object with __dict__ (e.g. from vars()) is accepted."""
-
-    class PayloadObj:
-        def __init__(self) -> None:
-            self.access_token = "at"
-            self.expires_at = None
-            self.refresh_token = None
-
-    client = MagicMock()
-    client.get_access_token = AsyncMock(return_value=PayloadObj())
-    payload = await _get_access_token(oauth_client=client, code="code", redirect_uri="https://app.example/callback")
-    assert payload["access_token"] == "at"
-    assert payload["expires_at"] is None
-    assert payload["refresh_token"] is None
-
-
-# --- _get_account_identity ---
-
-
-async def test_get_account_identity_success_via_get_id_email() -> None:
-    """get_id_email returning valid (id, email) tuple succeeds."""
-    client = MagicMock()
-    client.get_id_email = AsyncMock(return_value=("provider-id-123", "user@example.com"))
-    account_id, account_email = await _get_account_identity(client, "access-token")
-    assert account_id == "provider-id-123"
-    assert account_email == "user@example.com"
-
-
-async def test_get_account_identity_raises_when_get_id_email_bad_tuple_length() -> None:
-    """get_id_email returning wrong-length tuple raises ConfigurationError."""
-    client = MagicMock()
-    client.get_id_email = AsyncMock(return_value=("only-one",))
-    with pytest.raises(ConfigurationError) as exc_info:
-        await _get_account_identity(client, "access-token")
-    assert "invalid account identity" in str(exc_info.value).lower()
-
-
-async def test_get_account_identity_raises_when_get_id_email_not_tuple() -> None:
-    """get_id_email returning non-tuple raises ConfigurationError."""
-    client = MagicMock()
-    client.get_id_email = AsyncMock(return_value=["id", "email"])
-    with pytest.raises(ConfigurationError) as exc_info:
-        await _get_account_identity(client, "access-token")
-    assert "invalid account identity" in str(exc_info.value).lower()
-
-
-async def test_get_account_identity_raises_when_get_id_email_empty_strings() -> None:
-    """get_id_email returning (id, email) with empty string raises ConfigurationError."""
-    client = MagicMock()
-    client.get_id_email = AsyncMock(return_value=("", "user@example.com"))
-    with pytest.raises(ConfigurationError) as exc_info:
-        await _get_account_identity(client, "access-token")
-    assert "invalid account identity" in str(exc_info.value).lower()
-
-
-async def test_get_account_identity_raises_when_missing_both_methods() -> None:
-    """Client with neither get_id_email nor get_profile raises ConfigurationError."""
-    client = object()
-    with pytest.raises(ConfigurationError) as exc_info:
-        await _get_account_identity(client, "access-token")
-    assert "get_id_email" in str(exc_info.value) or "get_profile" in str(exc_info.value)
-
-
-async def test_get_account_identity_raises_when_profile_missing_account_id() -> None:
-    """get_profile path with no account_id/id raises ConfigurationError."""
-    client = MagicMock()
-    client.get_id_email = None
-    client.get_profile = AsyncMock(return_value={"email": "user@example.com"})
-    with pytest.raises(ConfigurationError) as exc_info:
-        await _get_account_identity(client, "access-token")
-    assert "account id" in str(exc_info.value).lower()
-
-
-async def test_get_account_identity_raises_when_profile_missing_email() -> None:
-    """get_profile path with no email raises ClientException OAUTH_NOT_AVAILABLE_EMAIL."""
-    client = MagicMock()
-    client.get_id_email = None
-    client.get_profile = AsyncMock(return_value={"id": "provider-id", "account_id": "provider-id"})
-    with pytest.raises(ClientException) as exc_info:
-        await _get_account_identity(client, "access-token")
-    assert exc_info.value.status_code == HTTP_400_BAD_REQUEST
-    extra = exc_info.value.extra
-    assert (extra.get("code") if isinstance(extra, dict) else None) == ErrorCode.OAUTH_NOT_AVAILABLE_EMAIL
-    assert "email" in exc_info.value.detail.lower()
-
-
-async def test_get_account_identity_success_via_get_profile() -> None:
-    """get_profile returning mapping with id and email succeeds."""
-    client = MagicMock()
-    client.get_id_email = None
-    client.get_profile = AsyncMock(return_value={"id": "provider-id", "email": "user@example.com"})
-    account_id, account_email = await _get_account_identity(client, "access-token")
-    assert account_id == "provider-id"
-    assert account_email == "user@example.com"
-
-
-async def test_get_account_identity_success_via_get_profile_account_id_email_keys() -> None:
-    """get_profile with account_id and account_email keys succeeds."""
-    client = MagicMock()
-    client.get_id_email = None
-    client.get_profile = AsyncMock(
-        return_value={"account_id": "pid", "account_email": "u@example.com"},
-    )
-    account_id, account_email = await _get_account_identity(client, "access-token")
-    assert account_id == "pid"
-    assert account_email == "u@example.com"
-
-
-# --- _get_email_verified ---
-
-
-async def test_get_email_verified_returns_none_when_client_has_no_methods() -> None:
-    """Client without get_email_verified and get_profile yields None."""
-    client = object()
-    assert await _get_email_verified(client, "token") is None
-
-
-@pytest.mark.parametrize("verified", [True, False])
-async def test_get_email_verified_returns_boolean_from_helper(verified: object) -> None:
-    """Boolean helper responses are returned directly."""
-    client = MagicMock()
-    client.get_email_verified = AsyncMock(return_value=verified)
-    assert await _get_email_verified(client, "token") is verified
-
-
-async def test_get_email_verified_reads_boolean_from_get_profile() -> None:
-    """get_profile email_verified bool is returned."""
-    client = MagicMock()
-    client.get_email_verified = None
-    client.get_profile = AsyncMock(return_value={"id": "pid", "email": "u@example.com", "email_verified": True})
-    assert await _get_email_verified(client, "token") is True
-
-
-async def test_get_email_verified_returns_none_when_profile_missing_claim() -> None:
-    """Missing email_verified claim yields None."""
-    client = MagicMock()
-    client.get_email_verified = None
-    client.get_profile = AsyncMock(return_value={"id": "pid", "email": "u@example.com"})
-    assert await _get_email_verified(client, "token") is None
-
-
-async def test_get_email_verified_parses_string_true_false() -> None:
-    """String email_verified values are normalized."""
-    client = MagicMock()
-    client.get_email_verified = None
-    client.get_profile = AsyncMock(return_value={"id": "pid", "email": "u@example.com", "email_verified": " true "})
-    assert await _get_email_verified(client, "token") is True
-    client.get_profile = AsyncMock(return_value={"id": "pid", "email": "u@example.com", "email_verified": "false"})
-    assert await _get_email_verified(client, "token") is False
-
-
-async def test_get_email_verified_raises_on_invalid_profile_value() -> None:
-    """Invalid email_verified values from get_profile raise ConfigurationError."""
-    client = MagicMock()
-    client.get_email_verified = None
-    client.get_profile = AsyncMock(return_value={"id": "pid", "email": "u@example.com", "email_verified": 123})
-    with pytest.raises(ConfigurationError, match=r"email_verified"):
-        await _get_email_verified(client, "token")
-
-
-@pytest.mark.parametrize("verified", [True, False])
-async def test_get_email_verified_handles_sync_helper(verified: object) -> None:
-    """Synchronous boolean returns from get_email_verified() are honoured."""
-    client = MagicMock()
-    client.get_email_verified = MagicMock(return_value=verified)
-    assert await _get_email_verified(client, "token") is verified
-
-
-async def test_get_email_verified_raises_on_invalid_helper_value() -> None:
-    """Invalid return values from get_email_verified() raise ConfigurationError."""
-    client = MagicMock()
-    client.get_email_verified = AsyncMock(return_value="not-a-bool")
-    with pytest.raises(ConfigurationError, match=r"verification"):
-        await _get_email_verified(client, "token")
 
 
 async def test_require_account_state_calls_optional_validator() -> None:
@@ -500,7 +319,7 @@ def _build_associate_controller(*, user_manager: object | None = None) -> object
     controller_class = create_oauth_associate_controller(
         provider_name="github",
         user_manager=cast("Any", user_manager or MagicMock()),
-        oauth_client=object(),
+        oauth_client=_make_oauth_client(),
         redirect_base_url="https://app.example/auth/associate",
         path="/auth/associate",
         cookie_secure=True,
@@ -523,7 +342,7 @@ def _build_login_controller(
         provider_name="github",
         backend=cast("Any", backend),
         user_manager=cast("Any", user_manager),
-        oauth_client=object(),
+        oauth_client=_make_oauth_client(),
         redirect_base_url="https://app.example/auth/oauth",
         path="/auth/oauth",
         cookie_secure=True,
@@ -532,14 +351,56 @@ def _build_login_controller(
     return cast("Any", controller_class(owner=Router(path="/", route_handlers=[])))
 
 
-def test_oauth_module_reload_preserves_public_helpers() -> None:
-    """Reloading the module under coverage preserves the exported helper surface."""
-    reloaded = importlib.reload(oauth_module)
+async def test_controller_helper_module_reload_preserves_account_state_error_contract(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Reload coverage keeps controller helper error mapping stable for callers."""
+    assert controller_utils_module.__file__ is not None
+    reloaded_module = load_reloaded_test_alias(
+        alias_name="_coverage_alias_controller_utils",
+        source_path=Path(controller_utils_module.__file__),
+        monkeypatch=monkeypatch,
+    )
+    manager = MagicMock()
+    manager.require_account_state.side_effect = reloaded_module.InactiveUserError()
+
+    with pytest.raises(ClientException) as exc_info:
+        await reloaded_module._require_account_state(object(), user_manager=manager)
+
+    extra = exc_info.value.extra
+    assert (extra.get("code") if isinstance(extra, dict) else None) == ErrorCode.LOGIN_USER_INACTIVE
+    assert exc_info.value.detail == reloaded_module.InactiveUserError.default_message
+
+
+def test_oauth_module_reload_preserves_helper_error_contract(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Reloading the controller module preserves public helper behavior, not exception identity."""
+    assert oauth_module.__file__ is not None
+    reloaded = load_reloaded_test_alias(
+        alias_name="_coverage_alias_controller_oauth",
+        source_path=Path(oauth_module.__file__).resolve(),
+        monkeypatch=monkeypatch,
+    )
 
     assert reloaded.STATE_COOKIE_MAX_AGE == STATE_COOKIE_MAX_AGE
     assert reloaded._build_callback_url_from_base("https://app.example/auth", "github") == (
         "https://app.example/auth/github/callback"
     )
+
+    with pytest.raises(ClientException) as client_exc_info:
+        reloaded._validate_state("cookie-state", "query-state")
+
+    with pytest.raises(Exception, match="valid Python identifier") as config_exc_info:
+        reloaded.create_oauth_associate_controller(
+            provider_name="github",
+            user_manager_dependency_key="not-a-valid-identifier",
+            oauth_client=_make_oauth_client(),
+            redirect_base_url="https://app.example/auth/associate",
+        )
+
+    extra = client_exc_info.value.extra
+    assert (extra.get("code") if isinstance(extra, dict) else None) == ErrorCode.OAUTH_STATE_INVALID
+    assert type(config_exc_info.value).__name__ == "ConfigurationError"
+    assert getattr(config_exc_info.value, "code", None) == ErrorCode.CONFIGURATION_INVALID
 
 
 def test_shared_oauth_controller_assembly_uses_direct_manager_binding_and_provider_scoped_paths() -> None:
@@ -548,7 +409,7 @@ def test_shared_oauth_controller_assembly_uses_direct_manager_binding_and_provid
 
     assembly = oauth_module._build_oauth_controller_assembly(
         provider_name="github",
-        oauth_client=object(),
+        oauth_client_adapter=oauth_module._build_oauth_client_adapter(oauth_client=_make_oauth_client()),
         redirect_base_url="https://app.example/auth/oauth",
         path="/auth/oauth",
         cookie_secure=True,
@@ -571,6 +432,44 @@ def test_shared_oauth_controller_assembly_uses_direct_manager_binding_and_provid
     assert assembly.user_manager_binding.dependency_parameter_name is None
 
 
+def test_shared_oauth_controller_assembly_rejects_missing_client_inputs() -> None:
+    """Internal controller assembly requires either a raw client or a resolved adapter."""
+    with pytest.raises(ValueError, match="Provide oauth_client or oauth_client_adapter"):
+        oauth_module._build_oauth_controller_assembly(
+            provider_name="github",
+            redirect_base_url="https://app.example/auth/oauth",
+            path="/auth/oauth",
+            cookie_secure=True,
+            state_cookie_prefix=oauth_module.STATE_COOKIE_PREFIX,
+            controller_name_suffix="OAuthController",
+            user_manager_binding=oauth_module._build_direct_user_manager_binding(cast("Any", MagicMock())),
+            validate_redirect_base_url=False,
+        )
+
+
+def test_shared_oauth_controller_assembly_rejects_duplicate_client_inputs() -> None:
+    """Internal controller assembly fails closed when both raw and adapted clients are supplied."""
+    with pytest.raises(ValueError, match="Provide only one of oauth_client or oauth_client_adapter"):
+        oauth_module._build_oauth_controller_assembly(
+            provider_name="github",
+            oauth_client=_make_oauth_client(),
+            oauth_client_adapter=oauth_module._build_oauth_client_adapter(oauth_client=_make_oauth_client()),
+            redirect_base_url="https://app.example/auth/oauth",
+            path="/auth/oauth",
+            cookie_secure=True,
+            state_cookie_prefix=oauth_module.STATE_COOKIE_PREFIX,
+            controller_name_suffix="OAuthController",
+            user_manager_binding=oauth_module._build_direct_user_manager_binding(cast("Any", MagicMock())),
+            validate_redirect_base_url=False,
+        )
+
+
+def test_manual_oauth_adapter_builder_requires_loader_for_class_path() -> None:
+    """Manual class-path client resolution requires an explicit lazy-loader callback."""
+    with pytest.raises(ConfigurationError, match="requires an OAuth client loader"):
+        oauth_module._build_oauth_client_adapter(oauth_client_class="tests.fake.Client")
+
+
 @pytest.mark.parametrize(
     ("oauth_scopes", "expected_message"),
     [
@@ -589,7 +488,7 @@ def test_create_oauth_controller_rejects_invalid_configured_scopes(
             provider_name="github",
             backend=cast("Any", MagicMock()),
             user_manager=cast("Any", MagicMock()),
-            oauth_client=object(),
+            oauth_client=_make_oauth_client(),
             redirect_base_url="https://app.example/auth/oauth",
             oauth_scopes=cast("Any", oauth_scopes),
         )
@@ -613,7 +512,7 @@ def test_create_oauth_controller_rejects_insecure_redirect_base_url(
             provider_name="github",
             backend=cast("Any", MagicMock()),
             user_manager=cast("Any", MagicMock()),
-            oauth_client=object(),
+            oauth_client=_make_oauth_client(),
             redirect_base_url=redirect_base_url,
         )
 
@@ -622,7 +521,7 @@ def test_shared_oauth_controller_assembly_uses_dependency_binding_for_associate_
     """Shared assembly keeps associate DI bindings on the provider-scoped cookie and callback contract."""
     assembly = oauth_module._build_oauth_controller_assembly(
         provider_name="github",
-        oauth_client=object(),
+        oauth_client_adapter=oauth_module._build_oauth_client_adapter(oauth_client=_make_oauth_client()),
         redirect_base_url="https://app.example/auth/associate",
         path="/auth/associate",
         cookie_secure=False,
@@ -686,7 +585,7 @@ def test_create_oauth_associate_controller_requires_exactly_one_manager_input() 
     with pytest.raises(ConfigurationError, match="exactly one"):
         create_oauth_associate_controller(
             provider_name="github",
-            oauth_client=object(),
+            oauth_client=_make_oauth_client(),
             redirect_base_url="https://app.example/auth/associate",
         )
 
@@ -695,7 +594,7 @@ def test_create_oauth_associate_controller_requires_exactly_one_manager_input() 
             provider_name="github",
             user_manager=cast("Any", MagicMock()),
             user_manager_dependency_key="litestar_auth_oauth_associate_user_manager",
-            oauth_client=object(),
+            oauth_client=_make_oauth_client(),
             redirect_base_url="https://app.example/auth/associate",
         )
 
@@ -706,7 +605,7 @@ def test_create_oauth_associate_controller_rejects_invalid_dependency_parameter_
         create_oauth_associate_controller(
             provider_name="github",
             user_manager_dependency_key="not-a-valid-identifier",
-            oauth_client=object(),
+            oauth_client=_make_oauth_client(),
             redirect_base_url="https://app.example/auth/associate",
         )
 
@@ -728,7 +627,7 @@ def test_create_oauth_associate_controller_rejects_insecure_redirect_base_url(
         create_oauth_associate_controller(
             provider_name="github",
             user_manager=cast("Any", MagicMock()),
-            oauth_client=object(),
+            oauth_client=_make_oauth_client(),
             redirect_base_url=redirect_base_url,
         )
 
@@ -885,7 +784,7 @@ async def test_oauth_associate_di_callback_uses_injected_manager(monkeypatch: py
     controller_class = create_oauth_associate_controller(
         provider_name="github",
         user_manager_dependency_key=dependency_parameter_name,
-        oauth_client=object(),
+        oauth_client=_make_oauth_client(),
         redirect_base_url="https://app.example/auth/associate",
         path="/auth/associate",
         cookie_secure=True,
@@ -912,7 +811,7 @@ async def test_oauth_associate_di_callback_raises_when_injected_manager_missing(
     controller_class = create_oauth_associate_controller(
         provider_name="github",
         user_manager_dependency_key="custom_manager_key",
-        oauth_client=object(),
+        oauth_client=_make_oauth_client(),
         redirect_base_url="https://app.example/auth/associate",
         path="/auth/associate",
         cookie_secure=True,
@@ -923,7 +822,7 @@ async def test_oauth_associate_di_callback_raises_when_injected_manager_missing(
         SimpleNamespace(cookies={"__oauth_associate_state_github": "associate-state"}, user=object()),
     )
 
-    with pytest.raises(TypeError, match="missing 1 required positional argument: 'custom_manager_key'"):
+    with pytest.raises(TypeError, match="custom_manager_key"):
         await controller.callback.fn(
             controller,
             request,
@@ -932,12 +831,47 @@ async def test_oauth_associate_di_callback_raises_when_injected_manager_missing(
         )
 
 
-def test_oauth_associate_di_callback_uses_native_signature_without_override() -> None:
-    """DI-key associate callbacks expose the dependency parameter without ``__signature__`` rewriting."""
+async def test_oauth_associate_di_callback_rejects_duplicate_injected_manager_input(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """DI-key associate callback fails closed when the manager is supplied twice."""
+    dependency_parameter_name = "custom_manager_key"
+    associate_account = AsyncMock()
+    monkeypatch.setattr("litestar_auth.controllers.oauth.OAuthService.associate_account", associate_account)
+    controller_class = create_oauth_associate_controller(
+        provider_name="github",
+        user_manager_dependency_key=dependency_parameter_name,
+        oauth_client=_make_oauth_client(),
+        redirect_base_url="https://app.example/auth/associate",
+        path="/auth/associate",
+        cookie_secure=True,
+    )
+    controller = cast("Any", controller_class(owner=Router(path="/", route_handlers=[])))
+    request = cast(
+        "Any",
+        SimpleNamespace(cookies={"__oauth_associate_state_github": "associate-state"}, user=object()),
+    )
+    injected_manager = MagicMock()
+
+    with pytest.raises(TypeError, match=dependency_parameter_name):
+        await controller.callback.fn(
+            controller,
+            request,
+            "provider-code",
+            injected_manager,
+            oauth_state="associate-state",
+            **{dependency_parameter_name: injected_manager},
+        )
+
+    associate_account.assert_not_awaited()
+
+
+def test_oauth_associate_di_callback_exposes_configured_dependency_parameter_name() -> None:
+    """DI-key associate callbacks expose the configured Litestar dependency parameter name."""
     controller = create_oauth_associate_controller(
         provider_name="github",
         user_manager_dependency_key="custom_manager_key",
-        oauth_client=object(),
+        oauth_client=_make_oauth_client(),
         redirect_base_url="https://app.example/auth/associate",
         path="/auth/associate",
         cookie_secure=True,
@@ -946,7 +880,6 @@ def test_oauth_associate_di_callback_uses_native_signature_without_override() ->
     callback_handler = cast("Any", controller).callback.fn
 
     assert "custom_manager_key" in inspect.signature(callback_handler).parameters
-    assert "__signature__" not in callback_handler.__dict__
 
 
 async def test_oauth_login_authorize_sets_state_cookie_and_redirects(monkeypatch: pytest.MonkeyPatch) -> None:

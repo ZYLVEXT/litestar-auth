@@ -175,26 +175,36 @@ class JWTRevocationPosture:
     requires_explicit_production_opt_in: bool
 
     @classmethod
+    def compatibility_in_memory(cls, *, denylist_store_type: str) -> Self:
+        """Return the compatibility-grade in-memory revocation posture."""
+        return cls(
+            key="compatibility_in_memory",
+            denylist_store_type=denylist_store_type,
+            revocation_is_durable=False,
+            requires_explicit_production_opt_in=True,
+        )
+
+    @classmethod
+    def shared_store(cls, *, denylist_store_type: str) -> Self:
+        """Return the durable shared-store revocation posture."""
+        return cls(
+            key="shared_store",
+            denylist_store_type=denylist_store_type,
+            revocation_is_durable=True,
+            requires_explicit_production_opt_in=False,
+        )
+
+    @classmethod
     def from_denylist_store(cls, denylist_store: JWTDenylistStore) -> Self:
-        """Build the posture contract for the configured denylist backend.
+        """Build the posture contract for a concrete denylist backend.
 
         Returns:
             The explicit revocation posture for ``denylist_store``.
         """
         store_type = type(denylist_store).__name__
         if isinstance(denylist_store, InMemoryJWTDenylistStore):
-            return cls(
-                key="compatibility_in_memory",
-                denylist_store_type=store_type,
-                revocation_is_durable=False,
-                requires_explicit_production_opt_in=True,
-            )
-        return cls(
-            key="shared_store",
-            denylist_store_type=store_type,
-            revocation_is_durable=True,
-            requires_explicit_production_opt_in=False,
-        )
+            return cls.compatibility_in_memory(denylist_store_type=store_type)
+        return cls.shared_store(denylist_store_type=store_type)
 
     @property
     def production_validation_error(self) -> str | None:
@@ -209,6 +219,18 @@ class JWTRevocationPosture:
         if not self.requires_explicit_production_opt_in:
             return None
         return _NONDURABLE_JWT_REVOCATION_STARTUP_WARNING
+
+
+def _resolve_jwt_revocation(
+    denylist_store: JWTDenylistStore | None,
+) -> tuple[JWTDenylistStore, JWTRevocationPosture]:
+    """Resolve the effective denylist backend and its explicit posture contract.
+
+    Returns:
+        Tuple of the denylist backend used at runtime and the posture it reports.
+    """
+    resolved_denylist_store = denylist_store or InMemoryJWTDenylistStore()
+    return resolved_denylist_store, JWTRevocationPosture.from_denylist_store(resolved_denylist_store)
 
 
 def _default_session_fingerprint(key: bytes) -> Callable[[object], str | None]:
@@ -297,9 +319,7 @@ class JWTStrategy(Strategy[UP, ID]):
         self.lifetime = lifetime
         self.subject_decoder = subject_decoder
         self.issuer = issuer
-        resolved_denylist_store = denylist_store or InMemoryJWTDenylistStore()
-        self._denylist_store: JWTDenylistStore = resolved_denylist_store
-        self._revocation_posture = JWTRevocationPosture.from_denylist_store(resolved_denylist_store)
+        self._denylist_store, self._revocation_posture = _resolve_jwt_revocation(denylist_store)
         # Security: always derive the fingerprint HMAC key from the signing secret
         # (kept private by the strategy), never from the public verify_key.
         fingerprint_key = self.secret.encode()
