@@ -45,7 +45,9 @@ from litestar_auth.totp_flow import InvalidTotpCodeError, InvalidTotpPendingToke
 from litestar_auth.types import LoginIdentifier, TotpUserProtocol, UserProtocol
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
+    from collections.abc import Callable, Sequence
+
+    from litestar.openapi.spec import SecurityRequirement
 
     from litestar_auth.authentication.backend import AuthenticationBackend
     from litestar_auth.authentication.strategy.jwt import JWTDenylistStore
@@ -504,6 +506,7 @@ def _define_totp_controller_class_di[UP: UserProtocol[Any], ID](
     ctx: _TotpControllerContext[UP, ID],
     *,
     totp_verify_before_request: Callable[[Request[Any, Any, Any]], Any] | None,
+    security: Sequence[SecurityRequirement] | None = None,
 ) -> type[Controller]:
     """Build the TOTP controller with enable, confirm, verify, and disable routes (DI user manager).
 
@@ -515,7 +518,7 @@ def _define_totp_controller_class_di[UP: UserProtocol[Any], ID](
     class _TotpControllerBase(Controller):
         """TOTP 2FA management endpoints."""
 
-        @post("/enable/confirm", guards=[is_authenticated])
+        @post("/enable/confirm", guards=[is_authenticated], security=security)
         async def confirm_enable(
             self,
             request: Request[Any, Any, Any],
@@ -545,7 +548,7 @@ def _define_totp_controller_class_di[UP: UserProtocol[Any], ID](
                 user_manager=litestar_auth_user_manager,
             )
 
-        @post("/disable", guards=[is_authenticated])
+        @post("/disable", guards=[is_authenticated], security=security)
         async def disable(
             self,
             request: Request[Any, Any, Any],
@@ -568,7 +571,7 @@ def _define_totp_controller_class_di[UP: UserProtocol[Any], ID](
         class TotpController(_TotpControllerBase):
             """TOTP 2FA management endpoints."""
 
-            @post("/enable", guards=[is_authenticated])
+            @post("/enable", guards=[is_authenticated], security=security)
             async def enable(
                 self,
                 request: Request[Any, Any, Any],
@@ -595,7 +598,7 @@ def _define_totp_controller_class_di[UP: UserProtocol[Any], ID](
         class TotpController(_TotpControllerBase):
             """TOTP 2FA management endpoints."""
 
-            @post("/enable", guards=[is_authenticated])
+            @post("/enable", guards=[is_authenticated], security=security)
             async def enable(
                 self,
                 request: Request[Any, Any, Any],
@@ -626,6 +629,7 @@ def create_totp_controller[UP: UserProtocol[Any], ID](  # noqa: PLR0913
     id_parser: Callable[[str], ID] | None = None,
     path: str = "/auth/2fa",
     unsafe_testing: bool = False,
+    security: Sequence[SecurityRequirement] | None = None,
 ) -> type[Controller]:
     """Return a controller with TOTP enable/verify/disable endpoints.
 
@@ -659,6 +663,8 @@ def create_totp_controller[UP: UserProtocol[Any], ID](  # noqa: PLR0913
         path: Base route prefix for the generated controller.
         unsafe_testing: Explicit test-only escape hatch that keeps the previous
             single-process shortcuts instance-scoped instead of process-global.
+        security: Optional OpenAPI security requirements to annotate the
+            guarded enrollment and management routes.
 
     Returns:
         Controller subclass with TOTP management endpoints.
@@ -718,6 +724,7 @@ def create_totp_controller[UP: UserProtocol[Any], ID](  # noqa: PLR0913
     totp_controller_cls = _define_totp_controller_class_di(
         ctx,
         totp_verify_before_request=before,
+        security=security,
     )
     totp_controller_cls.__name__ = "TotpController"
     totp_controller_cls.__qualname__ = "TotpController"

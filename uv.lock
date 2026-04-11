@@ -1,5 +1,5 @@
 version = 1
-revision = 3
+revision = 2
 requires-python = ">=3.12.0, <3.15.0"
 resolution-markers = [
     "python_full_version >= '3.14'",
@@ -355,7 +355,7 @@ wheels = [
 
 [[package]]
 name = "commitizen"
-version = "4.13.9"
+version = "4.13.10"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "argcomplete" },
@@ -371,9 +371,9 @@ dependencies = [
     { name = "termcolor" },
     { name = "tomlkit" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/a6/44/10f95e8178ab5a584298726a4a94ceb83a7f77e00741fec4680df05fedd5/commitizen-4.13.9.tar.gz", hash = "sha256:2b4567ed50555e10920e5bd804a6a4e2c42ec70bb74f14a83f2680fe9eaf9727", size = 64145, upload-time = "2026-02-25T02:40:05.326Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/37/95/da2c71ed6a1c06836cdd4eb60a8b9e1bf05f4ce7029ab508081745171be9/commitizen-4.13.10.tar.gz", hash = "sha256:402b5bcd466be69ba79a3f380be6ba5b55ac658c7d2a93e82fc99668a6eb2673", size = 64106, upload-time = "2026-04-11T06:49:12.907Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/28/22/9b14ee0f17f0aad219a2fb37a293a57b8324d9d195c6ef6807bcd0bf2055/commitizen-4.13.9-py3-none-any.whl", hash = "sha256:d2af3d6a83cacec9d5200e17768942c5de6266f93d932c955986c60c4285f2db", size = 85373, upload-time = "2026-02-25T02:40:03.83Z" },
+    { url = "https://files.pythonhosted.org/packages/11/3a/ad70b3c7dc3da1255668a9396429b1d820c15b74a501668158e4574c1edd/commitizen-4.13.10-py3-none-any.whl", hash = "sha256:95a281317990ac613501fdfe65745cec1fa4042bc5d003a72d332a74926e3039", size = 85746, upload-time = "2026-04-11T06:49:11.167Z" },
 ]
 
 [[package]]
@@ -890,7 +890,7 @@ provides-extras = ["redis", "oauth", "totp", "all"]
 
 [package.metadata.requires-dev]
 dev = [
-    { name = "commitizen", specifier = ">=4.13.9" },
+    { name = "commitizen", specifier = ">=4.13.10" },
     { name = "deptry", specifier = ">=0.25.1" },
     { name = "fakeredis", extras = ["lua"], specifier = ">=2.35.0" },
     { name = "pip-audit", specifier = ">=2.10.0" },
@@ -902,7 +902,7 @@ dev = [
     { name = "pytest-timeout", specifier = ">=2.4.0" },
     { name = "pytest-xdist", specifier = ">=3.8.0" },
     { name = "python-dotenv", specifier = ">=1.2.2" },
-    { name = "ruff", specifier = ">=0.15.9" },
+    { name = "ruff", specifier = ">=0.15.10" },
     { name = "rust-just", specifier = ">=1.49.0" },
     { name = "ty", specifier = ">=0.0.29" },
 ]
@@ -1801,15 +1801,15 @@ wheels = [
 
 [[package]]
 name = "rich"
-version = "14.3.3"
+version = "14.3.4"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "markdown-it-py" },
     { name = "pygments" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/b3/c6/f3b320c27991c46f43ee9d856302c70dc2d0fb2dba4842ff739d5f46b393/rich-14.3.3.tar.gz", hash = "sha256:b8daa0b9e4eef54dd8cf7c86c03713f53241884e814f4e2f5fb342fe520f639b", size = 230582, upload-time = "2026-02-19T17:23:12.474Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/e9/67/cae617f1351490c25a4b8ac3b8b63a4dda609295d8222bad12242dfdc629/rich-14.3.4.tar.gz", hash = "sha256:817e02727f2b25b40ef56f5aa2217f400c8489f79ca8f46ea2b70dd5e14558a9", size = 230524, upload-time = "2026-04-11T02:57:45.419Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/14/25/b208c5683343959b670dc001595f2f3737e051da617f66c31f7c4fa93abc/rich-14.3.3-py3-none-any.whl", hash = "sha256:793431c1f8619afa7d3b52b2cdec859562b950ea0d4b6b505397612db8d5362d", size = 310458, upload-time = "2026-02-19T17:23:13.732Z" },
+    { url = "https://files.pythonhosted.org/packages/b3/76/6d163cfac87b632216f71879e6b2cf17163f773ff59c00b5ff4900a80fa3/rich-14.3.4-py3-none-any.whl", hash = "sha256:07e7adb4690f68864777b1450859253bed81a99a31ac321ac1817b2313558952", size = 310480, upload-time = "2026-04-11T02:57:47.484Z" },
 ]
 
 [[package]]

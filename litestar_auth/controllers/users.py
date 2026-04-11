@@ -27,6 +27,8 @@ from litestar_auth.types import UserProtocol
 if TYPE_CHECKING:
     from collections.abc import Callable, Mapping, Sequence
 
+    from litestar.openapi.spec import SecurityRequirement
+
 SELF_UPDATE_FORBIDDEN_FIELDS = frozenset({"is_active", "is_verified", "is_superuser"})
 _PRIVILEGED_FIELDS = frozenset({"is_active", "is_verified", "is_superuser", "hashed_password"})
 
@@ -305,6 +307,7 @@ def create_users_controller[UP: UsersControllerUserProtocol[Any], ID](  # noqa: 
     user_read_schema: type[msgspec.Struct] = UserRead,
     user_update_schema: type[msgspec.Struct] = UserUpdate,
     unsafe_testing: bool = False,
+    security: Sequence[SecurityRequirement] | None = None,
 ) -> type[Controller]:
     """Return a controller subclass that resolves the user manager via Litestar DI.
 
@@ -318,6 +321,8 @@ def create_users_controller[UP: UsersControllerUserProtocol[Any], ID](  # noqa: 
         user_update_schema: Custom msgspec struct used for update requests.
         unsafe_testing: Explicit test-only escape hatch that allows response
             schemas with sensitive fields for isolated fixtures.
+        security: Optional OpenAPI security requirements applied at the
+            controller level to annotate all routes.
 
     Returns:
         Controller subclass exposing self-service and admin user endpoints.
@@ -366,6 +371,8 @@ def create_users_controller[UP: UsersControllerUserProtocol[Any], ID](  # noqa: 
     )
     controller_cls = _define_users_controller_class_di(ctx)
     controller_cls.path = path
+    if security is not None:
+        controller_cls.security = security
     return _mark_litestar_auth_route_handler(controller_cls)
 
 

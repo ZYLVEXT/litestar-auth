@@ -177,7 +177,16 @@ def test_on_app_init_runs_lifecycle_steps_in_order(monkeypatch: pytest.MonkeyPat
     )
     monkeypatch.setattr(plugin, "_register_dependencies", lambda _app_config: calls.append("dependencies"))
     monkeypatch.setattr(plugin, "_register_middleware", lambda _app_config: calls.append("middleware"))
-    monkeypatch.setattr(plugin, "_register_controllers", lambda _app_config: calls.append("controllers") or [])
+    monkeypatch.setattr(
+        plugin,
+        "_register_openapi_security",
+        lambda _app_config: (calls.append("openapi-security"), None)[1],
+    )
+    monkeypatch.setattr(
+        plugin,
+        "_register_controllers",
+        lambda _app_config, *, security=None: calls.append("controllers") or [],  # noqa: ARG005
+    )
     monkeypatch.setattr(plugin, "_register_exception_handlers", lambda _route_handlers: calls.append("exceptions"))
 
     result = plugin.on_app_init(app_config)
@@ -190,9 +199,22 @@ def test_on_app_init_runs_lifecycle_steps_in_order(monkeypatch: pytest.MonkeyPat
         "bootstrap-token-models",
         "dependencies",
         "middleware",
+        "openapi-security",
         "controllers",
         "exceptions",
     ]
+
+
+def test_register_openapi_security_disabled_returns_none() -> None:
+    """When include_openapi_security is False, _register_openapi_security returns None."""
+    config = _minimal_config()
+    config.include_openapi_security = False
+    plugin = LitestarAuth(config)
+    app_config = AppConfig()
+
+    result = plugin._register_openapi_security(app_config)
+
+    assert result is None
 
 
 def test_on_app_init_registers_middleware_controllers_dependencies_and_exceptions() -> None:
@@ -782,7 +804,7 @@ def test_register_controllers_extends_route_handlers() -> None:
 
     assert controllers == ["new-controller"]
     assert app_config.route_handlers == ["existing", "new-controller"]
-    build_controllers_mock.assert_called_once_with(plugin.config)
+    build_controllers_mock.assert_called_once_with(plugin.config, security=None)
 
 
 def test_on_app_init_registers_exception_handlers_for_all_app_route_handlers() -> None:

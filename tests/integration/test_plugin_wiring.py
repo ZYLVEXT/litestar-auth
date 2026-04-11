@@ -12,6 +12,7 @@ from litestar import Litestar, get
 from litestar.config.app import AppConfig
 from litestar.config.csrf import CSRFConfig
 from litestar.di import Provide
+from litestar.openapi.config import OpenAPIConfig
 from litestar.testing import AsyncTestClient
 from sqlalchemy import create_engine
 from sqlalchemy.pool import StaticPool
@@ -31,6 +32,7 @@ from litestar_auth.authentication.strategy.jwt import InMemoryJWTDenylistStore
 from litestar_auth.authentication.transport.bearer import BearerTransport
 from litestar_auth.authentication.transport.cookie import CookieTransport
 from litestar_auth.exceptions import ConfigurationError
+from litestar_auth.guards import is_authenticated
 from litestar_auth.manager import UserManagerSecurity
 from litestar_auth.password import PasswordHelper
 from litestar_auth.plugin import LitestarAuth, LitestarAuthConfig
@@ -55,6 +57,22 @@ pytestmark = pytest.mark.integration
 HTTP_OK = 200
 HTTP_CREATED = 201
 HTTP_NOT_FOUND = 404
+
+
+class _OpenAPIOAuthClient:
+    """Minimal OAuth client contract for schema-only plugin tests."""
+
+    async def get_authorization_url(self, redirect_uri: str, state: str, *, scope: str | None = None) -> str:
+        del redirect_uri, state, scope
+        return "https://provider.example/authorize"
+
+    async def get_access_token(self, code: str, redirect_uri: str) -> dict[str, str]:
+        del code, redirect_uri
+        return {"access_token": "provider-access-token"}
+
+    async def get_id_email(self, access_token: str) -> tuple[str, str]:
+        del access_token
+        return "provider-user", "oauth@example.com"
 
 
 def _minimal_litestar_auth_config(
@@ -413,6 +431,77 @@ def test_plugin_mounts_oauth_routes_from_the_single_provider_inventory(
         assert "/auth/associate/github" not in mounted_paths
     else:
         assert expected_associate_path in mounted_paths
+
+
+def test_plugin_openapi_security_uses_alternative_requirements_for_multiple_backends() -> None:
+    """Protected plugin routes allow any configured backend in OpenAPI."""
+    config = _minimal_litestar_auth_config(
+        backends=[
+            AuthenticationBackend[ExampleUser, UUID](
+                name="bearer",
+                transport=BearerTransport(),
+                strategy=cast("Any", InMemoryTokenStrategy(token_prefix="bearer-openapi")),
+            ),
+            AuthenticationBackend[ExampleUser, UUID](
+                name="cookie",
+                transport=CookieTransport(
+                    cookie_name="auth_cookie",
+                    allow_insecure_cookie_auth=True,
+                    secure=False,
+                ),
+                strategy=cast("Any", InMemoryTokenStrategy(token_prefix="cookie-openapi")),
+            ),
+        ],
+    )
+    app = Litestar(
+        plugins=[LitestarAuth(config)],
+        openapi_config=OpenAPIConfig(title="Test", version="1.0.0"),
+    )
+
+    paths = cast("Any", app.openapi_schema.paths)
+    logout_operation = paths["/auth/logout"].post
+
+    assert logout_operation.security == [{"bearer": []}, {"cookie": []}]
+
+
+def test_plugin_oauth_associate_callback_is_marked_protected_in_openapi() -> None:
+    """Plugin-owned OAuth associate authorize and callback operations share the same security metadata."""
+    config = _minimal_litestar_auth_config()
+    config.oauth_config = OAuthConfig(
+        oauth_providers=[("github", _OpenAPIOAuthClient())],
+        include_oauth_associate=True,
+        oauth_redirect_base_url="https://app.example.com/auth",
+        oauth_token_encryption_key="a" * 44,
+    )
+    app = Litestar(
+        plugins=[LitestarAuth(config)],
+        openapi_config=OpenAPIConfig(title="Test", version="1.0.0"),
+    )
+    paths = cast("Any", app.openapi_schema.paths)
+
+    assert paths["/auth/associate/github/authorize"].get.security == [{"primary": []}]
+    assert paths["/auth/associate/github/callback"].get.security == [{"primary": []}]
+
+
+def test_app_owned_routes_can_reuse_plugin_openapi_security_requirements() -> None:
+    """Application-defined protected routes can share the plugin's OpenAPI auth metadata."""
+    config = _minimal_litestar_auth_config()
+    protected_security = config.resolve_openapi_security_requirements()
+
+    @get("/app-protected", guards=[is_authenticated], security=protected_security, sync_to_thread=False)
+    def app_protected() -> dict[str, bool]:
+        return {"ok": True}
+
+    app = Litestar(
+        route_handlers=[app_protected],
+        plugins=[LitestarAuth(config)],
+        openapi_config=OpenAPIConfig(title="Test", version="1.0.0"),
+    )
+    paths = cast("Any", app.openapi_schema.paths)
+    security_schemes = cast("Any", app.openapi_schema.components.security_schemes)
+
+    assert paths["/app-protected"].get.security == [{"primary": []}]
+    assert "primary" in security_schemes
 
 
 async def test_plugin_respects_public_mount_paths_and_dependency_keys() -> None:

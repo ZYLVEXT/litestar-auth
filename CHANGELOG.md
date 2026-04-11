@@ -1,3 +1,20 @@
+## Unreleased
+
+### Added
+
+- **Public OpenAPI auth helpers for app-owned routes** — `LitestarAuthConfig.resolve_openapi_security_requirements()` and `resolve_openapi_security_schemes()` now expose the same auth-scheme derivation used by the plugin-owned route table, so application-defined Litestar handlers, routers, and controllers can advertise auth requirements in OpenAPI without hard-coding backend names.
+
+### Changed
+
+- **Protected-route OpenAPI metadata is now reusable outside the plugin route table** — docs now show the canonical pattern for app-owned routes: pair runtime guards such as `is_authenticated` with `security=config.resolve_openapi_security_requirements()` so runtime enforcement and OpenAPI documentation stay aligned.
+- **Manual protected controller factories now accept OpenAPI auth metadata consistently** — the manual OAuth associate and TOTP controller surfaces accept `security=...`, matching the existing plugin-owned route behavior and letting custom route tables publish standard OpenAPI auth requirements.
+- **Plugin-owned OpenAPI auth metadata is now more explicit** — `LitestarAuthConfig.include_openapi_security` controls whether plugin-managed protected routes register OpenAPI auth schemes and per-operation security requirements.
+
+### Fixed
+
+- **OpenAPI security requirements now use the correct alternative-backend semantics** — when multiple auth backends are configured, protected operations now publish OR-style security requirements instead of incorrectly requiring all schemes at once, so Swagger and other OpenAPI clients can authorize with any configured backend.
+- **OAuth associate callback routes no longer appear public in OpenAPI** — plugin-owned and manually mounted `/auth/associate/{provider}/callback` endpoints now publish the same auth requirement metadata as the corresponding protected authorize route.
+
 ## 1.6.0 (2026-04-11)
 
 ### Added

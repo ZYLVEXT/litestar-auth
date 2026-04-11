@@ -8,6 +8,40 @@ litestar-auth separates **authentication** (who is the caller?) from **authoriza
 
 Use **guards** on routes that require a logged-in user, verified email, active account, or superuser role. See [Guards API](../api/guards.md).
 
+## Protecting app-owned routes
+
+When your application defines its own Litestar handlers outside the plugin-owned route table, use both:
+
+- `guards=[is_authenticated]` (or `is_verified`, `is_superuser`, etc.) for runtime enforcement.
+- `security=config.resolve_openapi_security_requirements()` for OpenAPI / Swagger metadata.
+
+```python
+from litestar import Router, get
+
+from litestar_auth.guards import is_authenticated
+from litestar_auth.plugin import LitestarAuthConfig
+
+auth_config = LitestarAuthConfig(...)
+auth_security = auth_config.resolve_openapi_security_requirements()
+
+
+@get("/me", guards=[is_authenticated], security=auth_security)
+async def me() -> dict[str, bool]:
+    return {"ok": True}
+
+
+protected_api = Router(
+    path="/api",
+    guards=[is_authenticated],
+    security=auth_security,
+    route_handlers=[me],
+)
+```
+
+With the default `include_openapi_security=True`, the plugin also registers the corresponding security schemes globally, so application-defined routes can reuse the same requirements without hard-coding backend names.
+
+If you intentionally disable plugin-managed OpenAPI security, register `auth_config.resolve_openapi_security_schemes()` yourself in `OpenAPIConfig.components` before using those requirements.
+
 ## Transport and strategy
 
 - **Transport** — how credentials travel (Authorization header vs HTTP-only cookies).

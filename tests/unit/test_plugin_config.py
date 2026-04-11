@@ -28,6 +28,7 @@ from litestar_auth._plugin.scoped_session import SessionFactory
 from litestar_auth.authentication.backend import AuthenticationBackend
 from litestar_auth.authentication.strategy.db_models import AccessToken, RefreshToken
 from litestar_auth.authentication.transport.bearer import BearerTransport
+from litestar_auth.authentication.transport.cookie import CookieTransport
 from litestar_auth.config import DEFAULT_MINIMUM_PASSWORD_LENGTH
 from litestar_auth.exceptions import InvalidPasswordError
 from litestar_auth.manager import BaseUserManager, UserManagerSecurity, require_password_length
@@ -382,6 +383,34 @@ def test_startup_backends_wrap_manual_backends_in_startup_templates() -> None:
     assert startup_backend.name == backend.name
     assert startup_backend.transport is backend.transport
     assert startup_backend.strategy is backend.strategy
+
+
+def test_openapi_security_helpers_follow_the_configured_backend_inventory() -> None:
+    """App-owned route helpers derive schemes and OR requirements from startup backends."""
+    config = _minimal_config(
+        backends=[
+            AuthenticationBackend[ExampleUser, UUID](
+                name="bearer",
+                transport=BearerTransport(),
+                strategy=cast("Any", InMemoryTokenStrategy(token_prefix="bearer-openapi")),
+            ),
+            AuthenticationBackend[ExampleUser, UUID](
+                name="cookie",
+                transport=CookieTransport(cookie_name="auth_cookie"),
+                strategy=cast("Any", InMemoryTokenStrategy(token_prefix="cookie-openapi")),
+            ),
+        ],
+    )
+
+    schemes = config.resolve_openapi_security_schemes()
+    requirements = config.resolve_openapi_security_requirements()
+
+    assert set(schemes) == {"bearer", "cookie"}
+    assert schemes["bearer"].type == "http"
+    assert schemes["bearer"].scheme == "Bearer"
+    assert schemes["cookie"].type == "apiKey"
+    assert schemes["cookie"].name == "auth_cookie"
+    assert requirements == [{"bearer": []}, {"cookie": []}]
 
 
 def test_startup_database_token_templates_do_not_embed_a_placeholder_session() -> None:

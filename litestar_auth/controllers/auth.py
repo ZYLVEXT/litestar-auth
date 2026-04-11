@@ -39,6 +39,10 @@ from litestar_auth.totp_flow import TotpFlowUserManagerProtocol, TotpLoginFlowSe
 from litestar_auth.types import LoginIdentifier, TotpUserProtocol, UserProtocol
 
 if TYPE_CHECKING:
+    from collections.abc import Sequence
+
+    from litestar.openapi.spec import SecurityRequirement
+
     from litestar_auth.authentication.backend import AuthenticationBackend
     from litestar_auth.ratelimit import AuthRateLimitConfig
 
@@ -277,6 +281,8 @@ async def _handle_auth_refresh[UP: UserProtocol[Any], ID](
 
 def _define_auth_controller_class_di[UP: UserProtocol[Any], ID](
     ctx: _AuthControllerContext[UP, ID],
+    *,
+    security: Sequence[SecurityRequirement] | None = None,
 ) -> type[Controller]:
     """Build the base auth controller with login and logout routes (DI user manager).
 
@@ -310,7 +316,7 @@ def _define_auth_controller_class_di[UP: UserProtocol[Any], ID](
                 user_manager=litestar_auth_user_manager,
             )
 
-        @post("/logout", guards=[is_authenticated])
+        @post("/logout", guards=[is_authenticated], security=security)
         async def logout(self, request: Request[Any, Any, Any]) -> object:
             del self
             return await _handle_auth_logout(request, ctx=ctx)
@@ -375,6 +381,7 @@ def create_auth_controller[UP: UserProtocol[Any], ID](  # noqa: PLR0913
     totp_pending_lifetime: timedelta = _DEFAULT_PENDING_TOKEN_LIFETIME,
     path: str = "/auth",
     unsafe_testing: bool = False,
+    security: Sequence[SecurityRequirement] | None = None,
 ) -> type[Controller]:
     """Return a controller subclass bound to the provided backend (DI user manager).
 
@@ -395,6 +402,8 @@ def create_auth_controller[UP: UserProtocol[Any], ID](  # noqa: PLR0913
         path: Base route prefix for the generated controller.
         unsafe_testing: Explicit test-only escape hatch that skips production
             validation for short-lived single-process fixtures.
+        security: Optional OpenAPI security requirements to annotate
+            guarded routes on the generated controller.
 
     Returns:
         Controller subclass with backend-specific login and logout handlers.
@@ -420,7 +429,7 @@ def create_auth_controller[UP: UserProtocol[Any], ID](  # noqa: PLR0913
         totp_pending_secret=totp_pending_secret,
         totp_pending_lifetime=totp_pending_lifetime,
     )
-    base_cls = _define_auth_controller_class_di(ctx)
+    base_cls = _define_auth_controller_class_di(ctx, security=security)
     generated_controller: type[Controller] = (
         _define_refresh_auth_controller_class_di(base_cls, ctx) if ctx.refresh_strategy is not None else base_cls
     )

@@ -10,8 +10,9 @@ from typing import Any, cast
 from unittest.mock import AsyncMock, MagicMock, call
 
 import pytest
-from litestar import Router
+from litestar import Litestar, Router
 from litestar.exceptions import ClientException
+from litestar.openapi.config import OpenAPIConfig
 from litestar.response import Response
 from litestar.response.redirect import Redirect
 from litestar.status_codes import HTTP_400_BAD_REQUEST
@@ -880,6 +881,26 @@ def test_oauth_associate_di_callback_exposes_configured_dependency_parameter_nam
     callback_handler = cast("Any", controller).callback.fn
 
     assert "custom_manager_key" in inspect.signature(callback_handler).parameters
+
+
+def test_create_oauth_associate_controller_applies_openapi_security_to_both_protected_routes() -> None:
+    """Manual associate controllers expose matching OpenAPI security on authorize and callback."""
+    controller = create_oauth_associate_controller(
+        provider_name="github",
+        user_manager=cast("Any", MagicMock()),
+        oauth_client=_make_oauth_client(),
+        redirect_base_url="https://app.example/auth/associate",
+        path="/auth/associate",
+        security=[{"BearerToken": []}],
+    )
+    app = Litestar(
+        route_handlers=[controller],
+        openapi_config=OpenAPIConfig(title="Test", version="1.0.0"),
+    )
+    paths = cast("Any", app.openapi_schema.paths)
+
+    assert paths["/auth/associate/github/authorize"].get.security == [{"BearerToken": []}]
+    assert paths["/auth/associate/github/callback"].get.security == [{"BearerToken": []}]
 
 
 async def test_oauth_login_authorize_sets_state_cookie_and_redirects(monkeypatch: pytest.MonkeyPatch) -> None:

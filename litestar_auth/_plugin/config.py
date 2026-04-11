@@ -26,6 +26,7 @@ if TYPE_CHECKING:
     from logging import Logger
 
     import msgspec
+    from litestar.openapi.spec import SecurityRequirement, SecurityScheme
 
     from litestar_auth.authentication.backend import AuthenticationBackend
     from litestar_auth.authentication.strategy import DatabaseTokenModels
@@ -1141,6 +1142,7 @@ class LitestarAuthConfig[UP: UserProtocol[Any], ID]:
     include_verify: bool = True
     include_reset_password: bool = True
     include_users: bool = False
+    include_openapi_security: bool = True
     enable_refresh: bool = False
     requires_verification: bool = False
     hard_delete: bool = False
@@ -1199,6 +1201,34 @@ class LitestarAuthConfig[UP: UserProtocol[Any], ID]:
             Startup-only backend templates for the current config.
         """
         return resolve_backend_inventory(self).startup_backends()
+
+    def resolve_openapi_security_schemes(self) -> dict[str, SecurityScheme]:
+        """Return OpenAPI security schemes derived from the configured auth backends.
+
+        Use this helper when your application defines additional protected
+        routes or manages OpenAPI registration manually.
+
+        Returns:
+            Mapping of backend name to OpenAPI security scheme.
+        """
+        from litestar_auth._plugin.openapi import build_openapi_security_schemes  # noqa: PLC0415
+
+        return build_openapi_security_schemes(self.startup_backends())
+
+    def resolve_openapi_security_requirements(self) -> list[SecurityRequirement]:
+        """Return OpenAPI security requirements for app-owned protected routes.
+
+        Pair the returned value with Litestar guards such as
+        ``guards=[is_authenticated]`` on handlers, controllers, or routers that
+        your application defines outside the plugin-owned route table.
+
+        Returns:
+            Operation-level security requirements with OR semantics across the
+            configured auth backends.
+        """
+        from litestar_auth._plugin.openapi import build_security_requirement  # noqa: PLC0415
+
+        return build_security_requirement(self.resolve_openapi_security_schemes())
 
     def bind_request_backends(self, session: AsyncSession) -> tuple[AuthenticationBackend[UP, ID], ...]:
         """Return authentication backends bound to the current request session.

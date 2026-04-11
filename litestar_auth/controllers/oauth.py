@@ -44,6 +44,7 @@ from litestar_auth.types import UserProtocol
 if TYPE_CHECKING:
     from collections.abc import Mapping, Sequence
 
+    from litestar.openapi.spec import SecurityRequirement
     from litestar.types import Guard
 
     from litestar_auth.authentication.backend import AuthenticationBackend
@@ -321,6 +322,7 @@ def _create_authorize_handler[UP: UserProtocol[Any], ID](
     *,
     assembly: _OAuthControllerAssembly[UP, ID],
     guards: Sequence[Guard] | None = None,
+    security: Sequence[SecurityRequirement] | None = None,
 ) -> object:
     """Create the authorize route handler for a provider-scoped OAuth controller.
 
@@ -328,7 +330,7 @@ def _create_authorize_handler[UP: UserProtocol[Any], ID](
         Decorated Litestar route handler for the provider authorize endpoint.
     """
 
-    @get("/authorize", guards=guards)
+    @get("/authorize", guards=guards, security=security)
     async def authorize(
         self: object,
         request: Request[Any, Any, Any],
@@ -457,6 +459,7 @@ async def _complete_associate_callback[UP: UserProtocol[Any], ID](
 def _create_associate_callback_handler[UP: UserProtocol[Any], ID](
     *,
     assembly: _OAuthControllerAssembly[UP, ID],
+    security: Sequence[SecurityRequirement] | None = None,
 ) -> object:
     """Create the callback route handler for OAuth account-association controllers.
 
@@ -491,14 +494,14 @@ def _create_associate_callback_handler[UP: UserProtocol[Any], ID](
             "oauth_state": str,
             "return": Response[Any],
         }
-        return get("/callback", guards=[is_authenticated])(callback)
+        return get("/callback", guards=[is_authenticated], security=security)(callback)
 
     user_manager = cast(
         "OAuthControllerUserManagerProtocol[UP, ID]",
         assembly.user_manager_binding.user_manager,
     )
 
-    @get("/callback", guards=[is_authenticated])
+    @get("/callback", guards=[is_authenticated], security=security)
     async def callback(
         self: object,
         request: Request[Any, Any, Any],
@@ -606,6 +609,7 @@ def _create_oauth_associate_controller[UP: UserProtocol[Any], ID](  # noqa: PLR0
     path: str = "/auth/associate",
     cookie_secure: bool = True,
     validate_redirect_base_url: bool = True,
+    security: Sequence[SecurityRequirement] | None = None,
 ) -> type[Controller]:
     """Build an OAuth associate controller with optional redirect-origin validation.
 
@@ -631,8 +635,9 @@ def _create_oauth_associate_controller[UP: UserProtocol[Any], ID](  # noqa: PLR0
         authorize_handler=_create_authorize_handler(
             assembly=assembly,
             guards=[is_authenticated],
+            security=security,
         ),
-        callback_handler=_create_associate_callback_handler(assembly=assembly),
+        callback_handler=_create_associate_callback_handler(assembly=assembly, security=security),
         docstring="Provider-specific OAuth associate authorize/callback endpoints.",
     )
 
@@ -646,6 +651,7 @@ def create_oauth_associate_controller[UP: UserProtocol[Any], ID](  # noqa: PLR09
     redirect_base_url: str,
     path: str = "/auth/associate",
     cookie_secure: bool = True,
+    security: Sequence[SecurityRequirement] | None = None,
 ) -> type[Controller]:
     """Return a controller for linking an OAuth account to the authenticated user.
 
@@ -672,6 +678,7 @@ def create_oauth_associate_controller[UP: UserProtocol[Any], ID](  # noqa: PLR09
         redirect_base_url=redirect_base_url,
         path=path,
         cookie_secure=cookie_secure,
+        security=security,
     )
 
 

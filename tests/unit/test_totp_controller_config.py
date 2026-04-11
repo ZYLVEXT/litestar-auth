@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 import inspect
+from typing import Any, cast
 from unittest.mock import AsyncMock
 
 import pytest
+from litestar import Litestar
+from litestar.openapi.config import OpenAPIConfig
 
 from litestar_auth._plugin.config import TotpConfig
 from litestar_auth.controllers.totp import (
@@ -104,3 +107,28 @@ def test_totp_defaults_use_sha256() -> None:
     assert LitestarAuthConfig.__dataclass_fields__["totp_config"].default is None
     signature = inspect.signature(create_totp_controller)
     assert signature.parameters["totp_algorithm"].default == "SHA256"
+
+
+@pytest.mark.unit
+def test_create_totp_controller_applies_openapi_security_to_guarded_routes() -> None:
+    """Manual TOTP controllers expose security metadata on authenticated routes."""
+    controller = create_totp_controller(
+        backend=AsyncMock(),
+        user_manager_dependency_key="litestar_auth_user_manager",
+        used_tokens_store=AsyncMock(),
+        pending_jti_store=AsyncMock(),
+        totp_pending_secret="test-totp-pending-secret-thirty-two!",
+        require_replay_protection=False,
+        unsafe_testing=True,
+        security=[{"BearerToken": []}],
+    )
+    app = Litestar(
+        route_handlers=[controller],
+        openapi_config=OpenAPIConfig(title="Test", version="1.0.0"),
+    )
+    paths = cast("Any", app.openapi_schema.paths)
+
+    assert paths["/auth/2fa/enable"].post.security == [{"BearerToken": []}]
+    assert paths["/auth/2fa/enable/confirm"].post.security == [{"BearerToken": []}]
+    assert paths["/auth/2fa/disable"].post.security == [{"BearerToken": []}]
+    assert paths["/auth/2fa/verify"].post.security is None

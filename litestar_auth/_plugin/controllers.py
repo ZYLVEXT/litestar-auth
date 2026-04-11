@@ -85,6 +85,7 @@ from litestar_auth.types import UserProtocol
 if TYPE_CHECKING:
     from collections.abc import Callable, Sequence
 
+    from litestar.openapi.spec import SecurityRequirement
     from litestar.types import ControllerRouterHandler
 
     from litestar_auth.authentication.backend import AuthenticationBackend
@@ -139,6 +140,7 @@ def create_auth_controller[UP: UserProtocol[Any], ID](  # noqa: PLR0913
     totp_pending_lifetime: timedelta = timedelta(minutes=5),
     path: str = "/auth",
     unsafe_testing: bool = False,
+    security: Sequence[SecurityRequirement] | None = None,
 ) -> type[Controller]:
     """Return a plugin auth controller bound to request-scoped backends via DI."""
     if totp_pending_secret is not None and not unsafe_testing:
@@ -189,7 +191,7 @@ def create_auth_controller[UP: UserProtocol[Any], ID](  # noqa: PLR0913
                 user_manager=litestar_auth_user_manager,
             )
 
-        @post("/logout", guards=[is_authenticated])
+        @post("/logout", guards=[is_authenticated], security=security)
         async def logout(
             self,
             request: Request[Any, Any, Any],
@@ -241,6 +243,7 @@ def create_oauth_associate_controller[UP: UserProtocol[Any], ID](  # noqa: PLR09
     redirect_base_url: str,
     path: str = "/auth/associate",
     cookie_secure: bool = True,
+    security: Sequence[SecurityRequirement] | None = None,
 ) -> type[Controller]:
     """Return a plugin-owned OAuth associate controller bound to request DI."""
     return _create_plugin_oauth_associate_controller(
@@ -252,6 +255,7 @@ def create_oauth_associate_controller[UP: UserProtocol[Any], ID](  # noqa: PLR09
         path=path,
         cookie_secure=cookie_secure,
         validate_redirect_base_url=False,
+        security=security,
     )
 
 
@@ -326,6 +330,7 @@ def _define_plugin_totp_controller_class_di[UP: UserProtocol[Any], ID](
     backend_index: int,
     backend_name: str,
     totp_verify_before_request: Callable[[Request[Any, Any, Any]], object] | None,
+    security: Sequence[SecurityRequirement] | None = None,
 ) -> type[Controller]:
     """Build the plugin TOTP controller with request-scoped backend resolution.
 
@@ -346,7 +351,7 @@ def _define_plugin_totp_controller_class_di[UP: UserProtocol[Any], ID](
     class _TotpControllerBase(Controller):
         """TOTP 2FA management endpoints."""
 
-        @post("/enable/confirm", guards=[is_authenticated])
+        @post("/enable/confirm", guards=[is_authenticated], security=security)
         async def confirm_enable(
             self,
             request: Request[Any, Any, Any],
@@ -377,7 +382,7 @@ def _define_plugin_totp_controller_class_di[UP: UserProtocol[Any], ID](
                 user_manager=litestar_auth_user_manager,
             )
 
-        @post("/disable", guards=[is_authenticated])
+        @post("/disable", guards=[is_authenticated], security=security)
         async def disable(
             self,
             request: Request[Any, Any, Any],
@@ -400,7 +405,7 @@ def _define_plugin_totp_controller_class_di[UP: UserProtocol[Any], ID](
         class TotpController(_TotpControllerBase):
             """TOTP 2FA management endpoints."""
 
-            @post("/enable", guards=[is_authenticated])
+            @post("/enable", guards=[is_authenticated], security=security)
             async def enable(
                 self,
                 request: Request[Any, Any, Any],
@@ -427,7 +432,7 @@ def _define_plugin_totp_controller_class_di[UP: UserProtocol[Any], ID](
         class TotpController(_TotpControllerBase):
             """TOTP 2FA management endpoints."""
 
-            @post("/enable", guards=[is_authenticated])
+            @post("/enable", guards=[is_authenticated], security=security)
             async def enable(
                 self,
                 request: Request[Any, Any, Any],
@@ -463,6 +468,7 @@ def create_totp_controller[UP: UserProtocol[Any], ID](  # noqa: PLR0913
     id_parser: Callable[[str], ID] | None = None,
     path: str = "/auth/2fa",
     unsafe_testing: bool = False,
+    security: Sequence[SecurityRequirement] | None = None,
 ) -> type[Controller]:
     """Return a plugin TOTP controller that resolves its backend from request DI."""
     del user_manager_dependency_key
@@ -510,6 +516,7 @@ def create_totp_controller[UP: UserProtocol[Any], ID](  # noqa: PLR0913
         backend_index=backend_index,
         backend_name=backend.name,
         totp_verify_before_request=before,
+        security=security,
     )
     totp_controller_cls.__name__ = "TotpController"
     totp_controller_cls.__qualname__ = "TotpController"
@@ -519,6 +526,8 @@ def create_totp_controller[UP: UserProtocol[Any], ID](  # noqa: PLR0913
 
 def build_controllers[UP: UserProtocol[Any], ID](
     config: LitestarAuthConfig[UP, ID],
+    *,
+    security: Sequence[SecurityRequirement] | None = None,
 ) -> list[ControllerRouterHandler]:
     """Build the controller set for the configured plugin surface.
 
@@ -526,11 +535,12 @@ def build_controllers[UP: UserProtocol[Any], ID](
         Controllers matching the enabled auth features.
     """
     backend_inventory = resolve_backend_inventory(config)
-    controllers = _build_auth_controllers(config=config, backend_inventory=backend_inventory)
+    controllers = _build_auth_controllers(config=config, backend_inventory=backend_inventory, security=security)
     _append_optional_feature_controllers(
         controllers=controllers,
         config=config,
         backend_inventory=backend_inventory,
+        security=security,
     )
     return controllers
 
@@ -539,6 +549,7 @@ def _build_auth_controllers[UP: UserProtocol[Any], ID](
     *,
     config: LitestarAuthConfig[UP, ID],
     backend_inventory: _StartupBackendInventory[UP, ID] | None = None,
+    security: Sequence[SecurityRequirement] | None = None,
 ) -> list[ControllerRouterHandler]:
     """Build mandatory auth controllers per configured backend.
 
@@ -565,6 +576,7 @@ def _build_auth_controllers[UP: UserProtocol[Any], ID](
                     index=backend_entry.index,
                 ),
                 unsafe_testing=config.unsafe_testing,
+                security=security,
             ),
         )
     return controllers
@@ -575,6 +587,7 @@ def _append_optional_feature_controllers[UP: UserProtocol[Any], ID](
     controllers: list[ControllerRouterHandler],
     config: LitestarAuthConfig[UP, ID],
     backend_inventory: _StartupBackendInventory[UP, ID] | None = None,
+    security: Sequence[SecurityRequirement] | None = None,
 ) -> None:
     """Append optional controllers enabled by plugin flags."""
     if config.include_register:
@@ -611,17 +624,18 @@ def _append_optional_feature_controllers[UP: UserProtocol[Any], ID](
                 path=config.users_path,
                 hard_delete=config.hard_delete,
                 unsafe_testing=config.unsafe_testing,
+                security=security,
                 **users_schema_kwargs(config),
             ),
         )
     if config.totp_config is not None:
-        controllers.append(build_totp_controller(config, backend_inventory=backend_inventory))
+        controllers.append(build_totp_controller(config, backend_inventory=backend_inventory, security=security))
     _append_oauth_login_controllers(
         controllers=controllers,
         config=config,
         backend_inventory=backend_inventory,
     )
-    _append_oauth_associate_controllers(controllers=controllers, config=config)
+    _append_oauth_associate_controllers(controllers=controllers, config=config, security=security)
 
 
 def _append_oauth_login_controllers[UP: UserProtocol[Any], ID](
@@ -664,6 +678,7 @@ def _append_oauth_associate_controllers[UP: UserProtocol[Any], ID](
     *,
     controllers: list[ControllerRouterHandler],
     config: LitestarAuthConfig[UP, ID],
+    security: Sequence[SecurityRequirement] | None = None,
 ) -> None:
     """Append OAuth-associate controllers for configured providers."""
     contract = _build_oauth_route_registration_contract(
@@ -685,6 +700,7 @@ def _append_oauth_associate_controllers[UP: UserProtocol[Any], ID](
                 redirect_base_url=redirect_base_url,
                 path=contract.associate_path,
                 cookie_secure=contract.oauth_cookie_secure,
+                security=security,
             ),
         )
 
@@ -693,6 +709,7 @@ def build_totp_controller[UP: UserProtocol[Any], ID](
     config: LitestarAuthConfig[UP, ID],
     *,
     backend_inventory: _StartupBackendInventory[UP, ID] | None = None,
+    security: Sequence[SecurityRequirement] | None = None,
 ) -> ControllerRouterHandler:
     """Build the configured TOTP controller surface.
 
@@ -724,6 +741,7 @@ def build_totp_controller[UP: UserProtocol[Any], ID](
         id_parser=config.id_parser,
         path=totp_path(config.auth_path),
         unsafe_testing=config.unsafe_testing,
+        security=security,
     )
 
 

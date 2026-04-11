@@ -59,6 +59,8 @@ If you previously built the DB bearer backend by hand with `AuthenticationBacken
 
 `backends` remains the explicit manual-backend field, and `config.resolve_backends()` stays limited to that manual runtime inventory. For the canonical `database_token_auth=...` path, `config.startup_backends()` returns startup-only `StartupBackendTemplate` values used during plugin assembly, while `config.bind_request_backends(session)` returns request-scoped runtime `AuthenticationBackend` instances.
 
+For app-owned protected routes, reuse `config.resolve_openapi_security_requirements()` with Litestar `guards=[is_authenticated]` instead of hard-coding backend names in route-level OpenAPI metadata.
+
 Treat the startup templates as plugin-assembly inventory only: they preserve backend names plus transport/strategy metadata for validation and controller wiring, but DB-token runtime work still has to go through `bind_request_backends(session)` so the realized backend carries the active `AsyncSession`. Controller selection follows the startup inventory order: the primary backend mounts at `/auth`, later backends mount at `/auth/{backend.name}`, plugin-owned OAuth login routes use the primary backend, and TOTP uses the primary backend unless `totp_backend_name` selects another named startup backend.
 
 ## Public surface (high level)

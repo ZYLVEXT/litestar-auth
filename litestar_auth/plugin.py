@@ -123,7 +123,8 @@ class LitestarAuth[UP: UserProtocol[Any], ID](InitPlugin):
         bootstrap_bundled_token_orm_models(self.config)
         self._register_dependencies(app_config)
         self._register_middleware(app_config)
-        self._register_controllers(app_config)
+        security = self._register_openapi_security(app_config)
+        self._register_controllers(app_config, security=security)
         self._register_exception_handlers(app_config.route_handlers)
         return app_config
 
@@ -175,8 +176,31 @@ class LitestarAuth[UP: UserProtocol[Any], ID](InitPlugin):
         """Return the configured manager-class account-state validator contract."""
         return resolve_user_manager_account_state_validator(self.config.user_manager_class)
 
-    def _register_controllers(self, app_config: AppConfig) -> list[ControllerRouterHandler]:
-        controllers = build_controllers(self.config)
+    def _register_openapi_security(
+        self,
+        app_config: AppConfig,
+    ) -> list[dict[str, list[str]]] | None:
+        """Register OpenAPI security schemes and return the security requirement.
+
+        Returns:
+            Security requirement list for annotating guarded routes, or ``None``
+            when OpenAPI security is disabled or unavailable.
+        """
+        if not self.config.include_openapi_security:
+            return None
+        from litestar_auth._plugin.openapi import build_security_requirement, register_openapi_security  # noqa: PLC0415
+
+        backend_inventory = _plugin_config.resolve_backend_inventory(self.config)
+        schemes = register_openapi_security(app_config, backend_inventory.startup_backends())
+        return build_security_requirement(schemes) or None
+
+    def _register_controllers(
+        self,
+        app_config: AppConfig,
+        *,
+        security: list[dict[str, list[str]]] | None = None,
+    ) -> list[ControllerRouterHandler]:
+        controllers = build_controllers(self.config, security=security)
         app_config.route_handlers.extend(controllers)
         return controllers
 

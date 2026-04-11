@@ -88,9 +88,10 @@ def test_build_controllers_combines_auth_and_optional_controllers(monkeypatch: p
         *,
         config: LitestarAuthConfig[ExampleUser, UUID],
         backend_inventory: object | None = None,
+        security: object | None = None,
     ) -> list[str]:
         nonlocal auth_inventory
-        del config
+        del config, security
         auth_inventory = backend_inventory
         return ["auth-controller"]
 
@@ -101,7 +102,9 @@ def test_build_controllers_combines_auth_and_optional_controllers(monkeypatch: p
         controllers: list[object],
         config: LitestarAuthConfig[ExampleUser, UUID],
         backend_inventory: object | None = None,
+        security: object | None = None,
     ) -> None:
+        del security
         optional_calls.append((list(controllers), config, backend_inventory))
         controllers.append("optional-controller")
 
@@ -466,6 +469,7 @@ def test_append_optional_feature_controllers_appends_enabled_features_in_order(
             "path": "/users",
             "hard_delete": False,
             "unsafe_testing": False,
+            "security": None,
             "user_read_schema": _ReadSchema,
             "user_update_schema": _UpdateSchema,
         },
@@ -595,6 +599,7 @@ def test_append_oauth_associate_controllers_uses_explicit_redirect_base_url(
             "redirect_base_url": "https://app.example/auth/associate",
             "path": "/auth/associate",
             "cookie_secure": True,
+            "security": None,
         },
     ]
 
@@ -719,4 +724,5 @@ def _oauth_associate_call(provider_name: str, oauth_client: object) -> dict[str,
         "redirect_base_url": "https://app.example/auth/associate",
         "path": "/auth/associate",
         "cookie_secure": False,
+        "security": None,
     }

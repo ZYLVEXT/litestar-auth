@@ -9,6 +9,7 @@ Placeholders:
 - `{provider}` — OAuth provider name from `OAuthConfig.oauth_providers` or a manual controller factory.
 
 Generated OpenAPI publishes the built-in request/response payload names from `litestar_auth.payloads`. `login_identifier` only changes how `LoginCredentials.identifier` is resolved during login; it does not rename the email/token fields used by the built-in registration, verification, reset-password, refresh, or TOTP routes.
+For plugin-mounted protected routes, `LitestarAuth` also publishes per-operation OpenAPI security requirements derived from the configured auth transports so Swagger / other OpenAPI UIs can authorize requests with the standard mechanism. Disable that metadata with `include_openapi_security=False`. For app-owned protected routes, reuse `config.resolve_openapi_security_requirements()`; if you mount protected controllers manually, pass `security=` to the relevant controller factory.
 
 ## Auth core
 
