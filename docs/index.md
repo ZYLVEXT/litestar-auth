@@ -25,6 +25,7 @@ Teams building on [Litestar](https://litestar.dev/) who need registration, login
 | First working app | [Quickstart](quickstart.md) |
 | Mental model | [Architecture](concepts/architecture.md), [Backends](concepts/backends.md), [Request lifecycle](concepts/request_lifecycle.md) |
 | How-to guides | [Security](guides/security.md), [Registration](guides/registration.md), [OAuth](guides/oauth.md), [TOTP](guides/totp.md), [Rate limiting](guides/rate_limiting.md), [Role management CLI](guides/roles_cli.md), [Testing plugin-backed apps](guides/testing.md), [Hooks](guides/hooks.md), [Extending](guides/extending.md) |
+| Recipes & examples | [Cookie + CSRF](cookbook/cookie_csrf.md), [Refresh cookie](cookbook/refresh_cookie.md), [OAuth account linking](cookbook/oauth_associate.md), [Custom User model with OAuth](cookbook/custom_user_oauth.md), [Role administration API](cookbook/role_admin_controller.md) |
 | Moving from fastapi-users | [Concept mapping](guides/from_fastapi_users.md) (optional) |
 | HTTP reference | [HTTP API](http_api.md), [Errors](errors.md) |
 | Config & ops | [Configuration](configuration.md), [Security overview](security.md), [Deployment](deployment.md) |

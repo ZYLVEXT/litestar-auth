@@ -37,6 +37,7 @@ Examples:
 
 import logging
 
+from litestar_auth._roles import normalize_role_name
 from litestar_auth.authentication import AuthenticationBackend, Authenticator
 from litestar_auth.authentication.strategy import (
     DatabaseTokenStrategy,
@@ -206,6 +207,7 @@ __all__ = (
     "is_superuser",
     "is_verified",
     "load_httpx_oauth_client",
+    "normalize_role_name",
     "require_password_length",
     "verify_totp",
     "verify_totp_with_store",
