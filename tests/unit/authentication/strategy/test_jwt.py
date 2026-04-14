@@ -56,10 +56,15 @@ class _RecordingDenylistStore:
         self.calls: list[tuple[str, int]] = []
         self.denied: set[str] = set()
 
-    async def deny(self, jti: str, *, ttl_seconds: int) -> None:
-        """Store the denylist write call."""
+    async def deny(self, jti: str, *, ttl_seconds: int) -> bool:
+        """Store the denylist write call.
+
+        Returns:
+            ``True`` (test double always records successfully).
+        """
         self.calls.append((jti, ttl_seconds))
         self.denied.add(jti)
+        return True
 
     async def is_denied(self, jti: str) -> bool:
         """Return whether the given JTI has been recorded."""
@@ -121,7 +126,7 @@ def test_in_memory_jwt_denylist_store_rejects_invalid_capacity() -> None:
 async def test_in_memory_jwt_denylist_store_prunes_expired_entries_before_insert(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Expired entries are swept before cap enforcement evicts active ones."""
+    """Expired entries are swept so a new JTI can be admitted without hitting capacity."""
     fake_now = 1_000.0
 
     def fake_time() -> float:
@@ -138,10 +143,10 @@ async def test_in_memory_jwt_denylist_store_prunes_expired_entries_before_insert
     assert set(store._denylisted_until) == {"active", "fresh"}
 
 
-async def test_in_memory_jwt_denylist_store_evicts_soonest_expiring_entry_under_capacity_pressure(
+async def test_in_memory_jwt_denylist_store_fails_closed_under_capacity_pressure(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Cap enforcement removes the entry nearest expiry before admitting a new JTI."""
+    """At capacity with no reclaimable expired rows, a new deny is skipped; prior JTIs stay denied."""
     fake_now = 2_000.0
 
     def fake_time() -> float:
@@ -155,7 +160,10 @@ async def test_in_memory_jwt_denylist_store_evicts_soonest_expiring_entry_under_
     fake_now += 1.0
     await store.deny("new", ttl_seconds=20)
 
-    assert set(store._denylisted_until) == {"long", "new"}
+    assert set(store._denylisted_until) == {"short", "long"}
+    assert await store.is_denied("short") is True
+    assert await store.is_denied("long") is True
+    assert await store.is_denied("new") is False
 
 
 async def test_in_memory_jwt_denylist_store_expires_entries_during_lookup(

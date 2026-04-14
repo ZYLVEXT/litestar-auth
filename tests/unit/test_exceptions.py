@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-import inspect
+from enum import StrEnum
 from pathlib import Path
 
 import pytest
@@ -28,13 +28,13 @@ from tests.unit.test_definition_file_coverage import load_reloaded_test_alias
 
 pytestmark = pytest.mark.unit
 
-type ExceptionCase = tuple[type[LitestarAuthError], str, str, type[BaseException]]
+type ExceptionCase = tuple[type[LitestarAuthError], str, str | ErrorCode, type[BaseException]]
 
 EXCEPTION_CASES: tuple[ExceptionCase, ...] = (
     (
         LitestarAuthError,
         "An unexpected litestar-auth error occurred.",
-        "UNKNOWN",
+        ErrorCode.UNKNOWN,
         Exception,
     ),
     (
@@ -115,6 +115,7 @@ EXCEPTION_CASES: tuple[ExceptionCase, ...] = (
 )
 
 EXPECTED_ERROR_CODES = {
+    "UNKNOWN": "UNKNOWN",
     "AUTHENTICATION_FAILED": "AUTHENTICATION_FAILED",
     "TOKEN_PROCESSING_FAILED": "TOKEN_PROCESSING_FAILED",
     "CONFIGURATION_INVALID": "CONFIGURATION_INVALID",
@@ -148,8 +149,8 @@ EXPECTED_ERROR_CODES = {
 
 
 def _error_code_members() -> dict[str, str]:
-    """Return public string constants defined on ``ErrorCode``."""
-    return {name: value for name, value in inspect.getmembers(ErrorCode) if name.isupper() and isinstance(value, str)}
+    """Return member names and string values for ``ErrorCode``."""
+    return {member.name: member.value for member in ErrorCode}
 
 
 def test_exception_module_reload_preserves_default_message_and_code_contract(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -176,7 +177,7 @@ def test_exception_module_reload_preserves_default_message_and_code_contract(mon
 def test_exception_defaults(
     exception_type: type[LitestarAuthError],
     expected_message: str,
-    expected_code: str,
+    expected_code: str | ErrorCode,
     expected_base: type[BaseException],
 ) -> None:
     """Each exception exposes its default message, code, and inheritance."""
@@ -191,7 +192,7 @@ def test_exception_defaults(
 def test_exception_none_arguments_fall_back_to_defaults(
     exception_type: type[LitestarAuthError],
     expected_message: str,
-    expected_code: str,
+    expected_code: str | ErrorCode,
     _: type[BaseException],
 ) -> None:
     """Passing ``None`` preserves the class defaults."""
@@ -205,7 +206,7 @@ def test_exception_none_arguments_fall_back_to_defaults(
 def test_exception_custom_message_and_code_override_defaults(
     exception_type: type[LitestarAuthError],
     expected_message: str,
-    expected_code: str,
+    expected_code: str | ErrorCode,
     _: type[BaseException],
 ) -> None:
     """Every exception accepts custom message and code overrides."""
@@ -220,8 +221,8 @@ def test_exception_custom_message_and_code_override_defaults(
     assert error.code == custom_code
 
 
-def test_litestar_auth_error_fallback_uses_base_unknown_code_when_default_code_is_missing() -> None:
-    """Base initialization falls back to ``UNKNOWN`` if a subclass omits ``default_code``."""
+def test_litestar_auth_error_inherits_base_unknown_code_via_mro_when_subclass_omits_default_code() -> None:
+    """Subclasses that omit ``default_code`` inherit ``LitestarAuthError.default_code`` via normal MRO."""
 
     class MissingDefaultCodeError(LitestarAuthError):
         default_message = "missing default code"
@@ -251,3 +252,15 @@ def test_exception_inheritance_hierarchy() -> None:
 def test_error_code_constants_match_string_values() -> None:
     """Every ``ErrorCode`` constant matches its machine-readable string value."""
     assert _error_code_members() == EXPECTED_ERROR_CODES
+
+
+def test_error_code_is_strenum_with_stable_public_surface() -> None:
+    """``ErrorCode`` is a StrEnum with iterable members and value-based construction."""
+    assert issubclass(ErrorCode, StrEnum)
+    members = list(ErrorCode)
+    assert len(members) == len(EXPECTED_ERROR_CODES)
+    assert ErrorCode("UNKNOWN") is ErrorCode.UNKNOWN
+    assert ErrorCode("AUTHENTICATION_FAILED") is ErrorCode.AUTHENTICATION_FAILED
+    assert ErrorCode("LOGIN_BAD_CREDENTIALS") is ErrorCode.LOGIN_BAD_CREDENTIALS
+    assert isinstance(ErrorCode.LOGIN_BAD_CREDENTIALS, str)
+    assert ErrorCode.LOGIN_BAD_CREDENTIALS == "LOGIN_BAD_CREDENTIALS"

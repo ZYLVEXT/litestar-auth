@@ -11,7 +11,7 @@ import pytest
 
 from litestar_auth.authentication.strategy.db import AsyncSessionT, DatabaseTokenStrategy
 from litestar_auth.authentication.strategy.redis import RedisClientProtocol, RedisTokenStrategy
-from litestar_auth.manager import BaseUserManager
+from litestar_auth.manager import BaseUserManager, UserManagerSecurity
 from litestar_auth.models import User
 from litestar_auth.password import PasswordHelper
 from litestar_auth.schemas import UserUpdate
@@ -52,9 +52,11 @@ async def test_manager_reset_password_invalidates_tokens_when_supported() -> Non
     manager = BaseUserManager(
         user_db,
         password_helper=password_helper,
-        verification_token_secret="verify-secret-1234567890-1234567890",
-        reset_password_token_secret="reset-secret-1234567890-1234567890",
-        id_parser=UUID,
+        security=UserManagerSecurity[UUID](
+            verification_token_secret="verify-secret-1234567890-1234567890",
+            reset_password_token_secret="reset-secret-1234567890-1234567890",
+            id_parser=UUID,
+        ),
     )
     user = _User(id=uuid4(), email="user@example.com", hashed_password=password_helper.hash("old-password"))
     updated_user = replace(user, hashed_password=password_helper.hash("new-password"))
@@ -86,9 +88,11 @@ async def test_manager_update_invalidates_tokens_only_on_email_or_password_chang
     manager = BaseUserManager(
         user_db,
         password_helper=password_helper,
-        verification_token_secret="verify-secret-1234567890-1234567890",
-        reset_password_token_secret="reset-secret-1234567890-1234567890",
-        id_parser=UUID,
+        security=UserManagerSecurity[UUID](
+            verification_token_secret="verify-secret-1234567890-1234567890",
+            reset_password_token_secret="reset-secret-1234567890-1234567890",
+            id_parser=UUID,
+        ),
     )
     user = _User(id=uuid4(), email="user@example.com", hashed_password=password_helper.hash("old-password"))
 

@@ -53,6 +53,16 @@ Optional extras: `redis`, `oauth`, `totp`, or `all` — see the [installation gu
 
 Follow [docs/quickstart.md](docs/quickstart.md) for a minimal Bearer + JWT setup with the default SQLAlchemy user model.
 
+## Role management CLI
+
+When your app uses `LitestarAuth`, provides `session_maker`, and exposes a relational role-capable
+SQLAlchemy `user_model`, the plugin also registers `litestar roles` for role-catalog and user-role
+administration. This operator surface is CLI-only: the HTTP API still exposes only the flat
+normalized `user.roles` contract and does not add role-management endpoints.
+
+See [docs/guides/roles_cli.md](docs/guides/roles_cli.md) for prerequisites, command examples, and
+custom-model compatibility notes.
+
 ## Repository
 
 Contributing, local docs build, and verification commands are described in [docs/contributing.md](docs/contributing.md).

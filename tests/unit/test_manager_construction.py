@@ -103,12 +103,13 @@ def test_manager_constructor_inputs_preserve_explicit_kwargs_without_typed_secur
     assert inputs._build_manager_id_parser_kwargs() == {}
 
     kwargs = inputs.build_kwargs()
+    materialized = kwargs["security"]
 
     assert kwargs["password_validator"] is None
-    assert kwargs["id_parser"] is explicit_id_parser
-    assert kwargs["verification_token_secret"] == "v" * 32
-    assert kwargs["reset_password_token_secret"] == "r" * 32
-    assert kwargs["totp_secret_key"] == "t" * 32
+    assert materialized.verification_token_secret == "v" * 32
+    assert materialized.reset_password_token_secret == "r" * 32
+    assert materialized.totp_secret_key == "t" * 32
+    assert materialized.id_parser is explicit_id_parser
     assert kwargs["login_identifier"] == "email"
     assert kwargs["backends"] == ("bound-backend",)
 
@@ -127,6 +128,8 @@ def test_manager_constructor_inputs_inject_top_level_password_validator_and_id_p
         id_parser=UUID,
     )
 
+    assert inputs._build_manager_id_parser_kwargs() == {"id_parser": UUID}
+
     kwargs = inputs.build_kwargs()
     effective_security = inputs.effective_security
 
@@ -135,7 +138,8 @@ def test_manager_constructor_inputs_inject_top_level_password_validator_and_id_p
     assert effective_security.totp_secret_key is None
     assert effective_security.id_parser is UUID
     assert kwargs["password_validator"] is generated_password_validator
-    assert kwargs["id_parser"] is UUID
+    assert kwargs["security"] == effective_security
+    assert kwargs["security"].id_parser is UUID
     assert kwargs["login_identifier"] == "username"
     assert kwargs["backends"] == ("bound-backend",)
 

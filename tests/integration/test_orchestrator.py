@@ -69,9 +69,11 @@ class TokenCaptureUserManager(PluginUserManager):
         super().__init__(
             user_db,
             password_helper=password_helper,
-            verification_token_secret=verification_token_secret,
-            reset_password_token_secret=reset_password_token_secret,
-            id_parser=id_parser,
+            security=UserManagerSecurity[UUID](
+                verification_token_secret=verification_token_secret,
+                reset_password_token_secret=reset_password_token_secret,
+                id_parser=id_parser,
+            ),
             backends=backends,
         )
         self.forgot_password_events: list[tuple[ExampleUser, str]] = []
@@ -273,13 +275,8 @@ def build_app() -> tuple[
         is_verified=True,
     )
     user_db = InMemoryUserDatabase([admin_user, regular_user])
-    manager = PluginUserManager(
-        user_db,
-        password_helper=password_helper,
-        verification_token_secret="verify-secret-12345678901234567890",
-        reset_password_token_secret="reset-secret-123456789012345678901",
-        id_parser=UUID,
-    )
+    verify_secret = "verify-secret-12345678901234567890"
+    reset_secret = "reset-secret-123456789012345678901"
     primary_strategy = InMemoryTokenStrategy(token_prefix="primary")
     secondary_strategy = InMemoryTokenStrategy(token_prefix="secondary")
     backends = [
@@ -301,8 +298,8 @@ def build_app() -> tuple[
         user_manager_class=PluginUserManager,
         user_db_factory=lambda _session: user_db,
         user_manager_security=UserManagerSecurity[UUID](
-            verification_token_secret=manager.verification_token_secret.get_secret_value(),
-            reset_password_token_secret=manager.reset_password_token_secret.get_secret_value(),
+            verification_token_secret=verify_secret,
+            reset_password_token_secret=reset_secret,
             id_parser=UUID,
         ),
         user_manager_kwargs={"password_helper": password_helper},
@@ -336,13 +333,8 @@ def build_app_with_user_manager_kwargs(
         is_verified=True,
     )
     user_db = InMemoryUserDatabase([admin_user, regular_user])
-    manager = PluginUserManager(
-        user_db,
-        password_helper=password_helper,
-        verification_token_secret="verify-secret-12345678901234567890",
-        reset_password_token_secret="reset-secret-123456789012345678901",
-        id_parser=UUID,
-    )
+    verify_secret = "verify-secret-12345678901234567890"
+    reset_secret = "reset-secret-123456789012345678901"
     primary_strategy = InMemoryTokenStrategy(token_prefix="primary")
     secondary_strategy = InMemoryTokenStrategy(token_prefix="secondary")
     backends = [
@@ -364,8 +356,8 @@ def build_app_with_user_manager_kwargs(
         user_manager_class=PluginUserManager,
         user_db_factory=lambda _session: user_db,
         user_manager_security=UserManagerSecurity[UUID](
-            verification_token_secret=manager.verification_token_secret.get_secret_value(),
-            reset_password_token_secret=manager.reset_password_token_secret.get_secret_value(),
+            verification_token_secret=verify_secret,
+            reset_password_token_secret=reset_secret,
             id_parser=UUID,
         ),
         user_manager_kwargs={"password_helper": password_helper, **overrides},
@@ -787,4 +779,6 @@ async def _verify_totp_replay_protection(
     replay_response = await client.post("/auth/2fa/verify", json={"pending_token": pending_token, "code": code})
     assert replay_response.status_code == HTTP_BAD_REQUEST
     assert replay_response.json()["detail"] == INVALID_TOTP_TOKEN_DETAIL
-    assert await used_tokens_store.mark_used(admin_user.id, _current_counter(), 60.0) is False
+    replay_mark = await used_tokens_store.mark_used(admin_user.id, _current_counter(), 60.0)
+    assert replay_mark.stored is False
+    assert replay_mark.rejected_as_replay is True

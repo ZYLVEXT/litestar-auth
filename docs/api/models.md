@@ -28,6 +28,22 @@ columns or relationship wiring from the reference classes.
 [Configuration](../configuration.md#custom-sqlalchemy-user-and-token-models) covers the full
 support matrix and migration notes.
 
+## Lazy imports and IDE support
+
+`litestar_auth.models` exposes names such as `User` and `OAuthAccount` through [PEP
+562](https://peps.python.org/pep-0562/) `__getattr__` so that **importing the package does not
+register SQLAlchemy mappers** or run other ORM side effects until a symbol is accessed.
+
+Static type checkers still see those symbols with full annotations (the package uses
+`TYPE_CHECKING`-friendly patterns for stubs and forward references). Some IDEs cannot resolve
+**go to definition** or offer reliable autocomplete through a runtime `__getattr__` hook. For full
+IDE support—jump to definition, rename, and completion—import from the concrete modules directly:
+
+- `from litestar_auth.models.user import User`
+- `from litestar_auth.models.oauth import OAuthAccount`
+
+The [import paths](#import-paths) table restates the same guidance in task-oriented form.
+
 ## `UserModelMixin` hook
 
 `UserModelMixin` keeps the runtime attribute contract on `hashed_password`. When an app-owned user table uses a different SQL column name, set `auth_hashed_password_column_name` on the custom user class instead of redefining `hashed_password = mapped_column(...)`:
@@ -111,7 +127,7 @@ The library table (bundled `OAuthAccount`) includes at least:
 - `oauth_name` — `String(100)`
 - `account_id` — `String(255)`
 - `account_email` — `String(320)`
-- `access_token` — `EncryptedString`-backed (length 2048), Fernet when a key is configured
+- `access_token` — `EncryptedString`-backed (length 4096), Fernet when a key is configured
 - `expires_at` — integer epoch or null
 - `refresh_token` — optional, same encryption type as access token
 - Unique constraint **`uq_oauth_account_provider_identity`** on `(oauth_name, account_id)`

@@ -46,7 +46,7 @@ def test_oauth_redirect_localhost_fails_closed_in_production() -> None:
     config = _minimal_config()
     config.oauth_config = OAuthConfig(
         oauth_providers=[("example", object())],
-        oauth_token_encryption_key="a" * 44,
+        oauth_token_encryption_key="YWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWE=",
         oauth_redirect_base_url="http://localhost/auth",
     )
     plugin = LitestarAuth(config)
@@ -60,7 +60,7 @@ def test_oauth_redirect_localhost_is_allowed_in_debug() -> None:
     config = _minimal_config()
     config.oauth_config = OAuthConfig(
         oauth_providers=[("example", object())],
-        oauth_token_encryption_key="a" * 44,
+        oauth_token_encryption_key="YWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWE=",
         oauth_redirect_base_url="http://localhost/auth",
     )
     plugin = LitestarAuth(config)

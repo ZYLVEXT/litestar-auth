@@ -40,3 +40,4 @@ With defaults, log in at `POST /auth/login` and send `Authorization: Bearer <acc
 - [Concepts — Architecture](concepts/architecture.md) — how pieces fit together.
 - [Configuration](configuration.md) — all `LitestarAuthConfig` fields.
 - [Security](security.md) — CSRF, cookies, JWT revocation, and production flags.
+- [Types and protocols](api/types.md) — which user-model protocols to implement for guards and TOTP.

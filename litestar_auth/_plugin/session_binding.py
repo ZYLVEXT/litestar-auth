@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any, Protocol, cast
 
 from litestar_auth.db.base import BaseOAuthAccountStore, BaseUserStore
-from litestar_auth.types import UserProtocol
+from litestar_auth.types import LoginIdentifier, UserProtocol
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
@@ -73,7 +73,7 @@ class _ScopedUserDatabaseProxy[UP: UserProtocol[Any], ID](BaseUserStore[UP, ID])
         """Return the user matching the provided email, if present."""
         return await self._user_db.get_by_email(email)
 
-    async def get_by_field(self, field_name: str, value: str) -> UP | None:
+    async def get_by_field(self, field_name: LoginIdentifier, value: str) -> UP | None:
         """Return the user where ``field_name`` equals ``value``, if present."""
         return await self._user_db.get_by_field(field_name, value)
 

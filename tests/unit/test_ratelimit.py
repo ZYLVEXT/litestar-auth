@@ -711,7 +711,7 @@ async def test_contrib_redis_preset_builds_rate_limit_config_with_shared_client_
     assert store._redis is redis_client
     assert pending_store.redis is redis_client
     assert pending_store.key_prefix == "pending:"
-    assert await store.mark_used("user-1", 7, 1.25) is True
+    assert (await store.mark_used("user-1", 7, 1.25)).stored is True
     await pending_store.deny("pending-jti", ttl_seconds=PENDING_JTI_TTL_SECONDS)
     assert await pending_store.is_denied("pending-jti") is True
     assert await async_fakeredis.get("used:user-1:7") == b"1"

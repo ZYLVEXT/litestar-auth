@@ -16,6 +16,7 @@ from litestar_auth.authentication.strategy.jwt import (
     JWTStrategy,
     RedisJWTDenylistStore,
 )
+from litestar_auth.exceptions import TokenError
 from litestar_auth.password import PasswordHelper
 from tests._helpers import cast_fakeredis
 
@@ -46,8 +47,9 @@ class _RecordingDenylistStore:
     def __init__(self) -> None:
         self.calls: list[tuple[str, int]] = []
 
-    async def deny(self, jti: str, *, ttl_seconds: int) -> None:
+    async def deny(self, jti: str, *, ttl_seconds: int) -> bool:
         self.calls.append((jti, ttl_seconds))
+        return True
 
     async def is_denied(self, jti: str) -> bool:
         del jti
@@ -180,24 +182,71 @@ async def test_in_memory_jwt_denylist_honors_ttl(monkeypatch: pytest.MonkeyPatch
 
 
 @pytest.mark.unit
-async def test_in_memory_jwt_denylist_caps_entries_with_fifo_eviction() -> None:
-    """Cap enforcement should evict the oldest active JTI before adding a new one."""
+async def test_in_memory_jwt_denylist_refresh_same_jti_at_capacity_succeeds(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Re-denylisting an existing JTI refreshes TTL without requiring a free slot."""
+    fake_now = 5_000.0
+    monkeypatch.setattr("litestar_auth.authentication.strategy.jwt.time.time", lambda: fake_now)
     store = InMemoryJWTDenylistStore(max_entries=DENYLIST_CAP)
-
     await store.deny("jti-1", ttl_seconds=60)
     await store.deny("jti-2", ttl_seconds=60)
-    await store.deny("jti-3", ttl_seconds=60)
-
+    assert store._denylisted_until["jti-1"] == fake_now + 60
+    assert await store.deny("jti-1", ttl_seconds=120) is True
     assert len(store._denylisted_until) == DENYLIST_CAP
-    assert "jti-1" not in store._denylisted_until
-    assert set(store._denylisted_until) == {"jti-2", "jti-3"}
+    assert store._denylisted_until["jti-1"] == fake_now + 120
 
 
 @pytest.mark.unit
-async def test_in_memory_jwt_denylist_prunes_expired_entries_before_cap_eviction(
+async def test_in_memory_jwt_denylist_fails_closed_when_at_capacity_with_no_reclaimable_slots() -> None:
+    """At capacity with only active JTIs, a new deny is rejected and existing revocations stay."""
+    store = InMemoryJWTDenylistStore(max_entries=DENYLIST_CAP)
+
+    assert await store.deny("jti-1", ttl_seconds=60) is True
+    assert await store.deny("jti-2", ttl_seconds=60) is True
+    assert await store.deny("jti-3", ttl_seconds=60) is False
+
+    assert len(store._denylisted_until) == DENYLIST_CAP
+    assert set(store._denylisted_until) == {"jti-1", "jti-2"}
+    assert await store.is_denied("jti-1") is True
+    assert await store.is_denied("jti-2") is True
+    assert await store.is_denied("jti-3") is False
+
+
+@pytest.mark.unit
+async def test_jwt_strategy_destroy_token_raises_when_in_memory_denylist_cannot_record() -> None:
+    """destroy_token must not treat a skipped denylist insert as successful revocation."""
+    password_helper = PasswordHelper()
+    user = _User(id=uuid4(), email="user@example.com", hashed_password=password_helper.hash("pw"))
+    store = InMemoryJWTDenylistStore(max_entries=DENYLIST_CAP)
+    strategy = JWTStrategy(secret="secret-1234567890-1234567890-1234567890", denylist_store=store)
+
+    await store.deny("jti-1", ttl_seconds=60)
+    await store.deny("jti-2", ttl_seconds=60)
+
+    now = datetime.now(tz=UTC)
+    token = jwt.encode(
+        {
+            "sub": str(user.id),
+            "aud": "litestar-auth:access",
+            "iat": now,
+            "nbf": now,
+            "exp": now + timedelta(minutes=15),
+            "jti": "jti-3",
+        },
+        strategy.secret,
+        algorithm=strategy.algorithm,
+    )
+
+    with pytest.raises(TokenError, match="Could not record JWT revocation"):
+        await strategy.destroy_token(token, cast("Any", user))
+
+
+@pytest.mark.unit
+async def test_in_memory_jwt_denylist_prunes_expired_entries_before_cap_fail_closed(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Cap enforcement should full-sweep expired entries before evicting active ones."""
+    """Pruning expired entries reclaims slots before a fail-closed capacity check."""
     fake_now = 1_000.0
 
     def fake_time() -> float:

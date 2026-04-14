@@ -14,14 +14,15 @@ From the repository root (see [justfile](https://github.com/ZYLVEXT/litestar-aut
 | `just docs-serve` | Live Zensical preview |
 | `just docs-build` | Static site to `site/` |
 
-For release-quality verification from the repo root (with [`uv`](https://docs.astral.sh/uv/)):
+For release-quality verification from the repo root (with [`uv`](https://docs.astral.sh/uv/)), use the same mandatory block as [AGENTS.md](https://github.com/ZYLVEXT/litestar-auth/blob/main/AGENTS.md#verification):
 
 ```bash
 uv run ruff check --fix .
 uv run ruff format .
 uv run ty check
 uv run deptry .
-uv run pytest
+uv run pytest -n auto
+uv run pytest --cov --cov-report=term-missing --cov-fail-under=100 -n auto
 ```
 
 ## Tests
@@ -46,6 +47,8 @@ When you change HTTP routes, **`ErrorCode`** values, or security-sensitive confi
 | Configuration | [Configuration](configuration.md), [Plugin API](api/plugin.md) |
 | Hooks / extension | [Hooks](guides/hooks.md), [Extending](guides/extending.md) |
 | Production | [Security](security.md), [Deployment](deployment.md) |
+
+Python API reference pages under `docs/api/` should include short introductory prose before the `::: litestar_auth...` mkdocstrings directive—avoid shipping only the bare directive. For examples of well-structured pages, see [package.md](api/package.md), [models.md](api/models.md), and [guards.md](api/guards.md).
 
 ## Style
 

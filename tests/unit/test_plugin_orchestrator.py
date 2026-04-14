@@ -107,6 +107,7 @@ def test_plugin_module_executes_under_coverage() -> None:
         "LitestarAuth",
         "LitestarAuthConfig",
         "OAuthConfig",
+        "OAuthProviderConfig",
         "StartupBackendTemplate",
         "TotpConfig",
     )
@@ -515,7 +516,7 @@ def test_on_app_init_allows_oauth_providers_when_encryption_key_is_configured() 
     config.oauth_config = OAuthConfig(
         oauth_providers=[("github", object())],
         oauth_redirect_base_url="https://app.example.com/auth",
-        oauth_token_encryption_key="a" * 44,
+        oauth_token_encryption_key="YWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWE=",
     )
     plugin = LitestarAuth(config)
 
@@ -566,7 +567,7 @@ def test_on_app_init_rejects_insecure_oauth_redirect_origins_in_production(
     config.oauth_config = OAuthConfig(
         oauth_providers=[("github", object())],
         oauth_redirect_base_url=redirect_base_url,
-        oauth_token_encryption_key="a" * 44,
+        oauth_token_encryption_key="YWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWE=",
     )
     plugin = LitestarAuth(config)
 
@@ -580,7 +581,7 @@ def test_on_app_init_allows_loopback_oauth_redirect_origin_in_debug_mode() -> No
     config.oauth_config = OAuthConfig(
         oauth_providers=[("github", object())],
         oauth_redirect_base_url="http://localhost/auth",
-        oauth_token_encryption_key="a" * 44,
+        oauth_token_encryption_key="YWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWE=",
     )
     plugin = LitestarAuth(config)
 
@@ -796,7 +797,7 @@ def test_register_exception_handlers_delegates_to_shared_registration_function()
     with patch("litestar_auth.plugin.register_exception_handlers") as register_handlers_mock:
         plugin._register_exception_handlers(route_handlers)
 
-    register_handlers_mock.assert_called_once_with(route_handlers)
+    register_handlers_mock.assert_called_once_with(route_handlers, exception_response_hook=None)
 
 
 def test_register_controllers_extends_route_handlers() -> None:
@@ -832,7 +833,7 @@ def test_on_app_init_registers_exception_handlers_for_all_app_route_handlers() -
         plugin.on_app_init(app_config)
 
     assert app_config.route_handlers == ["existing-route", "plugin-controller"]
-    register_handlers_mock.assert_called_once_with(app_config.route_handlers)
+    register_handlers_mock.assert_called_once_with(app_config.route_handlers, exception_response_hook=None)
 
 
 @dataclass(slots=True)
@@ -1064,9 +1065,11 @@ def test_build_user_manager_allows_nonstandard_manager_contract_through_factory(
                 cast("Any", user_db),
                 password_helper=password_helper,
                 password_validator=cast("Any", password_validator),
-                verification_token_secret=verification_token_secret,
-                reset_password_token_secret=reset_password_token_secret,
-                id_parser=id_parser,
+                security=UserManagerSecurity[UUID](
+                    verification_token_secret=verification_token_secret,
+                    reset_password_token_secret=reset_password_token_secret,
+                    id_parser=id_parser,
+                ),
                 backends=backends,
                 login_identifier=login_identifier,
             )
@@ -1080,7 +1083,7 @@ def test_build_user_manager_allows_nonstandard_manager_contract_through_factory(
         assert security is not None
         return LegacyManagerWithoutSecurity(
             cast("Any", kwargs["user_db"]),
-            password_helper=session_config.build_password_helper(),
+            password_helper=session_config.resolve_password_helper(),
             password_validator=plugin_module._plugin_config.resolve_password_validator(session_config),
             verification_token_secret=cast("str", security.verification_token_secret),
             reset_password_token_secret=cast("str", security.reset_password_token_secret),
@@ -1252,7 +1255,7 @@ def test_session_bound_backends_realizes_database_token_preset_from_request_sess
     authentication_backend_type = _current_authentication_backend_type()
 
     rebound_backends = plugin._session_bound_backends(cast("Any", active_session))
-    template_backend = config.startup_backends()[0]
+    template_backend = config.resolve_startup_backends()[0]
     template_strategy = cast("Any", template_backend.strategy)
     rebound_strategy = cast("Any", rebound_backends[0].strategy)
 
@@ -1540,7 +1543,7 @@ def test_provide_request_backends_realizes_database_token_preset_from_request_se
     startup_backend_template_type = _current_startup_backend_template_type()
     database_token_strategy_type = _current_database_token_strategy_type()
     authentication_backend_type = _current_authentication_backend_type()
-    template_backend = config.startup_backends()[0]
+    template_backend = config.resolve_startup_backends()[0]
 
     rebound_backends = cast("Any", plugin._provide_request_backends)(db_session=active_session)
 
@@ -1623,16 +1626,16 @@ def test_plugins_hold_distinct_explicit_oauth_token_policies() -> None:
     """Separate plugin instances keep independent explicit OAuth token policies."""
     first_config = _minimal_config()
     second_config = _minimal_config()
-    first_config.oauth_config = OAuthConfig(oauth_token_encryption_key="a" * 44)
-    second_config.oauth_config = OAuthConfig(oauth_token_encryption_key="b" * 44)
+    first_config.oauth_config = OAuthConfig(oauth_token_encryption_key="YWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWE=")
+    second_config.oauth_config = OAuthConfig(oauth_token_encryption_key="YmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmI=")
 
     first_plugin = LitestarAuth(first_config)
     second_plugin = LitestarAuth(second_config)
 
     assert first_plugin._oauth_token_encryption is not None
-    assert first_plugin._oauth_token_encryption.key == "a" * 44
+    assert first_plugin._oauth_token_encryption.key == "YWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWE="
     assert first_plugin._oauth_token_encryption.unsafe_testing is False
     assert second_plugin._oauth_token_encryption is not None
-    assert second_plugin._oauth_token_encryption.key == "b" * 44
+    assert second_plugin._oauth_token_encryption.key == "YmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmI="
     assert second_plugin._oauth_token_encryption.unsafe_testing is False
     assert first_plugin._oauth_token_encryption is not second_plugin._oauth_token_encryption

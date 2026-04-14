@@ -59,5 +59,5 @@ def build_app() -> Litestar:
         include_users=False,
     )
     # Optional: call this only if app-owned code also hashes or verifies passwords.
-    config.build_password_helper()
+    config.resolve_password_helper()
     return Litestar(plugins=[LitestarAuth(config)])

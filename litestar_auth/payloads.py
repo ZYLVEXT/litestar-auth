@@ -1,9 +1,10 @@
 """Public msgspec payloads for built-in auth and user flows.
 
-This module is the authoritative public import boundary for built-in request and
-response structs. Existing imports from ``litestar_auth``,
-``litestar_auth.controllers``, and individual controller modules remain
-supported via compatibility re-exports.
+The **canonical** import path for these structs is ``litestar_auth.payloads``.
+The same symbols are also re-exported from ``litestar_auth`` (package root)
+and ``litestar_auth.controllers`` for backward compatibility; treat those paths
+as compatibility shims and prefer ``from litestar_auth.payloads import ...`` in
+new code so imports stay explicit for readers and tooling.
 """
 
 from __future__ import annotations

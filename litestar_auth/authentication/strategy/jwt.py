@@ -18,6 +18,7 @@ from jwt import ExpiredSignatureError, InvalidTokenError
 from litestar_auth._optional_deps import _require_redis_asyncio
 from litestar_auth.authentication.strategy.base import Strategy, UserManagerProtocol
 from litestar_auth.config import JWT_ACCESS_TOKEN_AUDIENCE, validate_secret_length
+from litestar_auth.exceptions import TokenError
 from litestar_auth.types import ID, UP
 
 logger = logging.getLogger(__name__)
@@ -62,15 +63,31 @@ type JWTRevocationPostureKey = Literal["compatibility_in_memory", "shared_store"
 class JWTDenylistStore(Protocol):
     """Shared denylist storage for JWT `jti` revocation."""
 
-    async def deny(self, jti: str, *, ttl_seconds: int) -> None:
-        """Mark a JTI as revoked for `ttl_seconds`."""
+    async def deny(self, jti: str, *, ttl_seconds: int) -> bool:
+        """Mark a JTI as revoked for ``ttl_seconds``.
+
+        Returns:
+            ``True`` when the revocation was recorded or an existing JTI's TTL was refreshed.
+            ``False`` when a **new** revocation could not be stored (for example, an
+            in-memory store at capacity after pruning expired entries). Implementations
+            that always persist (such as Redis) should return ``True``.
+        """
 
     async def is_denied(self, jti: str) -> bool:
         """Return whether the JTI is revoked."""
 
 
 class InMemoryJWTDenylistStore:
-    """Process-local denylist store (best-effort)."""
+    """Process-local denylist store (best-effort).
+
+    **Capacity:** Each :meth:`deny` call prunes expired JTIs first. When the map is already at
+    ``max_entries`` and no expired entries remain, :meth:`deny` **fails closed**: it logs an
+    error and does **not** insert the new JTI, preserving every existing active revocation.
+    The store never evicts a still-valid revoked JTI to admit another (older releases dropped
+    the soonest-expiring entry under pressure, which could revive a revoked token). Size
+    ``max_entries`` for peak concurrent revocations or use :class:`RedisJWTDenylistStore` for
+    shared, unbounded-by-process-memory semantics in production.
+    """
 
     def __init__(self, *, max_entries: int = 10_000) -> None:
         """Initialize an empty denylist map with per-entry expiration.
@@ -85,14 +102,32 @@ class InMemoryJWTDenylistStore:
         self.max_entries = max_entries
         self._denylisted_until: dict[str, float] = {}
 
-    async def deny(self, jti: str, *, ttl_seconds: int) -> None:
-        """Record the revoked JTI (TTL is best-effort in memory)."""
-        now = time.time()
-        if len(self._denylisted_until) >= self.max_entries:
-            self._prune_expired(now)
-            self._evict_oldest_until_below_cap()
+    async def deny(self, jti: str, *, ttl_seconds: int) -> bool:
+        """Record the revoked JTI (TTL is best-effort in memory).
 
-        self._denylisted_until[jti] = now + max(ttl_seconds, 1)
+        When the store is at capacity and no expired rows can be reclaimed, the new revocation
+        is skipped (fail-closed) so existing denylist entries are never dropped to make room.
+
+        Returns:
+            ``False`` when a new JTI could not be inserted at capacity; ``True`` otherwise.
+        """
+        now = time.time()
+        self._prune_expired(now)
+        expires_at = now + max(ttl_seconds, 1)
+        if jti in self._denylisted_until:
+            self._denylisted_until[jti] = expires_at
+            return True
+        if len(self._denylisted_until) >= self.max_entries:
+            logger.error(
+                "Rejected in-memory JWT denylist insert: capacity %d reached with no "
+                "expired entries to reclaim (fail closed). Use RedisJWTDenylistStore or "
+                "increase max_entries for high-volume deployments.",
+                self.max_entries,
+            )
+            return False
+
+        self._denylisted_until[jti] = expires_at
+        return True
 
     async def is_denied(self, jti: str) -> bool:
         """Return whether the JTI has been revoked in this process."""
@@ -109,25 +144,6 @@ class InMemoryJWTDenylistStore:
         expired_jtis = [jti for jti, expires_at in self._denylisted_until.items() if expires_at <= now]
         for expired_jti in expired_jtis:
             self._denylisted_until.pop(expired_jti, None)
-
-    def _evict_oldest_until_below_cap(self) -> None:
-        """Drop entries soonest to expire until a new item can be inserted.
-
-        Security: evicting by nearest-expiry rather than insertion order minimizes
-        the window in which a recently revoked token could become valid again.
-        """
-        while len(self._denylisted_until) >= self.max_entries:
-            soonest_jti = min(
-                self._denylisted_until,
-                key=lambda jti: self._denylisted_until[jti],
-            )
-            self._denylisted_until.pop(soonest_jti, None)
-            logger.warning(
-                "Evicted JTI %s from in-memory denylist (cap=%d reached); "
-                "revoked token may become valid. Use RedisJWTDenylistStore in production.",
-                soonest_jti,
-                self.max_entries,
-            )
 
 
 class RedisJWTDenylistStore:
@@ -156,9 +172,14 @@ class RedisJWTDenylistStore:
     def _key(self, jti: str) -> str:
         return f"{self.key_prefix}{jti}"
 
-    async def deny(self, jti: str, *, ttl_seconds: int) -> None:
-        """Store the JTI key with an expiry aligned to token lifetime."""
+    async def deny(self, jti: str, *, ttl_seconds: int) -> bool:
+        """Store the JTI key with an expiry aligned to token lifetime.
+
+        Returns:
+            ``True`` after the key is written (Redis denylist writes always succeed).
+        """
         await self.redis.setex(self._key(jti), max(ttl_seconds, 1), "1")
+        return True
 
     async def is_denied(self, jti: str) -> bool:
         """Return whether the JTI key exists in Redis."""
@@ -474,6 +495,10 @@ class JWTStrategy(Strategy[UP, ID]):
         """Revoke the given token by adding its ``jti`` to the configured denylist.
 
         Tokens without a ``jti`` claim, or tokens that fail to decode, are ignored.
+
+        Raises:
+            TokenError: When the denylist refuses a new revocation (for example, the
+                compatibility in-memory store is at ``max_entries`` with no reclaimable slots).
         """
         del user
 
@@ -498,4 +523,10 @@ class JWTStrategy(Strategy[UP, ID]):
         ttl_seconds = 1
         if isinstance(exp, int):
             ttl_seconds = max(exp - int(time.time()), 1)
-        await self._denylist_store.deny(jti, ttl_seconds=ttl_seconds)
+        recorded = await self._denylist_store.deny(jti, ttl_seconds=ttl_seconds)
+        if not recorded:
+            msg = (
+                "Could not record JWT revocation in the denylist (in-memory store at capacity). "
+                "Use RedisJWTDenylistStore or increase max_entries."
+            )
+            raise TokenError(msg)

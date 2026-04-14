@@ -13,7 +13,7 @@ import pytest
 
 import litestar_auth.manager as manager_module
 from litestar_auth.exceptions import InvalidResetPasswordTokenError, InvalidVerifyTokenError
-from litestar_auth.manager import ENCRYPTED_TOTP_SECRET_PREFIX, BaseUserManager
+from litestar_auth.manager import ENCRYPTED_TOTP_SECRET_PREFIX, BaseUserManager, UserManagerSecurity
 from litestar_auth.password import PasswordHelper
 from litestar_auth.schemas import UserCreate, UserUpdate
 from tests._helpers import ExampleUser
@@ -39,10 +39,12 @@ class CharacterizationManager(BaseUserManager[ExampleUser, UUID]):
         super().__init__(
             user_db,
             password_helper=PasswordHelper(),
-            verification_token_secret=VERIFY_SECRET,
-            reset_password_token_secret=RESET_SECRET,
-            id_parser=UUID,
-            totp_secret_key=totp_secret_key,
+            security=UserManagerSecurity[UUID](
+                verification_token_secret=VERIFY_SECRET,
+                reset_password_token_secret=RESET_SECRET,
+                totp_secret_key=totp_secret_key,
+                id_parser=UUID,
+            ),
             backends=backends,
         )
         self.events: list[tuple[str, UUID]] = []

@@ -6,7 +6,7 @@ from functools import partial
 from typing import TYPE_CHECKING, Any, override
 
 from litestar.middleware import DefineMiddleware
-from litestar.plugins import InitPlugin
+from litestar.plugins import CLIPlugin, InitPlugin
 
 from litestar_auth._plugin import config as _plugin_config
 from litestar_auth._plugin.controllers import (
@@ -39,7 +39,7 @@ from litestar_auth._plugin.validation import (
     validate_config,
 )
 from litestar_auth.authentication import Authenticator, LitestarAuthMiddleware
-from litestar_auth.config import plugin_secret_role_warning_owner
+from litestar_auth.config import OAuthProviderConfig, plugin_secret_role_warning_owner
 from litestar_auth.oauth_encryption import (
     OAuthTokenEncryption,
     require_oauth_token_encryption,
@@ -49,6 +49,7 @@ from litestar_auth.types import UserProtocol
 if TYPE_CHECKING:
     from collections.abc import Sequence
 
+    from litestar.cli._utils import Group
     from litestar.config.app import AppConfig
     from litestar.types import ControllerRouterHandler
     from sqlalchemy.ext.asyncio import AsyncSession
@@ -72,7 +73,7 @@ StartupBackendTemplate = _plugin_config.StartupBackendTemplate
 TotpConfig = _plugin_config.TotpConfig
 
 
-class LitestarAuth[UP: UserProtocol[Any], ID](InitPlugin):
+class LitestarAuth[UP: UserProtocol[Any], ID](InitPlugin, CLIPlugin):
     """Main auth orchestrator that wires middleware, controllers, and DI."""
 
     def __init__(self, config: LitestarAuthConfig[UP, ID]) -> None:
@@ -128,13 +129,20 @@ class LitestarAuth[UP: UserProtocol[Any], ID](InitPlugin):
         self._register_exception_handlers(app_config.route_handlers)
         return app_config
 
+    @override
+    def on_cli_init(self, cli: Group) -> None:
+        """Register plugin-owned CLI commands without affecting app startup wiring."""
+        from litestar_auth._plugin.role_cli import register_roles_cli  # noqa: PLC0415
+
+        register_roles_cli(cli, self.config)
+
     def _session_bound_backends(self, session: AsyncSession) -> list[AuthenticationBackend[UP, ID]]:
         """Bind all configured backends to the current request-local DB session.
 
         Returns:
             Backends rebound to the provided request-local session.
         """
-        return list(self.config.bind_request_backends(session))
+        return list(self.config.resolve_request_backends(session))
 
     def _build_user_manager(
         self,
@@ -201,13 +209,17 @@ class LitestarAuth[UP: UserProtocol[Any], ID](InitPlugin):
         security: list[dict[str, list[str]]] | None = None,
     ) -> list[ControllerRouterHandler]:
         controllers = build_controllers(self.config, security=security)
+        if self.config.controller_hook is not None:
+            controllers = self.config.controller_hook(controllers)
         app_config.route_handlers.extend(controllers)
         return controllers
 
-    @staticmethod
-    def _register_exception_handlers(route_handlers: Sequence[ControllerRouterHandler]) -> None:
+    def _register_exception_handlers(self, route_handlers: Sequence[ControllerRouterHandler]) -> None:
         """Register ClientException handlers for litestar-auth-generated routes only."""
-        register_exception_handlers(route_handlers)
+        register_exception_handlers(
+            route_handlers,
+            exception_response_hook=self.config.exception_response_hook,
+        )
 
     def _register_dependencies(self, app_config: AppConfig) -> None:
         register_dependencies(
@@ -234,15 +246,15 @@ class LitestarAuth[UP: UserProtocol[Any], ID](InitPlugin):
                 *(transport.refresh_cookie_name.encode() for transport in cookie_transports),
             },
         )
-        app_config.middleware.insert(
-            0,
-            DefineMiddleware(
-                LitestarAuthMiddleware[UP, ID],
-                get_request_session=partial(get_or_create_scoped_session, session_maker=self._session_maker),
-                authenticator_factory=self._build_authenticator,
-                auth_cookie_names=auth_cookie_names,
-            ),
+        middleware = DefineMiddleware(
+            LitestarAuthMiddleware[UP, ID],
+            get_request_session=partial(get_or_create_scoped_session, session_maker=self._session_maker),
+            authenticator_factory=self._build_authenticator,
+            auth_cookie_names=auth_cookie_names,
         )
+        if self.config.middleware_hook is not None:
+            middleware = self.config.middleware_hook(middleware)
+        app_config.middleware.insert(0, middleware)
 
     def _provide_backends(self) -> tuple[StartupBackendTemplate[UP, ID], ...]:
         return _plugin_config.resolve_backend_inventory(self.config).startup_backends()
@@ -263,6 +275,7 @@ __all__ = (
     "LitestarAuth",
     "LitestarAuthConfig",
     "OAuthConfig",
+    "OAuthProviderConfig",
     "StartupBackendTemplate",
     "TotpConfig",
 )

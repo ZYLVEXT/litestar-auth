@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from functools import cache
+from functools import lru_cache
 from typing import TYPE_CHECKING, Any, Protocol, Self, cast, override
 from uuid import UUID
 
@@ -20,7 +20,7 @@ from litestar_auth.oauth_encryption import (
     bind_oauth_token_encryption,
     require_oauth_token_encryption,
 )
-from litestar_auth.types import UserProtocol
+from litestar_auth.types import LoginIdentifier, UserProtocol
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
@@ -116,7 +116,7 @@ def _validate_oauth_account_model_contract(
         raise TypeError(msg)
 
 
-@cache
+@lru_cache(maxsize=16)
 def _build_user_repository[UP: SQLAlchemyUserModelProtocol](
     user_model: UserModelT[UP],
 ) -> type[SQLAlchemyAsyncRepository[UP]]:
@@ -138,7 +138,7 @@ def _build_user_repository[UP: SQLAlchemyUserModelProtocol](
     )
 
 
-@cache
+@lru_cache(maxsize=16)
 def _build_oauth_repository(oauth_model: type[Any]) -> type[SQLAlchemyAsyncRepository[Any]]:
     """Create a repository type bound to the provided OAuth account model.
 
@@ -265,14 +265,16 @@ class SQLAlchemyUserDatabase[UP: SQLAlchemyUserModelProtocol](BaseUserStore[UP, 
         """Return a user by email address when present."""
         return await self._repository().get_one_or_none(email=email, load=self._user_load or None)
 
-    _ALLOWED_LOOKUP_FIELDS: frozenset[str] = frozenset({"email", "username"})
+    _ALLOWED_LOOKUP_FIELDS: frozenset[LoginIdentifier] = frozenset({"email", "username"})
 
     @override
-    async def get_by_field(self, field_name: str, value: str) -> UP | None:
+    async def get_by_field(self, field_name: LoginIdentifier, value: str) -> UP | None:
         """Return a user by an allowed model field when present.
 
+        ``field_name`` must be a :data:`~litestar_auth.types.LoginIdentifier`.
+
         Raises:
-            ValueError: If ``field_name`` is not in the allow-list.
+            ValueError: If ``field_name`` is not in the allow-list (defense in depth).
         """
         if field_name not in self._ALLOWED_LOOKUP_FIELDS:
             msg = f"Lookup by {field_name!r} is not permitted; allowed: {sorted(self._ALLOWED_LOOKUP_FIELDS)}"
@@ -377,12 +379,11 @@ class SQLAlchemyUserDatabase[UP: SQLAlchemyUserModelProtocol](BaseUserStore[UP, 
         for field_name, value in update_dict.items():
             setattr(persistent_user, field_name, value)
 
-        updated_user = await self._repository().update(
+        return await self._repository().update(
             persistent_user,
             auto_refresh=True,
             load=self._user_load or None,
         )
-        return await self._reload_with_relationships(updated_user)
 
     @override
     async def delete(self, user_id: UUID) -> None:
@@ -398,7 +399,7 @@ class SQLAlchemyUserDatabase[UP: SQLAlchemyUserModelProtocol](BaseUserStore[UP, 
         return user if reloaded_user is None else reloaded_user
 
 
-@cache
+@lru_cache(maxsize=16)
 def _build_user_load[UP: SQLAlchemyUserModelProtocol](
     user_model: UserModelT[UP],
 ) -> tuple[Any, ...]:

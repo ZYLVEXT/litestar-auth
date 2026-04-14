@@ -10,13 +10,14 @@ from uuid import UUID, uuid4
 import pytest
 from litestar.connection import ASGIConnection
 from litestar.enums import MediaType
-from litestar.exceptions import NotAuthorizedException
+from litestar.exceptions import ClientException, NotAuthorizedException
 from litestar.response import Response
 
 from litestar_auth.authentication import backend as backend_module
 from litestar_auth.authentication.backend import AuthenticationBackend, _bind_strategy_session
 from litestar_auth.authentication.strategy.base import SessionBindable
 from litestar_auth.authentication.transport.cookie import CookieTransport
+from litestar_auth.exceptions import ErrorCode, TokenError
 from tests._helpers import ExampleUser
 
 if TYPE_CHECKING:
@@ -25,6 +26,8 @@ if TYPE_CHECKING:
     from litestar.types import HTTPScope
 
 pytestmark = pytest.mark.unit
+
+HTTP_SERVICE_UNAVAILABLE = 503
 
 
 def _backend_module() -> ModuleType:
@@ -109,6 +112,32 @@ async def test_backend_logout_composes_strategy_and_transport() -> None:
     called_response = transport.set_logout.call_args.args[0]
     assert isinstance(called_response, Response)
     assert called_response.content is None
+
+
+async def test_backend_logout_maps_token_error_to_service_unavailable() -> None:
+    """Logout surfaces denylist capacity failures as HTTP 503 JSON instead of silent success."""
+    user = ExampleUser(id=uuid4())
+    transport = Mock()
+    transport.read_token = AsyncMock()
+    strategy = AsyncMock()
+    strategy.destroy_token = AsyncMock(
+        side_effect=TokenError("Could not record JWT revocation in the denylist (in-memory store at capacity)."),
+    )
+    backend = AuthenticationBackend[ExampleUser, UUID](
+        name="cookie-db",
+        transport=transport,
+        strategy=cast("Any", strategy),
+    )
+    transport.set_logout.return_value = Response(content=None)
+
+    with pytest.raises(ClientException) as exc_info:
+        await backend.logout(user, "token-1")
+
+    assert exc_info.value.status_code == HTTP_SERVICE_UNAVAILABLE
+    extra = cast("dict[str, Any]", exc_info.value.extra)
+    assert extra["code"] == ErrorCode.TOKEN_PROCESSING_FAILED
+    strategy.destroy_token.assert_awaited_once_with("token-1", user)
+    transport.set_logout.assert_not_called()
 
 
 async def test_backend_logout_does_not_read_transport_token() -> None:

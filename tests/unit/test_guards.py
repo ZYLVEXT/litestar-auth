@@ -6,7 +6,7 @@ import importlib
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, cast
-from unittest.mock import Mock, patch
+from unittest.mock import Mock
 from uuid import UUID, uuid4
 
 import pytest
@@ -23,7 +23,11 @@ from litestar_auth.guards import (
     is_superuser,
     is_verified,
 )
-from litestar_auth.guards._guards import _require_guarded_user, _require_role_capable_user
+from litestar_auth.guards._guards import (
+    _require_active_guarded_user,
+    _require_guarded_user,
+    _require_role_capable_user,
+)
 from tests._helpers import ExampleUser
 
 if TYPE_CHECKING:
@@ -101,47 +105,38 @@ def test_guards_module_executes_under_coverage() -> None:
     assert reloaded_module.is_superuser is _guards.is_superuser
 
 
-def test_guards_reject_user_without_guarded_protocol() -> None:
+@pytest.mark.parametrize(
+    ("guard", "expected_name"),
+    [
+        pytest.param(is_active, "is_active", id="is_active"),
+        pytest.param(is_verified, "is_verified", id="is_verified"),
+        pytest.param(is_superuser, "is_superuser", id="is_superuser"),
+    ],
+)
+def test_guards_reject_user_without_guarded_protocol(
+    guard: Guard,
+    expected_name: str,
+) -> None:
     """Guards require ``GuardedUserProtocol`` (no getattr fallback for missing flags)."""
     user = _UserWithoutAccountState(id=uuid4())
     connection = _build_connection(user)
 
     with pytest.raises(PermissionDeniedException) as exc_info:
-        is_active(connection, _build_handler())
+        guard(connection, _build_handler())
 
+    detail = (exc_info.value.detail or "").lower()
     assert exc_info.value.status_code == HTTP_403_FORBIDDEN
-    assert "account state" in (exc_info.value.detail or "").lower()
+    assert "account state" in detail
+    assert expected_name in detail
+    assert "guardeduserprotocol" in detail
 
 
-@pytest.mark.parametrize("guard", [is_verified, is_superuser])
-def test_dependent_guards_defensively_reject_missing_user_after_activity_check(guard: Guard) -> None:
-    """Dependent guards still reject missing users if the activity check does not raise."""
-    connection = _build_connection(None)
+def test_require_active_guarded_user_returns_active_guarded_instance() -> None:
+    """The active-user helper returns the same user object narrowed for downstream checks."""
+    user = ExampleUser(id=uuid4(), is_active=True, is_verified=True, is_superuser=False)
+    connection = _build_connection(user)
 
-    with (
-        patch.object(guards_module, "is_active", return_value=None),
-        pytest.raises(NotAuthorizedException) as exc_info,
-    ):
-        guard(connection, _build_handler())
-
-    assert exc_info.value.status_code == HTTP_401_UNAUTHORIZED
-
-
-@pytest.mark.parametrize(
-    "guard",
-    [has_any_role("admin"), has_all_roles("admin", "billing")],
-)
-def test_role_guards_defensively_reject_missing_user_after_activity_check(guard: Guard) -> None:
-    """Role guards still reject missing users if the activity check does not raise."""
-    connection = _build_connection(None)
-
-    with (
-        patch.object(guards_module, "is_active", return_value=None),
-        pytest.raises(NotAuthorizedException) as exc_info,
-    ):
-        guard(connection, _build_handler())
-
-    assert exc_info.value.status_code == HTTP_401_UNAUTHORIZED
+    assert _require_active_guarded_user(connection) is user
 
 
 def test_require_guarded_user_returns_guarded_user_instance() -> None:
@@ -163,8 +158,11 @@ def test_require_guarded_user_rejects_none() -> None:
     with pytest.raises(PermissionDeniedException) as exc_info:
         _require_guarded_user(None)
 
+    detail = (exc_info.value.detail or "").lower()
     assert exc_info.value.status_code == HTTP_403_FORBIDDEN
-    assert "account state" in (exc_info.value.detail or "").lower()
+    assert "account state" in detail
+    assert "guard" in detail
+    assert "guardeduserprotocol" in detail
 
 
 def test_require_role_capable_user_rejects_user_without_roles() -> None:
@@ -172,8 +170,11 @@ def test_require_role_capable_user_rejects_user_without_roles() -> None:
     with pytest.raises(PermissionDeniedException) as exc_info:
         _require_role_capable_user(_GuardedUserWithoutRoles(id=uuid4()))
 
+    detail = (exc_info.value.detail or "").lower()
     assert exc_info.value.status_code == HTTP_403_FORBIDDEN
-    assert "role membership" in (exc_info.value.detail or "").lower()
+    assert "role membership" in detail
+    assert "guard" in detail
+    assert "rolecapableuserprotocol" in detail
 
 
 def test_guard_exports_reference_internal_implementations() -> None:
@@ -321,14 +322,21 @@ def test_authorization_guards_reject_invalid_users(
             has_any_role("admin"),
             _GuardedUserWithoutRoles(id=uuid4()),
             PermissionDeniedException,
-            "role membership",
-            id="missing-role-contract",
+            "has_any_role",
+            id="missing-role-contract-any",
+        ),
+        pytest.param(
+            has_all_roles("admin"),
+            _GuardedUserWithoutRoles(id=uuid4()),
+            PermissionDeniedException,
+            "has_all_roles",
+            id="missing-role-contract-all",
         ),
         pytest.param(
             has_any_role("admin"),
             _GuardedUserWithInvalidRoles(id=uuid4(), roles=(object(),)),
             PermissionDeniedException,
-            "role membership",
+            "has_any_role",
             id="invalid-user-roles",
         ),
         pytest.param(
@@ -359,4 +367,7 @@ def test_role_guards_fail_closed_for_unauthorized_requests(
     with pytest.raises(expected_exception) as exc_info:
         guard(connection, _build_handler())
 
-    assert detail_fragment in (str(exc_info.value.detail) if hasattr(exc_info.value, "detail") else "").lower()
+    detail = (str(exc_info.value.detail) if hasattr(exc_info.value, "detail") else str(exc_info.value)).lower()
+    assert detail_fragment in detail
+    if detail_fragment in {"has_any_role", "has_all_roles"}:
+        assert "rolecapableuserprotocol" in detail

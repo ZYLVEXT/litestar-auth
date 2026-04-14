@@ -7,8 +7,13 @@
 On `OAuthConfig`:
 
 ```python
+from litestar_auth import OAuthConfig, OAuthProviderConfig
+
 OAuthConfig(
-    oauth_providers=[("github", oauth_client), ...],
+    oauth_providers=[
+        OAuthProviderConfig(name="github", client=oauth_client),
+        # Legacy (name, client) tuples are also accepted.
+    ],
     oauth_redirect_base_url="https://your.app/auth",
     include_oauth_associate=True,
     oauth_token_encryption_key="...",  # required when OAuth is on

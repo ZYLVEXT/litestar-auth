@@ -1,5 +1,10 @@
 # OAuth router helpers
 
+The `litestar_auth.oauth` package uses **lazy imports** (PEP 562) so optional dependencies such as
+`httpx-oauth` are not loaded until OAuth helpers are used. If your IDE does not resolve symbols on
+`litestar_auth.oauth`, import from **`litestar_auth.oauth.router`** directly—the module that
+implements the helpers re-exported from the package.
+
 These helpers cover the supported manual OAuth client contract used by `create_provider_oauth_controller()`,
 `create_oauth_controller()`, and `OAuthClientAdapter`.
 

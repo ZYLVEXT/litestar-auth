@@ -29,7 +29,7 @@ from litestar_auth.exceptions import (
     OAuthAccountAlreadyLinkedError,
     UnverifiedUserError,
 )
-from litestar_auth.manager import BaseUserManager
+from litestar_auth.manager import BaseUserManager, UserManagerSecurity
 from litestar_auth.oauth import create_provider_oauth_controller
 from litestar_auth.password import PasswordHelper
 from tests._helpers import ExampleUser, auth_middleware_get_request_session
@@ -37,6 +37,8 @@ from tests._helpers import ExampleUser, auth_middleware_get_request_session
 if TYPE_CHECKING:
     from collections.abc import Mapping
     from types import TracebackType
+
+    from litestar_auth.types import LoginIdentifier
 
 pytestmark = pytest.mark.integration
 HTTP_CREATED = 201
@@ -82,7 +84,7 @@ class InMemoryOAuthUserDatabase(BaseUserStore[ExampleUser, UUID]):
         user_id = self.user_ids_by_email.get(email)
         return self.users_by_id.get(user_id) if user_id is not None else None
 
-    async def get_by_field(self, field_name: str, value: str) -> ExampleUser | None:
+    async def get_by_field(self, field_name: LoginIdentifier, value: str) -> ExampleUser | None:
         """Return a user by field value."""
         if field_name == "email":
             return await self.get_by_email(value)
@@ -348,9 +350,11 @@ class TrackingUserManager(BaseUserManager[ExampleUser, UUID]):
         super().__init__(
             user_db,
             password_helper=password_helper,
-            verification_token_secret="verify-secret-1234567890-1234567890",
-            reset_password_token_secret="reset-secret-1234567890-1234567890",
-            id_parser=UUID,
+            security=UserManagerSecurity[UUID](
+                verification_token_secret="verify-secret-1234567890-1234567890",
+                reset_password_token_secret="reset-secret-1234567890-1234567890",
+                id_parser=UUID,
+            ),
             backends=backends,
         )
         self.created_users: list[ExampleUser] = []

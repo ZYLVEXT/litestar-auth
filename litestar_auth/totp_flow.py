@@ -13,7 +13,7 @@ import jwt
 from jwt import ExpiredSignatureError, InvalidTokenError
 
 from litestar_auth.config import TOTP_PENDING_AUDIENCE
-from litestar_auth.exceptions import ConfigurationError
+from litestar_auth.exceptions import ConfigurationError, TokenError
 from litestar_auth.totp import SecurityWarning, TotpAlgorithm, UsedTotpCodeStore, verify_totp_with_store
 from litestar_auth.types import TotpUserProtocol
 
@@ -178,7 +178,13 @@ class TotpLoginFlowService[UP: TotpUserProtocol[Any], ID]:
             return
 
         ttl_seconds = max(int((pending_login.expires_at - datetime.now(tz=UTC)).total_seconds()), 1)
-        await self._pending_jti_store.deny(pending_login.pending_jti, ttl_seconds=ttl_seconds)
+        recorded = await self._pending_jti_store.deny(pending_login.pending_jti, ttl_seconds=ttl_seconds)
+        if not recorded:
+            msg = (
+                "Could not record pending-login JTI in the denylist (in-memory store at capacity). "
+                "Use RedisJWTDenylistStore or increase max_entries."
+            )
+            raise TokenError(msg)
 
     def _parse_user_id(self, subject: str) -> ID:
         # JWT `sub` is a string; when no id_parser is configured, ID must be str-compatible.

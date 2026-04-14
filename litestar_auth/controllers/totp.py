@@ -23,7 +23,7 @@ from litestar_auth.controllers._utils import (
     _require_account_state,
 )
 from litestar_auth.controllers.auth import INVALID_CREDENTIALS_DETAIL
-from litestar_auth.exceptions import ConfigurationError, ErrorCode
+from litestar_auth.exceptions import ConfigurationError, ErrorCode, TokenError
 from litestar_auth.guards import is_authenticated
 from litestar_auth.payloads import (
     TotpConfirmEnableRequest,
@@ -450,6 +450,12 @@ async def _totp_handle_verify[UP: UserProtocol[Any], ID](
             detail=msg,
             extra={"code": ErrorCode.TOTP_CODE_INVALID},
         ) from None
+    except TokenError as exc:
+        raise ClientException(
+            status_code=503,
+            detail=str(exc),
+            extra={"code": exc.code},
+        ) from exc
 
     verified_user = cast("UP", user)
     await totp_rate_limit.on_success("verify", request)

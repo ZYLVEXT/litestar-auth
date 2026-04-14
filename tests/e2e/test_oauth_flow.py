@@ -154,9 +154,11 @@ class OAuthManagerProxy:
                 oauth_token_encryption=self._oauth_token_encryption,
             ),
             password_helper=self._password_helper,
-            verification_token_secret="verify-secret-1234567890-1234567890",
-            reset_password_token_secret="reset-secret-1234567890-1234567890",
-            id_parser=UUID,
+            security=UserManagerSecurity[UUID](
+                verification_token_secret="verify-secret-1234567890-1234567890",
+                reset_password_token_secret="reset-secret-1234567890-1234567890",
+                id_parser=UUID,
+            ),
         )
 
     async def create(
@@ -457,9 +459,11 @@ async def create_local_user(
                 oauth_token_encryption=state.oauth_token_encryption,
             ),
             password_helper=state.password_helper,
-            verification_token_secret="verify-secret-1234567890-1234567890",
-            reset_password_token_secret="reset-secret-1234567890-1234567890",
-            id_parser=UUID,
+            security=UserManagerSecurity[UUID](
+                verification_token_secret="verify-secret-1234567890-1234567890",
+                reset_password_token_secret="reset-secret-1234567890-1234567890",
+                id_parser=UUID,
+            ),
         )
         user = await manager.create({"email": email, "password": password})
         if not is_active:

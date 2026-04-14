@@ -11,6 +11,7 @@ from litestar import Litestar, Request, get
 from litestar.testing import AsyncTestClient
 
 import litestar_auth._plugin.config as plugin_config_module
+import litestar_auth._plugin.database_token as database_token_module
 from litestar_auth._plugin.config import DatabaseTokenAuthConfig
 from litestar_auth.authentication.backend import AuthenticationBackend
 from litestar_auth.authentication.transport.bearer import BearerTransport
@@ -348,7 +349,7 @@ def _install_preset_backend_builder(
             strategy=cast("Any", strategy),
         )
 
-    monkeypatch.setattr(plugin_config_module, "_build_database_token_backend", _build_backend)
+    monkeypatch.setattr(database_token_module, "_build_database_token_backend", _build_backend)
     return states
 
 

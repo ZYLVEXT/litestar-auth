@@ -39,6 +39,7 @@ from litestar_auth._plugin.scoped_session import SessionFactory
 from litestar_auth.authentication.backend import AuthenticationBackend
 from litestar_auth.authentication.transport.bearer import BearerTransport
 from litestar_auth.controllers._utils import _mark_litestar_auth_route_handler
+from litestar_auth.exceptions import ErrorCode
 from litestar_auth.manager import UserManagerSecurity
 from tests.e2e.conftest import assert_structural_session_factory
 from tests.integration.test_orchestrator import (
@@ -53,6 +54,7 @@ if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 pytestmark = pytest.mark.unit
+HTTP_BAD_REQUEST = 400
 HTTP_IM_A_TEAPOT = 418
 
 
@@ -144,6 +146,16 @@ def test_client_exception_handler_formats_json_response() -> None:
     assert response.status_code == HTTP_IM_A_TEAPOT
     assert response.media_type == MediaType.JSON
     assert response.headers == {"X-Auth": "1"}
+
+
+def test_client_exception_handler_uses_error_code_unknown_when_extra_omits_code() -> None:
+    """Auth JSON responses fall back to ErrorCode.UNKNOWN when no string code is in ClientException.extra."""
+    exc = ClientException(detail="unspecified failure", extra={}, status_code=HTTP_BAD_REQUEST)
+
+    response = client_exception_handler(cast("Any", None), exc)
+
+    assert response.content == {"detail": "unspecified failure", "code": ErrorCode.UNKNOWN}
+    assert response.status_code == HTTP_BAD_REQUEST
 
 
 def test_register_exception_handlers_preserves_existing_handlers() -> None:
@@ -403,7 +415,7 @@ def test_register_dependencies_adds_oauth_associate_provider_only_when_configure
         oauth_providers=[("example", object())],
         include_oauth_associate=True,
         oauth_redirect_base_url="https://app.example.com/auth",
-        oauth_token_encryption_key="a" * 44,
+        oauth_token_encryption_key="YWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWE=",
     )
 
     register_dependencies(present_app_config, present_config, providers=_providers())

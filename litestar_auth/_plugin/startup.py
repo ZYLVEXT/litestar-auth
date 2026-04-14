@@ -9,13 +9,10 @@ from ipaddress import ip_address
 from typing import TYPE_CHECKING, Any, cast
 from urllib.parse import urlsplit
 
-from litestar_auth._plugin.config import (
-    _build_oauth_route_registration_contract,
-    _describe_jwt_revocation_tradeoff,
-    _uses_bundled_database_token_models,
-)
 from litestar_auth._plugin.middleware import get_cookie_transports
+from litestar_auth._plugin.oauth_contract import _build_oauth_route_registration_contract
 from litestar_auth._plugin.rate_limit import iter_rate_limit_endpoints
+from litestar_auth._plugin.security_policy import _describe_jwt_revocation_policy
 from litestar_auth.authentication.strategy.jwt import InMemoryJWTDenylistStore
 from litestar_auth.exceptions import ConfigurationError
 from litestar_auth.totp import InMemoryUsedTotpCodeStore, SecurityWarning
@@ -39,6 +36,10 @@ def _load_bundled_token_orm_models() -> tuple[object, object]:
 
 def bootstrap_bundled_token_orm_models(config: LitestarAuthConfig[Any, Any]) -> None:
     """Load bundled token ORM models during plugin app init when runtime uses them."""
+    from litestar_auth._plugin.database_token import (  # noqa: PLC0415
+        _uses_bundled_database_token_models,
+    )
+
     if _uses_bundled_database_token_models(config):
         _load_bundled_token_orm_models()
 
@@ -66,9 +67,9 @@ def warn_insecure_plugin_startup_defaults(config: LitestarAuthConfig[Any, Any]) 
             stacklevel=2,
         )
 
-    for backend in config.startup_backends():
+    for backend in config.resolve_startup_backends():
         strategy = getattr(backend, "strategy", None)
-        notice = _describe_jwt_revocation_tradeoff(getattr(strategy, "revocation_posture", None))
+        notice = _describe_jwt_revocation_policy(getattr(strategy, "revocation_posture", None))
         warning_message = None if notice is None else notice.startup_warning
         if isinstance(warning_message, str):
             warnings.warn(
@@ -223,7 +224,7 @@ def _warn_refresh_cookie_max_age_mismatch(config: LitestarAuthConfig[Any, Any]) 
     if not config.enable_refresh:
         return
 
-    cookie_transports = get_cookie_transports(config.startup_backends())
+    cookie_transports = get_cookie_transports(config.resolve_startup_backends())
     for transport in cookie_transports:
         if transport.refresh_max_age is None:
             warnings.warn(

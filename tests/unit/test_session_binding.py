@@ -17,6 +17,8 @@ from tests._helpers import ExampleUser
 if TYPE_CHECKING:
     from collections.abc import Mapping
 
+    from litestar_auth.types import LoginIdentifier
+
 pytestmark = pytest.mark.unit
 
 
@@ -51,7 +53,7 @@ class _DummyUserStore:
         """
         return await self.get_by_email_mock(email)
 
-    async def get_by_field(self, field_name: str, value: str) -> ExampleUser | None:
+    async def get_by_field(self, field_name: LoginIdentifier, value: str) -> ExampleUser | None:
         """Delegate ``get_by_field`` calls to the tracked async mock.
 
         Returns:
@@ -212,7 +214,7 @@ async def test_scoped_user_database_proxy_delegates_crud_methods(
 def test_scoped_user_database_proxy_binds_explicit_oauth_policy_when_supported() -> None:
     """Proxy construction binds the plugin-owned OAuth token policy once."""
     user_store = _BindingUserStore()
-    oauth_token_encryption = OAuthTokenEncryption(key="a" * 44)
+    oauth_token_encryption = OAuthTokenEncryption(key="YWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWE=")
 
     _build_proxy(user_store, oauth_token_encryption=oauth_token_encryption)
 
@@ -234,7 +236,7 @@ def test_scoped_user_database_proxy_ignores_non_callable_bind_attribute() -> Non
 
     proxy = _build_proxy(
         user_store,
-        oauth_token_encryption=OAuthTokenEncryption(key="a" * 44),
+        oauth_token_encryption=OAuthTokenEncryption(key="YWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWE="),
     )
 
     assert proxy._user_db is user_store
@@ -247,7 +249,7 @@ async def test_scoped_user_database_proxy_uses_store_returned_by_bind_call() -> 
     original_store.bind_result = rebound_store
     proxy = _build_proxy(
         original_store,
-        oauth_token_encryption=OAuthTokenEncryption(key="a" * 44),
+        oauth_token_encryption=OAuthTokenEncryption(key="YWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWE="),
     )
     expected_user = _build_user()
     rebound_store.get_by_email_mock.return_value = expected_user

@@ -67,6 +67,8 @@ def test_import_plugin_config_does_not_load_sqlalchemy_adapter() -> None:
     proc = _run_isolated(
         "import sys\n"
         "import litestar_auth._plugin.config\n"
+        "assert 'litestar_auth._plugin.database_token' not in sys.modules\n"
+        "assert 'litestar_auth._plugin.user_manager_builder' not in sys.modules\n"
         "assert 'litestar_auth.db.sqlalchemy' not in sys.modules\n"
         "assert 'litestar_auth.models' not in sys.modules\n",
     )

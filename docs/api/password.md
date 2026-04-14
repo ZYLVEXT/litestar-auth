@@ -10,7 +10,7 @@ default" path. Keep `PasswordHelper(password_hash=...)` for the deliberate custo
 your application intentionally diverges.
 
 For plugin-managed apps that also hash or verify passwords in domain services, CLI tasks, or data
-migrations, call `config.build_password_helper()` once after constructing
+migrations, call `config.resolve_password_helper()` once after constructing
 `LitestarAuthConfig(...)`. That method returns the explicit
 `user_manager_kwargs["password_helper"]` when you already supplied one; otherwise it memoizes
 `PasswordHelper.from_defaults()` on the config (without mutating the user-supplied

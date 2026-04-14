@@ -14,7 +14,7 @@ from litestar.testing import AsyncTestClient
 
 from litestar_auth.controllers import create_reset_password_controller
 from litestar_auth.exceptions import ErrorCode
-from litestar_auth.manager import BaseUserManager
+from litestar_auth.manager import BaseUserManager, UserManagerSecurity
 from litestar_auth.password import PasswordHelper
 from litestar_auth.ratelimit import AuthRateLimitConfig, EndpointRateLimit, InMemoryRateLimiter
 from tests._helpers import litestar_app_with_user_manager
@@ -56,10 +56,12 @@ class TrackingUserManager(BaseUserManager[ExampleUser, UUID]):
         super().__init__(
             user_db,
             password_helper=password_helper,
-            verification_token_secret="verify-secret-1234567890-1234567890",
-            reset_password_token_secret="reset-secret-1234567890-1234567890",
+            security=UserManagerSecurity[UUID](
+                verification_token_secret="verify-secret-1234567890-1234567890",
+                reset_password_token_secret="reset-secret-1234567890-1234567890",
+                id_parser=UUID,
+            ),
             reset_password_token_lifetime=reset_password_token_lifetime,
-            id_parser=UUID,
             backends=backends,
         )
         self.forgot_password_events: list[tuple[ExampleUser, str]] = []

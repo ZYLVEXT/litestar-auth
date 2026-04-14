@@ -98,7 +98,14 @@ from litestar_auth.payloads import (
     UserUpdate,
     VerifyToken,
 )
-from litestar_auth.plugin import DatabaseTokenAuthConfig, LitestarAuth, LitestarAuthConfig, OAuthConfig, TotpConfig
+from litestar_auth.plugin import (
+    DatabaseTokenAuthConfig,
+    LitestarAuth,
+    LitestarAuthConfig,
+    OAuthConfig,
+    OAuthProviderConfig,
+    TotpConfig,
+)
 from litestar_auth.ratelimit import (
     AuthRateLimitConfig,
     EndpointRateLimit,
@@ -151,6 +158,7 @@ __all__ = (
     "LoginCredentials",
     "OAuthAccountAlreadyLinkedError",
     "OAuthConfig",
+    "OAuthProviderConfig",
     "PasswordHelper",
     "RedisJWTDenylistStore",
     "RedisRateLimiter",

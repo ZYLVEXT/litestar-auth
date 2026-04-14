@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import importlib
+import re
+import sys
 from collections.abc import Callable, Sequence
 from datetime import timedelta
 from functools import partial
@@ -17,19 +19,20 @@ from litestar_auth._plugin.config import (
     DatabaseTokenAuthConfig,
     OAuthConfig,
     TotpConfig,
-    _build_oauth_route_registration_contract,
     build_user_manager,
     default_password_validator_factory,
     require_session_maker,
     resolve_password_validator,
     resolve_user_manager_factory,
 )
+from litestar_auth._plugin.oauth_contract import _build_oauth_route_registration_contract
 from litestar_auth._plugin.scoped_session import SessionFactory
+from litestar_auth._plugin.user_manager_builder import _DefaultUserManagerBuilderContract
 from litestar_auth.authentication.backend import AuthenticationBackend
 from litestar_auth.authentication.strategy.db_models import AccessToken, RefreshToken
 from litestar_auth.authentication.transport.bearer import BearerTransport
 from litestar_auth.authentication.transport.cookie import CookieTransport
-from litestar_auth.config import DEFAULT_MINIMUM_PASSWORD_LENGTH
+from litestar_auth.config import DEFAULT_MINIMUM_PASSWORD_LENGTH, OAuthProviderConfig
 from litestar_auth.exceptions import InvalidPasswordError
 from litestar_auth.manager import BaseUserManager, UserManagerSecurity, require_password_length
 from litestar_auth.password import PasswordHelper
@@ -45,6 +48,9 @@ from tests.integration.test_orchestrator import (
     InMemoryUserDatabase,
     PluginUserManager,
 )
+
+# Canonical substring from ``_raise_startup_only_database_token_runtime_error`` (database_token.py).
+_DB_TOKEN_STARTUP_ONLY_FAIL_CLOSED = re.escape("LitestarAuthConfig.resolve_request_backends(session)")
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -86,6 +92,23 @@ def test_plugin_config_module_executes_under_coverage() -> None:
     assert reloaded_module.LitestarAuthConfig.__name__ == LitestarAuthConfig.__name__
     assert reloaded_module.DatabaseTokenAuthConfig.__name__ == DatabaseTokenAuthConfig.__name__
     assert reloaded_module.OAuthConfig.__name__ == OAuthConfig.__name__
+
+
+def test_oauth_contract_module_executes_under_coverage() -> None:
+    """Reload the OAuth route contract module so coverage records module-level execution."""
+    oauth_contract_module = importlib.import_module("litestar_auth._plugin.oauth_contract")
+    importlib.reload(oauth_contract_module)
+
+
+def test_default_builder_constructor_mismatch_diagnostic_matches_security_bundle_contract() -> None:
+    """Constructor-mismatch text describes security=UserManagerSecurity, not standalone id_parser."""
+    msg = _DefaultUserManagerBuilderContract.build_constructor_mismatch_message(
+        "ExampleManager",
+        TypeError("boom"),
+    )
+    assert "security=UserManagerSecurity" in msg
+    assert "not a standalone id_parser=" in msg
+    assert "directly instead" not in msg
 
 
 def _minimal_config(  # noqa: PLR0913
@@ -177,12 +200,12 @@ def test_litestar_auth_config_login_identifier_defaults_to_email() -> None:
     assert config.login_identifier == "email"
 
 
-def test_litestar_auth_config_build_password_helper_memoizes_default_helper() -> None:
+def test_litestar_auth_config_resolve_password_helper_memoizes_default_helper() -> None:
     """Config exposes one memoized helper for plugin and app-owned password work."""
     config = _minimal_config()
 
-    first = config.build_password_helper()
-    second = config.build_password_helper()
+    first = config.resolve_password_helper()
+    second = config.resolve_password_helper()
 
     assert first is second
     assert "password_helper" not in config.user_manager_kwargs
@@ -190,13 +213,27 @@ def test_litestar_auth_config_build_password_helper_memoizes_default_helper() ->
     assert first.password_hash.hashers[1].__class__.__name__ == "BcryptHasher"
 
 
-def test_litestar_auth_config_build_password_helper_preserves_explicit_helper_override() -> None:
+def test_litestar_auth_config_resolve_password_helper_preserves_explicit_helper_override() -> None:
     """Config-level helper resolution keeps deliberate custom helper injection unchanged."""
     explicit_password_helper = PasswordHelper()
     config = _minimal_config()
     config.user_manager_kwargs["password_helper"] = explicit_password_helper
 
-    assert config.build_password_helper() is explicit_password_helper
+    assert config.resolve_password_helper() is explicit_password_helper
+
+
+def test_litestar_auth_config_exposes_only_canonical_password_and_backend_accessors() -> None:
+    """Removed alias methods: only resolve_* / get_* surfaces exist on the config class."""
+    config = _minimal_config()
+    assert not hasattr(LitestarAuthConfig, "build_password_helper")
+    assert not hasattr(LitestarAuthConfig, "memoized_default_password_helper")
+    assert not hasattr(LitestarAuthConfig, "startup_backends")
+    assert not hasattr(LitestarAuthConfig, "bind_request_backends")
+    session = cast("Any", DummySession())
+    helper = config.resolve_password_helper()
+    assert helper is config.get_default_password_helper()
+    assert config.resolve_startup_backends()
+    assert config.resolve_request_backends(session)
 
 
 def test_litestar_auth_config_accepts_login_identifier_username() -> None:
@@ -233,6 +270,69 @@ def test_oauth_config_defaults_match_expected_values() -> None:
     assert config.oauth_token_encryption_key is None
 
 
+def test_oauth_provider_config_constructed_with_keywords() -> None:
+    """OAuthProviderConfig supports keyword construction for IDE-friendly wiring."""
+    client = object()
+    entry = OAuthProviderConfig(name="github", client=client)
+    assert entry.name == "github"
+    assert entry.client is client
+
+
+def test_oauth_provider_config_coerce_accepts_legacy_tuple() -> None:
+    """Legacy (name, client) tuples normalize to OAuthProviderConfig."""
+    client = object()
+    entry = OAuthProviderConfig.coerce(("github", client))
+    assert entry.name == "github"
+    assert entry.client is client
+
+
+def test_oauth_provider_config_coerce_is_idempotent() -> None:
+    """Coercing an already-normalized entry returns the same instance."""
+    original = OAuthProviderConfig(name="x", client=object())
+    assert OAuthProviderConfig.coerce(original) is original
+
+
+def test_oauth_provider_config_coerce_rejects_invalid_shape() -> None:
+    """Invalid provider inventory items raise a clear TypeError."""
+    with pytest.raises(TypeError, match="OAuth provider entries must be"):
+        OAuthProviderConfig.coerce(cast("Any", ("only-one",)))
+
+
+def test_oauth_provider_config_coerce_requires_str_name() -> None:
+    """Tuple form requires a string provider name."""
+    with pytest.raises(TypeError, match="OAuth provider name must be a string"):
+        OAuthProviderConfig.coerce((123, object()))
+
+
+def test_oauth_route_registration_contract_accepts_named_and_tuple_entries() -> None:
+    """Plugin boundary coerces legacy tuples alongside OAuthProviderConfig entries."""
+    gh = object()
+    contract = _build_oauth_route_registration_contract(
+        auth_path="/auth/",
+        oauth_config=OAuthConfig(
+            oauth_providers=[
+                OAuthProviderConfig(name="github", client=gh),
+                ("gitlab", object()),
+            ],
+            oauth_redirect_base_url="https://app.example/auth/",
+        ),
+    )
+    assert [p.name for p in contract.providers] == ["github", "gitlab"]
+    assert contract.providers[0].client is gh
+
+
+def test_oauth_route_registration_contract_with_no_oauth_config() -> None:
+    """When ``oauth_config`` is omitted, the contract matches the empty OAuth surface."""
+    contract = _build_oauth_route_registration_contract(auth_path="/auth", oauth_config=None)
+
+    assert contract.has_configured_providers is False
+    assert contract.has_plugin_owned_login_routes is False
+    assert contract.has_plugin_owned_associate_routes is False
+    assert contract.login_path == "/auth/oauth"
+    assert contract.associate_path == "/auth/associate"
+    assert contract.redirect_base_url is None
+
+
 def test_oauth_route_registration_contract_omits_redirects_without_plugin_owned_routes() -> None:
     """Without providers, the plugin-owned OAuth callback bases stay absent."""
     contract = _build_oauth_route_registration_contract(
@@ -240,6 +340,7 @@ def test_oauth_route_registration_contract_omits_redirects_without_plugin_owned_
         oauth_config=OAuthConfig(),
     )
 
+    assert contract.has_configured_providers is False
     assert contract.has_plugin_owned_login_routes is False
     assert contract.has_plugin_owned_associate_routes is False
     assert contract.login_redirect_base_url is None
@@ -373,7 +474,7 @@ def test_database_token_auth_field_builds_canonical_db_bearer_backend() -> None:
     assert preset.token_bytes == configured_token_bytes
     assert preset.accept_legacy_plaintext_tokens is True
 
-    backend = config.startup_backends()[0]
+    backend = config.resolve_startup_backends()[0]
     database_token_strategy_type = _current_database_token_strategy_type()
     assert isinstance(backend, _current_startup_backend_template_type())
     assert backend.name == "database"
@@ -386,7 +487,7 @@ def test_database_token_auth_field_builds_canonical_db_bearer_backend() -> None:
     assert require_session_maker(config) is session_maker
 
 
-def test_startup_backends_wrap_manual_backends_in_startup_templates() -> None:
+def test_resolve_startup_backends_wrap_manual_backends_in_startup_templates() -> None:
     """Manual backends are exposed through the startup-only template type."""
     backend = AuthenticationBackend[ExampleUser, UUID](
         name="manual",
@@ -395,7 +496,7 @@ def test_startup_backends_wrap_manual_backends_in_startup_templates() -> None:
     )
     config = _minimal_config(backends=[backend])
 
-    startup_backend = config.startup_backends()[0]
+    startup_backend = config.resolve_startup_backends()[0]
 
     assert isinstance(startup_backend, _current_startup_backend_template_type())
     assert startup_backend.name == backend.name
@@ -450,7 +551,7 @@ def test_startup_database_token_templates_do_not_embed_a_placeholder_session() -
         ),
     )
 
-    startup_backend = config.startup_backends()[0]
+    startup_backend = config.resolve_startup_backends()[0]
 
     assert "session" not in vars(cast("Any", startup_backend.strategy))
 
@@ -459,7 +560,7 @@ def test_resolve_database_token_strategy_session_without_session_fails_closed() 
     """The legacy helper still returns a placeholder that raises the canonical runtime error."""
     startup_session = plugin_config_module.resolve_database_token_strategy_session()
 
-    with pytest.raises(RuntimeError, match="startup_backends\\(\\) returns startup-only backends"):
+    with pytest.raises(RuntimeError, match=_DB_TOKEN_STARTUP_ONLY_FAIL_CLOSED):
         _ = cast("Any", startup_session).execute
 
 
@@ -516,10 +617,10 @@ async def test_startup_database_token_templates_fail_closed_for_runtime_db_work(
             reset_password_token_secret="y" * 32,
         ),
     )
-    startup_backend = config.startup_backends()[0]
+    startup_backend = config.resolve_startup_backends()[0]
     user = ExampleUser(id=uuid4())
 
-    with pytest.raises(RuntimeError, match="startup_backends\\(\\) returns startup-only backends"):
+    with pytest.raises(RuntimeError, match=_DB_TOKEN_STARTUP_ONLY_FAIL_CLOSED):
         await cast("Any", startup_backend.strategy).write_token(user)
 
 
@@ -542,7 +643,7 @@ async def test_startup_database_token_templates_fail_closed_for_remaining_runtim
         ),
         enable_refresh=True,
     )
-    startup_strategy = cast("Any", config.startup_backends()[0].strategy)
+    startup_strategy = cast("Any", config.resolve_startup_backends()[0].strategy)
     user = ExampleUser(id=uuid4())
     runtime_calls = (
         startup_strategy.read_token(None, object()),
@@ -554,7 +655,7 @@ async def test_startup_database_token_templates_fail_closed_for_remaining_runtim
     )
 
     for operation in runtime_calls:
-        with pytest.raises(RuntimeError, match="startup_backends\\(\\) returns startup-only backends"):
+        with pytest.raises(RuntimeError, match=_DB_TOKEN_STARTUP_ONLY_FAIL_CLOSED):
             await operation
 
 
@@ -627,7 +728,7 @@ def test_resolve_backends_rejects_database_token_preset_and_directs_callers_to_e
         ),
     )
 
-    with pytest.raises(ValueError, match=r"Use startup_backends\(\) during plugin setup"):
+    with pytest.raises(ValueError, match=r"Use resolve_startup_backends\(\) during plugin setup"):
         config.resolve_backends()
 
 
@@ -643,7 +744,7 @@ def test_resolve_backends_returns_manual_backends_without_database_token_preset(
     assert config.resolve_backends() == [backend]
 
 
-def test_bind_request_backends_preserves_manual_backend_inventory_order() -> None:
+def test_resolve_request_backends_preserves_manual_backend_inventory_order() -> None:
     """Manual backends stay on the explicit runtime surface and bind sessions in the same order."""
 
     class _SessionAwareStrategy(InMemoryTokenStrategy):
@@ -670,14 +771,14 @@ def test_bind_request_backends_preserves_manual_backend_inventory_order() -> Non
     config = _minimal_config(backends=[primary_backend, secondary_backend])
     active_session = DummySession()
 
-    runtime_backends = config.bind_request_backends(cast("Any", active_session))
+    runtime_backends = config.resolve_request_backends(cast("Any", active_session))
 
     assert runtime_backends == (primary_backend, secondary_backend)
     assert primary_strategy.sessions_seen == [active_session]
     assert secondary_strategy.sessions_seen == [active_session]
 
 
-def test_bind_request_backends_realizes_database_token_preset_from_request_session() -> None:
+def test_resolve_request_backends_realizes_database_token_preset_from_request_session() -> None:
     """The DB-token preset exposes startup templates and request-scoped runtime backends separately."""
     config = LitestarAuthConfig[ExampleUser, UUID](
         database_token_auth=DatabaseTokenAuthConfig(
@@ -703,8 +804,8 @@ def test_bind_request_backends_realizes_database_token_preset_from_request_sessi
     authentication_backend_type = _current_authentication_backend_type()
     database_token_strategy_type = _current_database_token_strategy_type()
 
-    startup_backend = config.startup_backends()[0]
-    runtime_backends = config.bind_request_backends(cast("Any", active_session))
+    startup_backend = config.resolve_startup_backends()[0]
+    runtime_backends = config.resolve_request_backends(cast("Any", active_session))
 
     assert isinstance(startup_backend, _current_startup_backend_template_type())
     assert len(runtime_backends) == 1
@@ -718,8 +819,8 @@ def test_bind_request_backends_realizes_database_token_preset_from_request_sessi
     assert cast("Any", runtime_backends[0].strategy).accept_legacy_plaintext_tokens is True
 
 
-def test_startup_backends_reject_post_init_mixing_of_preset_and_manual_backends() -> None:
-    """`startup_backends()` fails closed if callers mutate the config into an invalid mixed state."""
+def test_resolve_startup_backends_reject_post_init_mixing_of_preset_and_manual_backends() -> None:
+    """`resolve_startup_backends()` fails closed if callers mutate the config into an invalid mixed state."""
     config = LitestarAuthConfig[ExampleUser, UUID](
         database_token_auth=DatabaseTokenAuthConfig(
             token_hash_secret="x" * 40,
@@ -745,7 +846,7 @@ def test_startup_backends_reject_post_init_mixing_of_preset_and_manual_backends(
     ]
 
     with pytest.raises(ValueError, match=r"database_token_auth=\.\.\. or backends=\.\.\., not both"):
-        config.startup_backends()
+        config.resolve_startup_backends()
 
 
 def test_resolve_password_validator_uses_fixed_default_builder_contract() -> None:
@@ -860,7 +961,7 @@ def test_build_user_manager_injects_default_password_helper_without_prior_materi
     config = _minimal_config()
     config.user_manager_class = _PasswordHelperRequiredManager
 
-    assert config.memoized_default_password_helper() is None
+    assert config.get_default_password_helper() is None
 
     manager = cast(
         "Any",
@@ -875,7 +976,7 @@ def test_build_user_manager_injects_default_password_helper_without_prior_materi
 
     assert manager.received_password_helper.verify("shared-password", hashed_password) is True
     assert manager.password_helper is manager.received_password_helper
-    assert config.memoized_default_password_helper() is manager.received_password_helper
+    assert config.get_default_password_helper() is manager.received_password_helper
 
 
 async def test_build_user_manager_preserves_explicit_none_password_validator_override() -> None:
@@ -917,10 +1018,10 @@ async def test_build_user_manager_applies_current_password_surface_from_config()
         verification_token_secret=verification_secret,
         reset_password_token_secret=reset_secret,
     )
-    password_helper = config.build_password_helper()
+    password_helper = config.resolve_password_helper()
 
     def factory(config: LitestarAuthConfig[ExampleUser, UUID]) -> Callable[[str], None]:
-        assert config.memoized_default_password_helper() is password_helper
+        assert config.get_default_password_helper() is password_helper
         assert "password_helper" not in config.user_manager_kwargs
         assert config.user_manager_security is not None
         assert config.user_manager_security.verification_token_secret == verification_secret
@@ -1163,8 +1264,10 @@ def test_build_user_manager_requires_canonical_default_constructor_contract() ->
                 cast("Any", user_db),
                 password_helper=password_helper,
                 password_validator=cast("Any", password_validator),
-                verification_token_secret=verification_token_secret,
-                reset_password_token_secret=reset_password_token_secret,
+                security=UserManagerSecurity[UUID](
+                    verification_token_secret=verification_token_secret,
+                    reset_password_token_secret=reset_password_token_secret,
+                ),
                 backends=backends,
             )
 
@@ -1282,7 +1385,7 @@ def test_backend_split_annotations_are_runtime_resolvable() -> None:
     """Config methods keep startup/runtime backend types distinct in runtime-resolved hints."""
     current_startup_backend_template = plugin_config_module.StartupBackendTemplate
     startup_hints = get_type_hints(
-        LitestarAuthConfig.startup_backends,
+        LitestarAuthConfig.resolve_startup_backends,
         localns={
             "StartupBackendTemplate": current_startup_backend_template,
             "UP": ExampleUser,
@@ -1290,7 +1393,7 @@ def test_backend_split_annotations_are_runtime_resolvable() -> None:
         },
     )
     bind_hints = get_type_hints(
-        LitestarAuthConfig.bind_request_backends,
+        LitestarAuthConfig.resolve_request_backends,
         localns={
             "AuthenticationBackend": AuthenticationBackend,
             "StartupBackendTemplate": current_startup_backend_template,
@@ -1312,8 +1415,8 @@ def test_backend_split_annotations_are_runtime_resolvable() -> None:
 
 def test_backend_split_static_types_remain_distinct() -> None:
     """Static typing keeps startup templates separate from runtime backends."""
-    startup_backends = _minimal_config().startup_backends()
-    runtime_backends = _minimal_config().bind_request_backends(cast("Any", DummySession()))
+    startup_backends = _minimal_config().resolve_startup_backends()
+    runtime_backends = _minimal_config().resolve_request_backends(cast("Any", DummySession()))
 
     assert_type(
         startup_backends,
@@ -1394,11 +1497,9 @@ def test_is_database_token_strategy_instance_returns_false_when_module_not_loade
     must report False without forcing the module to load.
     """
     fake_modules = {
-        name: module
-        for name, module in plugin_config_module.sys.modules.items()
-        if name != "litestar_auth.authentication.strategy.db"
+        name: module for name, module in sys.modules.items() if name != "litestar_auth.authentication.strategy.db"
     }
-    monkeypatch.setattr(plugin_config_module.sys, "modules", fake_modules)
+    monkeypatch.setattr(sys, "modules", fake_modules)
 
     assert plugin_config_module._is_database_token_strategy_instance(object()) is False
 
@@ -1415,10 +1516,10 @@ def test_is_bundled_token_model_returns_false_when_module_not_loaded(
     """
     fake_modules = {
         name: module
-        for name, module in plugin_config_module.sys.modules.items()
+        for name, module in sys.modules.items()
         if name != "litestar_auth.authentication.strategy.db_models"
     }
-    monkeypatch.setattr(plugin_config_module.sys, "modules", fake_modules)
+    monkeypatch.setattr(sys, "modules", fake_modules)
 
     assert plugin_config_module._is_bundled_token_model(object(), attribute_name="AccessToken") is False
 

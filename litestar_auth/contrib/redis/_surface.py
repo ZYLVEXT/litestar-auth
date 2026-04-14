@@ -158,59 +158,21 @@ class RedisAuthPreset:
         shared_backend: RateLimiterBackend = self._build_rate_limit_backend(self.rate_limit_tier)
         resolved_group_backends = derived_group_backends or None
 
-        if identity_fields is None:
-            if trusted_headers is None:
-                return AuthRateLimitConfig.from_shared_backend(
-                    shared_backend,
-                    enabled=enabled,
-                    disabled=disabled,
-                    group_backends=resolved_group_backends,
-                    scope_overrides=scope_overrides,
-                    namespace_style=namespace_style,
-                    namespace_overrides=namespace_overrides,
-                    endpoint_overrides=endpoint_overrides,
-                    trusted_proxy=trusted_proxy,
-                )
-            return AuthRateLimitConfig.from_shared_backend(
-                shared_backend,
-                enabled=enabled,
-                disabled=disabled,
-                group_backends=resolved_group_backends,
-                scope_overrides=scope_overrides,
-                namespace_style=namespace_style,
-                namespace_overrides=namespace_overrides,
-                endpoint_overrides=endpoint_overrides,
-                trusted_proxy=trusted_proxy,
-                trusted_headers=trusted_headers,
-            )
-
-        if trusted_headers is None:
-            return AuthRateLimitConfig.from_shared_backend(
-                shared_backend,
-                enabled=enabled,
-                disabled=disabled,
-                group_backends=resolved_group_backends,
-                scope_overrides=scope_overrides,
-                namespace_style=namespace_style,
-                namespace_overrides=namespace_overrides,
-                endpoint_overrides=endpoint_overrides,
-                trusted_proxy=trusted_proxy,
-                identity_fields=identity_fields,
-            )
-
-        return AuthRateLimitConfig.from_shared_backend(
-            shared_backend,
-            enabled=enabled,
-            disabled=disabled,
-            group_backends=resolved_group_backends,
-            scope_overrides=scope_overrides,
-            namespace_style=namespace_style,
-            namespace_overrides=namespace_overrides,
-            endpoint_overrides=endpoint_overrides,
-            trusted_proxy=trusted_proxy,
-            identity_fields=identity_fields,
-            trusted_headers=trusted_headers,
-        )
+        kwargs: dict[str, typing.Any] = {
+            "enabled": enabled,
+            "disabled": disabled,
+            "group_backends": resolved_group_backends,
+            "scope_overrides": scope_overrides,
+            "namespace_style": namespace_style,
+            "namespace_overrides": namespace_overrides,
+            "endpoint_overrides": endpoint_overrides,
+            "trusted_proxy": trusted_proxy,
+        }
+        if identity_fields is not None:
+            kwargs["identity_fields"] = identity_fields
+        if trusted_headers is not None:
+            kwargs["trusted_headers"] = trusted_headers
+        return AuthRateLimitConfig.from_shared_backend(shared_backend, **kwargs)
 
     def build_totp_used_tokens_store(self, *, key_prefix: str | None = None) -> RedisUsedTotpCodeStore:
         """Build ``RedisUsedTotpCodeStore`` from the preset's shared Redis client.

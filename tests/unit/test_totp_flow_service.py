@@ -12,6 +12,7 @@ import jwt
 import pytest
 
 import litestar_auth.totp_flow as totp_flow_module
+from litestar_auth.exceptions import TokenError
 from litestar_auth.totp import SecurityWarning
 from litestar_auth.totp_flow import (
     TOTP_PENDING_AUDIENCE,
@@ -102,6 +103,7 @@ async def test_authenticate_pending_login_returns_user_and_denies_verified_jti()
     used_tokens_store = AsyncMock()
     pending_jti_store = AsyncMock()
     pending_jti_store.is_denied.return_value = False
+    pending_jti_store.deny.return_value = True
     service = TotpLoginFlowService[ExampleUser, UUID](
         user_manager=manager,
         totp_pending_secret=TOTP_PENDING_SECRET,
@@ -326,6 +328,27 @@ async def test_deny_pending_login_records_pending_jti_with_remaining_ttl(monkeyp
     )
 
     pending_jti_store.deny.assert_awaited_once_with("b" * 32, ttl_seconds=45)
+
+
+async def test_deny_pending_login_raises_token_error_when_denylist_returns_false() -> None:
+    """Spent pending-login JTIs must not be treated as recorded when the store rejects the write."""
+    user = ExampleUser(id=uuid4(), email="user@example.com")
+    pending_jti_store = AsyncMock()
+    pending_jti_store.deny.return_value = False
+    service = TotpLoginFlowService[ExampleUser, UUID](
+        user_manager=_build_manager(user=user),
+        totp_pending_secret=TOTP_PENDING_SECRET,
+        pending_jti_store=pending_jti_store,
+    )
+
+    with pytest.raises(TokenError, match="Could not record pending-login JTI"):
+        await service._deny_pending_login(
+            PendingTotpLogin(
+                user=user,
+                pending_jti="e" * 32,
+                expires_at=datetime.now(tz=UTC) + timedelta(seconds=30),
+            ),
+        )
 
 
 async def test_deny_pending_login_warns_in_unsafe_testing_without_denylist_store() -> None:

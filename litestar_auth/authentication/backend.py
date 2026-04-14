@@ -4,12 +4,13 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any, cast
 
-from litestar.exceptions import NotAuthorizedException
+from litestar.exceptions import ClientException, NotAuthorizedException
 from litestar.response import Response
 
 from litestar_auth.authentication.strategy.base import SessionBindable, TokenInvalidationCapable
 from litestar_auth.authentication.transport.base import LogoutTokenReadable
 from litestar_auth.authentication.transport.cookie import CookieTransport
+from litestar_auth.exceptions import TokenError
 from litestar_auth.types import UserProtocol
 
 if TYPE_CHECKING:
@@ -53,8 +54,20 @@ class AuthenticationBackend[UP: UserProtocol[Any], ID]:
 
         Returns:
             Response mutated by the configured transport for logout.
+
+        Raises:
+            ClientException: When token revocation cannot be recorded (for example, an
+                in-memory denylist at capacity), surfaced as HTTP 503 with the library
+                error ``code`` in the JSON body.
         """
-        await self.strategy.destroy_token(token, user)
+        try:
+            await self.strategy.destroy_token(token, user)
+        except TokenError as exc:
+            raise ClientException(
+                status_code=503,
+                detail=str(exc),
+                extra={"code": exc.code},
+            ) from exc
         response = self.transport.set_logout(Response(content=None))
         if isinstance(self.transport, CookieTransport):
             self.transport.clear_refresh_token(response)

@@ -62,9 +62,11 @@ class E2EUserManager(BaseUserManager[User, UUID]):
         super().__init__(
             user_db=cast("Any", user_db),
             password_helper=password_helper,
-            verification_token_secret=verification_token_secret,
-            reset_password_token_secret=reset_password_token_secret,
-            id_parser=UUID,
+            security=UserManagerSecurity[UUID](
+                verification_token_secret=verification_token_secret,
+                reset_password_token_secret=reset_password_token_secret,
+                id_parser=UUID,
+            ),
             backends=backends,
         )
         self._verification_tracker = verification_tracker
@@ -143,7 +145,7 @@ def app() -> Iterator[tuple[Litestar, VerificationTracker]]:
         return E2EUserManager(
             user_db=user_db,
             verification_tracker=verification_tracker,
-            password_helper=config.build_password_helper(),
+            password_helper=config.resolve_password_helper(),
             verification_token_secret=cast("str", security.verification_token_secret),
             reset_password_token_secret=cast("str", security.reset_password_token_secret),
             backends=backends,

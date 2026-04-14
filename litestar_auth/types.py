@@ -1,7 +1,23 @@
-"""Shared typing primitives and authentication protocols."""
+"""Shared typing primitives and authentication protocols.
+
+Protocol selection (abbreviated)
+--------------------------------
+Implement the narrowest protocol that matches the features you use:
+
+| Feature area | Required protocol |
+|--------------|-------------------|
+| Basic authentication (identity in strategies, ``User`` typing) | ``UserProtocol`` — ``id`` |
+| ``is_active``, ``is_verified``, ``is_superuser`` guards | ``GuardedUserProtocol`` — account state booleans |
+| ``has_any_role``, ``has_all_roles`` guards | ``RoleCapableUserProtocol`` — flat ``roles`` |
+| TOTP enrollment / verification | ``TotpUserProtocol`` — ``email``, ``totp_secret`` |
+
+The full decision table, guard cross-links, and a multi-protocol model example are in
+``docs/api/types.md`` (API → Types in the built docs).
+"""
 
 from __future__ import annotations
 
+from collections.abc import Hashable
 from typing import TYPE_CHECKING, Any, Literal, Protocol, TypeVar, runtime_checkable
 
 if TYPE_CHECKING:
@@ -10,7 +26,7 @@ if TYPE_CHECKING:
     from litestar.connection import ASGIConnection
     from litestar.response import Response
 
-ID = TypeVar("ID")
+ID = TypeVar("ID", bound=Hashable)
 
 
 @runtime_checkable

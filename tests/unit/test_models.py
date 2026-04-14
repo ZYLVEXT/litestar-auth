@@ -42,6 +42,10 @@ from litestar_auth.models import (
 from litestar_auth.models import (
     import_token_orm_models as import_token_orm_models_from_models,
 )
+from litestar_auth.models._oauth_encrypted_types import (
+    oauth_access_token_type,
+    oauth_refresh_token_type,
+)
 from litestar_auth.oauth_encryption import OAuthTokenEncryption, bind_oauth_token_encryption
 
 if TYPE_CHECKING:
@@ -50,6 +54,7 @@ if TYPE_CHECKING:
 pytestmark = pytest.mark.unit
 
 OAUTH_TOKEN_ENCRYPTION_KEY = base64.urlsafe_b64encode(b"0" * 32).decode()
+OAUTH_TOKEN_COLUMN_LENGTH = 4096
 
 
 @pytest.mark.imports
@@ -69,6 +74,14 @@ def test_oauth_submodule_import_does_not_load_reference_user_module() -> None:
         timeout=60,
     )
     assert result.returncode == 0, (result.stdout, result.stderr)
+
+
+def test_oauth_token_sqlalchemy_string_length_matches_fernet_headroom() -> None:
+    """OAuth columns must store Fernet ciphertext for long provider tokens (see module comment)."""
+    assert isinstance(oauth_access_token_type, String)
+    assert isinstance(oauth_refresh_token_type, String)
+    assert oauth_access_token_type.length == OAUTH_TOKEN_COLUMN_LENGTH
+    assert oauth_refresh_token_type.length == OAUTH_TOKEN_COLUMN_LENGTH
 
 
 def test_models_package_getattr_unknown_name_raises() -> None:

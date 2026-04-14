@@ -20,7 +20,7 @@ from litestar_auth.authentication.transport.bearer import BearerTransport
 from litestar_auth.controllers import create_users_controller
 from litestar_auth.exceptions import ErrorCode, InvalidPasswordError, UserAlreadyExistsError
 from litestar_auth.guards import has_all_roles, has_any_role
-from litestar_auth.manager import BaseUserManager
+from litestar_auth.manager import BaseUserManager, UserManagerSecurity
 from litestar_auth.password import PasswordHelper
 from litestar_auth.schemas import UserUpdate
 from tests._helpers import auth_middleware_get_request_session, litestar_app_with_user_manager
@@ -80,8 +80,10 @@ class UsersControllerManager(BaseUserManager[ExampleUser, UUID]):
         super().__init__(
             user_db,
             password_helper=password_helper,
-            verification_token_secret="verify-secret-1234567890-1234567890",
-            reset_password_token_secret="reset-secret-1234567890-1234567890",
+            security=UserManagerSecurity[UUID](
+                verification_token_secret="verify-secret-1234567890-1234567890",
+                reset_password_token_secret="reset-secret-1234567890-1234567890",
+            ),
             backends=backends,
         )
         self.deleted_users: list[ExampleUser] = []

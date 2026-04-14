@@ -7,7 +7,7 @@ import inspect
 import logging
 import warnings
 from dataclasses import dataclass, replace
-from typing import TYPE_CHECKING, Literal, cast
+from typing import TYPE_CHECKING, Any, Literal, cast
 from unittest.mock import AsyncMock, patch
 from uuid import UUID, uuid4
 
@@ -87,9 +87,11 @@ class TrackingUserManager(BaseUserManager[ExampleUser, UUID]):
         super().__init__(
             user_db,
             password_helper=password_helper,
-            verification_token_secret="verify-secret-1234567890-1234567890",
-            reset_password_token_secret="reset-secret-1234567890-1234567890",
-            id_parser=UUID,
+            security=UserManagerSecurity[UUID](
+                verification_token_secret="verify-secret-1234567890-1234567890",
+                reset_password_token_secret="reset-secret-1234567890-1234567890",
+                id_parser=UUID,
+            ),
             password_validator=password_validator,
             reset_verification_on_email_change=reset_verification_on_email_change,
             backends=backends,
@@ -272,8 +274,7 @@ def test_manager_init_requires_explicit_secrets_outside_testing() -> None:
         BaseUserManager(
             user_db,
             password_helper=password_helper,
-            verification_token_secret=None,
-            reset_password_token_secret=None,
+            security=UserManagerSecurity[UUID](),
         )
 
 
@@ -319,6 +320,59 @@ def test_manager_init_accepts_typed_security_contract() -> None:
     assert manager.id_parser is UUID
 
 
+def test_manager_init_rejects_legacy_secret_keyword_arguments() -> None:
+    """Standalone verify/reset secret kwargs are not accepted; use ``security=`` only."""
+    user_db = AsyncMock()
+    password_helper = PasswordHelper()
+    loose_ctor = cast("Callable[..., Any]", BaseUserManager)
+    with pytest.raises(TypeError, match="unexpected keyword argument 'verification_token_secret'"):
+        loose_ctor(
+            user_db,
+            password_helper=password_helper,
+            verification_token_secret="verify-secret-1234567890-1234567890",
+            reset_password_token_secret="reset-secret-1234567890-1234567890",
+        )
+
+
+def test_manager_init_rejects_legacy_totp_and_id_parser_keyword_arguments() -> None:
+    """``totp_secret_key`` / ``id_parser`` must be passed via ``security=``, not as standalone kwargs."""
+    user_db = AsyncMock()
+    password_helper = PasswordHelper()
+    loose_ctor = cast("Callable[..., Any]", BaseUserManager)
+    with pytest.raises(TypeError, match="unexpected keyword argument 'totp_secret_key'"):
+        loose_ctor(
+            user_db,
+            password_helper=password_helper,
+            totp_secret_key="t" * 32,
+            unsafe_testing=True,
+        )
+    with pytest.raises(TypeError, match="unexpected keyword argument 'id_parser'"):
+        loose_ctor(
+            user_db,
+            password_helper=password_helper,
+            id_parser=UUID,
+            unsafe_testing=True,
+        )
+
+
+def test_manager_init_no_deprecation_when_only_unsafe_testing_with_default_secret_nones() -> None:
+    """Omitted secrets with ``unsafe_testing=True`` use generated fallbacks without deprecation noise."""
+    user_db = AsyncMock()
+    password_helper = PasswordHelper()
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        BaseUserManager(
+            user_db,
+            password_helper=password_helper,
+            security=UserManagerSecurity[UUID](),
+            unsafe_testing=True,
+        )
+
+    assert not [w for w in caught if issubclass(w.category, DeprecationWarning)]
+    unsafe_testing_warns = [w for w in caught if issubclass(w.category, UserWarning)]
+    assert len(unsafe_testing_warns) == EXPECTED_SECRET_FALLBACK_WARNINGS
+
+
 def test_manager_init_warns_when_typed_secret_roles_are_reused_in_production() -> None:
     """Direct manager construction warns instead of failing when roles reuse one value."""
     user_db = AsyncMock()
@@ -350,12 +404,13 @@ def test_manager_init_warns_when_typed_secret_roles_are_reused_in_production() -
 
 
 def test_manager_init_rejects_mixed_typed_security_and_legacy_secret_kwargs() -> None:
-    """The typed security contract is authoritative when it is used."""
+    """Surplus legacy keyword arguments are rejected at the Python level."""
     user_db = AsyncMock()
     password_helper = PasswordHelper()
+    loose_ctor = cast("Callable[..., Any]", BaseUserManager)
 
-    with pytest.raises(ConfigurationError, match="Configure manager secrets via security=UserManagerSecurity"):
-        BaseUserManager(
+    with pytest.raises(TypeError, match="unexpected keyword argument 'verification_token_secret'"):
+        loose_ctor(
             user_db,
             password_helper=password_helper,
             security=UserManagerSecurity[UUID](
@@ -393,8 +448,7 @@ def test_manager_init_allows_insecure_fallback_under_explicit_unsafe_testing() -
         manager = BaseUserManager(
             user_db,
             password_helper=password_helper,
-            verification_token_secret=None,
-            reset_password_token_secret=None,
+            security=UserManagerSecurity[UUID](),
             unsafe_testing=True,
         )
 
@@ -416,8 +470,7 @@ def test_manager_init_unsafe_testing_fallback_warning_points_to_caller() -> None
         BaseUserManager(
             user_db,
             password_helper=password_helper,
-            verification_token_secret=None,
-            reset_password_token_secret=None,
+            security=UserManagerSecurity[UUID](),
             unsafe_testing=True,
         )
 
@@ -435,16 +488,14 @@ def test_manager_unsafe_testing_generates_distinct_hex_secrets_when_omitted() ->
         first = BaseUserManager(
             user_db,
             password_helper=password_helper,
-            verification_token_secret=None,
-            reset_password_token_secret=None,
+            security=UserManagerSecurity[UUID](),
             unsafe_testing=True,
         )
     with pytest.warns(UserWarning, match=r"unsafe_testing=True"):
         second = BaseUserManager(
             user_db,
             password_helper=password_helper,
-            verification_token_secret=None,
-            reset_password_token_secret=None,
+            security=UserManagerSecurity[UUID](),
             unsafe_testing=True,
         )
 
@@ -482,6 +533,20 @@ def test_secret_value_equality_and_hash_cover_non_secret_comparisons() -> None:
     assert hash(first) == hash(same)
 
 
+def test_secret_value_hash_opaque_and_usable_as_mapping_key() -> None:
+    """__hash__ must follow __eq__ and avoid hashing the raw secret; sets/dicts behave."""
+    secret_cls = manager_module._SecretValue
+    a = secret_cls("same-value")
+    b = secret_cls("same-value")
+    c = secret_cls("other-value")
+
+    assert hash(a) == hash(b)
+    assert hash(a) != hash(c)
+    assert len({a, b}) == 1
+    table: dict[object, int] = {a: 1}
+    assert table[b] == 1
+
+
 def test_manager_repr_does_not_expose_token_secrets() -> None:
     """Manager text representations must not leak configured token secrets."""
     user_db = AsyncMock()
@@ -489,8 +554,10 @@ def test_manager_repr_does_not_expose_token_secrets() -> None:
     manager = BaseUserManager(
         user_db,
         password_helper=password_helper,
-        verification_token_secret="verify-secret-1234567890-1234567890",
-        reset_password_token_secret="reset-secret-1234567890-1234567890",
+        security=UserManagerSecurity[UUID](
+            verification_token_secret="verify-secret-1234567890-1234567890",
+            reset_password_token_secret="reset-secret-1234567890-1234567890",
+        ),
     )
 
     assert "verify-secret-1234567890-1234567890" not in repr(manager)
@@ -508,8 +575,10 @@ def test_manager_init_requires_reset_password_secret_when_verification_secret_pr
         BaseUserManager(
             user_db,
             password_helper=password_helper,
-            verification_token_secret="verify-secret-1234567890-1234567890",
-            reset_password_token_secret=None,
+            security=UserManagerSecurity[UUID](
+                verification_token_secret="verify-secret-1234567890-1234567890",
+                reset_password_token_secret=None,
+            ),
         )
 
 
@@ -604,14 +673,16 @@ def test_manager_init_wires_services_and_configuration() -> None:
             user_db,
             oauth_account_store=oauth_account_store,
             password_helper=password_helper,
-            verification_token_secret=verification_secret,
-            reset_password_token_secret=reset_secret,
+            security=UserManagerSecurity[UUID](
+                verification_token_secret=verification_secret,
+                reset_password_token_secret=reset_secret,
+                totp_secret_key="a" * 32,
+                id_parser=UUID,
+            ),
             verification_token_lifetime=verification_lifetime,
             reset_password_token_lifetime=reset_lifetime,
-            id_parser=UUID,
             password_validator=password_validator,
             reset_verification_on_email_change=False,
-            totp_secret_key="a" * 32,
             backends=backends,
             login_identifier="username",
         )
@@ -657,8 +728,10 @@ def test_manager_init_without_explicit_password_helper_uses_current_default_help
     """Omitting password_helper still yields the current Argon2+bcrypt helper surface."""
     manager = BaseUserManager(
         AsyncMock(),
-        verification_token_secret="verify-secret-1234567890-1234567890",
-        reset_password_token_secret="reset-secret-1234567890-1234567890",
+        security=UserManagerSecurity[UUID](
+            verification_token_secret="verify-secret-1234567890-1234567890",
+            reset_password_token_secret="reset-secret-1234567890-1234567890",
+        ),
     )
 
     assert manager.password_helper is manager.policy.password_helper
@@ -687,8 +760,10 @@ def test_manager_init_without_explicit_password_helper_uses_named_default_factor
 
     manager = BaseUserManager(
         AsyncMock(),
-        verification_token_secret="verify-secret-1234567890-1234567890",
-        reset_password_token_secret="reset-secret-1234567890-1234567890",
+        security=UserManagerSecurity[UUID](
+            verification_token_secret="verify-secret-1234567890-1234567890",
+            reset_password_token_secret="reset-secret-1234567890-1234567890",
+        ),
     )
 
     assert manager.password_helper is helper
@@ -2032,9 +2107,11 @@ async def test_base_hooks_are_noops() -> None:
     manager = BaseUserManager(
         user_db,
         password_helper=password_helper,
-        verification_token_secret="verify-secret-1234567890-1234567890",
-        reset_password_token_secret="reset-secret-1234567890-1234567890",
-        id_parser=UUID,
+        security=UserManagerSecurity[UUID](
+            verification_token_secret="verify-secret-1234567890-1234567890",
+            reset_password_token_secret="reset-secret-1234567890-1234567890",
+            id_parser=UUID,
+        ),
     )
     user = _build_user(password_helper)
 

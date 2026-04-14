@@ -6,7 +6,7 @@ This page summarizes protections and **conscious trade-offs** shipped by the lib
 
 - **Passwords** — hashing via `pwdlib`; hash upgrade on login when parameters change.
 - **Reset tokens** — signed JWT-style reset tokens with password fingerprint so tokens die after password change.
-- **JWT** — enforced `exp` / `iat` / `aud`; optional `iss`; `jti` denylist support (`InMemoryJWTDenylistStore`, `RedisJWTDenylistStore`) with an explicit `JWTStrategy.revocation_posture` contract.
+- **JWT** — enforced `exp` / `iat` / `aud`; optional `iss`; `jti` denylist support (`InMemoryJWTDenylistStore`, `RedisJWTDenylistStore`) with an explicit `JWTStrategy.revocation_posture` contract. The in-memory denylist prunes expired JTIs on each revoke and **fails closed** when `max_entries` is reached with no reclaimable slots: it does not insert the new revocation and does not drop active revocations (use `RedisJWTDenylistStore` or raise the cap for high revoke volume). Callers are not misled into thinking logout succeeded: `JWTStrategy.destroy_token` raises `TokenError`, and `AuthenticationBackend.logout` maps that to HTTP **503** with `TOKEN_PROCESSING_FAILED` for API routes using the bundled exception handler.
 - **Session fingerprint** — optional claim on JWT tying tokens to current password/email state.
 - **Cookie auth** — secure defaults (`HttpOnly`, `Secure`, `SameSite`); CSRF for unsafe methods when wired (see [Guides — Security](guides/security.md)).
 - **TOTP** — replay protection when a `totp_used_tokens_store` is configured; fail-fast in production without a store when replay protection is required; persisted secrets use the explicit `BaseUserManager.totp_secret_storage_posture` contract.
@@ -27,8 +27,8 @@ When you assemble `JWTStrategy` or `BaseUserManager` yourself, inspect the runti
 
 - `JWTStrategy(secret=...)` keeps the compatibility-grade `compatibility_in_memory` revocation posture by default. `revocation_is_durable` stays `False` and logout / revoke remains single-process until you provide a shared denylist store.
 - `JWTStrategy(..., denylist_store=RedisJWTDenylistStore(...))` reports the durable `shared_store` posture and clears the compatibility-only warning / validation branch.
-- `BaseUserManager(..., totp_secret_key=None)` keeps the compatibility-grade `compatibility_plaintext` storage posture so existing plaintext TOTP secrets still round-trip for direct/custom integrations.
-- Providing `totp_secret_key` through either direct kwargs or `security=UserManagerSecurity(...)` flips `BaseUserManager.totp_secret_storage_posture` to `fernet_encrypted`, so newly persisted TOTP secrets are encrypted at rest.
+- `BaseUserManager(..., security=UserManagerSecurity(...))` with `totp_secret_key` omitted or explicitly `None` keeps the compatibility-grade `compatibility_plaintext` storage posture so existing plaintext TOTP secrets still round-trip for direct/custom integrations.
+- Supplying a non-`None` `totp_secret_key` on that `UserManagerSecurity(...)` bundle flips `BaseUserManager.totp_secret_storage_posture` to `fernet_encrypted`, so newly persisted TOTP secrets are encrypted at rest.
 
 Additional explicit opt-ins to weaker behavior:
 

@@ -14,6 +14,8 @@ if TYPE_CHECKING:
     from collections.abc import Callable, Mapping
     from types import TracebackType
 
+    from litestar_auth.types import LoginIdentifier
+
 
 class _EmailUserProtocol(UserProtocol[UUID], Protocol):
     """User contract needed by the shared in-memory integration store."""
@@ -51,7 +53,7 @@ class InMemoryUserDatabase[UP: _EmailUserProtocol](BaseUserStore[UP, UUID]):
         return self.users_by_id.get(user_id) if user_id is not None else None
 
     @override
-    async def get_by_field(self, field_name: str, value: str) -> UP | None:
+    async def get_by_field(self, field_name: LoginIdentifier, value: str) -> UP | None:
         """Return a user by field value."""
         if field_name == "email":
             return await self.get_by_email(value)

@@ -11,6 +11,7 @@ if TYPE_CHECKING:
     from collections.abc import Mapping
     from uuid import UUID
 
+    from litestar_auth.types import LoginIdentifier
     from tests._helpers import ExampleUser
 
 
@@ -24,7 +25,7 @@ class _StructuralUserStore:
         del email
         return None
 
-    async def get_by_field(self, field_name: str, value: str) -> ExampleUser | None:
+    async def get_by_field(self, field_name: LoginIdentifier, value: str) -> ExampleUser | None:
         del field_name, value
         return None
 

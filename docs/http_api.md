@@ -41,7 +41,8 @@ Built-in user-returning responses from `POST {auth}/register`, `POST {auth}/veri
 
 That response contract is intentionally unchanged by the relational-role migration. The HTTP API
 still exposes one flat `roles` array, not raw `role` / `user_role` rows, permission matrices, or
-role-management endpoints.
+role-management endpoints. For operational catalog and user-role administration, use the
+plugin-owned [`litestar roles`](guides/roles_cli.md) CLI surface instead.
 
 ## Password reset
 
@@ -103,6 +104,8 @@ payloads even when a custom `user_update_schema` includes them, while superuser
 
 The storage redesign does not add separate CRUD endpoints for the relational role tables. Built-in
 users routes continue to manage only the normalized flat `roles` contract on the user boundary.
+Operator-driven catalog and assignment administration remains CLI-only through
+[`litestar roles`](guides/roles_cli.md).
 
 ## Multiple backends
 

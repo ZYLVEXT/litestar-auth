@@ -1,3 +1,9 @@
 # Exceptions
 
+All library-specific failures are expressed as **`LitestarAuthError`** (or a subclass). Each exception carries a human-readable message and a stable **`code`** string. The canonical set of machine-readable codes is the **`ErrorCode`** `StrEnum`: member names match their string values, so codes serialize cleanly to JSON and compare naturally to plain strings. The enum includes **`UNKNOWN`**, used as the default for base **`LitestarAuthError`** instances and as the JSON **`code`** fallback for plugin-owned auth routes when a `ClientException` has no string `code` in `extra`.
+
+Concrete types group related failures: **`AuthenticationError`** covers login and identity problems (with narrower types such as **`UserAlreadyExistsError`**, **`UserNotExistsError`**, **`InvalidPasswordError`**, **`InactiveUserError`**, **`UnverifiedUserError`**, and **`OAuthAccountAlreadyLinkedError`**). **`TokenError`** covers token lifecycle issues (for example **`InvalidVerifyTokenError`** and **`InvalidResetPasswordTokenError`**). **`AuthorizationError`** is raised when the caller is authenticated but not permitted. **`ConfigurationError`** indicates invalid plugin or library configuration. Not every **`ErrorCode`** has a dedicated exception class—some codes are used directly where a shared shape is enough.
+
+The bundled HTTP **`controllers`** translate these exceptions into HTTP responses (status codes and structured error payloads) without manual mapping in typical apps. For a table of codes, HTTP mapping, and user-facing messages, see [Errors reference](../errors.md). The same `ErrorCode` may appear with different HTTP statuses depending on context — for example, `TOKEN_PROCESSING_FAILED` is usually **401** or **400** for invalid tokens, and **503** when denylist storage cannot accept a required revocation or pending-JTI write under capacity pressure (see the errors reference and [Security](../security.md)).
+
 ::: litestar_auth.exceptions

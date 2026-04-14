@@ -29,7 +29,57 @@ RESET_PASSWORD_TOKEN_AUDIENCE = "litestar-auth:reset-password"
 JWT_ACCESS_TOKEN_AUDIENCE = "litestar-auth:access"
 TOTP_PENDING_AUDIENCE = "litestar-auth:2fa-pending"
 TOTP_ENROLL_AUDIENCE = "litestar-auth:2fa-enroll"
-type OAuthProviderConfig = tuple[str, object]
+# Legacy ``oauth_providers`` entries were ``(name, client)`` pairs of this length.
+_LEGACY_OAUTH_PROVIDER_PAIR_LEN = 2
+
+
+@dataclass(frozen=True, slots=True)
+class OAuthProviderConfig:
+    """One entry in :attr:`~litestar_auth._plugin.config.OAuthConfig.oauth_providers`.
+
+    Plugin-owned OAuth routes use ``name`` as the ``{provider}`` segment (for example
+    ``GET {auth_path}/oauth/{name}/callback``). ``client`` must be an httpx-oauth-compatible
+    OAuth2 client instance (typically :class:`httpx_oauth.oauth2.BaseOAuth2`).
+
+    The ``client`` field is typed as :class:`object` so core modules do not require a hard
+    dependency on httpx-oauth at import time.
+
+    For backward compatibility, configurations may still pass plain ``(name, client)``
+    pairs; :func:`OAuthProviderConfig.coerce` (used at the plugin OAuth route boundary)
+    normalizes those tuples to this type.
+
+    Attributes:
+        name: Logical provider name used in URLs and ``oauth_provider_scopes`` keys.
+        client: OAuth2 client instance passed through to the OAuth service layer.
+    """
+
+    name: str
+    client: object
+
+    @classmethod
+    def coerce(cls, value: object) -> OAuthProviderConfig:
+        """Return a normalized entry, accepting legacy ``(name, client)`` tuples.
+
+        The parameter is typed as :class:`object` so callers may pass legacy pairs while
+        invalid shapes still fail at runtime with :exc:`TypeError`.
+
+        Raises:
+            TypeError: If ``value`` is neither an :class:`OAuthProviderConfig` nor a
+                length-2 tuple whose first element is a ``str``.
+        """
+        if isinstance(value, OAuthProviderConfig):
+            return value
+        if isinstance(value, tuple) and len(value) == _LEGACY_OAUTH_PROVIDER_PAIR_LEN:
+            name, client = value
+            if not isinstance(name, str):
+                msg = "OAuth provider name must be a string."
+                raise TypeError(msg)
+            return cls(name=name, client=client)
+        msg = (
+            "OAuth provider entries must be OAuthProviderConfig(name=..., client=...) "
+            "or a (name, client) tuple of length 2."
+        )
+        raise TypeError(msg)
 
 
 @dataclass(frozen=True, slots=True)

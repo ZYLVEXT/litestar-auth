@@ -12,6 +12,7 @@ import secrets
 import struct
 import time
 import warnings
+from dataclasses import dataclass
 from functools import partial
 from typing import TYPE_CHECKING, Any, Literal, Protocol, runtime_checkable
 from urllib.parse import quote, urlencode
@@ -25,6 +26,7 @@ if TYPE_CHECKING:
 
 SECRET_BYTES = 20
 TIME_STEP_SECONDS = 30
+TOTP_DRIFT_STEPS: int = 1
 
 # RFC 4226 S4 recommends HMAC key length matching the hash output length.
 _SECRET_BYTES_BY_ALGORITHM: dict[TotpAlgorithm, int] = {
@@ -32,13 +34,15 @@ _SECRET_BYTES_BY_ALGORITHM: dict[TotpAlgorithm, int] = {
     "SHA256": 32,
     "SHA512": 64,
 }
-USED_TOTP_CODE_TTL_SECONDS = TIME_STEP_SECONDS * 2
+# Match replay-store retention to the full drift-validation span: counters in
+# ``range(-TOTP_DRIFT_STEPS, TOTP_DRIFT_STEPS + 1)`` cover ``2 * TOTP_DRIFT_STEPS + 1``
+# step-sized windows (e.g. 90 s when drift is 1 and the step is 30 s).
+USED_TOTP_CODE_TTL_SECONDS = TIME_STEP_SECONDS * (2 * TOTP_DRIFT_STEPS + 1)
 TOTP_DIGITS = 6
 # Default algorithm for new TOTP enrollments. Deployments that need legacy
 # authenticator compatibility can override this via the totp_algorithm
 # parameter and choose "SHA1" explicitly.
 TOTP_ALGORITHM = "SHA256"
-TOTP_DRIFT_STEPS: int = 1
 
 type TotpAlgorithm = Literal["SHA1", "SHA256", "SHA512"]
 
@@ -55,6 +59,21 @@ logger = logging.getLogger(__name__)
 _load_redis_asyncio = partial(_require_redis_asyncio, feature_name="RedisUsedTotpCodeStore")
 
 
+@dataclass(frozen=True, slots=True)
+class UsedTotpMarkResult:
+    """Outcome of attempting to record a used ``(user_id, counter)`` pair in a replay store.
+
+    Attributes:
+        stored: ``True`` when the pair was newly recorded.
+        rejected_as_replay: When ``stored`` is ``False``, ``True`` if the pair was already
+            recorded (replay). ``False`` when the store rejected the insert for another reason,
+            such as in-memory capacity exhaustion (fail-closed).
+    """
+
+    stored: bool
+    rejected_as_replay: bool = False
+
+
 class SecurityWarning(UserWarning):
     """Warning emitted for security-sensitive insecure defaults (TOTP, plugin startup, etc.)."""
 
@@ -63,11 +82,14 @@ class SecurityWarning(UserWarning):
 class UsedTotpCodeStore(Protocol):
     """Persistence for used TOTP codes keyed by user and counter."""
 
-    async def mark_used(self, user_id: Hashable, counter: int, ttl_seconds: float) -> bool:
+    async def mark_used(self, user_id: Hashable, counter: int, ttl_seconds: float) -> UsedTotpMarkResult:
         """Atomically record a `(user_id, counter)` pair when unused.
 
         Returns:
-            ``True`` when the pair was newly stored, otherwise ``False``.
+            :class:`UsedTotpMarkResult` with ``stored=True`` when the pair was newly recorded.
+            When ``stored`` is ``False``, set ``rejected_as_replay=True`` if the pair was already
+            stored; otherwise callers such as :func:`verify_totp_with_store` can surface
+            non-replay failures (for example in-memory capacity pressure) as distinct telemetry.
         """
 
 
@@ -103,16 +125,20 @@ class RedisUsedTotpCodeStore:
         """Return the Redis key for a (user_id, counter) pair."""
         return f"{self._key_prefix}{user_id!s}:{counter}"
 
-    async def mark_used(self, user_id: Hashable, counter: int, ttl_seconds: float) -> bool:
+    async def mark_used(self, user_id: Hashable, counter: int, ttl_seconds: float) -> UsedTotpMarkResult:
         """Atomically record a used (user_id, counter) pair via SET key 1 NX PX ttl_ms.
 
         Returns:
-            ``True`` when the pair was newly stored, ``False`` for a replay.
+            ``UsedTotpMarkResult(stored=True)`` when the pair was newly stored, or
+            ``UsedTotpMarkResult(stored=False, rejected_as_replay=True)`` when the key already
+            existed (replay).
         """
         key = self._key(user_id, counter)
         ttl_ms = int(ttl_seconds * 1000)
         result = await self._redis.set(key, "1", nx=True, px=ttl_ms)
-        return result is True
+        if result is True:
+            return UsedTotpMarkResult(stored=True)
+        return UsedTotpMarkResult(stored=False, rejected_as_replay=True)
 
 
 class InMemoryUsedTotpCodeStore:
@@ -120,6 +146,15 @@ class InMemoryUsedTotpCodeStore:
 
     Not safe for multi-process or multi-host deployments; use :class:`RedisUsedTotpCodeStore`
     for shared storage (e.g. multi-worker or multi-pod).
+
+    **Capacity / replay protection:** When ``len(entries) >= max_entries`` after dropping
+    expired rows, :meth:`mark_used` **fails closed** and returns a result with ``stored=False``
+    (and ``rejected_as_replay=False``) instead of evicting
+    still-valid replay records to make room. That avoids weakening replay protection under
+    load (previously the store evicted the soonest-to-expire active entry). Operators
+    should size ``max_entries`` for peak legitimate traffic or switch to Redis-backed storage.
+    Prior releases evicted the soonest-to-expire active entry under pressure; that behavior
+    was removed because it could widen replay windows.
     """
 
     def __init__(
@@ -142,50 +177,40 @@ class InMemoryUsedTotpCodeStore:
         self._entries: dict[tuple[Hashable, int], float] = {}
         self._lock = asyncio.Lock()
 
-    async def mark_used(self, user_id: Hashable, counter: int, ttl_seconds: float) -> bool:
+    async def mark_used(self, user_id: Hashable, counter: int, ttl_seconds: float) -> UsedTotpMarkResult:
         """Store a used code pair until its TTL elapses.
 
         Returns:
-            ``True`` when the pair was stored, otherwise ``False`` for a replay.
+            ``UsedTotpMarkResult(stored=True)`` when the pair was newly stored.
+            ``UsedTotpMarkResult(stored=False, rejected_as_replay=True)`` when the pair was
+            already recorded (replay). ``UsedTotpMarkResult(stored=False, rejected_as_replay=False)``
+            when the store is at ``max_entries`` and no expired entries remain to reclaim
+            (fail-closed under capacity pressure; see class docs).
         """
         async with self._lock:
             now = self._clock()
             self._prune(now)
             key = (user_id, counter)
             if key in self._entries:
-                return False
+                return UsedTotpMarkResult(stored=False, rejected_as_replay=True)
 
             if len(self._entries) >= self.max_entries:
-                self._prune(now)
-                self._evict_oldest_until_below_cap()
+                logger.error(
+                    "Rejected in-memory TOTP replay-store insert: capacity %d reached with no "
+                    "expired entries to reclaim (fail closed). Use RedisUsedTotpCodeStore or "
+                    "increase max_entries for high-volume deployments.",
+                    self.max_entries,
+                )
+                return UsedTotpMarkResult(stored=False, rejected_as_replay=False)
 
             self._entries[key] = now + ttl_seconds
-            return True
+            return UsedTotpMarkResult(stored=True)
 
     def _prune(self, now: float) -> None:
         """Drop expired replay-cache entries."""
         expired_keys = [key for key, expires_at in self._entries.items() if expires_at <= now]
         for key in expired_keys:
             del self._entries[key]
-
-    def _evict_oldest_until_below_cap(self) -> None:
-        """Drop entries soonest to expire until a new item can be inserted.
-
-        Security: evicting by nearest-expiry rather than insertion order
-        minimizes the window in which a recently accepted TOTP code could
-        be replayed after eviction pressure.
-        """
-        while len(self._entries) >= self.max_entries:
-            soonest_key = min(
-                self._entries,
-                key=lambda k: self._entries[k],
-            )
-            del self._entries[soonest_key]
-            logger.warning(
-                "Evicted TOTP replay entry from in-memory store (cap=%d reached); "
-                "use RedisUsedTotpCodeStore in production.",
-                self.max_entries,
-            )
 
 
 def generate_totp_secret(algorithm: TotpAlgorithm = TOTP_ALGORITHM) -> str:
@@ -275,11 +300,17 @@ async def verify_totp_with_store(  # noqa: PLR0913
         )
         return True
 
-    accepted = await used_tokens_store.mark_used(user_id, counter, USED_TOTP_CODE_TTL_SECONDS)
-    if not accepted:
+    mark_result = await used_tokens_store.mark_used(user_id, counter, USED_TOTP_CODE_TTL_SECONDS)
+    if mark_result.stored:
+        return True
+    if mark_result.rejected_as_replay:
         logger.warning("TOTP replay detected.", extra={"event": "totp_replay", "user_id": str(user_id)})
-        return False
-    return True
+    else:
+        logger.warning(
+            "TOTP used-code store rejected verification under capacity pressure (fail closed).",
+            extra={"event": "totp_replay_store_capacity", "user_id": str(user_id)},
+        )
+    return False
 
 
 def _current_counter() -> int:

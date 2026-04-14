@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
-from litestar_auth.types import UserProtocol
+from litestar_auth.types import LoginIdentifier, UserProtocol
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
@@ -22,12 +22,14 @@ class BaseUserStore[UP: UserProtocol[Any], ID](Protocol):
         """Return the user matching the provided email, if present."""
         ...
 
-    async def get_by_field(self, field_name: str, value: str) -> UP | None:
+    async def get_by_field(self, field_name: LoginIdentifier, value: str) -> UP | None:
         """Return the user where ``field_name`` equals ``value``, if present.
 
-        Implementations may perform a direct column/attribute lookup. Invalid
-        ``field_name`` values are a programming error and may surface as
-        backend-specific errors at runtime.
+        ``field_name`` must be ``"email"`` or ``"username"`` (see
+        :data:`~litestar_auth.types.LoginIdentifier`). Implementations may perform a
+        direct column/attribute lookup. Values outside that set are a
+        programming error and may surface as backend-specific errors at
+        runtime when callers bypass static typing.
         """
         ...
 

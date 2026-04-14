@@ -67,6 +67,7 @@ HTTP_ACCEPTED = 202
 HTTP_BAD_REQUEST = 400
 HTTP_UNPROCESSABLE_ENTITY = 422
 HTTP_UNAUTHORIZED = 401
+HTTP_SERVICE_UNAVAILABLE = 503
 TWO_CALLS = 2
 
 TOTP_PENDING_SECRET = "test-totp-pending-secret-thirty-two!"  # ≥ 32 bytes
@@ -92,8 +93,10 @@ class TrackingUserManager(BaseUserManager[ExampleUser, UUID]):
         super().__init__(
             user_db,
             password_helper=password_helper,
-            verification_token_secret=verification_token_secret,
-            reset_password_token_secret=reset_password_token_secret,
+            security=UserManagerSecurity[UUID](
+                verification_token_secret=verification_token_secret,
+                reset_password_token_secret=reset_password_token_secret,
+            ),
             backends=backends,
             login_identifier=login_identifier,
         )
@@ -1831,6 +1834,33 @@ async def test_verify_rejects_replayed_pending_jti_when_store_enabled() -> None:
         )
         assert second_verify.status_code == HTTP_BAD_REQUEST
         assert second_verify.json()["detail"] == INVALID_TOTP_TOKEN_DETAIL
+
+
+@pytest.mark.filterwarnings("ignore::litestar_auth.totp.SecurityWarning")
+async def test_verify_returns_service_unavailable_when_pending_jti_denylist_cannot_record() -> None:
+    """When the pending-JTI denylist rejects a new write, verification fails closed with 503 JSON."""
+    deny_store = InMemoryJWTDenylistStore(max_entries=1)
+    await deny_store.deny("a" * PENDING_JTI_HEX_LENGTH, ttl_seconds=3600)
+    app, _, _, _ = build_app(pending_jti_store=deny_store)
+
+    async with AsyncTestClient(app=app) as client:
+        secret = await _enable_totp_and_get_secret(client)
+        pending_token = (
+            await client.post("/auth/login", json={"identifier": "user@example.com", "password": "correct-password"})
+        ).json()["pending_token"]
+        valid_code = _generate_totp_code(secret, _current_counter())
+
+        resp = await client.post(
+            "/auth/2fa/verify",
+            json={"pending_token": pending_token, "code": valid_code},
+        )
+
+    assert resp.status_code == HTTP_SERVICE_UNAVAILABLE
+    body = resp.json()
+    code = body.get("code") or body.get("extra", {}).get("code")
+    assert code == ErrorCode.TOKEN_PROCESSING_FAILED
+    detail = body.get("detail", "")
+    assert "pending-login JTI" in detail
 
 
 @pytest.mark.filterwarnings("ignore::litestar_auth.totp.SecurityWarning")

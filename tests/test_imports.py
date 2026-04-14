@@ -283,7 +283,7 @@ def test_root_package_exports_canonical_database_token_preset_entrypoint() -> No
     assert preset.token_hash_secret == "x" * 40
     assert config.session_maker is session_maker
 
-    backend = config.startup_backends()[0]
+    backend = config.resolve_startup_backends()[0]
     current_plugin_module = importlib.import_module("litestar_auth.plugin")
     current_root_module = importlib.import_module("litestar_auth")
     database_token_strategy_type = _current_database_token_strategy_type()
@@ -574,7 +574,7 @@ async def test_root_package_supports_documented_redis_migration_recipe_and_totp_
     assert rate_limit_config.request_verify_token is None
     assert totp_config.totp_pending_jti_store is pending_jti_store
     assert totp_config.totp_used_tokens_store is used_tokens_store
-    assert await used_tokens_store.mark_used("user-1", 7, 60.0) is True
+    assert (await used_tokens_store.mark_used("user-1", 7, 60.0)).stored is True
     await pending_jti_store.deny("pending-jti", ttl_seconds=ONE_MINUTE_TTL_SECONDS)
     assert await pending_jti_store.is_denied("pending-jti") is True
     assert await totp_redis_client.get("litestar_auth:totp:used:user-1:7") == b"1"
@@ -678,7 +678,7 @@ async def test_contrib_redis_preset_supports_documented_shared_client_recipe(
     assert totp_config.totp_used_tokens_store is used_tokens_store
     assert used_tokens_store._redis is redis_client
     assert pending_jti_store.redis is redis_client
-    assert await used_tokens_store.mark_used("user-1", 7, 60.0) is True
+    assert (await used_tokens_store.mark_used("user-1", 7, 60.0)).stored is True
     await pending_jti_store.deny("pending-jti", ttl_seconds=ONE_MINUTE_TTL_SECONDS)
     assert await pending_jti_store.is_denied("pending-jti") is True
     assert await async_fakeredis.get("used:user-1:7") == b"1"
@@ -913,6 +913,7 @@ def test_plugin_module_public_exports_no_compat_shims() -> None:
         "LitestarAuth",
         "LitestarAuthConfig",
         "OAuthConfig",
+        "OAuthProviderConfig",
         "StartupBackendTemplate",
         "TotpConfig",
     )

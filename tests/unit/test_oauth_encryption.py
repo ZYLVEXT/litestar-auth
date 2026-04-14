@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import importlib
-from dataclasses import dataclass, field
+from dataclasses import FrozenInstanceError, dataclass, field
 
 import pytest
 from advanced_alchemy.base import UUIDPrimaryKey, create_registry
@@ -24,6 +24,13 @@ from litestar_auth.oauth_encryption import (
 )
 
 pytestmark = pytest.mark.unit
+
+
+def _fernet_key_string() -> str:
+    """Return a valid Fernet key string, or skip when cryptography is unavailable."""
+    if _FernetImport is None:
+        pytest.skip("cryptography is not installed in this environment")
+    return _FernetImport.generate_key().decode()
 
 
 @dataclass
@@ -115,11 +122,72 @@ def test_oauth_token_encryption_with_fernet_key_round_trips() -> None:
     assert policy.decrypt(encrypted) == "secret-token"
 
 
+def test_oauth_token_encryption_reuses_single_raw_backend_instance(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``OAuthTokenEncryption`` mounts Fernet once; repeated encrypt/decrypt does not recreate it."""
+    if _FernetImport is None:
+        pytest.skip("cryptography is not installed in this environment")
+    init_calls: list[None] = []
+
+    class TrackingRawFernetBackend(_RawFernetBackend):
+        """Counts ``__init__`` calls for the policy cache assertion."""
+
+        def __init__(self) -> None:
+            init_calls.append(None)
+            super().__init__()
+
+    monkeypatch.setattr(oauth_encryption, "_RawFernetBackend", TrackingRawFernetBackend)
+    policy = OAuthTokenEncryption(key=_FernetImport.generate_key())
+    first = policy.encrypt("a")
+    second = policy.encrypt("b")
+    assert policy.decrypt(first) == "a"
+    assert policy.decrypt(second) == "b"
+    assert len(init_calls) == 1
+
+
+def test_oauth_token_encryption_keyless_mounts_backend_once(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Plaintext mode still constructs one backend with ``mount_vault(None)``."""
+    init_calls: list[None] = []
+
+    class TrackingRawFernetBackend(_RawFernetBackend):
+        """Counts ``__init__`` calls for the policy cache assertion."""
+
+        def __init__(self) -> None:
+            init_calls.append(None)
+            super().__init__()
+
+    monkeypatch.setattr(oauth_encryption, "_RawFernetBackend", TrackingRawFernetBackend)
+    policy = OAuthTokenEncryption(key=None)
+    assert policy.encrypt("x") == "x"
+    assert policy.decrypt("y") == "y"
+    assert len(init_calls) == 1
+
+
+def test_oauth_token_encryption_repr_and_hash_exclude_backend() -> None:
+    """The cached Fernet backend must not affect repr, equality, or hashing."""
+    policy = OAuthTokenEncryption(key=None)
+    assert "_backend" not in repr(policy)
+    other = OAuthTokenEncryption(key=None)
+    assert policy == other
+    assert hash(policy) == hash(other)
+
+
+def test_oauth_token_encryption_is_frozen() -> None:
+    """Frozen dataclass instances reject attribute assignment after construction."""
+    policy = OAuthTokenEncryption(key=None)
+    field_name = "key"
+    with pytest.raises(FrozenInstanceError):
+        setattr(policy, field_name, "tamper")
+
+
 def test_bind_oauth_token_encryption_tracks_wrapped_session_targets() -> None:
     """Binding through a wrapper stores the policy on the real session target."""
     target = _SessionInfoTarget()
     wrapped_session = _WrappedSession(target)
-    policy = OAuthTokenEncryption(key="a" * 44)
+    policy = OAuthTokenEncryption(key=_fernet_key_string())
 
     bind_oauth_token_encryption(wrapped_session, policy)
 
@@ -133,13 +201,14 @@ def test_bind_oauth_token_encryption_tracks_wrapped_session_targets() -> None:
 def test_get_bound_oauth_token_encryption_normalizes_pre_reload_policy_instances() -> None:
     """Reloaded helpers still recognize a policy object that was bound before reload."""
     target = _SessionInfoTarget()
-    stale_policy = OAuthTokenEncryption(key="a" * 44)
+    key_str = _fernet_key_string()
+    stale_policy = OAuthTokenEncryption(key=key_str)
 
     bind_oauth_token_encryption(target, stale_policy)
     reloaded_module = importlib.reload(oauth_encryption)
 
     assert reloaded_module.get_bound_oauth_token_encryption(target) == reloaded_module.OAuthTokenEncryption(
-        key="a" * 44,
+        key=key_str,
     )
 
 
@@ -371,12 +440,13 @@ def test_coerce_oauth_token_encryption_rejects_incompatible_objects() -> None:
 def test_resolve_instance_oauth_token_encryption_uses_cached_policy(monkeypatch: pytest.MonkeyPatch) -> None:
     """Cached policies on ORM instances survive reload-normalization logic."""
     target = _TokenTarget()
-    target._litestar_auth_oauth_token_encryption = OAuthTokenEncryption(key="a" * 44)
+    key_str = _fernet_key_string()
+    target._litestar_auth_oauth_token_encryption = OAuthTokenEncryption(key=key_str)
     monkeypatch.setattr(oauth_encryption, "object_session", lambda _target: _SessionInfoTarget())
 
     resolved = oauth_encryption._resolve_instance_oauth_token_encryption(target)
 
-    assert resolved == oauth_encryption.OAuthTokenEncryption(key="a" * 44)
+    assert resolved == oauth_encryption.OAuthTokenEncryption(key=key_str)
 
 
 def test_decrypt_loaded_oauth_tokens_returns_early_without_policy(monkeypatch: pytest.MonkeyPatch) -> None:

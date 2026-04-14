@@ -249,7 +249,7 @@ def test_oauth_associate_dependency_registered_when_enabled() -> None:
         oauth_providers=[provider],
         include_oauth_associate=True,
         oauth_redirect_base_url="https://app.example.com/auth",
-        oauth_token_encryption_key="a" * 44,
+        oauth_token_encryption_key="YWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWE=",
     )
     plugin = LitestarAuth(config)
     app_config = AppConfig()
@@ -265,7 +265,7 @@ def test_oauth_login_inventory_does_not_register_associate_dependency() -> None:
     config.oauth_config = OAuthConfig(
         oauth_providers=[("example", object())],
         oauth_redirect_base_url="https://app.example.com/auth",
-        oauth_token_encryption_key="a" * 44,
+        oauth_token_encryption_key="YWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWE=",
     )
     plugin = LitestarAuth(config)
 
@@ -312,7 +312,7 @@ def test_oauth_plugin_routes_require_secure_public_redirect_origins_at_startup(
     config.oauth_config = OAuthConfig(
         oauth_providers=[("example", object())],
         oauth_redirect_base_url=redirect_base_url,
-        oauth_token_encryption_key="a" * 44,
+        oauth_token_encryption_key="YWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWE=",
     )
     plugin = LitestarAuth(config)
 
@@ -326,7 +326,7 @@ def test_oauth_plugin_routes_allow_localhost_redirects_in_debug_mode() -> None:
     config.oauth_config = OAuthConfig(
         oauth_providers=[("example", object())],
         oauth_redirect_base_url="http://localhost/auth",
-        oauth_token_encryption_key="a" * 44,
+        oauth_token_encryption_key="YWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWE=",
     )
     plugin = LitestarAuth(config)
 
@@ -342,7 +342,7 @@ def test_oauth_plugin_routes_allow_localhost_redirects_in_unsafe_testing_mode() 
     config.oauth_config = OAuthConfig(
         oauth_providers=[("example", object())],
         oauth_redirect_base_url="http://localhost/auth",
-        oauth_token_encryption_key="a" * 44,
+        oauth_token_encryption_key="YWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWE=",
     )
     plugin = LitestarAuth(config)
 
@@ -357,7 +357,7 @@ def test_oauth_plugin_routes_allow_localhost_redirects_in_unsafe_testing_mode() 
         pytest.param(
             OAuthConfig(
                 include_oauth_associate=True,
-                oauth_token_encryption_key="a" * 44,
+                oauth_token_encryption_key="YWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWE=",
             ),
             "include_oauth_associate=True requires oauth_providers",
             id="associate-flag-without-providers",
@@ -365,7 +365,7 @@ def test_oauth_plugin_routes_allow_localhost_redirects_in_unsafe_testing_mode() 
         pytest.param(
             OAuthConfig(
                 oauth_providers=[("github", object())],
-                oauth_token_encryption_key="a" * 44,
+                oauth_token_encryption_key="YWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWE=",
             ),
             "oauth_redirect_base_url is required when oauth_providers are configured",
             id="providers-without-redirect-base",
@@ -373,7 +373,7 @@ def test_oauth_plugin_routes_allow_localhost_redirects_in_unsafe_testing_mode() 
         pytest.param(
             OAuthConfig(
                 oauth_redirect_base_url="https://app.example.com/auth",
-                oauth_token_encryption_key="a" * 44,
+                oauth_token_encryption_key="YWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWE=",
             ),
             "oauth_redirect_base_url requires oauth_providers to be configured",
             id="redirect-base-without-providers",
@@ -399,7 +399,7 @@ def test_plugin_rejects_ambiguous_oauth_route_registration_contracts(
             OAuthConfig(
                 oauth_providers=[("github", object())],
                 oauth_redirect_base_url="https://app.example.com/auth",
-                oauth_token_encryption_key="a" * 44,
+                oauth_token_encryption_key="YWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWE=",
             ),
             None,
             id="login-only",
@@ -409,7 +409,7 @@ def test_plugin_rejects_ambiguous_oauth_route_registration_contracts(
                 oauth_providers=[("github", object())],
                 include_oauth_associate=True,
                 oauth_redirect_base_url="https://app.example.com/auth",
-                oauth_token_encryption_key="a" * 44,
+                oauth_token_encryption_key="YWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWE=",
             ),
             "/auth/associate/github",
             id="login-and-associate",
@@ -471,7 +471,7 @@ def test_plugin_oauth_associate_callback_is_marked_protected_in_openapi() -> Non
         oauth_providers=[("github", _OpenAPIOAuthClient())],
         include_oauth_associate=True,
         oauth_redirect_base_url="https://app.example.com/auth",
-        oauth_token_encryption_key="a" * 44,
+        oauth_token_encryption_key="YWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWE=",
     )
     app = Litestar(
         plugins=[LitestarAuth(config)],

@@ -30,6 +30,16 @@ class AppUserCreate(msgspec.Struct):
 
 ## Built-in auth payloads
 
+!!! note "Canonical import path"
+
+    Prefer importing built-in request and response structs from ``litestar_auth.payloads``:
+
+    ```python
+    from litestar_auth.payloads import LoginCredentials, RefreshTokenRequest
+    ```
+
+    The package root (``litestar_auth``) and ``litestar_auth.controllers`` also re-export these types for compatibility.
+
 Use these types when you want the exact request and response structs exposed by the built-in login, refresh, verify,
 reset-password, and TOTP routes.
 

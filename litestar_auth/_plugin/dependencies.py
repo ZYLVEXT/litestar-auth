@@ -22,12 +22,14 @@ from litestar_auth._plugin.config import (
     DEFAULT_USER_MANAGER_DEPENDENCY_KEY,
     DEFAULT_USER_MODEL_DEPENDENCY_KEY,
     OAUTH_ASSOCIATE_USER_MANAGER_DEPENDENCY_KEY,
+    ExceptionResponseHook,
     LitestarAuthConfig,
-    _build_oauth_route_registration_contract,
 )
+from litestar_auth._plugin.oauth_contract import _build_oauth_route_registration_contract
 from litestar_auth._plugin.scoped_session import SessionFactory, get_or_create_scoped_session
 from litestar_auth.authentication.backend import AuthenticationBackend
 from litestar_auth.controllers._utils import _is_litestar_auth_route_handler
+from litestar_auth.exceptions import ErrorCode, LitestarAuthError
 from litestar_auth.types import UserProtocol
 
 if TYPE_CHECKING:
@@ -51,6 +53,46 @@ class DependencyProviders:
     oauth_associate_user_manager: object
 
 
+class _PluginRouteAuthError(LitestarAuthError):
+    """Route-scoped auth error wrapper carrying response metadata for custom hooks."""
+
+    def __init__(
+        self,
+        *,
+        message: str,
+        code: str | None,
+        status_code: int,
+        headers: dict[str, str] | None,
+    ) -> None:
+        """Store auth error details plus the originating response metadata."""
+        super().__init__(message=message, code=code)
+        self.status_code = status_code
+        self.headers = headers
+
+
+def _resolve_client_exception_code(exc: ClientException) -> str | None:
+    """Return the auth error code embedded in ``exc.extra`` when present."""
+    extra = exc.extra if isinstance(exc.extra, dict) else {}
+    code = extra.get("code")
+    return code if isinstance(code, str) else None
+
+
+def _to_litestar_auth_error(exc: ClientException) -> _PluginRouteAuthError:
+    """Adapt a plugin-owned ``ClientException`` into ``LitestarAuthError`` metadata.
+
+    Returns:
+        A ``LitestarAuthError`` carrying the auth message/code plus the original
+        response status/header metadata needed by custom response hooks.
+    """
+    original_error = exc.__cause__ if isinstance(exc.__cause__, LitestarAuthError) else None
+    return _PluginRouteAuthError(
+        message=str(original_error) if original_error is not None else exc.detail,
+        code=original_error.code if original_error is not None else _resolve_client_exception_code(exc),
+        status_code=exc.status_code or 400,
+        headers=dict(exc.headers) if exc.headers is not None else None,
+    )
+
+
 def client_exception_handler(
     _request: Request[Any, Any, Any],
     exc: ClientException,
@@ -61,7 +103,7 @@ def client_exception_handler(
         JSON error response containing ``detail`` and ``code``.
     """
     extra = exc.extra if isinstance(exc.extra, dict) else {}
-    code = extra.get("code", "UNKNOWN")
+    code = extra.get("code", ErrorCode.UNKNOWN)
     return Response(
         content={"detail": exc.detail, "code": code},
         status_code=exc.status_code or 400,
@@ -70,17 +112,36 @@ def client_exception_handler(
     )
 
 
+def _build_client_exception_handler(
+    exception_response_hook: ExceptionResponseHook | None,
+) -> Callable[[Request[Any, Any, Any], ClientException], Response[Any]]:
+    """Return the route-scoped auth ``ClientException`` handler for plugin routes."""
+    if exception_response_hook is None:
+        return client_exception_handler
+
+    def handle_client_exception(
+        request: Request[Any, Any, Any],
+        exc: ClientException,
+    ) -> Response[Any]:
+        return exception_response_hook(_to_litestar_auth_error(exc), request)
+
+    return handle_client_exception
+
+
 def register_exception_handlers(
     route_handlers: Sequence[ControllerRouterHandler],
+    *,
+    exception_response_hook: ExceptionResponseHook | None = None,
 ) -> None:
     """Register the auth ClientException handler on litestar-auth route handlers only."""
+    client_handler = _build_client_exception_handler(exception_response_hook)
     for route_handler in route_handlers:
         if not _is_litestar_auth_route_handler(route_handler):
             continue
         route_handler_dict = getattr(route_handler, "__dict__", {})
         existing_handlers = route_handler_dict.get("exception_handlers")
         existing = dict(existing_handlers) if existing_handlers is not None else {}
-        existing.setdefault(ClientException, cast("Any", client_exception_handler))
+        existing.setdefault(ClientException, cast("Any", client_handler))
         cast("Any", route_handler).exception_handlers = existing
 
 

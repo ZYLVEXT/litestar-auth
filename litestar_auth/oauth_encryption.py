@@ -9,7 +9,7 @@ after loads/refreshes.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, cast, override
 
 from sqlalchemy import event
@@ -29,86 +29,6 @@ _OAUTH_TOKEN_ENCRYPTION_INFO_KEY = "litestar_auth_oauth_token_encryption"  # noq
 _OAUTH_TOKEN_ENCRYPTION_INSTANCE_KEY = "_litestar_auth_oauth_token_encryption"  # noqa: S105
 _OAUTH_TOKEN_ENCRYPTION_SNAPSHOT_KEY = "_litestar_auth_oauth_token_snapshot"  # noqa: S105
 _OAUTH_TOKEN_FIELDS: tuple[str, str] = ("access_token", "refresh_token")
-
-
-@dataclass(frozen=True, slots=True)
-class OAuthTokenEncryption:
-    """Explicit OAuth token encryption policy for one session-bound persistence path."""
-
-    key: str | bytes | None = None
-    unsafe_testing: bool = False
-
-    def require_configured(self, *, context: str = "OAuth token persistence") -> None:
-        """Fail closed when encryption is required but no key is configured.
-
-        Raises:
-            ConfigurationError: When ``unsafe_testing=False`` and no encryption key is configured.
-        """
-        if self.unsafe_testing or self.key is not None:
-            return
-        msg = (
-            f"oauth_token_encryption_key is required when {context}. "
-            'Generate one with `python -c "from cryptography.fernet import Fernet; '
-            'print(Fernet.generate_key().decode())"`.'
-        )
-        raise ConfigurationError(msg)
-
-    def encrypt(self, value: str | None) -> str | None:
-        """Return the value encrypted with this policy, or plaintext when disabled."""
-        if value is None:
-            return None
-        backend = _RawFernetBackend()
-        backend.mount_vault(self.key)
-        return backend.encrypt(value)
-
-    def decrypt(self, value: str | None) -> str | None:
-        """Return the value decrypted with this policy, or plaintext when disabled."""
-        if value is None:
-            return None
-        backend = _RawFernetBackend()
-        backend.mount_vault(self.key)
-        return backend.decrypt(value)
-
-
-def bind_oauth_token_encryption(session: object, oauth_token_encryption: OAuthTokenEncryption) -> None:
-    """Bind an explicit OAuth token encryption policy to a SQLAlchemy session path."""
-    for target in _iter_session_targets(session):
-        info = getattr(target, "info", None)
-        if isinstance(info, dict):
-            info[_OAUTH_TOKEN_ENCRYPTION_INFO_KEY] = oauth_token_encryption
-
-
-def get_bound_oauth_token_encryption(session: object) -> OAuthTokenEncryption | None:
-    """Return the OAuth token encryption policy bound to the given session path."""
-    for target in _iter_session_targets(session):
-        info = getattr(target, "info", None)
-        if isinstance(info, dict):
-            policy = _coerce_oauth_token_encryption(info.get(_OAUTH_TOKEN_ENCRYPTION_INFO_KEY))
-            if policy is not None:
-                return policy
-    return None
-
-
-def require_oauth_token_encryption(
-    oauth_token_encryption: OAuthTokenEncryption | None,
-    *,
-    context: str = "OAuth token persistence",
-) -> OAuthTokenEncryption:
-    """Return the explicit policy or fail when persistence would rely on ambient state.
-
-    Raises:
-        ConfigurationError: When no explicit policy was supplied, or when a policy without a
-            configured key is used while ``unsafe_testing=False``.
-    """
-    if oauth_token_encryption is None:
-        msg = (
-            f"{context} requires an explicit oauth_token_encryption policy. "
-            "Pass oauth_token_encryption=OAuthTokenEncryption(...) to SQLAlchemyUserDatabase() "
-            "or call bind_oauth_token_encryption(session, OAuthTokenEncryption(...))."
-        )
-        raise ConfigurationError(msg)
-    oauth_token_encryption.require_configured(context=context)
-    return oauth_token_encryption
 
 
 class _RawFernetBackend(EncryptionBackend):
@@ -189,6 +109,89 @@ class _RawFernetBackend(EncryptionBackend):
             msg = "OAuth token values must be strings or bytes."
             raise TypeError(msg)
         return decrypted.decode("utf-8") if isinstance(decrypted, bytes) else decrypted
+
+
+@dataclass(frozen=True, slots=True)
+class OAuthTokenEncryption:
+    """Explicit OAuth token encryption policy for one session-bound persistence path."""
+
+    key: str | bytes | None = None
+    unsafe_testing: bool = False
+    _backend: _RawFernetBackend = field(init=False, repr=False, compare=False, hash=False)
+
+    def __post_init__(self) -> None:
+        """Initialize the cached Fernet backend for this policy's key."""
+        backend = _RawFernetBackend()
+        backend.mount_vault(self.key)
+        object.__setattr__(self, "_backend", backend)
+
+    def require_configured(self, *, context: str = "OAuth token persistence") -> None:
+        """Fail closed when encryption is required but no key is configured.
+
+        Raises:
+            ConfigurationError: When ``unsafe_testing=False`` and no encryption key is configured.
+        """
+        if self.unsafe_testing or self.key is not None:
+            return
+        msg = (
+            f"oauth_token_encryption_key is required when {context}. "
+            'Generate one with `python -c "from cryptography.fernet import Fernet; '
+            'print(Fernet.generate_key().decode())"`.'
+        )
+        raise ConfigurationError(msg)
+
+    def encrypt(self, value: str | None) -> str | None:
+        """Return the value encrypted with this policy, or plaintext when disabled."""
+        if value is None:
+            return None
+        return self._backend.encrypt(value)
+
+    def decrypt(self, value: str | None) -> str | None:
+        """Return the value decrypted with this policy, or plaintext when disabled."""
+        if value is None:
+            return None
+        return self._backend.decrypt(value)
+
+
+def bind_oauth_token_encryption(session: object, oauth_token_encryption: OAuthTokenEncryption) -> None:
+    """Bind an explicit OAuth token encryption policy to a SQLAlchemy session path."""
+    for target in _iter_session_targets(session):
+        info = getattr(target, "info", None)
+        if isinstance(info, dict):
+            info[_OAUTH_TOKEN_ENCRYPTION_INFO_KEY] = oauth_token_encryption
+
+
+def get_bound_oauth_token_encryption(session: object) -> OAuthTokenEncryption | None:
+    """Return the OAuth token encryption policy bound to the given session path."""
+    for target in _iter_session_targets(session):
+        info = getattr(target, "info", None)
+        if isinstance(info, dict):
+            policy = _coerce_oauth_token_encryption(info.get(_OAUTH_TOKEN_ENCRYPTION_INFO_KEY))
+            if policy is not None:
+                return policy
+    return None
+
+
+def require_oauth_token_encryption(
+    oauth_token_encryption: OAuthTokenEncryption | None,
+    *,
+    context: str = "OAuth token persistence",
+) -> OAuthTokenEncryption:
+    """Return the explicit policy or fail when persistence would rely on ambient state.
+
+    Raises:
+        ConfigurationError: When no explicit policy was supplied, or when a policy without a
+            configured key is used while ``unsafe_testing=False``.
+    """
+    if oauth_token_encryption is None:
+        msg = (
+            f"{context} requires an explicit oauth_token_encryption policy. "
+            "Pass oauth_token_encryption=OAuthTokenEncryption(...) to SQLAlchemyUserDatabase() "
+            "or call bind_oauth_token_encryption(session, OAuthTokenEncryption(...))."
+        )
+        raise ConfigurationError(msg)
+    oauth_token_encryption.require_configured(context=context)
+    return oauth_token_encryption
 
 
 def register_oauth_model_encryption_events(model_base: type[Any]) -> None:

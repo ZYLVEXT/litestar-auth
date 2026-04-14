@@ -20,7 +20,28 @@ to the bundled `Role` / `UserRole` models or a custom `UserRoleRelationshipMixin
 seen by DTOs, managers, and guards even when storage becomes relational.
 
 This redesign preserves the existing flat role guards and payloads. It does not add permission
-matrices, role-management endpoints, or a policy DSL.
+matrices, role-management HTTP endpoints, or a policy DSL. Operator-driven role administration now
+lives on the plugin-owned [`litestar roles`](roles_cli.md) CLI surface.
+
+### Role CLI compatibility
+
+The `litestar roles` commands work only when the configured app still exposes the relational role
+contract through both `LitestarAuthConfig.user_model` and `session_maker`.
+
+Supported shapes:
+
+- The bundled `litestar_auth.models.User`.
+- A custom SQLAlchemy family composed from `UserRoleRelationshipMixin`, `RoleMixin`, and
+  `UserRoleAssociationMixin`.
+- An equivalent mapped contract that keeps `user.roles` as the normalized flat boundary while also
+  exposing compatible relational mappings for `user.role_assignments`, assignment-row `role_name`,
+  and the mapped role row.
+
+Roleless models, legacy JSON-only role storage, or ad hoc non-relational `roles` properties remain
+valid for app surfaces that do not need CLI role administration, but `litestar roles` fails closed
+for those apps instead of inferring persistence behavior.
+
+See [Role management CLI](roles_cli.md) for operator examples and destructive-delete semantics.
 
 ## User manager
 
@@ -30,7 +51,7 @@ The plugin injects a request-scoped manager built with your `user_db_factory`, `
 
 ### Default builder contract
 
-Without `user_manager_factory`, the plugin calls `user_manager_class(user_db, *, password_helper=..., security=..., password_validator=..., backends=..., login_identifier=..., unsafe_testing=...)`. When `user_manager_security` is unset, the default builder passes `id_parser=...` directly instead of folding it into `security`.
+Without `user_manager_factory`, the plugin calls `user_manager_class(user_db, *, password_helper=..., security=..., password_validator=..., backends=..., login_identifier=..., unsafe_testing=...)`. The default builder always passes `security=UserManagerSecurity(...)`; when `user_manager_security` is unset, `LitestarAuthConfig.id_parser` is folded into that bundle (there is no separate `id_parser=` kwarg on the default builder call).
 
 If your manager narrows or renames that constructor surface, configure `user_manager_factory` instead of relying on plugin-side capability detection. `password_validator_factory` belongs to that default builder contract: the plugin only resolves and injects the validator automatically when it still owns the canonical manager constructor call.
 
@@ -51,6 +72,104 @@ Generated controllers and plugin-owned flows also resolve one stable account-sta
 `BaseUserManager` keeps the built-in policy, and custom manager classes or adapters should forward
 the same user argument and keyword-only `require_verified` flag when they customize account-state
 handling.
+
+## Plugin hooks
+
+`LitestarAuthConfig` now exposes three opt-in plugin customization hooks for apps that want to
+keep the plugin-owned route table but still own response envelopes, middleware wrapping, or
+controller registration:
+
+- `exception_response_hook` replaces the plugin's default auth-route `ClientException` formatter.
+- `middleware_hook` receives the constructed auth `DefineMiddleware` before insertion.
+- `controller_hook` receives the built controller list before registration.
+
+All three default to `None`, so existing apps keep the current behavior unchanged.
+
+### Exception response hook
+
+Use `exception_response_hook` when plugin-owned auth errors should fit an app-specific response
+envelope:
+
+```python
+from litestar.enums import MediaType
+from litestar.response import Response
+
+
+def auth_error_response(exc, request):
+    status_code = getattr(exc, "status_code", 400)
+    return Response(
+        content={
+            "error": {
+                "code": exc.code,
+                "message": str(exc),
+                "path": request.url.path,
+            },
+        },
+        status_code=status_code,
+        media_type=MediaType.JSON,
+        headers=getattr(exc, "headers", None),
+    )
+
+
+config.exception_response_hook = auth_error_response
+```
+
+Compatibility note: this hook replaces the plugin's default auth-error adapter for plugin-owned
+routes. Route-local request-body decode / validation handlers keep their existing payload contract;
+mount custom controllers when those routes also need a different envelope.
+
+### Middleware hook
+
+Use `middleware_hook` when the app needs to wrap the plugin-owned auth middleware instead of
+rebuilding the middleware stack manually:
+
+```python
+from litestar.middleware import DefineMiddleware
+
+from litestar_auth.authentication import LitestarAuthMiddleware
+
+
+class AuthHeaderMiddleware(LitestarAuthMiddleware):
+    async def __call__(self, scope, receive, send):
+        async def send_with_header(message):
+            if message["type"] == "http.response.start":
+                headers = list(message.get("headers", []))
+                headers.append((b"x-auth-hook", b"enabled"))
+                message = {**message, "headers": headers}
+            await send(message)
+
+        await super().__call__(scope, receive, send_with_header)
+
+
+def wrap_auth_middleware(middleware: DefineMiddleware) -> DefineMiddleware:
+    return DefineMiddleware(AuthHeaderMiddleware, *middleware.args, **middleware.kwargs)
+
+
+config.middleware_hook = wrap_auth_middleware
+```
+
+The hook runs after the plugin has already derived CSRF settings and auth-cookie names, so the
+replacement middleware receives the same constructor args the plugin would have inserted.
+
+### Controller hook
+
+Use `controller_hook` when you want to drop or replace parts of the generated route table without
+forking the plugin:
+
+```python
+def filter_plugin_controllers(controllers):
+    return [
+        controller
+        for controller in controllers
+        if getattr(controller, "__name__", "") != "VerifyController"
+    ]
+
+
+config.controller_hook = filter_plugin_controllers
+```
+
+The hook receives fully built controller classes. Keep filtering explicit: dropping controllers
+also drops the corresponding routes and their exception-handler wiring.
 
 ## Controllers and DTOs
 
@@ -115,7 +234,7 @@ and superuser `PATCH /users/{user_id}` can persist validated role membership thr
 `user_update_schema`.
 
 If app-owned services, background jobs, or CLI commands also hash or verify passwords directly, call
-`config.build_password_helper()` once after constructing `LitestarAuthConfig(...)` and reuse the returned helper
+`config.resolve_password_helper()` once after constructing `LitestarAuthConfig(...)` and reuse the returned helper
 instead of building a separate default `PasswordHelper` instance in each call site. See
 [Configuration](../configuration.md#canonical-manager-password-surface) for the combined secret/helper/schema contract.
 

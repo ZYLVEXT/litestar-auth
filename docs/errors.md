@@ -18,8 +18,9 @@ Exact JSON layout follows your Litestar exception handler configuration.
 
 | Code | Typical HTTP | Meaning |
 | ---- | ------------ | ------- |
+| `UNKNOWN` | varies | Generic fallback: base `LitestarAuthError` default, or plugin JSON `code` when `extra` omits a string `code`. |
 | `AUTHENTICATION_FAILED` | 401 | Generic authentication failure (guards / middleware). |
-| `TOKEN_PROCESSING_FAILED` | 401 / 400 | Token invalid or unusable. |
+| `TOKEN_PROCESSING_FAILED` | 401 / 400 / 503 | Invalid or unusable token in ordinary validation paths (**401** / **400**); **503** when a bundled route cannot persist a required JWT revocation or TOTP pending-login JTI because the denylist is at capacity (fail-closed; see [Security](security.md) and [Guides — Security](guides/security.md)). |
 | `CONFIGURATION_INVALID` | 500 / startup | Misconfiguration. |
 | `USER_NOT_FOUND` | 404 | User id does not exist. |
 | `REGISTER_USER_ALREADY_EXISTS` | 400 | Duplicate registration. |

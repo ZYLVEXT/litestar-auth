@@ -23,7 +23,7 @@ from litestar_auth.controllers import (
     create_reset_password_controller,
     create_totp_controller,
 )
-from litestar_auth.manager import BaseUserManager
+from litestar_auth.manager import BaseUserManager, UserManagerSecurity
 from litestar_auth.password import PasswordHelper
 from litestar_auth.ratelimit import AuthRateLimitConfig, EndpointRateLimit, InMemoryRateLimiter
 from litestar_auth.totp import InMemoryUsedTotpCodeStore, _generate_totp_code
@@ -114,10 +114,12 @@ def build_app(*, rate_limit_config: AuthRateLimitConfig | None = None) -> Litest
     user_manager = BaseUserManager[ExampleUser, UUID](
         user_db,
         password_helper=password_helper,
-        verification_token_secret="verify-secret-1234567890-1234567890",
-        reset_password_token_secret="reset-password-secret-1234567890-1234567890",
+        security=UserManagerSecurity[UUID](
+            verification_token_secret="verify-secret-1234567890-1234567890",
+            reset_password_token_secret="reset-password-secret-1234567890-1234567890",
+            id_parser=UUID,
+        ),
         reset_password_token_lifetime=timedelta(hours=1),
-        id_parser=UUID,
     )
     backend = AuthenticationBackend[ExampleUser, UUID](
         name="memory-bearer",

@@ -16,8 +16,10 @@ import pytest
 from litestar.config.app import AppConfig
 
 import litestar_auth._plugin.config as plugin_config_module
+import litestar_auth._plugin.database_token as database_token_module
 import litestar_auth._plugin.middleware as middleware_module
 import litestar_auth._plugin.rate_limit as rate_limit_module
+import litestar_auth._plugin.security_policy as plugin_security_policy_module
 import litestar_auth._plugin.startup as startup_module
 import litestar_auth._plugin.validation as validation_module
 import litestar_auth.authentication.strategy.jwt as jwt_strategy_module
@@ -87,8 +89,9 @@ TOTP_SECRET_KEY = "u" * 32
 
 
 class _DurableDenylistStore:
-    async def deny(self, jti: str, *, ttl_seconds: int) -> None:
+    async def deny(self, jti: str, *, ttl_seconds: int) -> bool:
         del jti, ttl_seconds
+        return True
 
     async def is_denied(self, jti: str) -> bool:
         del jti
@@ -161,23 +164,32 @@ def test_plugin_rate_limit_module_executes_under_coverage() -> None:
     assert reloaded_module.iter_rate_limit_endpoints.__name__ == iter_rate_limit_endpoints.__name__
 
 
-def test_plugin_security_tradeoff_docs_snippet_matches_shared_policy_wording() -> None:
-    """The shared docs snippet stays aligned with the plugin-owned tradeoff policy source."""
+def test_security_policy_module_executes_under_coverage() -> None:
+    """Reload the security policy module so coverage records module-level execution."""
+    reloaded_module = importlib.reload(plugin_security_policy_module)
+
+    assert reloaded_module._iter_plugin_security_policies.__name__ == (
+        plugin_security_policy_module._iter_plugin_security_policies.__name__
+    )
+
+
+def test_plugin_security_policy_docs_snippet_matches_shared_policy_wording() -> None:
+    """The shared docs snippet stays aligned with the plugin-owned security policy source."""
     snippet = Path("docs/snippets/plugin_security_tradeoffs.md").read_text(encoding="utf-8")
 
-    for policy in plugin_config_module._iter_plugin_security_tradeoff_policies():
+    for policy in plugin_security_policy_module._iter_plugin_security_policies():
         assert policy.plugin_surface in snippet
         assert policy.contract_reference in snippet
         assert policy.docs_summary in snippet
         assert policy.production_requirement in snippet
 
 
-def test_describe_jwt_revocation_tradeoff_accepts_reloaded_posture() -> None:
+def test_describe_jwt_revocation_policy_accepts_reloaded_posture() -> None:
     """Plugin validation reuses the direct JWT posture contract even after reloads."""
     reloaded_jwt_module = importlib.reload(jwt_strategy_module)
     strategy = reloaded_jwt_module.JWTStrategy(secret=JWT_SECRET)
 
-    notice = plugin_config_module._describe_jwt_revocation_tradeoff(strategy.revocation_posture)
+    notice = plugin_security_policy_module._describe_jwt_revocation_policy(strategy.revocation_posture)
 
     assert notice is not None
     assert notice.policy.key == "jwt_revocation"
@@ -205,12 +217,12 @@ def _build_direct_manager(*, totp_secret_key: str | None = None) -> BaseUserMana
     )
 
 
-def test_resolve_plugin_managed_totp_secret_storage_tradeoff_matches_plaintext_posture() -> None:
+def test_resolve_plugin_managed_totp_secret_storage_policy_matches_plaintext_posture() -> None:
     """Plugin-owned TOTP wiring reuses the same direct-manager plaintext posture contract."""
     config = _minimal_config(totp_config=TotpConfig(totp_pending_secret="p" * 32))
     posture = _build_direct_manager().totp_secret_storage_posture
 
-    notice = plugin_config_module._resolve_plugin_managed_totp_secret_storage_tradeoff(config)
+    notice = plugin_config_module._resolve_plugin_managed_totp_secret_storage_policy(config)
 
     assert notice is not None
     assert notice.policy.key == "totp_secret_storage"
@@ -220,14 +232,14 @@ def test_resolve_plugin_managed_totp_secret_storage_tradeoff_matches_plaintext_p
     assert notice.startup_warning is None
 
 
-def test_resolve_plugin_managed_totp_secret_storage_tradeoff_returns_none_without_totp() -> None:
-    """Configs without TOTP do not report a plugin-managed TOTP storage tradeoff."""
-    notice = plugin_config_module._resolve_plugin_managed_totp_secret_storage_tradeoff(_minimal_config())
+def test_resolve_plugin_managed_totp_secret_storage_policy_returns_none_without_totp() -> None:
+    """Configs without TOTP do not report a plugin-managed TOTP storage policy notice."""
+    notice = plugin_config_module._resolve_plugin_managed_totp_secret_storage_policy(_minimal_config())
 
     assert notice is None
 
 
-def test_resolve_plugin_managed_totp_secret_storage_tradeoff_skips_factory_owned_wiring() -> None:
+def test_resolve_plugin_managed_totp_secret_storage_policy_skips_factory_owned_wiring() -> None:
     """Custom manager factories can own TOTP-secret storage without plugin validation interference."""
     config = _minimal_config(
         totp_config=TotpConfig(totp_pending_secret="p" * 32),
@@ -236,7 +248,7 @@ def test_resolve_plugin_managed_totp_secret_storage_tradeoff_skips_factory_owned
     config.user_manager_security = None
     config.user_manager_factory = lambda **kwargs: cast("Any", kwargs["user_db"])
 
-    notice = plugin_config_module._resolve_plugin_managed_totp_secret_storage_tradeoff(config)
+    notice = plugin_config_module._resolve_plugin_managed_totp_secret_storage_policy(config)
 
     assert notice is None
 
@@ -348,7 +360,7 @@ def test_warn_insecure_plugin_startup_defaults_is_silent_for_safe_production_con
         ],
         oauth_config=OAuthConfig(
             oauth_providers=[("github", object())],
-            oauth_token_encryption_key="k" * 44,
+            oauth_token_encryption_key="a2tra2tra2tra2tra2tra2tra2tra2tra2tra2tra2s=",
         ),
         rate_limit_config=_rate_limit_config(backend=_SharedRateLimitBackend()),
         totp_config=_configured_totp_config(
@@ -541,7 +553,7 @@ def test_validate_backend_strategy_security_uses_database_token_preset_rollout_h
         return legacy_backend
 
     monkeypatch.setattr(
-        plugin_config_module,
+        database_token_module,
         "_build_database_token_backend",
         _build_legacy_backend,
     )
@@ -922,33 +934,39 @@ def test_default_user_manager_contract_keeps_runtime_and_validation_surfaces_ali
         assert "id_parser" not in runtime_kwargs
         assert "id_parser" not in validation_kwargs
     else:
-        assert "security" not in runtime_kwargs
-        assert "security" not in validation_kwargs
-        assert runtime_kwargs["id_parser"] is UUID
-        assert validation_kwargs["id_parser"] is UUID
+        assert runtime_kwargs["security"] == validation_kwargs["security"]
+        assert runtime_kwargs["security"].id_parser is UUID
+        assert "id_parser" not in runtime_kwargs
+        assert "id_parser" not in validation_kwargs
 
 
 def test_validate_config_rejects_non_canonical_default_user_manager_constructor() -> None:
     """Plugin construction should fail fast for managers that do not accept ``security=...``."""
 
     class _LegacyManagerWithoutSecurity(PluginUserManager):
+        """Constructor intentionally omits ``security=`` so the default builder cannot bind."""
+
         def __init__(  # noqa: PLR0913
             self,
             user_db: object,
             *,
             password_helper: PasswordHelper | None = None,
             password_validator: object | None = None,
-            verification_token_secret: str,
-            reset_password_token_secret: str,
             backends: tuple[object, ...] = (),
+            login_identifier: Literal["email", "username"] = "email",
+            unsafe_testing: bool = False,
         ) -> None:
             super().__init__(
                 cast("Any", user_db),
                 password_helper=password_helper,
+                security=UserManagerSecurity[UUID](
+                    verification_token_secret="v" * 32,
+                    reset_password_token_secret="r" * 32,
+                ),
                 password_validator=cast("Any", password_validator),
-                verification_token_secret=verification_token_secret,
-                reset_password_token_secret=reset_password_token_secret,
                 backends=backends,
+                login_identifier=login_identifier,
+                unsafe_testing=unsafe_testing,
             )
 
     config = _minimal_config()
@@ -1753,7 +1771,7 @@ def test_validate_config_rejects_include_oauth_associate_without_provider_invent
     """Associate-route enablement still requires the single plugin-owned provider inventory."""
     config = _minimal_config(
         oauth_config=OAuthConfig(
-            oauth_token_encryption_key="a" * 44,
+            oauth_token_encryption_key="YWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWE=",
             include_oauth_associate=True,
         ),
     )
@@ -1767,7 +1785,7 @@ def test_validate_config_rejects_missing_redirect_base_url_for_plugin_owned_oaut
     config = _minimal_config(
         oauth_config=OAuthConfig(
             oauth_providers=[("github", object())],
-            oauth_token_encryption_key="a" * 44,
+            oauth_token_encryption_key="YWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWE=",
         ),
     )
 
@@ -1780,7 +1798,7 @@ def test_validate_config_rejects_orphan_redirect_base_url() -> None:
     config = _minimal_config(
         oauth_config=OAuthConfig(
             oauth_redirect_base_url="https://app.example.com/auth",
-            oauth_token_encryption_key="a" * 44,
+            oauth_token_encryption_key="YWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWE=",
         ),
     )
 
@@ -1794,7 +1812,7 @@ def test_validate_config_rejects_duplicate_login_provider_names() -> None:
         oauth_config=OAuthConfig(
             oauth_providers=[("github", object()), ("github", object())],
             oauth_redirect_base_url="https://app.example.com/auth",
-            oauth_token_encryption_key="a" * 44,
+            oauth_token_encryption_key="YWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWE=",
         ),
     )
 
@@ -1807,7 +1825,7 @@ def test_validate_config_rejects_oauth_associate_by_email_without_login_provider
     config = _minimal_config(
         oauth_config=OAuthConfig(
             oauth_associate_by_email=True,
-            oauth_token_encryption_key="a" * 44,
+            oauth_token_encryption_key="YWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWE=",
         ),
     )
 
@@ -1820,7 +1838,7 @@ def test_validate_config_rejects_oauth_trust_provider_email_verified_without_pro
     config = _minimal_config(
         oauth_config=OAuthConfig(
             oauth_trust_provider_email_verified=True,
-            oauth_token_encryption_key="a" * 44,
+            oauth_token_encryption_key="YWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWE=",
         ),
     )
 

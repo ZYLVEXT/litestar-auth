@@ -1,5 +1,10 @@
 # Guards
 
+Custom user models must expose the typing protocols that match the guards you use—see
+[Types and protocols — Which protocol should my user model implement?](types.md#which-protocol-should-my-user-model-implement)
+for a feature-to-protocol decision table (`UserProtocol`, `GuardedUserProtocol`,
+`RoleCapableUserProtocol`, `TotpUserProtocol`).
+
 Use these callables directly in Litestar `guards=[...]` lists. The role-guard
 factories `has_any_role(*roles)` and `has_all_roles(*roles)` require an
 authenticated active user, fail closed when `request.user` does not satisfy the

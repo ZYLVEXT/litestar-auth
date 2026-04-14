@@ -108,7 +108,9 @@ class _SecretValue:
         return hmac.compare_digest(self._value, other._value)
 
     def __hash__(self) -> int:
-        return hash(self._value)
+        # Opaque fixed-key digest so Python's hash() is not applied directly to the
+        # raw secret string (consistent with constant-time __eq__ via hmac.compare_digest).
+        return hash(hmac.digest(b"_SecretValue", self._value.encode("utf-8"), "sha256"))
 
     def __repr__(self) -> str:
         return f"_SecretValue('{_MASKED}')"
@@ -194,14 +196,10 @@ class BaseUserManager[UP: UserProtocol[Any], ID](  # noqa: PLR0904
         oauth_account_store: BaseOAuthAccountStore[UP, ID] | None = None,
         password_helper: PasswordHelper | None = None,
         security: UserManagerSecurity[ID] | None = None,
-        verification_token_secret: str | None = None,
-        reset_password_token_secret: str | None = None,
         verification_token_lifetime: timedelta = DEFAULT_VERIFY_TOKEN_LIFETIME,
         reset_password_token_lifetime: timedelta = DEFAULT_RESET_PASSWORD_TOKEN_LIFETIME,
-        id_parser: Callable[[str], ID] | None = None,
         password_validator: Callable[[str], None] | None = None,
         reset_verification_on_email_change: bool = True,
-        totp_secret_key: str | None = None,
         backends: tuple[object, ...] = (),
         login_identifier: LoginIdentifier = "email",
         unsafe_testing: bool = False,
@@ -212,24 +210,15 @@ class BaseUserManager[UP: UserProtocol[Any], ID](  # noqa: PLR0904
             user_db: Persistence backend used to load and update users.
             oauth_account_store: Optional persistence backend used for linked OAuth accounts.
             password_helper: Password hasher/verifier implementation.
-            security: Typed manager-security bundle for verification/reset secrets, TOTP
-                secret encryption, and JWT subject parsing. Do not combine it with the
-                legacy explicit secret or ``id_parser`` kwargs. In production, use
-                dedicated values per secret role instead of reusing one value across
-                verification, reset-password, and TOTP flows.
-            verification_token_secret: Secret used to sign email-verification tokens.
-                If omitted, ``ConfigurationError`` is raised unless ``unsafe_testing=True``.
-            reset_password_token_secret: Secret used to sign password-reset tokens.
-                If omitted, ``ConfigurationError`` is raised unless ``unsafe_testing=True``.
+            security: Typed bundle for verification/reset secrets, optional TOTP encryption key,
+                and optional JWT ``sub`` parsing. Omitted fields default to ``None``. In
+                production, use distinct values per secret role instead of reusing one value
+                across verification, reset-password, and TOTP flows.
             verification_token_lifetime: Lifetime applied to verification tokens.
             reset_password_token_lifetime: Lifetime applied to password-reset tokens.
-            id_parser: Optional callable that converts JWT ``sub`` strings into user identifiers.
             password_validator: Optional callable used to validate plain-text passwords.
             reset_verification_on_email_change: Whether email changes should clear ``is_verified`` and
                 trigger a new verification token hook.
-            totp_secret_key: Optional Fernet key used to encrypt stored TOTP secrets.
-                When omitted, the manager keeps the compatibility-grade plaintext
-                storage posture for direct/custom usage.
             backends: Session-bound auth backends when constructed via ``LitestarAuth``;
                 keeps credential updates aligned with the same backends used for request auth.
             login_identifier: Which field ``authenticate`` uses for credential lookup by default
@@ -238,38 +227,8 @@ class BaseUserManager[UP: UserProtocol[Any], ID](  # noqa: PLR0904
                 generated fallback secrets or other single-process shortcuts. Do not
                 enable this for production traffic.
 
-        Raises:
-            ConfigurationError: If the typed ``security`` bundle is combined with explicit
-                secret kwargs, or if required secrets are omitted outside
-                ``unsafe_testing`` mode.
-
         """
-        if security is not None:
-            if any(
-                value is not None
-                for value in (
-                    verification_token_secret,
-                    reset_password_token_secret,
-                    id_parser,
-                    totp_secret_key,
-                )
-            ):
-                msg = (
-                    "Configure manager secrets via security=UserManagerSecurity(...) or the explicit "
-                    "verification_token_secret/reset_password_token_secret/totp_secret_key/id_parser kwargs, "
-                    "not both."
-                )
-                raise _config.ConfigurationError(msg)
-            verification_token_secret = security.verification_token_secret
-            reset_password_token_secret = security.reset_password_token_secret
-            id_parser = security.id_parser
-            totp_secret_key = security.totp_secret_key
-        resolved_security = UserManagerSecurity(
-            verification_token_secret,
-            reset_password_token_secret,
-            totp_secret_key,
-            id_parser=id_parser,
-        )
+        resolved_security = security if security is not None else UserManagerSecurity()
         account_token_secrets = resolve_account_token_secrets(
             resolved_security,
             secret_factory=cast("SecretFactory", _SecretValue),
@@ -300,7 +259,7 @@ class BaseUserManager[UP: UserProtocol[Any], ID](  # noqa: PLR0904
         self.reset_password_token_secret = self._account_token_secrets.reset_password_token_secret
         self.verification_token_lifetime = verification_token_lifetime
         self.reset_password_token_lifetime = reset_password_token_lifetime
-        self.id_parser = id_parser
+        self.id_parser = resolved_security.id_parser
         self.password_validator = password_validator
         self.reset_verification_on_email_change = reset_verification_on_email_change
         self.totp_secret_key = resolved_security.totp_secret_key

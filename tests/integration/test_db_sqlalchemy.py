@@ -35,6 +35,7 @@ from litestar_auth.models import (
     UserRole,
 )
 from litestar_auth.oauth_encryption import OAuthTokenEncryption, bind_oauth_token_encryption
+from litestar_auth.types import LoginIdentifier  # noqa: TC001
 
 if TYPE_CHECKING:
     from collections.abc import Iterable, Mapping, Sequence
@@ -384,8 +385,10 @@ async def test_sqlalchemy_user_database_crud_missing_paths(session: SASession) -
     assert await database.get_by_email("missing@example.com") is None
     assert await database.get_by_field("email", "missing@example.com") is None
 
+    # Static typing restricts ``field_name`` to ``LoginIdentifier``; ``cast`` exercises
+    # the SQLAlchemy allow-list ValueError as defense-in-depth for dynamic callers.
     with pytest.raises(ValueError, match="Lookup by 'totp_secret' is not permitted"):
-        await database.get_by_field("totp_secret", "secret")
+        await database.get_by_field(cast("LoginIdentifier", "totp_secret"), "secret")
 
 
 async def test_sqlalchemy_user_database_update_merges_detached_instances(session: SASession) -> None:
@@ -467,6 +470,8 @@ async def test_sqlalchemy_user_database_update_replaces_role_assignments_without
     refreshed_user = await database.get(updated_user.id)
 
     assert refreshed_user is not None
+    # Returned instance must have hydrated role_assignments (not a second SELECT via reload).
+    assert {a.role_name for a in updated_user.role_assignments} == {"admin", "support"}
     session.expunge_all()
     assert updated_user.roles == ["admin", "support"]
     assert refreshed_user.roles == ["admin", "support"]

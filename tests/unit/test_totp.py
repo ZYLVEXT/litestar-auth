@@ -307,6 +307,55 @@ async def test_verify_totp_with_store_logs_warning_on_replay(
     assert RFC_SECRET not in record.getMessage()
 
 
+async def test_verify_totp_with_store_logs_capacity_event_when_in_memory_store_full(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Capacity exhaustion logs totp_replay_store_capacity, not totp_replay."""
+    monkeypatch.setattr(totp.time, "time", lambda: 59.0)
+    store = totp.InMemoryUsedTotpCodeStore(max_entries=2)
+    current_code = totp._generate_totp_code(RFC_SECRET, 1)
+
+    assert (
+        await totp.verify_totp_with_store(
+            RFC_SECRET,
+            current_code,
+            user_id="user-1",
+            used_tokens_store=store,
+        )
+        is True
+    )
+    assert (
+        await totp.verify_totp_with_store(
+            RFC_SECRET,
+            current_code,
+            user_id="user-2",
+            used_tokens_store=store,
+        )
+        is True
+    )
+
+    caplog.clear()
+    with caplog.at_level(logging.DEBUG, logger=totp.logger.name):
+        assert (
+            await totp.verify_totp_with_store(
+                RFC_SECRET,
+                current_code,
+                user_id="user-3",
+                used_tokens_store=store,
+            )
+            is False
+        )
+
+    capacity_warnings = [r for r in caplog.records if getattr(r, "event", None) == "totp_replay_store_capacity"]
+    assert len(capacity_warnings) == 1
+    record = capacity_warnings[0]
+    assert getattr(record, "user_id", None) == "user-3"
+    assert not any(getattr(r, "event", None) == "totp_replay" for r in caplog.records)
+    assert RFC_SECRET not in record.getMessage()
+    assert current_code not in record.getMessage()
+
+
 async def test_verify_totp_with_store_keys_replay_on_matched_counter(monkeypatch: pytest.MonkeyPatch) -> None:
     """Replay protection keys off the matched counter, not the current counter."""
     monkeypatch.setattr(totp.time, "time", lambda: 59.0)
@@ -315,9 +364,10 @@ async def test_verify_totp_with_store_keys_replay_on_matched_counter(monkeypatch
     seen_counters: list[int] = []
 
     class RecordingStore:
-        async def mark_used(self, user_id: object, counter: int, ttl_seconds: float) -> bool:
+        async def mark_used(self, user_id: object, counter: int, ttl_seconds: float) -> totp.UsedTotpMarkResult:
             seen_counters.append(counter)
-            return len(seen_counters) == 1
+            first = len(seen_counters) == 1
+            return totp.UsedTotpMarkResult(stored=first, rejected_as_replay=not first)
 
     store = RecordingStore()
 
@@ -327,7 +377,7 @@ async def test_verify_totp_with_store_keys_replay_on_matched_counter(monkeypatch
 
 
 async def test_verify_totp_with_store_isolated_per_user_and_ttl(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Replay entries do not collide across users and expire after two time steps."""
+    """Replay entries do not collide across users and expire after the used-code TTL elapses."""
 
     class Clock:
         def __init__(self) -> None:
@@ -361,29 +411,66 @@ async def test_verify_totp_with_store_isolated_per_user_and_ttl(monkeypatch: pyt
     )
 
     clock.current = float(totp.USED_TOTP_CODE_TTL_SECONDS - 1)
-    assert await store.mark_used("user-1", 1, totp.USED_TOTP_CODE_TTL_SECONDS) is False
+    replay_result = await store.mark_used("user-1", 1, totp.USED_TOTP_CODE_TTL_SECONDS)
+    assert replay_result.stored is False
+    assert replay_result.rejected_as_replay is True
 
     clock.current = float(totp.USED_TOTP_CODE_TTL_SECONDS)
-    assert await store.mark_used("user-1", 1, totp.USED_TOTP_CODE_TTL_SECONDS) is True
+    ok_result = await store.mark_used("user-1", 1, totp.USED_TOTP_CODE_TTL_SECONDS)
+    assert ok_result.stored is True
 
 
-async def test_in_memory_used_totp_store_caps_entries_with_fifo_eviction() -> None:
-    """Cap enforcement should evict the oldest active replay entry before adding a new one."""
+def test_used_totp_code_ttl_matches_full_drift_validation_window() -> None:
+    """TTL tracks drift steps so replay protection spans all accepted counter windows."""
+    assert totp.USED_TOTP_CODE_TTL_SECONDS == totp.TIME_STEP_SECONDS * (2 * totp.TOTP_DRIFT_STEPS + 1)
+
+
+async def test_inmemory_totp_replay_store_covers_full_drift_window() -> None:
+    """Mark at t=0 blocks replay until TTL end; after full span the same counter can be stored again."""
+
+    class Clock:
+        def __init__(self) -> None:
+            self.current = 0.0
+
+        def __call__(self) -> float:
+            return self.current
+
+    clock = Clock()
+    store = totp.InMemoryUsedTotpCodeStore(clock=clock)
+    ttl = totp.USED_TOTP_CODE_TTL_SECONDS
+    counter_t = 42
+
+    assert (await store.mark_used("user-1", counter_t, ttl)).stored is True
+
+    clock.current = float(ttl - 1)
+    near_expiry = await store.mark_used("user-1", counter_t, ttl)
+    assert near_expiry.stored is False
+    assert near_expiry.rejected_as_replay is True
+
+    clock.current = float(ttl)
+    after_expiry = await store.mark_used("user-1", counter_t, ttl)
+    assert after_expiry.stored is True
+
+
+async def test_in_memory_used_totp_store_rejects_insert_when_at_capacity_fail_closed() -> None:
+    """At capacity with only active entries, new mark_used fails closed (no eviction)."""
     store = totp.InMemoryUsedTotpCodeStore(max_entries=STORE_CAP)
 
-    assert await store.mark_used("user-1", 1, totp.USED_TOTP_CODE_TTL_SECONDS) is True
-    assert await store.mark_used("user-2", 2, totp.USED_TOTP_CODE_TTL_SECONDS) is True
-    assert await store.mark_used("user-3", 3, totp.USED_TOTP_CODE_TTL_SECONDS) is True
-
+    assert (await store.mark_used("user-1", 1, totp.USED_TOTP_CODE_TTL_SECONDS)).stored is True
+    assert (await store.mark_used("user-2", 2, totp.USED_TOTP_CODE_TTL_SECONDS)).stored is True
     assert len(store._entries) == STORE_CAP
-    assert ("user-1", 1) not in store._entries
-    assert set(store._entries) == {("user-2", 2), ("user-3", 3)}
+
+    cap_result = await store.mark_used("user-3", 3, totp.USED_TOTP_CODE_TTL_SECONDS)
+    assert cap_result.stored is False
+    assert cap_result.rejected_as_replay is False
+    assert len(store._entries) == STORE_CAP
+    assert set(store._entries) == {("user-1", 1), ("user-2", 2)}
 
 
-async def test_in_memory_used_totp_store_evicts_soonest_expiring_entry(
+async def test_in_memory_used_totp_store_logs_error_when_capacity_blocks_insert(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """Cap eviction drops the entry nearest expiry and logs the pressure event."""
+    """When full of non-expired entries, mark_used returns False and logs at error level."""
 
     class Clock:
         def __init__(self) -> None:
@@ -395,19 +482,21 @@ async def test_in_memory_used_totp_store_evicts_soonest_expiring_entry(
     clock = Clock()
     store = totp.InMemoryUsedTotpCodeStore(clock=clock, max_entries=STORE_CAP)
 
-    assert await store.mark_used("later", 1, 10.0) is True
-    assert await store.mark_used("sooner", 2, 5.0) is True
+    assert (await store.mark_used("later", 1, 10.0)).stored is True
+    assert (await store.mark_used("sooner", 2, 5.0)).stored is True
 
-    with caplog.at_level(logging.WARNING, logger=totp.logger.name):
-        assert await store.mark_used("fresh", 3, 15.0) is True
+    with caplog.at_level(logging.ERROR, logger=totp.logger.name):
+        cap_block = await store.mark_used("fresh", 3, 15.0)
+        assert cap_block.stored is False
+        assert cap_block.rejected_as_replay is False
 
-    assert ("sooner", 2) not in store._entries
-    assert set(store._entries) == {("later", 1), ("fresh", 3)}
-    assert "Evicted TOTP replay entry" in caplog.text
+    assert set(store._entries) == {("later", 1), ("sooner", 2)}
+    assert "Rejected in-memory TOTP replay-store insert" in caplog.text
+    assert "capacity" in caplog.text.lower()
 
 
 async def test_in_memory_used_totp_store_prunes_expired_entries_before_cap_eviction() -> None:
-    """Cap enforcement should full-sweep expired entries before evicting active ones."""
+    """Expired entries are pruned so a new insert can succeed without evicting active rows."""
 
     class Clock:
         def __init__(self) -> None:
@@ -419,11 +508,11 @@ async def test_in_memory_used_totp_store_prunes_expired_entries_before_cap_evict
     clock = Clock()
     store = totp.InMemoryUsedTotpCodeStore(clock=clock, max_entries=STORE_CAP)
 
-    assert await store.mark_used("expired", 1, 1.0) is True
-    assert await store.mark_used("active", 2, 10.0) is True
+    assert (await store.mark_used("expired", 1, 1.0)).stored is True
+    assert (await store.mark_used("active", 2, 10.0)).stored is True
 
     clock.current = 2.0
-    assert await store.mark_used("fresh", 3, 10.0) is True
+    assert (await store.mark_used("fresh", 3, 10.0)).stored is True
 
     assert len(store._entries) == STORE_CAP
     assert ("expired", 1) not in store._entries
@@ -444,8 +533,10 @@ async def test_redis_used_totp_code_store_first_call_true_second_false(
     store = totp.RedisUsedTotpCodeStore(redis=cast_fakeredis(async_fakeredis, totp.RedisUsedTotpCodeStoreClient))
     key = "litestar_auth:totp:used:user-1:42"
 
-    assert await store.mark_used("user-1", 42, ttl_seconds) is True
-    assert await store.mark_used("user-1", 42, ttl_seconds) is False
+    assert (await store.mark_used("user-1", 42, ttl_seconds)).stored is True
+    replay = await store.mark_used("user-1", 42, ttl_seconds)
+    assert replay.stored is False
+    assert replay.rejected_as_replay is True
     assert await async_fakeredis.get(key) == b"1"
     assert 0 < await async_fakeredis.pttl(key) <= int(ttl_seconds * 1000)
 
@@ -476,7 +567,9 @@ async def test_redis_used_totp_code_store_uses_custom_prefix_and_none_result(
 
     assert key == "custom:user-1:7"
     assert await async_fakeredis.set(key, "1") is True
-    assert await store.mark_used("user-1", 7, 1.25) is False
+    nx_replay = await store.mark_used("user-1", 7, 1.25)
+    assert nx_replay.stored is False
+    assert nx_replay.rejected_as_replay is True
     assert await async_fakeredis.get(key) == b"1"
 
 
@@ -502,7 +595,7 @@ async def test_contrib_redis_preset_builds_totp_store_with_prefix_override(
 
     assert store._key("user-1", 7) == "override-used:user-1:7"
     assert pending_store.key_prefix == "override-pending:"
-    assert await store.mark_used("user-1", 7, 1.25) is True
+    assert (await store.mark_used("user-1", 7, 1.25)).stored is True
     await pending_store.deny("pending-jti", ttl_seconds=PENDING_JTI_TTL_SECONDS)
     assert await pending_store.is_denied("pending-jti") is True
     assert await async_fakeredis.get("override-used:user-1:7") == b"1"

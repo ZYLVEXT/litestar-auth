@@ -17,11 +17,11 @@ from litestar_auth._plugin.config import (
     LitestarAuthConfig,
     StartupBackendTemplate,
     _BackendSlot,
-    _build_oauth_route_registration_contract,
     _StartupBackendInventory,
     require_session_maker,
     resolve_backend_inventory,
 )
+from litestar_auth._plugin.oauth_contract import _build_oauth_route_registration_contract
 from litestar_auth.config import validate_secret_length
 from litestar_auth.controllers import (
     create_register_controller,
@@ -657,21 +657,21 @@ def _append_oauth_login_controllers[UP: UserProtocol[Any], ID](
         return
     inventory = resolve_backend_inventory(config) if backend_inventory is None else backend_inventory
     primary_backend = inventory.primary()
-    for provider_name, oauth_client in contract.providers:
-        controllers.append(
-            create_oauth_login_controller(
-                provider_name=provider_name,
-                oauth_client=cast("OAuthClientProtocol", oauth_client),
-                backend=primary_backend.startup_backend,
-                backend_index=primary_backend.index,
-                redirect_base_url=redirect_base_url,
-                cookie_secure=contract.oauth_cookie_secure,
-                oauth_scopes=contract.oauth_provider_scopes.get(provider_name),
-                associate_by_email=contract.oauth_associate_by_email,
-                trust_provider_email_verified=contract.oauth_trust_provider_email_verified,
-                path=contract.login_path,
-            ),
+    controllers.extend(
+        create_oauth_login_controller(
+            provider_name=entry.name,
+            oauth_client=cast("OAuthClientProtocol", entry.client),
+            backend=primary_backend.startup_backend,
+            backend_index=primary_backend.index,
+            redirect_base_url=redirect_base_url,
+            cookie_secure=contract.oauth_cookie_secure,
+            oauth_scopes=contract.oauth_provider_scopes.get(entry.name),
+            associate_by_email=contract.oauth_associate_by_email,
+            trust_provider_email_verified=contract.oauth_trust_provider_email_verified,
+            path=contract.login_path,
         )
+        for entry in contract.providers
+    )
 
 
 def _append_oauth_associate_controllers[UP: UserProtocol[Any], ID](
@@ -691,18 +691,18 @@ def _append_oauth_associate_controllers[UP: UserProtocol[Any], ID](
     redirect_base_url = contract.associate_redirect_base_url
     if redirect_base_url is None:  # pragma: no cover - validation guarantees this when routes exist
         return
-    for provider_name, oauth_client in contract.providers:
-        controllers.append(
-            create_oauth_associate_controller(
-                provider_name=provider_name,
-                user_manager_dependency_key=OAUTH_ASSOCIATE_USER_MANAGER_DEPENDENCY_KEY,
-                oauth_client=cast("OAuthClientProtocol", oauth_client),
-                redirect_base_url=redirect_base_url,
-                path=contract.associate_path,
-                cookie_secure=contract.oauth_cookie_secure,
-                security=security,
-            ),
+    controllers.extend(
+        create_oauth_associate_controller(
+            provider_name=entry.name,
+            user_manager_dependency_key=OAUTH_ASSOCIATE_USER_MANAGER_DEPENDENCY_KEY,
+            oauth_client=cast("OAuthClientProtocol", entry.client),
+            redirect_base_url=redirect_base_url,
+            path=contract.associate_path,
+            cookie_secure=contract.oauth_cookie_secure,
+            security=security,
         )
+        for entry in contract.providers
+    )
 
 
 def build_totp_controller[UP: UserProtocol[Any], ID](

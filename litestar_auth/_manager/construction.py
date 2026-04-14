@@ -146,16 +146,27 @@ class ManagerConstructorInputs[ID]:
             return None
         return self.effective_security
 
+    def _materialize_security_for_constructor(self) -> UserManagerSecurity[ID]:
+        """Return the ``security=`` bundle for :class:`~litestar_auth.manager.BaseUserManager`.
+
+        When ``manager_security`` is unset, managed keys may still appear in ``manager_kwargs``
+        (factory-owned wiring). Fold those into a concrete
+        :class:`~litestar_auth.manager.UserManagerSecurity` so the manager receives a single
+        ``security=`` argument.
+        """
+        base = self.effective_security
+        if self.manager_security is not None:
+            return base
+        merge = {key: self.manager_kwargs[key] for key in _MANAGED_SECURITY_KEYS if key in self.manager_kwargs}
+        if not merge:
+            return base
+        return replace(base, **merge)
+
     def _build_manager_id_parser_kwargs(self) -> dict[str, Any]:
         """Return the explicit ``id_parser`` kwarg when the default contract needs it."""
         if self.manager_security is not None or self.id_parser is None or "id_parser" in self.manager_kwargs:
             return {}
         return {"id_parser": self.id_parser}
-
-    def _build_manager_security_kwargs(self) -> dict[str, Any]:
-        """Return the canonical typed security kwarg for the default builder."""
-        manager_security = self.build_manager_security()
-        return {"security": manager_security} if manager_security is not None else {}
 
     def build_kwargs(self) -> dict[str, Any]:
         """Materialize constructor kwargs for the target manager class.
@@ -172,11 +183,13 @@ class ManagerConstructorInputs[ID]:
         if self.manager_security is not None:
             for key in _MANAGED_SECURITY_KEYS:
                 manager_kwargs.pop(key, None)
-        manager_kwargs.update(self._build_manager_security_kwargs())
+        for key in _MANAGED_SECURITY_KEYS:
+            manager_kwargs.pop(key, None)
+        manager_kwargs.pop("security", None)
+        manager_kwargs["security"] = self._materialize_security_for_constructor()
         if self.password_validator is not None and not self.has_explicit_password_validator:
             manager_kwargs["password_validator"] = self.password_validator
         manager_kwargs["backends"] = self.backends
-        manager_kwargs.update(self._build_manager_id_parser_kwargs())
         if "login_identifier" not in manager_kwargs and self.login_identifier is not None:
             manager_kwargs["login_identifier"] = self.login_identifier
         return manager_kwargs

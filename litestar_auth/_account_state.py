@@ -8,8 +8,12 @@ from typing import Literal, NoReturn, Protocol, cast
 from litestar.exceptions import ClientException, PermissionDeniedException
 
 from litestar_auth.exceptions import ErrorCode
-from litestar_auth.guards._guards import _ACCOUNT_STATE_DETAIL
 from litestar_auth.types import GuardedUserProtocol
+
+_ACCOUNT_STATE_PROTOCOL_DETAIL = (
+    "Account state validation requires GuardedUserProtocol (is_active, is_verified, is_superuser). "
+    "The authenticated user does not expose account state required for this check."
+)
 
 _HTTP_BAD_REQUEST = 400
 
@@ -57,7 +61,7 @@ def resolve_account_state_attribute_failure(
         PermissionDeniedException: If the user is not a guarded-user protocol instance.
     """
     if not isinstance(user, GuardedUserProtocol):
-        raise PermissionDeniedException(detail=_ACCOUNT_STATE_DETAIL)
+        raise PermissionDeniedException(detail=_ACCOUNT_STATE_PROTOCOL_DETAIL)
     is_active = user.is_active
     is_verified = user.is_verified
 

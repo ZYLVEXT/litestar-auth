@@ -86,7 +86,7 @@ When any cookie transport is present, the plugin configures Litestar **CSRF** if
 
 ## JWT
 
-JWTs include standard time claims (`iat`, `exp`, `nbf`). Revocation uses a **denylist** store; default in-memory storage is suitable for single-process dev only—use a shared store (e.g. Redis) in multi-worker production.
+JWTs include standard time claims (`iat`, `exp`, `nbf`). Revocation uses a **denylist** store; default in-memory storage is suitable for single-process dev only—use a shared store (e.g. Redis) in multi-worker production. The in-memory denylist rejects new revocations under capacity pressure (after pruning expired entries) rather than evicting an existing revoked JTI; size `max_entries` or use Redis if you issue many concurrent revocations. When a new revocation cannot be stored, `destroy_token` raises `TokenError` (HTTP **503** / `TOKEN_PROCESSING_FAILED` on bundled routes); pending-login TOTP verification uses the same fail-closed pattern for recording the spent pending JTI.
 
 ## Rate limiting
 

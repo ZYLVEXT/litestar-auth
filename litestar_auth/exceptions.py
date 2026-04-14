@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+from enum import StrEnum
 
-class ErrorCode:
-    """String constants for machine-readable error responses."""
 
+class ErrorCode(StrEnum):
+    """Machine-readable error codes (``StrEnum``); values match member names."""
+
+    UNKNOWN = "UNKNOWN"
     AUTHENTICATION_FAILED = "AUTHENTICATION_FAILED"
     TOKEN_PROCESSING_FAILED = "TOKEN_PROCESSING_FAILED"
     CONFIGURATION_INVALID = "CONFIGURATION_INVALID"
@@ -41,12 +44,12 @@ class LitestarAuthError(Exception):
     """Base exception for all library-specific errors."""
 
     default_message = "An unexpected litestar-auth error occurred."
-    default_code = "UNKNOWN"
+    default_code = ErrorCode.UNKNOWN
 
     def __init__(self, message: str | None = None, code: str | None = None) -> None:
         """Initialize the exception with a default or custom message and optional code."""
         msg = message or self.default_message
-        self.code = code if code is not None else getattr(type(self), "default_code", LitestarAuthError.default_code)
+        self.code = code if code is not None else self.default_code
         super().__init__(msg)
 
 

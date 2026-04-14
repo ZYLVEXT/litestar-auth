@@ -11,18 +11,14 @@ from sqlalchemy import inspect as sa_inspect
 
 from litestar_auth._manager.construction import ManagerConstructorInputs
 from litestar_auth._plugin.config import (
-    _DEFAULT_USER_MANAGER_FACTORY_GUIDANCE,
     LitestarAuthConfig,
     TotpConfig,
-    _build_default_user_manager_contract,
-    _build_default_user_manager_validation_kwargs,
-    _build_oauth_route_registration_contract,
-    _describe_jwt_revocation_tradeoff,
-    _format_default_user_manager_managed_security_error,
-    _resolve_plugin_managed_totp_secret_storage_tradeoff,
+    _resolve_plugin_managed_totp_secret_storage_policy,
 )
 from litestar_auth._plugin.middleware import get_cookie_transports
+from litestar_auth._plugin.oauth_contract import _build_oauth_route_registration_contract
 from litestar_auth._plugin.rate_limit import iter_rate_limit_endpoints
+from litestar_auth._plugin.security_policy import _describe_jwt_revocation_policy
 from litestar_auth.authentication.strategy.db import (
     DatabaseTokenStrategy,
     build_legacy_plaintext_tokens_validation_message,
@@ -30,6 +26,7 @@ from litestar_auth.authentication.strategy.db import (
 from litestar_auth.authentication.strategy.jwt import JWTStrategy
 from litestar_auth.config import (
     MINIMUM_SECRET_LENGTH,
+    OAuthProviderConfig,
     resolve_trusted_proxy_setting,
     validate_secret_length,
     warn_if_secret_roles_are_reused,
@@ -154,7 +151,7 @@ def validate_core_session_config[UP: UserProtocol[Any], ID](config: LitestarAuth
     Raises:
         ValueError: If the plugin lacks a backend or a supported DB-session source.
     """
-    if not config.startup_backends():
+    if not config.resolve_startup_backends():
         msg = "LitestarAuth requires at least one authentication backend."
         raise ValueError(msg)
 
@@ -290,13 +287,13 @@ def _validate_totp_pending_secret_config[UP: UserProtocol[Any], ID](config: Lite
 
 def _validate_backend_strategy_security[UP: UserProtocol[Any], ID](config: LitestarAuthConfig[UP, ID]) -> None:
     """Validate backend strategy security posture for non-test environments."""
-    for backend in config.startup_backends():
+    for backend in config.resolve_startup_backends():
         _warn_backend_name_strategy_mismatch(
             backend_name=getattr(backend, "name", None),
             strategy=getattr(backend, "strategy", None),
         )
 
-    for backend in config.startup_backends():
+    for backend in config.resolve_startup_backends():
         strategy = getattr(backend, "strategy", None)
         _validate_database_strategy_legacy_mode(config=config, strategy=strategy)
         if isinstance(strategy, JWTStrategy):
@@ -371,7 +368,7 @@ def _validate_jwt_strategy_revocation[UP: UserProtocol[Any], ID](
     Raises:
         ValueError: If JWT revocation storage is nondurable in production.
     """
-    notice = _describe_jwt_revocation_tradeoff(strategy.revocation_posture)
+    notice = _describe_jwt_revocation_policy(strategy.revocation_posture)
     if (
         notice is None
         or not notice.requires_explicit_production_opt_in
@@ -395,7 +392,7 @@ def _validate_totp_encryption_key[UP: UserProtocol[Any], ID](config: LitestarAut
     """
     if config.totp_config is None or config.unsafe_testing:
         return
-    notice = _resolve_plugin_managed_totp_secret_storage_tradeoff(config)
+    notice = _resolve_plugin_managed_totp_secret_storage_policy(config)
     if notice is None or not notice.requires_explicit_production_opt_in:
         return
 
@@ -440,6 +437,10 @@ def validate_user_manager_security_config[UP: UserProtocol[Any], ID](config: Lit
             raise ConfigurationError(msg)
 
     if config.user_manager_factory is None and manager_inputs.managed_security_keys:
+        from litestar_auth._plugin.user_manager_builder import (  # noqa: PLC0415
+            _format_default_user_manager_managed_security_error,
+        )
+
         msg = _format_default_user_manager_managed_security_error(manager_inputs.managed_security_keys)
         raise ConfigurationError(msg)
 
@@ -488,6 +489,12 @@ def validate_default_user_manager_constructor_contract[UP: UserProtocol[Any], ID
     """
     if config.user_manager_factory is not None:
         return
+
+    from litestar_auth._plugin.user_manager_builder import (  # noqa: PLC0415
+        _DEFAULT_USER_MANAGER_FACTORY_GUIDANCE,
+        _build_default_user_manager_contract,
+        _build_default_user_manager_validation_kwargs,
+    )
 
     manager_class = config.user_manager_class
     manager_name = getattr(manager_class, "__name__", repr(manager_class))
@@ -544,7 +551,7 @@ def resolve_user_manager_account_state_validator[UP: UserProtocol[Any]](
 
 def _validate_unique_oauth_provider_names(
     *,
-    providers: tuple[tuple[str, object], ...],
+    providers: tuple[OAuthProviderConfig, ...],
     field_name: str,
 ) -> None:
     """Reject duplicate provider names within one declared OAuth inventory.
@@ -555,7 +562,7 @@ def _validate_unique_oauth_provider_names(
     seen: set[str] = set()
     duplicates: list[str] = []
     for provider in providers:
-        provider_name = provider[0]
+        provider_name = provider.name
         if provider_name in seen and provider_name not in duplicates:
             duplicates.append(provider_name)
             continue
@@ -588,7 +595,7 @@ def validate_cookie_auth_config[UP: UserProtocol[Any], ID](config: LitestarAuthC
     Raises:
         ConfigurationError: If cookie auth is enabled without a safe CSRF configuration.
     """
-    cookie_transports = get_cookie_transports(config.startup_backends())
+    cookie_transports = get_cookie_transports(config.resolve_startup_backends())
     if not cookie_transports:
         return
 
@@ -621,7 +628,7 @@ def validate_totp_config[UP: UserProtocol[Any], ID](config: LitestarAuthConfig[U
         unsafe_testing=config.unsafe_testing,
     )
     if not config.unsafe_testing:
-        cookie_transports = get_cookie_transports(config.startup_backends())
+        cookie_transports = get_cookie_transports(config.resolve_startup_backends())
         if cookie_transports and not all(t.secure for t in cookie_transports):
             warnings.warn(
                 "TOTP is enabled but CookieTransport.secure=False; TOTP secrets returned by "

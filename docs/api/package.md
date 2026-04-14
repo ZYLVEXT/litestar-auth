@@ -28,7 +28,7 @@ Call that helper explicitly during metadata bootstrap or Alembic-style autogener
 
 The canonical opaque DB-token entrypoint is exported from both the root package and `litestar_auth.plugin` as `DatabaseTokenAuthConfig`.
 
-For OAuth, treat root-package re-exports as compatibility aliases. Plugin-managed apps should configure `OAuthConfig` on `LitestarAuthConfig`; `litestar_auth.oauth.create_provider_oauth_controller` plus `litestar_auth.controllers.create_oauth_controller` / `create_oauth_associate_controller` remain the manual escape hatch for custom route tables.
+For OAuth, treat root-package re-exports as compatibility aliases. Plugin-managed apps should configure `OAuthConfig` on `LitestarAuthConfig` with `oauth_providers` as a sequence of `OAuthProviderConfig(name=..., client=...)` (legacy `(name, client)` tuples are coerced at the plugin boundary). `litestar_auth.oauth.create_provider_oauth_controller` plus `litestar_auth.controllers.create_oauth_controller` / `create_oauth_associate_controller` remain the manual escape hatch for custom route tables.
 
 Canonical opaque DB-token wiring:
 
@@ -64,11 +64,11 @@ In that example, `session_maker` is any compatible request-session factory calla
 
 If you previously built the DB bearer backend by hand with `AuthenticationBackend(..., BearerTransport(), DatabaseTokenStrategy(...))`, migrate to the direct `database_token_auth=DatabaseTokenAuthConfig(...)` form above. Keep manual backends for multi-backend or custom-transport cases.
 
-`backends` remains the explicit manual-backend field, and `config.resolve_backends()` stays limited to that manual runtime inventory. For the canonical `database_token_auth=...` path, `config.startup_backends()` returns startup-only `StartupBackendTemplate` values used during plugin assembly, while `config.bind_request_backends(session)` returns request-scoped runtime `AuthenticationBackend` instances.
+`backends` remains the explicit manual-backend field, and `config.resolve_backends()` stays limited to that manual runtime inventory. For the canonical `database_token_auth=...` path, `config.resolve_startup_backends()` returns startup-only `StartupBackendTemplate` values used during plugin assembly, while `config.resolve_request_backends(session)` returns request-scoped runtime `AuthenticationBackend` instances.
 
 For app-owned protected routes, reuse `config.resolve_openapi_security_requirements()` with Litestar `guards=[is_authenticated]` instead of hard-coding backend names in route-level OpenAPI metadata.
 
-Treat the startup templates as plugin-assembly inventory only: they preserve backend names plus transport/strategy metadata for validation and controller wiring, but DB-token runtime work still has to go through `bind_request_backends(session)` so the realized backend carries the active `AsyncSession`. Controller selection follows the startup inventory order: the primary backend mounts at `/auth`, later backends mount at `/auth/{backend.name}`, plugin-owned OAuth login routes use the primary backend, and TOTP uses the primary backend unless `totp_backend_name` selects another named startup backend.
+Treat the startup templates as plugin-assembly inventory only: they preserve backend names plus transport/strategy metadata for validation and controller wiring, but DB-token runtime work still has to go through `resolve_request_backends(session)` so the realized backend carries the active `AsyncSession`. Controller selection follows the startup inventory order: the primary backend mounts at `/auth`, later backends mount at `/auth/{backend.name}`, plugin-owned OAuth login routes use the primary backend, and TOTP uses the primary backend unless `totp_backend_name` selects another named startup backend.
 
 The relational-role redesign changes storage only. Public HTTP payloads, managers, and guard
 factories still work with one normalized flat `roles` collection, and the library still does not

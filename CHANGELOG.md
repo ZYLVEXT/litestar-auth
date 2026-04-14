@@ -1,3 +1,101 @@
+## Unreleased
+
+### Added
+
+- **`litestar roles` CLI for role catalog and user-role management** — A `roles` command group is
+  now registered by `LitestarAuth` through Litestar's `CLIPlugin` surface. Operators can list
+  normalized roles (`roles list`), create roles idempotently (`roles create <role>`), delete roles
+  with an explicit `--force` guard when assignments exist (`roles delete <role>`), assign and
+  unassign roles for a target user (`roles assign --email … <role>…` /
+  `roles unassign --email … <role>…`), and display current membership
+  (`roles show-user --email …`). Role mutations route through `BaseUserManager.update()` so
+  `on_after_update()` lifecycle hooks, audit logging, and downstream entitlement side effects fire
+  consistently for both single-user and multi-user forced-delete paths. Requires `LitestarAuth`
+  with a configured `session_maker` and a relational role-capable user model
+  (`UserRoleRelationshipMixin` or a custom equivalent); see the new role-management CLI guide in
+  `docs/guides/roles_cli.md`.
+- **Plugin-level customization hooks** — `LitestarAuthConfig` now accepts three optional typed
+  hook callbacks for applications that need to adjust plugin-owned behavior without subclassing or
+  forking. `exception_response_hook` replaces the built-in `LitestarAuthError` response handler
+  with a caller-supplied `Response` factory; `middleware_hook` receives the constructed
+  `DefineMiddleware` and returns the (possibly wrapped) middleware instance to insert into the app;
+  `controller_hook` receives the built controller list and returns the filtered or decorated list to
+  register. All hooks default to `None` and existing plugin behavior is fully preserved when they
+  are not set.
+- **`OAuthProviderConfig` is now a named dataclass** — **Breaking:** `OAuthProviderConfig` is now
+  a frozen dataclass with explicit `name: str` and `client: object` fields, replacing the opaque
+  `tuple[str, object]` type alias. Existing tuple entries continue to work at runtime via the new
+  `OAuthProviderConfig.coerce()` classmethod, but static type checkers will flag bare tuples passed
+  to `oauth_providers`. The named type is exported from `litestar_auth.config`.
+
+### Security
+
+- **In-memory JWT denylist is now fail-closed under capacity** — `InMemoryJWTDenylistStore` no
+  longer evicts already-denied JTI entries when `max_entries` is reached. `deny()` now returns
+  `False`, and the bundled logout and pending-token burn routes raise `TokenError` and return
+  **HTTP 503** rather than silently opening a capacity gap where a freshly revoked access or
+  pending-login token remains usable for the rest of its lifetime. This matches the fail-closed
+  behavior already applied to `InMemoryUsedTotpCodeStore`. Switch to `RedisJWTDenylistStore` for
+  an unbounded, durable denylist in production.
+- **TOTP replay protection TTL aligned with drift window** — `USED_TOTP_CODE_TTL_SECONDS` is now
+  `TIME_STEP_SECONDS * (2 * TOTP_DRIFT_STEPS + 1)` (90 s with `TOTP_DRIFT_STEPS=1`, up from
+  60 s). The previous value could let a replay-store entry expire up to ~29 s before the
+  corresponding TOTP code became invalid, leaving a narrow window for a replayed code to pass
+  verification a second time.
+
+### Changed
+
+- **OAuth token ORM columns are wider** — `oauth_access_token_type` and `oauth_refresh_token_type`
+  in `litestar_auth.models._oauth_encrypted_types` now use `String(length=4096)` instead of
+  `2048`, so Fernet-encrypted access and refresh tokens from providers that issue large JWTs fit
+  reliably.
+- **`OAuthTokenEncryption` builds its Fernet backend once at construction** —
+  `OAuthTokenEncryption.__post_init__()` now caches the `_RawFernetBackend` instance on the frozen
+  dataclass instead of allocating a new backend on every `encrypt()` / `decrypt()` call. As a side
+  effect, invalid Fernet keys now raise at `OAuthTokenEncryption(key=…)` construction time rather
+  than on first use.
+- **`SQLAlchemyUserDatabase.update()` no longer issues a redundant SELECT** — the repository
+  `update()` call already hydrates relationships via `load=self._user_load`; the follow-up
+  `_reload_with_relationships()` query has been removed from the `update()` path. Each user update
+  now executes one fewer database round-trip.
+- **Guard denial messages include the guard name and required protocol** — account-state and
+  role-membership guard failures now report the specific guard name and the `GuardedUserProtocol`
+  or `RoleCapableUserProtocol` attributes the user model must expose, replacing the previous
+  generic static strings with actionable operator-facing guidance.
+- **Protocol hierarchy decision table added to type reference** — `docs/api/types.md` and the
+  `litestar_auth.types` module docstring now include a feature-to-protocol mapping table
+  (`UserProtocol`, `GuardedUserProtocol`, `RoleCapableUserProtocol`, `TotpUserProtocol`) so users
+  can identify which protocol their model must satisfy for account-state guards, role guards, and
+  TOTP flows without reading guard implementation details.
+- **Role CLI user lookups use async-safe eager loading** — `roles assign`, `roles unassign`,
+  `roles show-user`, and forced `roles delete --force` now preload role membership via
+  `selectinload` before accessing `user.roles`, so supported custom models with `lazy='select'`
+  role-assignment relationships work correctly under native `AsyncSession` execution.
+
+### Internal
+
+- **`RedisAuthPreset.build_rate_limit_config()` consolidated** — the four copy-paste branches for
+  the `identity_fields` × `trusted_headers` kwarg combinations are replaced with a single call
+  site using a conditionally-built kwargs dict. Observable rate-limiter behavior is unchanged.
+
+### Migration
+
+- **`OAuthProviderConfig` named type** — Replace any `(name, client)` tuple entries in
+  `oauth_providers` with `OAuthProviderConfig(name=name, client=client)` to satisfy type checkers.
+  Existing tuples continue to work at runtime through `OAuthProviderConfig.coerce()`.
+- **JWT denylist capacity now surfaces HTTP 503** — If client or middleware code assumes logout
+  always returns a success response, add handling for 503 when using the default in-memory denylist
+  under load. Consider `RedisJWTDenylistStore` for durable, unbounded revocation in production.
+- **Fernet key validated at `OAuthTokenEncryption` construction** — `OAuthTokenEncryption(key=…)`
+  now validates the key immediately. Replace placeholder keys such as `"a" * 44` with a proper
+  32-byte url-safe base64-encoded key:
+  `python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"`.
+- **OAuth token DDL** — Existing deployments must widen `oauth_account.access_token` and
+  `oauth_account.refresh_token` (or equivalent custom column names) with database-specific DDL, for
+  example `ALTER TABLE oauth_account ALTER COLUMN access_token TYPE VARCHAR(4096)` and the same for
+  `refresh_token` on PostgreSQL. Adjust identifiers and types for your dialect (MySQL may rebuild
+  the table depending on row format).
+
 ## 1.7.0 (2026-04-11)
 
 ### Added
@@ -10,6 +108,8 @@
 
 ### Changed
 
+- **`LitestarAuthConfig` method names follow a consistent verb convention** — canonical entry points are `resolve_password_helper()`, `get_default_password_helper()`, `resolve_startup_backends()`, and `resolve_request_backends(session)`. **Breaking:** the older aliases (`build_password_helper()`, `memoized_default_password_helper()`, `startup_backends()`, `bind_request_backends(session)`) are removed with no compatibility shims; migrate call sites to the `resolve_*` / `get_*` names.
+- **`BaseUserManager` secrets contract is `security=` only** — **Breaking:** per-field `verification_token_secret`, `reset_password_token_secret`, `totp_secret_key`, and `id_parser` constructor kwargs are removed. Pass everything through `security=UserManagerSecurity(...)` (the default plugin builder already does). Custom `user_manager_factory` implementations must supply the same `security=` bundle when they construct managers.
 - **Bundled role persistence now uses relational tables instead of a JSON column** — the bundled
   `User` and the supported custom-model path now persist global role membership through `role` and
   `user_role` rows, while `user.roles` remains the normalized flat `list[str]` contract consumed by
@@ -32,6 +132,8 @@
   base for app-owned table names and registries.
 - Clients using the built-in register/verify/reset/users responses should expect a new `roles` array in the default payload shape. Apps that keep the built-in controllers with role-less user models should provide custom `user_read_schema` / `user_update_schema` types that intentionally omit `roles`.
 - Applications that want to use the built-in role guard factories on app-owned routes should ensure their authenticated user type satisfies `RoleCapableUserProtocol`; otherwise the guards now fail closed with **403** instead of relying on ad hoc `user.roles` access.
+- Replace removed `LitestarAuthConfig` aliases with `resolve_password_helper()`, `get_default_password_helper()`, `resolve_startup_backends()`, and `resolve_request_backends(session)`.
+- Construct `BaseUserManager` with `security=UserManagerSecurity(...)` only; move any former per-field secret or `id_parser` arguments into that bundle.
 
 ## 1.6.1 (2026-04-11)
 

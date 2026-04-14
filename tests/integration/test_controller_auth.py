@@ -72,8 +72,10 @@ class TrackingUserManager(BaseUserManager[ExampleUser, UUID]):
         super().__init__(
             user_db,
             password_helper=password_helper,
-            verification_token_secret=verification_token_secret,
-            reset_password_token_secret=reset_password_token_secret,
+            security=UserManagerSecurity[UUID](
+                verification_token_secret=verification_token_secret,
+                reset_password_token_secret=reset_password_token_secret,
+            ),
             backends=backends,
             login_identifier=login_identifier,
         )
@@ -299,7 +301,7 @@ def build_cookie_plugin_app(*, login_identifier: Literal["email", "username"] = 
         assert security is not None
         return TrackingUserManager(
             user_db=cast("BaseUserStore[ExampleUser, UUID]", user_db),
-            password_helper=config.build_password_helper(),
+            password_helper=config.resolve_password_helper(),
             verification_token_secret=security.verification_token_secret,
             reset_password_token_secret=security.reset_password_token_secret,
             backends=backends,

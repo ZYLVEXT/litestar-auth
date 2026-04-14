@@ -18,7 +18,7 @@ from litestar_auth.authentication.strategy.db_models import AccessToken, Refresh
 from litestar_auth.authentication.transport.bearer import BearerTransport
 from litestar_auth.controllers import create_auth_controller
 from litestar_auth.exceptions import ErrorCode
-from litestar_auth.manager import BaseUserManager
+from litestar_auth.manager import BaseUserManager, UserManagerSecurity
 from litestar_auth.models import User
 from litestar_auth.password import PasswordHelper
 from litestar_auth.ratelimit import AuthRateLimitConfig, EndpointRateLimit, InMemoryRateLimiter
@@ -179,8 +179,10 @@ def build_app(
     user_manager = BaseUserManager[User, UUID](
         user_db,
         password_helper=PasswordHelper(),
-        verification_token_secret="test-secret-verification-secret-1234567890",
-        reset_password_token_secret="test-secret-reset-password-secret-12345",
+        security=UserManagerSecurity[UUID](
+            verification_token_secret="test-secret-verification-secret-1234567890",
+            reset_password_token_secret="test-secret-reset-password-secret-12345",
+        ),
     )
     controller = create_auth_controller(
         backend=backend,
