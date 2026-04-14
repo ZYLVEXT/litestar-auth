@@ -124,7 +124,7 @@ from litestar_auth.types import GuardedUserProtocol, RoleCapableUserProtocol, To
 
 logging.getLogger(__name__).addHandler(logging.NullHandler())  # noqa: RUF067
 
-__version__ = "1.7.0"
+__version__ = "1.8.0"
 
 __all__ = (
     "AccessToken",
