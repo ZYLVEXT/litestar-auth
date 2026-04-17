@@ -20,7 +20,7 @@ import litestar_auth.models as models_module
 import litestar_auth.ratelimit as ratelimit_module
 import litestar_auth.ratelimit._config as ratelimit_config_module
 from litestar_auth.authentication.strategy.db_models import AccessToken, DatabaseTokenModels, RefreshToken
-from litestar_auth.ratelimit import AuthRateLimitEndpointGroup, AuthRateLimitEndpointSlot
+from litestar_auth.ratelimit import AuthRateLimitEndpointGroup, AuthRateLimitEndpointSlot, AuthRateLimitSlot
 from tests.conftest import project_version_from_pyproject
 
 pytestmark = [pytest.mark.unit, pytest.mark.imports]
@@ -196,7 +196,7 @@ def test_models_and_strategy_token_registration_helpers_share_the_same_db_models
 
 
 def test_ratelimit_reexport_module_exposes_identifier_aliases_and_keeps_catalog_internal() -> None:
-    """The public ratelimit module exports identifier aliases without leaking the private catalog."""
+    """The public ratelimit module exports identifier aliases and slot enum without leaking the private catalog."""
     reloaded_module = importlib.reload(ratelimit_module)
 
     assert reloaded_module is ratelimit_module
@@ -206,6 +206,7 @@ def test_ratelimit_reexport_module_exposes_identifier_aliases_and_keeps_catalog_
             "AuthRateLimitConfig",
             "AuthRateLimitEndpointGroup",
             "AuthRateLimitEndpointSlot",
+            "AuthRateLimitSlot",
             "EndpointRateLimit",
             "InMemoryRateLimiter",
             "RateLimitScope",
@@ -224,6 +225,7 @@ def test_ratelimit_reexport_module_exposes_identifier_aliases_and_keeps_catalog_
     assert get_args(reloaded_module.AuthRateLimitEndpointGroup.__value__) == get_args(
         AuthRateLimitEndpointGroup.__value__,
     )
+    assert tuple(reloaded_module.AuthRateLimitSlot) == tuple(AuthRateLimitSlot)
     assert not hasattr(reloaded_module, "_AUTH_RATE_LIMIT_ENDPOINT_RECIPES")
     assert not hasattr(reloaded_module, "_AUTH_RATE_LIMIT_ENDPOINT_RECIPES_BY_SLOT")
     assert not hasattr(reloaded_module, "_AUTH_RATE_LIMIT_ENDPOINT_SLOTS")

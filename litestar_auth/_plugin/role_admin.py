@@ -142,7 +142,6 @@ class _ManagerLifecycleRoleUpdater[UP: UserProtocol[Any]]:
             oauth_token_encryption=self._oauth_token_encryption,
         )
         manager_inputs = ManagerConstructorInputs(
-            manager_kwargs=self.config.user_manager_kwargs,
             manager_security=self.config.user_manager_security,
         )
         effective_security = manager_inputs.effective_security

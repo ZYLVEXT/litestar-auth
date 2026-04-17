@@ -1003,7 +1003,11 @@ async def test_callback_maps_oauth_account_already_linked_error_on_upsert() -> N
     ) -> None:
         del user, oauth_name, account_id, account_email, access_token, expires_at, refresh_token
         await asyncio.sleep(0)
-        raise OAuthAccountAlreadyLinkedError
+        raise OAuthAccountAlreadyLinkedError(
+            provider="github",
+            account_id="provider-user",
+            existing_user_id=uuid4(),
+        )
 
     user_db.upsert_oauth_account = fail_upsert  # ty: ignore[invalid-assignment]
 
@@ -1597,7 +1601,11 @@ async def test_associate_maps_oauth_account_already_linked_error_from_upsert() -
     ) -> None:
         del user, oauth_name, account_id, account_email, access_token, expires_at, refresh_token
         await asyncio.sleep(0)
-        raise OAuthAccountAlreadyLinkedError
+        raise OAuthAccountAlreadyLinkedError(
+            provider="github",
+            account_id="provider-user",
+            existing_user_id=uuid4(),
+        )
 
     user_db.upsert_oauth_account = fail_upsert  # ty: ignore[invalid-assignment]
     strategy.tokens["bearer-token"] = user.id

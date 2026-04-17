@@ -35,7 +35,9 @@ Manual/custom OAuth controllers accept any client object that satisfies the supp
 The typed surface is exposed as structural protocols in `litestar_auth.oauth.client_adapter`:
 `OAuthClientProtocol` covers the supported manual client shapes, with
 `OAuthDirectIdentityClientProtocol`, `OAuthProfileClientProtocol`, and the optional
-`OAuthEmailVerificationClientProtocol` documenting the capability split used by the adapter.
+`OAuthEmailVerificationAsyncClientProtocol` documenting the canonical email-verification capability used by the
+adapter. Sync-only verification clients can be wrapped explicitly with
+`make_async_email_verification_client()`.
 
 Supported provisioning paths:
 
@@ -43,7 +45,7 @@ Supported provisioning paths:
 - `oauth_client_factory=...`: pass a zero-argument callable that returns the client instance.
 - `oauth_client_class="package.module.Client"`: pass a fully qualified import path and optional `oauth_client_kwargs={...}`. `load_httpx_oauth_client()` imports the class lazily and forwards those kwargs to its constructor.
 
-`create_provider_oauth_controller()` resolves those provisioning options through the same adapter boundary that powers `create_oauth_controller()`, `create_oauth_associate_controller()`, and the controller-level compatibility helpers, so all manual entry points enforce one normalized runtime contract.
+`create_provider_oauth_controller()` resolves those provisioning options through the same adapter boundary that powers `create_oauth_controller()` and `create_oauth_associate_controller()`, so all manual entry points enforce one normalized runtime contract.
 
 Required client methods:
 
@@ -61,9 +63,44 @@ Identity resolution:
 
 Optional email-verification contract:
 
-- Dedicated hook: `get_email_verified(access_token) -> bool`
-  This hook may be async or sync, but it must resolve to a real boolean.
+- Dedicated hook: implement `OAuthEmailVerificationAsyncClientProtocol` with
+  `async get_email_verified(access_token) -> bool`.
 - Profile fallback: `get_profile()` may expose `email_verified` as `true`/`false` or the case-insensitive strings `"true"` / `"false"`.
+
+Async clients should implement the hook directly:
+
+```python
+from litestar_auth.oauth import OAuthEmailVerificationAsyncClientProtocol
+
+
+class ProviderClient(OAuthEmailVerificationAsyncClientProtocol):
+    async def get_email_verified(self, access_token: str) -> bool:
+        profile = await self.get_profile(access_token)
+        return profile["email_verified"] is True
+```
+
+Sync-only clients must be wrapped before they are passed to manual OAuth controller factories:
+
+```python
+from litestar_auth.oauth import (
+    OAuthEmailVerificationSyncClientProtocol,
+    make_async_email_verification_client,
+)
+
+
+class SyncProviderClient(OAuthEmailVerificationSyncClientProtocol):
+    def get_email_verified(self, access_token: str) -> bool:
+        return self.fetch_profile(access_token)["email_verified"] is True
+
+
+oauth_client = make_async_email_verification_client(SyncProviderClient())
+```
+
+!!! warning "Blocking in async context"
+
+    Do not pass a blocking sync `get_email_verified()` implementation directly to async OAuth routes. Use
+    `make_async_email_verification_client()` for truly blocking sync clients, or implement
+    `OAuthEmailVerificationAsyncClientProtocol` directly for native async and cheap in-memory checks.
 
 Fail-closed behavior:
 

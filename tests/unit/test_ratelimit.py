@@ -33,7 +33,7 @@ from litestar_auth.ratelimit import (
     AuthRateLimitConfig,
     AuthRateLimitEndpointGroup,
     AuthRateLimitEndpointSlot,
-    AuthRateLimitNamespaceStyle,
+    AuthRateLimitSlot,
     EndpointRateLimit,
     InMemoryRateLimiter,
     RateLimiterBackend,
@@ -70,6 +70,9 @@ USED_TOTP_TTL_MS = 1_250
 PENDING_JTI_TTL_SECONDS = 30
 PENDING_JTI_TTL_FLOOR = PENDING_JTI_TTL_SECONDS - 1
 UUID4_HEX_LENGTH = 32
+LENIENT_STRICT_MAX_ATTEMPTS = 5
+LENIENT_MEMORY_WINDOW_SECONDS = 300
+LENIENT_REDIS_WINDOW_SECONDS = 120
 
 AUTH_RATE_LIMIT_SLOT_IDENTIFIERS: tuple[AuthRateLimitEndpointSlot, ...] = (
     "login",
@@ -92,7 +95,6 @@ AUTH_RATE_LIMIT_GROUP_IDENTIFIERS: tuple[AuthRateLimitEndpointGroup, ...] = (
     "totp",
     "verification",
 )
-AUTH_RATE_LIMIT_NAMESPACE_STYLES: tuple[AuthRateLimitNamespaceStyle, ...] = ("route", "snake_case")
 AUTH_RATE_LIMIT_SLOT_IDENTIFIERS_BY_GROUP: dict[
     AuthRateLimitEndpointGroup,
     frozenset[AuthRateLimitEndpointSlot],
@@ -210,7 +212,6 @@ def test_auth_rate_limit_identifier_aliases_stay_aligned_with_public_builder_con
     """Public literal aliases match the supported builder identifiers."""
     slot_identifiers = get_args(ratelimit_module.AuthRateLimitEndpointSlot.__value__)
     group_identifiers = get_args(ratelimit_module.AuthRateLimitEndpointGroup.__value__)
-    namespace_styles = get_args(ratelimit_module.AuthRateLimitNamespaceStyle.__value__)
 
     assert slot_identifiers == AUTH_RATE_LIMIT_SLOT_IDENTIFIERS
     assert slot_identifiers == tuple(field.name for field in fields(AuthRateLimitConfig))
@@ -220,26 +221,42 @@ def test_auth_rate_limit_identifier_aliases_stay_aligned_with_public_builder_con
     assert frozenset(group_identifiers) == ratelimit_config_module._AUTH_RATE_LIMIT_ENDPOINT_GROUPS
     assert AUTH_RATE_LIMIT_ENDPOINT_SLOTS_BY_GROUP == AUTH_RATE_LIMIT_SLOT_IDENTIFIERS_BY_GROUP
     assert AUTH_RATE_LIMIT_SLOT_IDENTIFIERS_BY_GROUP["verification"] == AUTH_RATE_LIMIT_VERIFICATION_SLOTS
-    assert namespace_styles == AUTH_RATE_LIMIT_NAMESPACE_STYLES
-    assert frozenset(namespace_styles) == ratelimit_config_module._AUTH_RATE_LIMIT_NAMESPACE_STYLES
+
+
+def test_auth_rate_limit_slot_enum_stays_aligned_with_literal_slot_alias() -> None:
+    """The internal slot enum mirrors the legacy literal alias values in order."""
+    slot_enum = ratelimit_config_module.AuthRateLimitSlot
+
+    assert tuple(slot_enum) == tuple(slot_enum(identifier) for identifier in AUTH_RATE_LIMIT_SLOT_IDENTIFIERS)
+    assert tuple(member.value for member in slot_enum) == AUTH_RATE_LIMIT_SLOT_IDENTIFIERS
+    assert tuple(member.name for member in slot_enum) == (
+        "LOGIN",
+        "REFRESH",
+        "REGISTER",
+        "FORGOT_PASSWORD",
+        "RESET_PASSWORD",
+        "TOTP_ENABLE",
+        "TOTP_CONFIRM_ENABLE",
+        "TOTP_VERIFY",
+        "TOTP_DISABLE",
+        "VERIFY_TOKEN",
+        "REQUEST_VERIFY_TOKEN",
+    )
 
 
 def test_auth_rate_limit_slot_helpers_feed_shared_builder_inputs() -> None:
     """The public slot helpers remain valid inputs for the shared-backend builder."""
     shared_backend = InMemoryRateLimiter(max_attempts=2, window_seconds=10)
-
     config = AuthRateLimitConfig.from_shared_backend(
         shared_backend,
         enabled=AUTH_RATE_LIMIT_ENDPOINT_SLOTS,
         disabled=AUTH_RATE_LIMIT_ENDPOINT_SLOTS_BY_GROUP["verification"],
-        namespace_style="snake_case",
     )
-
     assert config.login == EndpointRateLimit(backend=shared_backend, scope="ip_email", namespace="login")
     assert config.forgot_password == EndpointRateLimit(
         backend=shared_backend,
         scope="ip_email",
-        namespace="forgot_password",
+        namespace="forgot-password",
     )
     assert config.verify_token is None
     assert config.request_verify_token is None
@@ -252,9 +269,6 @@ def test_auth_rate_limit_identifier_aliases_thread_through_builder_type_hints() 
     enabled_annotation = _unwrap_optional(builder_type_hints["enabled"])
     disabled_annotation = builder_type_hints["disabled"]
     group_backends_annotation = _unwrap_optional(builder_type_hints["group_backends"])
-    scope_overrides_annotation = _unwrap_optional(builder_type_hints["scope_overrides"])
-    namespace_style_annotation = builder_type_hints["namespace_style"]
-    namespace_overrides_annotation = _unwrap_optional(builder_type_hints["namespace_overrides"])
     endpoint_overrides_annotation = _unwrap_optional(builder_type_hints["endpoint_overrides"])
 
     assert get_origin(enabled_annotation) is Iterable
@@ -267,17 +281,35 @@ def test_auth_rate_limit_identifier_aliases_thread_through_builder_type_hints() 
         ratelimit_module.AuthRateLimitEndpointGroup,
         RateLimiterBackend,
     )
-    assert get_origin(scope_overrides_annotation) is Mapping
-    assert get_args(scope_overrides_annotation) == (
-        ratelimit_module.AuthRateLimitEndpointSlot,
-        ratelimit_module.RateLimitScope,
-    )
-    assert get_args(namespace_style_annotation.__value__) == AUTH_RATE_LIMIT_NAMESPACE_STYLES
-    assert get_origin(namespace_overrides_annotation) is Mapping
-    assert get_args(namespace_overrides_annotation) == (ratelimit_module.AuthRateLimitEndpointSlot, str)
     assert get_origin(endpoint_overrides_annotation) is Mapping
-    assert get_args(endpoint_overrides_annotation)[0] is ratelimit_module.AuthRateLimitEndpointSlot
+    assert get_args(endpoint_overrides_annotation)[0] is ratelimit_module.AuthRateLimitSlot
     assert set(get_args(get_args(endpoint_overrides_annotation)[1])) == {EndpointRateLimit, type(None)}
+
+
+def test_auth_rate_limit_config_from_shared_backend_accepts_slot_enum_override_keys() -> None:
+    """Endpoint override maps accept slot enums while keeping runtime behavior unchanged."""
+    shared_backend = InMemoryRateLimiter(max_attempts=2, window_seconds=10)
+    forgot_password_override = EndpointRateLimit(
+        backend=shared_backend,
+        scope="ip",
+        namespace="forgot_password",
+    )
+    verification_override = EndpointRateLimit(
+        backend=shared_backend,
+        scope="ip_email",
+        namespace="verify-request",
+    )
+    config = AuthRateLimitConfig.from_shared_backend(
+        shared_backend,
+        enabled=("forgot_password", "request_verify_token"),
+        endpoint_overrides={
+            AuthRateLimitSlot.FORGOT_PASSWORD: forgot_password_override,
+            AuthRateLimitSlot.REQUEST_VERIFY_TOKEN: verification_override,
+        },
+    )
+
+    assert config.forgot_password is forgot_password_override
+    assert config.request_verify_token is verification_override
 
 
 def test_endpoint_rate_limit_annotations_are_runtime_resolvable() -> None:
@@ -442,6 +474,155 @@ def test_auth_rate_limit_config_from_shared_backend_uses_catalog_defaults() -> N
         assert limiter.trusted_headers == ratelimit_config_module._DEFAULT_TRUSTED_HEADERS
 
 
+def test_auth_rate_limit_config_strict_preset_enables_only_public_sign_in_slots() -> None:
+    """The strict preset limits only the shared sign-in attack surfaces."""
+    strict_backend = InMemoryRateLimiter(max_attempts=2, window_seconds=60)
+    config = AuthRateLimitConfig.strict(backend=strict_backend)
+
+    assert config.login == EndpointRateLimit(
+        backend=strict_backend,
+        scope="ip_email",
+        namespace="login",
+    )
+    assert config.register == EndpointRateLimit(
+        backend=strict_backend,
+        scope="ip",
+        namespace="register",
+    )
+    assert config.totp_verify == EndpointRateLimit(
+        backend=strict_backend,
+        scope="ip",
+        namespace="totp-verify",
+    )
+    assert config.refresh is None
+    assert config.forgot_password is None
+    assert config.reset_password is None
+    assert config.totp_enable is None
+    assert config.totp_confirm_enable is None
+    assert config.totp_disable is None
+    assert config.verify_token is None
+    assert config.request_verify_token is None
+
+
+def test_auth_rate_limit_config_disabled_preset_turns_off_every_endpoint() -> None:
+    """The disabled preset leaves every auth endpoint slot unset."""
+    config = AuthRateLimitConfig.disabled()
+
+    assert all(getattr(config, field.name) is None for field in fields(AuthRateLimitConfig))
+
+
+def test_auth_rate_limit_config_lenient_preset_keeps_sensitive_routes_stricter() -> None:
+    """The lenient preset caps token and secret routes below the shared budget."""
+    lenient_backend = InMemoryRateLimiter(max_attempts=12, window_seconds=LENIENT_MEMORY_WINDOW_SECONDS)
+    config = AuthRateLimitConfig.lenient(backend=lenient_backend)
+    sensitive_backend = config.forgot_password
+
+    assert config.login == EndpointRateLimit(
+        backend=lenient_backend,
+        scope="ip_email",
+        namespace="login",
+    )
+    assert config.refresh == EndpointRateLimit(
+        backend=lenient_backend,
+        scope="ip",
+        namespace="refresh",
+    )
+    assert config.register == EndpointRateLimit(
+        backend=lenient_backend,
+        scope="ip",
+        namespace="register",
+    )
+    assert sensitive_backend is not None
+    assert isinstance(sensitive_backend.backend, InMemoryRateLimiter)
+    assert sensitive_backend.backend is not lenient_backend
+    assert sensitive_backend.backend.max_attempts == LENIENT_STRICT_MAX_ATTEMPTS
+    assert sensitive_backend.backend.window_seconds == LENIENT_MEMORY_WINDOW_SECONDS
+    assert config.reset_password == EndpointRateLimit(
+        backend=sensitive_backend.backend,
+        scope="ip",
+        namespace="reset-password",
+    )
+    assert config.totp_enable == EndpointRateLimit(
+        backend=sensitive_backend.backend,
+        scope="ip",
+        namespace="totp-enable",
+    )
+    assert config.totp_confirm_enable == EndpointRateLimit(
+        backend=sensitive_backend.backend,
+        scope="ip",
+        namespace="totp-confirm-enable",
+    )
+    assert config.totp_verify == EndpointRateLimit(
+        backend=sensitive_backend.backend,
+        scope="ip",
+        namespace="totp-verify",
+    )
+    assert config.totp_disable == EndpointRateLimit(
+        backend=sensitive_backend.backend,
+        scope="ip",
+        namespace="totp-disable",
+    )
+    assert config.verify_token == EndpointRateLimit(
+        backend=sensitive_backend.backend,
+        scope="ip",
+        namespace="verify-token",
+    )
+    assert config.request_verify_token == EndpointRateLimit(
+        backend=sensitive_backend.backend,
+        scope="ip_email",
+        namespace="request-verify-token",
+    )
+
+
+def test_auth_rate_limit_config_lenient_preset_clones_redis_backend_for_sensitive_routes() -> None:
+    """The lenient preset preserves Redis wiring while capping sensitive attempts."""
+    redis_client = cast("Any", object())
+    lenient_backend = RedisRateLimiter(
+        redis=redis_client,
+        max_attempts=9,
+        window_seconds=LENIENT_REDIS_WINDOW_SECONDS,
+        key_prefix="auth:",
+    )
+
+    config = AuthRateLimitConfig.lenient(backend=lenient_backend)
+    sensitive_backend = config.verify_token
+
+    assert config.login is not None
+    assert config.login.backend is lenient_backend
+    assert sensitive_backend is not None
+    assert isinstance(sensitive_backend.backend, RedisRateLimiter)
+    assert sensitive_backend.backend is not lenient_backend
+    assert sensitive_backend.backend.redis is redis_client
+    assert sensitive_backend.backend.max_attempts == LENIENT_STRICT_MAX_ATTEMPTS
+    assert sensitive_backend.backend.window_seconds == LENIENT_REDIS_WINDOW_SECONDS
+    assert sensitive_backend.backend.key_prefix == "auth:"
+
+
+def test_auth_rate_limit_config_lenient_preset_rejects_unknown_backend_types() -> None:
+    """The lenient preset fails fast when it cannot safely clone the backend."""
+
+    class CustomRateLimiter:
+        @property
+        def is_shared_across_workers(self) -> bool:
+            return False
+
+        async def check(self, key: str) -> bool:
+            return True
+
+        async def increment(self, key: str) -> None:
+            del key
+
+        async def reset(self, key: str) -> None:
+            del key
+
+        async def retry_after(self, key: str) -> int:
+            del key
+            return 0
+
+    with pytest.raises(TypeError, match="built-in InMemoryRateLimiter or RedisRateLimiter"):
+        AuthRateLimitConfig.lenient(backend=CustomRateLimiter())
+
+
 def test_auth_rate_limit_config_from_shared_backend_supports_partial_enablement_and_disabled_slots() -> None:
     """The shared-backend builder can leave individual slots unset."""
     shared_backend = InMemoryRateLimiter(max_attempts=2, window_seconds=10)
@@ -464,46 +645,49 @@ def test_auth_rate_limit_config_from_shared_backend_supports_partial_enablement_
     assert config.request_verify_token is None
 
 
-def test_auth_rate_limit_config_from_shared_backend_applies_group_namespace_and_slot_overrides() -> None:
-    """The builder applies namespace-family selection before per-slot namespace overrides."""
+def test_auth_rate_limit_config_from_shared_backend_applies_group_backends_and_endpoint_overrides() -> None:
+    """The builder applies group backends before canonical endpoint overrides."""
     shared_backend = InMemoryRateLimiter(max_attempts=2, window_seconds=10)
     totp_backend = InMemoryRateLimiter(max_attempts=5, window_seconds=30)
+    forgot_password_override = EndpointRateLimit(
+        backend=shared_backend,
+        scope="ip",
+        namespace="forgot_password",
+        trusted_proxy=True,
+    )
     confirm_enable_override = EndpointRateLimit(
         backend=shared_backend,
         scope="ip_email",
         namespace="totp-confirm-shared",
     )
+    request_verify_override = EndpointRateLimit(
+        backend=shared_backend,
+        scope="ip_email",
+        namespace="verify-request",
+        trusted_proxy=True,
+    )
     config = AuthRateLimitConfig.from_shared_backend(
         shared_backend,
         enabled=("forgot_password", "totp_enable", "totp_confirm_enable", "totp_verify", "request_verify_token"),
         group_backends={"totp": totp_backend},
-        scope_overrides=cast("Any", {"forgot_password": "ip"}),
-        namespace_style="snake_case",
-        namespace_overrides={"request_verify_token": "verify-request"},
         endpoint_overrides={
-            "totp_enable": None,
-            "totp_confirm_enable": confirm_enable_override,
+            AuthRateLimitSlot.FORGOT_PASSWORD: forgot_password_override,
+            AuthRateLimitSlot.TOTP_ENABLE: None,
+            AuthRateLimitSlot.TOTP_CONFIRM_ENABLE: confirm_enable_override,
+            AuthRateLimitSlot.REQUEST_VERIFY_TOKEN: request_verify_override,
         },
         trusted_proxy=True,
     )
 
     assert config.totp_enable is None
     assert config.totp_confirm_enable is confirm_enable_override
-    assert config.forgot_password is not None
-    assert config.forgot_password.backend is shared_backend
-    assert config.forgot_password.scope == "ip"
-    assert config.forgot_password.namespace == "forgot_password"
-    assert config.forgot_password.trusted_proxy is True
+    assert config.forgot_password is forgot_password_override
     assert config.totp_verify is not None
     assert config.totp_verify.backend is totp_backend
     assert config.totp_verify.scope == "ip"
-    assert config.totp_verify.namespace == "totp_verify"
+    assert config.totp_verify.namespace == "totp-verify"
     assert config.totp_verify.trusted_proxy is True
-    assert config.request_verify_token is not None
-    assert config.request_verify_token.backend is shared_backend
-    assert config.request_verify_token.scope == "ip_email"
-    assert config.request_verify_token.namespace == "verify-request"
-    assert config.request_verify_token.trusted_proxy is True
+    assert config.request_verify_token is request_verify_override
 
 
 async def test_auth_rate_limit_config_from_shared_backend_preserves_downstream_migration_recipe() -> None:
@@ -516,19 +700,49 @@ async def test_auth_rate_limit_config_from_shared_backend_preserves_downstream_m
         "refresh": refresh_backend,
     }
     disabled_slots = AUTH_RATE_LIMIT_VERIFICATION_SLOTS
-    namespace_overrides: dict[AuthRateLimitEndpointSlot, str] = {
-        "forgot_password": "forgot_password",
-        "reset_password": "reset_password",
-        "totp_enable": "totp_enable",
-        "totp_confirm_enable": "totp_confirm_enable",
-        "totp_verify": "totp_verify",
-        "totp_disable": "totp_disable",
+    endpoint_overrides: dict[AuthRateLimitSlot, EndpointRateLimit] = {
+        AuthRateLimitSlot.FORGOT_PASSWORD: EndpointRateLimit(
+            backend=credential_backend,
+            scope="ip_email",
+            namespace="forgot_password",
+            trusted_proxy=True,
+        ),
+        AuthRateLimitSlot.RESET_PASSWORD: EndpointRateLimit(
+            backend=credential_backend,
+            scope="ip",
+            namespace="reset_password",
+            trusted_proxy=True,
+        ),
+        AuthRateLimitSlot.TOTP_ENABLE: EndpointRateLimit(
+            backend=totp_backend,
+            scope="ip",
+            namespace="totp_enable",
+            trusted_proxy=True,
+        ),
+        AuthRateLimitSlot.TOTP_CONFIRM_ENABLE: EndpointRateLimit(
+            backend=totp_backend,
+            scope="ip",
+            namespace="totp_confirm_enable",
+            trusted_proxy=True,
+        ),
+        AuthRateLimitSlot.TOTP_VERIFY: EndpointRateLimit(
+            backend=totp_backend,
+            scope="ip",
+            namespace="totp_verify",
+            trusted_proxy=True,
+        ),
+        AuthRateLimitSlot.TOTP_DISABLE: EndpointRateLimit(
+            backend=totp_backend,
+            scope="ip",
+            namespace="totp_disable",
+            trusted_proxy=True,
+        ),
     }
     config = AuthRateLimitConfig.from_shared_backend(
         credential_backend,
         group_backends=group_backends,
         disabled=disabled_slots,
-        namespace_overrides=namespace_overrides,
+        endpoint_overrides=endpoint_overrides,
         trusted_proxy=True,
     )
     credential_request = cast(
@@ -604,9 +818,39 @@ def test_auth_rate_limit_config_from_shared_backend_preserves_documented_redis_m
         credential_backend,
         group_backends={"refresh": refresh_backend, "totp": totp_backend},
         disabled=AUTH_RATE_LIMIT_VERIFICATION_SLOTS,
-        namespace_style="snake_case",
+        endpoint_overrides={
+            AuthRateLimitSlot.FORGOT_PASSWORD: EndpointRateLimit(
+                backend=credential_backend,
+                scope="ip_email",
+                namespace="forgot_password",
+            ),
+            AuthRateLimitSlot.RESET_PASSWORD: EndpointRateLimit(
+                backend=credential_backend,
+                scope="ip",
+                namespace="reset_password",
+            ),
+            AuthRateLimitSlot.TOTP_ENABLE: EndpointRateLimit(
+                backend=totp_backend,
+                scope="ip",
+                namespace="totp_enable",
+            ),
+            AuthRateLimitSlot.TOTP_CONFIRM_ENABLE: EndpointRateLimit(
+                backend=totp_backend,
+                scope="ip",
+                namespace="totp_confirm_enable",
+            ),
+            AuthRateLimitSlot.TOTP_VERIFY: EndpointRateLimit(
+                backend=totp_backend,
+                scope="ip",
+                namespace="totp_verify",
+            ),
+            AuthRateLimitSlot.TOTP_DISABLE: EndpointRateLimit(
+                backend=totp_backend,
+                scope="ip",
+                namespace="totp_disable",
+            ),
+        },
     )
-
     assert config.login == EndpointRateLimit(backend=credential_backend, scope="ip_email", namespace="login")
     assert config.refresh == EndpointRateLimit(backend=refresh_backend, scope="ip", namespace="refresh")
     assert config.register == EndpointRateLimit(backend=credential_backend, scope="ip", namespace="register")
@@ -678,7 +922,6 @@ async def test_contrib_redis_preset_builds_rate_limit_config_with_shared_client_
     config = preset.build_rate_limit_config(
         disabled=AUTH_RATE_LIMIT_VERIFICATION_SLOTS,
         group_backends={"totp": explicit_totp_backend},
-        namespace_style="snake_case",
     )
     store = preset.build_totp_used_tokens_store(key_prefix="used:")
     pending_store = preset.build_totp_pending_jti_store(key_prefix="pending:")
@@ -697,9 +940,9 @@ async def test_contrib_redis_preset_builds_rate_limit_config_with_shared_client_
     assert config.refresh.backend.key_prefix == "refresh:"
     assert config.refresh.namespace == "refresh"
     assert config.forgot_password is not None
-    assert config.forgot_password.namespace == "forgot_password"
+    assert config.forgot_password.namespace == "forgot-password"
     assert await config.forgot_password.build_key(credential_request) == (
-        f"forgot_password:{ratelimit_module._safe_key_part('10.0.0.1')}:"
+        f"forgot-password:{ratelimit_module._safe_key_part('10.0.0.1')}:"
         f"{ratelimit_module._safe_key_part('user@example.com')}"
     )
     assert config.totp_verify is not None
@@ -718,6 +961,32 @@ async def test_contrib_redis_preset_builds_rate_limit_config_with_shared_client_
     assert await async_fakeredis.get("pending:pending-jti") == b"1"
     assert 0 < await async_fakeredis.pttl("used:user-1:7") <= USED_TOTP_TTL_MS
     assert PENDING_JTI_TTL_FLOOR <= await async_fakeredis.ttl("pending:pending-jti") <= PENDING_JTI_TTL_SECONDS
+
+
+def test_auth_rate_limit_config_from_shared_backend_uses_route_namespaces_by_default() -> None:
+    """The shared-backend builder keeps the canonical route-style namespace recipe."""
+    shared_backend = InMemoryRateLimiter(max_attempts=2, window_seconds=10)
+    config = AuthRateLimitConfig.from_shared_backend(shared_backend, enabled=("forgot_password",))
+
+    assert config.forgot_password == EndpointRateLimit(
+        backend=shared_backend,
+        scope="ip_email",
+        namespace="forgot-password",
+    )
+
+
+def test_auth_rate_limit_config_from_shared_backend_rejects_unknown_endpoint_override_slot() -> None:
+    """The shared-backend builder validates endpoint override slot names."""
+    shared_backend = InMemoryRateLimiter(max_attempts=2, window_seconds=10)
+
+    with pytest.raises(
+        ValueError,
+        match="endpoint_overrides contains unsupported auth rate-limit slots: bogus-slot",
+    ):
+        AuthRateLimitConfig.from_shared_backend(
+            shared_backend,
+            endpoint_overrides=cast("Any", {"bogus-slot": None}),
+        )
 
 
 def test_auth_rate_limit_config_from_shared_backend_rejects_unknown_enabled_slot() -> None:
@@ -739,15 +1008,29 @@ def test_auth_rate_limit_config_from_shared_backend_rejects_unknown_group_name()
         )
 
 
-def test_auth_rate_limit_config_from_shared_backend_rejects_unknown_namespace_style() -> None:
-    """The shared-backend builder validates namespace-style selection."""
+def test_auth_rate_limit_config_from_shared_backend_builds_canonical_route_namespaces() -> None:
+    """The default shared-builder output keeps the canonical hyphenated namespace recipe."""
     shared_backend = InMemoryRateLimiter(max_attempts=2, window_seconds=10)
+    config = AuthRateLimitConfig.from_shared_backend(
+        shared_backend,
+        enabled=("forgot_password", "totp_verify", "request_verify_token"),
+    )
 
-    with pytest.raises(
-        ValueError,
-        match="namespace_style contains unsupported auth rate-limit namespace styles: invalid-style",
-    ):
-        AuthRateLimitConfig.from_shared_backend(shared_backend, namespace_style=cast("Any", "invalid-style"))
+    assert config.forgot_password == EndpointRateLimit(
+        backend=shared_backend,
+        scope="ip_email",
+        namespace="forgot-password",
+    )
+    assert config.totp_verify == EndpointRateLimit(
+        backend=shared_backend,
+        scope="ip",
+        namespace="totp-verify",
+    )
+    assert config.request_verify_token == EndpointRateLimit(
+        backend=shared_backend,
+        scope="ip_email",
+        namespace="request-verify-token",
+    )
 
 
 def test_auth_rate_limit_recipe_index_rejects_duplicate_slots(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -893,7 +1176,6 @@ async def test_endpoint_rate_limit_shared_backend_preserves_namespace_and_scope_
             (
                 "AuthRateLimitConfig",
                 "AuthRateLimitEndpointGroup",
-                "AuthRateLimitNamespaceStyle",
                 "AuthRateLimitEndpointSlot",
                 "EndpointRateLimit",
                 "RateLimitScope",
@@ -910,8 +1192,8 @@ async def test_endpoint_rate_limit_shared_backend_preserves_namespace_and_scope_
             (
                 "AuthRateLimitConfig",
                 "AuthRateLimitEndpointGroup",
-                "AuthRateLimitNamespaceStyle",
                 "AuthRateLimitEndpointSlot",
+                "AuthRateLimitSlot",
                 "EndpointRateLimit",
                 "InMemoryRateLimiter",
                 "RateLimitScope",

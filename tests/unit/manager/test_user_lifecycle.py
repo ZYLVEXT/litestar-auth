@@ -93,9 +93,12 @@ async def test_create_rejects_duplicate_email_after_normalization() -> None:
     service = UserLifecycleService(manager)
     user_db.get_by_email.return_value = _build_user(password_helper, email="duplicate@example.com")
 
-    with pytest.raises(UserAlreadyExistsError):
+    with pytest.raises(UserAlreadyExistsError) as exc_info:
         await service.create({"email": " DUPLICATE@example.com ", "password": "test-password"})
 
+    assert exc_info.value.identifier_type == "email"
+    assert exc_info.value.identifier_value == "duplicate@example.com"
+    assert str(exc_info.value) == UserAlreadyExistsError.default_message
     user_db.create.assert_not_awaited()
     assert manager.registration_events == []
 
@@ -291,9 +294,12 @@ async def test_update_rejects_duplicate_email_for_another_user() -> None:
     duplicate_user = _build_user(password_helper, email="taken@example.com")
     user_db.get_by_email.return_value = duplicate_user
 
-    with pytest.raises(UserAlreadyExistsError):
+    with pytest.raises(UserAlreadyExistsError) as exc_info:
         await service.update({"email": "taken@example.com"}, user)
 
+    assert exc_info.value.identifier_type == "email"
+    assert exc_info.value.identifier_value == "taken@example.com"
+    assert str(exc_info.value) == UserAlreadyExistsError.default_message
     user_db.update.assert_not_awaited()
     assert manager.after_update_events == []
 

@@ -337,7 +337,8 @@ def test_models_role_module_reload_executes_under_coverage(monkeypatch: pytest.M
     assert reloaded_module.UserRole.__name__ == "UserRole"
     assert reloaded_module.Role.__tablename__ == "role"
     assert reloaded_module.UserRole.__tablename__ == "user_role"
-    assert set(reloaded_module.Role.__table__.c.keys()) == {"name"}
+    assert set(reloaded_module.Role.__table__.c.keys()) == {"description", "name"}
+    assert reloaded_module.Role.__table__.c.description.nullable is True
     assert set(reloaded_module.UserRole.__table__.c.keys()) == {"role_name", "user_id"}
     assert issubclass(reloaded_module.Role, RoleMixin)
     assert issubclass(reloaded_module.UserRole, UserRoleAssociationMixin)
@@ -651,7 +652,8 @@ def test_models_user_module_columns_and_relationships() -> None:
         "is_verified",
         "totp_secret",
     ]
-    assert set(ModelsRole.__table__.c.keys()) == {"name"}
+    assert set(ModelsRole.__table__.c.keys()) == {"description", "name"}
+    assert ModelsRole.__table__.c.description.nullable is True
     assert set(ModelsUserRole.__table__.c.keys()) == {"role_name", "user_id"}
     assert sorted(user_relationships.keys()) == [
         "access_tokens",

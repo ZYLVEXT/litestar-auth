@@ -45,13 +45,12 @@ def build_app() -> Litestar:
         transport=BearerTransport(),
         strategy=jwt_strategy,
     )
-    config = LitestarAuthConfig(
+    config = LitestarAuthConfig.with_default_manager(
         backends=(backend,),
         session_maker=session_maker,
         user_model=User,
         user_manager_class=UserManager,
         user_db_factory=lambda session: SQLAlchemyUserDatabase(session, user_model=User),
-        # Keep secrets on the typed contract; reserve user_manager_kwargs for non-secret deps.
         user_manager_security=UserManagerSecurity(
             verification_token_secret="replace-with-32+-char-secret-for-verify",
             reset_password_token_secret="replace-with-32+-char-secret-for-reset",

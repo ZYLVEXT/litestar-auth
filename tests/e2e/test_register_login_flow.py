@@ -28,7 +28,7 @@ if TYPE_CHECKING:
 
     from litestar.testing import AsyncTestClient
 
-pytestmark = pytest.mark.e2e
+pytestmark = [pytest.mark.e2e]
 
 AUTH_COOKIE_NAME = "auth-cookie"
 HTTP_CREATED = 201
@@ -151,22 +151,18 @@ def app() -> Iterator[tuple[Litestar, VerificationTracker]]:
             backends=backends,
         )
 
-    config = LitestarAuthConfig[User, UUID](
+    config = LitestarAuthConfig.with_custom_manager_factory(
         backends=[bearer_backend, cookie_backend],
         session_maker=cast("Any", SessionMaker(engine)),
         user_model=User,
-        user_manager_class=E2EUserManager,
         user_manager_factory=_build_user_manager,
         csrf_secret="c" * 32,
         allow_nondurable_jwt_revocation=True,
         user_manager_security=UserManagerSecurity[UUID](
             verification_token_secret="verify-secret-1234567890-1234567890",
             reset_password_token_secret="reset-secret-1234567890-1234567890",
+            password_helper=password_helper,
         ),
-        user_manager_kwargs={
-            "verification_tracker": verification_tracker,
-            "password_helper": password_helper,
-        },
     )
     yield Litestar(route_handlers=[protected_route], plugins=[LitestarAuth(config)]), verification_tracker
     engine.dispose()

@@ -27,7 +27,7 @@ from tests.integration.test_orchestrator import (
     dependency_probe,
 )
 
-pytestmark = pytest.mark.integration
+pytestmark = [pytest.mark.integration]
 
 HTTP_CREATED = 201
 HTTP_OK = 200
@@ -266,8 +266,8 @@ def _build_app_with_counting_session_maker() -> tuple[Litestar, CountingSessionM
             verification_token_secret="verify-secret-12345678901234567890",
             reset_password_token_secret="reset-secret-123456789012345678901",
             id_parser=UUID,
+            password_helper=password_helper,
         ),
-        user_manager_kwargs={"password_helper": password_helper},
         include_users=True,
     )
     plugin = LitestarAuth(config)
@@ -306,8 +306,8 @@ def _build_refresh_app_with_counting_session_maker() -> tuple[Litestar, Counting
             verification_token_secret="verify-secret-12345678901234567890",
             reset_password_token_secret="reset-secret-123456789012345678901",
             id_parser=UUID,
+            password_helper=password_helper,
         ),
-        user_manager_kwargs={"password_helper": password_helper},
         enable_refresh=True,
         include_users=False,
     )
@@ -386,8 +386,8 @@ def _build_database_token_preset_app(
             verification_token_secret="verify-secret-12345678901234567890",
             reset_password_token_secret="reset-secret-123456789012345678901",
             id_parser=UUID,
+            password_helper=password_helper,
         ),
-        user_manager_kwargs={"password_helper": password_helper},
         enable_refresh=enable_refresh,
         include_users=False,
     )

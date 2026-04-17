@@ -49,6 +49,7 @@ from litestar_auth import (
     CookieTransport,
     DatabaseTokenAuthConfig,
     DatabaseTokenStrategy,
+    DbSessionDependencyKey,
     EndpointRateLimit,
     ErrorCode,
     ForgotPassword,
@@ -91,6 +92,7 @@ from litestar_auth import (
     UserCreate,
     UserNotExistsError,
     UserProtocol,
+    UserProtocolStrict,
     UserRead,
     UserUpdate,
     VerifyToken,
@@ -122,13 +124,18 @@ from litestar_auth.contrib.redis import RedisAuthClientProtocol, RedisAuthPreset
 from litestar_auth.db import BaseOAuthAccountStore, BaseUserStore
 from litestar_auth.db.sqlalchemy import SQLAlchemyUserDatabase
 from litestar_auth.manager import UserManagerSecurity
+from litestar_auth.oauth.client_adapter import (
+    OAuthEmailVerificationAsyncClientProtocol,
+    OAuthEmailVerificationSyncClientProtocol,
+    make_async_email_verification_client,
+)
 from litestar_auth.ratelimit import (
     AUTH_RATE_LIMIT_ENDPOINT_SLOTS,
     AUTH_RATE_LIMIT_ENDPOINT_SLOTS_BY_GROUP,
     AUTH_RATE_LIMIT_VERIFICATION_SLOTS,
     AuthRateLimitEndpointGroup,
     AuthRateLimitEndpointSlot,
-    AuthRateLimitNamespaceStyle,
+    AuthRateLimitSlot,
 )
 from tests._helpers import ExampleUser, cast_fakeredis
 from tests.conftest import project_version_from_pyproject
@@ -218,6 +225,7 @@ def test_root_package_reexports_public_api() -> None:
     assert Transport is not None
     assert Strategy is not None
     assert UserProtocol is not None
+    assert all(symbol is not None for symbol in (DbSessionDependencyKey, UserProtocolStrict))
     assert GuardedUserProtocol is not None
     assert RoleCapableUserProtocol is not None
     assert TotpUserProtocol is not None
@@ -450,9 +458,18 @@ def test_root_package_reexports_controller_factories_and_payloads() -> None:
 
 def test_oauth_package_exposes_canonical_login_helper_and_not_advanced_controller_factory() -> None:
     """The OAuth package keeps the login helper canonical and custom controller factories elsewhere."""
-    assert oauth_package_module.__all__ == ("create_provider_oauth_controller", "load_httpx_oauth_client")
+    assert oauth_package_module.__all__ == (
+        "OAuthEmailVerificationAsyncClientProtocol",
+        "OAuthEmailVerificationSyncClientProtocol",
+        "create_provider_oauth_controller",
+        "load_httpx_oauth_client",
+        "make_async_email_verification_client",
+    )
+    assert oauth_package_module.OAuthEmailVerificationAsyncClientProtocol is OAuthEmailVerificationAsyncClientProtocol
+    assert oauth_package_module.OAuthEmailVerificationSyncClientProtocol is OAuthEmailVerificationSyncClientProtocol
     assert oauth_package_module.create_provider_oauth_controller is create_provider_oauth_controller
     assert oauth_package_module.load_httpx_oauth_client is load_httpx_oauth_client
+    assert oauth_package_module.make_async_email_verification_client is make_async_email_verification_client
     assert litestar_auth.create_provider_oauth_controller is oauth_package_module.create_provider_oauth_controller
     assert litestar_auth.load_httpx_oauth_client is oauth_package_module.load_httpx_oauth_client
     assert not hasattr(oauth_package_module, "create_oauth_controller")
@@ -466,7 +483,6 @@ def test_ratelimit_module_exposes_canonical_shared_backend_builder() -> None:
     current_endpoint_class = ratelimit_module.EndpointRateLimit
     current_memory_limiter_class = ratelimit_module.InMemoryRateLimiter
     current_redis_limiter_class = ratelimit_module.RedisRateLimiter
-    current_namespace_style_alias = ratelimit_module.AuthRateLimitNamespaceStyle
     credential_backend = current_memory_limiter_class(max_attempts=3, window_seconds=60)
     refresh_backend = current_memory_limiter_class(max_attempts=4, window_seconds=90)
     totp_backend = current_memory_limiter_class(max_attempts=5, window_seconds=120)
@@ -480,17 +496,14 @@ def test_ratelimit_module_exposes_canonical_shared_backend_builder() -> None:
         credential_backend,
         group_backends=group_backends,
         disabled=disabled_slots,
-        namespace_style="snake_case",
     )
 
     assert current_config_class.__name__ == AuthRateLimitConfig.__name__
     assert current_endpoint_class.__name__ == EndpointRateLimit.__name__
     assert current_memory_limiter_class.__name__ == InMemoryRateLimiter.__name__
     assert current_redis_limiter_class.__name__ == RedisRateLimiter.__name__
-    assert current_namespace_style_alias.__name__ == AuthRateLimitNamespaceStyle.__name__
     assert "AuthRateLimitConfig" in ratelimit_module.__all__
     assert "EndpointRateLimit" in ratelimit_module.__all__
-    assert "AuthRateLimitNamespaceStyle" in ratelimit_module.__all__
     assert "InMemoryRateLimiter" in ratelimit_module.__all__
     assert "RedisRateLimiter" in ratelimit_module.__all__
     assert config.login == current_endpoint_class(backend=credential_backend, scope="ip_email", namespace="login")
@@ -498,15 +511,15 @@ def test_ratelimit_module_exposes_canonical_shared_backend_builder() -> None:
     assert config.forgot_password == current_endpoint_class(
         backend=credential_backend,
         scope="ip_email",
-        namespace="forgot_password",
+        namespace="forgot-password",
     )
-    assert config.totp_verify == current_endpoint_class(backend=totp_backend, scope="ip", namespace="totp_verify")
+    assert config.totp_verify == current_endpoint_class(backend=totp_backend, scope="ip", namespace="totp-verify")
     assert config.verify_token is None
     assert config.request_verify_token is None
     assert config.totp_disable == current_endpoint_class(
         backend=totp_backend,
         scope="ip",
-        namespace="totp_disable",
+        namespace="totp-disable",
     )
 
 
@@ -532,11 +545,48 @@ async def test_root_package_supports_documented_redis_migration_recipe_and_totp_
     credential_backend = RedisRateLimiter(redis=rate_limit_redis, max_attempts=5, window_seconds=60)
     refresh_backend = RedisRateLimiter(redis=rate_limit_redis, max_attempts=10, window_seconds=300)
     totp_backend = RedisRateLimiter(redis=rate_limit_redis, max_attempts=5, window_seconds=300)
+    forgot_password_override = EndpointRateLimit(
+        backend=credential_backend,
+        scope="ip_email",
+        namespace="forgot_password",
+    )
+    reset_password_override = EndpointRateLimit(
+        backend=credential_backend,
+        scope="ip",
+        namespace="reset_password",
+    )
+    totp_enable_override = EndpointRateLimit(
+        backend=totp_backend,
+        scope="ip",
+        namespace="totp_enable",
+    )
+    totp_confirm_enable_override = EndpointRateLimit(
+        backend=totp_backend,
+        scope="ip",
+        namespace="totp_confirm_enable",
+    )
+    totp_verify_override = EndpointRateLimit(
+        backend=totp_backend,
+        scope="ip",
+        namespace="totp_verify",
+    )
+    totp_disable_override = EndpointRateLimit(
+        backend=totp_backend,
+        scope="ip",
+        namespace="totp_disable",
+    )
     rate_limit_config = AuthRateLimitConfig.from_shared_backend(
         credential_backend,
         group_backends={"refresh": refresh_backend, "totp": totp_backend},
         disabled=AUTH_RATE_LIMIT_VERIFICATION_SLOTS,
-        namespace_style="snake_case",
+        endpoint_overrides={
+            AuthRateLimitSlot.FORGOT_PASSWORD: forgot_password_override,
+            AuthRateLimitSlot.RESET_PASSWORD: reset_password_override,
+            AuthRateLimitSlot.TOTP_ENABLE: totp_enable_override,
+            AuthRateLimitSlot.TOTP_CONFIRM_ENABLE: totp_confirm_enable_override,
+            AuthRateLimitSlot.TOTP_VERIFY: totp_verify_override,
+            AuthRateLimitSlot.TOTP_DISABLE: totp_disable_override,
+        },
     )
     used_tokens_store = RedisUsedTotpCodeStore(redis=totp_redis)
     pending_jti_store = RedisJWTDenylistStore(redis=totp_redis)
@@ -555,21 +605,9 @@ async def test_root_package_supports_documented_redis_migration_recipe_and_totp_
         namespace="login",
     )
     assert rate_limit_config.refresh == current_endpoint_class(backend=refresh_backend, scope="ip", namespace="refresh")
-    assert rate_limit_config.forgot_password == current_endpoint_class(
-        backend=credential_backend,
-        scope="ip_email",
-        namespace="forgot_password",
-    )
-    assert rate_limit_config.totp_verify == current_endpoint_class(
-        backend=totp_backend,
-        scope="ip",
-        namespace="totp_verify",
-    )
-    assert rate_limit_config.totp_disable == current_endpoint_class(
-        backend=totp_backend,
-        scope="ip",
-        namespace="totp_disable",
-    )
+    assert rate_limit_config.forgot_password is forgot_password_override
+    assert rate_limit_config.totp_verify is totp_verify_override
+    assert rate_limit_config.totp_disable is totp_disable_override
     assert rate_limit_config.verify_token is None
     assert rate_limit_config.request_verify_token is None
     assert totp_config.totp_pending_jti_store is pending_jti_store
@@ -648,7 +686,6 @@ async def test_contrib_redis_preset_supports_documented_shared_client_recipe(
 
     rate_limit_config = preset.build_rate_limit_config(
         disabled=AUTH_RATE_LIMIT_ENDPOINT_SLOTS_BY_GROUP["verification"],
-        namespace_style="snake_case",
     )
     used_tokens_store = preset.build_totp_used_tokens_store()
     pending_jti_store = preset.build_totp_pending_jti_store()
@@ -691,13 +728,10 @@ def test_ratelimit_identifier_contract_stays_on_the_public_ratelimit_module() ->
     """Rate-limit typing stays on the ratelimit module without leaking onto the package root."""
     current_slot_alias = ratelimit_module.AuthRateLimitEndpointSlot
     current_group_alias = ratelimit_module.AuthRateLimitEndpointGroup
-    current_namespace_style_alias = ratelimit_module.AuthRateLimitNamespaceStyle
 
     assert current_slot_alias.__name__ == AuthRateLimitEndpointSlot.__name__
     assert current_group_alias.__name__ == AuthRateLimitEndpointGroup.__name__
-    assert current_namespace_style_alias.__name__ == AuthRateLimitNamespaceStyle.__name__
     assert get_args(ratelimit_module.RateLimitScope.__value__) == ("ip", "ip_email")
-    assert get_args(current_namespace_style_alias.__value__) == ("route", "snake_case")
     assert get_args(current_slot_alias.__value__) == (
         "login",
         "refresh",
@@ -725,7 +759,6 @@ def test_ratelimit_identifier_contract_stays_on_the_public_ratelimit_module() ->
     assert AUTH_RATE_LIMIT_ENDPOINT_SLOTS_BY_GROUP["verification"] == AUTH_RATE_LIMIT_VERIFICATION_SLOTS
     assert "AuthRateLimitEndpointSlot" in ratelimit_module.__all__
     assert "AuthRateLimitEndpointGroup" in ratelimit_module.__all__
-    assert "AuthRateLimitNamespaceStyle" in ratelimit_module.__all__
     assert "AUTH_RATE_LIMIT_ENDPOINT_SLOTS" in ratelimit_module.__all__
     assert "AUTH_RATE_LIMIT_ENDPOINT_SLOTS_BY_GROUP" in ratelimit_module.__all__
     assert "AUTH_RATE_LIMIT_VERIFICATION_SLOTS" in ratelimit_module.__all__
@@ -738,13 +771,11 @@ def test_ratelimit_identifier_contract_stays_on_the_public_ratelimit_module() ->
     assert not hasattr(litestar_auth, "AUTH_RATE_LIMIT_ENDPOINT_SLOTS")
     assert not hasattr(litestar_auth, "AUTH_RATE_LIMIT_ENDPOINT_SLOTS_BY_GROUP")
     assert not hasattr(litestar_auth, "AUTH_RATE_LIMIT_VERIFICATION_SLOTS")
-    assert not hasattr(litestar_auth, "AuthRateLimitNamespaceStyle")
     assert not hasattr(litestar_auth, "AuthRateLimitEndpointSlot")
     assert not hasattr(litestar_auth, "AuthRateLimitEndpointGroup")
     assert "AUTH_RATE_LIMIT_ENDPOINT_SLOTS" not in __all__
     assert "AUTH_RATE_LIMIT_ENDPOINT_SLOTS_BY_GROUP" not in __all__
     assert "AUTH_RATE_LIMIT_VERIFICATION_SLOTS" not in __all__
-    assert "AuthRateLimitNamespaceStyle" not in __all__
     assert "AuthRateLimitEndpointSlot" not in __all__
     assert "AuthRateLimitEndpointGroup" not in __all__
 
@@ -855,11 +886,15 @@ def test_root_package_all_excludes_private_symbols() -> None:
     assert "JWTDenylistStore" in __all__
     assert "RedisJWTDenylistStore" in __all__
     assert "RedisUsedTotpCodeStore" in __all__
-    assert "UserProtocol" in __all__
-    assert "GuardedUserProtocol" in __all__
-    assert "RoleCapableUserProtocol" in __all__
-    assert "TotpUserProtocol" in __all__
-    assert "TotpUserManagerProtocol" in __all__
+    assert {
+        "DbSessionDependencyKey",
+        "GuardedUserProtocol",
+        "RoleCapableUserProtocol",
+        "TotpUserManagerProtocol",
+        "TotpUserProtocol",
+        "UserProtocol",
+        "UserProtocolStrict",
+    } <= set(__all__)
     assert "Authenticator" in __all__
     assert "RefreshToken" in __all__
     assert "LoginCredentials" in __all__

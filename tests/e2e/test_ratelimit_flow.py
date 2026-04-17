@@ -24,11 +24,11 @@ from litestar_auth.manager import BaseUserManager, UserManagerSecurity
 from litestar_auth.models import User
 from litestar_auth.password import PasswordHelper
 from litestar_auth.plugin import LitestarAuth, LitestarAuthConfig
-from litestar_auth.ratelimit import AuthRateLimitConfig, EndpointRateLimit, InMemoryRateLimiter
+from litestar_auth.ratelimit import AuthRateLimitConfig, AuthRateLimitSlot, EndpointRateLimit, InMemoryRateLimiter
 from litestar_auth.totp import InMemoryUsedTotpCodeStore, _current_counter, _generate_totp_code
 from tests.e2e.conftest import SessionMaker
 
-pytestmark = pytest.mark.e2e
+pytestmark = [pytest.mark.e2e]
 
 HTTP_BAD_REQUEST = 400
 HTTP_CREATED = 201
@@ -122,13 +122,43 @@ def _build_app_with_trusted_proxy(
             credential_rate_limiter,
             group_backends={"totp": totp_rate_limiter, "refresh": refresh_rate_limiter},
             disabled={"verify_token", "request_verify_token"},
-            namespace_overrides={
-                "forgot_password": "forgot_password",
-                "reset_password": "reset_password",
-                "totp_enable": "totp_enable",
-                "totp_confirm_enable": "totp_confirm_enable",
-                "totp_verify": "totp_verify",
-                "totp_disable": "totp_disable",
+            endpoint_overrides={
+                AuthRateLimitSlot.FORGOT_PASSWORD: EndpointRateLimit(
+                    backend=credential_rate_limiter,
+                    scope="ip_email",
+                    namespace="forgot_password",
+                    trusted_proxy=trusted_proxy,
+                ),
+                AuthRateLimitSlot.RESET_PASSWORD: EndpointRateLimit(
+                    backend=credential_rate_limiter,
+                    scope="ip",
+                    namespace="reset_password",
+                    trusted_proxy=trusted_proxy,
+                ),
+                AuthRateLimitSlot.TOTP_ENABLE: EndpointRateLimit(
+                    backend=totp_rate_limiter,
+                    scope="ip",
+                    namespace="totp_enable",
+                    trusted_proxy=trusted_proxy,
+                ),
+                AuthRateLimitSlot.TOTP_CONFIRM_ENABLE: EndpointRateLimit(
+                    backend=totp_rate_limiter,
+                    scope="ip",
+                    namespace="totp_confirm_enable",
+                    trusted_proxy=trusted_proxy,
+                ),
+                AuthRateLimitSlot.TOTP_VERIFY: EndpointRateLimit(
+                    backend=totp_rate_limiter,
+                    scope="ip",
+                    namespace="totp_verify",
+                    trusted_proxy=trusted_proxy,
+                ),
+                AuthRateLimitSlot.TOTP_DISABLE: EndpointRateLimit(
+                    backend=totp_rate_limiter,
+                    scope="ip",
+                    namespace="totp_disable",
+                    trusted_proxy=trusted_proxy,
+                ),
             },
             trusted_proxy=trusted_proxy,
         )
@@ -158,8 +188,8 @@ def _build_app_with_trusted_proxy(
             reset_password_token_secret="reset-secret-1234567890-1234567890",
             totp_secret_key=Fernet.generate_key().decode(),
             id_parser=UUID,
+            password_helper=password_helper,
         ),
-        user_manager_kwargs={"password_helper": password_helper},
         rate_limit_config=rate_limit_config,
         totp_config=TotpConfig(
             totp_pending_secret="test-totp-pending-secret-thirty-two!",

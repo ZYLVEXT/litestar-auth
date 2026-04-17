@@ -406,42 +406,23 @@ def validate_user_manager_security_config[UP: UserProtocol[Any], ID](config: Lit
     """Validate manager secret wiring and the supported production secret posture.
 
     Raises:
-        ConfigurationError: If the typed contract overlaps with legacy kwargs or an
-            incompatible top-level ``id_parser`` declaration.
+        ConfigurationError: If the typed contract conflicts with the top-level
+            ``id_parser`` declaration.
     """
     manager_inputs = ManagerConstructorInputs(
-        manager_kwargs=config.user_manager_kwargs,
         manager_security=config.user_manager_security,
         id_parser=config.id_parser,
     )
     manager_security = config.user_manager_security
-    if manager_security is not None:
-        if manager_inputs.security_overlap_keys:
-            overlap = ", ".join(manager_inputs.security_overlap_keys)
-            msg = (
-                "user_manager_security is the canonical plugin-managed path for manager secrets and id_parser. "
-                "Remove the overlapping entries from user_manager_kwargs: "
-                f"{overlap}."
-            )
-            raise ConfigurationError(msg)
-
-        if (
-            config.id_parser is not None
-            and manager_security.id_parser is not None
-            and config.id_parser is not manager_security.id_parser
-        ):
-            msg = (
-                "Configure id_parser via user_manager_security.id_parser or LitestarAuthConfig.id_parser, "
-                "not both with different values."
-            )
-            raise ConfigurationError(msg)
-
-    if config.user_manager_factory is None and manager_inputs.managed_security_keys:
-        from litestar_auth._plugin.user_manager_builder import (  # noqa: PLC0415
-            _format_default_user_manager_managed_security_error,
+    if manager_security is not None and (
+        config.id_parser is not None
+        and manager_security.id_parser is not None
+        and config.id_parser is not manager_security.id_parser
+    ):
+        msg = (
+            "Configure id_parser via user_manager_security.id_parser or LitestarAuthConfig.id_parser, "
+            "not both with different values."
         )
-
-        msg = _format_default_user_manager_managed_security_error(manager_inputs.managed_security_keys)
         raise ConfigurationError(msg)
 
     if config.unsafe_testing:
@@ -460,22 +441,10 @@ def validate_user_manager_security_config[UP: UserProtocol[Any], ID](config: Lit
 def validate_password_validator_config[UP: UserProtocol[Any], ID](config: LitestarAuthConfig[UP, ID]) -> None:
     """Validate password-validator wiring for the configured user-manager builder.
 
-    Raises:
-        ValueError: If explicit and legacy password-validator configuration are mixed.
+    The canonical plugin contract now sources password validation only from
+    ``password_validator_factory`` when present.
     """
-    if config.password_validator_factory is None:
-        return
-
-    manager_inputs = ManagerConstructorInputs(manager_kwargs=config.user_manager_kwargs)
-    if manager_inputs.has_explicit_password_validator:
-        msg = (
-            "Configure password validation via password_validator_factory or "
-            "user_manager_kwargs['password_validator'], not both."
-        )
-        raise ValueError(msg)
-
-    if config.user_manager_factory is not None:
-        return
+    del config
 
 
 def validate_default_user_manager_constructor_contract[UP: UserProtocol[Any], ID](

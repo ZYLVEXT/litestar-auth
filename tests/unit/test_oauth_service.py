@@ -472,7 +472,11 @@ async def test_associate_account_maps_store_link_conflict_to_client_error() -> N
     """Store-level linked-account conflicts keep the stable client-facing error."""
     user = ExampleUser(id=uuid4(), email="user@example.com")
     manager = _build_manager()
-    manager.oauth_account_store.upsert_oauth_account.side_effect = oauth_service_module.OAuthAccountAlreadyLinkedError()
+    manager.oauth_account_store.upsert_oauth_account.side_effect = oauth_service_module.OAuthAccountAlreadyLinkedError(
+        provider="github",
+        account_id="provider-user",
+        existing_user_id=user.id,
+    )
     oauth_client = AsyncMock()
     oauth_client.get_access_token.return_value = {
         "access_token": "provider-access-token",

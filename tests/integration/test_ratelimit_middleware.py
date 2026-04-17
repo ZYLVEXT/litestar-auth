@@ -25,7 +25,7 @@ from litestar_auth.controllers import (
 )
 from litestar_auth.manager import BaseUserManager, UserManagerSecurity
 from litestar_auth.password import PasswordHelper
-from litestar_auth.ratelimit import AuthRateLimitConfig, EndpointRateLimit, InMemoryRateLimiter
+from litestar_auth.ratelimit import AuthRateLimitConfig, AuthRateLimitSlot, EndpointRateLimit, InMemoryRateLimiter
 from litestar_auth.totp import InMemoryUsedTotpCodeStore, _generate_totp_code
 from tests._helpers import auth_middleware_get_request_session, litestar_app_with_user_manager
 from tests.integration.conftest import DummySessionMaker, ExampleUser, InMemoryTokenStrategy, InMemoryUserDatabase
@@ -87,13 +87,37 @@ def build_shared_backend_rate_limit_config() -> AuthRateLimitConfig:
         credential_backend,
         group_backends={"totp": totp_backend, "refresh": refresh_backend},
         disabled={"verify_token", "request_verify_token"},
-        namespace_overrides={
-            "forgot_password": "forgot_password",
-            "reset_password": "reset_password",
-            "totp_enable": "totp_enable",
-            "totp_confirm_enable": "totp_confirm_enable",
-            "totp_verify": "totp_verify",
-            "totp_disable": "totp_disable",
+        endpoint_overrides={
+            AuthRateLimitSlot.FORGOT_PASSWORD: EndpointRateLimit(
+                backend=credential_backend,
+                scope="ip_email",
+                namespace="forgot_password",
+            ),
+            AuthRateLimitSlot.RESET_PASSWORD: EndpointRateLimit(
+                backend=credential_backend,
+                scope="ip",
+                namespace="reset_password",
+            ),
+            AuthRateLimitSlot.TOTP_ENABLE: EndpointRateLimit(
+                backend=totp_backend,
+                scope="ip",
+                namespace="totp_enable",
+            ),
+            AuthRateLimitSlot.TOTP_CONFIRM_ENABLE: EndpointRateLimit(
+                backend=totp_backend,
+                scope="ip",
+                namespace="totp_confirm_enable",
+            ),
+            AuthRateLimitSlot.TOTP_VERIFY: EndpointRateLimit(
+                backend=totp_backend,
+                scope="ip",
+                namespace="totp_verify",
+            ),
+            AuthRateLimitSlot.TOTP_DISABLE: EndpointRateLimit(
+                backend=totp_backend,
+                scope="ip",
+                namespace="totp_disable",
+            ),
         },
     )
 

@@ -1,8 +1,8 @@
 # User manager
 
 For plugin-managed apps, the authoritative wiring for `user_manager_security`,
-`user_manager_kwargs`, `password_validator_factory`, `PasswordHelper` sharing, and
-`UserEmailField` / `UserPasswordField` reuse lives in
+`password_validator_factory`, `PasswordHelper` sharing, and `UserEmailField` /
+`UserPasswordField` reuse lives in
 [Configuration](../configuration.md#canonical-manager-password-surface). This page focuses on the
 direct `BaseUserManager` API once those inputs have already been resolved.
 

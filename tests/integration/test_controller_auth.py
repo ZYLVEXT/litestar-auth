@@ -34,7 +34,7 @@ from tests.integration.conftest import (
     InMemoryUserDatabase,
 )
 
-pytestmark = pytest.mark.integration
+pytestmark = [pytest.mark.integration]
 HTTP_CREATED = 201
 HTTP_OK = 200
 HTTP_BAD_REQUEST = 400
@@ -308,18 +308,17 @@ def build_cookie_plugin_app(*, login_identifier: Literal["email", "username"] = 
             login_identifier=config.login_identifier,
         )
 
-    config = LitestarAuthConfig[ExampleUser, UUID](
+    config = LitestarAuthConfig.with_custom_manager_factory(
         backends=[backend],
         session_maker=cast("Any", DummySessionMaker()),
         user_model=ExampleUser,
-        user_manager_class=TrackingUserManager,
         user_manager_factory=_build_user_manager,
         user_db_factory=lambda _session: user_db,
         user_manager_security=UserManagerSecurity[UUID](
             verification_token_secret="test-secret-12345-verify-secret-12345",
             reset_password_token_secret="test-secret-12345-reset-secret-12345",
+            password_helper=password_helper,
         ),
-        user_manager_kwargs={"password_helper": password_helper},
         csrf_secret="c" * 32,
         include_register=False,
         include_verify=False,

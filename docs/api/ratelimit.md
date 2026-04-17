@@ -9,6 +9,20 @@ The higher-level one-client Redis preset lives in `litestar_auth.contrib.redis.R
 This module owns the lower-level shared builder plus the slot/group helper exports that feed
 `enabled=...` and `disabled=...`.
 
+For a smaller public-entry-point preset, `AuthRateLimitConfig.strict(backend=...)` wires a shared
+backend to `login`, `register`, and `totp_verify` using the package default scopes and route-style
+namespaces. Pass a backend that already encodes the lower attempt budget you want for those
+surfaces.
+
+For internal or lower-risk deployments, `AuthRateLimitConfig.lenient(backend=...)` uses the
+supplied built-in backend for `login`, `refresh`, and `register`, then clones that limiter with a
+five-attempt cap for token- and secret-bearing routes such as password reset, verification, and
+TOTP. That keeps the broader environment budget off the sensitive recovery and step-up surfaces.
+
+For local development, test harnesses, or other trusted environments that want the plugin wiring
+without active throttling, `AuthRateLimitConfig.disabled()` returns a config where every auth slot
+is left unset.
+
 Import the builder aliases and slot helpers from `litestar_auth.ratelimit` when app code annotates
 or reuses the shared-backend inventory:
 
@@ -19,13 +33,11 @@ from litestar_auth.ratelimit import (
     AUTH_RATE_LIMIT_VERIFICATION_SLOTS,
     AuthRateLimitEndpointGroup,
     AuthRateLimitEndpointSlot,
-    AuthRateLimitNamespaceStyle,
 )
 ```
 
-- `AuthRateLimitEndpointSlot` names the per-endpoint keys accepted by `enabled`, `disabled`, `scope_overrides`, `namespace_overrides`, and `endpoint_overrides`.
+- `AuthRateLimitEndpointSlot` names the per-endpoint keys accepted by `enabled`, `disabled`, and `endpoint_overrides`.
 - `AuthRateLimitEndpointGroup` names the shared-backend keys accepted by `group_backends`.
-- `AuthRateLimitNamespaceStyle` names the supported namespace families accepted by `namespace_style`.
 - `AUTH_RATE_LIMIT_ENDPOINT_SLOTS` exposes the ordered supported slot inventory derived from the package-owned catalog.
 - `AUTH_RATE_LIMIT_ENDPOINT_SLOTS_BY_GROUP` exposes read-only group-to-slot frozensets keyed by `AuthRateLimitEndpointGroup`.
 - `AUTH_RATE_LIMIT_VERIFICATION_SLOTS` is the convenience alias for `AUTH_RATE_LIMIT_ENDPOINT_SLOTS_BY_GROUP["verification"]`, which is useful for `disabled=...` when verification routes stay off.
@@ -38,7 +50,6 @@ from litestar_auth.ratelimit import (
         - AUTH_RATE_LIMIT_VERIFICATION_SLOTS
         - AuthRateLimitConfig
         - AuthRateLimitEndpointGroup
-        - AuthRateLimitNamespaceStyle
         - AuthRateLimitEndpointSlot
         - EndpointRateLimit
         - RateLimitScope

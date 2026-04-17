@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, TypeVar
 
 from litestar.exceptions import NotAuthorizedException, PermissionDeniedException
 
+from litestar_auth._roles import normalize_role_name as _normalize_role_name
 from litestar_auth._roles import normalize_roles as _normalize_roles
+from litestar_auth.exceptions import InsufficientRolesError
 from litestar_auth.types import GuardedUserProtocol, RoleCapableUserProtocol
 
 if TYPE_CHECKING:
@@ -14,8 +16,7 @@ if TYPE_CHECKING:
     from litestar.handlers.base import BaseRouteHandler
     from litestar.types import Guard
 
-_MISSING_ANY_ROLE_DETAIL = "The authenticated user does not have any of the required roles."
-_MISSING_ALL_ROLE_DETAIL = "The authenticated user does not have all of the required roles."
+RoleNameT = TypeVar("RoleNameT", bound=str)
 
 
 def _guarded_protocol_denial_detail(guard_name: str) -> str:
@@ -88,14 +89,25 @@ def _normalize_required_roles(roles: tuple[object, ...]) -> tuple[str, ...]:
         Deterministically normalized role names.
 
     Raises:
-        ValueError: If no roles were provided.
+        TypeError: If any provided role is not a string.
+        ValueError: If no roles were provided or any role normalizes to an empty string.
     """
-    normalized_roles = tuple(_normalize_roles(roles))
-    if normalized_roles:
-        return normalized_roles
+    if not roles:
+        msg = "Role guards require at least one role."
+        raise ValueError(msg)
 
-    msg = "Role guards require at least one role."
-    raise ValueError(msg)
+    normalized_roles: set[str] = set()
+    for raw_role in roles:
+        if not isinstance(raw_role, str):
+            msg = "Roles must be provided as an iterable of non-empty strings."
+            raise TypeError(msg)
+        try:
+            normalized_roles.add(_normalize_role_name(raw_role))
+        except ValueError as exc:
+            msg = f"Role guards do not accept empty role names after normalization: {raw_role!r}."
+            raise ValueError(msg) from exc
+
+    return tuple(sorted(normalized_roles))
 
 
 def _normalized_user_roles(user: object, *, guard_name: str) -> frozenset[str]:
@@ -180,23 +192,32 @@ def _build_role_guard(
         """Enforce normalized flat role membership on an authenticated active user.
 
         Raises:
-            PermissionDeniedException: When the user is inactive, lacks role membership support,
-                exposes invalid role data, or does not satisfy the configured role requirement.
+            InsufficientRolesError: When the user does not satisfy the configured role
+                requirement.
 
         Note:
             :func:`_require_active_guarded_user` may raise :exc:`NotAuthorizedException` when no user
-            is present on the connection.
+            is present on the connection, and downstream helpers may raise
+            :exc:`PermissionDeniedException` for inactive users or invalid role-capable contracts.
         """
         guarded = _require_active_guarded_user(connection, guard_name=guard_name)
         user_roles = _normalized_user_roles(guarded, guard_name=guard_name)
         if require_all:
             if required_role_set.issubset(user_roles):
                 return
-            raise PermissionDeniedException(detail=_MISSING_ALL_ROLE_DETAIL)
+            raise InsufficientRolesError(
+                required_roles=required_role_set,
+                user_roles=user_roles,
+                require_all=True,
+            )
 
         if user_roles & required_role_set:
             return
-        raise PermissionDeniedException(detail=_MISSING_ANY_ROLE_DETAIL)
+        raise InsufficientRolesError(
+            required_roles=required_role_set,
+            user_roles=user_roles,
+            require_all=False,
+        )
 
     return _guard
 
@@ -287,15 +308,18 @@ def is_superuser(
     raise PermissionDeniedException(detail=msg)
 
 
-def has_any_role(*roles: str) -> Guard:
+def has_any_role[RoleNameT: str](*roles: RoleNameT) -> Guard:
     """Return a guard that requires any configured normalized role.
 
     The returned guard first enforces the same authenticated-active user contract as
-    :func:`is_active`, then compares normalized flat role membership using the same
+    :func:`is_active`, then compares the normalized flat role membership exposed by
+    the authenticated user against the configured roles. Both sides use the same
     trim/lowercase/deduplicate/sort semantics as the model and manager layers.
 
     Args:
-        *roles: Required role names. Values must be non-empty strings after normalization.
+        *roles: Required role names. At least one role must be provided. Each value is
+            normalized with trim/lowercase/deduplicate/sort semantics, and empty or
+            whitespace-only role names are rejected at guard-build time.
 
     Returns:
         Litestar-compatible guard callable for route ``guards=[...]`` lists.
@@ -307,15 +331,18 @@ def has_any_role(*roles: str) -> Guard:
     )
 
 
-def has_all_roles(*roles: str) -> Guard:
+def has_all_roles[RoleNameT: str](*roles: RoleNameT) -> Guard:
     """Return a guard that requires all configured normalized roles.
 
     The returned guard first enforces the same authenticated-active user contract as
-    :func:`is_active`, then compares normalized flat role membership using the same
+    :func:`is_active`, then compares the normalized flat role membership exposed by
+    the authenticated user against the configured roles. Both sides use the same
     trim/lowercase/deduplicate/sort semantics as the model and manager layers.
 
     Args:
-        *roles: Required role names. Values must be non-empty strings after normalization.
+        *roles: Required role names. At least one role must be provided. Each value is
+            normalized with trim/lowercase/deduplicate/sort semantics, and empty or
+            whitespace-only role names are rejected at guard-build time.
 
     Returns:
         Litestar-compatible guard callable for route ``guards=[...]`` lists.

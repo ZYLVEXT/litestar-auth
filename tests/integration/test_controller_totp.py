@@ -57,9 +57,7 @@ from tests.integration.conftest import DummySessionMaker, ExampleUser, InMemoryT
 if TYPE_CHECKING:
     from litestar_auth.db.base import BaseUserStore
 
-pytestmark = [
-    pytest.mark.integration,
-]
+pytestmark = [pytest.mark.integration]
 
 HTTP_OK = 200
 HTTP_CREATED = 201
@@ -1023,8 +1021,8 @@ async def test_plugin_mounts_totp_routes_under_custom_auth_path() -> None:
                         reset_password_token_secret="reset-secret-123456789012345678901",
                         totp_secret_key=Fernet.generate_key().decode(),
                         id_parser=UUID,
+                        password_helper=password_helper,
                     ),
-                    user_manager_kwargs={"password_helper": password_helper},
                     auth_path="/api/auth",
                     totp_config=TotpConfig(
                         totp_pending_secret=TOTP_PENDING_SECRET,
@@ -1108,8 +1106,8 @@ async def test_plugin_allows_opt_out_of_totp_step_up_enrollment() -> None:
                         reset_password_token_secret="reset-secret-123456789012345678901",
                         totp_secret_key=Fernet.generate_key().decode(),
                         id_parser=UUID,
+                        password_helper=password_helper,
                     ),
-                    user_manager_kwargs={"password_helper": password_helper},
                     totp_config=TotpConfig(
                         totp_pending_secret=TOTP_PENDING_SECRET,
                         totp_pending_jti_store=InMemoryJWTDenylistStore(),

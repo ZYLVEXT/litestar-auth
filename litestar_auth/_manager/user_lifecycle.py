@@ -96,7 +96,11 @@ class UserLifecycleService[UP, ID]:
         hashed_password = self._hash_password(password)
         existing_user = await self._manager.user_db.get_by_email(email)
         if existing_user is not None:
-            raise UserAlreadyExistsError
+            raise UserAlreadyExistsError(
+                message=UserAlreadyExistsError.default_message,
+                identifier_type="email",
+                identifier_value=email,
+            )
 
         create_dict = {
             **user_dict,
@@ -193,7 +197,11 @@ class UserLifecycleService[UP, ID]:
         update_dict["email"] = new_email
         existing_user = await self._manager.user_db.get_by_email(new_email)
         if existing_user is not None and _managed_user(existing_user).id != _managed_user(user).id:
-            raise UserAlreadyExistsError
+            raise UserAlreadyExistsError(
+                message=UserAlreadyExistsError.default_message,
+                identifier_type="email",
+                identifier_value=new_email,
+            )
         return new_email
 
     def _apply_password_update(self, update_dict: dict[str, Any]) -> bool:

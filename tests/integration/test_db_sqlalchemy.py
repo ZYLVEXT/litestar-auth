@@ -771,7 +771,7 @@ async def test_sqlalchemy_user_database_upsert_oauth_account_rejects_cross_user_
         expires_at=3600,
         refresh_token="rt-a",
     )
-    with pytest.raises(OAuthAccountAlreadyLinkedError):
+    with pytest.raises(OAuthAccountAlreadyLinkedError) as exc_info:
         await database.upsert_oauth_account(
             user_b,
             oauth_name="google",
@@ -781,6 +781,10 @@ async def test_sqlalchemy_user_database_upsert_oauth_account_rejects_cross_user_
             expires_at=3600,
             refresh_token="rt-b",
         )
+    assert exc_info.value.provider == "google"
+    assert exc_info.value.account_id == "shared-id"
+    assert exc_info.value.existing_user_id == user_a.id
+    assert str(exc_info.value) == f"OAuth account google:shared-id is already linked to user {user_a.id}"
     resolved = await database.get_by_oauth_account("google", "shared-id")
     assert resolved is not None
     assert resolved.id == user_a.id

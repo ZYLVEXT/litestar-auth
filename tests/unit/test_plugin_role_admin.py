@@ -194,7 +194,6 @@ def _minimal_config(
             reset_password_token_secret="reset-password-secret-1234567890",
             id_parser=UUID,
         ),
-        user_manager_kwargs={},
         db_session_dependency_provided_externally=db_session_dependency_provided_externally,
     )
 

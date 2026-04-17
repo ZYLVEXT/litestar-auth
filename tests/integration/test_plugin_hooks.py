@@ -32,7 +32,7 @@ from tests.integration.test_orchestrator import (
 if TYPE_CHECKING:
     from litestar.types import Message, Receive, Scope, Send
 
-pytestmark = pytest.mark.integration
+pytestmark = [pytest.mark.integration]
 
 HTTP_BAD_REQUEST = 400
 HTTP_CREATED = 201
@@ -92,8 +92,8 @@ def _build_config(
             verification_token_secret="verify-secret-12345678901234567890",
             reset_password_token_secret="reset-secret-123456789012345678901",
             id_parser=UUID,
+            password_helper=password_helper,
         ),
-        user_manager_kwargs={"password_helper": password_helper},
         include_users=False,
     )
 

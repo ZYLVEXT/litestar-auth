@@ -12,7 +12,7 @@ from litestar_auth.db.sqlalchemy import SQLAlchemyUserDatabase
 
 ## Canonical opaque DB-token preset
 
-Use `DatabaseTokenAuthConfig` plus `LitestarAuthConfig(..., database_token_auth=...)` for the common bearer + database-token flow. This is the documented entrypoint for opaque DB tokens; it builds the `AuthenticationBackend`, `BearerTransport`, and `DatabaseTokenStrategy` for you.
+Use `DatabaseTokenAuthConfig` plus `LitestarAuthConfig.with_default_manager(..., database_token_auth=...)` for the common bearer + database-token flow. This is the documented entrypoint for opaque DB tokens; it builds the `AuthenticationBackend`, `BearerTransport`, and `DatabaseTokenStrategy` for you.
 
 ```python
 from uuid import UUID
@@ -23,7 +23,7 @@ from litestar_auth import DatabaseTokenAuthConfig, LitestarAuth, LitestarAuthCon
 from litestar_auth.manager import UserManagerSecurity
 from litestar_auth.models import User
 
-config = LitestarAuthConfig[User, UUID](
+config = LitestarAuthConfig.with_default_manager(
     database_token_auth=DatabaseTokenAuthConfig(
         token_hash_secret="replace-with-32+-char-db-token-secret",
     ),
@@ -371,7 +371,7 @@ class LegacyUser(UserModelMixin, UserAuthRelationshipMixin, AppUUIDBase):
 | ----- | ---- |
 | `backends` | Explicit non-preset authentication backends. Leave empty when using `database_token_auth`. |
 | `user_model` | User ORM type (e.g. subclass of `litestar_auth.models.User`). |
-| `user_manager_class` | Concrete subclass of `BaseUserManager`. |
+| `user_manager_class` | Concrete subclass of `BaseUserManager` for the default construction path. Prefer setting it through `LitestarAuthConfig.with_default_manager()`. |
 | `session_maker` | Callable request-session factory for scoped DB access (`session_maker() -> AsyncSession`). `async_sessionmaker(...)` is the common implementation. |
 
 On the `LitestarAuthConfig` dataclass, `session_maker` is typed as optional for advanced construction flows, but **`LitestarAuth` raises if it is missing** when the plugin is instantiated. Treat a compatible session factory as required for normal apps.
@@ -382,20 +382,18 @@ On the `LitestarAuthConfig` dataclass, `session_maker` is typed as optional for 
 | ----- | ------- | ---- |
 | `user_db_factory` | `None` → built from `user_model` | `Callable[[AsyncSession], BaseUserStore]`. When `None`, the plugin builds a default factory using `config.user_model`. Override for custom persistence. |
 | `user_manager_security` | `None` | Canonical typed contract for verification/reset secrets, optional TOTP encryption, and optional `id_parser`. |
-| `user_manager_kwargs` | `{}` | Additional manager constructor kwargs for non-security dependencies such as `password_helper`. The default plugin builder no longer reads manager secrets or `id_parser` from this mapping; use `user_manager_factory` when a custom builder must own that wiring instead. |
 | `password_validator_factory` | `None` | Build custom password policy; otherwise the default builder injects the shared minimum-length validator. |
-| `user_manager_factory` | `None` | Full control over request-scoped manager construction (`UserManagerFactory`). When set, the factory owns any non-canonical constructor wiring, including password-validator injection and manager-specific secret handling. |
+| `user_manager_factory` | `None` | Full control over request-scoped manager construction (`UserManagerFactory`). Prefer setting it through `LitestarAuthConfig.with_custom_manager_factory()`. When set, the factory owns any non-canonical constructor wiring, including password-validator injection and manager-specific secret handling. |
 | `rate_limit_config` | `None` | `AuthRateLimitConfig` for auth endpoint throttling. For the common one-client Redis recipe, build it through `litestar_auth.contrib.redis.RedisAuthPreset`; keep `AuthRateLimitConfig.from_shared_backend()` for lower-level shared-backend wiring. |
 
-### User manager customization (quick decision)
+### User manager customization
 
-These three fields overlap; pick **one** primary path. This matches the `LitestarAuthConfig` class docstring.
+Choose one factory method for new code:
 
-| Situation | Primary field | Notes |
+| Situation | Configuration path | Notes |
 | --- | --- | --- |
-| Subclass `BaseUserManager` and accept the default plugin builder’s keyword-only constructor surface | `user_manager_class` | Most apps. Put verification/reset/TOTP secrets and `id_parser` in `user_manager_security`, not in `user_manager_kwargs`. |
-| Non-canonical `__init__`, extra dependencies, or you must own all construction (including secrets/validators) | `user_manager_factory` | Receives `session`, `user_db`, `config`, and request-scoped `backends`. Inject `password_validator` and helpers inside the factory if you need them. |
-| Small tweaks to the default builder (e.g. `password_helper`, legacy `password_validator`) without replacing construction | `user_manager_kwargs` | Only with `user_manager_class` and the default builder. Never put secrets or `id_parser` here. |
+| Subclass `BaseUserManager` and accept the default plugin builder's keyword-only constructor surface | `LitestarAuthConfig.with_default_manager()` | Most apps. Put verification/reset/TOTP secrets, password-helper overrides, password-validator overrides, and `id_parser` in `user_manager_security`. |
+| Non-canonical `__init__`, extra dependencies, or caller-owned construction | `LitestarAuthConfig.with_custom_manager_factory()` | Receives `session`, `user_db`, `config`, and request-scoped `backends`. The factory injects any custom dependencies, password policy, and manager-specific secret wiring it owns. |
 
 ## Plugin customization hooks
 
@@ -421,7 +419,7 @@ For plugin-managed apps, keep the manager/password surface on one path:
 3. Call `config.resolve_password_helper()` only when app-owned code outside `BaseUserManager` also hashes or verifies passwords.
 4. Reuse `litestar_auth.schemas.UserEmailField` and `litestar_auth.schemas.UserPasswordField` in app-owned `msgspec.Struct` registration/update schemas.
 
-For non-standard manager construction, keep the plugin-owned security surface on `user_manager_security` and switch to `user_manager_factory` instead of smuggling manager secrets or `id_parser` through `user_manager_kwargs`. The factory receives `session`, `user_db`, `config`, and request-bound `backends`; it must opt into any custom `password_helper`, `password_validator`, or legacy secret wiring itself.
+For non-standard manager construction, keep the plugin-owned security surface on `user_manager_security` and switch to `LitestarAuthConfig.with_custom_manager_factory()`. The factory receives `session`, `user_db`, `config`, and request-bound `backends`; it must opt into any custom `password_helper`, `password_validator`, or legacy secret wiring itself.
 
 One integrated example:
 
@@ -448,8 +446,11 @@ def password_policy(_config: LitestarAuthConfig[User, UUID]) -> Callable[[str], 
     return partial(require_password_length, minimum_length=16)
 
 
-config = LitestarAuthConfig[User, UUID](
+config = LitestarAuthConfig.with_default_manager(
     ...,
+    user_model=User,
+    user_manager_class=UserManager,
+    session_maker=session_maker,
     user_manager_security=UserManagerSecurity(
         verification_token_secret="replace-with-32+-char-secret",
         reset_password_token_secret="replace-with-32+-char-secret",
@@ -465,6 +466,51 @@ Use the returned `password_helper` for CLI tasks, data migrations, or domain ser
 hashing policy as the plugin-managed manager. If your app never hashes passwords outside `BaseUserManager`, you can
 skip `config.resolve_password_helper()`.
 
+Use `with_custom_manager_factory()` only when the default builder cannot call your manager directly:
+
+```python
+from uuid import UUID
+
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from litestar_auth import LitestarAuthConfig
+from litestar_auth.db import BaseUserStore
+from litestar_auth.manager import UserManagerSecurity
+from litestar_auth.models import User
+
+
+def build_user_manager(
+    *,
+    session: AsyncSession,
+    user_db: BaseUserStore[User, UUID],
+    config: LitestarAuthConfig[User, UUID],
+    backends: tuple[object, ...] = (),
+) -> UserManager:
+    del session
+    security = config.user_manager_security
+    if security is None:
+        msg = "UserManagerSecurity is required for this manager factory."
+        raise RuntimeError(msg)
+    return UserManager(
+        user_db=user_db,
+        audit_sink=audit_sink,
+        password_helper=config.resolve_password_helper(),
+        security=security,
+        backends=backends,
+    )
+
+
+config = LitestarAuthConfig.with_custom_manager_factory(
+    user_model=User,
+    user_manager_factory=build_user_manager,
+    session_maker=session_maker,
+    user_manager_security=UserManagerSecurity(
+        verification_token_secret="replace-with-32+-char-secret",
+        reset_password_token_secret="replace-with-32+-char-secret",
+    ),
+)
+```
+
 The detailed contracts for each surface are:
 
 | Surface | Current contract | Notes |
@@ -474,9 +520,9 @@ The detailed contracts for each surface are:
 | `user_manager_security.totp_secret_key` | Encrypts persisted TOTP secrets at rest. | Required in production when `totp_config` is enabled. |
 | `totp_config.totp_pending_secret` | Signs pending/enrollment TOTP JWTs. | Required when `totp_config` is enabled; configured on `TotpConfig`, not `UserManagerSecurity`. |
 | `user_manager_security.id_parser` | Supplies the manager/controller JWT subject parser once. | When set, `LitestarAuthConfig.id_parser` defaults to the same callable. Do not configure both with different values. |
-| `user_manager_kwargs["password_helper"]` | Injects the `PasswordHelper` instance used by `BaseUserManager`. | Prefer `config.resolve_password_helper()` to memoize the default helper, or set this key explicitly when you intentionally use a custom pwdlib policy. |
+| `user_manager_security.password_helper` | Injects the `PasswordHelper` instance used by `BaseUserManager`. | Prefer `config.resolve_password_helper()` to memoize the default helper when app-owned code also needs one. |
 | `password_validator_factory` | Builds the runtime password validator for plugin-managed managers. | When omitted, the default plugin builder injects the default `require_password_length` validator. |
-| `user_manager_kwargs["password_validator"]` | Legacy direct runtime validator override. | Mutually exclusive with `password_validator_factory`; keep it only for compatibility. |
+| `user_manager_security.password_validator` | Direct runtime validator override. | Mutually exclusive with `password_validator_factory`; prefer the factory when the validator depends on configuration. |
 | `litestar_auth.schemas.UserEmailField` | Shares the built-in email regex and max-length metadata with app-owned `msgspec.Struct` schemas. | Schema metadata only; it does not add manager-side normalization or custom app policy. |
 | `litestar_auth.schemas.UserPasswordField` | Shares built-in password-length metadata with app-owned `msgspec.Struct` schemas. | Schema metadata only; it does not replace the runtime validator. |
 
@@ -484,7 +530,8 @@ The default plugin builder now treats `user_manager_security` as an end-to-end c
 typed bundle is present, the plugin always passes `security=UserManagerSecurity(...)`, folds the effective
 `id_parser` into that bundle first, and does not also send `verification_token_secret` /
 `reset_password_token_secret` / `totp_secret_key` / `id_parser` kwargs in the same call. Managers that do not
-follow the canonical `BaseUserManager` constructor surface must be built through `user_manager_factory`.
+follow the canonical `BaseUserManager` constructor surface must be built through
+`LitestarAuthConfig.with_custom_manager_factory()`.
 
 The supported production posture is one distinct high-entropy value per secret role. Outside
 explicit `unsafe_testing`, `LitestarAuth(config)` validation is the authoritative warning owner for the
@@ -514,15 +561,15 @@ coupling unrelated rotation events.
 Compatibility and migration:
 
 - Configure plugin-managed `verification_token_secret`, `reset_password_token_secret`, `totp_secret_key`, and
-  `id_parser` through `user_manager_security`. The default plugin builder now rejects those keys in
-  `user_manager_kwargs` instead of treating them as a second config-owned security surface.
-- If you intentionally need factory-owned security wiring, set `user_manager_factory` and read whatever extra
-  kwargs your factory owns from `user_manager_kwargs` there.
+  `id_parser` through `user_manager_security`.
+- If you intentionally need factory-owned security wiring, use `with_custom_manager_factory()` and pass explicit
+  dependencies through your factory closure or another typed app-owned dependency surface.
 - The default plugin builder calls the canonical `BaseUserManager`-style constructor surface:
   `user_manager_class(user_db, *, password_helper=..., security=..., password_validator=..., backends=..., login_identifier=..., unsafe_testing=...)`.
   It always passes `security=UserManagerSecurity(...)`. When `user_manager_security` is unset, the effective parser
   from `LitestarAuthConfig.id_parser` is folded into that bundle (not as a standalone `id_parser=` kwarg on the
-  builder call). If your manager narrows or renames that surface, configure `user_manager_factory`.
+  builder call). If your manager narrows or renames that surface, configure it with
+  `with_custom_manager_factory()`.
 - When `user_manager_security` is present, the effective manager parser comes from
   `user_manager_security.id_parser` first and otherwise falls back to `LitestarAuthConfig.id_parser`. When
   `user_manager_security` is absent, the default builder still materializes `security=UserManagerSecurity(...)`
@@ -533,15 +580,17 @@ Compatibility and migration:
 - Existing `PasswordHelper()` and `PasswordHelper(password_hash=...)` call sites remain source-compatible. Prefer
   `PasswordHelper.from_defaults()` when you mean "use the library default hasher policy" and reserve
   `PasswordHelper(password_hash=...)` for deliberate custom pwdlib composition.
+- Keep password-helper and password-validator overrides on `user_manager_security`. Use
+  `UserManagerSecurity(password_helper=..., password_validator=...)` for direct overrides, or
+  `password_validator_factory` when the validator should be derived from config at runtime.
 
 If your application also hashes or verifies passwords outside `BaseUserManager`, call
 `config.resolve_password_helper()` once after constructing `LitestarAuthConfig(...)`. When
-`user_manager_kwargs["password_helper"]` already points at an explicit helper override,
+`user_manager_security.password_helper` already points at an explicit helper override,
 `config.resolve_password_helper()` returns that object unchanged. Otherwise it memoizes
 `PasswordHelper.from_defaults()` on the config and the plugin will inject the same helper into
 each request-scoped manager, so the plugin and app-owned code share the same Argon2-primary helper
-with bcrypt fallback. The user-provided `user_manager_kwargs` mapping is left untouched. This
-helper path does not inherit anything from `password_validator_factory`, `user_manager_security`,
+with bcrypt fallback. This helper path does not inherit anything from `password_validator_factory`, `user_manager_security`,
 or token settings; it only resolves the password-hash policy itself.
 
 If app-owned code never hashes or verifies passwords directly, you can skip calling
@@ -549,8 +598,8 @@ If app-owned code never hashes or verifies passwords directly, you can skip call
 shared helper for each request-scoped manager on demand.
 
 Use `password_validator_factory` when the plugin should own runtime password-policy construction.
-If you do not provide it, the default plugin builder injects the default `require_password_length` validator. Keep `user_manager_kwargs["password_validator"]` only
-for legacy direct overrides, and do not mix it with `password_validator_factory`. When `user_manager_factory` is set, the plugin still validates this configuration surface but does not inject a resolved validator into your factory automatically; the factory must build and pass whatever validator policy it wants to own.
+If you do not provide it, the default plugin builder injects the default `require_password_length` validator. Keep `user_manager_security.password_validator` only
+for direct overrides, and do not mix it with `password_validator_factory`. When `with_custom_manager_factory()` is used, the plugin still validates this configuration surface but does not inject a resolved validator into your factory automatically; the factory must build and pass whatever validator policy it wants to own.
 
 Plugin-managed account-state checks also rely on one stable callable surface resolved from
 `user_manager_class`: `require_account_state(user, *, require_verified=False)`.
@@ -638,7 +687,6 @@ redis_auth = RedisAuthPreset(
 )
 rate_limit_config = redis_auth.build_rate_limit_config(
     disabled=AUTH_RATE_LIMIT_VERIFICATION_SLOTS,
-    namespace_style="snake_case",
 )
 totp_config = TotpConfig(
     totp_pending_secret="replace-with-32+-char-secret",
@@ -655,12 +703,12 @@ totp_config = TotpConfig(
   `AuthRateLimitConfig.from_shared_backend()`, `RedisRateLimiter`, the typed slot/group aliases, and
   the slot-set helpers.
 
-`RedisAuthPreset.build_rate_limit_config()` forwards the current shared-builder inputs such as
-`enabled`, `disabled`, `group_backends`, `scope_overrides`, `namespace_style`,
-`namespace_overrides`, and `endpoint_overrides`. Explicit `group_backends` still win over any
-preset `group_rate_limit_tiers`. `RedisAuthPreset.group_rate_limit_tiers` is snapshotted into a
-read-only mapping at construction time, so later mutations to the caller's source `dict` do not
-silently change the preset's runtime budget layout.
+`RedisAuthPreset.build_rate_limit_config()` forwards the live shared-builder inputs:
+`enabled`, `disabled`, `group_backends`, and `endpoint_overrides`, plus the shared proxy and
+identity settings. Explicit `group_backends` still win over any preset
+`group_rate_limit_tiers`. `RedisAuthPreset.group_rate_limit_tiers` is snapshotted into a read-only
+mapping at construction time, so later mutations to the caller's source `dict` do not silently
+change the preset's runtime budget layout.
 `build_totp_used_tokens_store()` and `build_totp_pending_jti_store()` follow the same precedence:
 per-call `key_prefix=` wins over the preset default, and `None` preserves each low-level store's
 current built-in prefix.
@@ -675,7 +723,6 @@ from litestar_auth.ratelimit import (
     AUTH_RATE_LIMIT_VERIFICATION_SLOTS,
     AuthRateLimitEndpointGroup,
     AuthRateLimitEndpointSlot,
-    AuthRateLimitNamespaceStyle,
 )
 ```
 
@@ -686,9 +733,9 @@ from litestar_auth.ratelimit import (
 - `AUTH_RATE_LIMIT_VERIFICATION_SLOTS` is the convenience alias for
   `AUTH_RATE_LIMIT_ENDPOINT_SLOTS_BY_GROUP["verification"]`, which is useful for `disabled=...`
   when verification routes stay off.
-- `AuthRateLimitEndpointSlot` names the per-endpoint keys accepted by `enabled`, `disabled`, `scope_overrides`, `namespace_overrides`, and `endpoint_overrides`.
+- `AuthRateLimitEndpointSlot` names the per-endpoint keys accepted by `enabled`, `disabled`, and
+  `endpoint_overrides`.
 - `AuthRateLimitEndpointGroup` names the shared-backend keys accepted by `group_backends`.
-- `AuthRateLimitNamespaceStyle` names the supported namespace families accepted by `namespace_style`.
 
 ### Low-level Redis builder path
 
@@ -710,7 +757,6 @@ rate_limit_config = AuthRateLimitConfig.from_shared_backend(
     shared_backend,
     enabled=AUTH_RATE_LIMIT_ENDPOINT_SLOTS,
     disabled=AUTH_RATE_LIMIT_ENDPOINT_SLOTS_BY_GROUP["verification"],
-    namespace_style="snake_case",
 )
 totp_used_tokens_store = RedisUsedTotpCodeStore(redis=redis_client)
 ```
@@ -737,25 +783,18 @@ Builder precedence is:
 
 1. `endpoint_overrides` wins per slot and can replace the limiter or set it to `None`.
 2. Otherwise, only slots enabled by `enabled` (defaults to every supported slot) and not listed in `disabled` are materialized.
-3. Generated limiters start from `backend`, then `group_backends` can swap the backend for the slot's group.
-4. `namespace_style` chooses the supported namespace family for generated limiters.
-5. `scope_overrides` and `namespace_overrides` adjust the generated limiter for that slot.
+3. Generated limiters start from `backend`, then `group_backends` can swap the backend for the slot's group before the builder materializes the final per-slot limiter.
 
-The supported namespace families are:
-
-- `route` (default): route-oriented tokens such as `forgot-password`, `totp-confirm-enable`, and `request-verify-token`
-- `snake_case`: slot-aligned tokens such as `forgot_password`, `totp_confirm_enable`, and `request_verify_token`
-
-If you already depend on slot-style Redis keys, start with `namespace_style="snake_case"`. Keep
-`namespace_overrides` only for bespoke key names, preserve non-default scopes with
-`scope_overrides`, and use `AUTH_RATE_LIMIT_VERIFICATION_SLOTS` or
+Generated limiters keep the package-owned scope and namespace defaults from the private endpoint
+catalog. Use `AUTH_RATE_LIMIT_VERIFICATION_SLOTS` or
 `AUTH_RATE_LIMIT_ENDPOINT_SLOTS_BY_GROUP["verification"]` to leave unused verification slots
-unset. Keep direct `EndpointRateLimit(...)` assembly only for advanced per-endpoint exceptions.
+unset, and keep direct `EndpointRateLimit(...)` assembly only for advanced per-endpoint
+exceptions.
 
 Migration example for an older Redis recipe: this keeps login, register, and password-reset style
-routes on one backend, splits out refresh and TOTP budgets, preserves legacy underscore
-namespaces, and leaves verification slots unset. The preset is just a higher-level wrapper around
-the current shared-builder surface, so the same slot and override rules still apply.
+routes on one backend, splits out refresh and TOTP budgets, and leaves verification slots unset.
+The preset is just a higher-level wrapper around the current shared-builder surface, so the same
+slot and override rules still apply.
 
 ```python
 from litestar_auth.contrib.redis import RedisAuthPreset, RedisAuthRateLimitTier
@@ -772,13 +811,11 @@ redis_auth = RedisAuthPreset(
 
 rate_limit_config = redis_auth.build_rate_limit_config(
     disabled=AUTH_RATE_LIMIT_VERIFICATION_SLOTS,
-    namespace_style="snake_case",
 )
 ```
 
-Add `namespace_overrides` only when an existing deployment needs names that do not match either
-supported family. Add `scope_overrides` only when an existing key shape also depends on a
-non-default scope for a specific slot.
+Add `endpoint_overrides` only when an existing deployment needs a fully custom per-slot limiter or
+an explicit `None` disablement beyond the shared `enabled` / `disabled` selection.
 
 ### Redis TOTP replay protection and pending-token deduplication
 

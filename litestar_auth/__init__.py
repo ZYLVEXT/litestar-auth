@@ -121,7 +121,14 @@ from litestar_auth.totp import (
     verify_totp,
     verify_totp_with_store,
 )
-from litestar_auth.types import GuardedUserProtocol, RoleCapableUserProtocol, TotpUserProtocol, UserProtocol
+from litestar_auth.types import (
+    DbSessionDependencyKey,
+    GuardedUserProtocol,
+    RoleCapableUserProtocol,
+    TotpUserProtocol,
+    UserProtocol,
+    UserProtocolStrict,
+)
 
 logging.getLogger(__name__).addHandler(logging.NullHandler())  # noqa: RUF067
 
@@ -140,6 +147,7 @@ __all__ = (
     "CookieTransport",
     "DatabaseTokenAuthConfig",
     "DatabaseTokenStrategy",
+    "DbSessionDependencyKey",
     "EndpointRateLimit",
     "ErrorCode",
     "ForgotPassword",
@@ -186,6 +194,7 @@ __all__ = (
     "UserCreate",
     "UserNotExistsError",
     "UserProtocol",
+    "UserProtocolStrict",
     "UserRead",
     "UserUpdate",
     "VerifyToken",

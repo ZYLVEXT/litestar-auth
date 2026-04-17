@@ -32,7 +32,7 @@ if TYPE_CHECKING:
     from sqlalchemy.orm.session import ForUpdateParameter
     from sqlalchemy.sql.base import Executable
 
-pytestmark = pytest.mark.e2e
+pytestmark = [pytest.mark.e2e]
 
 HTTP_BAD_REQUEST = 400
 HTTP_CREATED = 201
@@ -290,8 +290,8 @@ def app() -> Iterator[tuple[Litestar, Engine, PasswordHelper, dict[str, UUID]]]:
             verification_token_secret="verify-secret-1234567890-1234567890",
             reset_password_token_secret="reset-secret-1234567890-1234567890",
             id_parser=UUID,
+            password_helper=password_helper,
         ),
-        user_manager_kwargs={"password_helper": password_helper},
         include_users=True,
     )
     yield (
@@ -554,3 +554,41 @@ async def test_role_guards_and_request_user_roles_survive_relational_storage(
 
     assert stored_member is not None
     assert stored_member.roles == ["admin", "billing"]
+
+
+async def test_role_guard_failures_return_structured_insufficient_roles_payload(
+    client: tuple[AsyncTestClient[Litestar], Engine, PasswordHelper, dict[str, UUID]],
+) -> None:
+    """Plugin-wired role guards return 403 payloads with structured role-denial context."""
+    test_client, _, _, _ = client
+    member_headers = await _login_headers(
+        test_client,
+        email="member@example.com",
+        password="member-password",
+    )
+
+    any_response = await test_client.get("/role-guarded/any", headers=member_headers)
+    all_response = await test_client.get("/role-guarded/all", headers=member_headers)
+
+    assert any_response.status_code == HTTP_FORBIDDEN
+    assert any_response.json() == {
+        "detail": (
+            "The authenticated user does not have any of the required roles. "
+            "required_roles=['admin']; user_roles=['member']"
+        ),
+        "code": "INSUFFICIENT_ROLES",
+        "required_roles": ["admin"],
+        "user_roles": ["member"],
+        "require_all": False,
+    }
+    assert all_response.status_code == HTTP_FORBIDDEN
+    assert all_response.json() == {
+        "detail": (
+            "The authenticated user does not have all of the required roles. "
+            "required_roles=['admin', 'billing']; user_roles=['member']"
+        ),
+        "code": "INSUFFICIENT_ROLES",
+        "required_roles": ["admin", "billing"],
+        "user_roles": ["member"],
+        "require_all": True,
+    }

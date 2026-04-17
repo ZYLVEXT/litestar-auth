@@ -120,7 +120,6 @@ def _minimal_config[UP: _EmailUserProtocol](
             reset_password_token_secret="reset-password-secret-1234567890",
             id_parser=UUID,
         ),
-        user_manager_kwargs={},
     )
 
 

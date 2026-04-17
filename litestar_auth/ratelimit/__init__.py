@@ -32,7 +32,7 @@ from ._config import (
     AuthRateLimitConfig,
     AuthRateLimitEndpointGroup,
     AuthRateLimitEndpointSlot,
-    AuthRateLimitNamespaceStyle,
+    AuthRateLimitSlot,
     EndpointRateLimit,
     RateLimitScope,
 )
@@ -58,7 +58,7 @@ __all__ = (
     "AuthRateLimitConfig",
     "AuthRateLimitEndpointGroup",
     "AuthRateLimitEndpointSlot",
-    "AuthRateLimitNamespaceStyle",
+    "AuthRateLimitSlot",
     "EndpointRateLimit",
     "InMemoryRateLimiter",
     "RateLimitScope",

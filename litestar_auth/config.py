@@ -67,8 +67,18 @@ class OAuthProviderConfig:
             TypeError: If ``value`` is neither an :class:`OAuthProviderConfig` nor a
                 length-2 tuple whose first element is a ``str``.
         """
-        if isinstance(value, OAuthProviderConfig):
+        if isinstance(value, cls):
             return value
+        value_type = type(value)
+        if value_type.__name__ == cls.__name__ and value_type.__module__ == cls.__module__:
+            missing = object()
+            name = getattr(value, "name", missing)
+            client = getattr(value, "client", missing)
+            if not isinstance(name, str):
+                msg = "OAuth provider name must be a string."
+                raise TypeError(msg)
+            if client is not missing:
+                return cls(name=name, client=client)
         if isinstance(value, tuple) and len(value) == _LEGACY_OAUTH_PROVIDER_PAIR_LEN:
             name, client = value
             if not isinstance(name, str):

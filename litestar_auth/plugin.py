@@ -156,7 +156,6 @@ class LitestarAuth[UP: UserProtocol[Any], ID](InitPlugin, CLIPlugin):
             oauth_token_encryption=self._oauth_token_encryption,
         )
         manager_inputs = _plugin_config.ManagerConstructorInputs(
-            manager_kwargs=self.config.user_manager_kwargs,
             manager_security=self.config.user_manager_security,
         )
         effective_security = manager_inputs.effective_security

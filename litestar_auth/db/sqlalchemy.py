@@ -340,7 +340,11 @@ class SQLAlchemyUserDatabase[UP: SQLAlchemyUserModelProtocol](BaseUserStore[UP, 
             return
 
         if oauth_account.user_id != user.id:
-            raise OAuthAccountAlreadyLinkedError
+            raise OAuthAccountAlreadyLinkedError(
+                provider=oauth_account.oauth_name,
+                account_id=oauth_account.account_id,
+                existing_user_id=oauth_account.user_id,
+            )
 
         oauth_account.account_email = account_email
         oauth_account.access_token = access_token

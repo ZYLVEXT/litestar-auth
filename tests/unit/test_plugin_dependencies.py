@@ -31,6 +31,7 @@ from litestar_auth._plugin.dependencies import (
     _make_backends_dependency_provider,
     _make_db_session_provide,
     _make_user_manager_dependency_provider,
+    authorization_error_handler,
     client_exception_handler,
     register_dependencies,
     register_exception_handlers,
@@ -39,7 +40,7 @@ from litestar_auth._plugin.scoped_session import SessionFactory
 from litestar_auth.authentication.backend import AuthenticationBackend
 from litestar_auth.authentication.transport.bearer import BearerTransport
 from litestar_auth.controllers._utils import _mark_litestar_auth_route_handler
-from litestar_auth.exceptions import ErrorCode
+from litestar_auth.exceptions import AuthorizationError, ErrorCode, InsufficientRolesError
 from litestar_auth.manager import UserManagerSecurity
 from tests.e2e.conftest import assert_structural_session_factory
 from tests.integration.test_orchestrator import (
@@ -55,6 +56,7 @@ if TYPE_CHECKING:
 
 pytestmark = pytest.mark.unit
 HTTP_BAD_REQUEST = 400
+HTTP_FORBIDDEN = 403
 HTTP_IM_A_TEAPOT = 418
 
 
@@ -93,7 +95,6 @@ def _minimal_config() -> LitestarAuthConfig[ExampleUser, UUID]:
             reset_password_token_secret="reset-secret-123456789012345678901",
             id_parser=UUID,
         ),
-        user_manager_kwargs={},
         include_users=False,
     )
 
@@ -158,6 +159,37 @@ def test_client_exception_handler_uses_error_code_unknown_when_extra_omits_code(
     assert response.status_code == HTTP_BAD_REQUEST
 
 
+def test_authorization_error_handler_formats_base_authorization_error() -> None:
+    """AuthorizationError values are surfaced as 403 auth JSON responses."""
+    exc = AuthorizationError("denied")
+
+    response = authorization_error_handler(cast("Any", None), exc)
+
+    assert response.content == {"detail": "denied", "code": ErrorCode.AUTHORIZATION_DENIED}
+    assert response.status_code == HTTP_FORBIDDEN
+    assert response.media_type == MediaType.JSON
+
+
+def test_authorization_error_handler_includes_structured_role_context() -> None:
+    """Insufficient role responses include the normalized role context for clients."""
+    exc = InsufficientRolesError(
+        required_roles=frozenset({"admin", "billing"}),
+        user_roles=frozenset({"support"}),
+        require_all=True,
+    )
+
+    response = authorization_error_handler(cast("Any", None), exc)
+
+    assert response.content == {
+        "detail": str(exc),
+        "code": ErrorCode.INSUFFICIENT_ROLES,
+        "required_roles": ["admin", "billing"],
+        "user_roles": ["support"],
+        "require_all": True,
+    }
+    assert response.status_code == HTTP_FORBIDDEN
+
+
 def test_register_exception_handlers_preserves_existing_handlers() -> None:
     """Registering auth handlers keeps existing controller handlers while adding ClientException."""
 
@@ -179,6 +211,7 @@ def test_register_exception_handlers_preserves_existing_handlers() -> None:
 
     assert handlers[RuntimeError] is existing_handler
     assert handlers[ClientException] is dependencies_module.client_exception_handler
+    assert handlers[AuthorizationError] is dependencies_module.authorization_error_handler
 
 
 def test_register_exception_handlers_preserves_existing_client_exception_handler() -> None:
@@ -220,6 +253,21 @@ def test_register_exception_handlers_only_mutates_handlers_it_receives() -> None
     assert PluginOwnedController.exception_handlers is not None
     assert PluginOwnedController.exception_handlers[ClientException] is dependencies_module.client_exception_handler
     assert NonAuthController.exception_handlers is None
+
+
+def test_register_exception_handlers_adds_authorization_handler_to_non_auth_routes() -> None:
+    """AuthorizationError mapping is attached to app routes so library guards work outside generated controllers."""
+
+    class ApplicationRoute(Controller):
+        exception_handlers: ClassVar[dict[type[Exception], object] | None] = None
+        path = "/app"
+
+    register_exception_handlers([ApplicationRoute])
+
+    handlers = cast("dict[type[Exception], object]", ApplicationRoute.exception_handlers)
+
+    assert handlers[AuthorizationError] is dependencies_module.authorization_error_handler
+    assert ClientException not in handlers
 
 
 def test_make_db_session_provide_reuses_scoped_session_within_scope() -> None:

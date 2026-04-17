@@ -56,8 +56,8 @@ config = LitestarAuthConfig(
 Manager-scoped secrets, shared `PasswordHelper` injection, runtime password validation, and app-owned
 schema helper reuse still follow the same
 [canonical configuration contract](../configuration.md#canonical-manager-password-surface). Keep
-manager secrets on `user_manager_security`; reserve `user_manager_kwargs` for non-security
-dependencies or custom `user_manager_factory` inputs.
+manager secrets on `user_manager_security`; use `user_manager_factory` when a custom manager
+constructor needs non-canonical inputs.
 
 At runtime this still becomes a normal `AuthenticationBackend`, but the preset keeps request-session binding and migration-only rollout flags on the plugin side.
 

@@ -666,7 +666,6 @@ def _minimal_config(
             reset_password_token_secret="r" * 32,
             id_parser=UUID,
         ),
-        user_manager_kwargs={},
         oauth_config=oauth_config,
         totp_config=totp_config,
     )

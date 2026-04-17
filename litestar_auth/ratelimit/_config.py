@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable, Mapping  # noqa: TC003
 from dataclasses import dataclass, fields
+from enum import StrEnum
 from types import MappingProxyType
 from typing import Any, Literal, Self, cast
 
@@ -11,7 +12,9 @@ from litestar.connection import Request  # noqa: TC002
 from litestar.exceptions import TooManyRequestsException
 
 from ._helpers import _DEFAULT_TRUSTED_HEADERS, _client_host, _extract_email, _safe_key_part, logger
+from ._memory import InMemoryRateLimiter
 from ._protocol import RateLimiterBackend  # noqa: TC001
+from ._redis import RedisRateLimiter
 
 type RateLimitScope = Literal["ip", "ip_email"]
 type AuthRateLimitEndpointSlot = Literal[
@@ -28,11 +31,26 @@ type AuthRateLimitEndpointSlot = Literal[
     "request_verify_token",
 ]
 type AuthRateLimitEndpointGroup = Literal["login", "password_reset", "refresh", "register", "totp", "verification"]
-type AuthRateLimitNamespaceStyle = Literal["route", "snake_case"]
 
 _DEFAULT_IDENTITY_FIELDS = ("identifier", "username", "email")
 _AUTH_RATE_LIMIT_NAMESPACE_STYLES = frozenset({"route", "snake_case"})
 _MISSING_OVERRIDE = object()
+
+
+class AuthRateLimitSlot(StrEnum):
+    """IDE-friendly enum of supported auth rate-limit endpoint slots."""
+
+    LOGIN = "login"
+    REFRESH = "refresh"
+    REGISTER = "register"
+    FORGOT_PASSWORD = "forgot_password"  # noqa: S105
+    RESET_PASSWORD = "reset_password"  # noqa: S105
+    TOTP_ENABLE = "totp_enable"
+    TOTP_CONFIRM_ENABLE = "totp_confirm_enable"
+    TOTP_VERIFY = "totp_verify"
+    TOTP_DISABLE = "totp_disable"
+    VERIFY_TOKEN = "verify_token"  # noqa: S105
+    REQUEST_VERIFY_TOKEN = "request_verify_token"  # noqa: S105
 
 
 @dataclass(slots=True, frozen=True)
@@ -202,6 +220,16 @@ AUTH_RATE_LIMIT_ENDPOINT_SLOTS_BY_GROUP: MappingProxyType[
 AUTH_RATE_LIMIT_VERIFICATION_SLOTS: frozenset[AuthRateLimitEndpointSlot] = AUTH_RATE_LIMIT_ENDPOINT_SLOTS_BY_GROUP[
     "verification"
 ]
+_STRICT_AUTH_RATE_LIMIT_PRESET_SLOTS: frozenset[AuthRateLimitEndpointSlot] = frozenset(
+    {"login", "register", "totp_verify"},
+)
+_LENIENT_AUTH_RATE_LIMIT_SHARED_SLOTS: frozenset[AuthRateLimitEndpointSlot] = frozenset(
+    {"login", "refresh", "register"},
+)
+_LENIENT_AUTH_RATE_LIMIT_STRICT_SLOTS: frozenset[AuthRateLimitEndpointSlot] = frozenset(
+    set(_AUTH_RATE_LIMIT_ENDPOINT_SLOTS) - set(_LENIENT_AUTH_RATE_LIMIT_SHARED_SLOTS),
+)
+_LENIENT_STRICT_MAX_ATTEMPTS_CAP = 5
 
 
 def _validate_builder_names(
@@ -224,14 +252,45 @@ def _validate_builder_names(
     raise ValueError(msg)
 
 
+def _clone_backend_with_capped_attempts(backend: RateLimiterBackend, *, max_attempts_cap: int) -> RateLimiterBackend:
+    """Clone built-in backends while capping the attempt budget.
+
+    Args:
+        backend: Built-in rate-limiter backend to clone.
+        max_attempts_cap: Maximum attempts allowed on the cloned backend.
+
+    Returns:
+        New backend instance with the same storage configuration and a capped
+        ``max_attempts`` value.
+
+    Raises:
+        TypeError: If ``backend`` is not a built-in limiter that the preset can
+            safely clone.
+    """
+    if isinstance(backend, InMemoryRateLimiter):
+        return InMemoryRateLimiter(
+            max_attempts=min(backend.max_attempts, max_attempts_cap),
+            window_seconds=backend.window_seconds,
+            max_keys=backend.max_keys,
+            sweep_interval=backend.sweep_interval,
+        )
+    if isinstance(backend, RedisRateLimiter):
+        return RedisRateLimiter(
+            redis=backend.redis,
+            max_attempts=min(backend.max_attempts, max_attempts_cap),
+            window_seconds=backend.window_seconds,
+            key_prefix=backend.key_prefix,
+        )
+
+    msg = "AuthRateLimitConfig.lenient() only supports built-in InMemoryRateLimiter or RedisRateLimiter backends."
+    raise TypeError(msg)
+
+
 def _build_auth_rate_limit_endpoint(  # noqa: PLR0913
     recipe: _AuthRateLimitEndpointRecipe,
     *,
     backend: RateLimiterBackend,
     group_backends: Mapping[AuthRateLimitEndpointGroup, RateLimiterBackend],
-    namespace_style: AuthRateLimitNamespaceStyle,
-    scope_overrides: Mapping[AuthRateLimitEndpointSlot, RateLimitScope],
-    namespace_overrides: Mapping[AuthRateLimitEndpointSlot, str],
     trusted_proxy: bool,
     identity_fields: tuple[str, ...],
     trusted_headers: tuple[str, ...],
@@ -243,11 +302,8 @@ def _build_auth_rate_limit_endpoint(  # noqa: PLR0913
     """
     return EndpointRateLimit(
         backend=group_backends.get(recipe.group, backend),
-        scope=scope_overrides.get(recipe.slot, recipe.default_scope),
-        namespace=namespace_overrides.get(
-            recipe.slot,
-            recipe.default_namespace if namespace_style == "route" else recipe.slot,
-        ),
+        scope=recipe.default_scope,
+        namespace=recipe.default_namespace,
         trusted_proxy=trusted_proxy,
         identity_fields=identity_fields,
         trusted_headers=trusted_headers,
@@ -261,10 +317,7 @@ def _iter_auth_rate_limit_config_items(  # noqa: PLR0913
     enabled: Iterable[AuthRateLimitEndpointSlot] | None,
     disabled: Iterable[AuthRateLimitEndpointSlot],
     group_backends: Mapping[AuthRateLimitEndpointGroup, RateLimiterBackend],
-    scope_overrides: Mapping[AuthRateLimitEndpointSlot, RateLimitScope],
-    namespace_style: AuthRateLimitNamespaceStyle,
-    namespace_overrides: Mapping[AuthRateLimitEndpointSlot, str],
-    endpoint_overrides: Mapping[AuthRateLimitEndpointSlot, EndpointRateLimit | None],
+    endpoint_overrides: Mapping[str, EndpointRateLimit | None],
     trusted_proxy: bool,
     identity_fields: tuple[str, ...],
     trusted_headers: tuple[str, ...],
@@ -276,14 +329,6 @@ def _iter_auth_rate_limit_config_items(  # noqa: PLR0913
     catalog.validate_slot_names(enabled_slots, parameter_name="enabled")
     catalog.validate_slot_names(disabled_slots, parameter_name="disabled")
     catalog.validate_group_names(group_backends, parameter_name="group_backends")
-    catalog.validate_slot_names(scope_overrides, parameter_name="scope_overrides")
-    _validate_builder_names(
-        (namespace_style,),
-        allowed=_AUTH_RATE_LIMIT_NAMESPACE_STYLES,
-        parameter_name="namespace_style",
-        item_name="auth rate-limit namespace styles",
-    )
-    catalog.validate_slot_names(namespace_overrides, parameter_name="namespace_overrides")
     catalog.validate_slot_names(endpoint_overrides, parameter_name="endpoint_overrides")
 
     for recipe in catalog.recipes:
@@ -301,9 +346,6 @@ def _iter_auth_rate_limit_config_items(  # noqa: PLR0913
                 recipe,
                 backend=backend,
                 group_backends=group_backends,
-                namespace_style=namespace_style,
-                scope_overrides=scope_overrides,
-                namespace_overrides=namespace_overrides,
                 trusted_proxy=trusted_proxy,
                 identity_fields=identity_fields,
                 trusted_headers=trusted_headers,
@@ -395,6 +437,70 @@ class AuthRateLimitConfig:
     request_verify_token: EndpointRateLimit | None = None
 
     @classmethod
+    def disabled(cls) -> Self:
+        """Build a preset that disables rate limiting for every auth endpoint.
+
+        Returns:
+            New config with every supported auth slot left unset.
+        """
+        return cls()
+
+    @classmethod
+    def strict(cls, *, backend: RateLimiterBackend) -> Self:
+        """Build a strict preset for public-facing sign-in surfaces.
+
+        The provided backend should already be configured with the lower attempt
+        budget you want to enforce. This preset wires that shared backend to the
+        highest-risk public entry points: login, register, and TOTP verify.
+
+        Args:
+            backend: Shared backend instance for the strict preset slots.
+
+        Returns:
+            New config with only the strict preset slots enabled.
+        """
+        config_kwargs = {
+            recipe.slot: EndpointRateLimit(
+                backend=backend,
+                scope=recipe.default_scope,
+                namespace=recipe.default_namespace,
+            )
+            for recipe in _AUTH_RATE_LIMIT_ENDPOINT_RECIPES
+            if recipe.slot in _STRICT_AUTH_RATE_LIMIT_PRESET_SLOTS
+        }
+        return cls(**cast("Any", config_kwargs))
+
+    @classmethod
+    def lenient(cls, *, backend: RateLimiterBackend) -> Self:
+        """Build a lenient preset for internal or low-risk deployments.
+
+        The supplied backend sets the broader budget used for the lower-risk
+        login, refresh, and registration surfaces. Token- and secret-bearing
+        flows still receive a stricter built-in limiter clone capped at five
+        attempts per window so reset, verification, and TOTP endpoints do not
+        inherit an overly permissive budget.
+
+        Args:
+            backend: Built-in shared backend instance for the lenient preset.
+
+        Returns:
+            New config with route-style namespaces for every supported auth slot.
+        """
+        strict_backend = _clone_backend_with_capped_attempts(
+            backend,
+            max_attempts_cap=_LENIENT_STRICT_MAX_ATTEMPTS_CAP,
+        )
+        config_kwargs = {
+            recipe.slot: EndpointRateLimit(
+                backend=backend if recipe.slot in _LENIENT_AUTH_RATE_LIMIT_SHARED_SLOTS else strict_backend,
+                scope=recipe.default_scope,
+                namespace=recipe.default_namespace,
+            )
+            for recipe in _AUTH_RATE_LIMIT_ENDPOINT_RECIPES
+        }
+        return cls(**cast("Any", config_kwargs))
+
+    @classmethod
     def from_shared_backend(  # noqa: PLR0913
         cls,
         backend: RateLimiterBackend,
@@ -402,10 +508,7 @@ class AuthRateLimitConfig:
         enabled: Iterable[AuthRateLimitEndpointSlot] | None = None,
         disabled: Iterable[AuthRateLimitEndpointSlot] = (),
         group_backends: Mapping[AuthRateLimitEndpointGroup, RateLimiterBackend] | None = None,
-        scope_overrides: Mapping[AuthRateLimitEndpointSlot, RateLimitScope] | None = None,
-        namespace_style: AuthRateLimitNamespaceStyle = "route",
-        namespace_overrides: Mapping[AuthRateLimitEndpointSlot, str] | None = None,
-        endpoint_overrides: Mapping[AuthRateLimitEndpointSlot, EndpointRateLimit | None] | None = None,
+        endpoint_overrides: Mapping[AuthRateLimitSlot, EndpointRateLimit | None] | None = None,
         trusted_proxy: bool = False,
         identity_fields: tuple[str, ...] = _DEFAULT_IDENTITY_FIELDS,
         trusted_headers: tuple[str, ...] = _DEFAULT_TRUSTED_HEADERS,
@@ -417,9 +520,7 @@ class AuthRateLimitConfig:
 
         1. ``backend`` for every enabled slot
         2. ``group_backends`` for slot groups such as ``totp`` or ``verification``
-        3. ``namespace_style`` for the supported namespace family
-        4. ``scope_overrides`` / ``namespace_overrides`` for slot-specific tweaks
-        5. ``endpoint_overrides`` for full slot replacement or explicit ``None`` disablement
+        3. ``endpoint_overrides`` for full slot replacement or explicit ``None`` disablement
 
         Args:
             backend: Default limiter backend for enabled auth slots.
@@ -431,11 +532,6 @@ class AuthRateLimitConfig:
             group_backends: Optional backend overrides keyed by auth slot group:
                 ``login``, ``refresh``, ``register``, ``password_reset``, ``totp``, or
                 ``verification``.
-            scope_overrides: Optional per-slot scope overrides to preserve existing key behavior.
-            namespace_style: Supported namespace family for generated limiters. ``"route"``
-                keeps route-oriented tokens such as ``forgot-password``. ``"snake_case"``
-                uses slot-aligned tokens such as ``forgot_password``.
-            namespace_overrides: Optional per-slot namespace tokens to preserve existing key names.
             endpoint_overrides: Optional full per-slot replacements. ``None`` disables a slot.
             trusted_proxy: Shared trusted-proxy setting applied to generated limiters.
             identity_fields: Shared request body identity fields applied to generated limiters.
@@ -445,11 +541,7 @@ class AuthRateLimitConfig:
             New config populated from the shared-backend builder inputs.
         """
         group_backend_map: dict[AuthRateLimitEndpointGroup, RateLimiterBackend] = dict(group_backends or {})
-        scope_override_map: dict[AuthRateLimitEndpointSlot, RateLimitScope] = dict(scope_overrides or {})
-        namespace_override_map: dict[AuthRateLimitEndpointSlot, str] = dict(namespace_overrides or {})
-        endpoint_override_map: dict[AuthRateLimitEndpointSlot, EndpointRateLimit | None] = dict(
-            endpoint_overrides or {},
-        )
+        endpoint_override_map = dict(endpoint_overrides or {})
         config_kwargs = dict(
             _iter_auth_rate_limit_config_items(
                 catalog=_AUTH_RATE_LIMIT_ENDPOINT_CATALOG,
@@ -457,16 +549,12 @@ class AuthRateLimitConfig:
                 enabled=enabled,
                 disabled=disabled,
                 group_backends=group_backend_map,
-                scope_overrides=scope_override_map,
-                namespace_style=namespace_style,
-                namespace_overrides=namespace_override_map,
                 endpoint_overrides=endpoint_override_map,
                 trusted_proxy=trusted_proxy,
                 identity_fields=identity_fields,
                 trusted_headers=trusted_headers,
             ),
         )
-
         return cls(**cast("Any", config_kwargs))
 
 

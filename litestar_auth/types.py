@@ -11,14 +11,19 @@ Implement the narrowest protocol that matches the features you use:
 | ``has_any_role``, ``has_all_roles`` guards | ``RoleCapableUserProtocol`` — flat ``roles`` |
 | TOTP enrollment / verification | ``TotpUserProtocol`` — ``email``, ``totp_secret`` |
 
+``UserProtocol`` remains ``@runtime_checkable`` so runtime guard code can use ``isinstance(...)``.
+Use ``UserProtocolStrict`` for static-typing-only contracts where no runtime check is needed; avoiding
+``@runtime_checkable`` keeps the protocol's stricter static intent clear and avoids protocol runtime-check overhead.
+
 The full decision table, guard cross-links, and a multi-protocol model example are in
 ``docs/api/types.md`` (API → Types in the built docs).
 """
 
 from __future__ import annotations
 
+import keyword
 from collections.abc import Hashable
-from typing import TYPE_CHECKING, Any, Literal, Protocol, TypeVar, runtime_checkable
+from typing import TYPE_CHECKING, Annotated, Any, Literal, Protocol, TypeVar, runtime_checkable
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -29,11 +34,40 @@ if TYPE_CHECKING:
 ID = TypeVar("ID", bound=Hashable)
 
 
-@runtime_checkable
-class UserProtocol(Protocol[ID]):
-    """Protocol for user models handled by the library."""
+def _valid_python_identifier_validator(value: str) -> str:
+    """Return ``value`` when it is a valid non-keyword Python identifier.
+
+    Raises:
+        ValueError: When ``value`` is not a valid identifier or is a reserved keyword.
+    """
+    if not value.isidentifier() or keyword.iskeyword(value):
+        msg = (
+            "db_session_dependency_key must be a valid Python identifier because Litestar matches dependency "
+            f"keys to callable parameter names, got {value!r}"
+        )
+        raise ValueError(msg)
+    return value
+
+
+type DbSessionDependencyKey = Annotated[str, _valid_python_identifier_validator]
+
+
+class UserProtocolStrict(Protocol[ID]):
+    """Static-only protocol for user models handled by the library.
+
+    Prefer this variant for annotations and TypeVar bounds that do not need ``isinstance(...)`` checks.
+    """
 
     id: ID
+
+
+@runtime_checkable
+class UserProtocol(UserProtocolStrict[ID], Protocol[ID]):
+    """Runtime-checkable protocol for user models handled by the library.
+
+    This variant supports ``isinstance(...)`` checks, which are convenient at runtime but slower and less precise
+    than static protocol validation. Use :class:`UserProtocolStrict` when runtime checks are unnecessary.
+    """
 
 
 @runtime_checkable
@@ -60,7 +94,7 @@ class TotpUserProtocol(UserProtocol[ID], Protocol[ID]):
     totp_secret: str | None
 
 
-UP = TypeVar("UP", bound=UserProtocol[Any])
+UP = TypeVar("UP", bound=UserProtocol)
 
 
 @runtime_checkable

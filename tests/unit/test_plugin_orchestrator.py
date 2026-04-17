@@ -144,7 +144,6 @@ def _minimal_config(
             reset_password_token_secret="reset-secret-123456789012345678901",
             id_parser=UUID,
         ),
-        user_manager_kwargs={},
         include_users=include_users,
         login_identifier=login_identifier,
     )
@@ -1012,8 +1011,8 @@ def test_build_user_manager_passes_typed_security_to_security_only_manager() -> 
         user_manager_security=UserManagerSecurity[UUID](
             verification_token_secret="verify-secret-12345678901234567890",
             reset_password_token_secret="reset-secret-123456789012345678901",
+            password_helper=PasswordHelper(),
         ),
-        user_manager_kwargs={"password_helper": PasswordHelper()},
         id_parser=UUID,
         login_identifier="username",
     )

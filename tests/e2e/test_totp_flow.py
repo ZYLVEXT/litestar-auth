@@ -30,7 +30,7 @@ if TYPE_CHECKING:
 
     from litestar.testing import AsyncTestClient
 
-pytestmark = pytest.mark.e2e
+pytestmark = [pytest.mark.e2e]
 
 HTTP_ACCEPTED = 202
 HTTP_BAD_REQUEST = 400
@@ -113,8 +113,8 @@ def app() -> Iterator[Litestar]:
             reset_password_token_secret="reset-secret-1234567890-1234567890",
             totp_secret_key=Fernet.generate_key().decode(),
             id_parser=UUID,
+            password_helper=password_helper,
         ),
-        user_manager_kwargs={"password_helper": password_helper},
         totp_config=TotpConfig(
             totp_pending_secret=TOTP_PENDING_SECRET,
             totp_pending_jti_store=InMemoryJWTDenylistStore(),

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib
+from typing import TYPE_CHECKING
 
 import pytest
 
@@ -12,8 +13,16 @@ import litestar_auth.authentication.strategy._opaque_tokens as opaque_tokens_mod
 import litestar_auth.oauth as oauth_module
 import litestar_auth.payloads as payloads_module
 from litestar_auth.authentication.strategy._opaque_tokens import build_opaque_token_key, digest_opaque_token
+from litestar_auth.oauth.client_adapter import (
+    OAuthEmailVerificationAsyncClientProtocol,
+    OAuthEmailVerificationSyncClientProtocol,
+    make_async_email_verification_client,
+)
 from litestar_auth.oauth.router import create_provider_oauth_controller, load_httpx_oauth_client
 from litestar_auth.payloads import LoginCredentials, UserCreate
+
+if TYPE_CHECKING:
+    from types import ModuleType
 
 pytestmark = [pytest.mark.unit, pytest.mark.imports]
 EMAIL_MAX_LENGTH = 320
@@ -21,6 +30,16 @@ LOGIN_IDENTIFIER_MAX_LENGTH = 320
 REFRESH_TOKEN_MAX_LENGTH = 512
 LONG_LIVED_TOKEN_MAX_LENGTH = 2048
 TOTP_CODE_LENGTH = 6
+
+
+def _current_oauth_client_adapter_module() -> ModuleType:
+    """Return the current OAuth client-adapter module after any reloads."""
+    return importlib.import_module("litestar_auth.oauth.client_adapter")
+
+
+def _current_oauth_router_module() -> ModuleType:
+    """Return the current OAuth router module after any reloads."""
+    return importlib.import_module("litestar_auth.oauth.router")
 
 
 def test_opaque_tokens_module_executes_under_coverage() -> None:
@@ -58,17 +77,48 @@ def test_oauth_init_module_executes_under_coverage() -> None:
     """Reload the OAuth package and verify its lazy exports remain accessible."""
     reloaded_module = importlib.reload(oauth_module)
     exported_names = reloaded_module.__all__
+    current_client_adapter_module = _current_oauth_client_adapter_module()
+    current_router_module = _current_oauth_router_module()
 
-    assert exported_names == ("create_provider_oauth_controller", "load_httpx_oauth_client")
-    assert reloaded_module.create_provider_oauth_controller is getattr(oauth_module, exported_names[0])
-    assert reloaded_module.load_httpx_oauth_client is getattr(oauth_module, exported_names[1])
+    assert exported_names == (
+        "OAuthEmailVerificationAsyncClientProtocol",
+        "OAuthEmailVerificationSyncClientProtocol",
+        "create_provider_oauth_controller",
+        "load_httpx_oauth_client",
+        "make_async_email_verification_client",
+    )
+    assert (
+        reloaded_module.OAuthEmailVerificationAsyncClientProtocol
+        is current_client_adapter_module.OAuthEmailVerificationAsyncClientProtocol
+    )
+    assert (
+        reloaded_module.OAuthEmailVerificationSyncClientProtocol
+        is current_client_adapter_module.OAuthEmailVerificationSyncClientProtocol
+    )
+    assert reloaded_module.create_provider_oauth_controller is current_router_module.create_provider_oauth_controller
+    assert reloaded_module.load_httpx_oauth_client is current_router_module.load_httpx_oauth_client
+    assert (
+        reloaded_module.make_async_email_verification_client
+        is current_client_adapter_module.make_async_email_verification_client
+    )
     assert (
         root_package.create_provider_oauth_controller.__name__
         == reloaded_module.create_provider_oauth_controller.__name__
     )
     assert root_package.load_httpx_oauth_client.__name__ == reloaded_module.load_httpx_oauth_client.__name__
+    assert (
+        reloaded_module.OAuthEmailVerificationAsyncClientProtocol.__name__
+        == OAuthEmailVerificationAsyncClientProtocol.__name__
+    )
+    assert (
+        reloaded_module.OAuthEmailVerificationSyncClientProtocol.__name__
+        == OAuthEmailVerificationSyncClientProtocol.__name__
+    )
     assert reloaded_module.create_provider_oauth_controller.__name__ == create_provider_oauth_controller.__name__
     assert reloaded_module.load_httpx_oauth_client.__name__ == load_httpx_oauth_client.__name__
+    assert (
+        reloaded_module.make_async_email_verification_client.__name__ == make_async_email_verification_client.__name__
+    )
 
 
 def test_oauth_init_unknown_export_raises_attribute_error() -> None:

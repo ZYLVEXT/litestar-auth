@@ -24,7 +24,7 @@ from tests.integration.test_controller_users import build_app as build_users_app
 from tests.integration.test_controller_verify import build_app as build_verify_app
 from tests.integration.test_orchestrator import InMemoryRefreshTokenStrategy, PluginUserManager
 
-pytestmark = pytest.mark.integration
+pytestmark = [pytest.mark.integration]
 EMAIL_PATTERN = r"^[^@\s]+@[^@\s]+\.[^@\s]+$"
 STRING_TYPE = "string"
 
@@ -131,8 +131,8 @@ def _build_plugin_openapi_app() -> Litestar:
             verification_token_secret="verify-secret-12345678901234567890",
             reset_password_token_secret="reset-secret-123456789012345678901",
             id_parser=UUID,
+            password_helper=PasswordHelper(),
         ),
-        user_manager_kwargs={"password_helper": PasswordHelper()},
         auth_path="/auth/jwt",
         enable_refresh=True,
         include_users=False,

@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping
+from collections.abc import Callable
 from dataclasses import dataclass, replace
-from typing import TYPE_CHECKING, Any, Protocol, cast
+from typing import TYPE_CHECKING, Any, Protocol
 
 from litestar_auth.config import _resolve_token_secret
 
@@ -22,15 +22,6 @@ class SecretValueProtocol(Protocol):
 
 
 type SecretFactory = Callable[[str], SecretValueProtocol]
-
-_MANAGED_SECURITY_KEYS = frozenset(
-    {
-        "verification_token_secret",
-        "reset_password_token_secret",
-        "totp_secret_key",
-        "id_parser",
-    },
-)
 
 
 @dataclass(frozen=True, slots=True)
@@ -91,9 +82,12 @@ def resolve_account_token_secrets[ID](
 
 @dataclass(frozen=True, slots=True)
 class ManagerConstructorInputs[ID]:
-    """Typed plugin-owned inputs for request-scoped manager construction."""
+    """Typed plugin-owned inputs for request-scoped manager construction.
 
-    manager_kwargs: Mapping[str, Any]
+    The constructor contract is now fully driven by ``UserManagerSecurity`` plus the
+    remaining top-level plugin-owned manager inputs.
+    """
+
     manager_security: UserManagerSecurity[ID] | None = None
     password_validator: PasswordValidator | None = None
     backends: tuple[object, ...] = ()
@@ -101,33 +95,11 @@ class ManagerConstructorInputs[ID]:
     id_parser: Callable[[str], ID] | None = None
 
     @property
-    def has_explicit_password_validator(self) -> bool:
-        """Return whether ``user_manager_kwargs`` declares ``password_validator``."""
-        return "password_validator" in self.manager_kwargs
-
-    @property
-    def explicit_password_validator(self) -> PasswordValidator | None:
-        """Return the explicit validator declared through ``user_manager_kwargs``."""
-        return cast("PasswordValidator | None", self.manager_kwargs.get("password_validator"))
-
-    @property
-    def managed_security_keys(self) -> tuple[str, ...]:
-        """Return legacy plugin-managed security keys present in ``user_manager_kwargs``."""
-        return tuple(sorted(set(self.manager_kwargs).intersection(_MANAGED_SECURITY_KEYS)))
-
-    @property
     def resolved_security_id_parser(self) -> Callable[[str], ID] | None:
         """Return the parser contributed by the typed contract or top-level config."""
         if self.manager_security is None:
             return None
         return self.manager_security.id_parser if self.manager_security.id_parser is not None else self.id_parser
-
-    @property
-    def security_overlap_keys(self) -> tuple[str, ...]:
-        """Return managed security keys present in legacy kwargs alongside the typed contract."""
-        if self.manager_security is None:
-            return ()
-        return self.managed_security_keys
 
     @property
     def effective_security(self) -> UserManagerSecurity[ID]:
@@ -147,24 +119,12 @@ class ManagerConstructorInputs[ID]:
         return self.effective_security
 
     def _materialize_security_for_constructor(self) -> UserManagerSecurity[ID]:
-        """Return the ``security=`` bundle for :class:`~litestar_auth.manager.BaseUserManager`.
-
-        When ``manager_security`` is unset, managed keys may still appear in ``manager_kwargs``
-        (factory-owned wiring). Fold those into a concrete
-        :class:`~litestar_auth.manager.UserManagerSecurity` so the manager receives a single
-        ``security=`` argument.
-        """
-        base = self.effective_security
-        if self.manager_security is not None:
-            return base
-        merge = {key: self.manager_kwargs[key] for key in _MANAGED_SECURITY_KEYS if key in self.manager_kwargs}
-        if not merge:
-            return base
-        return replace(base, **merge)
+        """Return the ``security=`` bundle for :class:`~litestar_auth.manager.BaseUserManager`."""
+        return self.effective_security
 
     def _build_manager_id_parser_kwargs(self) -> dict[str, Any]:
         """Return the explicit ``id_parser`` kwarg when the default contract needs it."""
-        if self.manager_security is not None or self.id_parser is None or "id_parser" in self.manager_kwargs:
+        if self.manager_security is not None or self.id_parser is None:
             return {}
         return {"id_parser": self.id_parser}
 
@@ -179,17 +139,12 @@ class ManagerConstructorInputs[ID]:
         Returns:
             A concrete kwargs dictionary ready for ``user_manager_class(...)``.
         """
-        manager_kwargs = dict(self.manager_kwargs)
-        if self.manager_security is not None:
-            for key in _MANAGED_SECURITY_KEYS:
-                manager_kwargs.pop(key, None)
-        for key in _MANAGED_SECURITY_KEYS:
-            manager_kwargs.pop(key, None)
-        manager_kwargs.pop("security", None)
-        manager_kwargs["security"] = self._materialize_security_for_constructor()
-        if self.password_validator is not None and not self.has_explicit_password_validator:
-            manager_kwargs["password_validator"] = self.password_validator
-        manager_kwargs["backends"] = self.backends
-        if "login_identifier" not in manager_kwargs and self.login_identifier is not None:
-            manager_kwargs["login_identifier"] = self.login_identifier
-        return manager_kwargs
+        constructor_kwargs: dict[str, Any] = {
+            "security": self._materialize_security_for_constructor(),
+            "backends": self.backends,
+        }
+        if self.password_validator is not None:
+            constructor_kwargs["password_validator"] = self.password_validator
+        if self.login_identifier is not None:
+            constructor_kwargs["login_identifier"] = self.login_identifier
+        return constructor_kwargs

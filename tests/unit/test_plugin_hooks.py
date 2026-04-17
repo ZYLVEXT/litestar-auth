@@ -19,7 +19,12 @@ from litestar_auth.authentication.backend import AuthenticationBackend
 from litestar_auth.authentication.transport.bearer import BearerTransport
 from litestar_auth.authentication.transport.cookie import CookieTransport
 from litestar_auth.controllers._utils import _mark_litestar_auth_route_handler
-from litestar_auth.exceptions import InvalidVerifyTokenError, LitestarAuthError
+from litestar_auth.exceptions import (
+    AuthorizationError,
+    InsufficientRolesError,
+    InvalidVerifyTokenError,
+    LitestarAuthError,
+)
 from litestar_auth.manager import UserManagerSecurity
 from litestar_auth.plugin import LitestarAuth, LitestarAuthConfig
 from tests.e2e.conftest import assert_structural_session_factory
@@ -36,6 +41,7 @@ if TYPE_CHECKING:
 
 pytestmark = pytest.mark.unit
 HTTP_BAD_REQUEST = 400
+HTTP_FORBIDDEN = 403
 HTTP_TOO_MANY_REQUESTS = 429
 
 
@@ -68,7 +74,6 @@ def _minimal_config(
             reset_password_token_secret="reset-secret-123456789012345678901",
             id_parser=UUID,
         ),
-        user_manager_kwargs={},
         include_users=False,
     )
 
@@ -211,6 +216,61 @@ def test_register_exception_handlers_custom_hook_wraps_client_exceptions_without
     assert getattr(seen["exc"], "status_code", None) == HTTP_TOO_MANY_REQUESTS
     assert response.status_code == HTTP_TOO_MANY_REQUESTS
     assert response.content == {"code": LitestarAuthError.default_code}
+
+
+def test_register_exception_handlers_custom_hook_wraps_authorization_errors_with_role_context() -> None:
+    """Custom hooks receive 403 auth wrappers that preserve structured role-denial context."""
+    seen: dict[str, object] = {}
+
+    def exception_response_hook(exc: object, request: object) -> Response[dict[str, object]]:
+        seen["exc"] = exc
+        seen["request"] = request
+        return Response(
+            content={
+                "code": getattr(exc, "code", None),
+                "required_roles": sorted(getattr(exc, "required_roles", ())),
+                "user_roles": sorted(getattr(exc, "user_roles", ())),
+                "require_all": getattr(exc, "require_all", None),
+            },
+            status_code=getattr(exc, "status_code", HTTP_BAD_REQUEST),
+            media_type=MediaType.JSON,
+        )
+
+    config = _minimal_config()
+    config.exception_response_hook = exception_response_hook
+    plugin = LitestarAuth(config)
+
+    @_mark_litestar_auth_route_handler
+    class PluginOwnedController(Controller):
+        exception_handlers: ClassVar[dict[type[Exception], object] | None] = None
+        path = "/auth"
+
+    plugin._register_exception_handlers([PluginOwnedController])
+
+    handlers = cast("dict[type[Exception], object]", PluginOwnedController.exception_handlers)
+    handler = cast("Any", handlers[AuthorizationError])
+    request = object()
+    exc = InsufficientRolesError(
+        required_roles=frozenset({"admin", "billing"}),
+        user_roles=frozenset({"support"}),
+        require_all=True,
+    )
+
+    response = handler(request, exc)
+
+    assert seen["request"] is request
+    assert getattr(seen["exc"], "code", None) == exc.code
+    assert getattr(seen["exc"], "status_code", None) == HTTP_FORBIDDEN
+    assert getattr(seen["exc"], "required_roles", None) == exc.required_roles
+    assert getattr(seen["exc"], "user_roles", None) == exc.user_roles
+    assert getattr(seen["exc"], "require_all", None) is True
+    assert response.status_code == HTTP_FORBIDDEN
+    assert response.content == {
+        "code": exc.code,
+        "required_roles": ["admin", "billing"],
+        "user_roles": ["support"],
+        "require_all": True,
+    }
 
 
 def test_register_middleware_without_hook_keeps_default_definition() -> None:

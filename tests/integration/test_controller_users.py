@@ -13,12 +13,13 @@ from litestar.exceptions import NotAuthorizedException
 from litestar.middleware import DefineMiddleware
 
 from litestar_auth._plugin.config import DEFAULT_USER_MANAGER_DEPENDENCY_KEY
+from litestar_auth._plugin.dependencies import authorization_error_handler
 from litestar_auth.authentication.authenticator import Authenticator
 from litestar_auth.authentication.backend import AuthenticationBackend
 from litestar_auth.authentication.middleware import LitestarAuthMiddleware
 from litestar_auth.authentication.transport.bearer import BearerTransport
 from litestar_auth.controllers import create_users_controller
-from litestar_auth.exceptions import ErrorCode, InvalidPasswordError, UserAlreadyExistsError
+from litestar_auth.exceptions import AuthorizationError, ErrorCode, InvalidPasswordError, UserAlreadyExistsError
 from litestar_auth.guards import has_all_roles, has_any_role
 from litestar_auth.manager import BaseUserManager, UserManagerSecurity
 from litestar_auth.password import PasswordHelper
@@ -154,12 +155,20 @@ def build_app(
         get_request_session=auth_middleware_get_request_session(cast("Any", DummySessionMaker())),
         authenticator_factory=lambda _session: Authenticator([backend], user_manager),
     )
-    app = litestar_app_with_user_manager(
-        user_manager,
+    route_handlers = [
         controller,
         role_guarded_any,
         role_guarded_all,
         role_guarded_runtime,
+    ]
+    for route_handler in route_handlers:
+        route_handler_dict = getattr(route_handler, "__dict__", {})
+        existing_handlers = dict(route_handler_dict.get("exception_handlers") or {})
+        existing_handlers.setdefault(AuthorizationError, cast("Any", authorization_error_handler))
+        cast("Any", route_handler).exception_handlers = existing_handlers
+    app = litestar_app_with_user_manager(
+        user_manager,
+        *route_handlers,
         middleware=[middleware],
     )
     return app, user_db, user_manager, strategy, admin_user, regular_user

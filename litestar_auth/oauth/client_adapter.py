@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+import asyncio
 import inspect
-from collections.abc import Awaitable, Callable, Mapping
-from typing import Protocol, TypedDict, TypeGuard
+from collections.abc import Callable, Mapping
+from typing import Protocol, TypedDict, TypeGuard, runtime_checkable
 
 from litestar.exceptions import ClientException
 
@@ -67,10 +68,18 @@ class OAuthProfileClientProtocol(OAuthClientBaseProtocol, Protocol):
         """Return the upstream profile payload."""
 
 
-class OAuthEmailVerificationClientProtocol(Protocol):
-    """Optional manual OAuth client contract for email verification evidence."""
+@runtime_checkable
+class OAuthEmailVerificationAsyncClientProtocol(Protocol):
+    """Async-only manual OAuth client contract for email verification evidence."""
 
-    def get_email_verified(self, access_token: str) -> bool | Awaitable[bool]:
+    async def get_email_verified(self, access_token: str) -> bool:
+        """Return provider email-verification evidence."""
+
+
+class OAuthEmailVerificationSyncClientProtocol(Protocol):
+    """Sync-only manual OAuth client contract for email verification evidence."""
+
+    def get_email_verified(self, access_token: str) -> bool:
         """Return provider email-verification evidence."""
 
 
@@ -92,6 +101,46 @@ class OAuthTokenPayload(TypedDict):
     access_token: str
     expires_at: int | None
     refresh_token: str | None
+
+
+class _AsyncEmailVerificationClientAdapter:
+    """Wrap a blocking sync verification client behind an async interface."""
+
+    def __init__(self, sync_client: OAuthEmailVerificationSyncClientProtocol) -> None:
+        """Bind the sync verification client to offload in a worker thread."""
+        self._sync_client = sync_client
+
+    async def get_email_verified(self, access_token: str) -> bool:
+        """Return provider verification evidence without blocking the event loop.
+
+        This wrapper is only appropriate for truly blocking sync clients.
+        Prefer a native async client for fast in-memory checks.
+
+        Returns:
+            Provider-asserted email-verification boolean.
+
+        Raises:
+            ConfigurationError: If the sync client returns a non-bool value.
+        """
+        result = await asyncio.to_thread(self._sync_client.get_email_verified, access_token)
+        if isinstance(result, bool):
+            return result
+        msg = "OAuth client returned an invalid email verification value."
+        raise ConfigurationError(msg)
+
+
+def make_async_email_verification_client(
+    sync_client: OAuthEmailVerificationSyncClientProtocol,
+) -> OAuthEmailVerificationAsyncClientProtocol:
+    """Wrap a sync verification client behind an async thread-offloaded adapter.
+
+    Use this only for truly blocking sync clients. For cheap in-memory checks,
+    implement :class:`OAuthEmailVerificationAsyncClientProtocol` directly.
+
+    Returns:
+        Async adapter that runs the sync client in a worker thread.
+    """
+    return _AsyncEmailVerificationClientAdapter(sync_client)
 
 
 def _resolve_oauth_client(
@@ -171,9 +220,53 @@ def _supports_profile(oauth_client: object) -> TypeGuard[OAuthProfileClientProto
     return callable(getattr(oauth_client, "get_profile", None))
 
 
-def _supports_email_verified(oauth_client: object) -> TypeGuard[OAuthEmailVerificationClientProtocol]:
-    """Return whether the client exposes ``get_email_verified()``."""
-    return callable(getattr(oauth_client, "get_email_verified", None))
+def _validate_oauth_client_adapter_fields(oauth_client: object) -> None:
+    """Validate advertised manual OAuth client fields at adapter construction.
+
+    Raises:
+        ConfigurationError: If an advertised adapter field is malformed.
+    """
+    profile_method = getattr(oauth_client, "get_profile", None)
+    if profile_method is not None and not callable(profile_method):
+        msg = "OAuth client get_profile must be callable when provided."
+        raise ConfigurationError(msg)
+
+    email_verification_method = getattr(oauth_client, "get_email_verified", None)
+    if email_verification_method is not None and not _supports_email_verified(oauth_client):
+        msg = (
+            "OAuth client get_email_verified must be an async callable implementing "
+            "OAuthEmailVerificationAsyncClientProtocol, or wrap sync clients with "
+            "make_async_email_verification_client()."
+        )
+        raise ConfigurationError(msg)
+
+
+def _validate_email_verified_result(result: object) -> bool:
+    """Return a valid provider email-verification result.
+
+    Raises:
+        ConfigurationError: If the result is not a bool.
+    """
+    if isinstance(result, bool):
+        return result
+    msg = "OAuth client returned an invalid email verification value."
+    raise ConfigurationError(msg)
+
+
+def _supports_async_email_verified(oauth_client: object) -> TypeGuard[OAuthEmailVerificationAsyncClientProtocol]:
+    """Return whether the client exposes the canonical async verification contract."""
+    email_verification_method = getattr(oauth_client, "get_email_verified", None)
+    if not callable(email_verification_method):
+        return False
+    code = getattr(email_verification_method, "__code__", None)
+    return code is not None and bool(code.co_flags & inspect.CO_COROUTINE)
+
+
+def _supports_email_verified(
+    oauth_client: object,
+) -> TypeGuard[OAuthEmailVerificationAsyncClientProtocol]:
+    """Return whether the client exposes the canonical async verification contract."""
+    return _supports_async_email_verified(oauth_client)
 
 
 class OAuthClientAdapter:
@@ -181,6 +274,7 @@ class OAuthClientAdapter:
 
     def __init__(self, oauth_client: OAuthClientProtocol) -> None:
         """Bind the raw OAuth client implementation."""
+        _validate_oauth_client_adapter_fields(oauth_client)
         self._oauth_client = oauth_client
 
     async def get_authorization_url(
@@ -351,23 +445,15 @@ class OAuthClientAdapter:
 
     @staticmethod
     async def _call_dedicated_email_verified(
-        oauth_client: OAuthEmailVerificationClientProtocol,
+        oauth_client: OAuthEmailVerificationAsyncClientProtocol,
         access_token: str,
     ) -> bool:
-        """Invoke the provider's dedicated ``get_email_verified`` contract.
+        """Invoke the canonical async ``get_email_verified`` contract.
 
         Returns:
             Provider-asserted email-verification boolean.
-
-        Raises:
-            ConfigurationError: If the return value is not a bool.
         """
-        maybe_awaitable = oauth_client.get_email_verified(access_token)
-        result = await maybe_awaitable if inspect.isawaitable(maybe_awaitable) else maybe_awaitable
-        if isinstance(result, bool):
-            return result
-        msg = "OAuth client returned an invalid email verification value."
-        raise ConfigurationError(msg)
+        return _validate_email_verified_result(await oauth_client.get_email_verified(access_token))
 
 
 def _parse_email_verified_from_profile(profile: Mapping[str, object]) -> bool | None:

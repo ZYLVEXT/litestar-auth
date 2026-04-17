@@ -21,10 +21,8 @@ from litestar_auth.ratelimit import (
     AuthRateLimitConfig,
     AuthRateLimitEndpointGroup,
     AuthRateLimitEndpointSlot,
-    AuthRateLimitNamespaceStyle,
     EndpointRateLimit,
     RateLimiterBackend,
-    RateLimitScope,
 )
 from litestar_auth.totp import DEFAULT_TOTP_USED_KEY_PREFIX, RedisUsedTotpCodeStore
 
@@ -117,9 +115,6 @@ class RedisAuthPreset:
         enabled: typing.Iterable[AuthRateLimitEndpointSlot] | None = None,
         disabled: typing.Iterable[AuthRateLimitEndpointSlot] = (),
         group_backends: typing.Mapping[AuthRateLimitEndpointGroup, RateLimiterBackend] | None = None,
-        scope_overrides: typing.Mapping[AuthRateLimitEndpointSlot, RateLimitScope] | None = None,
-        namespace_style: AuthRateLimitNamespaceStyle = "route",
-        namespace_overrides: typing.Mapping[AuthRateLimitEndpointSlot, str] | None = None,
         endpoint_overrides: typing.Mapping[AuthRateLimitEndpointSlot, EndpointRateLimit | None] | None = None,
         trusted_proxy: bool = False,
         identity_fields: tuple[str, ...] | None = None,
@@ -132,9 +127,6 @@ class RedisAuthPreset:
             disabled: Auth slot names to leave unset.
             group_backends: Optional explicit backend overrides keyed by auth
                 slot group. These win over ``group_rate_limit_tiers``.
-            scope_overrides: Optional per-slot scope overrides.
-            namespace_style: Namespace family for generated limiters.
-            namespace_overrides: Optional per-slot namespace overrides.
             endpoint_overrides: Optional full per-slot replacements or explicit
                 ``None`` disablement.
             trusted_proxy: Shared trusted-proxy setting applied to generated
@@ -162,9 +154,6 @@ class RedisAuthPreset:
             "enabled": enabled,
             "disabled": disabled,
             "group_backends": resolved_group_backends,
-            "scope_overrides": scope_overrides,
-            "namespace_style": namespace_style,
-            "namespace_overrides": namespace_overrides,
             "endpoint_overrides": endpoint_overrides,
             "trusted_proxy": trusted_proxy,
         }

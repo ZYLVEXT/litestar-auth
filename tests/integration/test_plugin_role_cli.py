@@ -52,10 +52,11 @@ if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
     from sqlalchemy.sql.base import Executable
 
+    from litestar_auth._plugin.config import UserManagerFactory
     from litestar_auth.db.base import BaseUserStore
     from litestar_auth.types import StrategyProtocol
 
-pytestmark = pytest.mark.integration
+pytestmark = [pytest.mark.integration]
 
 
 class _RoleCLIUserManager[UP: SQLAlchemyUserModelProtocol](BaseUserManager[UP, UUID]):
@@ -564,12 +565,13 @@ def _build_root_cli() -> Group:
     return root
 
 
-def _build_config[UP: SQLAlchemyUserModelProtocol](
+def _build_config[UP: SQLAlchemyUserModelProtocol](  # noqa: PLR0913
     engine: Engine | None,
     *,
     user_model: type[UP],
     user_manager_class: type[BaseUserManager[UP, UUID]] | None = None,
-    user_manager_kwargs: dict[str, Any] | None = None,
+    extra_security_overrides: dict[str, Any] | None = None,
+    user_manager_factory: UserManagerFactory[UP, UUID] | None = None,
     session_maker: async_sessionmaker[AsyncSession] | None = None,
 ) -> LitestarAuthConfig[UP, UUID]:
     """Return a plugin config backed by a plugin-compatible SQLAlchemy session factory.
@@ -587,18 +589,41 @@ def _build_config[UP: SQLAlchemyUserModelProtocol](
             msg = "Role CLI test helpers require an engine when session_maker is omitted."
             raise AssertionError(msg)
         session_maker = _build_adapter_session_maker(engine)
-    return LitestarAuthConfig[UP, UUID](
+
+    def user_db_factory(session: AsyncSession) -> SQLAlchemyUserDatabase[UP]:
+        """Build the SQLAlchemy-backed user store for one request session.
+
+        Returns:
+            SQLAlchemy user store bound to ``session``.
+        """
+        return SQLAlchemyUserDatabase(session, user_model=user_model)
+
+    user_manager_security = UserManagerSecurity[UUID](
+        verification_token_secret="verify-secret-12345678901234567890",
+        reset_password_token_secret="reset-secret-123456789012345678901",
+        id_parser=UUID,
+        **dict(extra_security_overrides or {}),
+    )
+    if user_manager_factory is not None:
+        return LitestarAuthConfig.with_custom_manager_factory(
+            backends=[backend],
+            session_maker=session_maker,
+            user_model=user_model,
+            user_manager_factory=user_manager_factory,
+            user_db_factory=user_db_factory,
+            user_manager_security=user_manager_security,
+            include_register=False,
+            include_verify=False,
+            include_reset_password=False,
+            include_users=False,
+        )
+    return LitestarAuthConfig.with_default_manager(
         backends=[backend],
         session_maker=session_maker,
         user_model=user_model,
         user_manager_class=user_manager_class or _RoleCLIUserManager,
-        user_db_factory=lambda session: SQLAlchemyUserDatabase(session, user_model=user_model),
-        user_manager_security=UserManagerSecurity[UUID](
-            verification_token_secret="verify-secret-12345678901234567890",
-            reset_password_token_secret="reset-secret-123456789012345678901",
-            id_parser=UUID,
-        ),
-        user_manager_kwargs=dict(user_manager_kwargs or {}),
+        user_db_factory=user_db_factory,
+        user_manager_security=user_manager_security,
         include_register=False,
         include_verify=False,
         include_reset_password=False,
@@ -606,12 +631,13 @@ def _build_config[UP: SQLAlchemyUserModelProtocol](
     )
 
 
-def _build_roles_cli[UP: SQLAlchemyUserModelProtocol](
+def _build_roles_cli[UP: SQLAlchemyUserModelProtocol](  # noqa: PLR0913
     engine: Engine | None,
     *,
     user_model: type[UP],
     user_manager_class: type[BaseUserManager[UP, UUID]] | None = None,
-    user_manager_kwargs: dict[str, Any] | None = None,
+    extra_security_overrides: dict[str, Any] | None = None,
+    user_manager_factory: UserManagerFactory[UP, UUID] | None = None,
     session_maker: async_sessionmaker[AsyncSession] | None = None,
 ) -> Group:
     """Create the plugin-owned roles CLI group for one configured user model.
@@ -625,7 +651,8 @@ def _build_roles_cli[UP: SQLAlchemyUserModelProtocol](
             engine,
             user_model=user_model,
             user_manager_class=user_manager_class,
-            user_manager_kwargs=user_manager_kwargs,
+            extra_security_overrides=extra_security_overrides,
+            user_manager_factory=user_manager_factory,
             session_maker=session_maker,
         ),
     )
@@ -645,12 +672,32 @@ def _build_tracking_roles_cli[UP: SQLAlchemyUserModelProtocol](
         The CLI group plus the shared lifecycle event log.
     """
     update_events: list[_RoleLifecycleEvent] = []
+
+    def _build_tracking_user_manager(
+        *,
+        session: AsyncSession,
+        user_db: BaseUserStore[UP, UUID],
+        config: LitestarAuthConfig[UP, UUID],
+        backends: tuple[object, ...] = (),
+    ) -> BaseUserManager[UP, UUID]:
+        del session
+        security = config.user_manager_security
+        assert security is not None
+        return _TrackingRoleCLIUserManager(
+            user_db,
+            update_events=update_events,
+            password_helper=config.resolve_password_helper(),
+            security=security,
+            backends=backends,
+            login_identifier=config.login_identifier,
+            unsafe_testing=config.unsafe_testing,
+        )
+
     return (
         _build_roles_cli(
             engine,
             user_model=user_model,
-            user_manager_class=_TrackingRoleCLIUserManager,
-            user_manager_kwargs={"update_events": update_events},
+            user_manager_factory=_build_tracking_user_manager,
             session_maker=session_maker,
         ),
         update_events,

@@ -38,7 +38,7 @@ if TYPE_CHECKING:
     from litestar.types import ControllerRouterHandler
     from sqlalchemy.engine import Engine
 
-pytestmark = pytest.mark.e2e
+pytestmark = [pytest.mark.e2e]
 
 HTTP_BAD_REQUEST = 400
 HTTP_CREATED = 201
@@ -358,8 +358,8 @@ def build_app(
             verification_token_secret="verify-secret-1234567890-1234567890",
             reset_password_token_secret="reset-secret-1234567890-1234567890",
             id_parser=UUID,
+            password_helper=password_helper,
         ),
-        user_manager_kwargs={"password_helper": password_helper},
         oauth_config=configured_plugin_oauth,
         include_register=False,
         include_verify=False,

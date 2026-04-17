@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
-import keyword
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import timedelta
 from functools import partial
-from typing import TYPE_CHECKING, Any, Protocol, cast
+from importlib import import_module
+from typing import TYPE_CHECKING, Any, Protocol, cast, get_args
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -19,8 +19,12 @@ from litestar_auth._plugin.security_policy import (
 )
 from litestar_auth.db.base import BaseUserStore
 from litestar_auth.exceptions import ConfigurationError
-from litestar_auth.password import PasswordHelper
-from litestar_auth.types import LoginIdentifier, UserProtocol
+from litestar_auth.types import (
+    DbSessionDependencyKey,
+    LoginIdentifier,
+    UserProtocol,
+    _valid_python_identifier_validator,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Mapping, Sequence
@@ -37,12 +41,14 @@ if TYPE_CHECKING:
     from litestar_auth.config import OAuthProviderConfig
     from litestar_auth.exceptions import LitestarAuthError
     from litestar_auth.manager import BaseUserManager, UserManagerSecurity
+    from litestar_auth.password import PasswordHelper
     from litestar_auth.ratelimit import AuthRateLimitConfig
     from litestar_auth.totp import TotpAlgorithm, UsedTotpCodeStore
     from litestar_auth.types import StrategyProtocol, TransportProtocol
 
 type UserDatabaseFactory[UP: UserProtocol[Any], ID] = Callable[[AsyncSession], BaseUserStore[UP, ID]]
 _SESSION_FACTORY_CONTRACT = SessionFactory
+PasswordHelper = cast("Any", import_module("litestar_auth.password").PasswordHelper)
 
 DEFAULT_CONFIG_DEPENDENCY_KEY = "litestar_auth_config"
 DEFAULT_USER_MANAGER_DEPENDENCY_KEY = "litestar_auth_user_manager"
@@ -55,6 +61,15 @@ DEFAULT_DATABASE_TOKEN_BACKEND_NAME = "database"  # noqa: S105
 DEFAULT_DATABASE_TOKEN_MAX_AGE = timedelta(hours=1)
 DEFAULT_DATABASE_TOKEN_REFRESH_MAX_AGE = timedelta(days=30)
 DEFAULT_DATABASE_TOKEN_BYTES = 32
+
+
+def _current_password_helper_type() -> type[PasswordHelper]:
+    """Resolve PasswordHelper lazily so cross-test module reloads stay coherent.
+
+    Returns:
+        The current PasswordHelper type from ``litestar_auth.password``.
+    """
+    return cast("type[PasswordHelper]", import_module("litestar_auth.password").PasswordHelper)
 
 
 @dataclass(frozen=True, slots=True, eq=False)
@@ -252,14 +267,13 @@ def _resolve_plugin_managed_totp_secret_storage_policy[UP: UserProtocol[Any], ID
     if config.user_manager_factory is not None and config.user_manager_security is None:
         return None
     manager_inputs = ManagerConstructorInputs(
-        manager_kwargs=config.user_manager_kwargs,
         manager_security=config.user_manager_security,
         id_parser=config.id_parser,
     )
     return _describe_totp_secret_storage_policy(manager_inputs.effective_security.totp_secret_key or None)
 
 
-_VALID_LOGIN_IDENTIFIERS: frozenset[LoginIdentifier] = frozenset({"email", "username"})
+_VALID_LOGIN_IDENTIFIERS: frozenset[LoginIdentifier] = frozenset(get_args(LoginIdentifier.__value__))
 
 
 class ExceptionResponseHook(Protocol):
@@ -385,34 +399,17 @@ class LitestarAuthConfig[UP: UserProtocol[Any], ID]:
 
     User Manager Customization:
         Request-scoped :class:`~litestar_auth.manager.BaseUserManager` instances are built
-        either by the plugin's default constructor path or by a factory you provide. The
-        three fields ``user_manager_class``, ``user_manager_factory``, and
-        ``user_manager_kwargs`` overlap in purpose; use the table below to pick **one**
-        primary path.
-
-        **Decision table**
-
-        .. code-block:: text
-
-            +----------------------------------+----------------------------+
-            | Situation                        | Primary field              |
-            +==================================+============================+
-            | Subclass BaseUserManager; accept | user_manager_class         |
-            | the default builder kwargs       | (+ user_manager_security   |
-            | (see build_user_manager).        |   for secrets/id_parser)   |
-            +----------------------------------+----------------------------+
-            | Non-canonical __init__, extra    | user_manager_factory       |
-            | deps, or factory-owned secrets   |                            |
-            +----------------------------------+----------------------------+
-            | Minor extras for the default     | user_manager_kwargs        |
-            | builder (e.g. password_helper)   | (never secrets/id_parser)  |
-            +----------------------------------+----------------------------+
+        either by the plugin's default constructor path or by a factory you provide. Use
+        :meth:`with_default_manager` when a ``BaseUserManager`` subclass accepts the
+        canonical builder surface, including ``user_manager_security`` for secrets,
+        password helpers, validators, and ID parsing. Use
+        :meth:`with_custom_manager_factory` when the manager constructor needs custom
+        dependencies, a non-canonical signature, or caller-owned construction.
 
     Core:
         ``user_model``, ``user_manager_class``, ``backends``, ``database_token_auth``,
         ``session_maker``, ``user_db_factory``, ``user_manager_security``,
-        ``user_manager_kwargs``, ``password_validator_factory``, ``user_manager_factory``,
-        ``rate_limit_config``.
+        ``password_validator_factory``, ``user_manager_factory``, ``rate_limit_config``.
     Plugin customization hooks:
         ``exception_response_hook``, ``middleware_hook``, ``controller_hook``.
     Paths and endpoint flags:
@@ -447,10 +444,6 @@ class LitestarAuthConfig[UP: UserProtocol[Any], ID]:
     session_maker: SessionFactory | None = None
     user_db_factory: UserDatabaseFactory[UP, ID] | None = None
     user_manager_security: UserManagerSecurity[ID] | None = None
-    # Escape hatch: extra kwargs merged into the default builder's call to user_manager_class.
-    # Use for non-security extras (e.g. password_helper); never for secrets or id_parser —
-    # those belong in user_manager_security.
-    user_manager_kwargs: dict[str, Any] = field(default_factory=dict)
     password_validator_factory: PasswordValidatorFactory[UP, ID] | None = None
     # Advanced path: callable that fully constructs the manager per request. Use when the
     # constructor is not the canonical BaseUserManager surface or you need custom DI.
@@ -480,7 +473,7 @@ class LitestarAuthConfig[UP: UserProtocol[Any], ID]:
     user_read_schema: type[msgspec.Struct] | None = None
     user_create_schema: type[msgspec.Struct] | None = None
     user_update_schema: type[msgspec.Struct] | None = None
-    db_session_dependency_key: str = DEFAULT_DB_SESSION_DEPENDENCY_KEY
+    db_session_dependency_key: DbSessionDependencyKey = DEFAULT_DB_SESSION_DEPENDENCY_KEY
     db_session_dependency_provided_externally: bool = False
     login_identifier: LoginIdentifier = "email"
     _memoized_default_password_helper: PasswordHelper | None = field(
@@ -489,6 +482,272 @@ class LitestarAuthConfig[UP: UserProtocol[Any], ID]:
         repr=False,
         compare=False,
     )
+
+    @classmethod
+    def create[ConfigUP: UserProtocol[Any], ConfigID](  # noqa: PLR0913
+        cls,
+        *,
+        user_model: type[ConfigUP],
+        user_manager_class: type[BaseUserManager[ConfigUP, ConfigID]],
+        backends: Sequence[AuthenticationBackend[ConfigUP, ConfigID]] = (),
+        database_token_auth: DatabaseTokenAuthConfig | None = None,
+        session_maker: SessionFactory | None = None,
+        user_db_factory: UserDatabaseFactory[ConfigUP, ConfigID] | None = None,
+        user_manager_security: UserManagerSecurity[ConfigID] | None = None,
+        password_validator_factory: PasswordValidatorFactory[ConfigUP, ConfigID] | None = None,
+        user_manager_factory: UserManagerFactory[ConfigUP, ConfigID] | None = None,
+        rate_limit_config: AuthRateLimitConfig | None = None,
+        exception_response_hook: ExceptionResponseHook | None = None,
+        middleware_hook: MiddlewareHook | None = None,
+        controller_hook: ControllerHook | None = None,
+        auth_path: str = "/auth",
+        users_path: str = "/users",
+        include_register: bool = True,
+        include_verify: bool = True,
+        include_reset_password: bool = True,
+        include_users: bool = False,
+        include_openapi_security: bool = True,
+        enable_refresh: bool = False,
+        requires_verification: bool = False,
+        hard_delete: bool = False,
+        totp_config: TotpConfig | None = None,
+        oauth_config: OAuthConfig | None = None,
+        csrf_secret: str | None = None,
+        csrf_header_name: str = "X-CSRF-Token",
+        unsafe_testing: bool = False,
+        allow_legacy_plaintext_tokens: bool = False,
+        allow_nondurable_jwt_revocation: bool = False,
+        id_parser: Callable[[str], ConfigID] | None = None,
+        user_read_schema: type[msgspec.Struct] | None = None,
+        user_create_schema: type[msgspec.Struct] | None = None,
+        user_update_schema: type[msgspec.Struct] | None = None,
+        db_session_dependency_key: DbSessionDependencyKey = DEFAULT_DB_SESSION_DEPENDENCY_KEY,
+        db_session_dependency_provided_externally: bool = False,
+        login_identifier: LoginIdentifier = "email",
+    ) -> LitestarAuthConfig[ConfigUP, ConfigID]:
+        """Build a config while allowing type checkers to infer ``UP`` and ``ID``.
+
+        Returns:
+            A ``LitestarAuthConfig`` parameterized from ``user_model`` and ``user_manager_class``.
+        """
+        return LitestarAuthConfig(
+            user_model=user_model,
+            user_manager_class=user_manager_class,
+            backends=backends,
+            database_token_auth=database_token_auth,
+            session_maker=session_maker,
+            user_db_factory=user_db_factory,
+            user_manager_security=user_manager_security,
+            password_validator_factory=password_validator_factory,
+            user_manager_factory=user_manager_factory,
+            rate_limit_config=rate_limit_config,
+            exception_response_hook=exception_response_hook,
+            middleware_hook=middleware_hook,
+            controller_hook=controller_hook,
+            auth_path=auth_path,
+            users_path=users_path,
+            include_register=include_register,
+            include_verify=include_verify,
+            include_reset_password=include_reset_password,
+            include_users=include_users,
+            include_openapi_security=include_openapi_security,
+            enable_refresh=enable_refresh,
+            requires_verification=requires_verification,
+            hard_delete=hard_delete,
+            totp_config=totp_config,
+            oauth_config=oauth_config,
+            csrf_secret=csrf_secret,
+            csrf_header_name=csrf_header_name,
+            unsafe_testing=unsafe_testing,
+            allow_legacy_plaintext_tokens=allow_legacy_plaintext_tokens,
+            allow_nondurable_jwt_revocation=allow_nondurable_jwt_revocation,
+            id_parser=id_parser,
+            user_read_schema=user_read_schema,
+            user_create_schema=user_create_schema,
+            user_update_schema=user_update_schema,
+            db_session_dependency_key=db_session_dependency_key,
+            db_session_dependency_provided_externally=db_session_dependency_provided_externally,
+            login_identifier=login_identifier,
+        )
+
+    @classmethod
+    def with_default_manager[ConfigUP: UserProtocol[Any], ConfigID](  # noqa: PLR0913
+        cls,
+        *,
+        user_model: type[ConfigUP],
+        user_manager_class: type[BaseUserManager[ConfigUP, ConfigID]],
+        user_manager_security: UserManagerSecurity[ConfigID] | None = None,
+        session_maker: SessionFactory | None = None,
+        backends: Sequence[AuthenticationBackend[ConfigUP, ConfigID]] = (),
+        database_token_auth: DatabaseTokenAuthConfig | None = None,
+        user_db_factory: UserDatabaseFactory[ConfigUP, ConfigID] | None = None,
+        password_validator_factory: PasswordValidatorFactory[ConfigUP, ConfigID] | None = None,
+        rate_limit_config: AuthRateLimitConfig | None = None,
+        exception_response_hook: ExceptionResponseHook | None = None,
+        middleware_hook: MiddlewareHook | None = None,
+        controller_hook: ControllerHook | None = None,
+        auth_path: str = "/auth",
+        users_path: str = "/users",
+        include_register: bool = True,
+        include_verify: bool = True,
+        include_reset_password: bool = True,
+        include_users: bool = False,
+        include_openapi_security: bool = True,
+        enable_refresh: bool = False,
+        requires_verification: bool = False,
+        hard_delete: bool = False,
+        totp_config: TotpConfig | None = None,
+        oauth_config: OAuthConfig | None = None,
+        csrf_secret: str | None = None,
+        csrf_header_name: str = "X-CSRF-Token",
+        unsafe_testing: bool = False,
+        allow_legacy_plaintext_tokens: bool = False,
+        allow_nondurable_jwt_revocation: bool = False,
+        id_parser: Callable[[str], ConfigID] | None = None,
+        user_read_schema: type[msgspec.Struct] | None = None,
+        user_create_schema: type[msgspec.Struct] | None = None,
+        user_update_schema: type[msgspec.Struct] | None = None,
+        db_session_dependency_key: DbSessionDependencyKey = DEFAULT_DB_SESSION_DEPENDENCY_KEY,
+        db_session_dependency_provided_externally: bool = False,
+        login_identifier: LoginIdentifier = "email",
+    ) -> LitestarAuthConfig[ConfigUP, ConfigID]:
+        """Build a config for the plugin-owned default user-manager path.
+
+        Returns:
+            A ``LitestarAuthConfig`` with ``user_manager_factory`` left unset.
+        """
+        return cls.create(
+            user_model=user_model,
+            user_manager_class=user_manager_class,
+            backends=backends,
+            database_token_auth=database_token_auth,
+            session_maker=session_maker,
+            user_db_factory=user_db_factory,
+            user_manager_security=user_manager_security,
+            password_validator_factory=password_validator_factory,
+            user_manager_factory=None,
+            rate_limit_config=rate_limit_config,
+            exception_response_hook=exception_response_hook,
+            middleware_hook=middleware_hook,
+            controller_hook=controller_hook,
+            auth_path=auth_path,
+            users_path=users_path,
+            include_register=include_register,
+            include_verify=include_verify,
+            include_reset_password=include_reset_password,
+            include_users=include_users,
+            include_openapi_security=include_openapi_security,
+            enable_refresh=enable_refresh,
+            requires_verification=requires_verification,
+            hard_delete=hard_delete,
+            totp_config=totp_config,
+            oauth_config=oauth_config,
+            csrf_secret=csrf_secret,
+            csrf_header_name=csrf_header_name,
+            unsafe_testing=unsafe_testing,
+            allow_legacy_plaintext_tokens=allow_legacy_plaintext_tokens,
+            allow_nondurable_jwt_revocation=allow_nondurable_jwt_revocation,
+            id_parser=id_parser,
+            user_read_schema=user_read_schema,
+            user_create_schema=user_create_schema,
+            user_update_schema=user_update_schema,
+            db_session_dependency_key=db_session_dependency_key,
+            db_session_dependency_provided_externally=db_session_dependency_provided_externally,
+            login_identifier=login_identifier,
+        )
+
+    @classmethod
+    def with_custom_manager_factory[ConfigUP: UserProtocol[Any], ConfigID](  # noqa: PLR0913
+        cls,
+        *,
+        user_model: type[ConfigUP],
+        user_manager_factory: UserManagerFactory[ConfigUP, ConfigID] | None,
+        backends: Sequence[AuthenticationBackend[ConfigUP, ConfigID]] = (),
+        database_token_auth: DatabaseTokenAuthConfig | None = None,
+        session_maker: SessionFactory | None = None,
+        user_db_factory: UserDatabaseFactory[ConfigUP, ConfigID] | None = None,
+        user_manager_security: UserManagerSecurity[ConfigID] | None = None,
+        password_validator_factory: PasswordValidatorFactory[ConfigUP, ConfigID] | None = None,
+        rate_limit_config: AuthRateLimitConfig | None = None,
+        exception_response_hook: ExceptionResponseHook | None = None,
+        middleware_hook: MiddlewareHook | None = None,
+        controller_hook: ControllerHook | None = None,
+        auth_path: str = "/auth",
+        users_path: str = "/users",
+        include_register: bool = True,
+        include_verify: bool = True,
+        include_reset_password: bool = True,
+        include_users: bool = False,
+        include_openapi_security: bool = True,
+        enable_refresh: bool = False,
+        requires_verification: bool = False,
+        hard_delete: bool = False,
+        totp_config: TotpConfig | None = None,
+        oauth_config: OAuthConfig | None = None,
+        csrf_secret: str | None = None,
+        csrf_header_name: str = "X-CSRF-Token",
+        unsafe_testing: bool = False,
+        allow_legacy_plaintext_tokens: bool = False,
+        allow_nondurable_jwt_revocation: bool = False,
+        id_parser: Callable[[str], ConfigID] | None = None,
+        user_read_schema: type[msgspec.Struct] | None = None,
+        user_create_schema: type[msgspec.Struct] | None = None,
+        user_update_schema: type[msgspec.Struct] | None = None,
+        db_session_dependency_key: DbSessionDependencyKey = DEFAULT_DB_SESSION_DEPENDENCY_KEY,
+        db_session_dependency_provided_externally: bool = False,
+        login_identifier: LoginIdentifier = "email",
+    ) -> LitestarAuthConfig[ConfigUP, ConfigID]:
+        """Build a config for the caller-owned user-manager factory path.
+
+        Returns:
+            A ``LitestarAuthConfig`` with ``user_manager_class`` left unset.
+
+        Raises:
+            ConfigurationError: When ``user_manager_factory`` is ``None`` or not callable.
+        """
+        if user_manager_factory is None or not callable(user_manager_factory):
+            msg = "with_custom_manager_factory() requires a callable user_manager_factory."
+            raise ConfigurationError(msg)
+
+        return LitestarAuthConfig(
+            user_model=user_model,
+            user_manager_class=cast("type[BaseUserManager[ConfigUP, ConfigID]]", None),
+            backends=backends,
+            database_token_auth=database_token_auth,
+            session_maker=session_maker,
+            user_db_factory=user_db_factory,
+            user_manager_security=user_manager_security,
+            password_validator_factory=password_validator_factory,
+            user_manager_factory=user_manager_factory,
+            rate_limit_config=rate_limit_config,
+            exception_response_hook=exception_response_hook,
+            middleware_hook=middleware_hook,
+            controller_hook=controller_hook,
+            auth_path=auth_path,
+            users_path=users_path,
+            include_register=include_register,
+            include_verify=include_verify,
+            include_reset_password=include_reset_password,
+            include_users=include_users,
+            include_openapi_security=include_openapi_security,
+            enable_refresh=enable_refresh,
+            requires_verification=requires_verification,
+            hard_delete=hard_delete,
+            totp_config=totp_config,
+            oauth_config=oauth_config,
+            csrf_secret=csrf_secret,
+            csrf_header_name=csrf_header_name,
+            unsafe_testing=unsafe_testing,
+            allow_legacy_plaintext_tokens=allow_legacy_plaintext_tokens,
+            allow_nondurable_jwt_revocation=allow_nondurable_jwt_revocation,
+            id_parser=id_parser,
+            user_read_schema=user_read_schema,
+            user_create_schema=user_create_schema,
+            user_update_schema=user_update_schema,
+            db_session_dependency_key=db_session_dependency_key,
+            db_session_dependency_provided_externally=db_session_dependency_provided_externally,
+            login_identifier=login_identifier,
+        )
 
     def resolve_backends(self) -> Sequence[AuthenticationBackend[UP, ID]]:
         """Return the explicitly configured manual backends for this config.
@@ -568,21 +827,18 @@ class LitestarAuthConfig[UP: UserProtocol[Any], ID]:
     def resolve_password_helper(self) -> PasswordHelper:
         """Return the helper aligned with this config, memoizing default construction.
 
-        An explicit ``user_manager_kwargs['password_helper']`` always wins. When the
-        user did not provide one, the first call constructs a shared default and
-        subsequent calls return that same instance. The plugin's manager construction
-        path mirrors this resolution so the plugin and app-owned code observe a single
-        default helper without the config mutating the user-provided ``user_manager_kwargs``.
+        An explicit ``user_manager_security.password_helper`` wins. When the user did
+        not provide one, the first call constructs a shared default and subsequent
+        calls return that same instance.
 
         Returns:
-            The configured ``user_manager_kwargs['password_helper']`` when present,
-            otherwise a shared default helper memoized on the config instance.
+            The configured typed password helper when present, otherwise a shared
+            default helper memoized on the config instance.
         """
-        configured_password_helper = cast("PasswordHelper | None", self.user_manager_kwargs.get("password_helper"))
-        if configured_password_helper is not None:
-            return configured_password_helper
+        if self.user_manager_security is not None and self.user_manager_security.password_helper is not None:
+            return self.user_manager_security.password_helper
         if self._memoized_default_password_helper is None:
-            self._memoized_default_password_helper = PasswordHelper.from_defaults()
+            self._memoized_default_password_helper = _current_password_helper_type().from_defaults()
         return self._memoized_default_password_helper
 
     def get_default_password_helper(self) -> PasswordHelper | None:
@@ -590,7 +846,7 @@ class LitestarAuthConfig[UP: UserProtocol[Any], ID]:
 
         This accessor lets the plugin's manager construction path observe the
         same default helper that app-owned code received from
-        :meth:`resolve_password_helper`, without touching ``user_manager_kwargs``.
+        :meth:`resolve_password_helper`.
 
         Returns:
             The shared default helper, or ``None`` when
@@ -602,22 +858,29 @@ class LitestarAuthConfig[UP: UserProtocol[Any], ID]:
         """Validate configuration fields and build defaults that depend on other fields.
 
         Raises:
-            ConfigurationError: When ``login_identifier`` is not ``'email'`` or ``'username'``.
+            ConfigurationError: When manager construction paths conflict or ``login_identifier`` is outside
+                :data:`LoginIdentifier`.
             ValueError: When ``db_session_dependency_key`` is not a valid Python identifier or is a
                 reserved keyword, or when ``backends`` and ``database_token_auth`` are both configured.
         """
+        if self.user_manager_class is not None and self.user_manager_factory is not None:
+            msg = (
+                "user_manager_class and user_manager_factory are mutually exclusive. "
+                "Use LitestarAuthConfig.with_default_manager() for the default manager path or "
+                "LitestarAuthConfig.with_custom_manager_factory() for a custom factory."
+            )
+            raise ConfigurationError(msg)
         if self.user_manager_security is not None and self.id_parser is None:
             self.id_parser = self.user_manager_security.id_parser
         self._validate_backend_configuration()
+        # Static typing covers ordinary callers, but dataclass construction still receives runtime values.
         if self.login_identifier not in _VALID_LOGIN_IDENTIFIERS:
             msg = f"Invalid login_identifier {self.login_identifier!r}. Expected 'email' or 'username'."
             raise ConfigurationError(msg)
-        if not self.db_session_dependency_key.isidentifier() or keyword.iskeyword(self.db_session_dependency_key):
-            msg = (
-                "db_session_dependency_key must be a valid Python identifier because Litestar matches dependency "
-                f"keys to callable parameter names, got {self.db_session_dependency_key!r}"
-            )
-            raise ValueError(msg)
+        try:
+            _valid_python_identifier_validator(self.db_session_dependency_key)
+        except ValueError as exc:
+            raise ValueError(*exc.args) from None
 
     def _validate_backend_configuration(self) -> None:
         """Reject invalid mixed preset/manual backend configuration.
@@ -666,7 +929,6 @@ _USER_MANAGER_BUILDER_EXPORTS: frozenset[str] = frozenset(
         "UserManagerFactory",
         "_DefaultUserManagerBuilderContract",
         "_build_default_user_manager_contract",
-        "_build_default_user_manager_kwargs",
         "_build_default_user_manager_validation_kwargs",
         "build_user_manager",
         "default_password_validator_factory",

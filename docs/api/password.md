@@ -12,9 +12,8 @@ your application intentionally diverges.
 For plugin-managed apps that also hash or verify passwords in domain services, CLI tasks, or data
 migrations, call `config.resolve_password_helper()` once after constructing
 `LitestarAuthConfig(...)`. That method returns the explicit
-`user_manager_kwargs["password_helper"]` when you already supplied one; otherwise it memoizes
-`PasswordHelper.from_defaults()` on the config (without mutating the user-supplied
-`user_manager_kwargs`) and the plugin injects the same memoized helper into every request-scoped
-manager so the plugin and app-owned code reuse the same instance.
+`user_manager_security.password_helper` when you already supplied one; otherwise it memoizes
+`PasswordHelper.from_defaults()` on the config, and the plugin injects that same memoized helper
+into every request-scoped manager so the plugin and app-owned code reuse the same instance.
 
 ::: litestar_auth.password

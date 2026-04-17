@@ -71,13 +71,16 @@ class UserManagerSecurity[ID]:
 
     Production deployments should keep verification, reset-password, and TOTP
     secret roles separate even though distinct JWT audiences already scope each
-    token flow independently.
+    token flow independently. Password helper and validator fields belong in
+    this security bundle when a deployment needs to override those defaults.
     """
 
     verification_token_secret: str | None = dataclasses.field(default=None, repr=False)
     reset_password_token_secret: str | None = dataclasses.field(default=None, repr=False)
     totp_secret_key: str | None = dataclasses.field(default=None, repr=False)
     id_parser: Callable[[str], ID] | None = dataclasses.field(default=None, repr=False)
+    password_helper: PasswordHelper | None = dataclasses.field(default=None, repr=False)
+    password_validator: Callable[[str], None] | None = dataclasses.field(default=None, repr=False)
 
     def __repr__(self) -> str:
         """Return a repr that masks configured secret material."""
@@ -86,7 +89,9 @@ class UserManagerSecurity[ID]:
             f"verification_token_secret={_mask_optional_secret(self.verification_token_secret)!r}, "
             f"reset_password_token_secret={_mask_optional_secret(self.reset_password_token_secret)!r}, "
             f"totp_secret_key={_mask_optional_secret(self.totp_secret_key)!r}, "
-            f"id_parser={self.id_parser!r})"
+            f"id_parser={self.id_parser!r}, "
+            f"password_helper={self.password_helper!r}, "
+            f"password_validator={self.password_validator!r})"
         )
 
     __str__ = __repr__

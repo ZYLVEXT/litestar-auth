@@ -18,7 +18,8 @@ The bundled `User` model (and related token/OAuth tables if you use those featur
 
 ## 3. Application code
 
-The following matches the pattern used in the test suite: build a `LitestarAuthConfig`, pass it to `LitestarAuth`, and register the plugin on `Litestar`.
+The following matches the recommended plugin path: build a `LitestarAuthConfig` with
+`with_default_manager()`, pass it to `LitestarAuth`, and register the plugin on `Litestar`.
 
 ```python
 --8<-- "docs/snippets/quickstart_plugin.py"

@@ -34,7 +34,7 @@ if TYPE_CHECKING:
 
     from litestar_auth.db.base import BaseUserStore
 
-pytestmark = pytest.mark.integration
+pytestmark = [pytest.mark.integration]
 
 HTTP_ACCEPTED = 202
 HTTP_BAD_REQUEST = 400
@@ -301,8 +301,8 @@ def build_app() -> tuple[
             verification_token_secret=verify_secret,
             reset_password_token_secret=reset_secret,
             id_parser=UUID,
+            password_helper=password_helper,
         ),
-        user_manager_kwargs={"password_helper": password_helper},
         include_users=True,
     )
     plugin = LitestarAuth(config)
@@ -310,8 +310,8 @@ def build_app() -> tuple[
     return app, user_db, primary_strategy, secondary_strategy
 
 
-def build_app_with_user_manager_kwargs(
-    overrides: dict[str, Any],
+def build_app_with_security_overrides(
+    extra_security_overrides: dict[str, Any],
 ) -> tuple[Litestar, InMemoryUserDatabase, InMemoryTokenStrategy, InMemoryTokenStrategy]:
     """Create an app configured through the auth plugin with manager overrides.
 
@@ -359,8 +359,9 @@ def build_app_with_user_manager_kwargs(
             verification_token_secret=verify_secret,
             reset_password_token_secret=reset_secret,
             id_parser=UUID,
+            password_helper=password_helper,
+            **extra_security_overrides,
         ),
-        user_manager_kwargs={"password_helper": password_helper, **overrides},
         include_users=True,
     )
     plugin = LitestarAuth(config)
@@ -439,8 +440,8 @@ def build_advanced_app() -> tuple[
             reset_password_token_secret="reset-secret-123456789012345678901",
             totp_secret_key=Fernet.generate_key().decode(),
             id_parser=UUID,
+            password_helper=password_helper,
         ),
-        user_manager_kwargs={"password_helper": password_helper},
         include_users=True,
         totp_config=TotpConfig(
             totp_pending_secret="plugin-totp-pending-secret-thirty-two!",
@@ -480,7 +481,7 @@ def test_plugin_uses_dataclass_config_and_init_plugin_protocol() -> None:
         session_maker=cast("Any", DummySessionMaker()),
         user_model=ExampleUser,
         user_manager_class=PluginUserManager,
-        user_manager_kwargs={"password_helper": PasswordHelper()},
+        user_manager_security=UserManagerSecurity[UUID](password_helper=PasswordHelper()),
     )
 
     assert is_dataclass(invalid_config)
@@ -502,7 +503,7 @@ def test_plugin_uses_dataclass_config_and_init_plugin_protocol() -> None:
         user_model=ExampleUser,
         user_manager_class=PluginUserManager,
         user_db_factory=lambda _session: InMemoryUserDatabase([]),
-        user_manager_kwargs={"password_helper": PasswordHelper()},
+        user_manager_security=UserManagerSecurity[UUID](password_helper=PasswordHelper()),
     )
     assert isinstance(LitestarAuth(valid_config), InitPlugin)
 
@@ -623,7 +624,7 @@ async def test_plugin_enforces_default_minimum_password_length() -> None:
 
 async def test_plugin_allows_overriding_minimum_password_length() -> None:
     """Applications can override the default password validator via config."""
-    app, user_db, primary_strategy, secondary_strategy = build_app_with_user_manager_kwargs(
+    app, user_db, primary_strategy, secondary_strategy = build_app_with_security_overrides(
         {"password_validator": partial(require_password_length, minimum_length=8)},
     )
     async with AsyncTestClient(app=app) as client:

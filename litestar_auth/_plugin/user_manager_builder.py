@@ -9,7 +9,6 @@ from typing import TYPE_CHECKING, Any
 from litestar_auth._manager.construction import ManagerConstructorInputs
 from litestar_auth._plugin.config import UserManagerFactory  # noqa: TC001
 from litestar_auth.config import DEFAULT_MINIMUM_PASSWORD_LENGTH, require_password_length
-from litestar_auth.exceptions import ConfigurationError
 from litestar_auth.types import UserProtocol
 
 if TYPE_CHECKING:
@@ -47,17 +46,6 @@ def default_password_validator_factory[UP: UserProtocol[Any], ID](
     return partial(require_password_length, minimum_length=DEFAULT_MINIMUM_PASSWORD_LENGTH)
 
 
-def _format_default_user_manager_managed_security_error(managed_security_keys: tuple[str, ...]) -> str:
-    """Return the shared diagnostic for legacy plugin-managed security kwargs."""
-    invalid_keys = ", ".join(managed_security_keys)
-    return (
-        "The default plugin user-manager builder only accepts verification/reset/TOTP "
-        "secrets and id_parser through user_manager_security. "
-        "user_manager_security is the canonical plugin-managed path for manager secrets and id_parser. "
-        f"Remove these keys from user_manager_kwargs: {invalid_keys}. {_DEFAULT_USER_MANAGER_FACTORY_GUIDANCE}"
-    )
-
-
 @dataclass(frozen=True, slots=True)
 class _DefaultUserManagerBuilderContract[UP: UserProtocol[Any], ID]:
     """Shared internal contract for plugin-owned default user-manager construction."""
@@ -68,18 +56,9 @@ class _DefaultUserManagerBuilderContract[UP: UserProtocol[Any], ID]:
     backends: tuple[object, ...] = ()
 
     @property
-    def effective_manager_kwargs(self) -> dict[str, Any]:
-        """Return manager kwargs with the default password helper materialized."""
-        effective_manager_kwargs = dict(self.config.user_manager_kwargs)
-        if "password_helper" not in effective_manager_kwargs:
-            effective_manager_kwargs["password_helper"] = self.password_helper
-        return effective_manager_kwargs
-
-    @property
     def manager_inputs(self) -> ManagerConstructorInputs[ID]:
         """Return the normalized constructor inputs for the default builder."""
         return ManagerConstructorInputs(
-            manager_kwargs=self.effective_manager_kwargs,
             manager_security=self.config.user_manager_security,
             password_validator=self.password_validator,
             backends=self.backends,
@@ -92,22 +71,13 @@ class _DefaultUserManagerBuilderContract[UP: UserProtocol[Any], ID]:
 
         Returns:
             The concrete constructor kwargs for the requested default-builder surface.
-
-        Raises:
-            ConfigurationError: If plugin-managed secrets or ``id_parser`` are supplied
-                through ``user_manager_kwargs`` instead of ``user_manager_security``.
         """
         manager_inputs = self.manager_inputs
-        if manager_inputs.managed_security_keys:
-            msg = _format_default_user_manager_managed_security_error(manager_inputs.managed_security_keys)
-            raise ConfigurationError(msg)
-
-        manager_kwargs = manager_inputs.build_kwargs()
-        if "password_validator" not in self.effective_manager_kwargs:
-            manager_kwargs["password_validator"] = self.password_validator
-        if "unsafe_testing" not in manager_kwargs:
-            manager_kwargs["unsafe_testing"] = self.config.unsafe_testing
-        return manager_kwargs
+        constructor_kwargs = manager_inputs.build_kwargs()
+        constructor_kwargs["password_helper"] = self.password_helper
+        constructor_kwargs["password_validator"] = self.password_validator
+        constructor_kwargs["unsafe_testing"] = self.config.unsafe_testing
+        return constructor_kwargs
 
     @staticmethod
     def build_constructor_mismatch_message(manager_name: str, exc: TypeError) -> str:
@@ -137,25 +107,6 @@ def _build_default_user_manager_contract[UP: UserProtocol[Any], ID](
     )
 
 
-def _build_default_user_manager_kwargs[UP: UserProtocol[Any], ID](
-    config: LitestarAuthConfig[UP, ID],
-    *,
-    backends: tuple[object, ...] = (),
-) -> dict[str, Any]:
-    """Materialize the exact kwargs used by the runtime default manager builder.
-
-    Returns:
-        The concrete constructor kwargs that :func:`build_user_manager` passes to
-        ``user_manager_class(...)``.
-    """
-    return _build_default_user_manager_contract(
-        config,
-        password_helper=config.resolve_password_helper(),
-        password_validator=resolve_password_validator(config),
-        backends=backends,
-    ).build_kwargs()
-
-
 def _build_default_user_manager_validation_kwargs[UP: UserProtocol[Any], ID](
     config: LitestarAuthConfig[UP, ID],
     *,
@@ -163,9 +114,7 @@ def _build_default_user_manager_validation_kwargs[UP: UserProtocol[Any], ID](
 ) -> dict[str, Any]:
     """Materialize constructor-shape kwargs without executing runtime validator factories.
 
-    Validation only needs the keyword surface, not the runtime validator object. The
-    default builder still reserves the ``password_validator`` slot when the caller did
-    not explicitly own it through ``user_manager_kwargs``.
+    Validation only needs the keyword surface, not the runtime validator object.
 
     Returns:
         Constructor kwargs matching the startup validation contract for the default
@@ -193,8 +142,7 @@ def build_user_manager[UP: UserProtocol[Any], ID](
             for custom ``user_manager_factory`` symmetry with the plugin).
         user_db: User persistence adapter for this session.
         config: Plugin configuration.
-        backends: Session-bound authentication backends (overrides any ``backends`` key
-            in ``user_manager_kwargs``).
+        backends: Session-bound authentication backends for this manager instance.
 
     Returns:
         A request-scoped user manager instance built from the plugin config. When
@@ -206,8 +154,13 @@ def build_user_manager[UP: UserProtocol[Any], ID](
 
     """
     del session
-    manager_kwargs = _build_default_user_manager_kwargs(config, backends=backends)
-    return config.user_manager_class(user_db, **manager_kwargs)
+    constructor_kwargs = _build_default_user_manager_contract(
+        config,
+        password_helper=config.resolve_password_helper(),
+        password_validator=resolve_password_validator(config),
+        backends=backends,
+    ).build_kwargs()
+    return config.user_manager_class(user_db, **constructor_kwargs)
 
 
 def resolve_password_validator[UP: UserProtocol[Any], ID](
@@ -216,13 +169,9 @@ def resolve_password_validator[UP: UserProtocol[Any], ID](
     """Resolve the password validator requested by plugin configuration.
 
     Returns:
-        The explicitly configured password validator when present, otherwise the
+        The configured password-validator factory output when present, otherwise the
         plugin-owned default validator for the fixed default builder contract.
     """
-    manager_inputs = ManagerConstructorInputs(manager_kwargs=config.user_manager_kwargs)
-    explicit_validator = manager_inputs.explicit_password_validator
-    if explicit_validator is not None:
-        return explicit_validator
     if config.password_validator_factory is not None:
         return config.password_validator_factory(config)
     return default_password_validator_factory(config)

@@ -29,6 +29,7 @@ Exact JSON layout follows your Litestar exception handler configuration.
 | `LOGIN_USER_INACTIVE` | 403 | Account disabled. |
 | `LOGIN_USER_NOT_VERIFIED` | 403 | Verification required (`requires_verification` / flow). |
 | `AUTHORIZATION_DENIED` | 403 | Guard denied access. |
+| `INSUFFICIENT_ROLES` | 403 | Role-based guard denial with structured missing-role context. |
 | `RESET_PASSWORD_BAD_TOKEN` | 400 | Reset token invalid/expired. |
 | `RESET_PASSWORD_INVALID_PASSWORD` | 400 | New password rejected. |
 | `VERIFY_USER_BAD_TOKEN` | 400 | Verification token invalid. |

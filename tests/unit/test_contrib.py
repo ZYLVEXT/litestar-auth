@@ -198,7 +198,6 @@ async def test_contrib_redis_preset_builds_shared_client_auth_components(
 
     config = preset.build_rate_limit_config(
         disabled=AUTH_RATE_LIMIT_VERIFICATION_SLOTS,
-        namespace_style="snake_case",
         identity_fields=("username", "email"),
         trusted_headers=("X-Real-IP",),
     )

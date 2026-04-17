@@ -53,7 +53,7 @@ if TYPE_CHECKING:
 
     from litestar_auth.manager import BaseUserManager
 
-pytestmark = pytest.mark.integration
+pytestmark = [pytest.mark.integration]
 HTTP_OK = 200
 HTTP_CREATED = 201
 HTTP_NOT_FOUND = 404
@@ -101,7 +101,6 @@ def _minimal_litestar_auth_config(
             reset_password_token_secret="reset-secret-123456789012345678901",
             id_parser=UUID,
         ),
-        user_manager_kwargs={},
         include_users=False,
         totp_config=None,
     )
@@ -175,7 +174,7 @@ def test_validate_config_include_users_requires_list_users() -> None:
         user_model=ExampleUser,
         user_manager_class=cast("type[BaseUserManager[ExampleUser, UUID]]", _UserManagerWithoutListUsers),
         user_db_factory=lambda _session: user_db,
-        user_manager_kwargs={},
+        user_manager_security=UserManagerSecurity[UUID](),
         include_users=True,
     )
 
@@ -221,10 +220,8 @@ async def test_plugin_propagates_login_identifier_username_to_auth_login() -> No
             verification_token_secret="verify-secret-12345678901234567890",
             reset_password_token_secret="reset-secret-123456789012345678901",
             id_parser=UUID,
+            password_helper=password_helper,
         ),
-        user_manager_kwargs={
-            "password_helper": password_helper,
-        },
         include_register=False,
         include_verify=False,
         include_reset_password=False,
@@ -562,10 +559,8 @@ async def test_plugin_respects_public_mount_paths_and_dependency_keys() -> None:
             verification_token_secret="verify-secret-12345678901234567890",
             reset_password_token_secret="reset-secret-123456789012345678901",
             id_parser=UUID,
+            password_helper=password_helper,
         ),
-        user_manager_kwargs={
-            "password_helper": password_helper,
-        },
         auth_path="/api/account",
         users_path="/api/members",
         include_users=True,

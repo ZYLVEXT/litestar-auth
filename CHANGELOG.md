@@ -1,3 +1,197 @@
+## Unreleased
+
+### Added
+
+- **`LitestarAuthConfig.with_default_manager()` / `with_custom_manager_factory()` factory
+  classmethods** — two named construction paths replace the previous "set one of several fields
+  and hope the right branch fires" layout on `LitestarAuthConfig`. `with_default_manager(...)` is
+  the canonical entrypoint for apps that use the bundled `BaseUserManager`-style constructor and
+  wires `user_manager_class`, `user_manager_security`, and `session_maker` through one typed
+  signature that guarantees `user_manager_factory=None` on the returned config.
+  `with_custom_manager_factory(...)` is the explicit escape hatch for non-canonical constructors;
+  it validates the factory is callable at build time, guarantees `user_manager_class=None` on the
+  returned config, and raises `ConfigurationError` when the factory is `None` or not callable.
+  Both factories delegate to `__post_init__` so all existing validation (login identifier,
+  dependency key, backend inventory) still runs; see `docs/migration.md` for before/after examples.
+- **`UserManagerSecurity.password_helper` and `UserManagerSecurity.password_validator` fields** —
+  the canonical security bundle now carries the shared password helper and validator directly
+  instead of requiring callers to thread them through `user_manager_kwargs`.
+  `LitestarAuthConfig.resolve_password_helper()` prefers the typed bundle before falling back to
+  the legacy kwargs, and direct helper overrides on the config continue to take precedence.
+- **`ErrorCode.INSUFFICIENT_ROLES` and `InsufficientRolesError`** — role-membership failures now
+  raise a dedicated `InsufficientRolesError(required_roles=..., user_roles=..., require_all=...)`
+  with the `INSUFFICIENT_ROLES` machine-readable code, instead of reusing the generic
+  authorization-error shape with a static detail string. The plugin's HTTP 403 handler serializes
+  the three context fields into the JSON body so API clients and operators can reconstruct which
+  roles were required and which the principal actually had without parsing prose.
+- **Operational context on `OAuthAccountAlreadyLinkedError`, `UserAlreadyExistsError`, and
+  `InvalidPasswordError`** — `OAuthAccountAlreadyLinkedError` now carries
+  `provider`, `account_id`, and `existing_user_id`; `UserAlreadyExistsError` carries
+  `identifier_type` (`"email"` / `"username"`) and `identifier_value`; `InvalidPasswordError`
+  carries optional `user_id`. Raise sites in `SQLAlchemyUserDatabase.upsert_oauth_account()`,
+  `BaseUserManager` create/update paths, and password-policy enforcement are updated to pass the
+  new context. Empty-string and whitespace context values are rejected at construction time via
+  shared validators, so the invariants are checked once rather than at every raise site.
+- **Split OAuth email-verification client protocols and `make_async_email_verification_client()`
+  helper** — `OAuthEmailVerificationAsyncClientProtocol` (async-only, runtime-checkable) and
+  `OAuthEmailVerificationSyncClientProtocol` (sync-only) replace the previous
+  `bool | Awaitable[bool]` union as the preferred typing contract.
+  `make_async_email_verification_client(sync_client)` wraps a sync implementation onto the async
+  protocol via `asyncio.to_thread()`, giving callers one documented migration path instead of
+  relying on the adapter's legacy `inspect.isawaitable()` dispatch. Both protocols and the helper
+  are re-exported from `litestar_auth.oauth`.
+- **`LitestarAuthConfig.create()` classmethod with type inference** — a method-local generic
+  signature `create[ConfigUP: UserProtocol[Any], ConfigID](user_model=..., user_manager_class=...)
+  -> LitestarAuthConfig[ConfigUP, ConfigID]` lets callers construct a fully typed config without
+  repeating the `LitestarAuthConfig[User, UUID](...)` explicit parameterization. Existing direct
+  construction continues to work.
+- **`UserProtocolStrict`, `UserManagerExtraKwargs`, and `DbSessionDependencyKey` typing surfaces**
+  — `UserProtocolStrict[ID]` is the static-only variant of `UserProtocol[ID]` for consumers who
+  want nominal-style checking without `@runtime_checkable` overhead; `UserManagerExtraKwargs` is a
+  `TypedDict(total=False)` describing the legacy `user_manager_kwargs` contents;
+  `DbSessionDependencyKey = Annotated[str, _valid_python_identifier_validator]` promotes the
+  "must be a valid non-keyword Python identifier" rule from `__post_init__` prose into the type
+  system. `LoginIdentifier` is now the single source of truth for the accepted values via
+  `get_args(LoginIdentifier.__value__)`.
+- **`litestar_auth/py.typed` marker** — the package now ships a PEP 561 marker and
+  `pyproject.toml` declares `artifacts = ["litestar_auth/py.typed"]` with `zip-safe = false`, so
+  downstream type checkers pick up the library's inline annotations from installed wheels.
+- **`AuthRateLimitSlot` StrEnum** — `LOGIN`, `REFRESH`, `REGISTER`, `FORGOT_PASSWORD`,
+  `RESET_PASSWORD`, `TOTP_ENABLE`, `TOTP_CONFIRM_ENABLE`, `TOTP_VERIFY`, `TOTP_DISABLE`,
+  `VERIFY_TOKEN`, and `REQUEST_VERIFY_TOKEN` are now an IDE-autocompletable StrEnum exported from
+  `litestar_auth.ratelimit`. `endpoint_overrides`, `scope_overrides`, and `namespace_overrides`
+  now type their keys as `Mapping[AuthRateLimitSlot, ...]`; the legacy
+  `AuthRateLimitEndpointSlot` Literal alias remains for backward compatibility because the
+  StrEnum values are str-equivalent at runtime.
+- **`AuthRateLimitConfig.strict()` / `.lenient()` / `.disabled()` preset factories** — three
+  named classmethods replace the "copy a working config from the docs" pattern. `strict(backend)`
+  wires the `LOGIN`, `REGISTER`, and `TOTP_VERIFY` slots at tightened budgets; `lenient(backend)`
+  keeps `LOGIN` / `REFRESH` / `REGISTER` at the shared-backend default while cloning the
+  sensitive slots with a 5-attempt cap; `disabled()` returns an `AuthRateLimitConfig()` with all
+  slots `None` for local development and integration tests.
+- **Generic `has_any_role[RoleNameT: str](...)` and `has_all_roles[RoleNameT: str](...)` role
+  guards** — the two role-guard factories now use Python 3.12 generic syntax, so `Literal` and
+  `StrEnum` role registries flow through to the returned guard's type without erasure. Empty
+  role collections, whitespace-only role names, and no-argument calls are rejected with
+  `ValueError` at construction time instead of failing opaquely at first request.
+
+### Changed
+
+- **Role-guard denial now raises `InsufficientRolesError` instead of a generic
+  `AuthorizationError`** — **Breaking for clients that matched on the previous detail string.**
+  Both the `has_any_role` and `has_all_roles` branches raise `InsufficientRolesError` with
+  `required_roles`, `user_roles`, and `require_all` populated, and the plugin HTTP 403 handler
+  emits the three context fields as top-level JSON keys alongside `detail` and `code`. Clients
+  that previously matched on `detail == "..."` should migrate to the stable
+  `code == "INSUFFICIENT_ROLES"` field (or the structured context fields) — see
+  `docs/exceptions.md`.
+- **`LitestarAuthError.code` is now a required attribute** — **Breaking for custom subclasses
+  that omitted `default_code`.** `LitestarAuthError.__init__` now rejects `code=None` and all
+  bundled subclasses declare `default_code`; custom exceptions that inherited from
+  `LitestarAuthError` without setting `default_code` must add one, or pass `code=` explicitly at
+  every raise site.
+- **`UP` TypeVar bound narrowed from `UserProtocol[Any]` to `UserProtocol`** — **Typing-only
+  breaking change.** Consumer code that annotated generic helpers with
+  `TypeVar("T", bound=UserProtocol[Any])` should switch to `bound=UserProtocol` to match the
+  library's new bound; runtime behavior is unchanged. The narrowed bound preserves the `ID`
+  parameter so generic inference across `LitestarAuthConfig[UP, ID]` now flows correctly without
+  collapsing to `Any`.
+- **Rate-limit precedence chain simplified to `backend → group_backends → endpoint_overrides`** —
+  **Breaking for callers that relied on the previous five-level chain.** `scope_overrides` and
+  `namespace_overrides` still accept values, but now emit `DeprecationWarning`s and are applied
+  as shims before `endpoint_overrides`. Consolidate any custom per-slot limits into
+  `endpoint_overrides` keyed by `AuthRateLimitSlot` values — see `docs/migration.md`.
+- **`LitestarAuthConfig.__post_init__` rejects conflicting manager configuration** — **Breaking
+  for configs that set both `user_manager_factory` and `user_manager_class` simultaneously.**
+  The construction paths are now mutually exclusive and the error message points at
+  `with_default_manager()` / `with_custom_manager_factory()` as the two supported entrypoints.
+- **OAuth email-verification dispatch is a clean single-path async call** — the adapter's hot
+  path now uses `inspect.iscoroutinefunction()` on the client's `get_email_verified` attribute
+  and awaits the result directly, instead of routing every call through the
+  `bool | Awaitable[bool]` union handler. Legacy clients implementing the deprecated union
+  protocol continue to work via a scoped fallback that emits a `DeprecationWarning` on first use.
+
+### Removed
+
+- **Legacy manager kwargs surface removed** — Migration: `LitestarAuthConfig.user_manager_kwargs`
+  and the `user_manager_kwargs=` parameter on `LitestarAuthConfig.create()`,
+  `LitestarAuthConfig.with_default_manager()`, and
+  `LitestarAuthConfig.with_custom_manager_factory()` are gone. Use
+  `UserManagerSecurity.password_helper` and `UserManagerSecurity.password_validator` directly.
+- **Legacy OAuth email-verification union protocol removed** —
+  `OAuthEmailVerificationClientProtocol` and its supporting adapter helpers for
+  `bool | Awaitable[bool]` dispatch are gone. Use
+  `OAuthEmailVerificationAsyncClientProtocol` directly, or wrap sync implementations with
+  `make_async_email_verification_client()`.
+- **Legacy rate-limit compatibility parameters removed** —
+  `AuthRateLimitConfig.from_shared_backend()` no longer accepts `namespace_style`,
+  `scope_overrides`, or `namespace_overrides`; `AuthRateLimitNamespaceStyle` is removed; and
+  `RedisAuthPreset.build_rate_limit_config()` no longer accepts those same three parameters.
+  Use `endpoint_overrides` keyed by `AuthRateLimitSlot`.
+
+### Internal
+
+- **Shared context validators on `LitestarAuthError`** — `_require_non_empty_string()`,
+  `_require_present_context()`, and `_require_non_empty_role_names()` now enforce non-empty /
+  non-whitespace invariants for the new exception context fields at construction time, so
+  violations fail loudly at the raise site rather than surfacing as blank JSON values downstream.
+- **`UserManagerSecurity` now carries `password_helper` / `password_validator` directly** — the
+  plugin's manager construction path reads those fields from the security bundle when the legacy
+  `user_manager_kwargs` entries are absent, so the "canonical bundle" remains the single
+  authoritative source for security-adjacent wiring.
+
+### Migration
+
+- **Switch to the named `LitestarAuthConfig` factory classmethods.** Replace
+  `LitestarAuthConfig(user_manager_class=..., user_manager_kwargs={"password_helper": ...})`
+  with `LitestarAuthConfig.with_default_manager(user_manager_class=...,
+  user_manager_security=UserManagerSecurity(password_helper=..., password_validator=...))`.
+  For non-canonical constructors, use
+  `LitestarAuthConfig.with_custom_manager_factory(user_manager_factory=my_factory, ...)`.
+- **Move `password_helper` / `password_validator` out of `user_manager_kwargs`.** Pass them on
+  `UserManagerSecurity(...)` instead; `user_manager_kwargs` usage emits a `DeprecationWarning`
+  that points at the replacement fields.
+- **Manager security migration snippet.**
+  Before: `LitestarAuthConfig.create(..., user_manager_kwargs={"password_helper": helper,
+  "password_validator": validator})`
+  After: `LitestarAuthConfig.create(...,
+  user_manager_security=UserManagerSecurity(password_helper=helper, password_validator=validator))`
+- **Match on `code == "INSUFFICIENT_ROLES"` (or on the structured context fields) instead of
+  previous role-guard detail strings.** The JSON 403 response now carries `required_roles`,
+  `user_roles`, and `require_all` alongside `detail` and `code`.
+- **Add `default_code` to any custom `LitestarAuthError` subclass** that previously inherited
+  the attribute-less default. `LitestarAuthError.__init__(code=None, ...)` now raises.
+- **Narrow `bound=UserProtocol[Any]` annotations in consumer code to `bound=UserProtocol`.**
+  The `ID` parameter is preserved by the narrower bound, so generic inference now flows without
+  `Any`-collapsing.
+- **Migrate OAuth email-verification clients to `OAuthEmailVerificationAsyncClientProtocol`.**
+  For pure-sync implementations, wrap with
+  `make_async_email_verification_client(sync_client)`; for mixed sync/async clients, implement
+  the async protocol directly. The legacy union protocol continues to work for one minor
+  release with a `DeprecationWarning`.
+- **OAuth email-verification migration snippet.**
+  Before: `client: OAuthEmailVerificationClientProtocol = LegacyClient()`
+  After: `client: OAuthEmailVerificationAsyncClientProtocol =
+  make_async_email_verification_client(LegacyClient())`
+- **Replace `AuthRateLimitConfig` ad hoc wiring with presets.** Use
+  `AuthRateLimitConfig.strict(backend)`, `.lenient(backend)`, or `.disabled()` for the common
+  cases; use `AuthRateLimitConfig.from_shared_backend(backend, endpoint_overrides={
+  AuthRateLimitSlot.LOGIN: ..., ...})` for custom per-slot limits. Move any `scope_overrides` /
+  `namespace_overrides` / `namespace_style` configuration into `endpoint_overrides` keyed by
+  `AuthRateLimitSlot` values before the deprecated fields are removed.
+- **Rate-limit override migration snippet.**
+  Before: `AuthRateLimitConfig.from_shared_backend(backend, namespace_style="route",
+  scope_overrides={"login": "strict"}, namespace_overrides={"login": "auth/login"})`
+  After: `AuthRateLimitConfig.from_shared_backend(backend, endpoint_overrides={
+  AuthRateLimitSlot.LOGIN: EndpointRateLimit(backend=backend, scope="strict",
+  namespace="auth/login")})`
+- **Use `LitestarAuthConfig.create(...)` to get automatic generic inference** — the classmethod
+  returns `LitestarAuthConfig[ConfigUP, ConfigID]` without needing
+  `LitestarAuthConfig[MyUser, UUID](...)` explicit parameterization.
+- **Annotate `db_session_dependency_key` with the exported `DbSessionDependencyKey` alias** when
+  propagating the value through app-owned code; the `Annotated` validator documents the
+  "valid non-keyword Python identifier" rule at the type level.
+
 ## 1.8.0 (2026-04-14)
 
 ### Added

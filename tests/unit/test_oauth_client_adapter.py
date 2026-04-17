@@ -2,7 +2,11 @@
 
 from __future__ import annotations
 
+import asyncio
 import importlib
+import inspect
+import threading
+import time
 from types import SimpleNamespace
 from typing import cast
 from unittest.mock import AsyncMock
@@ -36,12 +40,230 @@ def test_oauth_client_adapter_exposes_typed_client_contract_annotation() -> None
     assert client_adapter_module.OAuthClientAdapter.__init__.__annotations__["oauth_client"] == "OAuthClientProtocol"
 
 
+def test_async_email_verification_protocol_exposes_async_bool_contract() -> None:
+    """The new verification protocol is explicitly async and bool-returning."""
+    method = client_adapter_module.OAuthEmailVerificationAsyncClientProtocol.get_email_verified
+
+    assert inspect.iscoroutinefunction(method)
+    assert method.__annotations__ == {"access_token": "str", "return": "bool"}
+
+
+def test_async_email_verification_protocol_accepts_runtime_instance_check() -> None:
+    """Async verification clients satisfy the runtime-checkable protocol."""
+
+    class _AsyncEmailVerificationClient:
+        async def get_email_verified(self, access_token: str) -> bool:
+            return access_token == "verified-token"
+
+    assert isinstance(
+        _AsyncEmailVerificationClient(),
+        client_adapter_module.OAuthEmailVerificationAsyncClientProtocol,
+    )
+
+
+async def test_async_email_verification_protocol_client_is_invoked_with_access_token() -> None:
+    """The adapter invokes async verification clients with the provider access token."""
+
+    class _AsyncEmailVerificationClient:
+        def __init__(self) -> None:
+            self.seen_access_tokens: list[str] = []
+
+        async def get_email_verified(self, access_token: str) -> bool:
+            self.seen_access_tokens.append(access_token)
+            return True
+
+    oauth_client = _AsyncEmailVerificationClient()
+
+    email_verified = await _build_adapter(oauth_client).get_email_verified("access-token")
+
+    assert email_verified is True
+    assert oauth_client.seen_access_tokens == ["access-token"]
+
+
+@pytest.mark.parametrize("verified", [True, False])
+async def test_async_email_verification_protocol_return_value_is_propagated(*, verified: bool) -> None:
+    """The adapter returns the async protocol's bool result unchanged."""
+
+    class _AsyncEmailVerificationClient:
+        async def get_email_verified(self, access_token: str) -> bool:
+            del access_token
+            return verified
+
+    assert await _build_adapter(_AsyncEmailVerificationClient()).get_email_verified("access-token") is verified
+
+
+async def test_async_email_verification_protocol_exception_is_propagated() -> None:
+    """Provider failures from the async verification protocol are not swallowed."""
+
+    class _AsyncEmailVerificationClient:
+        async def get_email_verified(self, access_token: str) -> bool:
+            msg = f"provider rejected {access_token}"
+            raise RuntimeError(msg)
+
+    with pytest.raises(RuntimeError, match="provider rejected access-token"):
+        await _build_adapter(_AsyncEmailVerificationClient()).get_email_verified("access-token")
+
+
+def test_sync_email_verification_protocol_exposes_sync_bool_contract() -> None:
+    """The sync-only verification protocol stays separate from the async contract."""
+    method = client_adapter_module.OAuthEmailVerificationSyncClientProtocol.get_email_verified
+
+    assert not inspect.iscoroutinefunction(method)
+    assert method.__annotations__ == {"access_token": "str", "return": "bool"}
+
+
+def test_make_async_email_verification_client_returns_async_protocol_adapter() -> None:
+    """Sync verification clients can be wrapped behind the async-only contract."""
+
+    class _SyncClient:
+        def get_email_verified(self, access_token: str) -> bool:
+            return access_token == "verified-token"
+
+    async_client = client_adapter_module.make_async_email_verification_client(_SyncClient())
+
+    assert inspect.iscoroutinefunction(async_client.get_email_verified)
+
+
+async def test_make_async_email_verification_client_offloads_sync_work_from_event_loop() -> None:
+    """Blocking sync verification work runs in a worker thread rather than the event loop."""
+    event_loop_thread_id = threading.get_ident()
+    observed_thread_ids: list[int] = []
+    release_sync_call = threading.Event()
+    max_event_loop_sleep_seconds = 0.2
+
+    class _SyncClient:
+        def get_email_verified(self, access_token: str) -> bool:
+            observed_thread_ids.append(threading.get_ident())
+            release_sync_call.wait(timeout=0.5)
+            return access_token == "verified-token"
+
+    async_client = client_adapter_module.make_async_email_verification_client(_SyncClient())
+
+    verification_task = asyncio.create_task(async_client.get_email_verified("verified-token"))
+    sleep_started_at = time.perf_counter()
+    await asyncio.sleep(0.01)
+    sleep_elapsed = time.perf_counter() - sleep_started_at
+
+    assert not verification_task.done()
+    assert sleep_elapsed < max_event_loop_sleep_seconds
+    release_sync_call.set()
+    assert await verification_task is True
+    assert observed_thread_ids
+    assert observed_thread_ids == [observed_thread_ids[0]]
+    assert observed_thread_ids[0] != event_loop_thread_id
+
+
+@pytest.mark.parametrize("verified", [True, False])
+async def test_make_async_email_verification_client_preserves_bool_return_values(*, verified: bool) -> None:
+    """Bool verification results from sync clients pass through the async wrapper."""
+
+    class _SyncClient:
+        def get_email_verified(self, access_token: str) -> bool:
+            del access_token
+            return verified
+
+    async_client = client_adapter_module.make_async_email_verification_client(_SyncClient())
+
+    assert await async_client.get_email_verified("access-token") is verified
+
+
+async def test_make_async_email_verification_client_propagates_sync_exceptions() -> None:
+    """Sync client failures still propagate through the async wrapper."""
+
+    class _SyncClient:
+        def get_email_verified(self, access_token: str) -> bool:
+            msg = f"provider rejected {access_token}"
+            raise RuntimeError(msg)
+
+    async_client = client_adapter_module.make_async_email_verification_client(_SyncClient())
+
+    with pytest.raises(RuntimeError, match="provider rejected access-token"):
+        await async_client.get_email_verified("access-token")
+
+
+async def test_make_async_email_verification_client_rejects_non_bool_sync_return_value() -> None:
+    """The async wrapper preserves the stable bool-only verification contract."""
+
+    class _SyncClient:
+        def get_email_verified(self, access_token: str) -> bool:
+            del access_token
+            return cast("bool", "sometimes")
+
+    async_client = client_adapter_module.make_async_email_verification_client(_SyncClient())
+
+    with pytest.raises(client_adapter_module.ConfigurationError, match="verification"):
+        await async_client.get_email_verified("access-token")
+
+
 async def test_get_authorization_url_requires_provider_method() -> None:
     """Manual OAuth clients must expose ``get_authorization_url()`` for login redirects."""
     with pytest.raises(client_adapter_module.ConfigurationError, match="get_authorization_url"):
         await _build_adapter(object()).get_authorization_url(
             redirect_uri="https://app.example/callback",
             state="state",
+        )
+
+
+def test_oauth_adapter_validation_error_rejects_non_callable_profile() -> None:
+    """Advertised profile hooks must be callable at construction time."""
+    oauth_client = _make_oauth_client(get_profile={"id": "provider-id"})
+
+    with pytest.raises(client_adapter_module.ConfigurationError, match="get_profile must be callable"):
+        _build_adapter(oauth_client)
+
+
+def test_oauth_adapter_validation_error_rejects_non_callable_email_verification() -> None:
+    """Advertised email-verification hooks must direct users to the supported protocols."""
+    oauth_client = _make_oauth_client(get_email_verified=True)
+
+    with pytest.raises(
+        client_adapter_module.ConfigurationError,
+        match=r"OAuthEmailVerificationAsyncClientProtocol|make_async_email_verification_client",
+    ):
+        _build_adapter(oauth_client)
+
+
+def test_oauth_adapter_validation_error_rejects_sync_email_verification() -> None:
+    """Direct sync verification hooks must be wrapped before adapter construction."""
+    oauth_client = _make_oauth_client(get_email_verified=lambda _access_token: True)
+
+    with pytest.raises(
+        client_adapter_module.ConfigurationError,
+        match=r"OAuthEmailVerificationAsyncClientProtocol|make_async_email_verification_client",
+    ):
+        _build_adapter(oauth_client)
+
+
+def test_oauth_adapter_validation_error_rejects_factory_client_with_non_callable_profile() -> None:
+    """Resolved factory clients receive the same construction-time field validation."""
+    oauth_client = _make_oauth_client(get_profile={"id": "provider-id"})
+
+    def oauth_client_factory() -> client_adapter_module.OAuthClientProtocol:
+        return cast("client_adapter_module.OAuthClientProtocol", oauth_client)
+
+    with pytest.raises(client_adapter_module.ConfigurationError, match="get_profile must be callable"):
+        client_adapter_module._build_oauth_client_adapter(oauth_client_factory=oauth_client_factory)
+
+
+def test_oauth_adapter_validation_error_rejects_loaded_client_with_non_callable_email_verification() -> None:
+    """Loaded class clients receive actionable email-verification validation errors."""
+    oauth_client = _make_oauth_client(get_email_verified=True)
+
+    def oauth_client_class_loader(
+        oauth_client_class: str,
+        /,
+        **client_kwargs: object,
+    ) -> client_adapter_module.OAuthClientProtocol:
+        del oauth_client_class, client_kwargs
+        return cast("client_adapter_module.OAuthClientProtocol", oauth_client)
+
+    with pytest.raises(
+        client_adapter_module.ConfigurationError,
+        match=r"OAuthEmailVerificationAsyncClientProtocol|make_async_email_verification_client",
+    ):
+        client_adapter_module._build_oauth_client_adapter(
+            oauth_client_class="provider.Client",
+            oauth_client_class_loader=oauth_client_class_loader,
         )
 
 
@@ -260,6 +482,34 @@ async def test_get_email_verified_returns_none_without_helper_or_profile() -> No
     assert await _build_adapter(object()).get_email_verified("access-token") is None
 
 
+def test_supports_async_email_verified_detects_only_coroutine_contract() -> None:
+    """Async verification support is identified without accepting sync helpers."""
+    async_client = _make_oauth_client(get_email_verified=AsyncMock(return_value=True))
+    sync_client = _make_oauth_client(get_email_verified=lambda _access_token: True)
+
+    assert client_adapter_module._supports_async_email_verified(async_client)
+    assert not client_adapter_module._supports_async_email_verified(sync_client)
+
+
+def test_supports_email_verified_rejects_sync_only_contract() -> None:
+    """Only async verification clients satisfy the supported verification surface."""
+    oauth_client = _make_oauth_client(get_email_verified=lambda _access_token: True)
+
+    assert not client_adapter_module._supports_email_verified(oauth_client)
+
+
+def test_supports_email_verified_rejects_missing_contract() -> None:
+    """Verification support is false when the provider exposes no helper."""
+    assert not client_adapter_module._supports_email_verified(object())
+
+
+def test_supports_email_verified_accepts_async_contract() -> None:
+    """Canonical async verification support remains detected."""
+    oauth_client = _make_oauth_client(get_email_verified=AsyncMock(return_value=True))
+
+    assert client_adapter_module._supports_email_verified(oauth_client)
+
+
 @pytest.mark.parametrize("verified", [True, False])
 async def test_get_email_verified_uses_dedicated_helper(verified: object) -> None:
     """Dedicated ``get_email_verified()`` hooks can be async and return bools directly."""
@@ -272,16 +522,17 @@ async def test_get_email_verified_uses_dedicated_helper(verified: object) -> Non
     assert email_verified is verified
 
 
-@pytest.mark.parametrize("verified", [True, False])
-async def test_get_email_verified_accepts_sync_helper(verified: object) -> None:
-    """Dedicated verification hooks may also be synchronous."""
+def test_get_email_verified_rejects_sync_helper_without_wrapper() -> None:
+    """Direct sync verification helpers must be wrapped before they reach runtime."""
     oauth_client = _make_oauth_client(
-        get_email_verified=lambda _access_token: verified,
+        get_email_verified=lambda _access_token: True,
     )
 
-    email_verified = await _build_adapter(oauth_client).get_email_verified("access-token")
-
-    assert email_verified is verified
+    with pytest.raises(
+        client_adapter_module.ConfigurationError,
+        match=r"OAuthEmailVerificationAsyncClientProtocol|make_async_email_verification_client",
+    ):
+        _build_adapter(oauth_client)
 
 
 async def test_get_email_verified_rejects_invalid_dedicated_helper_value() -> None:
@@ -340,6 +591,22 @@ async def test_get_account_identity_and_email_verified_uses_dedicated_email_veri
 
     assert identity == ("provider-id", "user@example.com")
     assert email_verified is True
+    oauth_client.get_profile.assert_awaited_once_with("access-token")
+    oauth_client.get_email_verified.assert_awaited_once_with("access-token")
+
+
+async def test_get_account_identity_and_email_verified_propagates_dedicated_verification_config_error() -> None:
+    """Combined identity lookup surfaces dedicated verification configuration errors unchanged."""
+    oauth_client = _make_oauth_client(
+        get_id_email=AsyncMock(return_value=None),
+        get_profile=AsyncMock(return_value={"id": "provider-id", "email": "user@example.com"}),
+        get_email_verified=AsyncMock(return_value="sometimes"),
+    )
+
+    with pytest.raises(client_adapter_module.ConfigurationError, match="verification") as exc_info:
+        await _build_adapter(oauth_client).get_account_identity_and_email_verified("access-token")
+
+    assert exc_info.value.code == client_adapter_module.ErrorCode.CONFIGURATION_INVALID
     oauth_client.get_profile.assert_awaited_once_with("access-token")
     oauth_client.get_email_verified.assert_awaited_once_with("access-token")
 

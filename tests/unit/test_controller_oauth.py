@@ -748,7 +748,11 @@ async def test_oauth_associate_callback_propagates_already_linked_error(
     ) -> None:
         del self, user, code, redirect_uri, user_manager
         await asyncio.sleep(0)
-        raise OAuthAccountAlreadyLinkedError
+        raise OAuthAccountAlreadyLinkedError(
+            provider="github",
+            account_id="provider-user",
+            existing_user_id="existing-user",
+        )
 
     monkeypatch.setattr("litestar_auth.controllers.oauth.OAuthService.associate_account", fail_associate_account)
     controller = cast("Any", _build_associate_controller())

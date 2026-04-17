@@ -37,7 +37,6 @@ def _minimal_config() -> LitestarAuthConfig[ExampleUser, UUID]:
         user_model=ExampleUser,
         user_manager_class=PluginUserManager,
         user_db_factory=lambda _session: user_db,
-        user_manager_kwargs={},
     )
 
 
