@@ -132,7 +132,7 @@ from litestar_auth.types import (
 
 logging.getLogger(__name__).addHandler(logging.NullHandler())  # noqa: RUF067
 
-__version__ = "1.8.0"
+__version__ = "1.9.0"
 
 __all__ = (
     "AccessToken",
