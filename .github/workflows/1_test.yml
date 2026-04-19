@@ -71,7 +71,7 @@ jobs:
       # restore-keys restores any prior attempt for this OS/Python; uv sync fixes deps if needed.
       # See: https://github.com/actions/cache/blob/main/tips-and-workarounds.md#update-a-cache
       - name: Restore .venv cache (prek / uv run hooks)
-        uses: actions/cache/restore@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
+        uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
         with:
           path: .venv
           key: venv-precommit-${{ env.VENV_PRECOMMIT_CACHE_VERSION }}-${{ runner.os }}-3.12-${{ github.run_id }}-${{ github.run_attempt }}
@@ -82,13 +82,13 @@ jobs:
         run: uv sync --frozen --all-extras --group dev
 
       - name: Save .venv cache (prek / uv run hooks)
-        uses: actions/cache/save@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
+        uses: actions/cache/save@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
         with:
           path: .venv
           key: venv-precommit-${{ env.VENV_PRECOMMIT_CACHE_VERSION }}-${{ runner.os }}-3.12-${{ github.run_id }}-${{ github.run_attempt }}
 
       - name: Run prek
-        uses: j178/prek-action@53276d8b0d10f8b6672aa85b4588c6921d0370cc # v2.0.1
+        uses: j178/prek-action@cbc2f23eb5539cf20d82d1aabd0d0ecbcc56f4e3 # v2.0.2
         with:
           cache: true
 
