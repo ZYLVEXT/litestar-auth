@@ -30,6 +30,11 @@ Exact JSON layout follows your Litestar exception handler configuration.
 | `LOGIN_USER_NOT_VERIFIED` | 403 | Verification required (`requires_verification` / flow). |
 | `AUTHORIZATION_DENIED` | 403 | Guard denied access. |
 | `INSUFFICIENT_ROLES` | 403 | Role-based guard denial with structured missing-role context. |
+| `ROLE_ALREADY_EXISTS` | 409 | Opt-in contrib role-admin create conflict. |
+| `ROLE_NOT_FOUND` | 404 | Opt-in contrib role-admin requested role missing. |
+| `ROLE_STILL_ASSIGNED` | 409 | Opt-in contrib role-admin delete refused while users still hold the role. |
+| `ROLE_ASSIGNMENT_USER_NOT_FOUND` | 404 | Opt-in contrib role-admin assignment target user missing. |
+| `ROLE_NAME_INVALID` | 422 | Opt-in contrib role-admin role name invalid or immutable-name patch attempted. |
 | `RESET_PASSWORD_BAD_TOKEN` | 400 | Reset token invalid/expired. |
 | `RESET_PASSWORD_INVALID_PASSWORD` | 400 | New password rejected. |
 | `VERIFY_USER_BAD_TOKEN` | 400 | Verification token invalid. |

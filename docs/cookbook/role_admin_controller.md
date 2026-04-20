@@ -1,20 +1,35 @@
-# Cookbook: Role catalog administration API
+# Cookbook: Custom role catalog administration API
+
+The supported HTTP role-management surface now lives in
+[HTTP role administration](../guides/role_admin_http.md) via
+`litestar_auth.contrib.role_admin.create_role_admin_controller(...)`.
+
+!!! warning "Use this cookbook only for a fully custom controller"
+    Keep the contrib controller as the default path. This page is for
+    applications that need custom request/response schemas, bespoke persistence
+    wiring, or materially different handler behavior and are willing to own the
+    security review, tests, and upgrade drift themselves.
 
 Add HTTP endpoints for creating, reading, updating, and deleting roles, plus
-assigning and revoking roles on users.  This cookbook provides a complete,
-copy-paste-ready Litestar controller built on
-**Advanced Alchemy Repository / Service** for **superuser-guarded role
-management** in applications that use the library's relational role support.
+assigning and revoking roles on users. This cookbook provides an app-owned
+starting point built on **Advanced Alchemy Repository / Service** for
+applications that use the library's relational role support and intentionally
+need more than the contrib surface exposes.
 
 ## When to use
 
 Use this controller when your application:
 
+- Has already ruled out the supported contrib controller in
+  [HTTP role administration](../guides/role_admin_http.md).
 - Uses `RoleMixin`, `UserRoleRelationshipMixin`, and `UserRoleAssociationMixin`
   from litestar-auth.
 - Needs HTTP CRUD for your global role catalog (not multi-tenant per-app role
   namespaces).
-- Wants superuser-only administration of roles and user assignments.
+- Needs custom request/response schemas or handler semantics that are not
+  direct factory hooks on `create_role_admin_controller(...)`.
+- Wants to own the authorization policy instead of using the contrib default
+  `guards=[is_superuser]`.
 - Expects role names to be normalized (lowercase, trimmed, deduplicated) like
   the CLI.
 
@@ -601,7 +616,7 @@ class CustomRoleAdmin(_Base):
 
 ### Extend the schema
 
-If you want more fields on roles (color, icon, …), extend the `Role` model
+If you want more fields on roles (color, icon, ...), extend the `Role` model
 and update the request/response structs in your copy of the controller:
 
 ```python
@@ -623,9 +638,12 @@ class Role(BaseRole):
   Delete and recreate if renaming is needed.
 - **CLI consistency**: Roles created via HTTP appear in `litestar roles list`
   and vice versa — both paths share the same database tables.
-- **User.roles property**: Assign/unassign operations mutate the ORM
-  association table directly; the user's `roles` property reflects the change
-  on the next read.
+- **Manager lifecycle parity**: This cookbook mutates assignment rows directly.
+  If your app depends on `BaseUserManager.update(...)` hooks such as
+  `on_after_update`, either mount the contrib controller or route
+  assign/unassign through `SQLAlchemyRoleAdmin.assign_user_roles()` /
+  `.unassign_user_roles()` instead of writing association rows behind the
+  manager.
 - **UUID vs integer PK**: The `user_id` path parameter is parsed as UUID
   first; if that fails it is passed as-is.  Adapt `_parse_user_id` if your PK
   type needs different handling.
@@ -635,5 +653,6 @@ class Role(BaseRole):
 ## See also
 
 - [Role management CLI guide](../guides/roles_cli.md)
+- [HTTP role administration](../guides/role_admin_http.md)
 - [Guards API](../api/guards.md)
 - [Models API](../api/models.md)

@@ -6,9 +6,10 @@ from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from functools import cache
 from typing import TYPE_CHECKING, Any, Protocol, cast
+from uuid import UUID
 
 from sqlalchemy import delete, inspect, select
-from sqlalchemy.exc import NoInspectionAvailable
+from sqlalchemy.exc import IntegrityError, NoInspectionAvailable
 from sqlalchemy.orm import selectinload
 
 from litestar_auth._plugin.config import resolve_user_manager_factory
@@ -92,6 +93,14 @@ class UserRoleMembership:
 
     email: str
     roles: list[str]
+
+
+class RoleAdminRoleNotFoundError(LookupError):
+    """Raised when the configured role catalog does not contain the requested role."""
+
+
+class RoleAdminUserNotFoundError(LookupError):
+    """Raised when the configured user lookup target does not exist."""
 
 
 class _RoleLifecycleManager[UP: UserProtocol[Any]](Protocol):
@@ -332,6 +341,39 @@ class SQLAlchemyRoleAdmin[UP: UserProtocol[Any]]:
         """Return one normalized role name using the shared flat-role helper."""
         return normalize_role_name(role)
 
+    def parse_user_id(self, raw_user_id: str) -> object:
+        """Parse one HTTP path user identifier for the configured user model.
+
+        The controller surface preserves the cookbook's UUID-first behavior and
+        then falls back to the mapped primary-key type when available so
+        integer-keyed custom models keep working without a separate ``id_parser``.
+
+        Returns:
+            The parsed identifier object suitable for querying ``user_model``.
+        """
+        try:
+            return UUID(raw_user_id)
+        except ValueError:
+            pass
+
+        try:
+            primary_key_column = inspect(self.user_model).primary_key[0]
+        except (IndexError, NoInspectionAvailable):
+            return raw_user_id
+
+        try:
+            primary_key_type = primary_key_column.type.python_type
+        except NotImplementedError:
+            return raw_user_id
+
+        if primary_key_type in {str, UUID}:
+            return raw_user_id
+
+        try:
+            return primary_key_type(raw_user_id)
+        except (TypeError, ValueError):
+            return raw_user_id
+
     def replace_user_roles(self, user: UP, roles: object) -> list[str]:
         """Persist normalized membership through the configured user model's ``roles`` boundary.
 
@@ -357,18 +399,34 @@ class SQLAlchemyRoleAdmin[UP: UserProtocol[Any]]:
         async with self.session() as session:
             return await self._list_role_names(session)
 
-    async def create_role(self, *, role: str) -> list[str]:
+    async def create_role(
+        self,
+        *,
+        role: str,
+        description: str | None = None,
+        fail_if_exists: bool = False,
+    ) -> list[str]:
         """Create one normalized role catalog row when it does not already exist.
 
         Returns:
             The deterministic normalized role catalog after the create attempt.
+
+        Raises:
+            IntegrityError: If ``fail_if_exists`` is ``True`` and the normalized
+                role already exists.
         """
         normalized_role_name = self.normalized_role_name(role)
         async with self.session() as session:
-            existing_role = await self._find_role_by_name(session, role_name=normalized_role_name)
-            if existing_role is None:
-                session.add(self.role_model(name=normalized_role_name))
-            await session.commit()
+            role_payload: dict[str, object] = {"name": normalized_role_name}
+            if hasattr(self.role_model, "description"):
+                role_payload["description"] = description
+            session.add(self.role_model(**role_payload))
+            try:
+                await session.commit()
+            except IntegrityError:
+                await session.rollback()
+                if fail_if_exists:
+                    raise
             return await self._list_role_names(session)
 
     async def delete_role(self, *, role: str, force: bool = False) -> list[str]:
@@ -406,40 +464,79 @@ class SQLAlchemyRoleAdmin[UP: UserProtocol[Any]]:
             await session.commit()
             return await self._list_role_names(session)
 
-    async def show_user_roles(self, *, email: str) -> UserRoleMembership:
-        """Return the current normalized role snapshot for one user selected by email."""
+    async def show_user_roles(
+        self,
+        *,
+        email: str | None = None,
+        user_id: object | None = None,
+    ) -> UserRoleMembership:
+        """Return the current normalized role snapshot for one configured user."""
         async with self.session() as session:
-            user = await self._require_user_by_email(session, email=email)
+            user = await self._require_user(session, email=email, user_id=user_id)
             return self._user_role_membership(user)
 
-    async def assign_user_roles(self, *, email: str, roles: object) -> UserRoleMembership:
-        """Assign normalized roles to one user selected by email.
+    async def list_role_users(self, *, role: str) -> list[UP]:
+        """Return users currently assigned one normalized role in deterministic order."""
+        normalized_role_name = self.normalized_role_name(role)
+        async with self.session() as session:
+            await self._require_role_by_name(session, role_name=normalized_role_name)
+            return await self._load_users_with_role(session, role_name=normalized_role_name)
+
+    async def assign_user_roles(
+        self,
+        *,
+        roles: object,
+        email: str | None = None,
+        user_id: object | None = None,
+        require_existing_roles: bool = False,
+    ) -> UserRoleMembership:
+        """Assign normalized roles to one configured user.
 
         Returns:
             The updated normalized role membership visible on the user boundary.
         """
         requested_roles = self.normalized_role_names(roles)
         async with self.session() as session:
-            user = await self._require_user_by_email(session, email=email)
+            if require_existing_roles:
+                for role_name in requested_roles:
+                    await self._require_role_by_name(session, role_name=role_name)
+            user = await self._require_user(session, email=email, user_id=user_id)
+            current_roles = self.normalized_role_names(cast("Any", user).roles)
+            updated_roles = self.normalized_role_names([*current_roles, *requested_roles])
+            if updated_roles == current_roles:
+                return self._user_role_membership(user)
             manager = self._role_lifecycle_updater.build_manager(session)
             updated_user = await self._update_user_roles(
                 manager=manager,
                 user=user,
-                roles=[*cast("Any", user).roles, *requested_roles],
+                roles=updated_roles,
             )
             await session.commit()
             return self._user_role_membership(updated_user)
 
-    async def unassign_user_roles(self, *, email: str, roles: object) -> UserRoleMembership:
-        """Remove selected normalized roles from one user selected by email.
+    async def unassign_user_roles(
+        self,
+        *,
+        roles: object,
+        email: str | None = None,
+        user_id: object | None = None,
+        require_existing_roles: bool = False,
+    ) -> UserRoleMembership:
+        """Remove selected normalized roles from one configured user.
 
         Returns:
             The remaining normalized role membership visible on the user boundary.
         """
         requested_roles = set(self.normalized_role_names(roles))
         async with self.session() as session:
-            user = await self._require_user_by_email(session, email=email)
-            remaining_roles = [role_name for role_name in cast("Any", user).roles if role_name not in requested_roles]
+            if require_existing_roles:
+                for role_name in sorted(requested_roles):
+                    await self._require_role_by_name(session, role_name=role_name)
+            user = await self._require_user(session, email=email, user_id=user_id)
+            current_roles = self.normalized_role_names(cast("Any", user).roles)
+            remaining_roles = [role_name for role_name in current_roles if role_name not in requested_roles]
+            if remaining_roles == current_roles:
+                return self._user_role_membership(user)
             manager = self._role_lifecycle_updater.build_manager(session)
             updated_user = await self._update_user_roles(manager=manager, user=user, roles=remaining_roles)
             await session.commit()
@@ -453,7 +550,8 @@ class SQLAlchemyRoleAdmin[UP: UserProtocol[Any]]:
         """Return the configured user or raise when the email is unknown.
 
         Raises:
-            LookupError: If no configured user exists for the requested email.
+            RoleAdminUserNotFoundError: If no configured user exists for the
+                requested email.
         """
         statement = self._with_role_membership(
             select(self.user_model).where(cast("Any", self.user_model).email == email),
@@ -461,8 +559,43 @@ class SQLAlchemyRoleAdmin[UP: UserProtocol[Any]]:
         user = await session.scalar(statement)
         if user is None:
             msg = f"Role admin could not find a user with email {email!r}."
-            raise LookupError(msg)
+            raise RoleAdminUserNotFoundError(msg)
         return user
+
+    async def _require_user_by_id(self, session: AsyncSession, *, user_id: object) -> UP:
+        """Return the configured user or raise when the identifier is unknown.
+
+        Raises:
+            RoleAdminUserNotFoundError: If no configured user exists for the
+                requested identifier.
+        """
+        statement = self._with_role_membership(
+            select(self.user_model).where(cast("Any", self.user_model).id == user_id),
+        )
+        user = await session.scalar(statement)
+        if user is None:
+            msg = f"Role admin could not find a user with id {user_id!r}."
+            raise RoleAdminUserNotFoundError(msg)
+        return user
+
+    async def _require_user(
+        self,
+        session: AsyncSession,
+        *,
+        email: str | None = None,
+        user_id: object | None = None,
+    ) -> UP:
+        """Return one configured user selected by email or identifier.
+
+        Raises:
+            TypeError: If the caller passes neither or both lookup selectors.
+        """
+        if (email is None) == (user_id is None):
+            msg = "Role admin user lookup requires exactly one of email or user_id."
+            raise TypeError(msg)
+        if email is not None:
+            return await self._require_user_by_email(session, email=email)
+        return await self._require_user_by_id(session, user_id=user_id)
 
     async def _find_role_by_name(self, session: AsyncSession, *, role_name: str) -> object | None:
         """Return one configured role row by normalized role name."""
@@ -473,12 +606,13 @@ class SQLAlchemyRoleAdmin[UP: UserProtocol[Any]]:
         """Return the configured role row or raise when the catalog entry is unknown.
 
         Raises:
-            LookupError: If the normalized role name does not exist in the active catalog.
+            RoleAdminRoleNotFoundError: If the normalized role name does not
+                exist in the active catalog.
         """
         role = await self._find_role_by_name(session, role_name=role_name)
         if role is None:
             msg = f"Role admin could not find role {role_name!r} in the configured catalog."
-            raise LookupError(msg)
+            raise RoleAdminRoleNotFoundError(msg)
         return role
 
     async def _list_role_names(self, session: AsyncSession) -> list[str]:

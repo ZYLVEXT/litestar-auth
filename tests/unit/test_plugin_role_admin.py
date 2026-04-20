@@ -4,15 +4,18 @@ from __future__ import annotations
 
 import asyncio
 from contextlib import nullcontext
+from types import SimpleNamespace
 from typing import TYPE_CHECKING, Any, ClassVar, Self, cast
 from uuid import UUID
 
 import pytest
 from advanced_alchemy.base import UUIDPrimaryKey, create_registry
 from sqlalchemy import ForeignKey, String, select
+from sqlalchemy.exc import NoInspectionAvailable
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 from sqlalchemy.orm import Session as SASession
 
+import litestar_auth._plugin.role_admin as role_admin_module
 from litestar_auth._plugin.role_admin import (
     SQLAlchemyRoleAdmin,
     _ManagerLifecycleRoleUpdater,
@@ -684,6 +687,45 @@ def test_sqlalchemy_role_admin_replace_user_roles_rejects_wrong_model_instances(
         role_admin.replace_user_roles(cast("Any", OtherUser()), ["admin"])
 
 
+def test_sqlalchemy_role_admin_parse_user_id_covers_uuid_and_fallback_branches(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """User-id parsing preserves the UUID-first contract and the model-introspection fallbacks."""
+    role_admin = SQLAlchemyRoleAdmin.from_config(_minimal_config(user_model=User, session_maker=TrackingSessionMaker()))
+
+    assert role_admin.parse_user_id("not-a-uuid") == "not-a-uuid"
+
+    def _inspect_raises(_: object) -> object:
+        msg = "no inspection"
+        raise NoInspectionAvailable(msg)
+
+    monkeypatch.setattr(role_admin_module, "inspect", _inspect_raises)
+    assert role_admin.parse_user_id("still-a-string") == "still-a-string"
+
+    class _TypeWithoutPythonType:
+        @property
+        def python_type(self) -> object:
+            raise NotImplementedError
+
+    class _PrimaryKeyColumn:
+        type = _TypeWithoutPythonType()
+
+    class _InspectionResult:
+        primary_key: ClassVar[list[object]] = [_PrimaryKeyColumn()]
+
+    monkeypatch.setattr(role_admin_module, "inspect", lambda _: _InspectionResult())
+    assert role_admin.parse_user_id("opaque-id") == "opaque-id"
+
+    class _IntegerPrimaryKeyColumn:
+        type = SimpleNamespace(python_type=int)
+
+    class _IntegerInspectionResult:
+        primary_key: ClassVar[list[object]] = [_IntegerPrimaryKeyColumn()]
+
+    monkeypatch.setattr(role_admin_module, "inspect", lambda _: _IntegerInspectionResult())
+    assert role_admin.parse_user_id("not-an-int") == "not-an-int"
+
+
 def test_manager_lifecycle_role_updater_builds_manager_from_plugin_config() -> None:
     """CLI role mutations build a session-bound manager through the plugin factory contract."""
     session = cast("Any", object())
@@ -750,6 +792,77 @@ async def test_sqlalchemy_role_admin_update_user_roles_uses_manager_lifecycle_pa
 
     assert updated_user.roles == ["admin", "billing"]
     assert update_calls == [(user, {"roles": ["admin", "billing"]})]
+
+
+async def test_sqlalchemy_role_admin_unassign_user_roles_checks_role_catalog_when_requested(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Optional role-catalog validation runs before unassigning user roles."""
+    session = TrackingAsyncSession()
+    role_admin = SQLAlchemyRoleAdmin.from_config(
+        _minimal_config(user_model=User, session_maker=TrackingSessionMaker(session)),
+    )
+    user = User(
+        email="member@example.com",
+        hashed_password="hashed-password",
+        roles=["billing"],
+    )
+    required_roles: list[str] = []
+    update_calls: list[list[str]] = []
+
+    async def _fake_require_role_by_name(self: SQLAlchemyRoleAdmin[User], session: object, *, role_name: str) -> object:
+        del self, session
+        await asyncio.sleep(0)
+        required_roles.append(role_name)
+        return object()
+
+    async def _fake_require_user(
+        self: SQLAlchemyRoleAdmin[User],
+        session: object,
+        *,
+        email: str | None = None,
+        user_id: object | None = None,
+    ) -> User:
+        del self, session, email, user_id
+        await asyncio.sleep(0)
+        return user
+
+    async def _fake_update_user_roles(
+        self: SQLAlchemyRoleAdmin[User],
+        *,
+        manager: _RoleLifecycleManager[User],
+        user: User,
+        roles: object,
+    ) -> User:
+        del self, manager, user
+        await asyncio.sleep(0)
+        normalized_roles = normalize_roles(roles)
+        update_calls.append(normalized_roles)
+        return User(email="updated@example.com", hashed_password="hash", roles=normalized_roles)
+
+    monkeypatch.setattr(SQLAlchemyRoleAdmin, "_require_role_by_name", _fake_require_role_by_name)
+    monkeypatch.setattr(SQLAlchemyRoleAdmin, "_require_user", _fake_require_user)
+    monkeypatch.setattr(SQLAlchemyRoleAdmin, "_update_user_roles", _fake_update_user_roles)
+
+    await role_admin.unassign_user_roles(user_id=UUID(int=1), roles=["billing"], require_existing_roles=True)
+
+    assert required_roles == ["billing"]
+    assert update_calls == [[]]
+
+
+async def test_sqlalchemy_role_admin_require_user_rejects_invalid_selector_combinations() -> None:
+    """User lookup requires exactly one selector."""
+    role_admin = SQLAlchemyRoleAdmin.from_config(_minimal_config(user_model=User, session_maker=TrackingSessionMaker()))
+
+    with pytest.raises(TypeError, match="exactly one of email or user_id"):
+        await role_admin._require_user(cast("Any", TrackingAsyncSession()))
+
+    with pytest.raises(TypeError, match="exactly one of email or user_id"):
+        await role_admin._require_user(
+            cast("Any", TrackingAsyncSession()),
+            email="member@example.com",
+            user_id=UUID(int=1),
+        )
 
 
 async def test_sqlalchemy_role_admin_delete_role_force_uses_manager_updates_before_role_delete(

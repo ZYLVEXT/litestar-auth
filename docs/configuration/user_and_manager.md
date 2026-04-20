@@ -144,9 +144,11 @@ Recommended upgrade sequence:
    membership.
 
 This redesign changes persistence only. Guards, DTOs, and manager APIs still exchange the same flat
-normalized `user.roles` values, and the library still does not add permission matrices, policy
-DSLs, or role-management HTTP endpoints. Operator-driven catalog and user-role administration now
-lives on the plugin-owned [`litestar roles`](../guides/roles_cli.md) CLI surface.
+normalized `user.roles` values, and the library still does not add permission matrices or policy
+DSLs. The core plugin-owned auth/users route table does not auto-mount role-management endpoints;
+use the plugin-owned [`litestar roles`](../guides/roles_cli.md) CLI surface or the opt-in
+[HTTP role administration](../guides/role_admin_http.md) contrib controller when you need
+catalog or assignment administration.
 
 If the user table is not `user`, or if you want app-owned token / OAuth tables, compose the sibling mixins on your own declarative base and point the hooks at the app's class names and table names instead of copying relationship code:
 

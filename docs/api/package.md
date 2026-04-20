@@ -75,8 +75,10 @@ For app-owned protected routes, reuse `config.resolve_openapi_security_requireme
 Treat the startup templates as plugin-assembly inventory only: they preserve backend names plus transport/strategy metadata for validation and controller wiring, but DB-token runtime work still has to go through `resolve_backends(session)` so the realized backend carries the active `AsyncSession`. Controller selection follows the startup inventory order: the primary backend mounts at `/auth`, later backends mount at `/auth/{backend.name}`, plugin-owned OAuth login routes use the primary backend, and TOTP uses the primary backend unless `totp_backend_name` selects another named startup backend.
 
 The relational-role redesign changes storage only. Public HTTP payloads, managers, and guard
-factories still work with one normalized flat `roles` collection, and the library still does not
-ship permission matrices or standalone role-management endpoints.
+factories still work with one normalized flat `roles` collection. The core plugin-owned auth/users
+route table still does not auto-mount role catalog or user-assignment endpoints; use the opt-in
+`litestar_auth.contrib.role_admin` controller or the `litestar roles` CLI when you need admin
+operations. The library still does not ship permission matrices.
 
 ## Public surface (high level)
 
@@ -91,6 +93,7 @@ ship permission matrices or standalone role-management endpoints.
 | Errors | `ErrorCode`, `LitestarAuthError`; typed subclasses from `litestar_auth.exceptions` |
 | Protocols | `UserProtocol`, `GuardedUserProtocol`, `RoleCapableUserProtocol`, `TotpUserProtocol` — [Types](types.md) |
 | Controllers (advanced) | `create_*_controller` factories from `litestar_auth.controllers` — [Controllers API](controllers.md) |
+| Contrib role admin | `create_role_admin_controller` from `litestar_auth.contrib.role_admin` — [HTTP role administration](../guides/role_admin_http.md) |
 | OAuth helpers | Plugin-managed route table via `OAuthConfig`; manual login helper and lazy client loader from `litestar_auth.oauth` |
 | TOTP | `generate_totp_secret`, `generate_totp_uri`, `verify_totp`, stores from `litestar_auth.totp` |
 | Rate limit | `AuthRateLimitConfig`, `EndpointRateLimit`, `InMemoryRateLimiter`, `RedisRateLimiter` from `litestar_auth.ratelimit` |

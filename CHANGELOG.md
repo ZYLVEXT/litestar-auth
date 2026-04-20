@@ -1,3 +1,38 @@
+## Unreleased
+
+### Added
+
+- **`litestar_auth.contrib.role_admin.create_role_admin_controller(...)`** — an
+  opt-in contrib HTTP role-administration surface for relational role-capable
+  SQLAlchemy apps. The controller is not auto-mounted by `LitestarAuth`; mount
+  it explicitly alongside the plugin when you want admin-only `/roles` catalog
+  and assignment routes backed by `RoleCreate`, `RoleUpdate`, `RoleRead`, and
+  `UserBrief`.
+
+### Fixed
+
+- **`create_role_admin_controller(config=config)` no longer raises `KeyError`
+  when `config.db_session_dependency_key` differs from the default** — the
+  internal dependency-parameter renamer is now a no-op for handlers that do
+  not declare the request-scoped session dependency, so the config+session_maker
+  branch (which opens its own sessions) is safe for any valid
+  `db_session_dependency_key` value.
+
+### Documentation
+
+- **New HTTP role-admin guide and migration notes** — the supported HTTP role
+  management path now points at `litestar_auth.contrib.role_admin`, while the
+  cookbook pages are explicitly scoped to fully custom controllers. The docs
+  now call out the behavior-parity fix versus the old cookbook pattern:
+  contrib assign/unassign flows preserve `BaseUserManager.update(...)`
+  lifecycle hooks instead of mutating association rows behind the manager.
+- **If you copied the old role-admin cookbook into your app, migrate to
+  `litestar_auth.contrib.role_admin` for the supported HTTP admin path.** The
+  contrib controller keeps catalog and assignment behavior aligned with
+  `litestar roles`, defaults to `guards=[is_superuser]`, and preserves manager
+  lifecycle hooks on assign/unassign. Keep the cookbook only when you
+  intentionally need a fully custom controller or custom schemas.
+
 ## 1.10.0 (2026-04-20)
 
 ### Changed

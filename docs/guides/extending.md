@@ -20,8 +20,10 @@ to the bundled `Role` / `UserRole` models or a custom `UserRoleRelationshipMixin
 seen by DTOs, managers, and guards even when storage becomes relational.
 
 This redesign preserves the existing flat role guards and payloads. It does not add permission
-matrices, role-management HTTP endpoints, or a policy DSL. Operator-driven role administration now
-lives on the plugin-owned [`litestar roles`](roles_cli.md) CLI surface.
+matrices or a policy DSL. The core plugin-owned auth/users controllers still do not auto-mount
+role catalog or user-assignment endpoints. Operator-driven role administration lives on the
+plugin-owned [`litestar roles`](roles_cli.md) CLI surface, and applications that want an HTTP
+admin surface can opt into [HTTP role administration](role_admin_http.md).
 
 ### Role CLI compatibility
 
@@ -41,7 +43,8 @@ Roleless models, legacy JSON-only role storage, or ad hoc non-relational `roles`
 valid for app surfaces that do not need CLI role administration, but `litestar roles` fails closed
 for those apps instead of inferring persistence behavior.
 
-See [Role management CLI](roles_cli.md) for operator examples and destructive-delete semantics.
+See [Role management CLI](roles_cli.md) for operator examples and destructive-delete semantics, or
+[HTTP role administration](role_admin_http.md) for the supported contrib controller.
 
 ## User manager
 

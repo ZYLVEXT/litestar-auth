@@ -41,8 +41,10 @@ Built-in user-returning responses from `POST {auth}/register`, `POST {auth}/veri
 
 That response contract is intentionally unchanged by the relational-role migration. The HTTP API
 still exposes one flat `roles` array, not raw `role` / `user_role` rows, permission matrices, or
-role-management endpoints. For operational catalog and user-role administration, use the
-plugin-owned [`litestar roles`](guides/roles_cli.md) CLI surface instead.
+role-catalog or user-assignment endpoints on the core plugin-owned auth routes. For operational
+catalog and user-role administration, use the plugin-owned
+[`litestar roles`](guides/roles_cli.md) CLI surface or mount the opt-in contrib controller from
+[HTTP role administration](guides/role_admin_http.md).
 
 ## Password reset
 
@@ -104,8 +106,39 @@ payloads even when a custom `user_update_schema` includes them, while superuser
 
 The storage redesign does not add separate CRUD endpoints for the relational role tables. Built-in
 users routes continue to manage only the normalized flat `roles` contract on the user boundary.
-Operator-driven catalog and assignment administration remains CLI-only through
-[`litestar roles`](guides/roles_cli.md).
+Operator-driven catalog and assignment administration lives on the
+[`litestar roles`](guides/roles_cli.md) CLI surface, while applications that need an HTTP admin
+surface can opt into [HTTP role administration](guides/role_admin_http.md).
+
+## Contrib role administration (opt-in)
+
+If you mount `litestar_auth.contrib.role_admin.create_role_admin_controller(...)`, the library
+adds an admin-only HTTP role-management surface under its configured prefix (default `/roles`).
+The factory defaults to `guards=[is_superuser]`; see
+[HTTP role administration](guides/role_admin_http.md) for mounting and override guidance.
+
+Payload contracts live in `litestar_auth.contrib.role_admin._schemas`:
+`RoleCreate`, `RoleUpdate`, `RoleRead`, and `UserBrief`. Paginated list routes return
+`{"items": [...], "total": int, "limit": int, "offset": int}`. The controller also reserves
+these machine-readable `ErrorCode` values for role-catalog and assignment failures:
+`ROLE_ALREADY_EXISTS`, `ROLE_NOT_FOUND`, `ROLE_STILL_ASSIGNED`,
+`ROLE_ASSIGNMENT_USER_NOT_FOUND`, and `ROLE_NAME_INVALID`.
+
+| Method | Path | Request body | Success | Other documented statuses | Error code(s) |
+| ------ | ---- | ------------ | ------- | ------------------------- | ------------- |
+| `GET` | `/roles` | None | `200` paginated `RoleRead` page | `403`, `422` | None |
+| `POST` | `/roles` | `RoleCreate` | `201` `RoleRead` | `403`, `409`, `422` | `ROLE_ALREADY_EXISTS`, `ROLE_NAME_INVALID` |
+| `GET` | `/roles/{role_name}` | None | `200` `RoleRead` | `403`, `404`, `422` | `ROLE_NOT_FOUND`, `ROLE_NAME_INVALID` |
+| `PATCH` | `/roles/{role_name}` | `RoleUpdate` | `200` `RoleRead` | `403`, `404`, `422` | `ROLE_NOT_FOUND`, `ROLE_NAME_INVALID` |
+| `DELETE` | `/roles/{role_name}` | None | `204` empty body | `403`, `404`, `409`, `422` | `ROLE_NOT_FOUND`, `ROLE_STILL_ASSIGNED`, `ROLE_NAME_INVALID` |
+| `POST` | `/roles/{role_name}/users/{user_id}` | None | `200` `RoleRead` | `403`, `404`, `422` | `ROLE_NOT_FOUND`, `ROLE_ASSIGNMENT_USER_NOT_FOUND`, `ROLE_NAME_INVALID` |
+| `DELETE` | `/roles/{role_name}/users/{user_id}` | None | `204` empty body | `403`, `404`, `422` | `ROLE_ASSIGNMENT_USER_NOT_FOUND`, `ROLE_NAME_INVALID` |
+| `GET` | `/roles/{role_name}/users` | None | `200` paginated `UserBrief` page | `403`, `404`, `422` | `ROLE_NOT_FOUND`, `ROLE_NAME_INVALID` |
+
+Assignment writes are idempotent and run through the manager lifecycle instead of mutating
+association rows behind `BaseUserManager`. The `user_id` path parameter is parsed UUID-first and
+then falls back to the configured model's primary-key shape so the same controller works with the
+bundled UUID user model and integer-key custom models.
 
 ## Multiple backends
 

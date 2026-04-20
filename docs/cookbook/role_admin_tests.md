@@ -1,7 +1,9 @@
-# Cookbook: Testing role administration endpoints
+# Cookbook: Testing a custom role administration controller
 
-Examples for testing the role admin controller from the
-[role administration API](role_admin_controller.md) recipe.
+The supported HTTP role-management surface now lives in
+[HTTP role administration](../guides/role_admin_http.md). These examples are
+for applications that keep an app-owned controller from the
+[custom role administration controller](role_admin_controller.md) cookbook.
 
 The snippets below are **illustrative** — adapt fixtures, config fields, and
 assertion helpers to match the litestar-auth version you are running and your
@@ -246,6 +248,9 @@ async def test_get_nonexistent_returns_404(app):
 - Integration tests skip authentication setup for brevity.  In a real test
   suite you would authenticate as a superuser via the plugin's auth flow or
   inject a test user into the request scope.
+- If your custom assign/unassign handlers are meant to preserve
+  `BaseUserManager.update(...)` hooks, assert that manager lifecycle explicitly.
+  The supported contrib controller already does this.
 - Use `pytest-anyio` (or `pytest-asyncio` with `asyncio_mode = "auto"`) so
   `@pytest.mark.anyio` / `@pytest.mark.asyncio` resolves correctly.
 - Advanced Alchemy's `NotFoundError` is the standard "row not found"
@@ -255,4 +260,5 @@ async def test_get_nonexistent_returns_404(app):
 ## See also
 
 - [Testing plugin-backed apps guide](../guides/testing.md)
-- [Role administration API recipe](role_admin_controller.md)
+- [HTTP role administration](../guides/role_admin_http.md)
+- [Custom role administration controller](role_admin_controller.md)

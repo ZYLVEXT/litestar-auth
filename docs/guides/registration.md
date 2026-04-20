@@ -15,7 +15,7 @@ With `include_register=True` (default), clients can call `POST {auth_path}/regis
 - **Login identifier** — `login_identifier` is `"email"` or `"username"` and selects how `POST .../login` resolves `LoginCredentials.identifier`. It does not rename the built-in registration fields.
 - **Safe creation** — registration uses `BaseUserManager.create(..., safe=True)` so only expected fields (e.g. email + password) are accepted; privileged flags like `is_superuser` and `roles` are stripped from public registration payloads unless you explicitly opt into dangerous behavior in your manager.
 - **Built-in response body** — successful register/verify/reset responses use `UserRead`, which includes normalized `roles` alongside the existing account-state fields. New users start with `roles=[]` unless a privileged path assigns them.
-- **Persistence boundary** — relational `role` / `user_role` tables are an internal storage detail of the ORM layer. Registration still accepts flat user fields only, and the library does not expose standalone role-management or RBAC policy payloads here.
+- **Persistence boundary** — relational `role` / `user_role` tables are an internal storage detail of the ORM layer. Registration still accepts flat user fields only, and this route surface does not expose role-catalog management or RBAC policy payloads. Use the opt-in [HTTP role administration](role_admin_http.md) guide or the operator CLI when you need admin workflows.
 
 ## Email verification
 

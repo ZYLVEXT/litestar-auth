@@ -5,8 +5,10 @@ catalog and user-role administration. The commands use the active plugin configu
 configured SQLAlchemy session factory, and the same normalized flat `user.roles` contract already
 used by guards, DTOs, and manager updates.
 
-This is a CLI-only surface. The library still does not expose standalone role-management endpoints
-or raw `role` / `user_role` rows over HTTP.
+This guide covers the CLI path. If you need an HTTP admin surface, mount the opt-in
+[HTTP role administration](role_admin_http.md) contrib controller. The core plugin-generated
+auth/users route table still does not auto-mount role catalog or user-assignment endpoints, and
+the library still does not expose raw `role` / `user_role` rows over HTTP.
 
 ## Prerequisites
 
@@ -120,12 +122,14 @@ surfaces only; the CLI is intentionally unavailable for that configuration.
 ## What does not change
 
 - Guards, schemas, and manager updates still exchange flat normalized `roles: list[str]` values.
-- The library still does not add permission matrices, object-level RBAC, or role-management HTTP
-  endpoints.
+- The library still does not add permission matrices or object-level RBAC. HTTP role
+  administration is available only through the opt-in contrib controller, not the core
+  plugin-generated route table.
 - The CLI is an operator workflow, not an end-user API surface.
 
 ## Related
 
 - [Configuration](../configuration.md)
 - [Extending](extending.md)
+- [HTTP role administration](role_admin_http.md)
 - [HTTP API](../http_api.md)

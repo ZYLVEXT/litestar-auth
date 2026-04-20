@@ -83,6 +83,17 @@ def test_import_plugin_public_module_does_not_load_models() -> None:
     assert proc.returncode == 0, proc.stdout + proc.stderr
 
 
+def test_import_contrib_package_does_not_load_role_admin_surface() -> None:
+    """Importing ``litestar_auth.contrib`` keeps the new role-admin package opt-in."""
+    proc = _run_isolated(
+        "import sys\n"
+        "import litestar_auth.contrib\n"
+        "assert 'litestar_auth.contrib.role_admin' not in sys.modules\n"
+        "assert 'litestar_auth.contrib.role_admin._controller' not in sys.modules\n",
+    )
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+
+
 def test_import_models_package_keeps_concrete_orm_submodules_lazy() -> None:
     """Importing ``litestar_auth.models`` keeps concrete ORM submodules deferred."""
     proc = _run_isolated(

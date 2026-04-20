@@ -28,6 +28,7 @@ nav = [
     "guides/oauth.md",
     "guides/totp.md",
     "guides/rate_limiting.md",
+    "guides/role_admin_http.md",
     "guides/from_fastapi_users.md",
     "guides/hooks.md",
     "guides/extending.md",
