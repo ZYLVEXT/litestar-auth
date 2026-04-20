@@ -1,21 +1,42 @@
-"""Home-page quick peek: plugin wiring (placeholders). Included via pymdownx.snippets."""
+"""Home-page quick peek: plugin wiring. Included via pymdownx.snippets."""
+
+from __future__ import annotations
+
+from uuid import UUID
 
 from litestar import Litestar
-from litestar_auth import LitestarAuth, LitestarAuthConfig
-from litestar_auth.authentication.backend import AuthenticationBackend
-from litestar_auth.authentication.strategy import JWTStrategy
-from litestar_auth.authentication.transport import BearerTransport
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-config = LitestarAuthConfig(
-    backends=(
-        AuthenticationBackend(
-            name="jwt",
-            transport=BearerTransport(),
-            strategy=JWTStrategy(secret="...", subject_decoder=YourIdType),
-        ),
+from litestar_auth import (
+    BaseUserManager,
+    DatabaseTokenAuthConfig,
+    LitestarAuth,
+    LitestarAuthConfig,
+    UserManagerSecurity,
+)
+from litestar_auth.models import User
+
+
+session_maker = async_sessionmaker[AsyncSession](
+    class_=AsyncSession,
+    expire_on_commit=False,
+)
+
+
+class UserManager(BaseUserManager[User, UUID]):
+    """Customize hooks such as on_after_register as needed."""
+
+
+config = LitestarAuthConfig[User, UUID](
+    database_token_auth=DatabaseTokenAuthConfig(
+        token_hash_secret="replace-with-32+-char-db-token-secret",
     ),
-    user_model=YourUser,
-    user_manager_class=YourUserManager,
-    session_maker=async_session_factory,
+    user_model=User,
+    user_manager_class=UserManager,
+    session_maker=session_maker,
+    user_manager_security=UserManagerSecurity(
+        verification_token_secret="replace-with-32+-char-secret-for-verify",
+        reset_password_token_secret="replace-with-32+-char-secret-for-reset",
+    ),
 )
 app = Litestar(plugins=[LitestarAuth(config)])

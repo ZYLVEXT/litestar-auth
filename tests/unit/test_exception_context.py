@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
-
 import pytest
 
 from litestar_auth.exceptions import (
@@ -11,10 +9,8 @@ from litestar_auth.exceptions import (
     InsufficientRolesError,
     OAuthAccountAlreadyLinkedError,
     UserAlreadyExistsError,
+    UserIdentifier,
 )
-
-if TYPE_CHECKING:
-    from collections.abc import Callable
 
 pytestmark = pytest.mark.unit
 
@@ -37,10 +33,13 @@ def test_oauth_account_already_linked_error_context_contract() -> None:
 def test_user_already_exists_error_context_contract() -> None:
     """Duplicate-user errors expose identifier context and derive the default message from it."""
     error = UserAlreadyExistsError(
-        identifier_type="email",
-        identifier_value="user@example.com",
+        identifier=UserIdentifier(
+            identifier_type="email",
+            identifier_value="user@example.com",
+        ),
     )
 
+    assert error.identifier == UserIdentifier(identifier_type="email", identifier_value="user@example.com")
     assert error.identifier_type == "email"
     assert error.identifier_value == "user@example.com"
     assert str(error) == "User with email='user@example.com' already exists"
@@ -81,62 +80,47 @@ def test_insufficient_roles_error_context_contract(*, require_all: bool, expecte
     assert error.code == ErrorCode.INSUFFICIENT_ROLES
 
 
-@pytest.mark.parametrize(
-    ("factory", "match"),
-    [
-        (
-            lambda: OAuthAccountAlreadyLinkedError(
-                provider=" \t ",
-                account_id="provider-user",
-                existing_user_id="user-123",
-            ),
-            "provider cannot be empty or whitespace-only",
+def test_oauth_account_already_linked_error_preserves_blank_context_without_runtime_validation() -> None:
+    """OAuth context is stored as provided instead of raising ``ValueError`` in ``__init__``."""
+    error = OAuthAccountAlreadyLinkedError(
+        provider=" \t ",
+        account_id="",
+        existing_user_id=None,
+    )
+
+    assert error.provider == " \t "
+    assert not error.account_id
+    assert error.existing_user_id is None
+    assert str(error) == "OAuth account  \t : is already linked to user None"
+
+
+def test_user_already_exists_error_preserves_identifier_value_without_runtime_validation() -> None:
+    """Duplicate-user context is stored verbatim when both identifier fields are present."""
+    error = UserAlreadyExistsError(
+        identifier=UserIdentifier(
+            identifier_type="email",
+            identifier_value=" \n ",
         ),
-        (
-            lambda: OAuthAccountAlreadyLinkedError(
-                provider="github",
-                account_id="",
-                existing_user_id="user-123",
-            ),
-            "account_id cannot be empty or whitespace-only",
-        ),
-        (
-            lambda: OAuthAccountAlreadyLinkedError(
-                provider="github",
-                account_id="provider-user",
-                existing_user_id=None,
-            ),
-            "existing_user_id cannot be None",
-        ),
-        (
-            lambda: UserAlreadyExistsError(
-                identifier_type="email",
-                identifier_value=" \n ",
-            ),
-            "identifier_value cannot be empty or whitespace-only",
-        ),
-        (
-            lambda: InsufficientRolesError(
-                required_roles=frozenset({"admin", ""}),
-                user_roles=frozenset({"viewer"}),
-                require_all=False,
-            ),
-            "required_roles cannot contain empty or whitespace-only role names",
-        ),
-        (
-            lambda: InsufficientRolesError(
-                required_roles=frozenset({"admin"}),
-                user_roles=frozenset({" \t "}),
-                require_all=False,
-            ),
-            "user_roles cannot contain empty or whitespace-only role names",
-        ),
-    ],
-)
-def test_exception_context_validation_rejects_empty_context(
-    factory: Callable[[], object],
-    match: str,
-) -> None:
-    """Structured exception context fails fast when required values are blank or missing."""
-    with pytest.raises(ValueError, match=match):
-        factory()
+    )
+
+    assert error.identifier == UserIdentifier(identifier_type="email", identifier_value=" \n ")
+    assert error.identifier_type == "email"
+    assert error.identifier_value == " \n "
+    assert str(error) == "User with email=' \\n ' already exists"
+
+
+def test_insufficient_roles_error_preserves_role_names_without_runtime_validation() -> None:
+    """Role-denial context is stored verbatim instead of filtering blank role names in ``__init__``."""
+    error = InsufficientRolesError(
+        required_roles=frozenset({"admin", ""}),
+        user_roles=frozenset({" \t "}),
+        require_all=False,
+    )
+
+    assert error.required_roles == frozenset({"admin", ""})
+    assert error.user_roles == frozenset({" \t "})
+    assert error.require_all is False
+    assert str(error) == (
+        "The authenticated user does not have any of the required roles. "
+        "required_roles=['', 'admin']; user_roles=[' \\t ']"
+    )

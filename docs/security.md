@@ -11,7 +11,7 @@ This page summarizes protections and **conscious trade-offs** shipped by the lib
 - **Cookie auth** — secure defaults (`HttpOnly`, `Secure`, `SameSite`); CSRF for unsafe methods when wired (see [Guides — Security](guides/security.md)).
 - **TOTP** — replay protection when a `totp_used_tokens_store` is configured; fail-fast in production without a store when replay protection is required; persisted secrets use the explicit `BaseUserManager.totp_secret_storage_posture` contract.
 - **OAuth** — state in `HttpOnly` cookie; strict validation; optional encryption at rest for provider tokens (`oauth_token_encryption_key`); guarded associate-by-email rules (`oauth_trust_provider_email_verified` on plugin-owned routes, `trust_provider_email_verified` on manual controllers, and `oauth_associate_by_email`).
-- **Opaque DB tokens** — keyed digest at rest; the canonical plugin path is `DatabaseTokenAuthConfig` plus `LitestarAuthConfig(..., database_token_auth=...)`, and legacy plaintext acceptance is migration-only and unsafe for production.
+- **Opaque DB tokens** — keyed digest at rest; plugin-managed DB-token wiring uses `DatabaseTokenAuthConfig` plus `LitestarAuthConfig(..., database_token_auth=...)`, and legacy plaintext acceptance is migration-only and unsafe for production.
 - **Rate limiting** — optional per-endpoint limits; in-memory backend is single-process only.
 - **Route-level role checks** — `has_any_role(...)` and `has_all_roles(...)` reuse the same normalized flat-role semantics as persistence and manager writes, and they fail closed if the authenticated user does not expose the documented role-capable contract.
 
@@ -34,7 +34,7 @@ Additional explicit opt-ins to weaker behavior:
 
 | Surface | Risk |
 | ---- | ---- |
-| `allow_legacy_plaintext_tokens=True` | Accepts legacy plaintext opaque tokens in DB for manual `DatabaseTokenStrategy` setups. For the canonical preset, set `DatabaseTokenAuthConfig.accept_legacy_plaintext_tokens=True` instead. |
+| `allow_legacy_plaintext_tokens=True` | Accepts legacy plaintext opaque tokens in DB for manual `DatabaseTokenStrategy` setups. For the plugin-managed DB-token preset, set `DatabaseTokenAuthConfig.accept_legacy_plaintext_tokens=True` instead. |
 | `totp_enable_requires_password=False` | Weakens step-up for TOTP enrollment. |
 | `csrf_secret` unset with cookie auth | CSRF middleware may not protect unsafe methods — see validation warnings at startup. |
 

@@ -9,10 +9,8 @@ from uuid import UUID, uuid4
 
 import pytest
 from litestar import Request, get
-from litestar.exceptions import NotAuthorizedException
 from litestar.middleware import DefineMiddleware
 
-from litestar_auth._plugin.config import DEFAULT_USER_MANAGER_DEPENDENCY_KEY
 from litestar_auth._plugin.dependencies import authorization_error_handler
 from litestar_auth.authentication.authenticator import Authenticator
 from litestar_auth.authentication.backend import AuthenticationBackend
@@ -23,7 +21,6 @@ from litestar_auth.exceptions import AuthorizationError, ErrorCode, InvalidPassw
 from litestar_auth.guards import has_all_roles, has_any_role
 from litestar_auth.manager import BaseUserManager, UserManagerSecurity
 from litestar_auth.password import PasswordHelper
-from litestar_auth.schemas import UserUpdate
 from tests._helpers import auth_middleware_get_request_session, litestar_app_with_user_manager
 from tests.integration.conftest import (
     DummySessionMaker,
@@ -342,30 +339,6 @@ async def test_me_endpoints_reject_inactive_users(
     assert (patch_response.json().get("extra") or {}).get("code") == ErrorCode.LOGIN_USER_INACTIVE
 
 
-async def test_controller_me_methods_raise_not_authorized_when_request_user_is_missing(
-    app: tuple[Litestar, InMemoryUserDatabase, UsersControllerManager, InMemoryTokenStrategy, ExampleUser, ExampleUser],
-) -> None:
-    """Directly exercise the redundant in-handler guard branches for coverage."""
-    controller_class = create_users_controller(
-        id_parser=UUID,
-        hard_delete=False,
-    )
-
-    class DummyRequest:
-        user = None
-
-    um_kw = {DEFAULT_USER_MANAGER_DEPENDENCY_KEY: app[2]}
-    get_me_handler = cast("Any", controller_class).get_me
-    with pytest.raises(NotAuthorizedException) as excinfo:
-        await get_me_handler.fn(object(), DummyRequest(), **um_kw)
-    assert str(excinfo.value.detail) == "Authentication credentials were not provided."
-
-    update_me_handler = cast("Any", controller_class).update_me
-    with pytest.raises(NotAuthorizedException) as excinfo:
-        await update_me_handler.fn(object(), DummyRequest(), UserUpdate(), **um_kw)
-    assert str(excinfo.value.detail) == "Authentication credentials were not provided."
-
-
 async def test_update_me_maps_user_manager_errors(
     client: tuple[
         AsyncTestClient[Litestar],
@@ -383,13 +356,17 @@ async def test_update_me_maps_user_manager_errors(
     headers = {"Authorization": f"Bearer {token}"}
 
     exists_message = "Email already exists."
-    monkeypatch.setattr(user_manager, "update", AsyncMock(side_effect=UserAlreadyExistsError(exists_message)))
+    monkeypatch.setattr(user_manager, "update", AsyncMock(side_effect=UserAlreadyExistsError(message=exists_message)))
     exists_response = await test_client.patch("/users/me", headers=headers, json={"email": "dup@example.com"})
     assert exists_response.status_code == HTTP_BAD_REQUEST
     assert (exists_response.json().get("extra") or {}).get("code") == ErrorCode.UPDATE_USER_EMAIL_ALREADY_EXISTS
 
     invalid_password_message = "Invalid password."
-    monkeypatch.setattr(user_manager, "update", AsyncMock(side_effect=InvalidPasswordError(invalid_password_message)))
+    monkeypatch.setattr(
+        user_manager,
+        "update",
+        AsyncMock(side_effect=InvalidPasswordError(message=invalid_password_message)),
+    )
     password_response = await test_client.patch(
         "/users/me",
         headers=headers,
@@ -471,7 +448,7 @@ async def test_update_user_maps_user_manager_errors(
     headers = {"Authorization": f"Bearer {token}"}
 
     exists_message = "Email already exists."
-    monkeypatch.setattr(user_manager, "update", AsyncMock(side_effect=UserAlreadyExistsError(exists_message)))
+    monkeypatch.setattr(user_manager, "update", AsyncMock(side_effect=UserAlreadyExistsError(message=exists_message)))
     exists_response = await test_client.patch(
         f"/users/{regular_user.id}",
         headers=headers,
@@ -481,7 +458,11 @@ async def test_update_user_maps_user_manager_errors(
     assert (exists_response.json().get("extra") or {}).get("code") == ErrorCode.UPDATE_USER_EMAIL_ALREADY_EXISTS
 
     invalid_password_message = "Invalid password."
-    monkeypatch.setattr(user_manager, "update", AsyncMock(side_effect=InvalidPasswordError(invalid_password_message)))
+    monkeypatch.setattr(
+        user_manager,
+        "update",
+        AsyncMock(side_effect=InvalidPasswordError(message=invalid_password_message)),
+    )
     password_response = await test_client.patch(
         f"/users/{regular_user.id}",
         headers=headers,

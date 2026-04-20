@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import secrets
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Protocol
+from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
 from litestar.exceptions import ClientException
 
@@ -58,6 +58,7 @@ class OAuthAccountStoreProtocol[UP: UserProtocol[Any], ID](Protocol):
         """Create or update the linked OAuth account."""
 
 
+@runtime_checkable
 class OAuthServiceUserManagerProtocol[UP: UserProtocol[Any], ID](Protocol):
     """User-manager behavior required by OAuth service orchestration."""
 

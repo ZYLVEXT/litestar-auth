@@ -50,6 +50,7 @@ from litestar_auth._plugin.validation import (
     validate_session_maker_or_external_db_session,
     validate_totp_config,
     validate_totp_sub_config,
+    validate_totp_user_model_protocol,
     validate_user_manager_security_config,
     validate_user_model_login_identifier_fields,
 )
@@ -79,11 +80,24 @@ from tests.integration.test_orchestrator import (
 if TYPE_CHECKING:
     from collections.abc import Callable
 
+    from litestar_auth.config import OAuthProviderConfig
+
 pytestmark = pytest.mark.unit
 
 JWT_SECRET = "s" * 32
 TOKEN_HASH_SECRET = "t" * 32
 TOTP_SECRET_KEY = "u" * 32
+
+
+def _oauth_provider(*, name: str, client: object) -> OAuthProviderConfig:
+    """Build an OAuthProviderConfig using the current runtime class.
+
+    Returns:
+        The current-runtime OAuthProviderConfig instance.
+    """
+    config_module = importlib.import_module("litestar_auth.config")
+    oauth_provider_config_type = cast("type[Any]", config_module.OAuthProviderConfig)
+    return oauth_provider_config_type(name=name, client=client)
 
 
 class _DurableDenylistStore:
@@ -275,7 +289,7 @@ def test_warn_insecure_plugin_startup_defaults_emits_all_expected_security_warni
             _cookie_backend(),
             _jwt_backend(),
         ],
-        oauth_config=OAuthConfig(oauth_providers=[("github", object())]),
+        oauth_config=OAuthConfig(oauth_providers=[_oauth_provider(name="github", client=object())]),
         rate_limit_config=_rate_limit_config(backend=InMemoryRateLimiter(max_attempts=5, window_seconds=60)),
         totp_config=TotpConfig(
             totp_pending_secret="p" * 32,
@@ -329,7 +343,7 @@ def test_warn_insecure_plugin_startup_defaults_is_silent_in_testing(
     """Testing mode suppresses the insecure-default warnings."""
     config = _minimal_config(
         backends=[_cookie_backend(), _jwt_backend()],
-        oauth_config=OAuthConfig(oauth_providers=[("github", object())]),
+        oauth_config=OAuthConfig(oauth_providers=[_oauth_provider(name="github", client=object())]),
         rate_limit_config=_rate_limit_config(backend=InMemoryRateLimiter(max_attempts=5, window_seconds=60)),
         totp_config=TotpConfig(
             totp_pending_secret="p" * 32,
@@ -357,7 +371,7 @@ def test_warn_insecure_plugin_startup_defaults_is_silent_for_safe_production_con
             _jwt_backend(denylist_store=_DurableDenylistStore()),
         ],
         oauth_config=OAuthConfig(
-            oauth_providers=[("github", object())],
+            oauth_providers=[_oauth_provider(name="github", client=object())],
             oauth_token_encryption_key="a2tra2tra2tra2tra2tra2tra2tra2tra2tra2tra2s=",
         ),
         rate_limit_config=_rate_limit_config(backend=_SharedRateLimitBackend()),
@@ -888,6 +902,21 @@ def test_resolve_user_manager_account_state_validator_raises_for_missing_callabl
         validation_module.resolve_user_manager_account_state_validator(_MissingValidatorManager)
 
 
+def test_resolve_user_manager_account_state_validator_raises_for_missing_manager_class() -> None:
+    """Factory-owned manager paths still fail with the shared contract error when no class is set."""
+    with pytest.raises(TypeError, match="require_account_state"):
+        validation_module.resolve_user_manager_account_state_validator(None)
+
+
+def test_validate_default_user_manager_constructor_contract_rejects_missing_manager_class() -> None:
+    """Default builder validation rejects configs with neither manager class nor factory."""
+    config = _minimal_config()
+    config.user_manager_class = None
+
+    with pytest.raises(validation_module.ConfigurationError, match="user_manager_class must be configured"):
+        validation_module.validate_default_user_manager_constructor_contract(config)
+
+
 @pytest.mark.parametrize(("use_typed_security"), [True, False])
 def test_default_user_manager_contract_keeps_runtime_and_validation_surfaces_aligned(
     *,
@@ -1183,6 +1212,59 @@ def test_validate_totp_pending_secret_config_rejects_short_secret() -> None:
     with pytest.raises(Exception, match="at least 32") as exc_info:
         _validate_totp_pending_secret_config(config)
     assert type(exc_info.value).__name__ == "ConfigurationError"
+
+
+def test_validate_totp_user_model_protocol_accepts_totp_user_model() -> None:
+    """TOTP startup validation accepts a model exposing the required protocol fields."""
+    config = _minimal_config(totp_config=_configured_totp_config())
+
+    validate_totp_user_model_protocol(config)
+
+
+def test_validate_config_rejects_totp_enabled_user_model_without_totp_fields() -> None:
+    """TOTP-enabled startup validation fails before serving requests for incompatible user models."""
+
+    class _UserModelWithoutTotpSecret:
+        id = UUID(int=0)
+        email = "user@example.com"
+        hashed_password = "hashed-password"
+        is_active = True
+        is_verified = False
+        is_superuser = False
+        roles = ()
+
+    config = _minimal_config(
+        totp_config=_configured_totp_config(totp_used_tokens_store=cast("Any", InMemoryUsedTotpCodeStore())),
+        user_manager_security=UserManagerSecurity[UUID](
+            verification_token_secret="v" * 32,
+            reset_password_token_secret="r" * 32,
+            totp_secret_key=TOTP_SECRET_KEY,
+            id_parser=UUID,
+        ),
+    )
+    config.user_model = cast("type[ExampleUser]", _UserModelWithoutTotpSecret)
+
+    with pytest.raises(
+        validation_module.ConfigurationError,
+        match=r"TotpUserProtocol: 'totp_secret'",
+    ):
+        validate_config(config)
+
+
+def test_validate_totp_user_model_protocol_rejects_missing_email_and_totp_fields() -> None:
+    """The startup validator reports every missing TOTP protocol field."""
+
+    class _UserModelWithoutTotpFields:
+        id = UUID(int=0)
+
+    config = _minimal_config(totp_config=_configured_totp_config())
+    config.user_model = cast("type[ExampleUser]", _UserModelWithoutTotpFields)
+
+    with pytest.raises(
+        validation_module.ConfigurationError,
+        match=r"TotpUserProtocol: 'email', 'totp_secret'",
+    ):
+        validate_totp_user_model_protocol(config)
 
 
 def test_validate_totp_encryption_key_requires_secret_in_production(
@@ -1481,25 +1563,20 @@ def test_build_csrf_config_returns_expected_cookie_settings() -> None:
 
 
 @pytest.mark.parametrize(
-    "oauth_config",
+    "route_variant",
     [
-        pytest.param(
-            OAuthConfig(oauth_providers=[("github", object())]),
-            id="login-providers",
-        ),
-        pytest.param(
-            OAuthConfig(
-                oauth_providers=[("github", object())],
-                include_oauth_associate=True,
-            ),
-            id="login-and-associate",
-        ),
+        pytest.param("login-only", id="login-providers"),
+        pytest.param("login-and-associate", id="login-and-associate"),
     ],
 )
 def test_require_oauth_token_encryption_for_configured_providers_calls_require_key(
-    oauth_config: OAuthConfig,
+    route_variant: str,
 ) -> None:
     """Either configured OAuth provider inventory triggers the fail-closed key requirement."""
+    oauth_config = OAuthConfig(
+        oauth_providers=[_oauth_provider(name="github", client=object())],
+        include_oauth_associate=route_variant == "login-and-associate",
+    )
     config = _minimal_config(oauth_config=oauth_config)
     seen: list[str] = []
 
@@ -1526,10 +1603,10 @@ def test_require_oauth_token_encryption_for_configured_providers_skips_unconfigu
 def test_has_configured_oauth_provider_helpers_report_expected_state() -> None:
     """Both provider helper variants agree on configured and unconfigured OAuth state."""
     empty_config = OAuthConfig()
-    login_only_config = OAuthConfig(oauth_providers=[("github", object())])
+    login_only_config = OAuthConfig(oauth_providers=[_oauth_provider(name="github", client=object())])
     login_and_associate_config = OAuthConfig(
         include_oauth_associate=True,
-        oauth_providers=[("github", object())],
+        oauth_providers=[_oauth_provider(name="github", client=object())],
     )
 
     assert has_configured_oauth_providers(_minimal_config(oauth_config=None)) is False
@@ -1544,7 +1621,7 @@ def test_require_secure_oauth_redirect_in_production_accepts_public_https_origin
     """Production startup accepts public HTTPS plugin redirect origins."""
     config = _minimal_config(
         oauth_config=OAuthConfig(
-            oauth_providers=[("github", object())],
+            oauth_providers=[_oauth_provider(name="github", client=object())],
             oauth_redirect_base_url="https://app.example.com/auth",
         ),
     )
@@ -1574,7 +1651,7 @@ def test_require_secure_oauth_redirect_in_production_rejects_insecure_origins(
     """Production startup fails closed for public HTTP and loopback OAuth redirect bases."""
     config = _minimal_config(
         oauth_config=OAuthConfig(
-            oauth_providers=[("github", object())],
+            oauth_providers=[_oauth_provider(name="github", client=object())],
             oauth_redirect_base_url=redirect_base_url,
         ),
     )
@@ -1587,7 +1664,7 @@ def test_require_secure_oauth_redirect_in_production_skips_debug_mode() -> None:
     """Debug mode keeps explicit localhost redirect recipes available."""
     config = _minimal_config(
         oauth_config=OAuthConfig(
-            oauth_providers=[("github", object())],
+            oauth_providers=[_oauth_provider(name="github", client=object())],
             oauth_redirect_base_url="http://localhost/auth",
         ),
     )
@@ -1599,7 +1676,7 @@ def test_require_secure_oauth_redirect_in_production_skips_unsafe_testing() -> N
     """unsafe_testing keeps explicit localhost redirect recipes available for tests."""
     config = _minimal_config(
         oauth_config=OAuthConfig(
-            oauth_providers=[("github", object())],
+            oauth_providers=[_oauth_provider(name="github", client=object())],
             oauth_redirect_base_url="http://localhost/auth",
         ),
     )
@@ -1625,7 +1702,7 @@ def test_validate_config_rejects_missing_redirect_base_url_for_plugin_owned_oaut
     """Plugin-owned OAuth routes require an explicit public redirect base URL."""
     config = _minimal_config(
         oauth_config=OAuthConfig(
-            oauth_providers=[("github", object())],
+            oauth_providers=[_oauth_provider(name="github", client=object())],
             oauth_token_encryption_key="YWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWE=",
         ),
     )
@@ -1651,7 +1728,10 @@ def test_validate_config_rejects_duplicate_login_provider_names() -> None:
     """Duplicate login-provider names would make explicit route ownership ambiguous."""
     config = _minimal_config(
         oauth_config=OAuthConfig(
-            oauth_providers=[("github", object()), ("github", object())],
+            oauth_providers=[
+                _oauth_provider(name="github", client=object()),
+                _oauth_provider(name="github", client=object()),
+            ],
             oauth_redirect_base_url="https://app.example.com/auth",
             oauth_token_encryption_key="YWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWE=",
         ),

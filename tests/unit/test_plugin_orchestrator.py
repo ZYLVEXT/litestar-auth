@@ -5,7 +5,6 @@ from __future__ import annotations
 import asyncio
 import importlib
 import warnings
-from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import timedelta
 from functools import partial
@@ -41,8 +40,9 @@ from litestar_auth.authentication.strategy.db_models import DatabaseTokenModels
 from litestar_auth.authentication.strategy.jwt import InMemoryJWTDenylistStore, JWTStrategy
 from litestar_auth.authentication.transport.bearer import BearerTransport
 from litestar_auth.authentication.transport.cookie import CookieTransport
+from litestar_auth.config import require_password_length
 from litestar_auth.exceptions import ConfigurationError
-from litestar_auth.manager import UserManagerSecurity, require_password_length
+from litestar_auth.manager import UserManagerSecurity
 from litestar_auth.password import PasswordHelper
 from litestar_auth.plugin import (
     DatabaseTokenAuthConfig,
@@ -70,8 +70,9 @@ from tests.integration.test_orchestrator import (
 )
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Iterator
+    from collections.abc import Callable
 
+    from litestar_auth.config import OAuthProviderConfig
     from tests._helpers import AsyncFakeRedis
 
 pytestmark = pytest.mark.unit
@@ -87,6 +88,17 @@ def _current_database_token_strategy_type() -> type[Any]:
     """Return the current DB-token strategy class after reload-oriented tests."""
     db_strategy_module = importlib.import_module("litestar_auth.authentication.strategy.db")
     return cast("type[Any]", db_strategy_module.DatabaseTokenStrategy)
+
+
+def _oauth_provider(*, name: str, client: object) -> OAuthProviderConfig:
+    """Build an OAuthProviderConfig using the current runtime class.
+
+    Returns:
+        The current-runtime OAuthProviderConfig instance.
+    """
+    config_module = importlib.import_module("litestar_auth.config")
+    oauth_provider_config_type = cast("type[Any]", config_module.OAuthProviderConfig)
+    return oauth_provider_config_type(name=name, client=client)
 
 
 def _current_authentication_backend_type() -> type[Any]:
@@ -495,7 +507,7 @@ def test_on_app_init_requires_oauth_token_encryption_key_for_oauth_providers() -
     """OAuth-enabled startup fails closed without an encryption key in non-test runtime."""
     config = _minimal_config()
     config.oauth_config = OAuthConfig(
-        oauth_providers=[("github", object())],
+        oauth_providers=[_oauth_provider(name="github", client=object())],
         oauth_redirect_base_url="https://app.example.com/auth",
     )
     plugin = LitestarAuth(config)
@@ -513,7 +525,7 @@ def test_on_app_init_allows_oauth_providers_when_encryption_key_is_configured() 
     """Configured OAuth encryption keys keep app-init startup guard silent."""
     config = _minimal_config()
     config.oauth_config = OAuthConfig(
-        oauth_providers=[("github", object())],
+        oauth_providers=[_oauth_provider(name="github", client=object())],
         oauth_redirect_base_url="https://app.example.com/auth",
         oauth_token_encryption_key="YWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWE=",
     )
@@ -564,7 +576,7 @@ def test_on_app_init_rejects_insecure_oauth_redirect_origins_in_production(
     """Production app init fails closed for insecure plugin-owned OAuth redirect bases."""
     config = _minimal_config()
     config.oauth_config = OAuthConfig(
-        oauth_providers=[("github", object())],
+        oauth_providers=[_oauth_provider(name="github", client=object())],
         oauth_redirect_base_url=redirect_base_url,
         oauth_token_encryption_key="YWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWE=",
     )
@@ -578,7 +590,7 @@ def test_on_app_init_allows_loopback_oauth_redirect_origin_in_debug_mode() -> No
     """Debug mode preserves explicit localhost OAuth plugin recipes."""
     config = _minimal_config()
     config.oauth_config = OAuthConfig(
-        oauth_providers=[("github", object())],
+        oauth_providers=[_oauth_provider(name="github", client=object())],
         oauth_redirect_base_url="http://localhost/auth",
         oauth_token_encryption_key="YWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWE=",
     )
@@ -618,7 +630,7 @@ def test_on_app_init_allows_missing_oauth_token_encryption_key_in_testing(
     config = _minimal_config()
     config.unsafe_testing = True
     config.oauth_config = OAuthConfig(
-        oauth_providers=[("github", object())],
+        oauth_providers=[_oauth_provider(name="github", client=object())],
         oauth_redirect_base_url="https://app.example.com/auth",
     )
     plugin = LitestarAuth(config)
@@ -652,7 +664,7 @@ def test_on_app_init_testing_recipe_suppresses_single_process_security_warnings(
     config.unsafe_testing = True
     config.csrf_secret = "c" * 32
     config.oauth_config = OAuthConfig(
-        oauth_providers=[("github", object())],
+        oauth_providers=[_oauth_provider(name="github", client=object())],
         oauth_redirect_base_url="https://app.example.com/auth",
     )
     config.rate_limit_config = AuthRateLimitConfig(
@@ -889,7 +901,7 @@ def test_build_user_manager_wraps_user_db_and_passes_bound_backends(monkeypatch:
     manager = plugin._build_user_manager(cast("Any", session))
 
     assert manager == "manager"
-    assert set(captured) == {"session", "user_db", "config", "backends"}
+    assert set(captured) == {"session", "user_db", "config", "backends", "skip_reuse_warning"}
     assert captured["session"] is session
     assert captured["config"] is plugin.config
     assert captured["user_db"] == _ScopedProxyRecorder(
@@ -928,51 +940,38 @@ def test_build_user_manager_passes_login_identifier_from_config() -> None:
 def test_build_user_manager_uses_plugin_warning_owner_for_default_builder(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """The bundled manager builder runs inside the plugin-owned warning scope with the config baseline."""
+    """The bundled manager builder passes the explicit reused-secret skip flag."""
     plugin = LitestarAuth(_minimal_config())
-    captured: list[tuple[str | None, str | None, str | None]] = []
+    captured: list[bool] = []
 
-    @contextmanager
-    def _record_owner(
-        *,
-        verification_token_secret: str | None = None,
-        reset_password_token_secret: str | None = None,
-        totp_secret_key: str | None = None,
-    ) -> Iterator[None]:
-        captured.append((verification_token_secret, reset_password_token_secret, totp_secret_key))
-        yield
+    def _record_factory(**kwargs: object) -> object:
+        captured.append(cast("bool", kwargs["skip_reuse_warning"]))
+        return plugin_module._plugin_config.build_user_manager(**kwargs)
 
-    monkeypatch.setattr(plugin_module, "plugin_secret_role_warning_owner", _record_owner)
+    monkeypatch.setattr(plugin, "_user_manager_factory", _record_factory)
 
     plugin._build_user_manager(cast("Any", DummySession()))
 
-    assert captured == [("verify-secret-12345678901234567890", "reset-secret-123456789012345678901", None)]
+    assert captured == [True]
 
 
 def test_build_user_manager_uses_plugin_warning_owner_baseline_for_custom_factory(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Custom factories inherit the config-owned baseline so aligned managers do not duplicate warnings."""
+    """Custom factories receive the explicit reused-secret skip flag from the plugin."""
     plugin = LitestarAuth(_minimal_config())
-    captured: list[tuple[str | None, str | None, str | None]] = []
+    captured: list[bool] = []
 
-    @contextmanager
-    def _record_owner(
-        *,
-        verification_token_secret: str | None = None,
-        reset_password_token_secret: str | None = None,
-        totp_secret_key: str | None = None,
-    ) -> Iterator[None]:
-        captured.append((verification_token_secret, reset_password_token_secret, totp_secret_key))
-        yield
+    def _record_factory(**kwargs: object) -> object:
+        captured.append(cast("bool", kwargs["skip_reuse_warning"]))
+        return "manager"
 
-    monkeypatch.setattr(plugin_module, "plugin_secret_role_warning_owner", _record_owner)
-    plugin._user_manager_factory = lambda **_kwargs: cast("Any", "manager")
+    monkeypatch.setattr(plugin, "_user_manager_factory", _record_factory)
 
     manager = plugin._build_user_manager(cast("Any", DummySession()))
 
     assert manager == "manager"
-    assert captured == [("verify-secret-12345678901234567890", "reset-secret-123456789012345678901", None)]
+    assert captured == [True]
 
 
 def test_build_user_manager_passes_typed_security_to_security_only_manager() -> None:
@@ -988,6 +987,7 @@ def test_build_user_manager_passes_typed_security_to_security_only_manager() -> 
             password_validator: object | None = None,
             backends: tuple[object, ...] = (),
             login_identifier: Literal["email", "username"] = "email",
+            skip_reuse_warning: bool = False,
             unsafe_testing: bool = False,
         ) -> None:
             self.received_security = security
@@ -998,6 +998,7 @@ def test_build_user_manager_passes_typed_security_to_security_only_manager() -> 
                 password_validator=cast("Any", password_validator),
                 backends=backends,
                 login_identifier=login_identifier,
+                skip_reuse_warning=skip_reuse_warning,
                 unsafe_testing=unsafe_testing,
             )
 

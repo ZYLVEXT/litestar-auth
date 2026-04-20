@@ -1,7 +1,7 @@
 """Database-backed authentication strategy models and model contracts.
 
 The concrete token ORM classes still live here because ``DatabaseTokenStrategy`` persists them, but
-the canonical public bootstrap helper lives at
+the public bootstrap helper lives at
 ``litestar_auth.models.import_token_orm_models()`` so explicit mapper registration stays with the
 models boundary.
 """

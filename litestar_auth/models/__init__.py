@@ -1,6 +1,6 @@
 """ORM models package.
 
-Use :func:`import_token_orm_models` from this package as the canonical explicit bootstrap helper
+Use :func:`import_token_orm_models` from this package as the explicit bootstrap helper
 for the bundled token tables so mapper discovery stays under the models boundary. The strategy
 layer still exposes the same helper only as a compatibility re-export for existing imports.
 

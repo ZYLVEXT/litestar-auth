@@ -3,11 +3,11 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Protocol, cast
+from typing import TYPE_CHECKING, Any, Protocol, cast, runtime_checkable
 
 import msgspec
 from litestar import Controller, Request, delete, get, patch
-from litestar.exceptions import ClientException, NotAuthorizedException, NotFoundException
+from litestar.exceptions import ClientException, NotFoundException
 from litestar.params import Parameter
 
 from litestar_auth.controllers._utils import (
@@ -42,6 +42,7 @@ class UsersControllerUserProtocol[ID](RoleCapableUserProtocol[ID], Protocol):
     is_superuser: bool
 
 
+@runtime_checkable
 class UsersControllerUserManagerProtocol[UP: UsersControllerUserProtocol[Any], ID](
     AccountStateValidatorProvider[UP],
     Protocol,
@@ -112,13 +113,9 @@ async def _users_handle_get_me[UP: UsersControllerUserProtocol[Any], ID](
     Returns:
         Public payload for the authenticated user.
 
-    Raises:
-        NotAuthorizedException: If the request does not contain an authenticated user.
     """
-    user: UP | None = request.user
-    if user is None:
-        msg = "Authentication credentials were not provided."
-        raise NotAuthorizedException(detail=msg)
+    # Litestar does not narrow ``Request.user`` to ``UP``; this handler is mounted behind ``is_authenticated``.
+    user = cast("UP", request.user)
     await _require_account_state(user, user_manager=user_manager, require_verified=False)
     return _to_user_schema(user, ctx.user_read_schema_type, unsafe_testing=ctx.unsafe_testing)
 
@@ -135,13 +132,9 @@ async def _users_handle_update_me[UP: UsersControllerUserProtocol[Any], ID](
     Returns:
         Public payload for the updated authenticated user.
 
-    Raises:
-        NotAuthorizedException: If the request does not contain an authenticated user.
     """
-    user: UP | None = request.user
-    if user is None:
-        msg = "Authentication credentials were not provided."
-        raise NotAuthorizedException(detail=msg)
+    # Litestar does not narrow ``Request.user`` to ``UP``; this handler is mounted behind ``is_authenticated``.
+    user = cast("UP", request.user)
     await _require_account_state(user, user_manager=user_manager, require_verified=False)
     async with _map_domain_exceptions(
         {
@@ -204,7 +197,7 @@ def _define_users_controller_class_di[UP: UsersControllerUserProtocol[Any], ID](
         async def get_me(  # noqa: PLR6301
             self,
             request: Request[Any, Any, Any],
-            litestar_auth_user_manager: Any,  # noqa: ANN401
+            litestar_auth_user_manager: UsersControllerUserManagerProtocol[Any, Any],
         ) -> msgspec.Struct:
             return await _users_handle_get_me(request, ctx=ctx, user_manager=litestar_auth_user_manager)
 
@@ -213,7 +206,7 @@ def _define_users_controller_class_di[UP: UsersControllerUserProtocol[Any], ID](
             self,
             request: Request[Any, Any, Any],
             data: msgspec.Struct,
-            litestar_auth_user_manager: Any,  # noqa: ANN401
+            litestar_auth_user_manager: UsersControllerUserManagerProtocol[Any, Any],
         ) -> msgspec.Struct:
             return await _users_handle_update_me(
                 request,
@@ -226,7 +219,7 @@ def _define_users_controller_class_di[UP: UsersControllerUserProtocol[Any], ID](
         async def get_user(  # noqa: PLR6301
             self,
             user_id: str,
-            litestar_auth_user_manager: Any,  # noqa: ANN401
+            litestar_auth_user_manager: UsersControllerUserManagerProtocol[Any, Any],
         ) -> msgspec.Struct:
             loaded = await _users_get_user_or_404(
                 user_id,
@@ -240,7 +233,7 @@ def _define_users_controller_class_di[UP: UsersControllerUserProtocol[Any], ID](
             self,
             user_id: str,
             data: msgspec.Struct,
-            litestar_auth_user_manager: Any,  # noqa: ANN401
+            litestar_auth_user_manager: UsersControllerUserManagerProtocol[Any, Any],
         ) -> msgspec.Struct:
             user = await _users_get_user_or_404(
                 user_id,
@@ -261,7 +254,7 @@ def _define_users_controller_class_di[UP: UsersControllerUserProtocol[Any], ID](
             self,
             user_id: str,
             request: Request[Any, Any, Any],
-            litestar_auth_user_manager: Any,  # noqa: ANN401
+            litestar_auth_user_manager: UsersControllerUserManagerProtocol[Any, Any],
         ) -> msgspec.Struct:
             return await _users_handle_delete_user(
                 user_id,
@@ -276,7 +269,7 @@ def _define_users_controller_class_di[UP: UsersControllerUserProtocol[Any], ID](
             limit: int = Parameter(default=ctx.default_limit, query="limit", ge=1, le=ctx.max_limit),
             offset: int = Parameter(default=0, query="offset", ge=0),
             *,
-            litestar_auth_user_manager: Any,  # noqa: ANN401
+            litestar_auth_user_manager: UsersControllerUserManagerProtocol[Any, Any],
         ) -> msgspec.Struct:
             users, total = await litestar_auth_user_manager.list_users(offset=offset, limit=limit)
             return ctx.users_page_schema_type(
@@ -319,7 +312,7 @@ def create_users_controller[UP: UsersControllerUserProtocol[Any], ID](  # noqa: 
         hard_delete: When ``True``, admin deletes remove users permanently.
         user_read_schema: Custom msgspec struct used for public user responses.
         user_update_schema: Custom msgspec struct used for update requests.
-        unsafe_testing: Explicit test-only escape hatch that allows response
+        unsafe_testing: Explicit test-only override that allows response
             schemas with sensitive fields for isolated fixtures.
         security: Optional OpenAPI security requirements applied at the
             controller level to annotate all routes.

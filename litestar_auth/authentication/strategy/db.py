@@ -91,7 +91,7 @@ class DatabaseTokenStrategy[UP: UserProtocol[Any], ID](Strategy[UP, ID], Refresh
             token_bytes: Number of random bytes used for token generation.
             accept_legacy_plaintext_tokens: When enabled, accept previously persisted raw tokens
                 stored before digest-at-rest hardening. This is intended for migrations only.
-            unsafe_testing: Explicit per-instance escape hatch for tests that need to
+            unsafe_testing: Explicit per-instance test-only override for flows that need to
                 suppress production-only warnings around temporary insecure
                 compatibility modes.
 

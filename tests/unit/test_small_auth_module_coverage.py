@@ -7,7 +7,6 @@ from typing import TYPE_CHECKING
 
 import pytest
 
-import litestar_auth as root_package
 import litestar_auth._schema_fields as schema_fields_module
 import litestar_auth.authentication.strategy._opaque_tokens as opaque_tokens_module
 import litestar_auth.oauth as oauth_module
@@ -19,7 +18,8 @@ from litestar_auth.oauth.client_adapter import (
     make_async_email_verification_client,
 )
 from litestar_auth.oauth.router import create_provider_oauth_controller, load_httpx_oauth_client
-from litestar_auth.payloads import LoginCredentials, UserCreate
+from litestar_auth.payloads import LoginCredentials
+from litestar_auth.schemas import UserCreate
 
 if TYPE_CHECKING:
     from types import ModuleType
@@ -102,11 +102,6 @@ def test_oauth_init_module_executes_under_coverage() -> None:
         is current_client_adapter_module.make_async_email_verification_client
     )
     assert (
-        root_package.create_provider_oauth_controller.__name__
-        == reloaded_module.create_provider_oauth_controller.__name__
-    )
-    assert root_package.load_httpx_oauth_client.__name__ == reloaded_module.load_httpx_oauth_client.__name__
-    assert (
         reloaded_module.OAuthEmailVerificationAsyncClientProtocol.__name__
         == OAuthEmailVerificationAsyncClientProtocol.__name__
     )
@@ -152,13 +147,11 @@ def test_payloads_module_executes_under_coverage() -> None:
         "TotpEnableRequest",
         "TotpEnableResponse",
         "TotpVerifyRequest",
-        "UserCreate",
-        "UserRead",
-        "UserUpdate",
         "VerifyToken",
     )
     assert reloaded_module.LoginCredentials.__name__ == LoginCredentials.__name__
-    assert reloaded_module.UserCreate.__struct_fields__ == UserCreate.__struct_fields__
+    assert UserCreate.__struct_fields__ == ("email", "password")
+    assert not hasattr(reloaded_module, "UserCreate")
 
 
 def test_schema_fields_module_executes_under_coverage() -> None:

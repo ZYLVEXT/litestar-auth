@@ -85,7 +85,7 @@ class UserPolicy:
         try:
             require_password_length(password, minimum_length=DEFAULT_MINIMUM_PASSWORD_LENGTH)
         except ValueError as exc:
-            raise InvalidPasswordError(str(exc)) from exc
+            raise InvalidPasswordError(message=str(exc)) from exc
 
         if self.password_validator is None:
             return
@@ -95,7 +95,7 @@ class UserPolicy:
         except InvalidPasswordError:
             raise
         except ValueError as exc:
-            raise InvalidPasswordError(str(exc)) from exc
+            raise InvalidPasswordError(message=str(exc)) from exc
 
     @staticmethod
     def require_account_state(user: Any, *, require_verified: bool = False) -> None:

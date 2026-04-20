@@ -15,13 +15,13 @@ Names are loaded lazily (PEP 562) when accessed on the package.
 | Reference `User` (and typical tests / quickstarts) | `from litestar_auth.models import User` or `from litestar_auth.models.user import User` |
 
 Use [Configuration](../configuration.md#custom-sqlalchemy-user-and-token-models) as the
-canonical ORM setup guide for token bootstrap lifecycle, relational role composition, custom model
+main ORM setup guide for token bootstrap lifecycle, relational role composition, custom model
 families, `SQLAlchemyUserDatabase`, and the supported password-column hook. Use the [Custom user +
 OAuth cookbook](../cookbook/custom_user_oauth.md) when the application owns the `user` table.
 
 Avoid `from litestar_auth.models import User` (or the `user` submodule) in apps that already map table `user` to a custom model. That import registers the bundled reference mapper and conflicts with an app-owned mapping. Likewise, importing `OAuthAccount` from `litestar_auth.models.oauth` only keeps the reference `User` lazy; when the app owns a different user class, table, or registry, prefer an `OAuthAccountMixin` subclass that points back at the custom user contract.
 
-`import_token_orm_models()` remains the canonical explicit helper for bundled token metadata bootstrap and Alembic-style autogenerate. `LitestarAuth.on_app_init()` now calls the same helper lazily for plugin-managed runtime when bundled DB-token models are active, so no extra import side effect is required only to make the plugin work.
+`import_token_orm_models()` remains the explicit helper for bundled token metadata bootstrap and Alembic-style autogenerate. `LitestarAuth.on_app_init()` now calls the same helper lazily for plugin-managed runtime when bundled DB-token models are active, so no extra import side effect is required only to make the plugin work.
 
 For custom SQLAlchemy models, compose the mixins on your own declarative base instead of copying
 columns or relationship wiring from the reference classes.
@@ -88,7 +88,7 @@ relationship rows instead of a JSON column on the user table.
 The bundled `User` model composes `UserRoleRelationshipMixin`, and the bundled `Role` /
 `UserRole` models are the reference implementation of the same contract.
 
-## Canonical role shape
+## Role shape
 
 The bundled relational role family consists of:
 
@@ -118,7 +118,7 @@ This ORM redesign does not change the higher-level auth contract: managers, sche
 still operate on flat normalized `roles`, and the library still does not provide RBAC permission
 matrices or policy DSLs.
 
-## Canonical `oauth_account` shape
+## `oauth_account` shape
 
 The library table (bundled `OAuthAccount`) includes at least:
 

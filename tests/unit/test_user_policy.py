@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import importlib
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING
 
 import pytest
 
@@ -28,19 +28,19 @@ def _user_policy_cls() -> type[user_policy_module.UserPolicy]:
     return module.UserPolicy
 
 
-def _invalid_password_error_cls() -> type[Exception]:
+def _invalid_password_error_cls() -> type[user_policy_module.InvalidPasswordError]:
     """Return the ``InvalidPasswordError`` bound in ``user_policy`` (matches ``UserPolicy`` raises)."""
-    return cast("type[Exception]", user_policy_module.InvalidPasswordError)
+    return user_policy_module.InvalidPasswordError
 
 
-def _inactive_user_error_cls() -> type[Exception]:
+def _inactive_user_error_cls() -> type[user_policy_module.InactiveUserError]:
     """Return the ``InactiveUserError`` bound in ``user_policy`` (matches ``UserPolicy`` raises)."""
-    return cast("type[Exception]", user_policy_module.InactiveUserError)
+    return user_policy_module.InactiveUserError
 
 
-def _unverified_user_error_cls() -> type[Exception]:
+def _unverified_user_error_cls() -> type[user_policy_module.UnverifiedUserError]:
     """Return the ``UnverifiedUserError`` bound in ``user_policy`` (matches ``UserPolicy`` raises)."""
-    return cast("type[Exception]", user_policy_module.UnverifiedUserError)
+    return user_policy_module.UnverifiedUserError
 
 
 @dataclass
@@ -155,7 +155,7 @@ def test_validate_password_custom_validator_called() -> None:
     def reject_short(password: str) -> None:
         if len(password) < min_len:
             msg = "too short"
-            raise _invalid_password_error_cls()(msg)
+            raise _invalid_password_error_cls()(message=msg)
 
     policy = _make_policy(password_validator=reject_short)
     # Password meets baseline (12+) but fails custom validator (20+)

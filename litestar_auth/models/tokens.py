@@ -1,4 +1,4 @@
-"""Canonical token-model registration helpers exposed from the models boundary."""
+"""Token-model registration helpers exposed from the models boundary."""
 
 from __future__ import annotations
 
@@ -10,7 +10,7 @@ from litestar_auth.authentication.strategy.db_models import AccessToken, Refresh
 def import_token_orm_models() -> tuple[type[AccessToken], type[RefreshToken]]:
     """Return the bundled token ORM models for explicit and plugin-owned bootstrap.
 
-    This remains the canonical public helper for metadata bootstrap and Alembic-style
+    This remains the public helper for metadata bootstrap and Alembic-style
     autogenerate flows. ``LitestarAuth.on_app_init()`` also calls it lazily when bundled
     DB-token models are active, so plugin-managed runtime no longer depends on a separate
     app-level import side effect. The helper keeps token-model discovery under

@@ -21,9 +21,6 @@ from litestar_auth.config import (
     TOTP_PENDING_AUDIENCE,
     VERIFY_TOKEN_AUDIENCE,
     _resolve_token_secret,
-    plugin_owns_secret_role_reuse_warning,
-    plugin_secret_role_warning_matches_manager_surface,
-    plugin_secret_role_warning_owner,
     resolve_trusted_proxy_setting,
     validate_secret_length,
 )
@@ -133,38 +130,6 @@ def test_resolve_token_secret_returns_explicit_secret_in_production() -> None:
     secret = "s" * MINIMUM_SECRET_LENGTH
 
     assert _resolve_token_secret(secret, label="JWT secret") == secret
-
-
-def test_plugin_secret_role_warning_matcher_returns_false_without_active_owner() -> None:
-    """The secret-role baseline matcher is false when no plugin-owned warning scope is active."""
-    assert not plugin_owns_secret_role_reuse_warning()
-    assert not plugin_secret_role_warning_matches_manager_surface(
-        verification_token_secret="verify-secret",
-        reset_password_token_secret="reset-secret",
-        totp_secret_key="totp-secret",
-    )
-
-
-def test_plugin_secret_role_warning_matcher_tracks_active_owner() -> None:
-    """The secret-role baseline matcher follows the active plugin-owned warning scope."""
-    with plugin_secret_role_warning_owner(
-        verification_token_secret="verify-secret",
-        reset_password_token_secret="reset-secret",
-        totp_secret_key="totp-secret",
-    ):
-        assert plugin_owns_secret_role_reuse_warning()
-        assert plugin_secret_role_warning_matches_manager_surface(
-            verification_token_secret="verify-secret",
-            reset_password_token_secret="reset-secret",
-            totp_secret_key="totp-secret",
-        )
-        assert not plugin_secret_role_warning_matches_manager_surface(
-            verification_token_secret="verify-secret",
-            reset_password_token_secret="reset-secret",
-            totp_secret_key="other-secret",
-        )
-
-    assert not plugin_owns_secret_role_reuse_warning()
 
 
 @pytest.mark.parametrize("trusted_proxy", [True, False])

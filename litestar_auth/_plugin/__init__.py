@@ -2,7 +2,7 @@
 
 `litestar_auth.plugin` is the stable public entry point for plugin consumers.
 Names exported from this package exist for internal composition and for
-compatibility shims only.
+legacy-compatible re-exports only.
 """
 
 from litestar_auth._plugin.config import (

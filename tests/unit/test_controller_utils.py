@@ -112,7 +112,7 @@ def _raise_user_already_exists() -> None:
         UserAlreadyExistsError: Always.
     """
     msg = "Email already registered"
-    raise UserAlreadyExistsError(msg)
+    raise UserAlreadyExistsError(message=msg)
 
 
 def _raise_invalid_password() -> None:
@@ -122,7 +122,7 @@ def _raise_invalid_password() -> None:
         InvalidPasswordError: Always.
     """
     msg = "too weak"
-    raise InvalidPasswordError(msg)
+    raise InvalidPasswordError(message=msg)
 
 
 async def _raise_runtime_error_in_mapped_context() -> None:
@@ -474,7 +474,7 @@ def test_resolve_domain_error_response_prefers_first_matching_mapping() -> None:
         },
     )
 
-    assert _resolve_domain_error_response(UserAlreadyExistsError("dup"), mapping) == (409, "GENERIC")
+    assert _resolve_domain_error_response(UserAlreadyExistsError(message="dup"), mapping) == (409, "GENERIC")
 
 
 def test_resolve_domain_error_response_raises_for_unmapped_errors() -> None:

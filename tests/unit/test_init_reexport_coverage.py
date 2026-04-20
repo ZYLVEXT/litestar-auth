@@ -91,10 +91,8 @@ def _assert_exported_symbols(module: ModuleType, *, expected_names: Iterable[str
         pytest.param(
             controllers_module,
             (
-                "LoginCredentials",
-                "ResetPassword",
-                "TotpVerifyRequest",
                 "create_auth_controller",
+                "create_totp_controller",
                 "create_users_controller",
             ),
             id="controllers",
@@ -142,17 +140,19 @@ def test_root_reexport_module_executes_under_coverage(monkeypatch: pytest.Monkey
         expected_names=(
             "AuthenticationBackend",
             "Authenticator",
+            "BaseUserManager",
             "BearerTransport",
             "CookieTransport",
+            "DatabaseTokenAuthConfig",
+            "ErrorCode",
             "LitestarAuth",
             "LitestarAuthConfig",
-            "PasswordHelper",
-            "UserCreate",
-            "create_auth_controller",
-            "create_provider_oauth_controller",
+            "LitestarAuthError",
+            "OAuthConfig",
+            "OAuthProviderConfig",
+            "TotpConfig",
+            "UserManagerSecurity",
             "is_authenticated",
-            "load_httpx_oauth_client",
-            "verify_totp",
         ),
     )
     assert len(capturing_logger.handlers) == 1

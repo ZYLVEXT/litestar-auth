@@ -111,29 +111,6 @@ def test_logout_guard_raises_not_authorized_when_no_credentials() -> None:
     assert "credentials" in exc_info.value.detail.lower() or "authorized" in exc_info.value.detail.lower()
 
 
-async def test_logout_raises_not_authorized_when_user_is_none() -> None:
-    """Logout handler raises NotAuthorizedException when request.user is None (defensive path)."""
-    transport = BearerTransport()
-    strategy = _make_minimal_strategy()
-
-    backend = AuthenticationBackend(name="test", transport=transport, strategy=cast("Any", strategy))
-    controller_class = create_auth_controller(
-        backend=backend,
-    )
-    controller = cast("Any", controller_class(owner=MagicMock()))
-
-    request = MagicMock()
-    request.user = None
-    request.headers = MagicMock()
-    request.headers.get.return_value = None
-
-    logout_handler = controller.logout.fn
-    with pytest.raises(NotAuthorizedException) as exc_info:
-        await logout_handler(controller, request)
-
-    assert "credentials" in exc_info.value.detail.lower() or "authorized" in exc_info.value.detail.lower()
-
-
 async def test_logout_raises_not_authorized_when_transport_returns_no_token() -> None:
     """Logout handler raises NotAuthorizedException when transport.read_token returns None."""
     transport = _TransportReturningNone()
@@ -690,40 +667,6 @@ async def test_login_falls_back_to_full_login_when_totp_pending_token_is_not_iss
     assert isinstance(response, Response)
     assert response.content == {"access_token": "t", "token_type": "bearer"}
     user_manager.on_after_login.assert_awaited_once_with(user)
-
-
-async def test_login_raises_configuration_error_when_totp_user_protocol_is_missing() -> None:
-    """A configured TOTP pending flow requires the authenticated user to expose TOTP fields."""
-    backend = AuthenticationBackend(
-        name="test",
-        transport=BearerTransport(),
-        strategy=cast("Any", _make_minimal_strategy()),
-    )
-    ctx = _make_auth_controller_context(
-        backend=backend,
-        rate_limit_config=None,
-        enable_refresh=False,
-        requires_verification=False,
-        login_identifier="email",
-        totp_pending_secret="pending-secret-for-unit-tests-1234",
-        totp_pending_lifetime=timedelta(minutes=5),
-    )
-    request = MagicMock()
-    data = LoginCredentials(identifier="user@example.com", password="correct-password")
-    user_manager = MagicMock()
-    user_manager.authenticate = AsyncMock(return_value=_MinimalUser())
-    user_manager.on_after_login = AsyncMock()
-    user_manager.require_account_state = MagicMock()
-
-    with pytest.raises(ConfigurationError, match="does not implement TOTP fields"):
-        await auth_controller_module._handle_auth_login(
-            request,
-            data,
-            ctx=ctx,
-            user_manager=user_manager,
-        )
-
-    user_manager.on_after_login.assert_not_awaited()
 
 
 async def test_refresh_rejects_invalid_token_and_increments_rate_limit() -> None:

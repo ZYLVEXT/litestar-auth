@@ -75,7 +75,7 @@ def _user_id[TypedID: Hashable](user: UserProtocol[TypedID]) -> TypedID:
 
 async def test_public_typing_contracts_preserve_user_and_id_types() -> None:
     """Public generic contracts preserve configured user and ID types."""
-    config = LitestarAuthConfig.create(
+    config = LitestarAuthConfig[ExampleUser, UUID](
         user_model=ExampleUser,
         user_manager_class=_TypingUserManager,
         user_manager_security=UserManagerSecurity[UUID](
@@ -108,7 +108,7 @@ async def test_public_typing_contracts_preserve_user_and_id_types() -> None:
     assert user_id == user.id
 
     with pytest.raises(ValueError, match="db_session_dependency_key must be a valid Python identifier"):
-        LitestarAuthConfig.create(
+        LitestarAuthConfig[ExampleUser, UUID](
             user_model=ExampleUser,
             user_manager_class=_TypingUserManager,
             db_session_dependency_key="class",

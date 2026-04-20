@@ -11,11 +11,9 @@ from sqlalchemy import delete, inspect, select
 from sqlalchemy.exc import NoInspectionAvailable
 from sqlalchemy.orm import selectinload
 
-from litestar_auth._manager.construction import ManagerConstructorInputs
 from litestar_auth._plugin.config import resolve_user_manager_factory
 from litestar_auth._plugin.session_binding import _ScopedUserDatabaseProxy
 from litestar_auth._roles import normalize_role_name, normalize_roles
-from litestar_auth.config import plugin_secret_role_warning_owner
 from litestar_auth.exceptions import ConfigurationError
 from litestar_auth.oauth_encryption import OAuthTokenEncryption
 from litestar_auth.types import UserProtocol
@@ -141,22 +139,14 @@ class _ManagerLifecycleRoleUpdater[UP: UserProtocol[Any]]:
             self._user_db_factory(session),
             oauth_token_encryption=self._oauth_token_encryption,
         )
-        manager_inputs = ManagerConstructorInputs(
-            manager_security=self.config.user_manager_security,
+        bound_backends = self.config.resolve_backends(session)
+        return self._user_manager_factory(
+            session=session,
+            user_db=user_db,
+            config=self.config,
+            backends=bound_backends,
+            skip_reuse_warning=True,
         )
-        effective_security = manager_inputs.effective_security
-        bound_backends = self.config.resolve_request_backends(session)
-        with plugin_secret_role_warning_owner(
-            verification_token_secret=effective_security.verification_token_secret,
-            reset_password_token_secret=effective_security.reset_password_token_secret,
-            totp_secret_key=effective_security.totp_secret_key,
-        ):
-            return self._user_manager_factory(
-                session=session,
-                user_db=user_db,
-                config=self.config,
-                backends=bound_backends,
-            )
 
 
 @cache

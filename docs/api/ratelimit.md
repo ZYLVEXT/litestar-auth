@@ -1,7 +1,7 @@
 # Rate limiting
 
-Use [Configuration](../configuration.md#canonical-redis-backed-auth-surface) as the canonical guide
-for the current Redis-backed auth contract: the preferred `RedisAuthPreset` flow, stable slot and
+Use [Configuration](../configuration.md#redis-backed-auth-surface) as the main guide
+for the current Redis-backed auth contract: the `RedisAuthPreset` flow, stable slot and
 group names, namespace families, helper exports, migration behavior, and the paired TOTP
 replay-store setup all live there. This page focuses on the public rate-limit types themselves.
 

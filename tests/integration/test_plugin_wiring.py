@@ -17,7 +17,6 @@ from litestar.testing import AsyncTestClient
 from sqlalchemy import create_engine
 from sqlalchemy.pool import StaticPool
 
-import litestar_auth.plugin as plugin_module
 from litestar_auth._plugin import (
     DEFAULT_BACKENDS_DEPENDENCY_KEY,
     DEFAULT_CONFIG_DEPENDENCY_KEY,
@@ -31,6 +30,7 @@ from litestar_auth.authentication.backend import AuthenticationBackend
 from litestar_auth.authentication.strategy.jwt import InMemoryJWTDenylistStore
 from litestar_auth.authentication.transport.bearer import BearerTransport
 from litestar_auth.authentication.transport.cookie import CookieTransport
+from litestar_auth.config import OAuthProviderConfig
 from litestar_auth.exceptions import ConfigurationError
 from litestar_auth.guards import is_authenticated
 from litestar_auth.manager import UserManagerSecurity
@@ -240,7 +240,7 @@ async def test_plugin_propagates_login_identifier_username_to_auth_login() -> No
 
 def test_oauth_associate_dependency_registered_when_enabled() -> None:
     """OAuth associate user-manager dependency is registered when configured."""
-    provider = ("example", object())
+    provider = OAuthProviderConfig(name="example", client=object())
     config = _minimal_litestar_auth_config()
     config.oauth_config = OAuthConfig(
         oauth_providers=[provider],
@@ -260,7 +260,7 @@ def test_oauth_login_inventory_does_not_register_associate_dependency() -> None:
     """OAuth login-provider config alone does not register the associate-only DI key."""
     config = _minimal_litestar_auth_config()
     config.oauth_config = OAuthConfig(
-        oauth_providers=[("example", object())],
+        oauth_providers=[OAuthProviderConfig(name="example", client=object())],
         oauth_redirect_base_url="https://app.example.com/auth",
         oauth_token_encryption_key="YWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWE=",
     )
@@ -275,7 +275,7 @@ def test_oauth_plugin_routes_require_encryption_key_at_startup() -> None:
     """Plugin-owned OAuth startup fails closed when token encryption is not configured."""
     config = _minimal_litestar_auth_config()
     config.oauth_config = OAuthConfig(
-        oauth_providers=[("example", object())],
+        oauth_providers=[OAuthProviderConfig(name="example", client=object())],
         include_oauth_associate=True,
         oauth_redirect_base_url="https://app.example.com/auth",
     )
@@ -307,7 +307,7 @@ def test_oauth_plugin_routes_require_secure_public_redirect_origins_at_startup(
     """Plugin-owned OAuth startup now fails closed for insecure redirect origins."""
     config = _minimal_litestar_auth_config()
     config.oauth_config = OAuthConfig(
-        oauth_providers=[("example", object())],
+        oauth_providers=[OAuthProviderConfig(name="example", client=object())],
         oauth_redirect_base_url=redirect_base_url,
         oauth_token_encryption_key="YWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWE=",
     )
@@ -321,7 +321,7 @@ def test_oauth_plugin_routes_allow_localhost_redirects_in_debug_mode() -> None:
     """Debug mode keeps the explicit localhost OAuth plugin recipe available."""
     config = _minimal_litestar_auth_config()
     config.oauth_config = OAuthConfig(
-        oauth_providers=[("example", object())],
+        oauth_providers=[OAuthProviderConfig(name="example", client=object())],
         oauth_redirect_base_url="http://localhost/auth",
         oauth_token_encryption_key="YWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWE=",
     )
@@ -337,7 +337,7 @@ def test_oauth_plugin_routes_allow_localhost_redirects_in_unsafe_testing_mode() 
     config = _minimal_litestar_auth_config()
     config.unsafe_testing = True
     config.oauth_config = OAuthConfig(
-        oauth_providers=[("example", object())],
+        oauth_providers=[OAuthProviderConfig(name="example", client=object())],
         oauth_redirect_base_url="http://localhost/auth",
         oauth_token_encryption_key="YWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWE=",
     )
@@ -361,7 +361,7 @@ def test_oauth_plugin_routes_allow_localhost_redirects_in_unsafe_testing_mode() 
         ),
         pytest.param(
             OAuthConfig(
-                oauth_providers=[("github", object())],
+                oauth_providers=[OAuthProviderConfig(name="github", client=object())],
                 oauth_token_encryption_key="YWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWE=",
             ),
             "oauth_redirect_base_url is required when oauth_providers are configured",
@@ -394,7 +394,7 @@ def test_plugin_rejects_ambiguous_oauth_route_registration_contracts(
     [
         pytest.param(
             OAuthConfig(
-                oauth_providers=[("github", object())],
+                oauth_providers=[OAuthProviderConfig(name="github", client=object())],
                 oauth_redirect_base_url="https://app.example.com/auth",
                 oauth_token_encryption_key="YWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWE=",
             ),
@@ -403,7 +403,7 @@ def test_plugin_rejects_ambiguous_oauth_route_registration_contracts(
         ),
         pytest.param(
             OAuthConfig(
-                oauth_providers=[("github", object())],
+                oauth_providers=[OAuthProviderConfig(name="github", client=object())],
                 include_oauth_associate=True,
                 oauth_redirect_base_url="https://app.example.com/auth",
                 oauth_token_encryption_key="YWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWE=",
@@ -465,7 +465,7 @@ def test_plugin_oauth_associate_callback_is_marked_protected_in_openapi() -> Non
     """Plugin-owned OAuth associate authorize and callback operations share the same security metadata."""
     config = _minimal_litestar_auth_config()
     config.oauth_config = OAuthConfig(
-        oauth_providers=[("github", _OpenAPIOAuthClient())],
+        oauth_providers=[OAuthProviderConfig(name="github", client=_OpenAPIOAuthClient())],
         include_oauth_associate=True,
         oauth_redirect_base_url="https://app.example.com/auth",
         oauth_token_encryption_key="YWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWE=",
@@ -726,7 +726,6 @@ def test_totp_backend_resolves_named_backend() -> None:
 
     startup_backend = plugin._totp_backend()
 
-    assert isinstance(startup_backend, plugin_module.StartupBackendTemplate)
     assert startup_backend.name == secondary_backend.name
     assert startup_backend.transport is secondary_backend.transport
     assert startup_backend.strategy is secondary_backend.strategy

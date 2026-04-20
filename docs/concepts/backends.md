@@ -30,7 +30,7 @@ flowchart LR
 
 Constructors and options are documented under [Python API — Strategies](../api/strategies.md).
 
-## Canonical opaque DB-token setup
+## Opaque DB-token setup
 
 For the common bearer + database-token plugin flow, prefer the plugin-owned preset instead of hand-assembling the backend:
 
@@ -55,9 +55,9 @@ config = LitestarAuthConfig(
 `session_maker` here is any callable object compatible with `session_maker() -> AsyncSession`; `async_sessionmaker(...)` is the usual implementation, not the only supported one.
 Manager-scoped secrets, shared `PasswordHelper` injection, runtime password validation, and app-owned
 schema helper reuse still follow the same
-[canonical configuration contract](../configuration.md#canonical-manager-password-surface). Keep
+[configuration contract](../configuration.md#manager-password-surface). Keep
 manager secrets on `user_manager_security`; use `user_manager_factory` when a custom manager
-constructor needs non-canonical inputs.
+constructor needs custom inputs.
 
 At runtime this still becomes a normal `AuthenticationBackend`, but the preset keeps request-session binding and migration-only rollout flags on the plugin side.
 
@@ -66,7 +66,7 @@ At runtime this still becomes a normal `AuthenticationBackend`, but the preset k
 - Middleware tries backends **in order**; the first that yields a user wins.
 - The **first** backend is exposed under the configured `auth_path` (default `/auth`).
 - **Additional** backends are mounted under `/auth/{backend-name}/...` so paths do not collide.
-- Manual `AuthenticationBackend(...)` assembly remains the advanced escape hatch for multi-backend or custom transport setups.
+- Manual `AuthenticationBackend(...)` assembly remains the direct path for multi-backend or custom transport setups.
 
 Name backends explicitly when you have more than one:
 
@@ -79,6 +79,6 @@ AuthenticationBackend(name="mobile", transport=BearerTransport(), strategy=db_st
 
 - **Public API / microservice:** often `BearerTransport` + `JWTStrategy` with a durable denylist in production if you rely on revocation.
 - **Same-site browser app:** `CookieTransport` + strategy of your choice; enable CSRF for state-changing requests.
-- **Central session store:** use `LitestarAuthConfig(..., database_token_auth=DatabaseTokenAuthConfig(...))` for the canonical bearer + DB-token path, or `RedisTokenStrategy` when Redis is your session store. Drop to manual `DatabaseTokenStrategy` assembly only when you need a non-canonical transport or multiple backends.
+- **Central session store:** use `LitestarAuthConfig(..., database_token_auth=DatabaseTokenAuthConfig(...))` for the plugin-managed bearer + DB-token path, or `RedisTokenStrategy` when Redis is your session store. Drop to manual `DatabaseTokenStrategy` assembly only when you need a custom transport or multiple backends.
 
 See also [Request lifecycle](request_lifecycle.md).

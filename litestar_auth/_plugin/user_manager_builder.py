@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING, Any
 from litestar_auth._manager.construction import ManagerConstructorInputs
 from litestar_auth._plugin.config import UserManagerFactory  # noqa: TC001
 from litestar_auth.config import DEFAULT_MINIMUM_PASSWORD_LENGTH, require_password_length
+from litestar_auth.exceptions import ConfigurationError
 from litestar_auth.types import UserProtocol
 
 if TYPE_CHECKING:
@@ -31,7 +32,7 @@ _DEFAULT_USER_MANAGER_ID_PARSER_FALLBACK_DESCRIPTION = (
     "(not a standalone id_parser= kwarg)."
 )
 _DEFAULT_USER_MANAGER_FACTORY_GUIDANCE = (
-    "Configure user_manager_factory for non-canonical or factory-owned manager construction."
+    "Configure user_manager_factory for custom or factory-owned manager construction."
 )
 
 
@@ -67,7 +68,7 @@ class _DefaultUserManagerBuilderContract[UP: UserProtocol[Any], ID]:
         )
 
     def build_kwargs(self) -> dict[str, Any]:
-        """Materialize the canonical default-builder kwargs for one call site.
+        """Materialize the default-builder kwargs for one call site.
 
         Returns:
             The concrete constructor kwargs for the requested default-builder surface.
@@ -134,6 +135,7 @@ def build_user_manager[UP: UserProtocol[Any], ID](
     user_db: BaseUserStore[UP, ID],
     config: LitestarAuthConfig[UP, ID],
     backends: tuple[object, ...] = (),
+    skip_reuse_warning: bool = False,
 ) -> BaseUserManager[UP, ID]:
     """Instantiate the configured user manager through the explicit factory contract.
 
@@ -143,24 +145,36 @@ def build_user_manager[UP: UserProtocol[Any], ID](
         user_db: User persistence adapter for this session.
         config: Plugin configuration.
         backends: Session-bound authentication backends for this manager instance.
+        skip_reuse_warning: When ``True``, suppress the manager-owned reused-secret warning
+            because plugin validation already emitted it for the same baseline.
 
     Returns:
         A request-scoped user manager instance built from the plugin config. When
         ``user_manager_factory`` is omitted, the default builder always calls the
-        canonical ``BaseUserManager``-style constructor surface, including the
+        ``BaseUserManager``-style constructor surface, including the
         plugin-managed ``unsafe_testing`` flag, and expects ``user_manager_class`` to
         accept that contract. Custom constructors that narrow or rename that surface
         must be built through ``user_manager_factory``.
 
+    Raises:
+        ConfigurationError: If ``user_manager_factory`` is unset but ``user_manager_class``
+            is also unset.
+
     """
     del session
+    user_manager_class = config.user_manager_class
+    if user_manager_class is None:
+        msg = "user_manager_class must be configured when user_manager_factory is unset."
+        raise ConfigurationError(msg)
     constructor_kwargs = _build_default_user_manager_contract(
         config,
         password_helper=config.resolve_password_helper(),
         password_validator=resolve_password_validator(config),
         backends=backends,
     ).build_kwargs()
-    return config.user_manager_class(user_db, **constructor_kwargs)
+    if skip_reuse_warning:
+        constructor_kwargs["skip_reuse_warning"] = True
+    return user_manager_class(user_db, **constructor_kwargs)
 
 
 def resolve_password_validator[UP: UserProtocol[Any], ID](

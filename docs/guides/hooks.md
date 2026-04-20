@@ -1,6 +1,6 @@
 # Lifecycle hooks
 
-Subclass **`BaseUserManager`** and override async hooks to integrate email, analytics, or domain side effects. Hooks are **best-effort** extension points: keep them fast; offload I/O to background tasks when needed.
+Subclass **`BaseUserManager`** and override async hooks to integrate email, analytics, or domain side effects. The default no-op implementations now live on **`UserManagerHooks`**, which `BaseUserManager` inherits, so existing subclasses keep the same override points. Hooks are **best-effort** extension points: keep them fast; offload I/O to background tasks when needed.
 
 !!! warning "Timing and `on_after_forgot_password`"
     `forgot_password` uses enumeration-resistant logic in the manager. **`on_after_forgot_password`** runs after that path and may perform I/O (e.g. sending email). Timing differences from real SMTP or HTTP calls can still leak information unless you delegate to a **queue or background worker**. See [Registration](registration.md).
@@ -19,7 +19,7 @@ Subclass **`BaseUserManager`** and override async hooks to integrate email, anal
 | `on_before_delete(user)` | Before user deletion | Soft checks, cascade hints |
 | `on_after_delete(user)` | After user removed (or soft-deleted per policy) | GDPR export cleanup, cache purge |
 
-Exact signatures and defaults live on **`BaseUserManager`** — see [Manager API](../api/manager.md).
+Exact signatures and default implementations live on **`UserManagerHooks`**, inherited by **`BaseUserManager`** — see [Manager API](../api/manager.md).
 
 ## Flow sketch (register → verify → reset)
 

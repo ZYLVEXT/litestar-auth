@@ -20,7 +20,7 @@ class PasswordHelper:
 
     @classmethod
     def from_defaults(cls) -> Self:
-        """Return a helper configured with the library's canonical hasher policy."""
+        """Return a helper configured with the library's default hasher policy."""
         return cls(password_hash=_build_default_password_hash())
 
     def __init__(self, password_hash: PasswordHash | None = None) -> None:
@@ -51,8 +51,9 @@ class PasswordHelper:
     def verify_and_update(self, password: str, hashed: str) -> tuple[bool, str | None]:
         """Verify a password and return an updated hash when the stored one is deprecated.
 
-        Uses pwdlib's verify_and_update: when the stored hash is deprecated (e.g. bcrypt
-        while Argon2 is preferred), pwdlib returns the new hash so the caller can persist it.
+        Uses pwdlib's verify_and_update: when the stored hash is deprecated (for example,
+        bcrypt while new hashes should use Argon2), pwdlib returns the new hash so the
+        caller can persist it.
         When the hash is already current or the password is wrong, the second element is None.
 
         Returns:

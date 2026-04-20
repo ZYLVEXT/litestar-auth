@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, Protocol, cast
+from typing import TYPE_CHECKING, Any, Protocol, cast, runtime_checkable
 
 import msgspec  # noqa: TC002
 from litestar import Controller, Request, post
@@ -34,6 +34,7 @@ class VerifyControllerUserProtocol[ID](RoleCapableUserProtocol[ID], Protocol):
     is_superuser: bool
 
 
+@runtime_checkable
 class VerifyControllerUserManagerProtocol[UP: VerifyControllerUserProtocol[Any], ID](Protocol):
     """User-manager behavior required by the verify controller."""
 
@@ -58,7 +59,7 @@ def create_verify_controller[UP: VerifyControllerUserProtocol[Any], ID](
             ``request_verify_token`` requests are subject to rate limiting.
         path: Base route prefix for the generated controller.
         user_read_schema: Custom msgspec struct used for public verification responses.
-        unsafe_testing: Explicit test-only escape hatch that allows response
+        unsafe_testing: Explicit test-only override that allows response
             schemas with sensitive fields for isolated fixtures.
 
     Returns:
@@ -86,7 +87,7 @@ def create_verify_controller[UP: VerifyControllerUserProtocol[Any], ID](
             self,
             request: Request[Any, Any, Any],
             data: VerifyToken,
-            litestar_auth_user_manager: Any,  # noqa: ANN401
+            litestar_auth_user_manager: VerifyControllerUserManagerProtocol[Any, Any],
         ) -> msgspec.Struct:
             try:
                 user = await litestar_auth_user_manager.verify(data.token)
@@ -110,7 +111,7 @@ def create_verify_controller[UP: VerifyControllerUserProtocol[Any], ID](
             self,
             request: Request[Any, Any, Any],
             data: RequestVerifyToken,
-            litestar_auth_user_manager: Any,  # noqa: ANN401
+            litestar_auth_user_manager: VerifyControllerUserManagerProtocol[Any, Any],
         ) -> None:
             await litestar_auth_user_manager.request_verify_token(data.email)
             if request_verify_rate_limit is not None:

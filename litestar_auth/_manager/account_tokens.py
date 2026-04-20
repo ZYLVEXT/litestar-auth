@@ -12,7 +12,7 @@ from typing import TYPE_CHECKING, Any, Protocol, cast
 import jwt
 
 from litestar_auth._manager._coercions import _managed_user
-from litestar_auth._manager._protocols import PasswordManagedUserManagerProtocol
+from litestar_auth._manager._protocols import PasswordManagedUserManagerProtocol, UserManagerHooksProtocol
 from litestar_auth.exceptions import InvalidResetPasswordTokenError, InvalidVerifyTokenError, UserNotExistsError
 
 if TYPE_CHECKING:
@@ -31,26 +31,13 @@ class _AccountTokenSecurityManagerProtocol[ID](Protocol):
 class _AccountTokensManagerProtocol[UP, ID](
     PasswordManagedUserManagerProtocol[UP],
     _AccountTokenSecurityManagerProtocol[ID],
+    UserManagerHooksProtocol[UP],
     Protocol,
 ):
     """Manager surface required by verify/reset token flows."""
 
     verification_token_lifetime: timedelta
     reset_password_token_lifetime: timedelta
-
-    def _password_fingerprint(self, hashed_password: str) -> str: ...  # pragma: no cover
-
-    async def on_after_verify(self, user: UP) -> None: ...  # pragma: no cover
-
-    async def on_after_request_verify_token(self, user: UP, token: str) -> None: ...  # pragma: no cover
-
-    async def on_after_forgot_password(
-        self,
-        user: UP | None,
-        token: str | None,
-    ) -> None: ...  # pragma: no cover
-
-    async def on_after_reset_password(self, user: UP) -> None: ...  # pragma: no cover
 
     async def _invalidate_all_tokens(self, user: UP) -> None: ...  # pragma: no cover
 
@@ -245,6 +232,11 @@ class AccountTokensService[UP, ID]:
         self._token_security = token_security
         self._logger = logger
 
+    @property
+    def security(self) -> AccountTokenSecurityService[UP, ID]:
+        """Return the low-level JWT and fingerprint helper surface."""
+        return self._token_security
+
     async def verify(self, token: str) -> UP:
         """Mark the token subject as verified."""
         user = await self._token_security.get_user_from_token(
@@ -305,7 +297,7 @@ class AccountTokensService[UP, ID]:
             )
             raise InvalidResetPasswordTokenError
 
-        current_fingerprint = self._manager._password_fingerprint(_managed_user(user).hashed_password)
+        current_fingerprint = self.password_fingerprint(_managed_user(user).hashed_password)
         if not hmac.compare_digest(token_fingerprint, current_fingerprint):
             self._logger.warning(
                 "Reset token fingerprint mismatch (password changed)",
@@ -337,7 +329,7 @@ class AccountTokensService[UP, ID]:
             managed_user = _managed_user(user)
             subject = str(managed_user.id)
             fingerprint_source = managed_user.hashed_password
-        extra_claims = {"password_fingerprint": self._manager._password_fingerprint(fingerprint_source)}
+        extra_claims = {"password_fingerprint": self.password_fingerprint(fingerprint_source)}
 
         return self._token_security.write_token(
             subject=subject,
@@ -363,7 +355,7 @@ class AccountTokensService[UP, ID]:
         """Sign a short-lived JWT for a user."""
         token_claims = dict(extra_claims or {})
         if audience == self._reset_password_token_audience and "password_fingerprint" not in token_claims:
-            token_claims["password_fingerprint"] = self._manager._password_fingerprint(
+            token_claims["password_fingerprint"] = self.password_fingerprint(
                 _managed_user(user).hashed_password,
             )
 

@@ -108,7 +108,7 @@ def _make_closure_cell(value: object) -> CellType:
 
 async def test_register_duplicate_user_returns_400_and_increments_rate_limit() -> None:
     """UserAlreadyExistsError is mapped to 400 REGISTER_USER_ALREADY_EXISTS and rate limit is incremented."""
-    manager = DummyUserManager(error=UserAlreadyExistsError("Email already registered"))
+    manager = DummyUserManager(error=UserAlreadyExistsError(message="Email already registered"))
     backend = _make_rate_limit_backend()
     rate_limit = EndpointRateLimit(backend=backend, scope="ip", namespace="register")
     config = AuthRateLimitConfig(register=rate_limit)
@@ -128,7 +128,7 @@ async def test_register_duplicate_user_returns_400_and_increments_rate_limit() -
 
 async def test_register_invalid_password_returns_400_and_increments_rate_limit() -> None:
     """InvalidPasswordError is mapped to 400 REGISTER_INVALID_PASSWORD and rate limit is incremented."""
-    manager = DummyUserManager(error=InvalidPasswordError("Password too weak"))
+    manager = DummyUserManager(error=InvalidPasswordError(message="Password too weak"))
     backend = _make_rate_limit_backend()
     rate_limit = EndpointRateLimit(backend=backend, scope="ip", namespace="register")
     config = AuthRateLimitConfig(register=rate_limit)
@@ -210,7 +210,7 @@ async def test_register_before_request_is_a_noop_when_rate_limit_cell_is_none() 
 
 async def test_register_invalid_password_without_rate_limit_keeps_plain_error_mapping() -> None:
     """InvalidPasswordError still maps correctly when no rate limiter is configured."""
-    manager = DummyUserManager(error=InvalidPasswordError("Password too weak"))
+    manager = DummyUserManager(error=InvalidPasswordError(message="Password too weak"))
     controller = create_register_controller(rate_limit_config=None)
 
     status_code, payload = await _invoke_register(

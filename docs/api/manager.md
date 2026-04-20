@@ -3,27 +3,38 @@
 For plugin-managed apps, the authoritative wiring for `user_manager_security`,
 `password_validator_factory`, `PasswordHelper` sharing, and `UserEmailField` /
 `UserPasswordField` reuse lives in
-[Configuration](../configuration.md#canonical-manager-password-surface). This page focuses on the
+[Configuration](../configuration.md#manager-password-surface). This page focuses on the
 direct `BaseUserManager` API once those inputs have already been resolved.
 
 The default plugin builder now treats `user_manager_security` as an end-to-end constructor
 contract. When that typed bundle is present, the plugin calls
 `user_manager_class(..., password_helper=..., security=UserManagerSecurity(...), password_validator=..., backends=..., login_identifier=..., unsafe_testing=...)`
 and folds the effective `id_parser` into `security` first. If your manager narrows or renames that
-canonical `BaseUserManager`-style constructor surface, `user_manager_factory` is the explicit
-escape hatch. That escape hatch only changes who constructs the manager; it does not create a
+`BaseUserManager`-style constructor surface, `user_manager_factory` is the explicit customization
+path. That changes who constructs the manager; it does not create a
 second implicit injection path for `password_helper`, `password_validator`, or security kwargs.
 Custom factories must wire those inputs themselves when they still want them.
 
 When you instantiate `BaseUserManager` yourself, pass secrets and optional `id_parser` through the
 typed `security=UserManagerSecurity(...)` bundle only. Pair that with `PasswordHelper.from_defaults()`
-when you want the library's canonical hasher policy, or pass `PasswordHelper(password_hash=...)` when
+when you want the library's default hasher policy, or pass `PasswordHelper(password_hash=...)` when
 you intentionally diverge with custom pwdlib composition.
 
 Across plugin-managed and direct-manager flows, the stable account-state policy surface remains
 `require_account_state(user, *, require_verified=False)`. The built-in implementation delegates to
 `UserPolicy.require_account_state`; custom managers or adapters should preserve the same callable
 shape and semantics when they customize account-state enforcement.
+
+`BaseUserManager` is now explicitly documented as a façade over three service entrypoints:
+`manager.users` for CRUD and password lifecycle flows, `manager.tokens` for verify/reset token
+flows, and `manager.totp` for TOTP secret storage. Low-level JWT helpers sit under
+`manager.tokens.security`. The convenience methods on `BaseUserManager` still forward to those
+services, so existing call sites continue to work; prefer the service properties when you are
+working within one subsystem directly.
+
+The default no-op lifecycle hook implementations live on `UserManagerHooks`, which
+`BaseUserManager` inherits. Subclass `BaseUserManager` exactly as before; the mixin split only
+keeps the manager surface easier to navigate and document.
 
 `BaseUserManager.totp_secret_storage_posture` is the stable direct-manager contract for persisted
 TOTP secrets. On `security=UserManagerSecurity(...)`, leaving `totp_secret_key` unset or `None` keeps

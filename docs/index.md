@@ -28,7 +28,7 @@ Teams building on [Litestar](https://litestar.dev/) who need registration, login
 | Recipes & examples | [Cookie + CSRF](cookbook/cookie_csrf.md), [Refresh cookie](cookbook/refresh_cookie.md), [OAuth account linking](cookbook/oauth_associate.md), [Custom User model with OAuth](cookbook/custom_user_oauth.md), [Role administration API](cookbook/role_admin_controller.md) |
 | Moving from fastapi-users | [Concept mapping](guides/from_fastapi_users.md) (optional) |
 | HTTP reference | [HTTP API](http_api.md), [Errors](errors.md) |
-| Config & ops | [Configuration](configuration.md), [Security overview](security.md), [Deployment](deployment.md) |
+| Config & ops | [Configuration index](configuration.md), [Security overview](security.md), [Deployment](deployment.md) |
 | Python API | [Package](api/package.md) and subpages under **Python API** in the nav |
 | Project | [Roadmap](roadmap.md), [Contributing](contributing.md), [Test suite README](https://github.com/ZYLVEXT/litestar-auth/blob/main/tests/README.md) |
 

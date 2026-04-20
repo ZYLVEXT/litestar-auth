@@ -1,3 +1,213 @@
+## Unreleased
+
+### Changed
+
+- **`LitestarAuthConfig.resolve_backends(session)` is the single runtime accessor** — **Breaking
+  for callers of the previous no-arg `resolve_backends()` or `resolve_request_backends()`.** The
+  accessor now always takes an `AsyncSession` and uniformly returns the effective backend tuple
+  for every supported configuration (manual `backends=` or the `database_token_auth=` preset).
+  The previous no-arg `resolve_backends()` that raised `ValueError` to redirect callers to
+  `resolve_startup_backends()` / `resolve_request_backends(session)` is gone;
+  `resolve_startup_backends()` remains for startup-only inventory. Mutual exclusion between
+  `backends=` and `database_token_auth=` is still enforced with a clear error at config build
+  time.
+- **`user_manager_class` is now `type[BaseUserManager[UP, ID]] | None`** — the field is honestly
+  `Optional` in the dataclass, which removes the `cast(..., None)` that was previously needed to
+  express the factory path. Consumers reading `config.user_manager_class` directly must handle
+  `None` explicitly; `__post_init__` continues to enforce mutual exclusion with
+  `user_manager_factory`.
+- **`BaseUserManager.__init__` accepts a `skip_reuse_warning: bool = False` keyword** — the
+  plugin-managed builder passes `skip_reuse_warning=True` after config validation has already
+  emitted the reused-secret `SecurityWarning`, replacing the previous `ContextVar`-based owner
+  signalling. Manager-only construction (including the `litestar roles` CLI manager) continues
+  to emit the warning exactly once, unchanged from 1.9.
+- **`BaseUserManager` exposes `manager.users`, `manager.tokens`, `manager.totp` service façades**
+  — the four internal services (`_user_lifecycle`, `_account_tokens`, `_account_token_security`,
+  `_totp_secrets`) are now reachable as public attributes, with low-level JWT helpers available
+  through `manager.tokens.security`. The default lifecycle hooks (`on_after_register`,
+  `on_after_login`, `on_after_verify`, `on_after_request_verify_token`, `on_after_forgot_password`,
+  `on_after_reset_password`, `on_after_update`, `on_before_delete`, `on_after_delete`) moved to a
+  new `UserManagerHooks[UP]` mixin that `BaseUserManager` inherits; override points remain
+  identical.
+- **Controller DI parameters use concrete protocols instead of `Any`** — the
+  `litestar_auth_user_manager` parameter in every generated controller (`auth`, `users`,
+  `register`, `verify`, `reset`, `totp`, `oauth`) is now typed with the controller-specific
+  runtime-checkable protocol (`AuthControllerUserManagerProtocol[UP, ID]`,
+  `UsersControllerUserManagerProtocol[UP, ID]`, `TotpUserManagerProtocol[UP]`, and the per-module
+  equivalents). No generated controller still carries `user_manager: Any, # noqa: ANN401`.
+- **TOTP user-model compatibility is validated at plugin startup** — **Breaking for deployments
+  that relied on the first-login 500 to surface the misconfiguration.** When `totp_config` is set,
+  plugin init now calls `validate_totp_user_model_protocol()` and raises `ConfigurationError` if
+  the configured `user_model` does not implement `TotpUserProtocol` (`email: str` and
+  `totp_secret: str | None`). The `isinstance(user, TotpUserProtocol)` / `ConfigurationError`
+  branch that ran on every login request is gone.
+- **`UserAlreadyExistsError` accepts a keyword-only `identifier=UserIdentifier(...)`** — the
+  small keyword-only `UserIdentifier(identifier_type=..., identifier_value=...)` dataclass is the
+  single structured-context entry point; `identifier_type` and `identifier_value` are still
+  mirrored onto the exception instance for read access. `InvalidPasswordError` is fully
+  keyword-only. Both exceptions no longer run partial-context validation in `__init__`; the
+  declared types describe the contract.
+
+### Removed
+
+- **`LitestarAuthConfig.create()`, `.with_default_manager()`, and `.with_custom_manager_factory()`
+  classmethod factories removed** — **Breaking, notable reversal of the 1.9.0 addition.**
+  The three factories each carried ~35 identical keyword parameters, forcing every new config
+  field to be declared in four places. Construct `LitestarAuthConfig[UP, ID](...)` directly;
+  mutual exclusion between `user_manager_class=` and `user_manager_factory=` is enforced by
+  `__post_init__`, `user_manager_factory` must be callable when provided, and the clearer error
+  messages now point at the direct-construction path. The migration is mechanical — the dataclass
+  already accepts every factory keyword unchanged.
+- **Root package payload re-exports removed** — **Breaking for callers importing payload structs
+  from `litestar_auth`.** Import `LoginCredentials`, `RefreshTokenRequest`, `ForgotPassword`,
+  `ResetPassword`, `VerifyToken`, `RequestVerifyToken`, `TotpEnableResponse`,
+  `TotpVerifyRequest`, `TotpConfirmEnableRequest`, `TotpConfirmEnableResponse`,
+  `TotpDisableRequest` from `litestar_auth.payloads`. Import `UserCreate`, `UserRead`,
+  `UserUpdate` from `litestar_auth.schemas`.
+- **`litestar_auth.controllers.__init__` no longer re-exports payload structs** — **Breaking for
+  callers importing payloads via `litestar_auth.controllers`.** The controllers package exposes
+  only the controller factories (`create_auth_controller`, `create_users_controller`,
+  `create_register_controller`, `create_verify_controller`, `create_reset_password_controller`,
+  `create_totp_controller`, `create_oauth_controller`, `create_oauth_associate_controller`) and
+  `TotpUserManagerProtocol`. Import payloads from `litestar_auth.payloads`.
+- **`litestar_auth.payloads` no longer re-exports `UserCreate`, `UserRead`, `UserUpdate`** —
+  **Breaking for callers importing user CRUD schemas from `litestar_auth.payloads`.** Import
+  user schemas from `litestar_auth.schemas` instead; `litestar_auth.payloads` now contains only
+  the structs that originate there.
+- **Manager-module compatibility re-exports removed** — **Breaking for callers importing
+  `SAFE_FIELDS`, `_PRIVILEGED_FIELDS`, `MAX_PASSWORD_LENGTH`, or `require_password_length` from
+  `litestar_auth.manager`.** Import `SAFE_FIELDS` / `_PRIVILEGED_FIELDS` from their canonical
+  module (`litestar_auth._manager.user_lifecycle`) and `MAX_PASSWORD_LENGTH` /
+  `require_password_length` from `litestar_auth.config`.
+- **Root `__all__` shrunk from 85 symbols to 26** — **Breaking for callers importing controller
+  factories, strategies, token stores, rate limiters, TOTP helpers, or individual exception
+  subclasses from the root package.** `litestar_auth.__all__` now contains only the primary
+  entry points: `LitestarAuth`, `LitestarAuthConfig`, `DatabaseTokenAuthConfig`, `TotpConfig`,
+  `OAuthConfig`, `OAuthProviderConfig`, `BaseUserManager`, `UserManagerSecurity`,
+  `AuthenticationBackend`, `Authenticator`, `BearerTransport`, `CookieTransport`, the six core
+  guards, `ErrorCode`, `LitestarAuthError`, the five user protocols, and `__version__`. Import
+  everything else from its submodule (`litestar_auth.controllers`,
+  `litestar_auth.authentication.strategy`, `litestar_auth.ratelimit`, `litestar_auth.totp`,
+  `litestar_auth.exceptions`, etc.).
+- **`OAuthProviderConfig.coerce()` no longer accepts legacy `(name, client)` tuples or
+  duck-typed duplicates** — **Breaking for callers passing tuples through
+  `OAuthConfig.oauth_providers`.** `oauth_providers` is now typed
+  `Sequence[OAuthProviderConfig] | None`; construct providers explicitly via
+  `OAuthProviderConfig(name=..., client=...)`. The duck-typed
+  `type(value).__name__ == cls.__name__` fallback that silently accepted hot-reloaded
+  class duplicates is gone.
+- **`_UseDefaultCode` sentinel and exception `@overload` stacks removed** — every exception
+  constructor now takes `code: str | None = None` (where `None` resolves to the class
+  `default_code`), with no `_UseDefaultCode` / `_USE_DEFAULT_CODE` singletons and no
+  `TYPE_CHECKING` overload stacks on `LitestarAuthError`, `InsufficientRolesError`,
+  `UserAlreadyExistsError`, `InvalidPasswordError`, or `OAuthAccountAlreadyLinkedError`.
+  **Minor breaking change:** passing `code=None` explicitly no longer raises `TypeError`; it
+  resolves to `default_code` like an omitted argument.
+- **`_require_non_empty_string`, `_require_present_context`, `_require_non_empty_role_names`
+  removed from `litestar_auth.exceptions`** — structured context fields are stored verbatim;
+  any invariant checks belong at the raise sites, not in `__init__`.
+
+### Internal
+
+- **`_SecretValue` simplified to a masked-repr dataclass** — the wrapper no longer implements
+  `__eq__` via `hmac.compare_digest` or `__hash__` via `hmac.digest(...)`; Python's default
+  identity equality applies. Secrets are still masked in `repr()` / `str()` and
+  `get_secret_value()` still returns the raw string. The `import hmac` that served only the
+  removed equality / hash paths is gone.
+- **Module-level dummy-hash cache replaced with per-instance caching** — the
+  `_DUMMY_PASSWORD_HASHES: WeakKeyDictionary` + `_DUMMY_PASSWORD_HASH_LOCK` globals are gone;
+  each `BaseUserManager` lazily computes one dummy hash via its active `PasswordHelper` and
+  caches it on the instance. Enumeration-resistance behavior on unknown-user login / forgot-password
+  paths is unchanged.
+- **Redundant `UserManagerSecurity.__str__ = __repr__` assignment removed** — Python's default
+  `object.__str__` already returns `__repr__()`; the explicit alias was dead code.
+- **`BaseUserManager` no longer needs `# noqa: PLR0904`** — after the service-façade + hooks-mixin
+  decomposition the public surface fits within the lint threshold.
+- **Startup backend inventory flattened from four classes to two** — `_BackendSlot`,
+  `_StartupBackendInventoryEntry`, and the private `_StartupBackendInventory` are collapsed into
+  a single public `StartupBackendInventory` dataclass holding a
+  `tuple[StartupBackendTemplate, ...]`. Index / name lookups are direct tuple indexing;
+  multi-backend drift detection (missing index, backend-name mismatch) keeps the same error
+  semantics.
+- **Defensive `request.user is None` branches removed from authenticated handlers** —
+  `_users_handle_get_me`, `_users_handle_update_me`, and `_handle_auth_logout` rely on the
+  `is_authenticated` guard invariant and narrow `request.user` via a local `cast` instead of a
+  dead raise branch. The live identity check in `_users_handle_delete_user` ("superusers cannot
+  delete themselves") is unchanged.
+
+### Documentation
+
+- **`docs/configuration.md` split into seven focused sub-pages under `docs/configuration/`** —
+  `backends.md`, `user_and_manager.md`, `manager.md`, `redis.md`, `totp.md`, `oauth.md`, and
+  `security.md`, each under 300 lines. `docs/configuration.md` is now a 139-line index that keeps
+  the old section headings with `Moved to:` links so existing anchors still lead readers to the
+  right page. Navigation in `zensical.toml` is updated accordingly.
+- **`docs/quickstart.md` rewritten as a 148-line end-to-end example** — five fenced code blocks
+  (install, SQLite `create_tables.py`, inline `app.py`, run commands, register / verify / login /
+  protected-route requests) produce a working login without opening any other docs page. The
+  inline app is kept byte-for-byte in sync with `docs/snippets/quickstart_plugin.py` by a
+  regression test; a new `tests/integration/test_docs_quickstart.py` exercises the full flow
+  against isolated SQLite.
+- **`README.md` rewritten as a 145-line landing page** with an elevator pitch, a runnable
+  quick-peek block that mirrors the quickstart snippet, a feature list, install guidance with
+  extras, and absolute `https://zylvext.github.io/litestar-auth/…` docs links suitable for the
+  PyPI surface.
+- **`docs/snippets/home_quick_peek.py` is now a self-contained importable module** — the previous
+  `YourIdType` / `YourUser` / `YourUserManager` / `async_session_factory` placeholders are
+  replaced with concrete types wired through `DatabaseTokenAuthConfig` + `LitestarAuthConfig` +
+  `LitestarAuth`. A smoke test in `tests/unit/test_docs_snippets.py` imports the module and
+  asserts `module.app` is a `Litestar` instance so future doc rot fails CI.
+- **Canonical / compatibility shim vocabulary removed from docs and public docstrings** — after
+  the 1.9 + Unreleased refactors removed the shims the vocabulary described, all 87+ occurrences
+  of "canonical", "compatibility shim", "preferred one-client", and "escape hatch" across 24 docs
+  pages and the affected public Python modules are rewritten into neutral, declarative "Use X
+  for Y" guidance. A docs-wide banned-vocabulary regression in
+  `tests/unit/test_docs_redis_totp_guidance.py` keeps the sweep enforced.
+- **`litestar_auth/__init__.py` module docstring reframed around the primary use case** — the
+  preamble now describes the plugin/config/manager/guards entry points and points at the
+  submodules for everything else; the previous OAuth "advanced escape hatch" headline is gone
+  and a runnable `DatabaseTokenAuthConfig` + `LitestarAuth` example is embedded directly.
+
+### Migration
+
+- **Switch from `LitestarAuthConfig.create(...)` / `.with_default_manager(...)` /
+  `.with_custom_manager_factory(...)` to direct construction.** The dataclass accepts every
+  factory keyword, so the migration is mechanical:
+  Before: `LitestarAuthConfig.with_default_manager(user_model=User, user_manager_class=UserManager,
+  session_maker=session_maker, user_manager_security=UserManagerSecurity(...))`
+  After: `LitestarAuthConfig[User, UUID](user_model=User, user_manager_class=UserManager,
+  session_maker=session_maker, user_manager_security=UserManagerSecurity(...))`.
+  For the custom-factory path, pass `user_manager_factory=my_factory` directly;
+  `__post_init__` still rejects configs that set both `user_manager_class=` and
+  `user_manager_factory=`.
+- **Replace `resolve_backends()` calls with `resolve_backends(session)`.** Call sites that used
+  to call the no-arg method and catch `ValueError` should drop the try/except and pass the
+  active `AsyncSession`. Use `resolve_startup_backends()` only for startup-only inventory.
+- **Construct OAuth providers as real `OAuthProviderConfig` instances.**
+  Before: `OAuthConfig(oauth_providers=[("google", google_client)])`
+  After: `OAuthConfig(oauth_providers=[OAuthProviderConfig(name="google", client=google_client)])`.
+- **Import payloads from `litestar_auth.payloads` and user schemas from `litestar_auth.schemas`.**
+  No payload struct is re-exported from `litestar_auth`, `litestar_auth.controllers`, or
+  (for user schemas) `litestar_auth.payloads` any more.
+- **Retarget compat imports from `litestar_auth.manager`.** `SAFE_FIELDS` / `_PRIVILEGED_FIELDS`
+  now live in `litestar_auth._manager.user_lifecycle`; `MAX_PASSWORD_LENGTH` /
+  `require_password_length` live in `litestar_auth.config`.
+- **Migrate non-core imports off the root package.** Controller factories → `litestar_auth.controllers`.
+  Strategies → `litestar_auth.authentication.strategy`. Token stores → their strategy module.
+  Rate limiters → `litestar_auth.ratelimit`. TOTP helpers → `litestar_auth.totp`. Individual
+  exception subclasses → `litestar_auth.exceptions`. Typed aliases (`DbSessionDependencyKey`,
+  `UserManagerExtraKwargs`) → `litestar_auth.types`.
+- **Raise `UserAlreadyExistsError` with keyword-only `identifier=UserIdentifier(...)`.**
+  Before: `raise UserAlreadyExistsError("already exists", identifier_type="email",
+  identifier_value=email)`
+  After: `raise UserAlreadyExistsError("already exists",
+  identifier=UserIdentifier(identifier_type="email", identifier_value=email))`.
+  The mirrored `identifier_type` / `identifier_value` attributes remain readable on the
+  exception instance.
+- **If you configure `totp_config`, ensure `user_model` implements `TotpUserProtocol`.**
+  Plugin init now fails fast with `ConfigurationError` when `email: str` or
+  `totp_secret: str | None` is missing from the user model, instead of raising on first login.
+
 ## 1.9.0 (2026-04-18)
 
 ### Added

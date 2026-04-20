@@ -1,7 +1,7 @@
 # Redis contrib
 
-Use [Configuration](../configuration.md#canonical-redis-backed-auth-surface) for the canonical
-Redis-backed auth story: the preferred one-client preset flow, the `AUTH_RATE_LIMIT_*` helper
+Use [Configuration](../configuration.md#redis-backed-auth-surface) for the main
+Redis-backed auth story: the shared-client preset flow, the `AUTH_RATE_LIMIT_*` helper
 exports, namespace families, migration behavior, and TOTP store guidance still live there.
 
 `litestar_auth.contrib.redis` is the higher-level entrypoint when one async Redis client should back
@@ -18,7 +18,7 @@ auth rate limiting plus both TOTP Redis stores:
 - `RedisTokenStrategy` and `RedisUsedTotpCodeStore` remain the direct low-level convenience imports.
 - `AuthRateLimitConfig.from_shared_backend()`, direct `RedisRateLimiter(...)` construction, and
   direct `RedisJWTDenylistStore(...)` / `RedisUsedTotpCodeStore(...)` construction remain the
-  fallback escape hatches for applications that need separate backends or fully bespoke wiring.
+  fallback low-level path for applications that need separate backends or fully bespoke wiring.
 
 Optional Redis-backed helpers (requires `litestar-auth[redis]`).
 

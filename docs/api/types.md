@@ -33,9 +33,8 @@ runtime-visible shape of the protocol and carry extra overhead.
 
 ## Config inference and dependency-key typing
 
-Prefer `LitestarAuthConfig.create()` when you want type checkers to infer the concrete user and ID
-types from `user_model` and `user_manager_class`. Direct dataclass construction still works, but it
-usually requires spelling both generic parameters as `LitestarAuthConfig[User, UUID](...)`.
+Construct `LitestarAuthConfig` directly. For strict typing, spell both generic parameters as
+`LitestarAuthConfig[User, UUID](...)` so the configured user and ID types stay explicit.
 
 The `db_session_dependency_key` parameter is typed as `DbSessionDependencyKey`, so the annotation
 documents the same identifier rule enforced at runtime. This complete example type-checks as
@@ -46,7 +45,8 @@ from dataclasses import dataclass
 from typing import assert_type
 from uuid import UUID
 
-from litestar_auth import DbSessionDependencyKey, LitestarAuthConfig
+from litestar_auth import LitestarAuthConfig
+from litestar_auth.types import DbSessionDependencyKey
 from litestar_auth.manager import BaseUserManager
 from litestar_auth.types import UserProtocolStrict
 
@@ -67,7 +67,7 @@ def needs_static_user_contract(user: UserProtocolStrict[UUID]) -> UUID:
 
 dependency_key: DbSessionDependencyKey = "db_session"
 
-config = LitestarAuthConfig.create(
+config = LitestarAuthConfig[User, UUID](
     user_model=User,
     user_manager_class=UserManager,
     db_session_dependency_key=dependency_key,

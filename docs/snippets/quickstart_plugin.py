@@ -1,62 +1,71 @@
-"""Minimal wiring pattern: JWT + Bearer backend and LitestarAuth plugin.
-
-Replace secrets and database URL. For SQLite async you need `aiosqlite`.
-This file is included in docs via pymdownx.snippets; it is not part of the installed package.
-"""
+"""Minimal Litestar auth quickstart app mirrored in docs/quickstart.md."""
 
 from __future__ import annotations
 
 from datetime import timedelta
+from typing import Any
 from uuid import UUID
 
-from litestar import Litestar
+from litestar import Litestar, Request, get
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from litestar_auth import (
+    AuthenticationBackend,
     BaseUserManager,
+    BearerTransport,
     LitestarAuth,
     LitestarAuthConfig,
+    UserManagerSecurity,
+    is_authenticated,
 )
-from litestar_auth.authentication.backend import AuthenticationBackend
 from litestar_auth.authentication.strategy import JWTStrategy
-from litestar_auth.authentication.transport import BearerTransport
 from litestar_auth.db.sqlalchemy import SQLAlchemyUserDatabase
-from litestar_auth.manager import UserManagerSecurity
 from litestar_auth.models import User
 
-
-DATABASE_URL = "sqlite+aiosqlite:///./auth.db"
+DATABASE_URL = "sqlite+aiosqlite:///./quickstart.db"
 engine = create_async_engine(DATABASE_URL, echo=False)
 session_maker = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
 
 
 class UserManager(BaseUserManager[User, UUID]):
-    """Override hooks (on_after_register, etc.) as needed."""
+    """Print verification tokens so the quickstart can finish without email infrastructure."""
+
+    verification_tokens: dict[str, str] = {}
+
+    async def on_after_register(self, user: User, token: str) -> None:
+        self.verification_tokens[user.email] = token
+        print(f"verification token for {user.email}: {token}")  # noqa: T201
 
 
-def build_app() -> Litestar:
-    jwt_strategy = JWTStrategy[User, UUID](
+@get("/protected", guards=[is_authenticated])
+async def protected(request: Request[User, Any, Any]) -> dict[str, str]:
+    user = request.user
+    assert user is not None
+    return {"email": user.email}
+
+
+backend = AuthenticationBackend[User, UUID](
+    name="jwt",
+    transport=BearerTransport(),
+    strategy=JWTStrategy[User, UUID](
         secret="replace-with-32+-char-jwt-secret",
         lifetime=timedelta(minutes=15),
         subject_decoder=UUID,
-    )
-    backend = AuthenticationBackend[User, UUID](
-        name="jwt",
-        transport=BearerTransport(),
-        strategy=jwt_strategy,
-    )
-    config = LitestarAuthConfig.with_default_manager(
-        backends=(backend,),
-        session_maker=session_maker,
-        user_model=User,
-        user_manager_class=UserManager,
-        user_db_factory=lambda session: SQLAlchemyUserDatabase(session, user_model=User),
-        user_manager_security=UserManagerSecurity(
-            verification_token_secret="replace-with-32+-char-secret-for-verify",
-            reset_password_token_secret="replace-with-32+-char-secret-for-reset",
-        ),
-        include_users=False,
-    )
-    # Optional: call this only if app-owned code also hashes or verifies passwords.
-    config.resolve_password_helper()
-    return Litestar(plugins=[LitestarAuth(config)])
+    ),
+)
+
+config = LitestarAuthConfig[User, UUID](
+    backends=(backend,),
+    session_maker=session_maker,
+    user_model=User,
+    user_manager_class=UserManager,
+    user_db_factory=lambda session: SQLAlchemyUserDatabase(session, user_model=User),
+    user_manager_security=UserManagerSecurity(
+        verification_token_secret="replace-with-32+-char-secret-for-verify",
+        reset_password_token_secret="replace-with-32+-char-secret-for-reset",
+    ),
+    allow_nondurable_jwt_revocation=True,
+    include_users=False,
+)
+
+app = Litestar(route_handlers=[protected], plugins=[LitestarAuth(config)])

@@ -8,6 +8,6 @@ Token **strategies** validate or issue credentials and pair with transports insi
 
 - **`RedisTokenStrategy`** keeps opaque token state in Redis (TTLs, Lua-assisted operations). Use it when you want fast invalidation and shared token state across app instances without adding DB round-trips for every validation.
 
-For plugin-oriented setup, **`DatabaseTokenAuthConfig`** on `LitestarAuthConfig` is the canonical shortcut for wiring opaque database-backed tokens (hash secret, optional backend naming, and related compatibility flags) without hand-assembling the strategy and related pieces in isolation. Full wiring for secrets, ORM mixins, and related options is covered in [Configuration](../configuration.md).
+For plugin-oriented setup, **`DatabaseTokenAuthConfig`** on `LitestarAuthConfig` is the direct shortcut for wiring opaque database-backed tokens (hash secret, optional backend naming, and related compatibility flags) without hand-assembling the strategy and related pieces in isolation. Full wiring for secrets, ORM mixins, and related options is covered in [Configuration](../configuration.md).
 
 ::: litestar_auth.authentication.strategy

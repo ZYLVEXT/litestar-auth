@@ -3,14 +3,19 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from importlib import import_module
 from typing import TYPE_CHECKING
-
-from litestar_auth.config import OAuthProviderConfig
 
 if TYPE_CHECKING:
     from collections.abc import Mapping, Sequence  # pragma: no cover
 
     from litestar_auth._plugin.config import OAuthConfig  # pragma: no cover
+    from litestar_auth.config import OAuthProviderConfig  # pragma: no cover
+
+
+def _current_oauth_provider_config_type() -> type[OAuthProviderConfig]:
+    """Return the current OAuthProviderConfig type after module reloads."""
+    return import_module("litestar_auth.config").OAuthProviderConfig
 
 
 @dataclass(frozen=True, slots=True)
@@ -58,16 +63,13 @@ class _OAuthRouteRegistrationContract:
 
 
 def _normalize_oauth_provider_inventory(
-    providers: Sequence[OAuthProviderConfig | tuple[str, object]] | None,
+    providers: Sequence[OAuthProviderConfig] | None,
 ) -> tuple[OAuthProviderConfig, ...]:
-    """Return a stable tuple of normalized OAuth provider entries.
-
-    Accepts :class:`~litestar_auth.config.OAuthProviderConfig` instances and legacy
-    ``(name, client)`` tuples, coercing the latter at this boundary.
-    """
+    """Return a stable tuple of normalized OAuth provider entries."""
     if not providers:
         return ()
-    return tuple(OAuthProviderConfig.coerce(item) for item in providers)
+    oauth_provider_config_type = _current_oauth_provider_config_type()
+    return tuple(oauth_provider_config_type.coerce(item) for item in providers)
 
 
 def _normalize_oauth_scopes(scopes: Sequence[str]) -> tuple[str, ...]:

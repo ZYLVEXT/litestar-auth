@@ -171,6 +171,7 @@ poetry.toml
 pyrightconfig.json
 
 .env
+.uv-cache
 
 # AI agents
 PRD.md

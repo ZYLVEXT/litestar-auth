@@ -14,7 +14,7 @@ keywords = [
     "library", "litestar", "auth", "authentication", "authorization", "jwt", "database", "redis", "oauth", "httpx-oauth",
 ]
 classifiers = [
-    "Development Status :: 4 - Beta",
+    "Development Status :: 5 - Production/Stable",
     "Intended Audience :: Developers",
     "Topic :: Software Development :: Libraries",
     "Programming Language :: Python :: 3 :: Only",

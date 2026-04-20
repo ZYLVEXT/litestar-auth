@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, Protocol
+from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
 import msgspec  # noqa: TC002
 from litestar import Controller, Request, post
@@ -35,6 +35,7 @@ class ResetPasswordControllerUserProtocol[ID](RoleCapableUserProtocol[ID], Proto
     is_superuser: bool
 
 
+@runtime_checkable
 class ResetPasswordControllerUserManagerProtocol[UP: ResetPasswordControllerUserProtocol[Any], ID](Protocol):
     """User-manager behavior required by the reset-password controller."""
 
@@ -58,7 +59,7 @@ def create_reset_password_controller[UP: ResetPasswordControllerUserProtocol[Any
         rate_limit_config: Optional auth-endpoint rate-limiter configuration.
         path: Base route prefix for the generated controller.
         user_read_schema: Custom msgspec struct used for public reset-password responses.
-        unsafe_testing: Explicit test-only escape hatch that allows response
+        unsafe_testing: Explicit test-only override that allows response
             schemas with sensitive fields for isolated fixtures.
 
     Returns:
@@ -87,7 +88,7 @@ def create_reset_password_controller[UP: ResetPasswordControllerUserProtocol[Any
             self,
             request: Request[Any, Any, Any],
             data: ForgotPassword,
-            litestar_auth_user_manager: Any,  # noqa: ANN401
+            litestar_auth_user_manager: ResetPasswordControllerUserManagerProtocol[Any, Any],
         ) -> None:
             await litestar_auth_user_manager.forgot_password(data.email)
             # Rate limit increments only after successful dispatch — intentional.
@@ -105,7 +106,7 @@ def create_reset_password_controller[UP: ResetPasswordControllerUserProtocol[Any
             self,
             request: Request[Any, Any, Any],
             data: ResetPassword,
-            litestar_auth_user_manager: Any,  # noqa: ANN401
+            litestar_auth_user_manager: ResetPasswordControllerUserManagerProtocol[Any, Any],
         ) -> msgspec.Struct:
             async def _increment_rate_limit() -> None:
                 await reset_password_rate_limit_increment(request)

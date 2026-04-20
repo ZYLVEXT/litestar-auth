@@ -68,7 +68,7 @@ That keeps `BaseUserManager`, `SQLAlchemyUserDatabase`, and JWT fingerprinting o
 
 The mixins exposed from `litestar_auth.models` are side-effect free: importing them does **not** register the bundled `User` or `OAuthAccount` mappers.
 
-That same `litestar_auth.models` package is also the canonical ORM setup entrypoint for the bundled DB-token tables:
+That same `litestar_auth.models` package is also the main ORM setup entrypoint for the bundled DB-token tables:
 
 ```python
 from litestar_auth.models import import_token_orm_models
@@ -154,4 +154,4 @@ If the same user later composes custom token tables too, `auth_token_relationshi
 
 `UserAuthRelationshipMixin` mirrors the inverse side. Set `auth_oauth_account_model = "MyOAuthAccount"` so `MyUser.oauth_accounts` points back at the custom OAuth class, and set `auth_access_token_model = None` / `auth_refresh_token_model = None` when this custom user does not also compose token-model relationships. Leave the relationship-option hooks unset to keep the bundled default behavior, or set `auth_oauth_account_relationship_lazy` and `auth_oauth_account_relationship_foreign_keys` for the documented OAuth-specific tuning path. If you also customize token model names or tables, replace those `None` hooks with `AccessTokenMixin` / `RefreshTokenMixin` classes as shown in [Configuration](../configuration.md#custom-sqlalchemy-user-and-token-models), then optionally set `auth_token_relationship_lazy` for both token collections. The mixin does not expose arbitrary `relationship()` kwargs beyond those hooks.
 
-See also: canonical columns for `oauth_account` in [Models API](../api/models.md) and the optional audit-column pattern in [OAuth guide](../guides/oauth.md).
+See also: the `oauth_account` columns in [Models API](../api/models.md) and the optional audit-column pattern in [OAuth guide](../guides/oauth.md).

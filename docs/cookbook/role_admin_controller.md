@@ -33,6 +33,7 @@ AsyncSession for async SQLAlchemy.
 
 from __future__ import annotations
 
+import unicodedata
 from contextlib import asynccontextmanager
 from typing import Any, cast
 from uuid import UUID
@@ -48,8 +49,15 @@ from msgspec import Struct
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from litestar_auth import normalize_role_name
 from litestar_auth.guards import is_superuser
+
+
+def normalize_role_name(role: str) -> str:
+    normalized = unicodedata.normalize("NFKC", role.strip()).lower()
+    if not normalized:
+        msg = "Role name must not be empty."
+        raise ValueError(msg)
+    return normalized
 
 
 # ============================================================================

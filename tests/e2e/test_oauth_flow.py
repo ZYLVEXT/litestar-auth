@@ -20,6 +20,7 @@ from litestar_auth._plugin.config import OAuthConfig
 from litestar_auth.authentication.backend import AuthenticationBackend
 from litestar_auth.authentication.strategy.jwt import JWTStrategy
 from litestar_auth.authentication.transport.bearer import BearerTransport
+from litestar_auth.config import OAuthProviderConfig
 from litestar_auth.controllers import create_oauth_associate_controller
 from litestar_auth.db.sqlalchemy import SQLAlchemyUserDatabase
 from litestar_auth.exceptions import ErrorCode, InactiveUserError, UnverifiedUserError
@@ -760,7 +761,7 @@ async def test_plugin_managed_oauth_associate_routes_link_provider_to_authentica
         oauth_client=oauth_client,
         include_login_controller=False,
         plugin_oauth_config=OAuthConfig(
-            oauth_providers=[("github", oauth_client)],
+            oauth_providers=[OAuthProviderConfig(name="github", client=oauth_client)],
             oauth_redirect_base_url="https://testserver.local/auth",
             include_oauth_associate=True,
         ),
@@ -810,7 +811,7 @@ async def test_plugin_oauth_provider_inventory_auto_mounts_login_routes_and_keep
         oauth_client=oauth_client,
         include_login_controller=False,
         plugin_oauth_config=OAuthConfig(
-            oauth_providers=[("github", oauth_client)],
+            oauth_providers=[OAuthProviderConfig(name="github", client=oauth_client)],
             oauth_redirect_base_url="https://testserver.local/auth",
         ),
     )

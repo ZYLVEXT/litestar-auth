@@ -9,7 +9,7 @@ from uuid import UUID, uuid4
 
 import msgspec
 import pytest
-from litestar.exceptions import ClientException, NotAuthorizedException, NotFoundException
+from litestar.exceptions import ClientException, NotFoundException
 from litestar.status_codes import HTTP_400_BAD_REQUEST
 
 import litestar_auth.controllers.users as users_module
@@ -214,18 +214,6 @@ async def test_users_get_user_or_404_rejects_missing_users() -> None:
             str(missing_user_id),
             user_manager=cast("Any", manager),
             id_parser=UUID,
-        )
-
-
-async def test_users_handle_get_me_requires_authenticated_user() -> None:
-    """Direct helper coverage for the in-handler authentication guard."""
-    manager = RecordingUserManager()
-
-    with pytest.raises(NotAuthorizedException, match="Authentication credentials were not provided\\."):
-        await _users_handle_get_me(
-            cast("Any", DummyRequest(user=None)),
-            ctx=build_context(),
-            user_manager=cast("Any", manager),
         )
 
 

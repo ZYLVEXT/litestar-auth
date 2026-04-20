@@ -6,10 +6,10 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any, Literal, Protocol, cast, runtime_checkable
 
 from litestar_auth._manager._coercions import _as_dict, _managed_user, _require_str
-from litestar_auth._manager._protocols import PasswordManagedUserManagerProtocol
+from litestar_auth._manager._protocols import PasswordManagedUserManagerProtocol, UserManagerHooksProtocol
 from litestar_auth._manager.user_policy import UserPolicy
 from litestar_auth.authentication.strategy.base import TokenInvalidationCapable
-from litestar_auth.exceptions import UserAlreadyExistsError, UserNotExistsError
+from litestar_auth.exceptions import UserAlreadyExistsError, UserIdentifier, UserNotExistsError
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
@@ -17,7 +17,11 @@ if TYPE_CHECKING:
     import msgspec
 
 
-class _UserLifecycleManagerProtocol[UP, ID](PasswordManagedUserManagerProtocol[UP], Protocol):
+class _UserLifecycleManagerProtocol[UP, ID](
+    PasswordManagedUserManagerProtocol[UP],
+    UserManagerHooksProtocol[UP],
+    Protocol,
+):
     """Manager surface required by the user-lifecycle service."""
 
     password_validator: Any
@@ -28,16 +32,6 @@ class _UserLifecycleManagerProtocol[UP, ID](PasswordManagedUserManagerProtocol[U
     def _normalize_username_lookup(username: str) -> str: ...  # pragma: no cover
 
     def write_verify_token(self, user: UP) -> str: ...  # pragma: no cover
-
-    async def on_after_register(self, user: UP, token: str) -> None: ...  # pragma: no cover
-
-    async def on_after_request_verify_token(self, user: UP, token: str) -> None: ...  # pragma: no cover
-
-    async def on_after_update(self, user: UP, update_dict: dict[str, Any]) -> None: ...  # pragma: no cover
-
-    async def on_before_delete(self, user: UP) -> None: ...  # pragma: no cover
-
-    async def on_after_delete(self, user: UP) -> None: ...  # pragma: no cover
 
 
 @runtime_checkable
@@ -97,9 +91,8 @@ class UserLifecycleService[UP, ID]:
         existing_user = await self._manager.user_db.get_by_email(email)
         if existing_user is not None:
             raise UserAlreadyExistsError(
+                identifier=UserIdentifier(identifier_type="email", identifier_value=email),
                 message=UserAlreadyExistsError.default_message,
-                identifier_type="email",
-                identifier_value=email,
             )
 
         create_dict = {
@@ -198,9 +191,8 @@ class UserLifecycleService[UP, ID]:
         existing_user = await self._manager.user_db.get_by_email(new_email)
         if existing_user is not None and _managed_user(existing_user).id != _managed_user(user).id:
             raise UserAlreadyExistsError(
+                identifier=UserIdentifier(identifier_type="email", identifier_value=new_email),
                 message=UserAlreadyExistsError.default_message,
-                identifier_type="email",
-                identifier_value=new_email,
             )
         return new_email
 

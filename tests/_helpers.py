@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import asyncio
 import importlib
+import sqlite3
 from dataclasses import dataclass, field
 from functools import partial
-from typing import TYPE_CHECKING, Literal, Protocol, cast
+from types import ModuleType
+from typing import TYPE_CHECKING, Any, Literal, Protocol, Self, cast
 
 from litestar import Litestar
 from litestar.di import Provide
@@ -15,7 +18,6 @@ from litestar_auth._plugin.scoped_session import get_or_create_scoped_session
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator, Callable, Iterable, Sequence
-    from types import ModuleType
     from uuid import UUID
 
     import fakeredis
@@ -54,6 +56,184 @@ class FakeRedisServerFactory(Protocol):
         server_type: FakeRedisServerType = "redis",
     ) -> fakeredis.FakeServer:
         """Create a fakeredis server instance."""
+
+
+class _ImmediateAioSQLiteQueue:
+    """Run SQLAlchemy's internal aiosqlite work items inline for tests."""
+
+    def put_nowait(self, item: tuple[asyncio.Future[None], Callable[[], None]]) -> None:
+        """Execute one queued callback immediately and resolve its future."""
+        future, function = item
+        function()
+        future.set_result(None)
+
+
+class FakeAioSQLiteCursor:
+    """Minimal async cursor surface for SQLAlchemy's aiosqlite dialect."""
+
+    def __init__(self, cursor: sqlite3.Cursor) -> None:
+        """Store the wrapped SQLite cursor."""
+        self._cursor = cursor
+
+    @property
+    def description(self) -> object | None:
+        """Expose the wrapped cursor description."""
+        return self._cursor.description
+
+    @property
+    def lastrowid(self) -> int | None:
+        """Expose the wrapped cursor last inserted row id."""
+        return self._cursor.lastrowid
+
+    @property
+    def rowcount(self) -> int:
+        """Expose the wrapped cursor rowcount."""
+        return self._cursor.rowcount
+
+    async def close(self) -> None:
+        """Close the wrapped cursor."""
+        self._cursor.close()
+
+    async def execute(self, operation: object, parameters: object | None = None) -> Self:
+        """Execute one SQL statement through the wrapped cursor.
+
+        Returns:
+            This cursor instance.
+        """
+        if parameters is None:
+            self._cursor.execute(cast("str", operation))
+        else:
+            self._cursor.execute(cast("str", operation), cast("Any", parameters))
+        return self
+
+    async def executemany(self, operation: object, parameters: object) -> Self:
+        """Execute one SQL statement against many parameter rows.
+
+        Returns:
+            This cursor instance.
+        """
+        self._cursor.executemany(cast("str", operation), cast("Any", parameters))
+        return self
+
+    async def fetchall(self) -> list[object]:
+        """Return all remaining rows."""
+        return cast("list[object]", self._cursor.fetchall())
+
+    async def fetchmany(self, size: int | None = None) -> list[object]:
+        """Return the next batch of rows."""
+        return cast(
+            "list[object]",
+            self._cursor.fetchmany() if size is None else self._cursor.fetchmany(size),
+        )
+
+    async def fetchone(self) -> object | None:
+        """Return the next available row or ``None``."""
+        return self._cursor.fetchone()
+
+
+class FakeAioSQLiteConnection:
+    """Minimal driver-level async SQLite connection for AsyncSession tests."""
+
+    def __init__(self, connection: sqlite3.Connection) -> None:
+        """Store the wrapped SQLite connection."""
+        self._conn: sqlite3.Connection = connection
+        self._tx = _ImmediateAioSQLiteQueue()
+
+    @property
+    def isolation_level(self) -> Literal["DEFERRED", "EXCLUSIVE", "IMMEDIATE"] | None:
+        """Expose the wrapped connection isolation level."""
+        return self._conn.isolation_level
+
+    @isolation_level.setter
+    def isolation_level(self, value: Literal["DEFERRED", "EXCLUSIVE", "IMMEDIATE"] | None) -> None:
+        """Set the wrapped connection isolation level."""
+        self._conn.isolation_level = value
+
+    async def close(self) -> None:
+        """Close the wrapped SQLite connection."""
+        self._conn.close()
+
+    async def commit(self) -> None:
+        """Commit the current transaction."""
+        self._conn.commit()
+
+    async def create_function(
+        self,
+        name: str,
+        narg: int,
+        func: Callable[..., str | bytes | int | float | None] | None,
+        *,
+        deterministic: bool = False,
+    ) -> None:
+        """Create one SQLite user-defined function on the wrapped connection."""
+        self._conn.create_function(name, narg, func, deterministic=deterministic)
+
+    async def cursor(self) -> FakeAioSQLiteCursor:
+        """Return a wrapped SQLite cursor."""
+        return FakeAioSQLiteCursor(self._conn.cursor())
+
+    async def execute(
+        self,
+        statement: str,
+        parameters: object | None = None,
+    ) -> FakeAioSQLiteCursor:
+        """Execute one SQL statement and return a wrapped cursor.
+
+        Returns:
+            Wrapped cursor exposing the async DB-API surface SQLAlchemy expects.
+        """
+        if parameters is None:
+            return FakeAioSQLiteCursor(self._conn.execute(statement))
+        return FakeAioSQLiteCursor(self._conn.execute(statement, cast("Any", parameters)))
+
+    async def rollback(self) -> None:
+        """Roll back the current transaction."""
+        self._conn.rollback()
+
+    def stop(self) -> None:
+        """Terminate the wrapped connection for SQLAlchemy shutdown semantics."""
+        self._conn.close()
+
+
+def build_fake_aiosqlite_module() -> ModuleType:
+    """Return a minimal ``aiosqlite`` module for SQLAlchemy AsyncSession tests."""
+    module = cast("Any", ModuleType("aiosqlite"))
+    module.Connection = FakeAioSQLiteConnection
+    module.connect = _unexpected_aiosqlite_connect
+    module.sqlite_version = sqlite3.sqlite_version
+    module.sqlite_version_info = sqlite3.sqlite_version_info
+    for name in (
+        "DatabaseError",
+        "Error",
+        "IntegrityError",
+        "NotSupportedError",
+        "OperationalError",
+        "ProgrammingError",
+    ):
+        setattr(module, name, getattr(sqlite3, name))
+    return module
+
+
+def _unexpected_aiosqlite_connect(*args: object, **kwargs: object) -> None:
+    """Fail fast if the fake driver is used without ``async_creator``.
+
+    Raises:
+        AssertionError: Always, because these test helpers require ``async_creator``.
+    """
+    del args, kwargs
+    msg = "Tests using the fake aiosqlite module must provide create_async_engine(..., async_creator=...)."
+    raise AssertionError(msg)
+
+
+async def open_fake_aiosqlite_connection(database: str, *_: object, **__: object) -> FakeAioSQLiteConnection:
+    """Open one SQLite connection wrapped in the fake async driver surface.
+
+    Returns:
+        Wrapped SQLite connection exposing the async driver surface SQLAlchemy expects.
+    """
+    connection = await asyncio.to_thread(sqlite3.connect, database, check_same_thread=False)
+    await asyncio.to_thread(connection.execute, "PRAGMA foreign_keys=ON")
+    return FakeAioSQLiteConnection(connection)
 
 
 def _load_fakeredis() -> ModuleType:

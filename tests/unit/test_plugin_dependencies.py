@@ -54,7 +54,22 @@ from tests.integration.test_orchestrator import (
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+    from litestar_auth.config import OAuthProviderConfig
+
 pytestmark = pytest.mark.unit
+
+
+def _oauth_provider(*, name: str, client: object) -> OAuthProviderConfig:
+    """Build an OAuthProviderConfig using the current runtime class.
+
+    Returns:
+        The current-runtime OAuthProviderConfig instance.
+    """
+    config_module = importlib.import_module("litestar_auth.config")
+    oauth_provider_config_type = cast("type[Any]", config_module.OAuthProviderConfig)
+    return oauth_provider_config_type(name=name, client=client)
+
+
 HTTP_BAD_REQUEST = 400
 HTTP_FORBIDDEN = 403
 HTTP_IM_A_TEAPOT = 418
@@ -460,7 +475,7 @@ def test_register_dependencies_adds_oauth_associate_provider_only_when_configure
     present_app_config = AppConfig()
     present_config = _minimal_config()
     present_config.oauth_config = OAuthConfig(
-        oauth_providers=[("example", object())],
+        oauth_providers=[_oauth_provider(name="example", client=object())],
         include_oauth_associate=True,
         oauth_redirect_base_url="https://app.example.com/auth",
         oauth_token_encryption_key="YWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWE=",

@@ -32,7 +32,7 @@ When you replace the built-in `UserCreate` request body with `user_create_schema
 you want the documented built-in validation metadata. Existing `UserPasswordField` imports remain valid; add
 `UserEmailField` when you also want the built-in email regex and max length. The default runtime validator still
 enforces password length through `require_password_length`. See
-[Configuration](configuration.md#canonical-manager-password-surface) for the full schema-helper,
+[Configuration](configuration.md#manager-password-surface) for the full schema-helper,
 password-validator, and shared-helper contract.
 
 Built-in user-returning responses from `POST {auth}/register`, `POST {auth}/verify`, and

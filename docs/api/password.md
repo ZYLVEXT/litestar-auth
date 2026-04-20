@@ -1,8 +1,8 @@
 # Password helpers
 
-The canonical plugin-owned password wiring now lives in
-[Configuration](../configuration.md#canonical-manager-password-surface). `PasswordHelper` is the
-hashing boundary itself. Use `PasswordHelper.from_defaults()` when you want the library's canonical
+The plugin-owned password wiring now lives in
+[Configuration](../configuration.md#manager-password-surface). `PasswordHelper` is the
+hashing boundary itself. Use `PasswordHelper.from_defaults()` when you want the library's default
 pwdlib configuration: Argon2 for new hashes, bcrypt verification fallback for legacy hashes, plus
 `verify_and_update()` for opportunistic upgrades. Existing `PasswordHelper()` call sites remain
 source-compatible, but `PasswordHelper.from_defaults()` is the named public "use the library

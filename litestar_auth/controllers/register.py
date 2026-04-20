@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, Protocol, cast
+from typing import TYPE_CHECKING, Any, Protocol, cast, runtime_checkable
 
 import msgspec  # noqa: TC002
 from litestar import Controller, Request, post
@@ -32,6 +32,7 @@ class RegisterControllerUserProtocol[ID](RoleCapableUserProtocol[ID], Protocol):
     is_superuser: bool
 
 
+@runtime_checkable
 class RegisterControllerUserManagerProtocol[UP: RegisterControllerUserProtocol[Any], ID](Protocol):
     """User-manager behavior required by the register controller."""
 
@@ -60,7 +61,7 @@ def create_register_controller[UP: RegisterControllerUserProtocol[Any], ID](
         path: Base route prefix for the generated controller.
         user_read_schema: Custom msgspec struct used for public registration responses.
         user_create_schema: Custom msgspec struct used for registration requests.
-        unsafe_testing: Explicit test-only escape hatch that allows response
+        unsafe_testing: Explicit test-only override that allows response
             schemas with sensitive fields for isolated fixtures.
 
     Returns:
@@ -103,7 +104,7 @@ def create_register_controller[UP: RegisterControllerUserProtocol[Any], ID](
             self,
             request: Request[Any, Any, Any],
             data: msgspec.Struct,
-            litestar_auth_user_manager: Any,  # noqa: ANN401
+            litestar_auth_user_manager: RegisterControllerUserManagerProtocol[Any, Any],
         ) -> msgspec.Struct:
             async def _increment_rate_limit() -> None:
                 if register_rate_limit is not None:

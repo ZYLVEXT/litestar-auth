@@ -12,7 +12,6 @@ from litestar_auth import OAuthConfig, OAuthProviderConfig
 OAuthConfig(
     oauth_providers=[
         OAuthProviderConfig(name="github", client=oauth_client),
-        # Legacy (name, client) tuples are also accepted.
     ],
     oauth_redirect_base_url="https://your.app/auth",
     include_oauth_associate=True,

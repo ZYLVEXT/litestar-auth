@@ -29,7 +29,7 @@ uv run pytest --cov --cov-report=term-missing --cov-fail-under=100 -n auto
 
 Keep the testing docs aligned by audience:
 
-- [Testing plugin-backed apps](guides/testing.md) is the canonical app-level guide for explicit `unsafe_testing`, `AsyncTestClient`, request-scoped session sharing, and auth-state isolation boundaries.
+- [Testing plugin-backed apps](guides/testing.md) is the app-level guide for explicit `unsafe_testing`, `AsyncTestClient`, request-scoped session sharing, and auth-state isolation boundaries.
 - [tests/README.md](https://github.com/ZYLVEXT/litestar-auth/blob/main/tests/README.md) is the repo-internal guide for the test pyramid, pytest markers (`unit`, `integration`, `e2e`, `imports`), and targeted local runs.
 
 Before claiming completion or opening a PR, run the full verification block above from the repo root. CI enforces high coverage on `litestar_auth/`.

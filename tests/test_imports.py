@@ -37,106 +37,107 @@ import litestar_auth.ratelimit as ratelimit_module
 import litestar_auth.schemas as schemas_module
 import litestar_auth.totp as totp_module
 from litestar_auth import (
-    AccessToken,
     AuthenticationBackend,
-    AuthenticationError,
     Authenticator,
-    AuthorizationError,
-    AuthRateLimitConfig,
     BaseUserManager,
     BearerTransport,
-    ConfigurationError,
     CookieTransport,
     DatabaseTokenAuthConfig,
-    DatabaseTokenStrategy,
-    DbSessionDependencyKey,
-    EndpointRateLimit,
     ErrorCode,
-    ForgotPassword,
     GuardedUserProtocol,
-    InMemoryJWTDenylistStore,
-    InMemoryRateLimiter,
-    InMemoryUsedTotpCodeStore,
-    InvalidPasswordError,
-    InvalidResetPasswordTokenError,
-    InvalidVerifyTokenError,
-    JWTDenylistStore,
-    JWTStrategy,
     LitestarAuth,
     LitestarAuthConfig,
     LitestarAuthError,
-    LoginCredentials,
-    OAuthAccountAlreadyLinkedError,
-    PasswordHelper,
-    RedisJWTDenylistStore,
-    RedisRateLimiter,
-    RedisTokenStrategy,
-    RedisUsedTotpCodeStore,
-    RefreshToken,
-    RefreshTokenRequest,
-    RequestVerifyToken,
-    ResetPassword,
+    OAuthConfig,
+    OAuthProviderConfig,
     RoleCapableUserProtocol,
-    Strategy,
-    TokenError,
     TotpConfig,
-    TotpConfirmEnableRequest,
-    TotpConfirmEnableResponse,
-    TotpDisableRequest,
-    TotpEnableResponse,
-    TotpUserManagerProtocol,
     TotpUserProtocol,
-    TotpVerifyRequest,
-    Transport,
-    UserAlreadyExistsError,
-    UserCreate,
-    UserNotExistsError,
+    UserManagerSecurity,
     UserProtocol,
     UserProtocolStrict,
-    UserRead,
-    UserUpdate,
-    VerifyToken,
     __all__,
     __version__,
-    create_auth_controller,
-    create_oauth_associate_controller,
-    create_oauth_controller,
-    create_provider_oauth_controller,
-    create_register_controller,
-    create_reset_password_controller,
-    create_totp_controller,
-    create_users_controller,
-    create_verify_controller,
-    generate_totp_secret,
-    generate_totp_uri,
     has_all_roles,
     has_any_role,
     is_active,
     is_authenticated,
     is_superuser,
     is_verified,
-    load_httpx_oauth_client,
-    require_password_length,
-    verify_totp,
-    verify_totp_with_store,
 )
+from litestar_auth.authentication.strategy import DatabaseTokenStrategy, JWTStrategy, RedisTokenStrategy, Strategy
+from litestar_auth.authentication.strategy.db_models import AccessToken, RefreshToken
+from litestar_auth.authentication.strategy.jwt import InMemoryJWTDenylistStore, JWTDenylistStore, RedisJWTDenylistStore
+from litestar_auth.authentication.transport import Transport
+from litestar_auth.config import require_password_length
 from litestar_auth.contrib.redis import RedisAuthClientProtocol, RedisAuthPreset, RedisAuthRateLimitTier
+from litestar_auth.controllers import (
+    TotpUserManagerProtocol,
+    create_auth_controller,
+    create_oauth_associate_controller,
+    create_oauth_controller,
+    create_register_controller,
+    create_reset_password_controller,
+    create_totp_controller,
+    create_users_controller,
+    create_verify_controller,
+)
 from litestar_auth.db import BaseOAuthAccountStore, BaseUserStore
 from litestar_auth.db.sqlalchemy import SQLAlchemyUserDatabase
-from litestar_auth.manager import UserManagerSecurity
+from litestar_auth.exceptions import (
+    AuthenticationError,
+    AuthorizationError,
+    ConfigurationError,
+    InvalidPasswordError,
+    InvalidResetPasswordTokenError,
+    InvalidVerifyTokenError,
+    OAuthAccountAlreadyLinkedError,
+    TokenError,
+    UserAlreadyExistsError,
+    UserNotExistsError,
+)
+from litestar_auth.oauth import create_provider_oauth_controller, load_httpx_oauth_client
 from litestar_auth.oauth.client_adapter import (
     OAuthEmailVerificationAsyncClientProtocol,
     OAuthEmailVerificationSyncClientProtocol,
     make_async_email_verification_client,
 )
+from litestar_auth.password import PasswordHelper
+from litestar_auth.payloads import (
+    ForgotPassword,
+    LoginCredentials,
+    RefreshTokenRequest,
+    RequestVerifyToken,
+    ResetPassword,
+    TotpConfirmEnableRequest,
+    TotpConfirmEnableResponse,
+    TotpDisableRequest,
+    TotpEnableResponse,
+    TotpVerifyRequest,
+    VerifyToken,
+)
 from litestar_auth.ratelimit import (
     AUTH_RATE_LIMIT_ENDPOINT_SLOTS,
     AUTH_RATE_LIMIT_ENDPOINT_SLOTS_BY_GROUP,
     AUTH_RATE_LIMIT_VERIFICATION_SLOTS,
+    AuthRateLimitConfig,
     AuthRateLimitEndpointGroup,
     AuthRateLimitEndpointSlot,
     AuthRateLimitSlot,
+    EndpointRateLimit,
+    InMemoryRateLimiter,
+    RedisRateLimiter,
 )
+from litestar_auth.schemas import UserCreate, UserRead, UserUpdate
+from litestar_auth.totp import (
+    InMemoryUsedTotpCodeStore,
+    RedisUsedTotpCodeStore,
+    generate_totp_secret,
+    generate_totp_uri,
+    verify_totp,
+    verify_totp_with_store,
+)
+from litestar_auth.types import DbSessionDependencyKey
 from tests._helpers import ExampleUser, cast_fakeredis
 from tests.conftest import project_version_from_pyproject
 
@@ -155,6 +156,82 @@ TOTP_WINDOW_SECONDS = 300
 ONE_MINUTE_TTL_SECONDS = 60
 ONE_MINUTE_TTL_FLOOR = ONE_MINUTE_TTL_SECONDS - 1
 ONE_MINUTE_TTL_MS = ONE_MINUTE_TTL_SECONDS * 1000
+REMOVED_ROOT_PAYLOAD_EXPORTS = (
+    "ForgotPassword",
+    "LoginCredentials",
+    "RefreshTokenRequest",
+    "RequestVerifyToken",
+    "ResetPassword",
+    "TotpConfirmEnableRequest",
+    "TotpConfirmEnableResponse",
+    "TotpDisableRequest",
+    "TotpEnableResponse",
+    "TotpVerifyRequest",
+    "UserCreate",
+    "UserRead",
+    "UserUpdate",
+    "VerifyToken",
+)
+REMOVED_CONTROLLERS_PAYLOAD_EXPORTS = (
+    "ForgotPassword",
+    "LoginCredentials",
+    "RefreshTokenRequest",
+    "RequestVerifyToken",
+    "ResetPassword",
+    "TotpConfirmEnableRequest",
+    "TotpConfirmEnableResponse",
+    "TotpDisableRequest",
+    "TotpEnableResponse",
+    "TotpVerifyRequest",
+    "VerifyToken",
+)
+REMOVED_PAYLOAD_SCHEMA_EXPORTS = ("UserCreate", "UserRead", "UserUpdate")
+REMOVED_ROOT_SECONDARY_EXPORTS = (
+    "AccessToken",
+    "AuthRateLimitConfig",
+    "AuthenticationError",
+    "AuthorizationError",
+    "ConfigurationError",
+    "DatabaseTokenStrategy",
+    "DbSessionDependencyKey",
+    "EndpointRateLimit",
+    "InMemoryJWTDenylistStore",
+    "InMemoryRateLimiter",
+    "InMemoryUsedTotpCodeStore",
+    "InvalidPasswordError",
+    "InvalidResetPasswordTokenError",
+    "InvalidVerifyTokenError",
+    "JWTDenylistStore",
+    "JWTStrategy",
+    "OAuthAccountAlreadyLinkedError",
+    "PasswordHelper",
+    "RedisJWTDenylistStore",
+    "RedisRateLimiter",
+    "RedisTokenStrategy",
+    "RedisUsedTotpCodeStore",
+    "RefreshToken",
+    "Strategy",
+    "TokenError",
+    "TotpUserManagerProtocol",
+    "Transport",
+    "UserAlreadyExistsError",
+    "UserNotExistsError",
+    "create_auth_controller",
+    "create_oauth_associate_controller",
+    "create_oauth_controller",
+    "create_provider_oauth_controller",
+    "create_register_controller",
+    "create_reset_password_controller",
+    "create_totp_controller",
+    "create_users_controller",
+    "create_verify_controller",
+    "generate_totp_secret",
+    "generate_totp_uri",
+    "load_httpx_oauth_client",
+    "require_password_length",
+    "verify_totp",
+    "verify_totp_with_store",
+)
 
 pytestmark = [pytest.mark.unit, pytest.mark.imports]
 EMAIL_PATTERN = r"^[^@\s]+@[^@\s]+\.[^@\s]+$"
@@ -217,52 +294,29 @@ def test_root_package_reexports_public_api() -> None:
     assert __version__ == project_version_from_pyproject()
     assert LitestarAuth is not None
     assert LitestarAuthConfig is not None
-    assert AccessToken is not None
-    assert RefreshToken is not None
-    assert PasswordHelper is not None
     assert AuthenticationBackend is not None
     assert Authenticator is not None
-    assert Transport is not None
-    assert Strategy is not None
     assert UserProtocol is not None
-    assert all(symbol is not None for symbol in (DbSessionDependencyKey, UserProtocolStrict))
+    assert UserProtocolStrict is not None
     assert GuardedUserProtocol is not None
     assert RoleCapableUserProtocol is not None
     assert TotpUserProtocol is not None
     assert BearerTransport is not None
     assert CookieTransport is not None
-    assert JWTStrategy is not None
     assert DatabaseTokenAuthConfig is not None
-    assert DatabaseTokenStrategy is not None
-    assert RedisTokenStrategy is not None
-    assert InMemoryRateLimiter is not None
-    assert RedisRateLimiter is not None
-    assert EndpointRateLimit is not None
-    assert AuthRateLimitConfig is not None
-    assert InMemoryJWTDenylistStore is not None
-    assert InMemoryUsedTotpCodeStore is not None
-    assert JWTDenylistStore is not None
-    assert RedisJWTDenylistStore is not None
-    assert RedisUsedTotpCodeStore is not None
-    assert callable(generate_totp_secret)
-    assert callable(generate_totp_uri)
-    assert callable(verify_totp)
-    assert callable(verify_totp_with_store)
-    assert BaseUserStore is not None
-    assert SQLAlchemyUserDatabase is not None
+    assert OAuthConfig is not None
+    assert OAuthProviderConfig is not None
+    assert TotpConfig is not None
     assert BaseUserManager is not None
-    assert UserRead.__struct_fields__ == ("id", "email", "is_active", "is_verified", "is_superuser", "roles")
-    assert UserCreate.__struct_fields__ == ("email", "password")
-    assert UserUpdate.__struct_fields__ == ("password", "email", "is_active", "is_verified", "is_superuser", "roles")
+    assert UserManagerSecurity is not None
     assert callable(is_authenticated)
     assert callable(is_active)
     assert callable(is_verified)
     assert callable(is_superuser)
-    assert callable(create_provider_oauth_controller)
-    assert callable(create_oauth_associate_controller)
-    assert callable(load_httpx_oauth_client)
-    assert callable(require_password_length)
+    assert callable(has_any_role)
+    assert callable(has_all_roles)
     assert ErrorCode is not None
+    assert LitestarAuthError is not None
 
 
 def test_root_package_reexports_role_guard_factories() -> None:
@@ -293,12 +347,10 @@ def test_root_package_exports_canonical_database_token_preset_entrypoint() -> No
 
     backend = config.resolve_startup_backends()[0]
     current_plugin_module = importlib.import_module("litestar_auth.plugin")
-    current_root_module = importlib.import_module("litestar_auth")
     database_token_strategy_type = _current_database_token_strategy_type()
     assert isinstance(backend, current_plugin_module.StartupBackendTemplate)
     assert backend.name == "database"
     assert isinstance(backend.transport, BearerTransport)
-    assert current_root_module.DatabaseTokenStrategy is not None
     assert isinstance(backend.strategy, database_token_strategy_type)
 
 
@@ -347,7 +399,7 @@ def test_public_user_schema_reuse_surface_stays_importable() -> None:
     assert user_update_meta.min_length == config_module.DEFAULT_MINIMUM_PASSWORD_LENGTH
     assert user_create_meta.max_length == config_module.MAX_PASSWORD_LENGTH
     assert user_update_meta.max_length == config_module.MAX_PASSWORD_LENGTH
-    assert litestar_auth.require_password_length is config_module.require_password_length
+    assert require_password_length is config_module.require_password_length
 
 
 def test_models_and_strategy_modules_expose_documented_orm_setup_surface() -> None:
@@ -433,8 +485,8 @@ def test_sqlalchemy_user_database_keeps_documented_keyword_contract() -> None:
     assert init_signature.parameters["oauth_account_model"].default is None
 
 
-def test_root_package_reexports_controller_factories_and_payloads() -> None:
-    """The package root exposes controller factories and their public payload structs."""
+def test_controller_factories_and_payloads_stay_canonical() -> None:
+    """Controller factories and payload structs resolve from their canonical modules."""
     assert LoginCredentials.__struct_fields__ == ("identifier", "password")
     assert RefreshTokenRequest.__struct_fields__ == ("refresh_token",)
     assert ForgotPassword.__struct_fields__ == ("email",)
@@ -456,6 +508,28 @@ def test_root_package_reexports_controller_factories_and_payloads() -> None:
     assert callable(create_oauth_controller)
 
 
+def test_root_package_does_not_reexport_payload_or_schema_structs() -> None:
+    """Payload and schema structs must be imported from ``payloads`` or ``schemas``."""
+    for symbol in REMOVED_ROOT_PAYLOAD_EXPORTS:
+        assert symbol not in __all__
+        assert not hasattr(litestar_auth, symbol)
+
+    assert payloads_module.LoginCredentials is LoginCredentials
+    assert payloads_module.RefreshTokenRequest is RefreshTokenRequest
+    assert payloads_module.ForgotPassword is ForgotPassword
+    assert payloads_module.ResetPassword is ResetPassword
+    assert payloads_module.VerifyToken is VerifyToken
+    assert payloads_module.RequestVerifyToken is RequestVerifyToken
+    assert payloads_module.TotpConfirmEnableRequest is TotpConfirmEnableRequest
+    assert payloads_module.TotpConfirmEnableResponse is TotpConfirmEnableResponse
+    assert payloads_module.TotpEnableResponse is TotpEnableResponse
+    assert payloads_module.TotpVerifyRequest is TotpVerifyRequest
+    assert payloads_module.TotpDisableRequest is TotpDisableRequest
+    assert schemas_module.UserCreate is UserCreate
+    assert schemas_module.UserRead is UserRead
+    assert schemas_module.UserUpdate is UserUpdate
+
+
 def test_oauth_package_exposes_canonical_login_helper_and_not_advanced_controller_factory() -> None:
     """The OAuth package keeps the login helper canonical and custom controller factories elsewhere."""
     assert oauth_package_module.__all__ == (
@@ -470,8 +544,8 @@ def test_oauth_package_exposes_canonical_login_helper_and_not_advanced_controlle
     assert oauth_package_module.create_provider_oauth_controller is create_provider_oauth_controller
     assert oauth_package_module.load_httpx_oauth_client is load_httpx_oauth_client
     assert oauth_package_module.make_async_email_verification_client is make_async_email_verification_client
-    assert litestar_auth.create_provider_oauth_controller is oauth_package_module.create_provider_oauth_controller
-    assert litestar_auth.load_httpx_oauth_client is oauth_package_module.load_httpx_oauth_client
+    assert not hasattr(litestar_auth, "create_provider_oauth_controller")
+    assert not hasattr(litestar_auth, "load_httpx_oauth_client")
     assert not hasattr(oauth_package_module, "create_oauth_controller")
     assert controllers_package.create_oauth_controller is create_oauth_controller
     assert controllers_package.create_oauth_associate_controller is create_oauth_associate_controller
@@ -780,21 +854,10 @@ def test_ratelimit_identifier_contract_stays_on_the_public_ratelimit_module() ->
     assert "AuthRateLimitEndpointGroup" not in __all__
 
 
-def test_payload_module_is_authoritative_boundary_with_compat_reexports() -> None:
-    """Payloads resolve from the dedicated module and stay aliased from compatibility paths."""
+def test_payload_module_is_authoritative_boundary_without_controllers_package_reexports() -> None:
+    """Payloads resolve from the dedicated module without controllers-package aliases."""
     assert controllers_package.__all__ == (
-        "ForgotPassword",
-        "LoginCredentials",
-        "RefreshTokenRequest",
-        "RequestVerifyToken",
-        "ResetPassword",
-        "TotpConfirmEnableRequest",
-        "TotpConfirmEnableResponse",
-        "TotpDisableRequest",
-        "TotpEnableResponse",
         "TotpUserManagerProtocol",
-        "TotpVerifyRequest",
-        "VerifyToken",
         "create_auth_controller",
         "create_oauth_associate_controller",
         "create_oauth_controller",
@@ -816,42 +879,34 @@ def test_payload_module_is_authoritative_boundary_with_compat_reexports() -> Non
         "TotpEnableRequest",
         "TotpEnableResponse",
         "TotpVerifyRequest",
-        "UserCreate",
-        "UserRead",
-        "UserUpdate",
         "VerifyToken",
     )
-    assert payloads_module.UserCreate is UserCreate
-    assert payloads_module.UserRead is UserRead
-    assert payloads_module.UserUpdate is UserUpdate
     assert payloads_module.LoginCredentials is LoginCredentials
-    assert payloads_module.LoginCredentials is controllers_package.LoginCredentials
     assert payloads_module.LoginCredentials is auth_controller_module.LoginCredentials
-    assert payloads_module.RefreshTokenRequest is controllers_package.RefreshTokenRequest
     assert payloads_module.RefreshTokenRequest is auth_controller_module.RefreshTokenRequest
-    assert payloads_module.ForgotPassword is controllers_package.ForgotPassword
     assert payloads_module.ForgotPassword is reset_controller_module.ForgotPassword
-    assert payloads_module.ResetPassword is controllers_package.ResetPassword
     assert payloads_module.ResetPassword is reset_controller_module.ResetPassword
-    assert payloads_module.VerifyToken is controllers_package.VerifyToken
     assert payloads_module.VerifyToken is verify_controller_module.VerifyToken
-    assert payloads_module.RequestVerifyToken is controllers_package.RequestVerifyToken
     assert payloads_module.RequestVerifyToken is verify_controller_module.RequestVerifyToken
-    assert payloads_module.TotpConfirmEnableRequest is controllers_package.TotpConfirmEnableRequest
     assert payloads_module.TotpEnableRequest is totp_controller_module.TotpEnableRequest
     assert payloads_module.TotpConfirmEnableRequest is TotpConfirmEnableRequest
-    assert payloads_module.TotpConfirmEnableResponse is controllers_package.TotpConfirmEnableResponse
     assert payloads_module.TotpConfirmEnableResponse is TotpConfirmEnableResponse
-    assert payloads_module.TotpEnableResponse is controllers_package.TotpEnableResponse
     assert payloads_module.TotpEnableResponse is TotpEnableResponse
-    assert payloads_module.TotpVerifyRequest is controllers_package.TotpVerifyRequest
     assert payloads_module.TotpVerifyRequest is TotpVerifyRequest
-    assert payloads_module.TotpDisableRequest is controllers_package.TotpDisableRequest
     assert payloads_module.TotpDisableRequest is TotpDisableRequest
+    for symbol in REMOVED_CONTROLLERS_PAYLOAD_EXPORTS:
+        assert symbol not in controllers_package.__all__
+        assert not hasattr(controllers_package, symbol)
+    for symbol in REMOVED_PAYLOAD_SCHEMA_EXPORTS:
+        assert symbol not in payloads_module.__all__
+        assert not hasattr(payloads_module, symbol)
+    assert schemas_module.UserCreate is UserCreate
+    assert schemas_module.UserRead is UserRead
+    assert schemas_module.UserUpdate is UserUpdate
 
 
-def test_root_package_reexports_exception_hierarchy() -> None:
-    """The package root exposes all public exception types."""
+def test_exception_hierarchy_stays_on_canonical_module() -> None:
+    """Exception subclasses stay on ``litestar_auth.exceptions`` while the root exports the base type."""
     assert issubclass(AuthenticationError, LitestarAuthError)
     assert issubclass(AuthorizationError, LitestarAuthError)
     assert issubclass(ConfigurationError, LitestarAuthError)
@@ -863,63 +918,98 @@ def test_root_package_reexports_exception_hierarchy() -> None:
     assert issubclass(InvalidPasswordError, AuthenticationError)
     assert issubclass(InvalidVerifyTokenError, TokenError)
     assert issubclass(InvalidResetPasswordTokenError, TokenError)
+    assert not hasattr(litestar_auth, "AuthenticationError")
+    assert not hasattr(litestar_auth, "TokenError")
 
 
 def test_root_package_all_excludes_private_symbols() -> None:
     """`__all__` lists only public names."""
-    assert all(not symbol.startswith("_") for symbol in __all__)
+    assert tuple(__all__) == (
+        "AuthenticationBackend",
+        "Authenticator",
+        "BaseUserManager",
+        "BearerTransport",
+        "CookieTransport",
+        "DatabaseTokenAuthConfig",
+        "ErrorCode",
+        "GuardedUserProtocol",
+        "LitestarAuth",
+        "LitestarAuthConfig",
+        "LitestarAuthError",
+        "OAuthConfig",
+        "OAuthProviderConfig",
+        "RoleCapableUserProtocol",
+        "TotpConfig",
+        "TotpUserProtocol",
+        "UserManagerSecurity",
+        "UserProtocol",
+        "UserProtocolStrict",
+        "__version__",
+        "has_all_roles",
+        "has_any_role",
+        "is_active",
+        "is_authenticated",
+        "is_superuser",
+        "is_verified",
+    )
+    assert all(not symbol.startswith("_") or symbol == "__version__" for symbol in __all__)
     assert len(__all__) == len(set(__all__))
     assert "_UserManagerProxy" not in __all__
-    assert "AuthRateLimitConfig" in __all__
-    assert "EndpointRateLimit" in __all__
     assert "ErrorCode" in __all__
-    assert "InMemoryRateLimiter" in __all__
-    assert "RedisRateLimiter" in __all__
-    assert "generate_totp_secret" in __all__
-    assert "generate_totp_uri" in __all__
-    assert "verify_totp" in __all__
-    assert "verify_totp_with_store" in __all__
     assert "has_any_role" in __all__
     assert "has_all_roles" in __all__
-    assert "InMemoryJWTDenylistStore" in __all__
-    assert "InMemoryUsedTotpCodeStore" in __all__
-    assert "JWTDenylistStore" in __all__
-    assert "RedisJWTDenylistStore" in __all__
-    assert "RedisUsedTotpCodeStore" in __all__
     assert {
-        "DbSessionDependencyKey",
         "GuardedUserProtocol",
         "RoleCapableUserProtocol",
-        "TotpUserManagerProtocol",
         "TotpUserProtocol",
         "UserProtocol",
         "UserProtocolStrict",
     } <= set(__all__)
     assert "Authenticator" in __all__
-    assert "RefreshToken" in __all__
-    assert "LoginCredentials" in __all__
-    assert "RefreshTokenRequest" in __all__
-    assert "ForgotPassword" in __all__
-    assert "ResetPassword" in __all__
-    assert "VerifyToken" in __all__
-    assert "RequestVerifyToken" in __all__
-    assert "TotpConfirmEnableRequest" in __all__
-    assert "TotpConfirmEnableResponse" in __all__
-    assert "TotpEnableResponse" in __all__
-    assert "TotpVerifyRequest" in __all__
-    assert "TotpDisableRequest" in __all__
-    assert "create_auth_controller" in __all__
-    assert "create_oauth_associate_controller" in __all__
-    assert "create_register_controller" in __all__
-    assert "create_verify_controller" in __all__
-    assert "create_reset_password_controller" in __all__
-    assert "create_users_controller" in __all__
-    assert "create_totp_controller" in __all__
-    assert "create_oauth_controller" in __all__
-    assert "OAuthAccountAlreadyLinkedError" in __all__
-    assert "require_password_length" in __all__
+    for symbol in REMOVED_ROOT_PAYLOAD_EXPORTS:
+        assert symbol not in __all__
+    for symbol in REMOVED_ROOT_SECONDARY_EXPORTS:
+        assert symbol not in __all__
     assert "LitestarAuth" in __all__
     assert "DatabaseTokenAuthConfig" in __all__
+
+
+def test_root_package_does_not_reexport_secondary_surfaces() -> None:
+    """Secondary APIs stay on canonical submodules instead of the package root."""
+    for symbol in REMOVED_ROOT_SECONDARY_EXPORTS:
+        assert not hasattr(litestar_auth, symbol)
+
+    assert AccessToken is not None
+    assert RefreshToken is not None
+    assert PasswordHelper is not None
+    assert Transport is not None
+    assert Strategy is not None
+    assert DbSessionDependencyKey is not None
+    assert JWTStrategy is not None
+    assert DatabaseTokenStrategy is not None
+    assert RedisTokenStrategy is not None
+    assert InMemoryRateLimiter is not None
+    assert RedisRateLimiter is not None
+    assert EndpointRateLimit is not None
+    assert AuthRateLimitConfig is not None
+    assert InMemoryJWTDenylistStore is not None
+    assert InMemoryUsedTotpCodeStore is not None
+    assert JWTDenylistStore is not None
+    assert RedisJWTDenylistStore is not None
+    assert RedisUsedTotpCodeStore is not None
+    assert BaseUserStore is not None
+    assert SQLAlchemyUserDatabase is not None
+    assert UserRead.__struct_fields__ == ("id", "email", "is_active", "is_verified", "is_superuser", "roles")
+    assert UserCreate.__struct_fields__ == ("email", "password")
+    assert UserUpdate.__struct_fields__ == ("password", "email", "is_active", "is_verified", "is_superuser", "roles")
+    assert callable(create_provider_oauth_controller)
+    assert callable(create_oauth_associate_controller)
+    assert callable(load_httpx_oauth_client)
+    assert callable(require_password_length)
+    assert callable(generate_totp_secret)
+    assert callable(generate_totp_uri)
+    assert callable(verify_totp)
+    assert callable(verify_totp_with_store)
 
 
 def test_root_package_all_entries_resolve_to_attributes() -> None:

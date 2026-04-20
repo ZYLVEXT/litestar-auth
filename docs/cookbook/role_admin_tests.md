@@ -248,7 +248,7 @@ async def test_get_nonexistent_returns_404(app):
   inject a test user into the request scope.
 - Use `pytest-anyio` (or `pytest-asyncio` with `asyncio_mode = "auto"`) so
   `@pytest.mark.anyio` / `@pytest.mark.asyncio` resolves correctly.
-- Advanced Alchemy's `NotFoundError` is the canonical "row not found"
+- Advanced Alchemy's `NotFoundError` is the standard "row not found"
   exception.  The controller maps it to Litestar's `NotFoundException`
   (HTTP 404).
 

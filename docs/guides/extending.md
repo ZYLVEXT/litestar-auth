@@ -45,15 +45,15 @@ See [Role management CLI](roles_cli.md) for operator examples and destructive-de
 
 ## User manager
 
-Subclass [`BaseUserManager`](../api/manager.md) to implement **lifecycle hooks** and custom rules. See the dedicated [Hooks](hooks.md) page for when each hook runs and timing considerations (`on_after_forgot_password`).
+Subclass [`BaseUserManager`](../api/manager.md) to implement **lifecycle hooks** and custom rules. The default no-op hook bodies live on `UserManagerHooks`, which `BaseUserManager` already inherits, so existing subclasses keep the same override surface. See the dedicated [Hooks](hooks.md) page for when each hook runs and timing considerations (`on_after_forgot_password`).
 
-The plugin injects a request-scoped manager built with your `user_db_factory`, `backends`, and the canonical `BaseUserManager`-style constructor kwargs.
+The plugin injects a request-scoped manager built with your `user_db_factory`, `backends`, and the default `BaseUserManager`-style constructor kwargs.
 
 ### Default builder contract
 
 Without `user_manager_factory`, the plugin calls `user_manager_class(user_db, *, password_helper=..., security=..., password_validator=..., backends=..., login_identifier=..., unsafe_testing=...)`. The default builder always passes `security=UserManagerSecurity(...)`; when `user_manager_security` is unset, `LitestarAuthConfig.id_parser` is folded into that bundle (there is no separate `id_parser=` kwarg on the default builder call).
 
-If your manager narrows or renames that constructor surface, configure `user_manager_factory` instead of relying on plugin-side capability detection. `password_validator_factory` belongs to that default builder contract: the plugin only resolves and injects the validator automatically when it still owns the canonical manager constructor call.
+If your manager narrows or renames that constructor surface, configure `user_manager_factory` instead of relying on plugin-side capability detection. `password_validator_factory` belongs to that default builder contract: the plugin only resolves and injects the validator automatically when it still owns the default manager constructor call.
 
 ### Custom factory
 
@@ -236,7 +236,7 @@ and superuser `PATCH /users/{user_id}` can persist validated role membership thr
 If app-owned services, background jobs, or CLI commands also hash or verify passwords directly, call
 `config.resolve_password_helper()` once after constructing `LitestarAuthConfig(...)` and reuse the returned helper
 instead of building a separate default `PasswordHelper` instance in each call site. See
-[Configuration](../configuration.md#canonical-manager-password-surface) for the combined secret/helper/schema contract.
+[Configuration](../configuration.md#manager-password-surface) for the combined secret/helper/schema contract.
 
 `user_create_schema`, `user_update_schema`, and `user_read_schema` do not replace the built-in login, verification, reset-password, refresh, or TOTP request payloads. If you need different field names for those routes, mount or wrap the relevant controller factory instead of expecting `login_identifier` or `user_*_schema` to rename `identifier`, `email`, `token`, `refresh_token`, `pending_token`, or `code`.
 

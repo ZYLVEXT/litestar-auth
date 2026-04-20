@@ -33,3 +33,25 @@ class PasswordManagedUserManagerProtocol[UP](UserDatabaseManagerProtocol[UP], Pr
     def _normalize_email(email: str) -> str: ...  # pragma: no cover
 
     def _validate_password(self, password: str) -> None: ...  # pragma: no cover
+
+
+class UserManagerHooksProtocol[UP](Protocol):
+    """Lifecycle-hook surface exposed by manager implementations."""
+
+    async def on_after_register(self, user: UP, token: str) -> None: ...  # pragma: no cover
+
+    async def on_after_login(self, user: UP) -> None: ...  # pragma: no cover
+
+    async def on_after_verify(self, user: UP) -> None: ...  # pragma: no cover
+
+    async def on_after_request_verify_token(self, user: UP, token: str) -> None: ...  # pragma: no cover
+
+    async def on_after_forgot_password(self, user: UP | None, token: str | None) -> None: ...  # pragma: no cover
+
+    async def on_after_reset_password(self, user: UP) -> None: ...  # pragma: no cover
+
+    async def on_after_update(self, user: UP, update_dict: dict[str, Any]) -> None: ...  # pragma: no cover
+
+    async def on_before_delete(self, user: UP) -> None: ...  # pragma: no cover
+
+    async def on_after_delete(self, user: UP) -> None: ...  # pragma: no cover

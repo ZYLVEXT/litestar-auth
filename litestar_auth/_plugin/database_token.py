@@ -25,9 +25,9 @@ if TYPE_CHECKING:
 
 
 class _StartupOnlyDatabaseTokenSession:
-    """Fail-closed placeholder kept for test helpers and compatibility shims.
+    """Fail-closed placeholder kept for test helpers and legacy compatibility helpers.
 
-    Request-time code must use :meth:`LitestarAuthConfig.resolve_request_backends`; the
+    Request-time code must use :meth:`LitestarAuthConfig.resolve_backends`; the
     startup inventory from :meth:`LitestarAuthConfig.resolve_startup_backends` is not
     sufficient for session-bound database-token operations.
     """
@@ -42,10 +42,10 @@ _STARTUP_ONLY_DATABASE_TOKEN_SESSION = _StartupOnlyDatabaseTokenSession()
 
 
 def _raise_startup_only_database_token_runtime_error() -> Never:
-    """Raise the canonical fail-closed error for startup-only DB-token backends.
+    """Raise the shared fail-closed error for startup-only DB-token backends.
 
     Directs operators to :meth:`LitestarAuthConfig.resolve_startup_backends` for startup
-    inventory and :meth:`LitestarAuthConfig.resolve_request_backends` for request-bound
+    inventory and :meth:`LitestarAuthConfig.resolve_backends` for request-bound
     backends.
 
     Raises:
@@ -55,7 +55,7 @@ def _raise_startup_only_database_token_runtime_error() -> Never:
     msg = (
         "LitestarAuthConfig.resolve_startup_backends() yields startup-only database-token "
         "backends that cannot run request-time authentication work against a request "
-        "AsyncSession. Use LitestarAuthConfig.resolve_request_backends(session) to obtain "
+        "AsyncSession. Use LitestarAuthConfig.resolve_backends(session) to obtain "
         "request-scoped backend instances for login, refresh, logout, or token validation."
     )
     raise RuntimeError(msg)
@@ -66,8 +66,8 @@ def resolve_database_token_strategy_session(session: AsyncSession | None = None)
 
     Returns:
         The provided request ``AsyncSession`` when available, otherwise a placeholder that
-        raises the canonical startup-only runtime error on first use. Prefer obtaining
-        request-bound backends via :meth:`LitestarAuthConfig.resolve_request_backends`; the
+        raises the startup-only runtime error on first use. Prefer obtaining
+        request-bound backends via :meth:`LitestarAuthConfig.resolve_backends`; the
         startup inventory from :meth:`LitestarAuthConfig.resolve_startup_backends` uses an
         explicit startup-only strategy wrapper instead of this placeholder.
     """
@@ -87,7 +87,7 @@ class _DatabaseTokenStrategySettings:
 
 
 class _StartupOnlyDatabaseTokenStrategyMixin[UP: UserProtocol[Any], ID]:
-    """Fail-closed startup-only wrapper for the canonical DB-token strategy settings."""
+    """Fail-closed startup-only wrapper for the DB-token strategy settings."""
 
     def __init__(
         self,
@@ -219,14 +219,14 @@ def _build_database_token_backend[UP: UserProtocol[Any], ID](
     session: AsyncSession | None = None,
     unsafe_testing: bool = False,
 ) -> AuthenticationBackend[UP, ID]:
-    """Build the canonical bearer + database-token backend lazily.
+    """Build the bearer + database-token backend lazily.
 
     Imports the backend, transport, and strategy only when the ``database_token_auth`` path is used so
     importing ``litestar_auth._plugin.config`` keeps the current lazy-import contract
     without hiding first-party references behind string-based module lookups.
 
     Returns:
-        Authentication backend configured for the canonical DB bearer path.
+        Authentication backend configured for the DB-token bearer path.
     """
     from litestar_auth.authentication.backend import AuthenticationBackend  # noqa: PLC0415
     from litestar_auth.authentication.strategy.db import DatabaseTokenStrategy  # noqa: PLC0415
@@ -265,13 +265,13 @@ def build_database_token_backend[UP: UserProtocol[Any], ID](
     session: AsyncSession,
     unsafe_testing: bool = False,
 ) -> AuthenticationBackend[UP, ID]:
-    """Return the canonical DB-token backend for the provided request session.
+    """Return the DB-token backend for the provided request session.
 
     Uses the module-local :func:`_build_database_token_backend` implementation. Tests that need a
     seam should patch that helper on this module (not :mod:`litestar_auth._plugin.config`).
 
     Returns:
-        Authentication backend configured for the canonical DB bearer path.
+        Authentication backend configured for the DB-token bearer path.
     """
     return _build_database_token_backend(
         database_token_auth,
@@ -285,10 +285,10 @@ def _build_database_token_backend_template[UP: UserProtocol[Any], ID](
     *,
     unsafe_testing: bool = False,
 ) -> StartupBackendTemplate[UP, ID]:
-    """Build the startup-only template for the canonical DB-token backend.
+    """Build the startup-only template for the DB-token backend.
 
     Returns:
-        Startup-only template for the canonical DB-token backend.
+        Startup-only template for the DB-token backend.
     """
     from litestar_auth._plugin.config import StartupBackendTemplate  # noqa: PLC0415
 

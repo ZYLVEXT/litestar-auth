@@ -39,7 +39,7 @@ def _build_user_manager_security[ID](
     totp_secret_key: str | None = None,
     id_parser: Callable[[str], ID] | None = None,
 ) -> UserManagerSecurity[ID]:
-    """Return the canonical concrete manager-security bundle."""
+    """Return the concrete manager-security bundle."""
     from litestar_auth.manager import UserManagerSecurity  # noqa: PLC0415
 
     return UserManagerSecurity(
@@ -57,7 +57,7 @@ def resolve_account_token_secrets[ID](
     warning_stacklevel: int = 2,
     unsafe_testing: bool = False,
 ) -> AccountTokenSecrets:
-    """Resolve verify/reset secrets from the canonical manager-security bundle.
+    """Resolve verify/reset secrets from the manager-security bundle.
 
     Returns:
         Wrapped verification/reset token secrets for account-token operations.
@@ -103,7 +103,7 @@ class ManagerConstructorInputs[ID]:
 
     @property
     def effective_security(self) -> UserManagerSecurity[ID]:
-        """Return the canonical plugin-managed security bundle for the current inputs."""
+        """Return the plugin-managed security bundle for the current inputs."""
         if self.manager_security is None:
             return _build_user_manager_security(id_parser=self.id_parser)
 
@@ -131,7 +131,7 @@ class ManagerConstructorInputs[ID]:
     def build_kwargs(self) -> dict[str, Any]:
         """Materialize constructor kwargs for the target manager class.
 
-        The default plugin builder now assumes the canonical ``BaseUserManager``-style
+        The default plugin builder now assumes the default ``BaseUserManager``-style
         constructor contract. Custom managers that narrow or rename this surface must
         be built through ``user_manager_factory`` instead of relying on compatibility
         probing in the plugin path.

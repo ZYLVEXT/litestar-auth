@@ -14,8 +14,9 @@ import msgspec
 import pytest
 
 import litestar_auth.config as config_module
+from litestar_auth.config import MAX_PASSWORD_LENGTH, require_password_length
 from litestar_auth.exceptions import InvalidResetPasswordTokenError, InvalidVerifyTokenError
-from litestar_auth.manager import MAX_PASSWORD_LENGTH, RESET_PASSWORD_TOKEN_AUDIENCE, require_password_length
+from litestar_auth.manager import RESET_PASSWORD_TOKEN_AUDIENCE
 from litestar_auth.manager import logger as manager_logger
 from litestar_auth.password import PasswordHelper
 from litestar_auth.schemas import UserCreate, UserPasswordField, UserUpdate
@@ -223,7 +224,7 @@ async def test_reset_password_rejects_mismatched_fingerprint(caplog: pytest.LogC
         _full_claims(
             sub=str(user.id),
             aud=RESET_PASSWORD_TOKEN_AUDIENCE,
-            password_fingerprint=manager._password_fingerprint(user.hashed_password),
+            password_fingerprint=manager.tokens.password_fingerprint(user.hashed_password),
         ),
         manager.reset_password_token_secret.get_secret_value(),
         algorithm="HS256",
@@ -254,7 +255,7 @@ async def test_reset_password_accepts_matching_fingerprint() -> None:
         _full_claims(
             sub=str(user.id),
             aud=RESET_PASSWORD_TOKEN_AUDIENCE,
-            password_fingerprint=manager._password_fingerprint(user.hashed_password),
+            password_fingerprint=manager.tokens.password_fingerprint(user.hashed_password),
         ),
         manager.reset_password_token_secret.get_secret_value(),
         algorithm="HS256",
@@ -283,4 +284,4 @@ def test_dummy_reset_password_token_keeps_password_fingerprint_structure() -> No
     )
 
     assert not payload["sub"]
-    assert payload["password_fingerprint"] == manager._password_fingerprint(dummy_hash)
+    assert payload["password_fingerprint"] == manager.tokens.password_fingerprint(dummy_hash)

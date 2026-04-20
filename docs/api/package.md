@@ -1,9 +1,13 @@
 # Package overview
 
-The `litestar_auth` package re-exports stable symbols for application code. ORM models (`User`,
-`Role`, `UserRole`, `OAuthAccount`) and the SQLAlchemy adapter (`SQLAlchemyUserDatabase`) are
-**not** re-exported from the root. Import them from the models package or submodules to keep
-imports explicit and avoid accidental mapper registration:
+The `litestar_auth` package re-exports the core plugin surface for application code: `LitestarAuth`,
+`LitestarAuthConfig`, plugin config dataclasses, `BaseUserManager`, `UserManagerSecurity`,
+authentication backends/transports, guards, user protocols, `ErrorCode`, and `LitestarAuthError`.
+Controllers, strategies, token stores, rate limiters, payloads, schemas, ORM models, OAuth helpers,
+and TOTP helpers are imported from their dedicated submodules. ORM models (`User`, `Role`,
+`UserRole`, `OAuthAccount`) and the SQLAlchemy adapter (`SQLAlchemyUserDatabase`) are **not**
+re-exported from the root. Import them from the models package or submodules to keep imports
+explicit and avoid accidental mapper registration:
 
 ```python
 from litestar_auth.models import User
@@ -26,11 +30,11 @@ AccessToken, RefreshToken = import_token_orm_models()
 
 Call that helper explicitly during metadata bootstrap or Alembic-style autogenerate when your app uses the bundled token tables. For plugin-managed runtime, `LitestarAuth.on_app_init()` bootstraps the same bundled token mappers lazily when bundled DB-token models are active. The strategy-layer `import_token_orm_models()` re-export remains compatibility-only for existing imports, and the helper is intentionally not re-exported from `litestar_auth`.
 
-The canonical opaque DB-token entrypoint is exported from both the root package and `litestar_auth.plugin` as `DatabaseTokenAuthConfig`.
+The DB-token preset entrypoint is exported from both the root package and `litestar_auth.plugin` as `DatabaseTokenAuthConfig`.
 
-For OAuth, treat root-package re-exports as compatibility aliases. Plugin-managed apps should configure `OAuthConfig` on `LitestarAuthConfig` with `oauth_providers` as a sequence of `OAuthProviderConfig(name=..., client=...)` (legacy `(name, client)` tuples are coerced at the plugin boundary). `litestar_auth.oauth.create_provider_oauth_controller` plus `litestar_auth.controllers.create_oauth_controller` / `create_oauth_associate_controller` remain the manual escape hatch for custom route tables.
+For OAuth, plugin-managed apps should configure `OAuthConfig` on `LitestarAuthConfig` with `oauth_providers` as a sequence of `OAuthProviderConfig(name=..., client=...)`. `litestar_auth.oauth.create_provider_oauth_controller` plus `litestar_auth.controllers.create_oauth_controller` / `create_oauth_associate_controller` remain the manual route-table path for custom layouts.
 
-Canonical opaque DB-token wiring:
+Opaque DB-token wiring:
 
 ```python
 from uuid import UUID
@@ -64,11 +68,11 @@ In that example, `session_maker` is any compatible request-session factory calla
 
 If you previously built the DB bearer backend by hand with `AuthenticationBackend(..., BearerTransport(), DatabaseTokenStrategy(...))`, migrate to the direct `database_token_auth=DatabaseTokenAuthConfig(...)` form above. Keep manual backends for multi-backend or custom-transport cases.
 
-`backends` remains the explicit manual-backend field, and `config.resolve_backends()` stays limited to that manual runtime inventory. For the canonical `database_token_auth=...` path, `config.resolve_startup_backends()` returns startup-only `StartupBackendTemplate` values used during plugin assembly, while `config.resolve_request_backends(session)` returns request-scoped runtime `AuthenticationBackend` instances.
+`backends` remains the explicit manual-backend field, and `config.resolve_backends(session)` is the runtime accessor for every supported backend configuration. For the `database_token_auth=...` path, `config.resolve_startup_backends()` returns startup-only `StartupBackendTemplate` values used during plugin assembly, while `config.resolve_backends(session)` returns the request-scoped runtime `AuthenticationBackend` instances.
 
 For app-owned protected routes, reuse `config.resolve_openapi_security_requirements()` with Litestar `guards=[is_authenticated]` instead of hard-coding backend names in route-level OpenAPI metadata.
 
-Treat the startup templates as plugin-assembly inventory only: they preserve backend names plus transport/strategy metadata for validation and controller wiring, but DB-token runtime work still has to go through `resolve_request_backends(session)` so the realized backend carries the active `AsyncSession`. Controller selection follows the startup inventory order: the primary backend mounts at `/auth`, later backends mount at `/auth/{backend.name}`, plugin-owned OAuth login routes use the primary backend, and TOTP uses the primary backend unless `totp_backend_name` selects another named startup backend.
+Treat the startup templates as plugin-assembly inventory only: they preserve backend names plus transport/strategy metadata for validation and controller wiring, but DB-token runtime work still has to go through `resolve_backends(session)` so the realized backend carries the active `AsyncSession`. Controller selection follows the startup inventory order: the primary backend mounts at `/auth`, later backends mount at `/auth/{backend.name}`, plugin-owned OAuth login routes use the primary backend, and TOTP uses the primary backend unless `totp_backend_name` selects another named startup backend.
 
 The relational-role redesign changes storage only. Public HTTP payloads, managers, and guard
 factories still work with one normalized flat `roles` collection, and the library still does not
@@ -78,17 +82,18 @@ ship permission matrices or standalone role-management endpoints.
 
 | Area | Types / functions |
 | ---- | ----------------- |
-| Plugin | `LitestarAuth`, `LitestarAuthConfig`, `DatabaseTokenAuthConfig`, `OAuthConfig`, `TotpConfig` |
-| Backends | `AuthenticationBackend`, `BearerTransport`, `CookieTransport`, `JWTStrategy`, `DatabaseTokenStrategy`, `RedisTokenStrategy`, … |
-| Manager | `BaseUserManager`, `require_password_length`, `PasswordHelper` |
+| Plugin | `LitestarAuth`, `LitestarAuthConfig`, `DatabaseTokenAuthConfig`, `OAuthConfig`, `OAuthProviderConfig`, `TotpConfig` |
+| Backends | `AuthenticationBackend`, `Authenticator`, `BearerTransport`, `CookieTransport`; strategies from `litestar_auth.authentication.strategy` |
+| Manager | `BaseUserManager`, `UserManagerSecurity`; `PasswordHelper` and password policy helpers from their submodules |
+| Payloads / schemas | Auth lifecycle DTOs from `litestar_auth.payloads`; user CRUD schemas from `litestar_auth.schemas` |
 | Persistence | `User`, `Role`, `UserRole`, `OAuthAccount` (from `litestar_auth.models` / submodules), `AccessToken`, `RefreshToken`, `SQLAlchemyUserDatabase` (from `litestar_auth.db.sqlalchemy`) |
 | Guards | `is_authenticated`, `is_active`, `is_verified`, `is_superuser`, `has_any_role`, `has_all_roles` |
-| Errors | `ErrorCode`, `LitestarAuthError`, typed subclasses |
+| Errors | `ErrorCode`, `LitestarAuthError`; typed subclasses from `litestar_auth.exceptions` |
 | Protocols | `UserProtocol`, `GuardedUserProtocol`, `RoleCapableUserProtocol`, `TotpUserProtocol` — [Types](types.md) |
-| Controllers (advanced) | `create_*_controller` factories for custom route tables — [Controllers API](controllers.md) |
-| OAuth helpers | Plugin-managed route table via `OAuthConfig`; manual login helper: `litestar_auth.oauth.create_provider_oauth_controller`; lazy client loader: `load_httpx_oauth_client` |
-| TOTP | `generate_totp_secret`, `generate_totp_uri`, `verify_totp`, stores, … |
-| Rate limit | `AuthRateLimitConfig`, `EndpointRateLimit`, `InMemoryRateLimiter`, `RedisRateLimiter` |
+| Controllers (advanced) | `create_*_controller` factories from `litestar_auth.controllers` — [Controllers API](controllers.md) |
+| OAuth helpers | Plugin-managed route table via `OAuthConfig`; manual login helper and lazy client loader from `litestar_auth.oauth` |
+| TOTP | `generate_totp_secret`, `generate_totp_uri`, `verify_totp`, stores from `litestar_auth.totp` |
+| Rate limit | `AuthRateLimitConfig`, `EndpointRateLimit`, `InMemoryRateLimiter`, `RedisRateLimiter` from `litestar_auth.ratelimit` |
 
 The authoritative `__all__` list is in `litestar_auth/__init__.py` on your installed version.
 

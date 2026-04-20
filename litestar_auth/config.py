@@ -9,15 +9,9 @@ from __future__ import annotations
 
 import secrets
 import warnings
-from contextlib import contextmanager
-from contextvars import ContextVar
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
 
 from litestar_auth.exceptions import ConfigurationError
-
-if TYPE_CHECKING:
-    from collections.abc import Iterator
 
 MINIMUM_SECRET_LENGTH = 32
 # Shared password-length bounds for built-in validation and schema metadata.
@@ -29,8 +23,6 @@ RESET_PASSWORD_TOKEN_AUDIENCE = "litestar-auth:reset-password"
 JWT_ACCESS_TOKEN_AUDIENCE = "litestar-auth:access"
 TOTP_PENDING_AUDIENCE = "litestar-auth:2fa-pending"
 TOTP_ENROLL_AUDIENCE = "litestar-auth:2fa-enroll"
-# Legacy ``oauth_providers`` entries were ``(name, client)`` pairs of this length.
-_LEGACY_OAUTH_PROVIDER_PAIR_LEN = 2
 
 
 @dataclass(frozen=True, slots=True)
@@ -44,10 +36,6 @@ class OAuthProviderConfig:
     The ``client`` field is typed as :class:`object` so core modules do not require a hard
     dependency on httpx-oauth at import time.
 
-    For backward compatibility, configurations may still pass plain ``(name, client)``
-    pairs; :func:`OAuthProviderConfig.coerce` (used at the plugin OAuth route boundary)
-    normalizes those tuples to this type.
-
     Attributes:
         name: Logical provider name used in URLs and ``oauth_provider_scopes`` keys.
         client: OAuth2 client instance passed through to the OAuth service layer.
@@ -58,37 +46,14 @@ class OAuthProviderConfig:
 
     @classmethod
     def coerce(cls, value: object) -> OAuthProviderConfig:
-        """Return a normalized entry, accepting legacy ``(name, client)`` tuples.
-
-        The parameter is typed as :class:`object` so callers may pass legacy pairs while
-        invalid shapes still fail at runtime with :exc:`TypeError`.
+        """Return ``value`` when it is already an :class:`OAuthProviderConfig`.
 
         Raises:
-            TypeError: If ``value`` is neither an :class:`OAuthProviderConfig` nor a
-                length-2 tuple whose first element is a ``str``.
+            TypeError: If ``value`` is not an :class:`OAuthProviderConfig`.
         """
         if isinstance(value, cls):
             return value
-        value_type = type(value)
-        if value_type.__name__ == cls.__name__ and value_type.__module__ == cls.__module__:
-            missing = object()
-            name = getattr(value, "name", missing)
-            client = getattr(value, "client", missing)
-            if not isinstance(name, str):
-                msg = "OAuth provider name must be a string."
-                raise TypeError(msg)
-            if client is not missing:
-                return cls(name=name, client=client)
-        if isinstance(value, tuple) and len(value) == _LEGACY_OAUTH_PROVIDER_PAIR_LEN:
-            name, client = value
-            if not isinstance(name, str):
-                msg = "OAuth provider name must be a string."
-                raise TypeError(msg)
-            return cls(name=name, client=client)
-        msg = (
-            "OAuth provider entries must be OAuthProviderConfig(name=..., client=...) "
-            "or a (name, client) tuple of length 2."
-        )
+        msg = "OAuth provider entries must be OAuthProviderConfig(name=..., client=...)."
         raise TypeError(msg)
 
 
@@ -126,21 +91,6 @@ _TOTP_PENDING_SECRET_ROLE = _SecretRole(
     setting_name="totp_pending_secret",
     protected_surface="pending/enrollment TOTP JWT signing",
     audiences=(TOTP_PENDING_AUDIENCE, TOTP_ENROLL_AUDIENCE),
-)
-
-
-@dataclass(frozen=True, slots=True)
-class _PluginSecretRoleWarningState:
-    """Track the plugin-managed secret surface already covered by validation."""
-
-    verification_token_secret: str | None = None
-    reset_password_token_secret: str | None = None
-    totp_secret_key: str | None = None
-
-
-_PLUGIN_SECRET_ROLE_WARNING_OWNER = ContextVar[_PluginSecretRoleWarningState | None](
-    "litestar_auth_plugin_secret_role_warning_owner",
-    default=None,
 )
 
 
@@ -281,50 +231,6 @@ def warn_if_secret_roles_are_reused(
         warning_cls,
         stacklevel=warning_stacklevel,
     )
-
-
-def plugin_owns_secret_role_reuse_warning() -> bool:
-    """Return whether the current plugin-managed secret surface already owns the reuse warning."""
-    return _PLUGIN_SECRET_ROLE_WARNING_OWNER.get() is not None
-
-
-def plugin_secret_role_warning_matches_manager_surface(
-    *,
-    verification_token_secret: str,
-    reset_password_token_secret: str,
-    totp_secret_key: str | None,
-) -> bool:
-    """Return whether the current manager secrets match the plugin-owned baseline."""
-    state = _PLUGIN_SECRET_ROLE_WARNING_OWNER.get()
-    if state is None:
-        return False
-
-    return state == _PluginSecretRoleWarningState(
-        verification_token_secret=verification_token_secret,
-        reset_password_token_secret=reset_password_token_secret,
-        totp_secret_key=totp_secret_key,
-    )
-
-
-@contextmanager
-def plugin_secret_role_warning_owner(
-    *,
-    verification_token_secret: str | None = None,
-    reset_password_token_secret: str | None = None,
-    totp_secret_key: str | None = None,
-) -> Iterator[None]:
-    """Mark the current plugin-managed secret surface as already covered by validation."""
-    token = _PLUGIN_SECRET_ROLE_WARNING_OWNER.set(
-        _PluginSecretRoleWarningState(
-            verification_token_secret=verification_token_secret,
-            reset_password_token_secret=reset_password_token_secret,
-            totp_secret_key=totp_secret_key,
-        ),
-    )
-    try:
-        yield
-    finally:
-        _PLUGIN_SECRET_ROLE_WARNING_OWNER.reset(token)
 
 
 def resolve_trusted_proxy_setting(*, trusted_proxy: object) -> bool:

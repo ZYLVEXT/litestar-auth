@@ -251,7 +251,7 @@ def _make_associate_callback_signature(parameter_name: str) -> inspect.Signature
             inspect.Parameter(
                 name=parameter_name,
                 kind=inspect.Parameter.POSITIONAL_OR_KEYWORD,
-                annotation=Any,
+                annotation=OAuthControllerUserManagerProtocol[Any, Any],
             ),
             inspect.Parameter(
                 name="oauth_state",
@@ -490,7 +490,7 @@ def _create_associate_callback_handler[UP: UserProtocol[Any], ID](
             "self": object,
             "request": Request[Any, Any, Any],
             "code": str,
-            dependency_parameter_name: Any,
+            dependency_parameter_name: OAuthControllerUserManagerProtocol[Any, Any],
             "oauth_state": str,
             "return": Response[Any],
         }
@@ -580,7 +580,7 @@ def create_oauth_controller[UP: UserProtocol[Any], ID](  # noqa: PLR0913
     The authorize endpoint uses only server-configured ``oauth_scopes``. Runtime
     scope-query overrides are rejected. ``redirect_base_url`` must use a
     non-loopback ``https://`` origin; the manual controller API does not expose
-    a debug or testing escape hatch for insecure callback origins.
+    a debug or testing override for insecure callback origins.
 
     Returns:
         Generated controller class mounted under the provider-specific path.
@@ -664,7 +664,7 @@ def create_oauth_associate_controller[UP: UserProtocol[Any], ID](  # noqa: PLR09
     must be a valid non-keyword Python identifier because Litestar injects
     dependencies by matching keys to callback parameter names.
     ``redirect_base_url`` must use a non-loopback ``https://`` origin; the
-    manual controller API does not expose a debug or testing escape hatch for
+    manual controller API does not expose a debug or testing override for
     insecure callback origins.
 
     Returns:

@@ -1,10 +1,8 @@
 """Public msgspec payloads for built-in auth and user flows.
 
-The **canonical** import path for these structs is ``litestar_auth.payloads``.
-The same symbols are also re-exported from ``litestar_auth`` (package root)
-and ``litestar_auth.controllers`` for backward compatibility; treat those paths
-as compatibility shims and prefer ``from litestar_auth.payloads import ...`` in
-new code so imports stay explicit for readers and tooling.
+The supported import path for these structs is ``litestar_auth.payloads``.
+Payload structs are intentionally not re-exported from ``litestar_auth``; import
+them from this module so imports stay explicit for readers and tooling.
 """
 
 from __future__ import annotations
@@ -12,7 +10,6 @@ from __future__ import annotations
 import msgspec
 
 import litestar_auth._schema_fields as schema_fields  # noqa: TC001
-from litestar_auth.schemas import UserCreate, UserRead, UserUpdate
 
 
 class LoginCredentials(msgspec.Struct):
@@ -109,8 +106,5 @@ __all__ = (
     "TotpEnableRequest",
     "TotpEnableResponse",
     "TotpVerifyRequest",
-    "UserCreate",
-    "UserRead",
-    "UserUpdate",
     "VerifyToken",
 )

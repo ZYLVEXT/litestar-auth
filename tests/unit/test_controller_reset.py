@@ -135,7 +135,7 @@ async def test_reset_password_maps_invalid_reset_token_error_to_client_exception
 
 async def test_reset_password_maps_invalid_password_error_to_client_exception() -> None:
     """Invalid password errors are converted into a 400 response with the correct error code."""
-    manager = DummyUserManager(error=InvalidPasswordError("too weak"))
+    manager = DummyUserManager(error=InvalidPasswordError(message="too weak"))
     controller = create_reset_password_controller()
 
     status_code, payload = await _invoke_reset_password(

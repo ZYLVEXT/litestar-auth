@@ -39,7 +39,7 @@ from litestar_auth._plugin.validation import (
     validate_config,
 )
 from litestar_auth.authentication import Authenticator, LitestarAuthMiddleware
-from litestar_auth.config import OAuthProviderConfig, plugin_secret_role_warning_owner
+from litestar_auth.config import OAuthProviderConfig
 from litestar_auth.oauth_encryption import (
     OAuthTokenEncryption,
     require_oauth_token_encryption,
@@ -142,7 +142,7 @@ class LitestarAuth[UP: UserProtocol[Any], ID](InitPlugin, CLIPlugin):
         Returns:
             Backends rebound to the provided request-local session.
         """
-        return list(self.config.resolve_request_backends(session))
+        return list(self.config.resolve_backends(session))
 
     def _build_user_manager(
         self,
@@ -155,24 +155,16 @@ class LitestarAuth[UP: UserProtocol[Any], ID](InitPlugin, CLIPlugin):
             user_db_factory(session),
             oauth_token_encryption=self._oauth_token_encryption,
         )
-        manager_inputs = _plugin_config.ManagerConstructorInputs(
-            manager_security=self.config.user_manager_security,
-        )
-        effective_security = manager_inputs.effective_security
         bound_backends = tuple(backends or self._session_bound_backends(session))
-        # Plugin validation owns the config-managed warning baseline; manager construction
-        # should only add a warning if a custom factory diverges from that secret surface.
-        with plugin_secret_role_warning_owner(
-            verification_token_secret=effective_security.verification_token_secret,
-            reset_password_token_secret=effective_security.reset_password_token_secret,
-            totp_secret_key=effective_security.totp_secret_key,
-        ):
-            return self._user_manager_factory(
-                session=session,
-                user_db=user_db,
-                config=self.config,
-                backends=bound_backends,
-            )
+        # Plugin validation already emitted the reused-secret warning for this effective
+        # config-owned baseline, so plugin-managed builder paths suppress a duplicate.
+        return self._user_manager_factory(
+            session=session,
+            user_db=user_db,
+            config=self.config,
+            backends=bound_backends,
+            skip_reuse_warning=True,
+        )
 
     def _build_authenticator(self, session: AsyncSession) -> Authenticator[UP, ID]:
         backends = self._session_bound_backends(session)

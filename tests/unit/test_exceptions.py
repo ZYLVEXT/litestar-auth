@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from enum import StrEnum
 from pathlib import Path
-from typing import Any, cast
 
 import pytest
 
@@ -24,6 +23,7 @@ from litestar_auth.exceptions import (
     TokenError,
     UnverifiedUserError,
     UserAlreadyExistsError,
+    UserIdentifier,
     UserNotExistsError,
 )
 from tests.unit.test_definition_file_coverage import load_reloaded_test_alias
@@ -157,8 +157,10 @@ def test_exception_module_reload_preserves_default_message_and_code_contract(mon
     )
     reloaded_configuration_error = reloaded_module.ConfigurationError()
     reloaded_user_exists_error = reloaded_module.UserAlreadyExistsError(
-        identifier_type="email",
-        identifier_value="user@example.com",
+        identifier=reloaded_module.UserIdentifier(
+            identifier_type="email",
+            identifier_value="user@example.com",
+        ),
     )
     reloaded_invalid_password_error = reloaded_module.InvalidPasswordError(user_id="user-123")
     reloaded_role_error = reloaded_module.InsufficientRolesError(
@@ -175,6 +177,7 @@ def test_exception_module_reload_preserves_default_message_and_code_contract(mon
     assert reloaded_module.LitestarAuthError.default_code == LitestarAuthError.default_code
     assert reloaded_module.ConfigurationError is not ConfigurationError
     assert reloaded_module.UserAlreadyExistsError is not UserAlreadyExistsError
+    assert reloaded_module.UserIdentifier is not UserIdentifier
     assert reloaded_module.InvalidPasswordError is not InvalidPasswordError
     assert reloaded_module.InsufficientRolesError is not InsufficientRolesError
     assert reloaded_module.OAuthAccountAlreadyLinkedError is not OAuthAccountAlreadyLinkedError
@@ -231,12 +234,18 @@ def test_exception_none_message_and_omitted_code_fall_back_to_defaults(
     assert error.code == expected_code
 
 
-@pytest.mark.parametrize("exception_type", tuple(case[0] for case in EXCEPTION_CASES))
-def test_exception_none_code_argument_is_rejected(exception_type: type[LitestarAuthError]) -> None:
-    """Passing ``code=None`` is rejected; callers must omit it to use the default."""
-    exc_factory = cast("Any", exception_type)
-    with pytest.raises(TypeError, match="code cannot be None"):
-        exc_factory(code=None)
+@pytest.mark.parametrize(("exception_type", "expected_message", "expected_code", "_"), EXCEPTION_CASES)
+def test_exception_none_code_argument_uses_default_code(
+    exception_type: type[LitestarAuthError],
+    expected_message: str,
+    expected_code: str | ErrorCode,
+    _: type[BaseException],
+) -> None:
+    """Passing ``code=None`` falls back to the class default code."""
+    error = exception_type(code=None)
+
+    assert str(error) == expected_message
+    assert error.code == expected_code
 
 
 @pytest.mark.parametrize(("exception_type", "expected_message", "expected_code", "_"), EXCEPTION_CASES)
@@ -298,55 +307,31 @@ def test_oauth_account_already_linked_error_none_message_and_omitted_code_use_co
     assert error.code == ErrorCode.OAUTH_ACCOUNT_ALREADY_LINKED
 
 
-def test_oauth_account_already_linked_error_none_code_argument_is_rejected() -> None:
-    """OAuth link conflicts inherit the base exception's concrete-code requirement."""
-    exc_factory = cast("Any", OAuthAccountAlreadyLinkedError)
+def test_oauth_account_already_linked_error_none_code_argument_uses_default_code() -> None:
+    """OAuth link conflicts resolve explicit ``code=None`` to the default code."""
+    error = OAuthAccountAlreadyLinkedError(
+        provider="google",
+        account_id="acct-42",
+        existing_user_id=123,
+        code=None,
+    )
 
-    with pytest.raises(TypeError, match="code cannot be None"):
-        exc_factory(
-            provider="google",
-            account_id="acct-42",
-            existing_user_id=123,
-            code=None,
-        )
-
-
-@pytest.mark.parametrize(
-    ("field_name", "field_value"),
-    [
-        ("provider", ""),
-        ("provider", " \t "),
-        ("account_id", ""),
-        ("account_id", "\n"),
-    ],
-)
-def test_oauth_account_already_linked_error_blank_string_context_is_rejected(
-    field_name: str,
-    field_value: str,
-) -> None:
-    """Provider identity context must fail fast when a required string field is blank."""
-    exc_factory = cast("Any", OAuthAccountAlreadyLinkedError)
-    kwargs = {
-        "provider": "github",
-        "account_id": "provider-user",
-        "existing_user_id": "user-123",
-    }
-    kwargs[field_name] = field_value
-
-    with pytest.raises(ValueError, match=rf"{field_name} cannot be empty or whitespace-only"):
-        exc_factory(**kwargs)
+    assert str(error) == "OAuth account google:acct-42 is already linked to user 123"
+    assert error.code == ErrorCode.OAUTH_ACCOUNT_ALREADY_LINKED
 
 
-def test_oauth_account_already_linked_error_none_existing_user_id_is_rejected() -> None:
-    """Linked-account conflicts require the existing local user identifier."""
-    exc_factory = cast("Any", OAuthAccountAlreadyLinkedError)
+def test_oauth_account_already_linked_error_preserves_blank_context_without_runtime_validation() -> None:
+    """Linked-account conflicts store provider context as provided instead of raising ``ValueError``."""
+    error = OAuthAccountAlreadyLinkedError(
+        provider=" \t ",
+        account_id="",
+        existing_user_id=None,
+    )
 
-    with pytest.raises(ValueError, match="existing_user_id cannot be None"):
-        exc_factory(
-            provider="github",
-            account_id="provider-user",
-            existing_user_id=None,
-        )
+    assert error.provider == " \t "
+    assert not error.account_id
+    assert error.existing_user_id is None
+    assert str(error) == "OAuth account  \t : is already linked to user None"
 
 
 def test_oauth_account_already_linked_error_custom_message_and_code_override_defaults() -> None:
@@ -400,43 +385,37 @@ def test_insufficient_roles_error_require_all_message_uses_all_role_wording() ->
     assert error.require_all is True
 
 
-def test_insufficient_roles_error_none_code_argument_is_rejected() -> None:
-    """Role-denial errors inherit the concrete-code requirement."""
-    exc_factory = cast("Any", InsufficientRolesError)
+def test_insufficient_roles_error_none_code_argument_uses_default_code() -> None:
+    """Role-denial errors resolve explicit ``code=None`` to the default code."""
+    error = InsufficientRolesError(
+        required_roles=frozenset({"admin"}),
+        user_roles=frozenset({"viewer"}),
+        require_all=False,
+        code=None,
+    )
 
-    with pytest.raises(TypeError, match="code cannot be None"):
-        exc_factory(
-            required_roles=frozenset({"admin"}),
-            user_roles=frozenset({"viewer"}),
-            require_all=False,
-            code=None,
-        )
+    assert str(error) == (
+        "The authenticated user does not have any of the required roles. "
+        "required_roles=['admin']; user_roles=['viewer']"
+    )
+    assert error.code == ErrorCode.INSUFFICIENT_ROLES
 
 
-@pytest.mark.parametrize(
-    ("field_name", "field_value"),
-    [
-        ("required_roles", frozenset({"", "admin"})),
-        ("required_roles", frozenset({" \t ", "admin"})),
-        ("user_roles", frozenset({"", "viewer"})),
-        ("user_roles", frozenset({" \n ", "viewer"})),
-    ],
-)
-def test_insufficient_roles_error_blank_role_names_are_rejected(
-    field_name: str,
-    field_value: frozenset[str],
-) -> None:
-    """Structured role context must not carry blank role names."""
-    exc_factory = cast("Any", InsufficientRolesError)
-    kwargs = {
-        "required_roles": frozenset({"admin"}),
-        "user_roles": frozenset({"viewer"}),
-        "require_all": False,
-    }
-    kwargs[field_name] = field_value
+def test_insufficient_roles_error_preserves_blank_role_names_without_runtime_validation() -> None:
+    """Role-denial errors store role context as provided instead of raising ``ValueError``."""
+    error = InsufficientRolesError(
+        required_roles=frozenset({"admin", ""}),
+        user_roles=frozenset({" \n ", "viewer"}),
+        require_all=False,
+    )
 
-    with pytest.raises(ValueError, match=rf"{field_name} cannot contain empty or whitespace-only role names"):
-        exc_factory(**kwargs)
+    assert error.required_roles == frozenset({"admin", ""})
+    assert error.user_roles == frozenset({" \n ", "viewer"})
+    assert error.require_all is False
+    assert str(error) == (
+        "The authenticated user does not have any of the required roles. "
+        "required_roles=['', 'admin']; user_roles=[' \\n ', 'viewer']"
+    )
 
 
 def test_insufficient_roles_error_custom_message_and_code_override_defaults() -> None:
@@ -459,76 +438,77 @@ def test_insufficient_roles_error_custom_message_and_code_override_defaults() ->
 def test_user_already_exists_error_exposes_identifier_context_and_default_message() -> None:
     """Duplicate-user errors expose the colliding identifier details."""
     error = UserAlreadyExistsError(
-        identifier_type="username",
-        identifier_value="existing-user",
+        identifier=UserIdentifier(
+            identifier_type="username",
+            identifier_value="existing-user",
+        ),
     )
 
     assert str(error) == "User with username='existing-user' already exists"
     assert error.code == ErrorCode.REGISTER_USER_ALREADY_EXISTS
+    assert error.identifier == UserIdentifier(identifier_type="username", identifier_value="existing-user")
     assert error.identifier_type == "username"
     assert error.identifier_value == "existing-user"
 
 
-def test_user_already_exists_error_none_message_and_omitted_code_use_context_message() -> None:
-    """Explicit ``message=None`` still derives the message from identifier context."""
+def test_user_already_exists_error_none_message_and_none_code_use_context_message() -> None:
+    """Explicit ``message=None`` and ``code=None`` still derive the contextual defaults."""
     error = UserAlreadyExistsError(
-        identifier_type="email",
-        identifier_value="user@example.com",
+        identifier=UserIdentifier(
+            identifier_type="email",
+            identifier_value="user@example.com",
+        ),
         message=None,
+        code=None,
     )
 
     assert str(error) == "User with email='user@example.com' already exists"
     assert error.code == ErrorCode.REGISTER_USER_ALREADY_EXISTS
 
 
-def test_user_already_exists_error_partial_context_is_rejected() -> None:
-    """Context fields must be supplied together so the error remains coherent."""
-    exc_factory = cast("Any", UserAlreadyExistsError)
+def test_user_already_exists_error_rejects_positional_message_argument() -> None:
+    """The duplicate-user constructor is keyword-only to keep structured context explicit."""
+    call_class = type.__call__
+    with pytest.raises(TypeError):
+        call_class(UserAlreadyExistsError, "duplicate")
 
-    with pytest.raises(TypeError, match="identifier_type and identifier_value must be provided together"):
-        exc_factory(identifier_type="email")
 
+def test_user_already_exists_error_preserves_blank_context_without_runtime_validation() -> None:
+    """Duplicate-user identifier context is stored as provided once both fields are present."""
+    error = UserAlreadyExistsError(
+        identifier=UserIdentifier(
+            identifier_type="email",
+            identifier_value="\n",
+        ),
+    )
 
-@pytest.mark.parametrize(
-    ("field_name", "field_value"),
-    [
-        ("identifier_type", ""),
-        ("identifier_type", " \t "),
-        ("identifier_value", ""),
-        ("identifier_value", "\n"),
-    ],
-)
-def test_user_already_exists_error_blank_context_is_rejected(field_name: str, field_value: str) -> None:
-    """Duplicate-user context must fail fast when any required string field is blank."""
-    exc_factory = cast("Any", UserAlreadyExistsError)
-    kwargs = {
-        "identifier_type": "email",
-        "identifier_value": "user@example.com",
-    }
-    kwargs[field_name] = field_value
-
-    with pytest.raises(ValueError, match=rf"{field_name} cannot be empty or whitespace-only"):
-        exc_factory(**kwargs)
+    assert error.identifier == UserIdentifier(identifier_type="email", identifier_value="\n")
+    assert error.identifier_type == "email"
+    assert error.identifier_value == "\n"
+    assert str(error) == "User with email='\\n' already exists"
 
 
 def test_user_already_exists_error_custom_message_and_code_override_defaults() -> None:
     """Duplicate-user errors still accept explicit message and code overrides."""
     error = UserAlreadyExistsError(
+        identifier=UserIdentifier(
+            identifier_type="email",
+            identifier_value="user@example.com",
+        ),
         message="custom user exists message",
         code="CUSTOM_REGISTER_USER_ALREADY_EXISTS",
-        identifier_type="email",
-        identifier_value="user@example.com",
     )
 
     assert str(error) == "custom user exists message"
     assert error.code == "CUSTOM_REGISTER_USER_ALREADY_EXISTS"
+    assert error.identifier == UserIdentifier(identifier_type="email", identifier_value="user@example.com")
     assert error.identifier_type == "email"
     assert error.identifier_value == "user@example.com"
 
 
-def test_invalid_password_error_stores_optional_user_id_without_leaking_it_in_default_message() -> None:
-    """Invalid-password errors keep operator-only user context off the client-facing detail."""
-    error = InvalidPasswordError(user_id="user-123")
+def test_invalid_password_error_none_code_stores_optional_user_id_without_leaking_it() -> None:
+    """Invalid-password errors keep operator-only context while resolving ``code=None`` to default."""
+    error = InvalidPasswordError(user_id="user-123", code=None)
 
     assert str(error) == InvalidPasswordError.default_message
     assert error.code == ErrorCode.LOGIN_BAD_CREDENTIALS
@@ -539,14 +519,21 @@ def test_invalid_password_error_custom_message_and_code_preserve_user_id_context
     """Custom invalid-password overrides still retain the operator-only context field."""
     user_id = "user-123"
     error = InvalidPasswordError(
-        "custom invalid password message",
-        "CUSTOM_LOGIN_BAD_CREDENTIALS",
         user_id=user_id,
+        message="custom invalid password message",
+        code="CUSTOM_LOGIN_BAD_CREDENTIALS",
     )
 
     assert str(error) == "custom invalid password message"
     assert error.code == "CUSTOM_LOGIN_BAD_CREDENTIALS"
     assert error.user_id == user_id
+
+
+def test_invalid_password_error_rejects_positional_message_argument() -> None:
+    """The invalid-password constructor is keyword-only so operator context stays unambiguous."""
+    call_class = type.__call__
+    with pytest.raises(TypeError):
+        call_class(InvalidPasswordError, "custom invalid password message")
 
 
 def test_exception_inheritance_hierarchy() -> None:

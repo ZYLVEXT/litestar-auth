@@ -1,19 +1,33 @@
 # Migration Guide
 
-## Typing: UP bound narrowing and create() helper
+## Typing: UP bound narrowing and direct config construction
 
 The typing-only API was tightened so downstream annotations describe the same
 runtime contracts the library already expects. Runtime behavior is unchanged,
 but type checkers may now surface code that relied on broad `Any`-based bounds,
-manual generic parameters, or plain `str` dependency keys.
+helper-based config construction, manual generic parameters, or plain `str`
+dependency keys.
 
-### Manual `LitestarAuthConfig[...]` parameters to `LitestarAuthConfig.create()`
+### `LitestarAuthConfig.create()` to direct construction
 
-Prefer `LitestarAuthConfig.create()` when constructing a config from a concrete
-user model and manager class. The helper keeps the same dataclass fields while
-letting type checkers infer the user and ID types from those arguments.
+Construct `LitestarAuthConfig` directly. The dataclass now owns the full public
+configuration surface without separate wrapper helpers.
 
 Before:
+
+```python
+from uuid import UUID
+
+from litestar_auth import LitestarAuthConfig
+
+config = LitestarAuthConfig.create(
+    user_model=User,
+    user_manager_class=UserManager,
+    session_maker=session_maker,
+)
+```
+
+After:
 
 ```python
 from uuid import UUID
@@ -26,22 +40,6 @@ config = LitestarAuthConfig[User, UUID](
     session_maker=session_maker,
 )
 ```
-
-After:
-
-```python
-from litestar_auth import LitestarAuthConfig
-
-config = LitestarAuthConfig.create(
-    user_model=User,
-    user_manager_class=UserManager,
-    session_maker=session_maker,
-)
-```
-
-Keep explicit `LitestarAuthConfig[User, UUID](...)` only when you intentionally
-want to pin a type checker to a wider or narrower static type than the concrete
-constructor arguments provide.
 
 ### `UP bound=UserProtocol[Any]` consumer code
 
@@ -82,6 +80,14 @@ Use `UserProtocol` as the broad runtime-checkable user bound. Use
 `UserProtocol[ID]` when the function or class needs to preserve the concrete ID
 type through its return values or collaborators.
 
+### TOTP user-model validation moves to startup
+
+Apps with `totp_config` enabled must use a `user_model` that exposes the
+`TotpUserProtocol` fields: `email` and `totp_secret`. The plugin now checks that
+contract during startup, so a misconfigured app fails before routes are mounted.
+Previously, the same misconfiguration could surface only after a login reached
+the pending-2FA branch.
+
 ### `DbSessionDependencyKey` adoption
 
 Annotate custom DB-session dependency keys with `DbSessionDependencyKey` instead
@@ -96,7 +102,7 @@ from litestar_auth import LitestarAuthConfig
 
 db_session_dependency_key: str = "db_session"
 
-config = LitestarAuthConfig.create(
+config = LitestarAuthConfig[User, UUID](
     user_model=User,
     user_manager_class=UserManager,
     session_maker=session_maker,
@@ -107,11 +113,12 @@ config = LitestarAuthConfig.create(
 After:
 
 ```python
-from litestar_auth import DbSessionDependencyKey, LitestarAuthConfig
+from litestar_auth import LitestarAuthConfig
+from litestar_auth.types import DbSessionDependencyKey
 
 db_session_dependency_key: DbSessionDependencyKey = "db_session"
 
-config = LitestarAuthConfig.create(
+config = LitestarAuthConfig[User, UUID](
     user_model=User,
     user_manager_class=UserManager,
     session_maker=session_maker,

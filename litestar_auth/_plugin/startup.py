@@ -25,7 +25,7 @@ if TYPE_CHECKING:
 
 @cache
 def _load_bundled_token_orm_models() -> tuple[object, object]:
-    """Load the canonical bundled DB-token ORM classes exactly once per process.
+    """Load the bundled DB-token ORM classes exactly once per process.
 
     Returns:
         The bundled access-token and refresh-token ORM classes.
@@ -143,7 +143,7 @@ def require_secure_oauth_redirect_in_production(
 
     Raises:
         ConfigurationError: If plugin-owned OAuth routes use a non-HTTPS, loopback,
-            or malformed redirect origin outside explicit debug or testing escape hatches.
+            or malformed redirect origin outside explicit debug or testing overrides.
     """
     if config.unsafe_testing or getattr(app_config, "debug", False):
         return

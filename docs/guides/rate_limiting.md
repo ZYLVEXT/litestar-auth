@@ -4,7 +4,7 @@ Optional **per-endpoint** limits protect login, registration, token flows, and T
 brute force and abuse. Configure **`AuthRateLimitConfig`** on
 **`LitestarAuthConfig.rate_limit_config`**. For the current Redis-backed contract, including the
 stable slot and group inventory, migration recipe, and the paired TOTP Redis-store wiring, use
-[Configuration](../configuration.md#canonical-redis-backed-auth-surface) as the maintained source
+[Configuration](../configuration.md#redis-backed-auth-surface) as the maintained source
 of truth. This guide focuses on how the rate-limit surface maps onto the HTTP routes you expose.
 
 ## Start with a preset
@@ -55,16 +55,16 @@ rate_limit_config = AuthRateLimitConfig.disabled()
 
 ## Custom shared-backend setup
 
-Use [Configuration](../configuration.md#canonical-redis-backed-auth-surface) for the maintained
-production Redis/TOTP recipe. That canonical snippet is the single source of truth for wiring
+Use [Configuration](../configuration.md#redis-backed-auth-surface) for the maintained
+production Redis/TOTP recipe. That shared-client snippet is the single source of truth for wiring
 `RedisAuthPreset`, `AUTH_RATE_LIMIT_VERIFICATION_SLOTS`, `TotpConfig.totp_pending_jti_store`, and
 `TotpConfig.totp_used_tokens_store` from one shared async Redis client.
 
 This guide deliberately does not repeat the full snippet, because the slot inventory, namespace
-families, and one-client TOTP wiring now live in one canonical place. Keep
+families, and shared-client TOTP wiring now live in one maintained place. Keep
 `AuthRateLimitConfig.from_shared_backend()` plus direct `RedisRateLimiter(...)` /
-`RedisJWTDenylistStore(...)` / `RedisUsedTotpCodeStore(...)` construction as the advanced escape
-hatch when applications intentionally need separate backends or deeper per-slot customization.
+`RedisJWTDenylistStore(...)` / `RedisUsedTotpCodeStore(...)` construction as the advanced
+low-level path when applications intentionally need separate backends or deeper per-slot customization.
 
 Reach for `from_shared_backend()` when the preset is close, but you still need endpoint- or
 group-specific changes. Prefer `endpoint_overrides` for per-slot customization.
@@ -121,10 +121,10 @@ prefer `AuthRateLimitSlot`.
 
 - When a limit is exceeded, clients receive **429 Too Many Requests** with **`Retry-After`**.
 - Backends: **`InMemoryRateLimiter`** (single process / dev) or **`RedisRateLimiter`** (production, multiple workers). See [Deployment](../deployment.md).
-- For the production shared-client Redis path, use the canonical configuration recipe so rate
+- For the production shared-client Redis path, use the configuration recipe so rate
   limiting stays aligned with both TOTP replay stores instead of hand-maintaining a partial copy in
   this guide.
-- For pytest-driven plugin tests, `InMemoryRateLimiter` is the canonical single-process choice described in the [testing guide](testing.md). Keep limiter state isolated per test when counters must not leak.
+- For pytest-driven plugin tests, `InMemoryRateLimiter` is the documented single-process choice described in the [testing guide](testing.md). Keep limiter state isolated per test when counters must not leak.
 
 ## Config fields → HTTP surface
 
@@ -181,7 +181,7 @@ rate_limit_config = AuthRateLimitConfig.from_shared_backend(
 ```
 
 Follow the broader Redis key-shape migration recipe in
-[Configuration](../configuration.md#canonical-redis-backed-auth-surface) when an existing
+[Configuration](../configuration.md#redis-backed-auth-surface) when an existing
 deployment also needs group-level backend changes, disabled verification routes, or staged TOTP
 adoption.
 
@@ -202,5 +202,5 @@ rate_limit_config = AuthRateLimitConfig(
 
 - [Python API — Rate limiting](../api/ratelimit.md) — mkdocstrings for the public rate-limit entrypoints and advanced types.
 - [Security guide](security.md) — when to prefer Redis.
-- [Configuration](../configuration.md#canonical-redis-backed-auth-surface) — canonical Redis-backed
+- [Configuration](../configuration.md#redis-backed-auth-surface) — Redis-backed
   auth contract, migration recipe, and replay-store guidance.

@@ -6,7 +6,7 @@ Use this guide when you test an app that mounts `LitestarAuth` as a plugin. It c
     The library does not ship a `litestar_auth.testing` module, a Redis flush helper, or another dedicated test harness API. Use Litestar's `AsyncTestClient`, your app fixtures, and the existing configuration seams documented here.
 
 !!! note "Contributors to this repository"
-    This page is the canonical app-level testing guide. If you are changing `litestar-auth` itself, keep the repo-internal test pyramid and marker guidance in the [test suite README](https://github.com/ZYLVEXT/litestar-auth/blob/main/tests/README.md) and run the mandatory verification block from [Contributing](../contributing.md).
+    This page is the app-level testing guide. If you are changing `litestar-auth` itself, keep the repo-internal test pyramid and marker guidance in the [test suite README](https://github.com/ZYLVEXT/litestar-auth/blob/main/tests/README.md) and run the mandatory verification block from [Contributing](../contributing.md).
 
 ## Enable explicit unsafe testing only in test-owned fixtures
 
@@ -28,7 +28,7 @@ def app() -> Litestar:
     return Litestar(plugins=[LitestarAuth(config)])
 ```
 
-`unsafe_testing` is an explicit test-only escape hatch:
+`unsafe_testing` is an explicit test-only override:
 
 - Some required token secrets can fall back to generated values during tests so you do not have to hard-code production secrets in fixtures.
 - Security warnings for the documented single-process recipe are suppressed for that specific config instance.

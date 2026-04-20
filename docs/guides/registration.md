@@ -41,8 +41,8 @@ Reset tokens are tied to a password fingerprint so they invalidate after a succe
 
 ## User schema helpers
 
-The canonical password-wiring contract now lives in
-[Configuration](../configuration.md#canonical-manager-password-surface). For custom registration
+The password-wiring contract now lives in
+[Configuration](../configuration.md#manager-password-surface). For custom registration
 DTOs, reuse `litestar_auth.schemas.UserEmailField` and `litestar_auth.schemas.UserPasswordField`
 when you want the built-in email/password metadata without copying local constraints. Existing
 `UserPasswordField` imports remain valid; add `UserEmailField` only when you also want the

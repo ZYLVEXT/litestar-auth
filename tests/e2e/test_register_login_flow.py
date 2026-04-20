@@ -57,6 +57,7 @@ class E2EUserManager(BaseUserManager[User, UUID]):
         verification_token_secret: str,
         reset_password_token_secret: str,
         backends: tuple[object, ...] = (),
+        skip_reuse_warning: bool = False,
     ) -> None:
         """Initialize the manager with the shared verification tracker."""
         super().__init__(
@@ -68,6 +69,7 @@ class E2EUserManager(BaseUserManager[User, UUID]):
                 id_parser=UUID,
             ),
             backends=backends,
+            skip_reuse_warning=skip_reuse_warning,
         )
         self._verification_tracker = verification_tracker
 
@@ -138,6 +140,7 @@ def app() -> Iterator[tuple[Litestar, VerificationTracker]]:
         user_db: object,
         config: LitestarAuthConfig[User, UUID],
         backends: tuple[object, ...] = (),
+        skip_reuse_warning: bool = False,
     ) -> E2EUserManager:
         del session
         security = config.user_manager_security
@@ -149,9 +152,10 @@ def app() -> Iterator[tuple[Litestar, VerificationTracker]]:
             verification_token_secret=cast("str", security.verification_token_secret),
             reset_password_token_secret=cast("str", security.reset_password_token_secret),
             backends=backends,
+            skip_reuse_warning=skip_reuse_warning,
         )
 
-    config = LitestarAuthConfig.with_custom_manager_factory(
+    config = LitestarAuthConfig[User, UUID](
         backends=[bearer_backend, cookie_backend],
         session_maker=cast("Any", SessionMaker(engine)),
         user_model=User,

@@ -15,9 +15,8 @@ from litestar_auth._plugin.config import (
     DEFAULT_USER_MANAGER_DEPENDENCY_KEY,
     OAUTH_ASSOCIATE_USER_MANAGER_DEPENDENCY_KEY,
     LitestarAuthConfig,
+    StartupBackendInventory,
     StartupBackendTemplate,
-    _BackendSlot,
-    _StartupBackendInventory,
     require_session_maker,
     resolve_backend_inventory,
 )
@@ -115,22 +114,23 @@ class _UsersSchemaKwargs(_UserReadSchemaKwargs, total=False):
 
 
 def _resolve_request_backend[UP: UserProtocol[Any], ID](
+    backend_inventory: StartupBackendInventory[UP, ID],
     request_backends: object,
     *,
     backend_index: int,
-    backend_name: str,
 ) -> AuthenticationBackend[UP, ID]:
     """Return the request-scoped backend matching the startup controller slot.
 
     Returns:
         Request-scoped backend aligned with the startup controller slot.
     """
-    return _BackendSlot(index=backend_index, name=backend_name).resolve_request_backend(request_backends)
+    return backend_inventory.resolve_request_backend(request_backends, backend_index=backend_index)
 
 
 def create_auth_controller[UP: UserProtocol[Any], ID](  # noqa: PLR0913
     *,
     backend: StartupBackendTemplate[UP, ID],
+    backend_inventory: StartupBackendInventory[UP, ID],
     backend_index: int,
     rate_limit_config: AuthRateLimitConfig | None = None,
     enable_refresh: bool = False,
@@ -154,9 +154,9 @@ def create_auth_controller[UP: UserProtocol[Any], ID](  # noqa: PLR0913
 
     def _build_runtime_context(litestar_auth_backends: object) -> object:
         request_backend = _resolve_request_backend(
+            backend_inventory,
             litestar_auth_backends,
             backend_index=backend_index,
-            backend_name=backend.name,
         )
         return _make_auth_controller_context(
             backend=request_backend,
@@ -263,7 +263,7 @@ def create_oauth_login_controller[UP: UserProtocol[Any], ID](  # noqa: PLR0913
     *,
     provider_name: str,
     oauth_client: OAuthClientProtocol,
-    backend: StartupBackendTemplate[UP, ID],
+    backend_inventory: StartupBackendInventory[UP, ID],
     backend_index: int,
     redirect_base_url: str,
     cookie_secure: bool = True,
@@ -286,7 +286,7 @@ def create_oauth_login_controller[UP: UserProtocol[Any], ID](  # noqa: PLR0913
         oauth_scopes=oauth_scopes,
         associate_by_email=associate_by_email,
         trust_provider_email_verified=trust_provider_email_verified,
-        # Plugin-owned routes keep their debug/unsafe_testing escape hatch in startup validation.
+        # Plugin-owned routes keep their debug/unsafe_testing override in startup validation.
         validate_redirect_base_url=False,
     )
 
@@ -301,9 +301,9 @@ def create_oauth_login_controller[UP: UserProtocol[Any], ID](  # noqa: PLR0913
     ) -> Response[Any]:
         del self
         request_backend = _resolve_request_backend(
+            backend_inventory,
             litestar_auth_backends,
             backend_index=backend_index,
-            backend_name=backend.name,
         )
         return await _complete_oauth_login_callback(
             assembly=assembly,
@@ -327,8 +327,8 @@ def create_oauth_login_controller[UP: UserProtocol[Any], ID](  # noqa: PLR0913
 def _define_plugin_totp_controller_class_di[UP: UserProtocol[Any], ID](
     startup_ctx: _TotpControllerContext[UP, ID],
     *,
+    backend_inventory: StartupBackendInventory[UP, ID],
     backend_index: int,
-    backend_name: str,
     totp_verify_before_request: Callable[[Request[Any, Any, Any]], object] | None,
     security: Sequence[SecurityRequirement] | None = None,
 ) -> type[Controller]:
@@ -342,9 +342,9 @@ def _define_plugin_totp_controller_class_di[UP: UserProtocol[Any], ID](
         return replace(
             startup_ctx,
             backend=_resolve_request_backend(
+                backend_inventory,
                 litestar_auth_backends,
                 backend_index=backend_index,
-                backend_name=backend_name,
             ),
         )
 
@@ -453,6 +453,7 @@ def _define_plugin_totp_controller_class_di[UP: UserProtocol[Any], ID](
 def create_totp_controller[UP: UserProtocol[Any], ID](  # noqa: PLR0913
     *,
     backend: StartupBackendTemplate[UP, ID],
+    backend_inventory: StartupBackendInventory[UP, ID],
     backend_index: int,
     user_manager_dependency_key: str,
     used_tokens_store: UsedTotpCodeStore | None = None,
@@ -513,8 +514,8 @@ def create_totp_controller[UP: UserProtocol[Any], ID](  # noqa: PLR0913
     before = totp_verify_before_request if totp_rate_limit.verify is not None else None
     totp_controller_cls = _define_plugin_totp_controller_class_di(
         startup_ctx,
+        backend_inventory=backend_inventory,
         backend_index=backend_index,
-        backend_name=backend.name,
         totp_verify_before_request=before,
         security=security,
     )
@@ -548,7 +549,7 @@ def build_controllers[UP: UserProtocol[Any], ID](
 def _build_auth_controllers[UP: UserProtocol[Any], ID](
     *,
     config: LitestarAuthConfig[UP, ID],
-    backend_inventory: _StartupBackendInventory[UP, ID] | None = None,
+    backend_inventory: StartupBackendInventory[UP, ID] | None = None,
     security: Sequence[SecurityRequirement] | None = None,
 ) -> list[ControllerRouterHandler]:
     """Build mandatory auth controllers per configured backend.
@@ -559,12 +560,13 @@ def _build_auth_controllers[UP: UserProtocol[Any], ID](
     controllers: list[ControllerRouterHandler] = []
     require_session_maker(config)
     inventory = resolve_backend_inventory(config) if backend_inventory is None else backend_inventory
-    for backend_entry in inventory.entries:
+    for backend_index, backend in enumerate(inventory.startup_backends()):
         totp_pending_secret = config.totp_config.totp_pending_secret if config.totp_config is not None else None
         controllers.append(
             create_auth_controller(
-                backend=backend_entry.startup_backend,
-                backend_index=backend_entry.index,
+                backend=backend,
+                backend_inventory=inventory,
+                backend_index=backend_index,
                 rate_limit_config=config.rate_limit_config,
                 enable_refresh=config.enable_refresh,
                 requires_verification=config.requires_verification,
@@ -572,8 +574,8 @@ def _build_auth_controllers[UP: UserProtocol[Any], ID](
                 totp_pending_secret=totp_pending_secret,
                 path=backend_auth_path(
                     auth_path=config.auth_path,
-                    backend_name=backend_entry.name,
-                    index=backend_entry.index,
+                    backend_name=backend.name,
+                    index=backend_index,
                 ),
                 unsafe_testing=config.unsafe_testing,
                 security=security,
@@ -586,7 +588,7 @@ def _append_optional_feature_controllers[UP: UserProtocol[Any], ID](
     *,
     controllers: list[ControllerRouterHandler],
     config: LitestarAuthConfig[UP, ID],
-    backend_inventory: _StartupBackendInventory[UP, ID] | None = None,
+    backend_inventory: StartupBackendInventory[UP, ID] | None = None,
     security: Sequence[SecurityRequirement] | None = None,
 ) -> None:
     """Append optional controllers enabled by plugin flags."""
@@ -642,7 +644,7 @@ def _append_oauth_login_controllers[UP: UserProtocol[Any], ID](
     *,
     controllers: list[ControllerRouterHandler],
     config: LitestarAuthConfig[UP, ID],
-    backend_inventory: _StartupBackendInventory[UP, ID] | None = None,
+    backend_inventory: StartupBackendInventory[UP, ID] | None = None,
 ) -> None:
     """Append plugin-owned OAuth login controllers for configured providers."""
     contract = _build_oauth_route_registration_contract(
@@ -656,13 +658,13 @@ def _append_oauth_login_controllers[UP: UserProtocol[Any], ID](
     if redirect_base_url is None:  # pragma: no cover - validation guarantees this when providers exist
         return
     inventory = resolve_backend_inventory(config) if backend_inventory is None else backend_inventory
-    primary_backend = inventory.primary()
+    primary_backend_index, _primary_backend = inventory.primary()
     controllers.extend(
         create_oauth_login_controller(
             provider_name=entry.name,
             oauth_client=cast("OAuthClientProtocol", entry.client),
-            backend=primary_backend.startup_backend,
-            backend_index=primary_backend.index,
+            backend_inventory=inventory,
+            backend_index=primary_backend_index,
             redirect_base_url=redirect_base_url,
             cookie_secure=contract.oauth_cookie_secure,
             oauth_scopes=contract.oauth_provider_scopes.get(entry.name),
@@ -708,7 +710,7 @@ def _append_oauth_associate_controllers[UP: UserProtocol[Any], ID](
 def build_totp_controller[UP: UserProtocol[Any], ID](
     config: LitestarAuthConfig[UP, ID],
     *,
-    backend_inventory: _StartupBackendInventory[UP, ID] | None = None,
+    backend_inventory: StartupBackendInventory[UP, ID] | None = None,
     security: Sequence[SecurityRequirement] | None = None,
 ) -> ControllerRouterHandler:
     """Build the configured TOTP controller surface.
@@ -724,10 +726,11 @@ def build_totp_controller[UP: UserProtocol[Any], ID](
         msg = "totp_config must be configured to build TOTP controller."
         raise ValueError(msg)
     inventory = resolve_backend_inventory(config) if backend_inventory is None else backend_inventory
-    totp_backend_entry = inventory.resolve_totp(backend_name=totp_config.totp_backend_name)
+    backend_index, backend = inventory.resolve_totp(backend_name=totp_config.totp_backend_name)
     return create_totp_controller(
-        backend=totp_backend_entry.startup_backend,
-        backend_index=totp_backend_entry.index,
+        backend=backend,
+        backend_inventory=inventory,
+        backend_index=backend_index,
         user_manager_dependency_key=DEFAULT_USER_MANAGER_DEPENDENCY_KEY,
         used_tokens_store=totp_config.totp_used_tokens_store,
         pending_jti_store=totp_config.totp_pending_jti_store,
@@ -791,7 +794,7 @@ def backend_auth_path(*, auth_path: str, backend_name: str, index: int) -> str:
 def totp_backend[UP: UserProtocol[Any], ID](
     config: LitestarAuthConfig[UP, ID],
     *,
-    backend_inventory: _StartupBackendInventory[UP, ID] | None = None,
+    backend_inventory: StartupBackendInventory[UP, ID] | None = None,
 ) -> StartupBackendTemplate[UP, ID]:
     """Return the configured TOTP backend or the primary backend.
 
@@ -800,7 +803,8 @@ def totp_backend[UP: UserProtocol[Any], ID](
     """
     inventory = resolve_backend_inventory(config) if backend_inventory is None else backend_inventory
     backend_name = None if config.totp_config is None else config.totp_config.totp_backend_name
-    return inventory.resolve_totp(backend_name=backend_name).startup_backend
+    _, backend = inventory.resolve_totp(backend_name=backend_name)
+    return backend
 
 
 def totp_path(auth_path: str) -> str:

@@ -16,6 +16,7 @@ from litestar_auth._plugin.config import (
     LitestarAuthConfig,
     OAuthConfig,
     TotpConfig,
+    resolve_backend_inventory,
 )
 from litestar_auth._plugin.controllers import (
     _append_oauth_associate_controllers,
@@ -47,6 +48,8 @@ if TYPE_CHECKING:
 
     from litestar.types import ControllerRouterHandler
 
+    from litestar_auth.config import OAuthProviderConfig
+
 
 class _ReadSchema(msgspec.Struct):
     email: str
@@ -68,6 +71,17 @@ def _current_startup_backend_template_type() -> type[Any]:
         The current StartupBackendTemplate type.
     """
     return cast("type[Any]", importlib.import_module("litestar_auth._plugin.config").StartupBackendTemplate)
+
+
+def _oauth_provider(*, name: str, client: object) -> OAuthProviderConfig:
+    """Build an OAuthProviderConfig using the current runtime class.
+
+    Returns:
+        The current-runtime OAuthProviderConfig instance.
+    """
+    config_module = importlib.import_module("litestar_auth.config")
+    oauth_provider_config_type = cast("type[Any]", config_module.OAuthProviderConfig)
+    return oauth_provider_config_type(name=name, client=client)
 
 
 def test_plugin_controllers_module_executes_under_coverage() -> None:
@@ -270,34 +284,38 @@ def test_totp_backend_defaults_to_primary_startup_backend() -> None:
 
 def test_resolve_request_backend_raises_when_backend_index_is_missing() -> None:
     """Request backend resolution fails closed when the startup index is absent at runtime."""
-    backend = _backend(name="primary", token_prefix="primary")
+    primary_backend = _backend(name="primary", token_prefix="primary")
+    secondary_backend = _backend(name="secondary", token_prefix="secondary")
+    inventory = resolve_backend_inventory(_minimal_config(backends=[secondary_backend, primary_backend]))
 
     with pytest.raises(RuntimeError, match="Missing backend index 1 for 'primary'"):
         controllers_module._resolve_request_backend(
-            [backend],
+            inventory,
+            [secondary_backend],
             backend_index=1,
-            backend_name="primary",
         )
 
 
 def test_resolve_request_backend_raises_when_backend_name_changes() -> None:
     """Request backend resolution fails closed when backend ordering no longer matches startup."""
     backend = _backend(name="secondary", token_prefix="secondary")
+    inventory = resolve_backend_inventory(_minimal_config(backends=[_backend(name="primary", token_prefix="primary")]))
 
     with pytest.raises(RuntimeError, match="Expected backend 'primary' at index 0, got 'secondary'"):
         controllers_module._resolve_request_backend(
+            inventory,
             [backend],
             backend_index=0,
-            backend_name="primary",
         )
 
 
 async def test_create_totp_controller_enable_validation_callback_runs_background_task() -> None:
     """Plugin TOTP enable handlers keep the invalid-payload background callback wired."""
+    config = _minimal_config(totp_config=TotpConfig(totp_pending_secret="p" * 32))
+    inventory = resolve_backend_inventory(config)
     controller_cls = controllers_module.create_totp_controller(
-        backend=controllers_module.StartupBackendTemplate.from_runtime_backend(
-            _backend(name="primary", token_prefix="primary"),
-        ),
+        backend=config.resolve_startup_backends()[0],
+        backend_inventory=inventory,
         backend_index=0,
         user_manager_dependency_key="litestar_auth_user_manager",
         pending_jti_store=cast("Any", object()),
@@ -372,8 +390,8 @@ def test_append_optional_feature_controllers_appends_enabled_features_in_order(
     config = _minimal_config(
         oauth_config=OAuthConfig(
             oauth_providers=[
-                ("github", github_client),
-                ("gitlab", gitlab_client),
+                _oauth_provider(name="github", client=github_client),
+                _oauth_provider(name="gitlab", client=gitlab_client),
             ],
             oauth_redirect_base_url="https://app.example/auth",
             include_oauth_associate=True,
@@ -491,7 +509,7 @@ def test_append_oauth_login_controllers_uses_explicit_redirect_base_url_and_prim
     config = _minimal_config(
         backends=[primary_backend, secondary_backend],
         oauth_config=OAuthConfig(
-            oauth_providers=[("github", client)],
+            oauth_providers=[_oauth_provider(name="github", client=client)],
             oauth_redirect_base_url="https://app.example/auth",
             oauth_cookie_secure=False,
             oauth_associate_by_email=True,
@@ -518,7 +536,7 @@ def test_append_oauth_login_controllers_uses_explicit_redirect_base_url_and_prim
         {
             "provider_name": "github",
             "oauth_client": client,
-            "backend": controllers_module.StartupBackendTemplate.from_runtime_backend(primary_backend),
+            "backend_inventory": resolve_backend_inventory(config),
             "backend_index": 0,
             "redirect_base_url": "https://app.example/auth/oauth",
             "path": "/auth/oauth",
@@ -540,7 +558,10 @@ def test_append_oauth_login_controllers_forwards_per_provider_scopes(
     config = _minimal_config(
         backends=[primary_backend],
         oauth_config=OAuthConfig(
-            oauth_providers=[("github", github_client), ("gitlab", gitlab_client)],
+            oauth_providers=[
+                _oauth_provider(name="github", client=github_client),
+                _oauth_provider(name="gitlab", client=gitlab_client),
+            ],
             oauth_redirect_base_url="https://app.example/auth",
             oauth_provider_scopes={"github": ["openid", "email"]},
         ),
@@ -570,7 +591,7 @@ def test_append_oauth_associate_controllers_uses_explicit_redirect_base_url(
     client = object()
     config = _minimal_config(
         oauth_config=OAuthConfig(
-            oauth_providers=[("github", client)],
+            oauth_providers=[_oauth_provider(name="github", client=client)],
             include_oauth_associate=True,
             oauth_redirect_base_url="https://app.example/auth",
         ),
@@ -611,7 +632,7 @@ def test_append_oauth_associate_controllers_uses_shared_provider_inventory(
     oauth_client = object()
     config = _minimal_config(
         oauth_config=OAuthConfig(
-            oauth_providers=[("github", oauth_client)],
+            oauth_providers=[_oauth_provider(name="github", client=oauth_client)],
             include_oauth_associate=True,
             oauth_redirect_base_url="https://app.example/auth",
             oauth_cookie_secure=False,
@@ -699,7 +720,7 @@ def _oauth_login_call(
     return {
         "provider_name": provider_name,
         "oauth_client": oauth_client,
-        "backend": controllers_module.StartupBackendTemplate.from_runtime_backend(backend),
+        "backend_inventory": resolve_backend_inventory(_minimal_config(backends=[backend])),
         "backend_index": 0,
         "redirect_base_url": "https://app.example/auth/oauth",
         "path": "/auth/oauth",

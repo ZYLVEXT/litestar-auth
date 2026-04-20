@@ -2,9 +2,9 @@
 
 OAuth is optional and configured through `OAuthConfig` on `LitestarAuthConfig`.
 
-## Canonical route registration
+## Route registration
 
-OAuth has one plugin-owned route-registration contract plus a manual escape hatch:
+OAuth has one plugin-owned route-registration contract plus a manual route-table path:
 
 - **Plugin-owned login routes.** Declare `oauth_providers` plus `oauth_redirect_base_url` on `OAuthConfig`. With the default `auth_path="/auth"`, the plugin auto-mounts:
   - `GET /auth/oauth/{provider}/authorize`
@@ -12,13 +12,13 @@ OAuth has one plugin-owned route-registration contract plus a manual escape hatc
 - **Plugin-owned associate routes.** Set `include_oauth_associate=True` to extend that same provider inventory with:
   - `GET /auth/associate/{provider}/authorize`
   - `GET /auth/associate/{provider}/callback`
-- **Advanced escape hatch.** If you need a custom route table, custom path prefixes, or direct user-manager wiring, mount `create_provider_oauth_controller()` / `create_oauth_controller()` / `create_oauth_associate_controller()` yourself instead of using the plugin-owned route table.
+- **Manual route table.** If you need a custom route table, custom path prefixes, or direct user-manager wiring, mount `create_provider_oauth_controller()` / `create_oauth_controller()` / `create_oauth_associate_controller()` yourself instead of using the plugin-owned route table.
 
 The plugin no longer treats `oauth_providers` as inert metadata: if providers are declared, login routes are part of the plugin-owned HTTP surface.
 
 For plugin-owned routes, production app init now fails closed unless `oauth_redirect_base_url` uses a non-loopback `https://...` origin. Keep localhost or plain-HTTP redirect bases behind `AppConfig(debug=True)` or `unsafe_testing=True` only.
 
-For manual/custom controller wiring, `redirect_base_url` on `create_provider_oauth_controller()`, `create_oauth_controller()`, and `create_oauth_associate_controller()` must also use a non-loopback `https://...` origin and remain a clean callback base without embedded userinfo, query strings, or fragments. Unlike the plugin-owned route table, the low-level manual factories do not inspect `AppConfig(debug=True)` or `unsafe_testing=True`, so there is no localhost or plain-HTTP escape hatch on that API surface.
+For manual/custom controller wiring, `redirect_base_url` on `create_provider_oauth_controller()`, `create_oauth_controller()`, and `create_oauth_associate_controller()` must also use a non-loopback `https://...` origin and remain a clean callback base without embedded userinfo, query strings, or fragments. Unlike the plugin-owned route table, the low-level manual factories do not inspect `AppConfig(debug=True)` or `unsafe_testing=True`, so there is no localhost or plain-HTTP override on that API surface.
 
 ## Scope policy
 
@@ -35,7 +35,7 @@ Manual/custom OAuth controllers accept any client object that satisfies the supp
 The typed surface is exposed as structural protocols in `litestar_auth.oauth.client_adapter`:
 `OAuthClientProtocol` covers the supported manual client shapes, with
 `OAuthDirectIdentityClientProtocol`, `OAuthProfileClientProtocol`, and the optional
-`OAuthEmailVerificationAsyncClientProtocol` documenting the canonical email-verification capability used by the
+`OAuthEmailVerificationAsyncClientProtocol` documenting the async email-verification hook used by the
 adapter. Sync-only verification clients can be wrapped explicitly with
 `make_async_email_verification_client()`.
 
@@ -153,9 +153,9 @@ Default **`oauth_associate_by_email=False`** avoids implicit login-time linking 
 
 ## Code entry points
 
-- Canonical plugin-managed path: `LitestarAuthConfig(..., oauth_config=OAuthConfig(...))`
+- Plugin-managed path: `LitestarAuthConfig(..., oauth_config=OAuthConfig(...))`
 - Manual login helper: `litestar_auth.oauth.create_provider_oauth_controller`
-- Advanced custom-controller escape hatch: `litestar_auth.controllers.create_oauth_controller` and `create_oauth_associate_controller`
+- Manual custom-controller path: `litestar_auth.controllers.create_oauth_controller` and `create_oauth_associate_controller`
 - Lazy client loader: `litestar_auth.oauth.load_httpx_oauth_client`
 
 Use `OAuthConfig` on `LitestarAuthConfig` for the default plugin-owned route table. Reach for `create_provider_oauth_controller(...)` or the lower-level controller factories only when you intentionally assemble a custom OAuth route layout.

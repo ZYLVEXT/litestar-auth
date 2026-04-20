@@ -9,7 +9,7 @@ see :class:`litestar_auth.contrib.redis.RedisAuthPreset`. Keep manual
 advanced cases that need fully custom per-endpoint wiring.
 
 Examples:
-    Build the canonical shared-backend recipe::
+    Build the shared-backend recipe::
 
         from litestar_auth.ratelimit import (
             AUTH_RATE_LIMIT_VERIFICATION_SLOTS,

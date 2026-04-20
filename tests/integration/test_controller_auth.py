@@ -67,6 +67,7 @@ class TrackingUserManager(BaseUserManager[ExampleUser, UUID]):
         *,
         backends: tuple[object, ...] = (),
         login_identifier: Literal["email", "username"] = "email",
+        skip_reuse_warning: bool = False,
     ) -> None:
         """Initialize the manager with deterministic hook tracking."""
         super().__init__(
@@ -78,6 +79,7 @@ class TrackingUserManager(BaseUserManager[ExampleUser, UUID]):
             ),
             backends=backends,
             login_identifier=login_identifier,
+            skip_reuse_warning=skip_reuse_warning,
         )
         self.logged_in_users: list[ExampleUser] = []
 
@@ -295,6 +297,7 @@ def build_cookie_plugin_app(*, login_identifier: Literal["email", "username"] = 
         user_db: object,
         config: LitestarAuthConfig[ExampleUser, UUID],
         backends: tuple[object, ...] = (),
+        skip_reuse_warning: bool = False,
     ) -> TrackingUserManager:
         del session
         security = config.user_manager_security
@@ -306,9 +309,10 @@ def build_cookie_plugin_app(*, login_identifier: Literal["email", "username"] = 
             reset_password_token_secret=security.reset_password_token_secret,
             backends=backends,
             login_identifier=config.login_identifier,
+            skip_reuse_warning=skip_reuse_warning,
         )
 
-    config = LitestarAuthConfig.with_custom_manager_factory(
+    config = LitestarAuthConfig[ExampleUser, UUID](
         backends=[backend],
         session_maker=cast("Any", DummySessionMaker()),
         user_model=ExampleUser,

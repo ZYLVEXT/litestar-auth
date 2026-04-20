@@ -11,7 +11,6 @@ from uuid import uuid4
 import pytest
 
 import litestar_auth._manager.user_lifecycle as user_lifecycle_module
-import litestar_auth.manager as manager_module
 from litestar_auth._manager.user_lifecycle import UserLifecycleService
 from litestar_auth._manager.user_policy import UserPolicy
 from litestar_auth.exceptions import (
@@ -24,7 +23,6 @@ from litestar_auth.exceptions import (
 from litestar_auth.password import PasswordHelper
 from litestar_auth.schemas import UserCreate, UserUpdate
 from tests._helpers import ExampleUser
-from tests.unit import test_manager as test_manager_module
 from tests.unit.test_manager import TrackingUserManager
 
 pytestmark = pytest.mark.unit
@@ -33,10 +31,6 @@ pytestmark = pytest.mark.unit
 def test_user_lifecycle_module_executes_under_coverage() -> None:
     """Reload the module in-test so coverage records module and class definitions."""
     reloaded_module = importlib.reload(user_lifecycle_module)
-    manager_module.SAFE_FIELDS = reloaded_module.SAFE_FIELDS
-    manager_module._PRIVILEGED_FIELDS = reloaded_module.PRIVILEGED_FIELDS
-    test_manager_module.SAFE_FIELDS = reloaded_module.SAFE_FIELDS
-    test_manager_module.PRIVILEGED_FIELDS = reloaded_module.PRIVILEGED_FIELDS
 
     assert reloaded_module.UserLifecycleService.__name__ == UserLifecycleService.__name__
 

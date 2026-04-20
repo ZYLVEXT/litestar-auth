@@ -605,7 +605,7 @@ def _build_config[UP: SQLAlchemyUserModelProtocol](  # noqa: PLR0913
         **dict(extra_security_overrides or {}),
     )
     if user_manager_factory is not None:
-        return LitestarAuthConfig.with_custom_manager_factory(
+        return LitestarAuthConfig[UP, UUID](
             backends=[backend],
             session_maker=session_maker,
             user_model=user_model,
@@ -617,7 +617,7 @@ def _build_config[UP: SQLAlchemyUserModelProtocol](  # noqa: PLR0913
             include_reset_password=False,
             include_users=False,
         )
-    return LitestarAuthConfig.with_default_manager(
+    return LitestarAuthConfig[UP, UUID](
         backends=[backend],
         session_maker=session_maker,
         user_model=user_model,
@@ -679,6 +679,7 @@ def _build_tracking_roles_cli[UP: SQLAlchemyUserModelProtocol](
         user_db: BaseUserStore[UP, UUID],
         config: LitestarAuthConfig[UP, UUID],
         backends: tuple[object, ...] = (),
+        skip_reuse_warning: bool = False,
     ) -> BaseUserManager[UP, UUID]:
         del session
         security = config.user_manager_security
@@ -690,6 +691,7 @@ def _build_tracking_roles_cli[UP: SQLAlchemyUserModelProtocol](
             security=security,
             backends=backends,
             login_identifier=config.login_identifier,
+            skip_reuse_warning=skip_reuse_warning,
             unsafe_testing=config.unsafe_testing,
         )
 

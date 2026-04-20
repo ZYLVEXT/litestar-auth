@@ -50,6 +50,8 @@ Exact JSON layout follows your Litestar exception handler configuration.
 | `TOTP_ALREADY_ENABLED` | 400 | TOTP already active. |
 | `TOTP_ENROLL_BAD_TOKEN` | 400 | Enrollment token invalid. |
 
+`REGISTER_USER_ALREADY_EXISTS`, `REGISTER_INVALID_PASSWORD`, and `UPDATE_USER_INVALID_PASSWORD` keep the same HTTP mappings even though the corresponding Python exceptions now use keyword-only structured context.
+
 Source of truth in code: `litestar_auth.exceptions.ErrorCode` and controller `ClientException` sites. Full exception hierarchy: [Python API — Exceptions](api/exceptions.md).
 
 ## Enumeration safety

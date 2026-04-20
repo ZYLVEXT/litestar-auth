@@ -26,7 +26,7 @@ from tests.unit.test_plugin_config import (
     _minimal_config,
 )
 
-_REQUEST_BACKEND_GUIDANCE = re.escape("LitestarAuthConfig.resolve_request_backends(session)")
+_REQUEST_BACKEND_GUIDANCE = re.escape("LitestarAuthConfig.resolve_backends(session)")
 
 
 def test_public_build_database_token_backend_uses_module_local_builder(
@@ -181,4 +181,4 @@ def test_raise_startup_only_database_token_runtime_error() -> None:
         database_token_module._raise_startup_only_database_token_runtime_error()
     msg = str(excinfo.value)
     assert "LitestarAuthConfig.resolve_startup_backends()" in msg
-    assert "LitestarAuthConfig.resolve_request_backends(session)" in msg
+    assert "LitestarAuthConfig.resolve_backends(session)" in msg

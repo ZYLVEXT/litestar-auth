@@ -177,6 +177,7 @@ def validate_credential_config[UP: UserProtocol[Any], ID](config: LitestarAuthCo
 
 def validate_totp_domain_config[UP: UserProtocol[Any], ID](config: LitestarAuthConfig[UP, ID]) -> None:
     """Validate TOTP feature-level configuration before deeper security checks."""
+    validate_totp_user_model_protocol(config)
     validate_totp_config(config)
 
 
@@ -402,6 +403,32 @@ def _validate_totp_encryption_key[UP: UserProtocol[Any], ID](config: LitestarAut
     raise ConfigurationError(msg)
 
 
+def validate_totp_user_model_protocol[UP: UserProtocol[Any], ID](config: LitestarAuthConfig[UP, ID]) -> None:
+    """Ensure TOTP-enabled configs use a user model that exposes TOTP fields.
+
+    Raises:
+        ConfigurationError: If ``totp_config`` is set but ``user_model`` does not expose
+            the fields required by ``TotpUserProtocol``.
+    """
+    if config.totp_config is None:
+        return
+
+    required_fields = ("email", "totp_secret")
+    missing_fields = tuple(
+        field_name for field_name in required_fields if not _user_model_defines_field(config.user_model, field_name)
+    )
+    if not missing_fields:
+        return
+
+    user_model_name = getattr(config.user_model, "__name__", config.user_model)
+    missing_fields_list = ", ".join(repr(field_name) for field_name in missing_fields)
+    msg = (
+        f"TOTP is configured but user_model {user_model_name!r} does not expose "
+        f"fields required by TotpUserProtocol: {missing_fields_list}."
+    )
+    raise ConfigurationError(msg)
+
+
 def validate_user_manager_security_config[UP: UserProtocol[Any], ID](config: LitestarAuthConfig[UP, ID]) -> None:
     """Validate manager secret wiring and the supported production secret posture.
 
@@ -441,7 +468,7 @@ def validate_user_manager_security_config[UP: UserProtocol[Any], ID](config: Lit
 def validate_password_validator_config[UP: UserProtocol[Any], ID](config: LitestarAuthConfig[UP, ID]) -> None:
     """Validate password-validator wiring for the configured user-manager builder.
 
-    The canonical plugin contract now sources password validation only from
+    The plugin contract now sources password validation only from
     ``password_validator_factory`` when present.
     """
     del config
@@ -466,6 +493,12 @@ def validate_default_user_manager_constructor_contract[UP: UserProtocol[Any], ID
     )
 
     manager_class = config.user_manager_class
+    if manager_class is None:
+        msg = (
+            "user_manager_class must be configured when user_manager_factory is unset. "
+            f"{_DEFAULT_USER_MANAGER_FACTORY_GUIDANCE}"
+        )
+        raise ConfigurationError(msg)
     manager_name = getattr(manager_class, "__name__", repr(manager_class))
     contract = _build_default_user_manager_contract(
         config,
@@ -492,7 +525,7 @@ def validate_default_user_manager_constructor_contract[UP: UserProtocol[Any], ID
 
 
 def resolve_user_manager_account_state_validator[UP: UserProtocol[Any]](
-    user_manager_class: type[object],
+    user_manager_class: type[object] | None,
 ) -> PluginAccountStateValidator[UP]:
     """Resolve the plugin-managed manager-class account-state validator contract.
 
@@ -610,7 +643,7 @@ def validate_totp_config[UP: UserProtocol[Any], ID](config: LitestarAuthConfig[U
 def validate_totp_sub_config[UP: UserProtocol[Any]](
     totp_config: TotpConfig,
     *,
-    user_manager_class: type[object],
+    user_manager_class: type[object] | None,
     unsafe_testing: bool = False,
 ) -> None:
     """Validate a concrete ``TotpConfig`` payload.

@@ -17,9 +17,9 @@ from pwdlib.hashers.bcrypt import BcryptHasher
 
 import litestar_auth.manager as manager_module
 from litestar_auth._manager._coercions import _account_state_user, _as_dict, _managed_user, _require_str
-from litestar_auth._manager.account_tokens import AccountTokenSecurityService
-from litestar_auth._manager.user_lifecycle import PRIVILEGED_FIELDS, SAFE_FIELDS
+from litestar_auth._manager.user_lifecycle import PRIVILEGED_FIELDS
 from litestar_auth.authentication.strategy.base import TokenInvalidationCapable
+from litestar_auth.config import require_password_length
 from litestar_auth.exceptions import (
     ConfigurationError,
     InactiveUserError,
@@ -31,13 +31,10 @@ from litestar_auth.exceptions import (
     UserNotExistsError,
 )
 from litestar_auth.manager import (
-    _PRIVILEGED_FIELDS,
     RESET_PASSWORD_TOKEN_AUDIENCE,
     BaseUserManager,
     UserManagerSecurity,
-    _get_dummy_hash,
     _SecretValue,
-    require_password_length,
 )
 from litestar_auth.manager import logger as manager_logger
 from litestar_auth.password import PasswordHelper
@@ -46,12 +43,12 @@ from tests._helpers import ExampleUser
 
 if TYPE_CHECKING:
     from collections.abc import Callable
-    from types import TracebackType
 
 JTI_HEX_LENGTH = 32
 # ``secrets.token_hex(32)`` is 64 lowercase hex characters.
 EXPECTED_TOKEN_HEX_32_LEN = 64
 EXPECTED_SECRET_FALLBACK_WARNINGS = 2
+EXPECTED_SHARED_HELPER_DUMMY_HASH_CALLS = 2
 
 pytestmark = pytest.mark.unit
 
@@ -64,10 +61,10 @@ def test_manager_module_executes_under_coverage() -> None:
     assert reloaded_module._SecretValue.__name__ == _SecretValue.__name__
 
 
-def test_manager_reexports_canonical_lifecycle_constants() -> None:
-    """Manager-level compatibility constants stay aligned with the lifecycle service."""
-    assert manager_module.SAFE_FIELDS is SAFE_FIELDS
-    assert manager_module._PRIVILEGED_FIELDS is PRIVILEGED_FIELDS
+def test_manager_does_not_reexport_lifecycle_constants() -> None:
+    """Lifecycle field allowlists live in the lifecycle service module."""
+    assert not hasattr(manager_module, "SAFE_FIELDS")
+    assert not hasattr(manager_module, "_PRIVILEGED_FIELDS")
 
 
 class TrackingUserManager(BaseUserManager[ExampleUser, UUID]):
@@ -403,6 +400,31 @@ def test_manager_init_warns_when_typed_secret_roles_are_reused_in_production() -
     assert manager.totp_secret_key == shared_secret
 
 
+def test_manager_init_skips_reused_secret_warning_when_explicitly_requested() -> None:
+    """Plugin-managed builders can suppress a duplicate reused-secret warning explicitly."""
+    user_db = AsyncMock()
+    password_helper = PasswordHelper()
+    shared_secret = "shared-manager-secret-role-1234567890"
+
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        manager = BaseUserManager(
+            user_db,
+            password_helper=password_helper,
+            security=UserManagerSecurity[UUID](
+                verification_token_secret=shared_secret,
+                reset_password_token_secret=shared_secret,
+                totp_secret_key=shared_secret,
+            ),
+            skip_reuse_warning=True,
+        )
+
+    assert not [warning for warning in caught if issubclass(warning.category, manager_module.SecurityWarning)]
+    assert manager.verification_token_secret.get_secret_value() == shared_secret
+    assert manager.reset_password_token_secret.get_secret_value() == shared_secret
+    assert manager.totp_secret_key == shared_secret
+
+
 def test_manager_init_rejects_mixed_typed_security_and_legacy_secret_kwargs() -> None:
     """Surplus legacy keyword arguments are rejected at the Python level."""
     user_db = AsyncMock()
@@ -520,33 +542,6 @@ def test_secret_value_masks_repr_and_str() -> None:
     assert "verify-secret-1234567890-1234567890" not in repr(secret)
 
 
-def test_secret_value_equality_and_hash_cover_non_secret_comparisons() -> None:
-    """Secret equality uses constant-time comparison and defers unsupported operands."""
-    secret_cls = manager_module._SecretValue
-    first = secret_cls("verify-secret-1234567890-1234567890")
-    same = secret_cls("verify-secret-1234567890-1234567890")
-    different = secret_cls("reset-secret-1234567890-1234567890")
-
-    assert first == same
-    assert first != different
-    assert (first == "not-a-secret") is False
-    assert hash(first) == hash(same)
-
-
-def test_secret_value_hash_opaque_and_usable_as_mapping_key() -> None:
-    """__hash__ must follow __eq__ and avoid hashing the raw secret; sets/dicts behave."""
-    secret_cls = manager_module._SecretValue
-    a = secret_cls("same-value")
-    b = secret_cls("same-value")
-    c = secret_cls("other-value")
-
-    assert hash(a) == hash(b)
-    assert hash(a) != hash(c)
-    assert len({a, b}) == 1
-    table: dict[object, int] = {a: 1}
-    assert table[b] == 1
-
-
 def test_manager_repr_does_not_expose_token_secrets() -> None:
     """Manager text representations must not leak configured token secrets."""
     user_db = AsyncMock()
@@ -629,7 +624,7 @@ def test_manager_init_wires_services_and_configuration() -> None:
     backends = (object(),)
     lifecycle_service = object()
     token_security_service = object()
-    account_tokens_service = object()
+    account_tokens_service = type("AccountTokensServiceStub", (), {"security": token_security_service})()
     totp_secrets_service = object()
 
     class DummyOAuthAccountStore:
@@ -708,6 +703,10 @@ def test_manager_init_wires_services_and_configuration() -> None:
     assert manager._account_token_security is token_security_service
     assert manager._account_tokens is account_tokens_service
     assert manager._totp_secrets is totp_secrets_service
+    assert manager.users is lifecycle_service
+    assert manager.tokens is account_tokens_service
+    assert manager.tokens.security is token_security_service
+    assert manager.totp is totp_secrets_service
     user_lifecycle_service.assert_called_once_with(manager, policy=manager.policy)
     account_token_security_service.assert_called_once_with(
         manager,
@@ -850,7 +849,7 @@ async def test_create_safe_false_still_strips_privilege_fields_by_default() -> N
     assert result is created_user
     create_payload = user_db.create.await_args.args[0]
     assert create_payload["nickname"] == "visible"
-    assert _PRIVILEGED_FIELDS.isdisjoint(create_payload)
+    assert PRIVILEGED_FIELDS.isdisjoint(create_payload)
     assert "password" not in create_payload
     assert create_payload["email"] == created_user.email
 
@@ -964,7 +963,7 @@ async def test_authenticate_verifies_dummy_hash_for_unknown_email() -> None:
 
     assert len(verify_calls) == 1
     assert verify_calls[0][0] == "test-password"
-    assert verify_calls[0][1] == _get_dummy_hash(password_helper)
+    assert verify_calls[0][1] == manager._get_dummy_hash()
 
 
 def test_manager_module_does_not_hash_dummy_password_at_import(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -988,9 +987,11 @@ def test_manager_module_does_not_hash_dummy_password_at_import(monkeypatch: pyte
     assert len(hash_calls) == 1
 
 
-def test_get_dummy_hash_is_lazy_and_cached_per_helper() -> None:
-    """A helper computes one dummy hash lazily and reuses it for later lookups."""
+def test_manager_get_dummy_hash_is_lazy_and_cached_per_instance() -> None:
+    """A manager computes one dummy hash lazily and reuses it across later lookups."""
+    user_db = AsyncMock()
     password_helper = PasswordHelper()
+    manager = TrackingUserManager(user_db, password_helper)
     hash_calls: list[str] = []
     original_hash = password_helper.hash
 
@@ -999,79 +1000,36 @@ def test_get_dummy_hash_is_lazy_and_cached_per_helper() -> None:
         return original_hash(password)
 
     with patch.object(password_helper, "hash", side_effect=record_hash):
-        first = manager_module._get_dummy_hash(password_helper)
-        second = manager_module._get_dummy_hash(password_helper)
+        first = manager._get_dummy_hash()
+        second = manager._get_dummy_hash()
 
     assert first == second
     assert len(hash_calls) == 1
 
 
-def test_get_dummy_hash_is_scoped_per_helper() -> None:
-    """Different helpers keep independent dummy-hash cache entries."""
-    first_helper = PasswordHelper()
-    second_helper = PasswordHelper()
-    first_hash_calls: list[str] = []
-    second_hash_calls: list[str] = []
-    first_original_hash = first_helper.hash
-    second_original_hash = second_helper.hash
-
-    def record_first_hash(password: str) -> str:
-        first_hash_calls.append(password)
-        return first_original_hash(password)
-
-    def record_second_hash(password: str) -> str:
-        second_hash_calls.append(password)
-        return second_original_hash(password)
-
-    with (
-        patch.object(first_helper, "hash", side_effect=record_first_hash),
-        patch.object(second_helper, "hash", side_effect=record_second_hash),
-    ):
-        first_dummy_hash = manager_module._get_dummy_hash(first_helper)
-        second_dummy_hash = manager_module._get_dummy_hash(second_helper)
-        assert manager_module._get_dummy_hash(first_helper) == first_dummy_hash
-        assert manager_module._get_dummy_hash(second_helper) == second_dummy_hash
-
-    assert len(first_hash_calls) == 1
-    assert len(second_hash_calls) == 1
-
-
-def test_get_dummy_hash_reuses_hash_populated_while_waiting_for_lock(monkeypatch: pytest.MonkeyPatch) -> None:
-    """A cache hit discovered after entering the lock should be returned without hashing."""
-
-    class _RaceCache:
-        def __init__(self) -> None:
-            self.get_calls = 0
-
-        def get(self, _password_helper: PasswordHelper) -> str | None:
-            self.get_calls += 1
-            return None if self.get_calls == 1 else "cached-after-lock"
-
-        def __setitem__(self, _password_helper: PasswordHelper, _dummy_hash: str) -> None:
-            pytest.fail("dummy hash should not be recomputed when the cache is filled before the lock path re-check")
-
-    class _NoOpLock:
-        def __enter__(self) -> None:
-            return None
-
-        def __exit__(
-            self,
-            _exc_type: type[BaseException] | None,
-            _exc: BaseException | None,
-            _tb: TracebackType | None,
-        ) -> bool:
-            return False
-
+def test_manager_get_dummy_hash_is_scoped_per_manager() -> None:
+    """Managers do not share cached dummy hashes, even when they share a helper."""
     password_helper = PasswordHelper()
-    monkeypatch.setattr(manager_module, "_DUMMY_PASSWORD_HASHES", _RaceCache())
-    monkeypatch.setattr(manager_module, "_DUMMY_PASSWORD_HASH_LOCK", _NoOpLock())
+    first_manager = TrackingUserManager(AsyncMock(), password_helper)
+    second_manager = TrackingUserManager(AsyncMock(), password_helper)
+    hash_calls: list[str] = []
+    original_hash = password_helper.hash
 
-    with patch.object(password_helper, "hash", side_effect=pytest.fail):
-        assert manager_module._get_dummy_hash(password_helper) == "cached-after-lock"
+    def record_hash(password: str) -> str:
+        hash_calls.append(password)
+        return original_hash(password)
+
+    with patch.object(password_helper, "hash", side_effect=record_hash):
+        first_dummy_hash = first_manager._get_dummy_hash()
+        second_dummy_hash = second_manager._get_dummy_hash()
+        assert first_manager._get_dummy_hash() == first_dummy_hash
+        assert second_manager._get_dummy_hash() == second_dummy_hash
+
+    assert len(hash_calls) == EXPECTED_SHARED_HELPER_DUMMY_HASH_CALLS
 
 
 def test_get_dummy_hash_returns_valid_password_hash() -> None:
-    """The dummy hash should be a valid password hash value."""
+    """The dummy hash helper should return a valid password hash value."""
     password_helper = PasswordHelper()
     dummy_hash = manager_module._get_dummy_hash(password_helper)
 
@@ -1241,10 +1199,10 @@ async def test_forgot_password_uses_dummy_fingerprint_for_missing_users() -> Non
     manager = TrackingUserManager(user_db, password_helper)
     user_db.get_by_email.return_value = None
 
-    with patch.object(manager, "_password_fingerprint", wraps=manager._password_fingerprint) as fingerprint:
+    with patch.object(manager.tokens, "password_fingerprint", wraps=manager.tokens.password_fingerprint) as fingerprint:
         assert await manager.forgot_password("missing@example.com") is None
 
-    fingerprint.assert_called_once_with(_get_dummy_hash(password_helper))
+    fingerprint.assert_called_once_with(manager._get_dummy_hash())
     assert len(manager.forgot_password_events) == 1
     assert manager.forgot_password_events[0] == (None, None)
 
@@ -1257,7 +1215,7 @@ async def test_forgot_password_uses_real_fingerprint_for_existing_users() -> Non
     user = _build_user(password_helper)
     user_db.get_by_email.return_value = user
 
-    with patch.object(manager, "_password_fingerprint", wraps=manager._password_fingerprint) as fingerprint:
+    with patch.object(manager.tokens, "password_fingerprint", wraps=manager.tokens.password_fingerprint) as fingerprint:
         assert await manager.forgot_password(user.email) is None
 
     fingerprint.assert_called_once_with(user.hashed_password)
@@ -1330,7 +1288,7 @@ async def test_authenticate_delegates_to_lifecycle_service_with_effective_mode(
     manager = TrackingUserManager(user_db, password_helper, login_identifier=manager_login_identifier)
     user = _build_user(password_helper)
 
-    with patch.object(manager._user_lifecycle, "authenticate", new=AsyncMock(return_value=user)) as authenticate:
+    with patch.object(manager.users, "authenticate", new=AsyncMock(return_value=user)) as authenticate:
         result = await manager.authenticate("lookup-value", "test-password", login_identifier=call_login_identifier)
 
     assert result is user
@@ -1338,7 +1296,7 @@ async def test_authenticate_delegates_to_lifecycle_service_with_effective_mode(
         "lookup-value",
         "test-password",
         login_identifier=expected_mode,
-        dummy_hash=_get_dummy_hash(password_helper),
+        dummy_hash=manager._get_dummy_hash(),
         logger=manager_logger,
     )
 
@@ -1365,12 +1323,7 @@ async def test_reset_password_hashes_new_password_and_calls_hook() -> None:
     updated_user = replace(user, hashed_password=password_helper.hash("new-password"))
     user_db.get.return_value = user
     user_db.update.return_value = updated_user
-    reset_token = manager._write_token(
-        user,
-        secret=manager.reset_password_token_secret.get_secret_value(),
-        audience=RESET_PASSWORD_TOKEN_AUDIENCE,
-        lifetime=manager.reset_password_token_lifetime,
-    )
+    reset_token = manager.tokens.write_reset_password_token(user, dummy_hash=manager._get_dummy_hash())
 
     result = await manager.reset_password(reset_token, "new-password")
 
@@ -1416,12 +1369,7 @@ async def test_reset_password_rejects_weak_password_before_hashing() -> None:
     manager = TrackingUserManager(user_db, password_helper, password_validator=require_password_length)
     user = _build_user(password_helper)
     user_db.get.return_value = user
-    reset_token = manager._write_token(
-        user,
-        secret=manager.reset_password_token_secret.get_secret_value(),
-        audience=RESET_PASSWORD_TOKEN_AUDIENCE,
-        lifetime=manager.reset_password_token_lifetime,
-    )
+    reset_token = manager.tokens.write_reset_password_token(user, dummy_hash=manager._get_dummy_hash())
 
     with pytest.raises(InvalidPasswordError, match="at least 12 characters"):
         await manager.reset_password(reset_token, "short")
@@ -1437,11 +1385,11 @@ async def test_verify_and_account_token_flows_delegate_to_account_tokens_service
     expected_user = _build_user(password_helper)
 
     with (
-        patch.object(manager._account_tokens, "verify", new=AsyncMock(return_value=expected_user)) as verify,
-        patch.object(manager._account_tokens, "request_verify_token", new=AsyncMock()) as request_verify_token,
-        patch.object(manager._account_tokens, "forgot_password", new=AsyncMock()) as forgot_password,
+        patch.object(manager.tokens, "verify", new=AsyncMock(return_value=expected_user)) as verify,
+        patch.object(manager.tokens, "request_verify_token", new=AsyncMock()) as request_verify_token,
+        patch.object(manager.tokens, "forgot_password", new=AsyncMock()) as forgot_password,
         patch.object(
-            manager._account_tokens,
+            manager.tokens,
             "reset_password",
             new=AsyncMock(return_value=expected_user),
         ) as reset_password,
@@ -1453,7 +1401,7 @@ async def test_verify_and_account_token_flows_delegate_to_account_tokens_service
 
     verify.assert_awaited_once_with("verify-token")
     request_verify_token.assert_awaited_once_with("user@example.com")
-    forgot_password.assert_awaited_once_with("user@example.com", dummy_hash=_get_dummy_hash(password_helper))
+    forgot_password.assert_awaited_once_with("user@example.com", dummy_hash=manager._get_dummy_hash())
     reset_password.assert_awaited_once_with("reset-token", "new-password")
 
 
@@ -1784,7 +1732,7 @@ async def test_reset_password_raises_invalid_token_when_subject_user_missing(
 
 
 async def test_get_user_from_token_raises_user_not_exists_error() -> None:
-    """_get_user_from_token raises when the token resolves to a missing user."""
+    """Token security raises when the token resolves to a missing user."""
     user_db = AsyncMock()
     password_helper = PasswordHelper()
     manager = TrackingUserManager(user_db, password_helper)
@@ -1797,16 +1745,17 @@ async def test_get_user_from_token_raises_user_not_exists_error() -> None:
     )
 
     with pytest.raises(UserNotExistsError):
-        await manager._get_user_from_token(
+        await manager.tokens.security.get_user_from_token(
             token,
             secret=manager.verification_token_secret.get_secret_value(),
             audience=manager_module.VERIFY_TOKEN_AUDIENCE,
             invalid_token_error=InvalidVerifyTokenError,
+            user_db=manager.user_db,
         )
 
 
-async def test_manager_token_helpers_delegate_to_account_token_security_service() -> None:
-    """Low-level token helpers remain a facade over the extracted token-security service."""
+async def test_public_token_services_delegate_to_account_token_security_service() -> None:
+    """Public token facades remain thin layers over the extracted token-security service."""
     user_db = AsyncMock()
     password_helper = PasswordHelper()
     manager = TrackingUserManager(user_db, password_helper)
@@ -1814,31 +1763,32 @@ async def test_manager_token_helpers_delegate_to_account_token_security_service(
     expected_user_id = uuid4()
 
     with (
-        patch.object(AccountTokenSecurityService, "write_token_subject", return_value="signed-token") as write_token,
+        patch.object(manager.tokens.security, "write_token", return_value="signed-token") as write_token,
         patch.object(
-            manager._account_token_security,
+            manager.tokens.security,
             "get_user_from_token",
             new=AsyncMock(return_value=expected_user),
         ) as get_user_from_token,
         patch.object(
-            manager._account_token_security,
+            manager.tokens.security,
             "read_token_subject",
             return_value=expected_user_id,
         ) as read_token_subject,
     ):
-        written = manager._write_token_subject(
-            subject=str(expected_user.id),
+        written = manager.tokens.write_user_token(
+            expected_user,
             secret=manager.verification_token_secret.get_secret_value(),
             audience=manager_module.VERIFY_TOKEN_AUDIENCE,
             lifetime=manager.verification_token_lifetime,
         )
-        resolved_user = await manager._get_user_from_token(
+        resolved_user = await manager.tokens.security.get_user_from_token(
             "signed-token",
             secret=manager.verification_token_secret.get_secret_value(),
             audience=manager_module.VERIFY_TOKEN_AUDIENCE,
             invalid_token_error=InvalidVerifyTokenError,
+            user_db=manager.user_db,
         )
-        resolved_user_id = manager._read_token(
+        resolved_user_id = manager.tokens.security.read_token_subject(
             "signed-token",
             secret=manager.verification_token_secret.get_secret_value(),
             audience=manager_module.VERIFY_TOKEN_AUDIENCE,
@@ -1871,14 +1821,14 @@ async def test_manager_token_helpers_delegate_to_account_token_security_service(
 
 
 def test_read_token_rejects_payload_without_subject(monkeypatch: pytest.MonkeyPatch) -> None:
-    """_read_token rejects payloads missing the subject string."""
+    """Token security rejects payloads missing the subject string."""
     user_db = AsyncMock()
     password_helper = PasswordHelper()
     manager = TrackingUserManager(user_db, password_helper)
 
-    monkeypatch.setattr(manager._account_token_security, "decode_token", lambda *_args, **_kwargs: {"sub": ""})
+    monkeypatch.setattr(manager.tokens.security, "decode_token", lambda *_args, **_kwargs: {"sub": ""})
     with pytest.raises(InvalidVerifyTokenError):
-        manager._read_token(
+        manager.tokens.security.read_token_subject(
             "token",
             secret=manager.verification_token_secret.get_secret_value(),
             audience=manager_module.VERIFY_TOKEN_AUDIENCE,
@@ -1887,18 +1837,18 @@ def test_read_token_rejects_payload_without_subject(monkeypatch: pytest.MonkeyPa
 
 
 def test_read_token_rejects_unparseable_subject(monkeypatch: pytest.MonkeyPatch) -> None:
-    """_read_token rejects payloads whose subject cannot be parsed by id_parser."""
+    """Token security rejects payloads whose subject cannot be parsed by id_parser."""
     user_db = AsyncMock()
     password_helper = PasswordHelper()
     manager = TrackingUserManager(user_db, password_helper)
 
     monkeypatch.setattr(
-        manager._account_token_security,
+        manager.tokens.security,
         "decode_token",
         lambda *_args, **_kwargs: {"sub": "not-a-uuid"},
     )
     with pytest.raises(InvalidVerifyTokenError):
-        manager._read_token(
+        manager.tokens.security.read_token_subject(
             "token",
             secret=manager.verification_token_secret.get_secret_value(),
             audience=manager_module.VERIFY_TOKEN_AUDIENCE,
@@ -1934,7 +1884,7 @@ def test_validate_password_propagates_invalid_password_error() -> None:
 
     def raise_invalid(_: str) -> None:
         msg = "nope"
-        raise InvalidPasswordError(msg)
+        raise InvalidPasswordError(message=msg)
 
     manager = TrackingUserManager(user_db, password_helper, password_validator=raise_invalid)
     with pytest.raises(InvalidPasswordError, match="nope"):
@@ -2007,8 +1957,8 @@ async def test_totp_secret_helpers_delegate_to_totp_service() -> None:
     updated_user = replace(user, totp_secret="encrypted")
 
     with (
-        patch.object(manager._totp_secrets, "set_secret", new=AsyncMock(return_value=updated_user)) as set_secret,
-        patch.object(manager._totp_secrets, "read_secret", new=AsyncMock(return_value="plain-secret")) as read_secret,
+        patch.object(manager.totp, "set_secret", new=AsyncMock(return_value=updated_user)) as set_secret,
+        patch.object(manager.totp, "read_secret", new=AsyncMock(return_value="plain-secret")) as read_secret,
     ):
         assert await manager.set_totp_secret(user, None) is updated_user
         assert await manager.read_totp_secret("encrypted-value") == "plain-secret"
@@ -2087,6 +2037,12 @@ def test_prepare_totp_secret_encrypts_and_prefixes_when_key_set(monkeypatch: pyt
 
     stored = manager._prepare_totp_secret_for_storage("secret")
     assert stored == f"{manager_module.ENCRYPTED_TOTP_SECRET_PREFIX}encrypted-value"
+
+    stored_via_service = manager.totp.prepare_secret_for_storage(
+        "secret",
+        load_cryptography_fernet=manager_module._load_cryptography_fernet,
+    )
+    assert stored_via_service == f"{manager_module.ENCRYPTED_TOTP_SECRET_PREFIX}encrypted-value"
 
 
 def test_load_cryptography_fernet_raises_with_install_hint(monkeypatch: pytest.MonkeyPatch) -> None:

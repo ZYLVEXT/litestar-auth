@@ -45,7 +45,7 @@ def create_provider_oauth_controller[UP: UserProtocol[Any], ID](  # noqa: PLR091
     The authorize endpoint uses only server-configured ``oauth_scopes``. Runtime
     scope-query overrides are rejected. ``redirect_base_url`` must use a
     non-loopback ``https://`` origin; the manual controller API does not expose
-    a debug or testing escape hatch for insecure callback origins.
+    a debug or testing override for insecure callback origins.
 
     Returns:
         Generated controller class mounted under the provider-specific path.
@@ -76,7 +76,7 @@ def create_provider_oauth_controller[UP: UserProtocol[Any], ID](  # noqa: PLR091
 
 
 def _build_oauth_login_path(auth_path: str) -> str:
-    """Return the canonical login-controller prefix for a given auth base path."""
+    """Return the login-controller prefix for a given auth base path."""
     base_path = auth_path.rstrip("/") or "/"
     return f"{base_path}/oauth" if base_path != "/" else "/oauth"
 

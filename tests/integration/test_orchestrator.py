@@ -21,9 +21,10 @@ from litestar_auth.authentication.backend import AuthenticationBackend
 from litestar_auth.authentication.strategy.base import Strategy, UserManagerProtocol
 from litestar_auth.authentication.strategy.jwt import InMemoryJWTDenylistStore
 from litestar_auth.authentication.transport.bearer import BearerTransport
+from litestar_auth.config import require_password_length
 from litestar_auth.controllers.totp import INVALID_TOTP_TOKEN_DETAIL
 from litestar_auth.exceptions import ErrorCode
-from litestar_auth.manager import BaseUserManager, UserManagerSecurity, require_password_length
+from litestar_auth.manager import BaseUserManager, UserManagerSecurity
 from litestar_auth.password import PasswordHelper
 from litestar_auth.plugin import LitestarAuth, LitestarAuthConfig
 from litestar_auth.totp import InMemoryUsedTotpCodeStore, _current_counter, _generate_totp_code

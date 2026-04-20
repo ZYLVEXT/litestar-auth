@@ -6,7 +6,7 @@ import logging
 import secrets
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from typing import TYPE_CHECKING, Any, Never, Protocol, cast
+from typing import TYPE_CHECKING, Any, Never, Protocol, cast, runtime_checkable
 
 import jwt
 import msgspec  # noqa: TC002
@@ -64,6 +64,7 @@ TOTP_RATE_LIMITED_ENDPOINTS: tuple[TotpSensitiveEndpoint, ...] = ("verify", "con
 logger = logging.getLogger(__name__)
 
 
+@runtime_checkable
 class TotpUserManagerProtocol[UP: UserProtocol[Any], ID](AccountStateValidatorProvider[UP], Protocol):
     """User-manager behavior required by the TOTP controller."""
 
@@ -529,7 +530,7 @@ def _define_totp_controller_class_di[UP: UserProtocol[Any], ID](
             self,
             request: Request[Any, Any, Any],
             data: TotpConfirmEnableRequest,
-            litestar_auth_user_manager: Any,  # noqa: ANN401
+            litestar_auth_user_manager: TotpUserManagerProtocol[Any, Any],
         ) -> TotpConfirmEnableResponse:
             del self
             return await _totp_handle_confirm_enable(
@@ -544,7 +545,7 @@ def _define_totp_controller_class_di[UP: UserProtocol[Any], ID](
             self,
             request: Request[Any, Any, Any],
             data: TotpVerifyRequest,
-            litestar_auth_user_manager: Any,  # noqa: ANN401
+            litestar_auth_user_manager: TotpUserManagerProtocol[Any, Any],
         ) -> object:
             del self
             return await _totp_handle_verify(
@@ -559,7 +560,7 @@ def _define_totp_controller_class_di[UP: UserProtocol[Any], ID](
             self,
             request: Request[Any, Any, Any],
             data: TotpDisableRequest,
-            litestar_auth_user_manager: Any,  # noqa: ANN401
+            litestar_auth_user_manager: TotpUserManagerProtocol[Any, Any],
         ) -> None:
             del self
             await _totp_handle_disable(
@@ -581,7 +582,7 @@ def _define_totp_controller_class_di[UP: UserProtocol[Any], ID](
             async def enable(
                 self,
                 request: Request[Any, Any, Any],
-                litestar_auth_user_manager: Any,  # noqa: ANN401
+                litestar_auth_user_manager: TotpUserManagerProtocol[Any, Any],
                 data: msgspec.Struct | None = None,
             ) -> TotpEnableResponse:
                 del self
@@ -608,7 +609,7 @@ def _define_totp_controller_class_di[UP: UserProtocol[Any], ID](
             async def enable(
                 self,
                 request: Request[Any, Any, Any],
-                litestar_auth_user_manager: Any,  # noqa: ANN401
+                litestar_auth_user_manager: TotpUserManagerProtocol[Any, Any],
             ) -> TotpEnableResponse:
                 del self
                 return await _totp_handle_enable(request, ctx=ctx, user_manager=litestar_auth_user_manager)
@@ -667,7 +668,7 @@ def create_totp_controller[UP: UserProtocol[Any], ID](  # noqa: PLR0913
         id_parser: Optional callable that converts the JWT ``sub`` string into the
             application's user ID type (e.g. ``UUID`` for UUID-keyed users).
         path: Base route prefix for the generated controller.
-        unsafe_testing: Explicit test-only escape hatch that keeps the previous
+        unsafe_testing: Explicit test-only override that keeps the previous
             single-process shortcuts instance-scoped instead of process-global.
         security: Optional OpenAPI security requirements to annotate the
             guarded enrollment and management routes.

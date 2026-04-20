@@ -254,7 +254,7 @@ def _validate_email_verified_result(result: object) -> bool:
 
 
 def _supports_async_email_verified(oauth_client: object) -> TypeGuard[OAuthEmailVerificationAsyncClientProtocol]:
-    """Return whether the client exposes the canonical async verification contract."""
+    """Return whether the client exposes the async verification contract."""
     email_verification_method = getattr(oauth_client, "get_email_verified", None)
     if not callable(email_verification_method):
         return False
@@ -265,7 +265,7 @@ def _supports_async_email_verified(oauth_client: object) -> TypeGuard[OAuthEmail
 def _supports_email_verified(
     oauth_client: object,
 ) -> TypeGuard[OAuthEmailVerificationAsyncClientProtocol]:
-    """Return whether the client exposes the canonical async verification contract."""
+    """Return whether the client exposes the async verification contract."""
     return _supports_async_email_verified(oauth_client)
 
 
@@ -448,7 +448,7 @@ class OAuthClientAdapter:
         oauth_client: OAuthEmailVerificationAsyncClientProtocol,
         access_token: str,
     ) -> bool:
-        """Invoke the canonical async ``get_email_verified`` contract.
+        """Invoke the async ``get_email_verified`` contract.
 
         Returns:
             Provider-asserted email-verification boolean.

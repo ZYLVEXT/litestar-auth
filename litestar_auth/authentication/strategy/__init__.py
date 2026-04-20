@@ -5,7 +5,7 @@ inside :class:`~litestar_auth.authentication.backend.AuthenticationBackend`.
 
 ``DatabaseTokenModels`` is the explicit contract for ``DatabaseTokenStrategy`` when you swap in
 mixin-composed token ORM classes. ``import_token_orm_models()`` remains re-exported here only for
-compatibility with existing imports; the canonical public bootstrap helper lives at
+compatibility with existing imports; the public bootstrap helper lives at
 ``litestar_auth.models.import_token_orm_models()``.
 """
 

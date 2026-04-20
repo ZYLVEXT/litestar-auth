@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from typing import Any, cast
+import importlib
+from typing import TYPE_CHECKING, Any, cast
 from uuid import UUID
 
 import pytest
@@ -22,6 +23,20 @@ from tests.integration.test_orchestrator import (
 )
 
 pytestmark = pytest.mark.unit
+
+if TYPE_CHECKING:
+    from litestar_auth.config import OAuthProviderConfig
+
+
+def _oauth_provider(*, name: str, client: object) -> OAuthProviderConfig:
+    """Build an OAuthProviderConfig using the current runtime class.
+
+    Returns:
+        The current-runtime OAuthProviderConfig instance.
+    """
+    config_module = importlib.import_module("litestar_auth.config")
+    oauth_provider_config_type = cast("type[Any]", config_module.OAuthProviderConfig)
+    return oauth_provider_config_type(name=name, client=client)
 
 
 def _minimal_config() -> LitestarAuthConfig[ExampleUser, UUID]:
@@ -44,7 +59,7 @@ def test_oauth_redirect_localhost_fails_closed_in_production() -> None:
     """Production startup rejects plugin-owned localhost OAuth redirect origins."""
     config = _minimal_config()
     config.oauth_config = OAuthConfig(
-        oauth_providers=[("example", object())],
+        oauth_providers=[_oauth_provider(name="example", client=object())],
         oauth_token_encryption_key="YWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWE=",
         oauth_redirect_base_url="http://localhost/auth",
     )
@@ -58,7 +73,7 @@ def test_oauth_redirect_localhost_is_allowed_in_debug() -> None:
     """Debug mode preserves explicit localhost plugin OAuth recipes."""
     config = _minimal_config()
     config.oauth_config = OAuthConfig(
-        oauth_providers=[("example", object())],
+        oauth_providers=[_oauth_provider(name="example", client=object())],
         oauth_token_encryption_key="YWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWE=",
         oauth_redirect_base_url="http://localhost/auth",
     )

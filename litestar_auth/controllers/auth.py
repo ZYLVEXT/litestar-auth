@@ -6,11 +6,11 @@ import re
 from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import timedelta
-from typing import TYPE_CHECKING, Any, Protocol, cast
+from typing import TYPE_CHECKING, Any, Protocol, cast, runtime_checkable
 
 from litestar import Controller, Request, post
 from litestar.enums import MediaType
-from litestar.exceptions import ClientException, NotAuthorizedException
+from litestar.exceptions import ClientException
 from litestar.response import Response
 
 import litestar_auth._schema_fields as schema_fields
@@ -55,6 +55,7 @@ _LOGIN_USERNAME_MAX_LENGTH = 150
 _EMAIL_PATTERN = re.compile(schema_fields.EMAIL_PATTERN)
 
 
+@runtime_checkable
 class AuthControllerUserManagerProtocol[UP: UserProtocol[Any], ID](
     UserManagerProtocol[UP, ID],
     AccountStateValidatorProvider[UP],
@@ -146,8 +147,6 @@ async def _handle_auth_login[UP: UserProtocol[Any], ID](
 
     Raises:
         ClientException: On invalid credentials, invalid login payload, or failed account-state checks.
-        ConfigurationError: When TOTP is enabled but the authenticated user model does not implement
-            ``TotpUserProtocol`` (misconfiguration).
     """
     resolved_identifier = _resolve_login_identifier(data.identifier, ctx.login_identifier)
     user = await user_manager.authenticate(
@@ -180,10 +179,8 @@ async def _handle_auth_login[UP: UserProtocol[Any], ID](
         else None
     )
     if totp_login_flow is not None:
-        if not isinstance(user, TotpUserProtocol):
-            msg = "TOTP is configured but the authenticated user does not implement TOTP fields."
-            raise ConfigurationError(msg)
-        pending_token = await totp_login_flow.issue_pending_token(user)
+        totp_user = cast("TotpUserProtocol[Any]", user)
+        pending_token = await totp_login_flow.issue_pending_token(totp_user)
         if pending_token is not None:
             await ctx.login_reset(request)
             return Response(
@@ -215,14 +212,9 @@ async def _handle_auth_logout[UP: UserProtocol[Any], ID](
     Returns:
         Response from the configured backend transport.
 
-    Raises:
-        NotAuthorizedException: When no authenticated user is present on the request.
     """
-    user: UP | None = request.user
-    if user is None:
-        msg = "Authentication credentials were not provided."
-        raise NotAuthorizedException(detail=msg)
-
+    # Litestar does not narrow ``Request.user`` to ``UP``; this handler is mounted behind ``is_authenticated``.
+    user = cast("UP", request.user)
     response = await ctx.backend.terminate_session(request, user)
     cookie_transport = ctx.backend.transport if isinstance(ctx.backend.transport, CookieTransport) else None
     if ctx.refresh_strategy is not None and cookie_transport is not None:
@@ -306,7 +298,7 @@ def _define_auth_controller_class_di[UP: UserProtocol[Any], ID](
             self,
             request: Request[Any, Any, Any],
             data: LoginCredentials,
-            litestar_auth_user_manager: Any,  # noqa: ANN401
+            litestar_auth_user_manager: AuthControllerUserManagerProtocol[Any, Any],
         ) -> object:
             del self
             return await _handle_auth_login(
@@ -354,7 +346,7 @@ def _define_refresh_auth_controller_class_di[UP: UserProtocol[Any], ID](
             self,
             request: Request[Any, Any, Any],
             data: RefreshTokenRequest,
-            litestar_auth_user_manager: Any,  # noqa: ANN401
+            litestar_auth_user_manager: AuthControllerUserManagerProtocol[Any, Any],
         ) -> Response[Any]:
             del self
             return await _handle_auth_refresh(
@@ -400,7 +392,7 @@ def create_auth_controller[UP: UserProtocol[Any], ID](  # noqa: PLR0913
             Must match the value passed to ``create_totp_controller``.
         totp_pending_lifetime: Maximum age of the intermediate pending token.
         path: Base route prefix for the generated controller.
-        unsafe_testing: Explicit test-only escape hatch that skips production
+        unsafe_testing: Explicit test-only override that skips production
             validation for short-lived single-process fixtures.
         security: Optional OpenAPI security requirements to annotate
             guarded routes on the generated controller.

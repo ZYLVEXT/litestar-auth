@@ -121,118 +121,67 @@ class StartupBackendTemplate[UP: UserProtocol[Any], ID]:
 
 
 @dataclass(frozen=True, slots=True)
-class _BackendSlot[UP: UserProtocol[Any], ID]:
-    """Stable index-and-name metadata shared across startup and request backend flows."""
-
-    index: int
-    name: str
-
-    def resolve_request_backend(
-        self,
-        request_backends: object,
-    ) -> AuthenticationBackend[UP, ID]:
-        """Return the request-scoped backend matching this startup slot.
-
-        Raises:
-            RuntimeError: If the request-time backend inventory diverges from plugin startup.
-        """
-        backends = cast("Sequence[AuthenticationBackend[UP, ID]]", request_backends)
-        if len(backends) <= self.index:
-            msg = (
-                "litestar_auth_backends did not provide the backend sequence expected by the plugin. "
-                f"Missing backend index {self.index} for {self.name!r}."
-            )
-            raise RuntimeError(msg)
-
-        backend = backends[self.index]
-        if backend.name != self.name:
-            msg = (
-                "litestar_auth_backends no longer matches the plugin startup backend order. "
-                f"Expected backend {self.name!r} at index {self.index}, got {backend.name!r}."
-            )
-            raise RuntimeError(msg)
-        return backend
-
-
-@dataclass(frozen=True, slots=True)
-class _StartupBackendInventoryEntry[UP: UserProtocol[Any], ID]:
-    """One startup backend plus the slot metadata used to resolve runtime backends."""
-
-    startup_backend: StartupBackendTemplate[UP, ID]
-    slot: _BackendSlot[UP, ID]
-
-    @property
-    def index(self) -> int:
-        """Return the startup-order index for this backend."""
-        return self.slot.index
-
-    @property
-    def name(self) -> str:
-        """Return the backend name preserved across startup and request inventories."""
-        return self.slot.name
-
-    def bind_runtime_backend(self, session: AsyncSession) -> AuthenticationBackend[UP, ID]:
-        """Materialize the request-scoped backend for ``session``.
-
-        Returns:
-            Runtime authentication backend rebound to ``session``.
-        """
-        return self.startup_backend.bind_runtime_backend(session)
-
-
-@dataclass(frozen=True, slots=True)
-class _StartupBackendInventory[UP: UserProtocol[Any], ID]:
+class StartupBackendInventory[UP: UserProtocol[Any], ID]:
     """Central startup inventory reused by plugin assembly and request binding."""
 
-    entries: tuple[_StartupBackendInventoryEntry[UP, ID], ...]
-
-    @classmethod
-    def from_startup_backends(
-        cls,
-        startup_backends: tuple[StartupBackendTemplate[UP, ID], ...],
-    ) -> _StartupBackendInventory[UP, ID]:
-        """Build a centralized inventory from startup-only backend templates.
-
-        Returns:
-            Startup inventory with stable per-backend slot metadata.
-        """
-        return cls(
-            entries=tuple(
-                _StartupBackendInventoryEntry(
-                    startup_backend=backend,
-                    slot=_BackendSlot(index=index, name=backend.name),
-                )
-                for index, backend in enumerate(startup_backends)
-            ),
-        )
+    startup_backend_templates: tuple[StartupBackendTemplate[UP, ID], ...]
 
     def startup_backends(self) -> tuple[StartupBackendTemplate[UP, ID], ...]:
         """Return the startup-only backend templates in configured order."""
-        return tuple(entry.startup_backend for entry in self.entries)
+        return self.startup_backend_templates
 
     def bind_request_backends(self, session: AsyncSession) -> tuple[AuthenticationBackend[UP, ID], ...]:
         """Return request-scoped runtime backends aligned with the startup inventory."""
-        return tuple(entry.bind_runtime_backend(session) for entry in self.entries)
+        return tuple(backend.bind_runtime_backend(session) for backend in self.startup_backend_templates)
 
-    def primary(self) -> _StartupBackendInventoryEntry[UP, ID]:
-        """Return the primary startup backend entry."""
-        return self.entries[0]
+    def primary(self) -> tuple[int, StartupBackendTemplate[UP, ID]]:
+        """Return the primary startup backend and its startup-order index."""
+        return 0, self.startup_backend_templates[0]
 
-    def resolve_named(self, backend_name: str) -> _StartupBackendInventoryEntry[UP, ID]:
-        """Return the startup backend entry matching ``backend_name``.
+    def resolve_named(self, backend_name: str) -> tuple[int, StartupBackendTemplate[UP, ID]]:
+        """Return the startup backend matching ``backend_name`` plus its index.
 
         Raises:
             ValueError: If ``backend_name`` is not part of the startup inventory.
         """
-        for entry in self.entries:
-            if entry.name == backend_name:
-                return entry
+        for index, backend in enumerate(self.startup_backend_templates):
+            if backend.name == backend_name:
+                return index, backend
 
         msg = f"Unknown TOTP backend: {backend_name}"
         raise ValueError(msg)
 
-    def resolve_totp(self, *, backend_name: str | None) -> _StartupBackendInventoryEntry[UP, ID]:
-        """Return the TOTP startup backend entry, defaulting to the primary backend."""
+    def resolve_request_backend(
+        self,
+        request_backends: object,
+        *,
+        backend_index: int,
+    ) -> AuthenticationBackend[UP, ID]:
+        """Return the request-scoped backend matching ``backend_index`` from startup.
+
+        Raises:
+            RuntimeError: If the request-time backend inventory diverges from plugin startup.
+        """
+        expected_backend = self.startup_backend_templates[backend_index]
+        backends = cast("Sequence[AuthenticationBackend[UP, ID]]", request_backends)
+        if len(backends) <= backend_index:
+            msg = (
+                "litestar_auth_backends did not provide the backend sequence expected by the plugin. "
+                f"Missing backend index {backend_index} for {expected_backend.name!r}."
+            )
+            raise RuntimeError(msg)
+
+        backend = backends[backend_index]
+        if backend.name != expected_backend.name:
+            msg = (
+                "litestar_auth_backends no longer matches the plugin startup backend order. "
+                f"Expected backend {expected_backend.name!r} at index {backend_index}, got {backend.name!r}."
+            )
+            raise RuntimeError(msg)
+        return backend
+
+    def resolve_totp(self, *, backend_name: str | None) -> tuple[int, StartupBackendTemplate[UP, ID]]:
+        """Return the TOTP startup backend, defaulting to the primary backend."""
         if backend_name is None:
             return self.primary()
         return self.resolve_named(backend_name)
@@ -337,7 +286,7 @@ class OAuthConfig:
     """OAuth-specific plugin settings."""
 
     oauth_cookie_secure: bool = True
-    oauth_providers: Sequence[OAuthProviderConfig | tuple[str, object]] | None = None
+    oauth_providers: Sequence[OAuthProviderConfig] | None = None
     oauth_provider_scopes: Mapping[str, Sequence[str]] = field(default_factory=dict)
     oauth_associate_by_email: bool = False
     oauth_trust_provider_email_verified: bool = False
@@ -362,10 +311,10 @@ class UserManagerFactory[UP: UserProtocol[Any], ID](Protocol):
     Implementations receive ``backends`` session-bound to the current request; pass them
     through to ``BaseUserManager`` (or equivalent) so credential changes revoke persisted
     sessions consistently. Plugin validation remains authoritative for the
-    ``user_manager_security`` surface; if a custom factory constructs ``BaseUserManager`` with
-    that same verification/reset/TOTP secret bundle, manager construction suppresses the
-    duplicate warning. Factories that diverge from the validated config-owned secret surface
-    still surface the manager-owned warning for the secrets they actually wire.
+    ``user_manager_security`` surface. Plugin-managed paths pass ``skip_reuse_warning=True``
+    after validation has already emitted the reused-secret warning for the same config-owned
+    baseline. Factories that diverge from that baseline can ignore the flag and still surface
+    the manager-owned warning for the secrets they actually wire.
     """
 
     def __call__(
@@ -375,12 +324,13 @@ class UserManagerFactory[UP: UserProtocol[Any], ID](Protocol):
         user_db: BaseUserStore[UP, ID],
         config: LitestarAuthConfig[UP, ID],
         backends: tuple[object, ...] = (),
+        skip_reuse_warning: bool = False,
     ) -> BaseUserManager[UP, ID]: ...  # pragma: no cover
 
 
 @dataclass(slots=True)
 class DatabaseTokenAuthConfig:
-    """Canonical DB bearer preset settings owned by ``LitestarAuthConfig``."""
+    """DB-token bearer preset settings owned by ``LitestarAuthConfig``."""
 
     token_hash_secret: str
     backend_name: str = DEFAULT_DATABASE_TOKEN_BACKEND_NAME
@@ -399,12 +349,12 @@ class LitestarAuthConfig[UP: UserProtocol[Any], ID]:
 
     User Manager Customization:
         Request-scoped :class:`~litestar_auth.manager.BaseUserManager` instances are built
-        either by the plugin's default constructor path or by a factory you provide. Use
-        :meth:`with_default_manager` when a ``BaseUserManager`` subclass accepts the
-        canonical builder surface, including ``user_manager_security`` for secrets,
-        password helpers, validators, and ID parsing. Use
-        :meth:`with_custom_manager_factory` when the manager constructor needs custom
-        dependencies, a non-canonical signature, or caller-owned construction.
+        either by the plugin's default constructor path or by a factory you provide.
+        Set ``user_manager_class`` when a ``BaseUserManager`` subclass accepts the
+        default builder surface, including ``user_manager_security`` for secrets,
+        password helpers, validators, and ID parsing. Set
+        ``user_manager_factory`` when the manager constructor needs custom
+        dependencies, a custom signature, or caller-owned construction.
 
     Core:
         ``user_model``, ``user_manager_class``, ``backends``, ``database_token_auth``,
@@ -437,8 +387,8 @@ class LitestarAuthConfig[UP: UserProtocol[Any], ID]:
 
     user_model: type[UP]
     # Default path: concrete BaseUserManager subclass constructed by the plugin with the
-    # canonical keyword-only surface (see "User Manager Customization" above).
-    user_manager_class: type[BaseUserManager[UP, ID]]
+    # default keyword-only surface (see "User Manager Customization" above).
+    user_manager_class: type[BaseUserManager[UP, ID]] | None = None
     backends: Sequence[AuthenticationBackend[UP, ID]] = field(default_factory=tuple)
     database_token_auth: DatabaseTokenAuthConfig | None = None
     session_maker: SessionFactory | None = None
@@ -446,7 +396,7 @@ class LitestarAuthConfig[UP: UserProtocol[Any], ID]:
     user_manager_security: UserManagerSecurity[ID] | None = None
     password_validator_factory: PasswordValidatorFactory[UP, ID] | None = None
     # Advanced path: callable that fully constructs the manager per request. Use when the
-    # constructor is not the canonical BaseUserManager surface or you need custom DI.
+    # constructor is not the default BaseUserManager surface or you need custom DI.
     user_manager_factory: UserManagerFactory[UP, ID] | None = None
     rate_limit_config: AuthRateLimitConfig | None = None
     exception_response_hook: ExceptionResponseHook | None = None
@@ -483,299 +433,20 @@ class LitestarAuthConfig[UP: UserProtocol[Any], ID]:
         compare=False,
     )
 
-    @classmethod
-    def create[ConfigUP: UserProtocol[Any], ConfigID](  # noqa: PLR0913
-        cls,
-        *,
-        user_model: type[ConfigUP],
-        user_manager_class: type[BaseUserManager[ConfigUP, ConfigID]],
-        backends: Sequence[AuthenticationBackend[ConfigUP, ConfigID]] = (),
-        database_token_auth: DatabaseTokenAuthConfig | None = None,
-        session_maker: SessionFactory | None = None,
-        user_db_factory: UserDatabaseFactory[ConfigUP, ConfigID] | None = None,
-        user_manager_security: UserManagerSecurity[ConfigID] | None = None,
-        password_validator_factory: PasswordValidatorFactory[ConfigUP, ConfigID] | None = None,
-        user_manager_factory: UserManagerFactory[ConfigUP, ConfigID] | None = None,
-        rate_limit_config: AuthRateLimitConfig | None = None,
-        exception_response_hook: ExceptionResponseHook | None = None,
-        middleware_hook: MiddlewareHook | None = None,
-        controller_hook: ControllerHook | None = None,
-        auth_path: str = "/auth",
-        users_path: str = "/users",
-        include_register: bool = True,
-        include_verify: bool = True,
-        include_reset_password: bool = True,
-        include_users: bool = False,
-        include_openapi_security: bool = True,
-        enable_refresh: bool = False,
-        requires_verification: bool = False,
-        hard_delete: bool = False,
-        totp_config: TotpConfig | None = None,
-        oauth_config: OAuthConfig | None = None,
-        csrf_secret: str | None = None,
-        csrf_header_name: str = "X-CSRF-Token",
-        unsafe_testing: bool = False,
-        allow_legacy_plaintext_tokens: bool = False,
-        allow_nondurable_jwt_revocation: bool = False,
-        id_parser: Callable[[str], ConfigID] | None = None,
-        user_read_schema: type[msgspec.Struct] | None = None,
-        user_create_schema: type[msgspec.Struct] | None = None,
-        user_update_schema: type[msgspec.Struct] | None = None,
-        db_session_dependency_key: DbSessionDependencyKey = DEFAULT_DB_SESSION_DEPENDENCY_KEY,
-        db_session_dependency_provided_externally: bool = False,
-        login_identifier: LoginIdentifier = "email",
-    ) -> LitestarAuthConfig[ConfigUP, ConfigID]:
-        """Build a config while allowing type checkers to infer ``UP`` and ``ID``.
+    def resolve_backends(
+        self,
+        session: AsyncSession,
+    ) -> tuple[AuthenticationBackend[UP, ID], ...]:
+        """Return authentication backends bound to the current request session.
+
+        This is the runtime backend accessor for every supported backend
+        configuration. Use :meth:`resolve_startup_backends` only for plugin setup,
+        validation, OpenAPI registration, and route assembly.
 
         Returns:
-            A ``LitestarAuthConfig`` parameterized from ``user_model`` and ``user_manager_class``.
+            Request-scoped backends aligned with the provided SQLAlchemy session.
         """
-        return LitestarAuthConfig(
-            user_model=user_model,
-            user_manager_class=user_manager_class,
-            backends=backends,
-            database_token_auth=database_token_auth,
-            session_maker=session_maker,
-            user_db_factory=user_db_factory,
-            user_manager_security=user_manager_security,
-            password_validator_factory=password_validator_factory,
-            user_manager_factory=user_manager_factory,
-            rate_limit_config=rate_limit_config,
-            exception_response_hook=exception_response_hook,
-            middleware_hook=middleware_hook,
-            controller_hook=controller_hook,
-            auth_path=auth_path,
-            users_path=users_path,
-            include_register=include_register,
-            include_verify=include_verify,
-            include_reset_password=include_reset_password,
-            include_users=include_users,
-            include_openapi_security=include_openapi_security,
-            enable_refresh=enable_refresh,
-            requires_verification=requires_verification,
-            hard_delete=hard_delete,
-            totp_config=totp_config,
-            oauth_config=oauth_config,
-            csrf_secret=csrf_secret,
-            csrf_header_name=csrf_header_name,
-            unsafe_testing=unsafe_testing,
-            allow_legacy_plaintext_tokens=allow_legacy_plaintext_tokens,
-            allow_nondurable_jwt_revocation=allow_nondurable_jwt_revocation,
-            id_parser=id_parser,
-            user_read_schema=user_read_schema,
-            user_create_schema=user_create_schema,
-            user_update_schema=user_update_schema,
-            db_session_dependency_key=db_session_dependency_key,
-            db_session_dependency_provided_externally=db_session_dependency_provided_externally,
-            login_identifier=login_identifier,
-        )
-
-    @classmethod
-    def with_default_manager[ConfigUP: UserProtocol[Any], ConfigID](  # noqa: PLR0913
-        cls,
-        *,
-        user_model: type[ConfigUP],
-        user_manager_class: type[BaseUserManager[ConfigUP, ConfigID]],
-        user_manager_security: UserManagerSecurity[ConfigID] | None = None,
-        session_maker: SessionFactory | None = None,
-        backends: Sequence[AuthenticationBackend[ConfigUP, ConfigID]] = (),
-        database_token_auth: DatabaseTokenAuthConfig | None = None,
-        user_db_factory: UserDatabaseFactory[ConfigUP, ConfigID] | None = None,
-        password_validator_factory: PasswordValidatorFactory[ConfigUP, ConfigID] | None = None,
-        rate_limit_config: AuthRateLimitConfig | None = None,
-        exception_response_hook: ExceptionResponseHook | None = None,
-        middleware_hook: MiddlewareHook | None = None,
-        controller_hook: ControllerHook | None = None,
-        auth_path: str = "/auth",
-        users_path: str = "/users",
-        include_register: bool = True,
-        include_verify: bool = True,
-        include_reset_password: bool = True,
-        include_users: bool = False,
-        include_openapi_security: bool = True,
-        enable_refresh: bool = False,
-        requires_verification: bool = False,
-        hard_delete: bool = False,
-        totp_config: TotpConfig | None = None,
-        oauth_config: OAuthConfig | None = None,
-        csrf_secret: str | None = None,
-        csrf_header_name: str = "X-CSRF-Token",
-        unsafe_testing: bool = False,
-        allow_legacy_plaintext_tokens: bool = False,
-        allow_nondurable_jwt_revocation: bool = False,
-        id_parser: Callable[[str], ConfigID] | None = None,
-        user_read_schema: type[msgspec.Struct] | None = None,
-        user_create_schema: type[msgspec.Struct] | None = None,
-        user_update_schema: type[msgspec.Struct] | None = None,
-        db_session_dependency_key: DbSessionDependencyKey = DEFAULT_DB_SESSION_DEPENDENCY_KEY,
-        db_session_dependency_provided_externally: bool = False,
-        login_identifier: LoginIdentifier = "email",
-    ) -> LitestarAuthConfig[ConfigUP, ConfigID]:
-        """Build a config for the plugin-owned default user-manager path.
-
-        Returns:
-            A ``LitestarAuthConfig`` with ``user_manager_factory`` left unset.
-        """
-        return cls.create(
-            user_model=user_model,
-            user_manager_class=user_manager_class,
-            backends=backends,
-            database_token_auth=database_token_auth,
-            session_maker=session_maker,
-            user_db_factory=user_db_factory,
-            user_manager_security=user_manager_security,
-            password_validator_factory=password_validator_factory,
-            user_manager_factory=None,
-            rate_limit_config=rate_limit_config,
-            exception_response_hook=exception_response_hook,
-            middleware_hook=middleware_hook,
-            controller_hook=controller_hook,
-            auth_path=auth_path,
-            users_path=users_path,
-            include_register=include_register,
-            include_verify=include_verify,
-            include_reset_password=include_reset_password,
-            include_users=include_users,
-            include_openapi_security=include_openapi_security,
-            enable_refresh=enable_refresh,
-            requires_verification=requires_verification,
-            hard_delete=hard_delete,
-            totp_config=totp_config,
-            oauth_config=oauth_config,
-            csrf_secret=csrf_secret,
-            csrf_header_name=csrf_header_name,
-            unsafe_testing=unsafe_testing,
-            allow_legacy_plaintext_tokens=allow_legacy_plaintext_tokens,
-            allow_nondurable_jwt_revocation=allow_nondurable_jwt_revocation,
-            id_parser=id_parser,
-            user_read_schema=user_read_schema,
-            user_create_schema=user_create_schema,
-            user_update_schema=user_update_schema,
-            db_session_dependency_key=db_session_dependency_key,
-            db_session_dependency_provided_externally=db_session_dependency_provided_externally,
-            login_identifier=login_identifier,
-        )
-
-    @classmethod
-    def with_custom_manager_factory[ConfigUP: UserProtocol[Any], ConfigID](  # noqa: PLR0913
-        cls,
-        *,
-        user_model: type[ConfigUP],
-        user_manager_factory: UserManagerFactory[ConfigUP, ConfigID] | None,
-        backends: Sequence[AuthenticationBackend[ConfigUP, ConfigID]] = (),
-        database_token_auth: DatabaseTokenAuthConfig | None = None,
-        session_maker: SessionFactory | None = None,
-        user_db_factory: UserDatabaseFactory[ConfigUP, ConfigID] | None = None,
-        user_manager_security: UserManagerSecurity[ConfigID] | None = None,
-        password_validator_factory: PasswordValidatorFactory[ConfigUP, ConfigID] | None = None,
-        rate_limit_config: AuthRateLimitConfig | None = None,
-        exception_response_hook: ExceptionResponseHook | None = None,
-        middleware_hook: MiddlewareHook | None = None,
-        controller_hook: ControllerHook | None = None,
-        auth_path: str = "/auth",
-        users_path: str = "/users",
-        include_register: bool = True,
-        include_verify: bool = True,
-        include_reset_password: bool = True,
-        include_users: bool = False,
-        include_openapi_security: bool = True,
-        enable_refresh: bool = False,
-        requires_verification: bool = False,
-        hard_delete: bool = False,
-        totp_config: TotpConfig | None = None,
-        oauth_config: OAuthConfig | None = None,
-        csrf_secret: str | None = None,
-        csrf_header_name: str = "X-CSRF-Token",
-        unsafe_testing: bool = False,
-        allow_legacy_plaintext_tokens: bool = False,
-        allow_nondurable_jwt_revocation: bool = False,
-        id_parser: Callable[[str], ConfigID] | None = None,
-        user_read_schema: type[msgspec.Struct] | None = None,
-        user_create_schema: type[msgspec.Struct] | None = None,
-        user_update_schema: type[msgspec.Struct] | None = None,
-        db_session_dependency_key: DbSessionDependencyKey = DEFAULT_DB_SESSION_DEPENDENCY_KEY,
-        db_session_dependency_provided_externally: bool = False,
-        login_identifier: LoginIdentifier = "email",
-    ) -> LitestarAuthConfig[ConfigUP, ConfigID]:
-        """Build a config for the caller-owned user-manager factory path.
-
-        Returns:
-            A ``LitestarAuthConfig`` with ``user_manager_class`` left unset.
-
-        Raises:
-            ConfigurationError: When ``user_manager_factory`` is ``None`` or not callable.
-        """
-        if user_manager_factory is None or not callable(user_manager_factory):
-            msg = "with_custom_manager_factory() requires a callable user_manager_factory."
-            raise ConfigurationError(msg)
-
-        return LitestarAuthConfig(
-            user_model=user_model,
-            user_manager_class=cast("type[BaseUserManager[ConfigUP, ConfigID]]", None),
-            backends=backends,
-            database_token_auth=database_token_auth,
-            session_maker=session_maker,
-            user_db_factory=user_db_factory,
-            user_manager_security=user_manager_security,
-            password_validator_factory=password_validator_factory,
-            user_manager_factory=user_manager_factory,
-            rate_limit_config=rate_limit_config,
-            exception_response_hook=exception_response_hook,
-            middleware_hook=middleware_hook,
-            controller_hook=controller_hook,
-            auth_path=auth_path,
-            users_path=users_path,
-            include_register=include_register,
-            include_verify=include_verify,
-            include_reset_password=include_reset_password,
-            include_users=include_users,
-            include_openapi_security=include_openapi_security,
-            enable_refresh=enable_refresh,
-            requires_verification=requires_verification,
-            hard_delete=hard_delete,
-            totp_config=totp_config,
-            oauth_config=oauth_config,
-            csrf_secret=csrf_secret,
-            csrf_header_name=csrf_header_name,
-            unsafe_testing=unsafe_testing,
-            allow_legacy_plaintext_tokens=allow_legacy_plaintext_tokens,
-            allow_nondurable_jwt_revocation=allow_nondurable_jwt_revocation,
-            id_parser=id_parser,
-            user_read_schema=user_read_schema,
-            user_create_schema=user_create_schema,
-            user_update_schema=user_update_schema,
-            db_session_dependency_key=db_session_dependency_key,
-            db_session_dependency_provided_externally=db_session_dependency_provided_externally,
-            login_identifier=login_identifier,
-        )
-
-    def resolve_backends(self) -> Sequence[AuthenticationBackend[UP, ID]]:
-        """Return the explicitly configured manual backends for this config.
-
-        This accessor is intentionally limited to the manual ``backends=...`` surface.
-        The canonical ``database_token_auth=...`` preset now exposes an explicit
-        startup-vs-request split:
-        - :meth:`resolve_startup_backends` for plugin setup and validation.
-        - :meth:`resolve_request_backends` for request-scoped runtime backends.
-
-        Returns:
-            The explicit manual ``backends`` sequence.
-
-        Raises:
-            ValueError: If both ``backends`` and ``database_token_auth`` are configured, or if
-                callers attempt to use this manual-backend accessor with
-                ``database_token_auth=...``.
-        """
-        self._validate_backend_configuration()
-        if self.database_token_auth is not None:
-            msg = (
-                "resolve_backends() only returns explicit backends=... entries. "
-                "Use resolve_startup_backends() during plugin setup or "
-                "resolve_request_backends(session) for request-scoped backend instances when "
-                "database_token_auth is configured."
-            )
-            raise ValueError(msg)
-        return self.backends
+        return resolve_backend_inventory(self).bind_request_backends(session)
 
     def resolve_startup_backends(self) -> tuple[StartupBackendTemplate[UP, ID], ...]:
         """Return startup-only backends for plugin setup, validation, and route assembly.
@@ -812,17 +483,6 @@ class LitestarAuthConfig[UP: UserProtocol[Any], ID]:
         from litestar_auth._plugin.openapi import build_security_requirement  # noqa: PLC0415
 
         return build_security_requirement(self.resolve_openapi_security_schemes())
-
-    def resolve_request_backends(
-        self,
-        session: AsyncSession,
-    ) -> tuple[AuthenticationBackend[UP, ID], ...]:
-        """Return authentication backends bound to the current request session.
-
-        Returns:
-            Request-scoped backends aligned with the provided SQLAlchemy session.
-        """
-        return resolve_backend_inventory(self).bind_request_backends(session)
 
     def resolve_password_helper(self) -> PasswordHelper:
         """Return the helper aligned with this config, memoizing default construction.
@@ -866,9 +526,12 @@ class LitestarAuthConfig[UP: UserProtocol[Any], ID]:
         if self.user_manager_class is not None and self.user_manager_factory is not None:
             msg = (
                 "user_manager_class and user_manager_factory are mutually exclusive. "
-                "Use LitestarAuthConfig.with_default_manager() for the default manager path or "
-                "LitestarAuthConfig.with_custom_manager_factory() for a custom factory."
+                "Set user_manager_class for the default manager path or "
+                "user_manager_factory for a custom factory."
             )
+            raise ConfigurationError(msg)
+        if self.user_manager_factory is not None and not callable(self.user_manager_factory):
+            msg = "user_manager_factory must be callable when provided."
             raise ConfigurationError(msg)
         if self.user_manager_security is not None and self.id_parser is None:
             self.id_parser = self.user_manager_security.id_parser
@@ -962,7 +625,7 @@ def __getattr__(name: str) -> Any:  # noqa: ANN401
 
 def resolve_backend_inventory[UP: UserProtocol[Any], ID](
     config: LitestarAuthConfig[UP, ID],
-) -> _StartupBackendInventory[UP, ID]:
+) -> StartupBackendInventory[UP, ID]:
     """Return the centralized startup inventory for plugin assembly and request binding.
 
     Returns:
@@ -987,4 +650,4 @@ def resolve_backend_inventory[UP: UserProtocol[Any], ID](
         )
     else:
         startup_backends = tuple(StartupBackendTemplate.from_runtime_backend(backend) for backend in config.backends)
-    return _StartupBackendInventory.from_startup_backends(startup_backends)
+    return StartupBackendInventory(startup_backends)

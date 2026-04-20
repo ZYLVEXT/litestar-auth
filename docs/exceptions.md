@@ -31,8 +31,8 @@ Raised when an OAuth provider identity is already linked to a different local us
 | `existing_user_id` | `object` | Local user identifier that already owns that provider identity. |
 
 Notes:
-- `provider` and `account_id` must be non-empty strings.
-- `existing_user_id` is required and must not be `None`.
+- The constructor stores these context values as provided. If your application needs stricter
+  invariants, validate them at the raise site that owns the data.
 - The default message includes the three context values for operator-facing diagnostics.
 
 Example catch/log flow:
@@ -74,12 +74,14 @@ Raised when a create or update flow collides with an existing user identity.
 
 | Field | Type | Semantics |
 | ---- | ---- | --------- |
-| `identifier_type` | `"email" | "username" | None` | Duplicate field name when structured context is supplied. Legacy message-only construction leaves this as `None`. |
-| `identifier_value` | `str | None` | Conflicting value for `identifier_type` when structured context is supplied. Legacy message-only construction leaves this as `None`. |
+| `identifier` | `UserIdentifier | None` | Structured duplicate-identifier payload when supplied. |
+| `identifier_type` | `"email" | "username" | None` | Convenience mirror of `identifier.identifier_type`; message-only construction leaves this as `None`. |
+| `identifier_value` | `str | None` | Convenience mirror of `identifier.identifier_value`; message-only construction leaves this as `None`. |
 
 Notes:
-- Pass `identifier_type` and `identifier_value` together or omit both.
-- Structured construction rejects empty or whitespace-only identifier values.
+- Construct with `UserAlreadyExistsError(identifier=UserIdentifier(...))` or omit `identifier`.
+- `message`, `code`, and `identifier` are keyword-only.
+- Structured construction stores the supplied identifier context as-is.
 - The default message includes the identifier context when it is supplied.
 
 Example catch/log flow:
@@ -87,12 +89,17 @@ Example catch/log flow:
 ```python
 from logging import getLogger
 
-from litestar_auth.exceptions import UserAlreadyExistsError
+from litestar_auth.exceptions import UserAlreadyExistsError, UserIdentifier
 
 logger = getLogger(__name__)
 
 try:
-    await user_manager.create(create_user)
+    raise UserAlreadyExistsError(
+        identifier=UserIdentifier(
+            identifier_type="email",
+            identifier_value="admin@example.com",
+        ),
+    )
 except UserAlreadyExistsError as exc:
     logger.info(
         "Duplicate user identifier_type=%s identifier_value=%r",
@@ -135,6 +142,7 @@ Raised when password validation or verification fails.
 | `user_id` | `object | None` | Optional operator-only identifier for the user whose password check failed. |
 
 Notes:
+- `message`, `code`, and `user_id` are keyword-only.
 - `user_id` is intentionally not included in the default message.
 - Use this field for internal logging or security monitoring; do not echo it to untrusted clients unless you have explicitly decided to expose it.
 
@@ -177,7 +185,8 @@ Raised when an authenticated user fails a structured role requirement.
 | `require_all` | `bool` | `True` when every role in `required_roles` must be present; `False` when any one role is sufficient. |
 
 Notes:
-- Role names must be non-empty, non-whitespace strings.
+- The constructor stores the supplied role sets as-is; validate role-name invariants at the raise
+  site if your application requires them.
 - The default message includes both role sets and whether the check required all roles or any role.
 - The built-in role guards now raise this exception directly, and the bundled plugin exception wiring maps it to HTTP `403` with `code`, `required_roles`, `user_roles`, and `require_all` in the JSON body.
 
