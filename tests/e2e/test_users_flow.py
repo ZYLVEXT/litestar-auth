@@ -556,10 +556,10 @@ async def test_role_guards_and_request_user_roles_survive_relational_storage(
     assert stored_member.roles == ["admin", "billing"]
 
 
-async def test_role_guard_failures_return_structured_insufficient_roles_payload(
+async def test_role_guard_failures_return_sanitized_insufficient_roles_payload(
     client: tuple[AsyncTestClient[Litestar], Engine, PasswordHelper, dict[str, UUID]],
 ) -> None:
-    """Plugin-wired role guards return 403 payloads with structured role-denial context."""
+    """Plugin-wired role guards return sanitized 403 payloads by default."""
     test_client, _, _, _ = client
     member_headers = await _login_headers(
         test_client,
@@ -572,23 +572,11 @@ async def test_role_guard_failures_return_structured_insufficient_roles_payload(
 
     assert any_response.status_code == HTTP_FORBIDDEN
     assert any_response.json() == {
-        "detail": (
-            "The authenticated user does not have any of the required roles. "
-            "required_roles=['admin']; user_roles=['member']"
-        ),
+        "detail": "The authenticated user does not have any of the required roles.",
         "code": "INSUFFICIENT_ROLES",
-        "required_roles": ["admin"],
-        "user_roles": ["member"],
-        "require_all": False,
     }
     assert all_response.status_code == HTTP_FORBIDDEN
     assert all_response.json() == {
-        "detail": (
-            "The authenticated user does not have all of the required roles. "
-            "required_roles=['admin', 'billing']; user_roles=['member']"
-        ),
+        "detail": "The authenticated user does not have all of the required roles.",
         "code": "INSUFFICIENT_ROLES",
-        "required_roles": ["admin", "billing"],
-        "user_roles": ["member"],
-        "require_all": True,
     }

@@ -49,24 +49,12 @@ def test_user_already_exists_error_context_contract() -> None:
 @pytest.mark.parametrize(
     ("require_all", "expected_message"),
     [
-        (
-            False,
-            (
-                "The authenticated user does not have any of the required roles. "
-                "required_roles=['admin', 'billing']; user_roles=['viewer']"
-            ),
-        ),
-        (
-            True,
-            (
-                "The authenticated user does not have all of the required roles. "
-                "required_roles=['admin', 'billing']; user_roles=['viewer']"
-            ),
-        ),
+        (False, "The authenticated user does not have any of the required roles."),
+        (True, "The authenticated user does not have all of the required roles."),
     ],
 )
 def test_insufficient_roles_error_context_contract(*, require_all: bool, expected_message: str) -> None:
-    """Role-denial errors expose structured role context and include it in the generated message."""
+    """Role-denial errors keep structured role context off the generated message."""
     error = InsufficientRolesError(
         required_roles=frozenset({"admin", "billing"}),
         user_roles=frozenset({"viewer"}),
@@ -120,7 +108,4 @@ def test_insufficient_roles_error_preserves_role_names_without_runtime_validatio
     assert error.required_roles == frozenset({"admin", ""})
     assert error.user_roles == frozenset({" \t "})
     assert error.require_all is False
-    assert str(error) == (
-        "The authenticated user does not have any of the required roles. "
-        "required_roles=['', 'admin']; user_roles=[' \\t ']"
-    )
+    assert str(error) == "The authenticated user does not have any of the required roles."

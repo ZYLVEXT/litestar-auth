@@ -110,11 +110,10 @@ class InsufficientRolesError(AuthorizationError):
         self.user_roles = user_roles
         self.require_all = require_all
         required_role_phrase = "all of the required roles" if require_all else "any of the required roles"
-        resolved_message = (
-            message
-            or f"The authenticated user does not have {required_role_phrase}. "
-            f"required_roles={sorted(self.required_roles)!r}; user_roles={sorted(self.user_roles)!r}"
-        )
+        # Security: keep structured role context on the exception instance for
+        # operators and custom hooks, but do not leak role names in the
+        # default human-readable message.
+        resolved_message = message or f"The authenticated user does not have {required_role_phrase}."
         super().__init__(message=resolved_message, code=code)
 
 

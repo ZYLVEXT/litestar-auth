@@ -187,8 +187,12 @@ Raised when an authenticated user fails a structured role requirement.
 Notes:
 - The constructor stores the supplied role sets as-is; validate role-name invariants at the raise
   site if your application requires them.
-- The default message includes both role sets and whether the check required all roles or any role.
-- The built-in role guards now raise this exception directly, and the bundled plugin exception wiring maps it to HTTP `403` with `code`, `required_roles`, `user_roles`, and `require_all` in the JSON body.
+- The default message is intentionally generic so ordinary logs and HTTP responses do not leak
+  internal role names.
+- The built-in role guards raise this exception directly, and the bundled plugin exception wiring
+  maps it to HTTP `403` with `code` only by default. Custom exception hooks can still inspect
+  `required_roles`, `user_roles`, and `require_all` on the exception instance when operator-facing
+  diagnostics need that detail.
 
 Example catch/log flow:
 
@@ -220,7 +224,7 @@ Example custom-handler response shape:
 ```json
 {
   "status_code": 403,
-  "detail": "The authenticated user does not have all of the required roles. required_roles=['admin', 'billing']; user_roles=['support']",
+  "detail": "The authenticated user does not have all of the required roles.",
   "extra": {
     "code": "INSUFFICIENT_ROLES"
   }

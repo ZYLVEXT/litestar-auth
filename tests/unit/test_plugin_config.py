@@ -785,6 +785,22 @@ def test_totp_config_defaults_match_expected_values() -> None:
     assert config.totp_enable_requires_password is True
 
 
+def test_secret_bearing_plugin_config_repr_masks_secret_values() -> None:
+    """Plugin config repr output omits live secrets from debug surfaces."""
+    totp_config = TotpConfig(totp_pending_secret="p" * 32)
+    oauth_config = OAuthConfig(oauth_token_encryption_key="k" * 44)
+    token_config = DatabaseTokenAuthConfig(token_hash_secret="t" * 40)
+    plugin_config = _minimal_config(totp_config=totp_config)
+    plugin_config.oauth_config = oauth_config
+    plugin_config.database_token_auth = token_config
+    plugin_config.csrf_secret = "c" * 32
+
+    assert "p" * 32 not in repr(totp_config)
+    assert "k" * 44 not in repr(oauth_config)
+    assert "t" * 40 not in repr(token_config)
+    assert "c" * 32 not in repr(plugin_config)
+
+
 def test_oauth_config_defaults_match_expected_values() -> None:
     """OAuthConfig exposes stable defaults for optional settings."""
     config = OAuthConfig()

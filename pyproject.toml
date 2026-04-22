@@ -146,7 +146,10 @@ pythonpath = ["."]
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "session"
 minversion = "9.0"
-addopts = "-ra -q --strict-markers"
+# Cap xdist auto scheduling to keep the async/ASGI-heavy suite stable on macOS.
+# The suite is clean at 8 workers and below, but `-n auto` on 12 logical CPUs
+# reproducibly triggers unraisable socket/event-loop teardown warnings.
+addopts = "-ra -q --strict-markers --maxprocesses=8"
 filterwarnings = [
     "error",
     "error:::litestar_auth",

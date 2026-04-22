@@ -195,10 +195,7 @@ def test_exception_module_reload_preserves_default_message_and_code_contract(mon
     assert str(reloaded_invalid_password_error) == InvalidPasswordError.default_message
     assert reloaded_invalid_password_error.code == ErrorCode.LOGIN_BAD_CREDENTIALS
     assert reloaded_invalid_password_error.user_id == "user-123"
-    assert (
-        str(reloaded_role_error) == "The authenticated user does not have any of the required roles. "
-        "required_roles=['admin', 'billing']; user_roles=['viewer']"
-    )
+    assert str(reloaded_role_error) == "The authenticated user does not have any of the required roles."
     assert reloaded_role_error.code == ErrorCode.INSUFFICIENT_ROLES
     assert reloaded_role_error.required_roles == frozenset({"admin", "billing"})
     assert reloaded_role_error.user_roles == frozenset({"viewer"})
@@ -356,18 +353,15 @@ def test_oauth_account_already_linked_error_custom_message_and_code_override_def
     assert error.existing_user_id == "user-123"
 
 
-def test_insufficient_roles_error_exposes_context_and_default_message() -> None:
-    """Role-denial errors expose the required and actual role membership."""
+def test_insufficient_roles_error_exposes_context_and_generic_default_message() -> None:
+    """Role-denial errors keep structured context off the default message."""
     error = InsufficientRolesError(
         required_roles=frozenset({"admin", "billing"}),
         user_roles=frozenset({"viewer"}),
         require_all=False,
     )
 
-    assert (
-        str(error) == "The authenticated user does not have any of the required roles. "
-        "required_roles=['admin', 'billing']; user_roles=['viewer']"
-    )
+    assert str(error) == "The authenticated user does not have any of the required roles."
     assert error.code == ErrorCode.INSUFFICIENT_ROLES
     assert error.required_roles == frozenset({"admin", "billing"})
     assert error.user_roles == frozenset({"viewer"})
@@ -382,10 +376,7 @@ def test_insufficient_roles_error_require_all_message_uses_all_role_wording() ->
         require_all=True,
     )
 
-    assert (
-        str(error) == "The authenticated user does not have all of the required roles. "
-        "required_roles=['admin', 'billing']; user_roles=['admin']"
-    )
+    assert str(error) == "The authenticated user does not have all of the required roles."
     assert error.code == ErrorCode.INSUFFICIENT_ROLES
     assert error.require_all is True
 
@@ -399,15 +390,12 @@ def test_insufficient_roles_error_none_code_argument_uses_default_code() -> None
         code=None,
     )
 
-    assert str(error) == (
-        "The authenticated user does not have any of the required roles. "
-        "required_roles=['admin']; user_roles=['viewer']"
-    )
+    assert str(error) == "The authenticated user does not have any of the required roles."
     assert error.code == ErrorCode.INSUFFICIENT_ROLES
 
 
 def test_insufficient_roles_error_preserves_blank_role_names_without_runtime_validation() -> None:
-    """Role-denial errors store role context as provided instead of raising ``ValueError``."""
+    """Role-denial errors store role context as provided without echoing it in messages."""
     error = InsufficientRolesError(
         required_roles=frozenset({"admin", ""}),
         user_roles=frozenset({" \n ", "viewer"}),
@@ -417,10 +405,7 @@ def test_insufficient_roles_error_preserves_blank_role_names_without_runtime_val
     assert error.required_roles == frozenset({"admin", ""})
     assert error.user_roles == frozenset({" \n ", "viewer"})
     assert error.require_all is False
-    assert str(error) == (
-        "The authenticated user does not have any of the required roles. "
-        "required_roles=['', 'admin']; user_roles=[' \\n ', 'viewer']"
-    )
+    assert str(error) == "The authenticated user does not have any of the required roles."
 
 
 def test_insufficient_roles_error_custom_message_and_code_override_defaults() -> None:

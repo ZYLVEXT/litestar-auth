@@ -19,7 +19,7 @@ to the bundled `Role` / `UserRole` models or a custom `UserRoleRelationshipMixin
 `RoleMixin` / `UserRoleAssociationMixin` family. Keep `user.roles: Sequence[str]` as the boundary
 seen by DTOs, managers, and guards even when storage becomes relational.
 
-This redesign preserves the existing flat role guards and payloads. It does not add permission
+This redesign preserves the existing flat role guards and structured role exception context. It does not add permission
 matrices or a policy DSL. The core plugin-owned auth/users controllers still do not auto-mount
 role catalog or user-assignment endpoints. Operator-driven role administration lives on the
 plugin-owned [`litestar roles`](roles_cli.md) CLI surface, and applications that want an HTTP

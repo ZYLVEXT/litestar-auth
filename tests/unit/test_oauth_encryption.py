@@ -175,6 +175,17 @@ def test_oauth_token_encryption_repr_and_hash_exclude_backend() -> None:
     assert hash(policy) == hash(other)
 
 
+def test_oauth_token_encryption_repr_hides_configured_key() -> None:
+    """Configured encryption keys stay out of repr/str surfaces."""
+    key = _fernet_key_string()
+    policy = OAuthTokenEncryption(key=key)
+
+    rendered = repr(policy)
+
+    assert key not in rendered
+    assert "unsafe_testing=False" in rendered
+
+
 def test_oauth_token_encryption_is_frozen() -> None:
     """Frozen dataclass instances reject attribute assignment after construction."""
     policy = OAuthTokenEncryption(key=None)

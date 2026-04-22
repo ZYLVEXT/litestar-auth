@@ -162,10 +162,6 @@ def _authorization_error_content(exc: AuthorizationError) -> dict[str, object]:
         "detail": str(exc),
         "code": exc.code,
     }
-    if isinstance(exc, InsufficientRolesError):
-        content["required_roles"] = sorted(exc.required_roles)
-        content["user_roles"] = sorted(exc.user_roles)
-        content["require_all"] = exc.require_all
     return content
 
 

@@ -185,8 +185,8 @@ def test_authorization_error_handler_formats_base_authorization_error() -> None:
     assert response.media_type == MediaType.JSON
 
 
-def test_authorization_error_handler_includes_structured_role_context() -> None:
-    """Insufficient role responses include the normalized role context for clients."""
+def test_authorization_error_handler_omits_structured_role_context() -> None:
+    """Default insufficient-role responses keep role metadata off the wire."""
     exc = InsufficientRolesError(
         required_roles=frozenset({"admin", "billing"}),
         user_roles=frozenset({"support"}),
@@ -198,9 +198,6 @@ def test_authorization_error_handler_includes_structured_role_context() -> None:
     assert response.content == {
         "detail": str(exc),
         "code": ErrorCode.INSUFFICIENT_ROLES,
-        "required_roles": ["admin", "billing"],
-        "user_roles": ["support"],
-        "require_all": True,
     }
     assert response.status_code == HTTP_FORBIDDEN
 

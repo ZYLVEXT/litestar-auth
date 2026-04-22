@@ -115,7 +115,8 @@ class _RawFernetBackend(EncryptionBackend):
 class OAuthTokenEncryption:
     """Explicit OAuth token encryption policy for one session-bound persistence path."""
 
-    key: str | bytes | None = None
+    # Security: never expose the encryption key in repr/str output.
+    key: str | bytes | None = field(default=None, repr=False)
     unsafe_testing: bool = False
     _backend: _RawFernetBackend = field(init=False, repr=False, compare=False, hash=False)
 

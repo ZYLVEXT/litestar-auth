@@ -29,7 +29,7 @@ Exact JSON layout follows your Litestar exception handler configuration.
 | `LOGIN_USER_INACTIVE` | 403 | Account disabled. |
 | `LOGIN_USER_NOT_VERIFIED` | 403 | Verification required (`requires_verification` / flow). |
 | `AUTHORIZATION_DENIED` | 403 | Guard denied access. |
-| `INSUFFICIENT_ROLES` | 403 | Role-based guard denial with structured missing-role context. |
+| `INSUFFICIENT_ROLES` | 403 | Role-based guard denial. Structured role context stays on the exception object but is omitted from default HTTP responses. |
 | `ROLE_ALREADY_EXISTS` | 409 | Opt-in contrib role-admin create conflict. |
 | `ROLE_NOT_FOUND` | 404 | Opt-in contrib role-admin requested role missing. |
 | `ROLE_STILL_ASSIGNED` | 409 | Opt-in contrib role-admin delete refused while users still hold the role. |
