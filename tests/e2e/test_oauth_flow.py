@@ -181,7 +181,13 @@ class OAuthManagerProxy:
                 allow_privileged=allow_privileged,
             )
 
-    async def update(self, user_update: Mapping[str, Any], user: User) -> User:
+    async def update(
+        self,
+        user_update: Mapping[str, Any],
+        user: User,
+        *,
+        allow_privileged: bool = False,
+    ) -> User:
         """Update a user through the real manager.
 
         Returns:
@@ -196,7 +202,11 @@ class OAuthManagerProxy:
             )
             persistent_user = await user_db.get(user.id)
             assert persistent_user is not None
-            return await self._build_manager(session).update(user_update, persistent_user)
+            return await self._build_manager(session).update(
+                user_update,
+                persistent_user,
+                allow_privileged=allow_privileged,
+            )
 
     async def on_after_login(self, user: User) -> None:
         """Delegate post-login hooks to the real manager."""
@@ -468,9 +478,9 @@ async def create_local_user(
         )
         user = await manager.create({"email": email, "password": password})
         if not is_active:
-            user = await manager.update({"is_active": False}, user)
+            user = await manager.update({"is_active": False}, user, allow_privileged=True)
         if is_verified:
-            user = await manager.update({"is_verified": True}, user)
+            user = await manager.update({"is_verified": True}, user, allow_privileged=True)
         await session.commit()
         await session.refresh(user)
         session.expunge(user)

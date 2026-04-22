@@ -139,7 +139,7 @@ user_db = SQLAlchemyUserDatabase(
 )
 ```
 
-For ad-hoc ORM queries against `OAuthAccount`, bind the same policy to the session with `bind_oauth_token_encryption(session, OAuthTokenEncryption(...))` before loading encrypted token columns. In tests you can use `OAuthTokenEncryption(key=None)` as the explicit plaintext policy; production OAuth deployments should always supply a Fernet key.
+For ad-hoc ORM queries against `OAuthAccount`, bind the same policy to the session with `bind_oauth_token_encryption(session, OAuthTokenEncryption(...))` before loading encrypted token columns. In tests you can use `OAuthTokenEncryption(key=None)` as the explicit plaintext policy; production OAuth deployments should always supply a Fernet key. The mapper listeners keep temporary plaintext snapshots only for the duration of a write and now clear them again if the ORM transaction rolls back.
 
 ## Cookies
 

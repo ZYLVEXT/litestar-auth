@@ -17,6 +17,8 @@ MINIMUM_SECRET_LENGTH = 32
 # Shared password-length bounds for built-in validation and schema metadata.
 DEFAULT_MINIMUM_PASSWORD_LENGTH = 12
 MAX_PASSWORD_LENGTH = 128
+# Small validation margin for JWT time claims (`exp` / `nbf`) to absorb normal clock skew.
+JWT_TIME_CLAIM_LEEWAY_SECONDS = 30
 # Canonical JWT audiences shared across account, auth, and TOTP flows.
 VERIFY_TOKEN_AUDIENCE = "litestar-auth:verify"
 RESET_PASSWORD_TOKEN_AUDIENCE = "litestar-auth:reset-password"

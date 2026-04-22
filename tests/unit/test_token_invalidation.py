@@ -94,9 +94,10 @@ async def test_manager_update_invalidates_tokens_only_on_email_or_password_chang
     invalidate = AsyncMock()
     cast("object", manager).backends = [_Backend(strategy=_Strategy(invalidate_all_tokens=invalidate))]  # ty: ignore[unresolved-attribute]
 
-    # Non-credential update does not invalidate.
+    # Non-credential, non-privileged update does not invalidate.
     user_db.update.return_value = user
-    await manager.update(UserUpdate(is_active=False), user)
+    await manager.update({"bio": "updated"}, user)
+    user_db.update.assert_awaited_once_with(user, {"bio": "updated"})
     invalidate.assert_not_awaited()
 
     # Email change invalidates once.

@@ -52,7 +52,13 @@ class UsersControllerUserManagerProtocol[UP: UsersControllerUserProtocol[Any], I
     async def get(self, user_id: ID) -> UP | None:
         """Return a user by identifier."""
 
-    async def update(self, user_update: msgspec.Struct | Mapping[str, Any], user: UP) -> UP:
+    async def update(
+        self,
+        user_update: msgspec.Struct | Mapping[str, Any],
+        user: UP,
+        *,
+        allow_privileged: bool = False,
+    ) -> UP:
         """Update and return a user."""
 
     async def list_users(self, *, offset: int, limit: int) -> tuple[Sequence[UP], int]:
@@ -177,7 +183,7 @@ async def _users_handle_delete_user[UP: UsersControllerUserProtocol[Any], ID](
     if ctx.hard_delete:
         await user_manager.delete(user.id)
         return _to_user_schema(user, ctx.user_read_schema_type, unsafe_testing=ctx.unsafe_testing)
-    updated_user = await user_manager.update(UserUpdate(is_active=False), user)
+    updated_user = await user_manager.update(UserUpdate(is_active=False), user, allow_privileged=True)
     return _to_user_schema(updated_user, ctx.user_read_schema_type, unsafe_testing=ctx.unsafe_testing)
 
 
@@ -246,7 +252,7 @@ def _define_users_controller_class_di[UP: UsersControllerUserProtocol[Any], ID](
                     InvalidPasswordError: (400, ErrorCode.UPDATE_USER_INVALID_PASSWORD),
                 },
             ):
-                updated_user = await litestar_auth_user_manager.update(data, user)
+                updated_user = await litestar_auth_user_manager.update(data, user, allow_privileged=True)
             return _to_user_schema(updated_user, ctx.user_read_schema_type, unsafe_testing=ctx.unsafe_testing)
 
         @delete("/{user_id:str}", guards=[is_superuser], status_code=200)

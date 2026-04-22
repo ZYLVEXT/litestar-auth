@@ -73,6 +73,8 @@ manager construction used by the CLI and the rest of the auth stack.
 - Runs assign/unassign through `SQLAlchemyRoleAdmin.assign_user_roles()` and
   `.unassign_user_roles()`, which preserves `BaseUserManager.update(...)`
   lifecycle hooks instead of mutating relationship rows behind the manager.
+  Those contrib paths opt into `allow_privileged=True` explicitly because role
+  membership is part of the privileged manager surface.
 
 The HTTP reference for every route, status code, and role-admin `ErrorCode`
 mapping lives in [HTTP API](../http_api.md#contrib-role-administration-opt-in).

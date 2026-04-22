@@ -14,7 +14,8 @@ from typing import Any, cast, override
 
 from sqlalchemy import event
 from sqlalchemy import inspect as sa_inspect
-from sqlalchemy.orm import attributes, object_session
+from sqlalchemy.orm import Session, attributes, object_session
+from sqlalchemy.orm.exc import UnmappedInstanceError
 
 from litestar_auth.exceptions import ConfigurationError
 
@@ -28,6 +29,7 @@ from advanced_alchemy.types.encrypted_string import EncryptionBackend
 _OAUTH_TOKEN_ENCRYPTION_INFO_KEY = "litestar_auth_oauth_token_encryption"  # noqa: S105
 _OAUTH_TOKEN_ENCRYPTION_INSTANCE_KEY = "_litestar_auth_oauth_token_encryption"  # noqa: S105
 _OAUTH_TOKEN_ENCRYPTION_SNAPSHOT_KEY = "_litestar_auth_oauth_token_snapshot"  # noqa: S105
+_OAUTH_TOKEN_ENCRYPTION_TRACKED_TARGETS_KEY = "_litestar_auth_oauth_snapshot_targets"  # noqa: S105
 _OAUTH_TOKEN_FIELDS: tuple[str, str] = ("access_token", "refresh_token")
 
 
@@ -209,6 +211,14 @@ def register_oauth_model_encryption_events(model_base: type[Any]) -> None:
         if not event.contains(model_base, identifier, listener):
             event.listen(model_base, identifier, listener, propagate=True)
 
+    transaction_listeners: tuple[tuple[str, object], ...] = (
+        ("after_rollback", _restore_oauth_token_snapshots_after_rollback),
+        ("after_soft_rollback", _restore_oauth_token_snapshots_after_rollback),
+    )
+    for identifier, listener in transaction_listeners:
+        if not event.contains(Session, identifier, listener):
+            event.listen(Session, identifier, listener)
+
 
 def _iter_session_targets(session: object) -> tuple[object, ...]:
     """Return the concrete session objects that may carry encryption state."""
@@ -308,16 +318,100 @@ def _decrypt_refreshed_oauth_tokens(target: object, context: object, attrs: obje
     _decrypt_loaded_oauth_tokens(target, context, field_names=field_names)
 
 
+def _track_oauth_token_snapshot_target(target: object) -> None:
+    """Record a target with an in-flight plaintext snapshot on its current session."""
+    try:
+        session = object_session(target)
+    except UnmappedInstanceError:
+        return
+    if session is None:
+        return
+    tracked_targets = cast(
+        "list[object]",
+        session.info.setdefault(_OAUTH_TOKEN_ENCRYPTION_TRACKED_TARGETS_KEY, []),
+    )
+    if any(existing is target for existing in tracked_targets):
+        return
+    tracked_targets.append(target)
+
+
+def _untrack_oauth_token_snapshot_target(target: object) -> None:
+    """Remove a target from the session-local snapshot tracker."""
+    try:
+        session = object_session(target)
+    except UnmappedInstanceError:
+        return
+    if session is None:
+        return
+    tracked_targets = cast(
+        "list[object] | None",
+        session.info.get(_OAUTH_TOKEN_ENCRYPTION_TRACKED_TARGETS_KEY),
+    )
+    if not tracked_targets:
+        return
+    remaining_targets = [existing for existing in tracked_targets if existing is not target]
+    if remaining_targets:
+        session.info[_OAUTH_TOKEN_ENCRYPTION_TRACKED_TARGETS_KEY] = remaining_targets
+        return
+    session.info.pop(_OAUTH_TOKEN_ENCRYPTION_TRACKED_TARGETS_KEY, None)
+
+
+def _restore_oauth_token_snapshot(target: object) -> None:
+    """Restore plaintext OAuth token fields from the temporary write snapshot."""
+    snapshot = cast(
+        "dict[str, str | None] | None",
+        getattr(target, _OAUTH_TOKEN_ENCRYPTION_SNAPSHOT_KEY, None),
+    )
+    if snapshot is None:
+        _untrack_oauth_token_snapshot_target(target)
+        return
+    for field_name, value in snapshot.items():
+        attributes.set_committed_value(target, field_name, value)
+    delattr(target, _OAUTH_TOKEN_ENCRYPTION_SNAPSHOT_KEY)
+    _untrack_oauth_token_snapshot_target(target)
+
+
+def _snapshot_and_encrypt_oauth_tokens(
+    target: object,
+    *,
+    field_names: tuple[str, ...],
+    policy: OAuthTokenEncryption,
+) -> None:
+    """Encrypt selected token fields while preserving rollback-safe plaintext restoration."""
+    snapshot = {field_name: cast("str | None", getattr(target, field_name)) for field_name in field_names}
+    setattr(target, _OAUTH_TOKEN_ENCRYPTION_SNAPSHOT_KEY, snapshot)
+    _track_oauth_token_snapshot_target(target)
+    try:
+        for field_name, value in snapshot.items():
+            setattr(target, field_name, policy.encrypt(value))
+    except Exception:
+        _restore_oauth_token_snapshot(target)
+        raise
+
+
+def _restore_oauth_token_snapshots_after_rollback(session: object, *_args: object) -> None:
+    """Restore and clear any OAuth token snapshots left behind by an aborted flush."""
+    info = getattr(session, "info", None)
+    if not isinstance(info, dict):
+        return
+    tracked_targets = cast(
+        "list[object]",
+        info.pop(_OAUTH_TOKEN_ENCRYPTION_TRACKED_TARGETS_KEY, []),
+    )
+    seen_target_ids: set[int] = set()
+    for target in tracked_targets:
+        target_id = id(target)
+        if target_id in seen_target_ids:
+            continue
+        seen_target_ids.add(target_id)
+        _restore_oauth_token_snapshot(target)
+
+
 def _encrypt_oauth_tokens_before_insert(mapper: object, connection: object, target: object) -> None:
     """Encrypt OAuth token fields immediately before INSERT statements."""
     del mapper, connection
     policy = _require_instance_oauth_token_encryption(target)
-    snapshot: dict[str, str | None] = {}
-    for field_name in _OAUTH_TOKEN_FIELDS:
-        value = cast("str | None", getattr(target, field_name))
-        snapshot[field_name] = value
-        setattr(target, field_name, policy.encrypt(value))
-    setattr(target, _OAUTH_TOKEN_ENCRYPTION_SNAPSHOT_KEY, snapshot)
+    _snapshot_and_encrypt_oauth_tokens(target, field_names=_OAUTH_TOKEN_FIELDS, policy=policy)
 
 
 def _encrypt_oauth_tokens_before_update(mapper: object, connection: object, target: object) -> None:
@@ -330,23 +424,10 @@ def _encrypt_oauth_tokens_before_update(mapper: object, connection: object, targ
     if not changed_fields:
         return
     policy = _require_instance_oauth_token_encryption(target)
-    snapshot: dict[str, str | None] = {}
-    for field_name in changed_fields:
-        value = cast("str | None", getattr(target, field_name))
-        snapshot[field_name] = value
-        setattr(target, field_name, policy.encrypt(value))
-    setattr(target, _OAUTH_TOKEN_ENCRYPTION_SNAPSHOT_KEY, snapshot)
+    _snapshot_and_encrypt_oauth_tokens(target, field_names=changed_fields, policy=policy)
 
 
 def _restore_oauth_tokens_after_write(mapper: object, connection: object, target: object) -> None:
     """Restore plaintext OAuth token fields after a successful INSERT/UPDATE."""
     del mapper, connection
-    snapshot = cast(
-        "dict[str, str | None] | None",
-        getattr(target, _OAUTH_TOKEN_ENCRYPTION_SNAPSHOT_KEY, None),
-    )
-    if snapshot is None:
-        return
-    for field_name, value in snapshot.items():
-        attributes.set_committed_value(target, field_name, value)
-    delattr(target, _OAUTH_TOKEN_ENCRYPTION_SNAPSHOT_KEY)
+    _restore_oauth_token_snapshot(target)

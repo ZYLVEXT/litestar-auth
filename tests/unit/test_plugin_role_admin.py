@@ -772,13 +772,19 @@ async def test_sqlalchemy_role_admin_update_user_roles_uses_manager_lifecycle_pa
         hashed_password="hashed-password",
         roles=["member"],
     )
-    update_calls: list[tuple[User, Mapping[str, Any]]] = []
+    update_calls: list[tuple[User, Mapping[str, Any], bool]] = []
 
     class FakeManager:
         """Minimal manager stub capturing normalized update payloads."""
 
-        async def update(self, user_update: Mapping[str, Any], current_user: User) -> User:
-            update_calls.append((current_user, user_update))
+        async def update(
+            self,
+            user_update: Mapping[str, Any],
+            current_user: User,
+            *,
+            allow_privileged: bool = False,
+        ) -> User:
+            update_calls.append((current_user, user_update, allow_privileged))
             current_user.roles = user_update["roles"]
             return current_user
 
@@ -791,7 +797,7 @@ async def test_sqlalchemy_role_admin_update_user_roles_uses_manager_lifecycle_pa
     )
 
     assert updated_user.roles == ["admin", "billing"]
-    assert update_calls == [(user, {"roles": ["admin", "billing"]})]
+    assert update_calls == [(user, {"roles": ["admin", "billing"]}, True)]
 
 
 async def test_sqlalchemy_role_admin_unassign_user_roles_checks_role_catalog_when_requested(

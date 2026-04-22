@@ -502,17 +502,27 @@ class BaseUserManager[UP: UserProtocol[Any], ID](
             load_cryptography_fernet=_load_cryptography_fernet,
         )
 
-    async def update(self, user_update: msgspec.Struct | Mapping[str, Any], user: UP) -> UP:
+    async def update(
+        self,
+        user_update: msgspec.Struct | Mapping[str, Any],
+        user: UP,
+        *,
+        allow_privileged: bool = False,
+    ) -> UP:
         """Update mutable user fields, hashing passwords when provided.
 
         Fields with ``None`` values in *user_update* are treated as absent and
         will **not** overwrite existing data.  To explicitly clear a nullable
         field, use a dedicated method (e.g. ``set_totp_secret(user, None)``).
 
+        Privileged fields such as ``is_active``, ``is_verified``,
+        ``is_superuser``, and ``roles`` are rejected unless
+        ``allow_privileged=True`` is passed explicitly.
+
         Returns:
             The updated user, or the original user when there are no changes.
         """
-        return await self._user_lifecycle.update(user_update, user)
+        return await self._user_lifecycle.update(user_update, user, allow_privileged=allow_privileged)
 
     async def delete(self, user_id: ID) -> None:
         """Delete a user permanently and run the post-delete hook."""

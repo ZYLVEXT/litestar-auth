@@ -383,6 +383,59 @@ def test_jwt_strategy_decodes_verified_tokens_with_and_without_issuer() -> None:
     assert strategy_with_issuer._decode_verified_access_token(_make_token(payload=base_payload)) is None
 
 
+def test_jwt_strategy_applies_bounded_clock_skew_leeway() -> None:
+    """Verified token decoding tolerates small skew while still rejecting stale/future tokens."""
+    user = ExampleUser(id=uuid4())
+    now = datetime.now(tz=UTC)
+    strategy = JWTStrategy(secret=DEFAULT_SECRET)
+
+    slightly_expired = _make_token(
+        payload={
+            "sub": str(user.id),
+            "aud": JWT_ACCESS_TOKEN_AUDIENCE,
+            "iat": now - timedelta(seconds=15),
+            "nbf": now - timedelta(seconds=15),
+            "exp": now - timedelta(seconds=5),
+            "jti": "slightly-expired-jti",
+        },
+    )
+    slightly_early = _make_token(
+        payload={
+            "sub": str(user.id),
+            "aud": JWT_ACCESS_TOKEN_AUDIENCE,
+            "iat": now,
+            "nbf": now + timedelta(seconds=5),
+            "exp": now + timedelta(minutes=5),
+            "jti": "slightly-early-jti",
+        },
+    )
+    stale = _make_token(
+        payload={
+            "sub": str(user.id),
+            "aud": JWT_ACCESS_TOKEN_AUDIENCE,
+            "iat": now - timedelta(minutes=2),
+            "nbf": now - timedelta(minutes=2),
+            "exp": now - timedelta(seconds=45),
+            "jti": "stale-jti",
+        },
+    )
+    too_early = _make_token(
+        payload={
+            "sub": str(user.id),
+            "aud": JWT_ACCESS_TOKEN_AUDIENCE,
+            "iat": now,
+            "nbf": now + timedelta(seconds=45),
+            "exp": now + timedelta(minutes=5),
+            "jti": "too-early-jti",
+        },
+    )
+
+    assert strategy._decode_verified_access_token(slightly_expired) is not None
+    assert strategy._decode_verified_access_token(slightly_early) is not None
+    assert strategy._decode_verified_access_token(stale) is None
+    assert strategy._decode_verified_access_token(too_early) is None
+
+
 def test_jwt_strategy_decodes_invalid_token_as_none() -> None:
     """Invalid JWT payloads are rejected during verified decode."""
     strategy = JWTStrategy(secret=DEFAULT_SECRET)

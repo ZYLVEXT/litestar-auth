@@ -17,7 +17,7 @@ from jwt import ExpiredSignatureError, InvalidTokenError
 
 from litestar_auth._optional_deps import _require_redis_asyncio
 from litestar_auth.authentication.strategy.base import Strategy, UserManagerProtocol
-from litestar_auth.config import JWT_ACCESS_TOKEN_AUDIENCE, validate_secret_length
+from litestar_auth.config import JWT_ACCESS_TOKEN_AUDIENCE, JWT_TIME_CLAIM_LEEWAY_SECONDS, validate_secret_length
 from litestar_auth.exceptions import TokenError
 from litestar_auth.types import ID, UP
 
@@ -401,6 +401,7 @@ class JWTStrategy(Strategy[UP, ID]):
                     self.verify_key,
                     algorithms=[self.algorithm],
                     audience=JWT_ACCESS_TOKEN_AUDIENCE,
+                    leeway=JWT_TIME_CLAIM_LEEWAY_SECONDS,
                     options={"require": ["exp", "aud", "iat", "nbf", "jti"]},
                 )
             else:
@@ -410,6 +411,7 @@ class JWTStrategy(Strategy[UP, ID]):
                     algorithms=[self.algorithm],
                     audience=JWT_ACCESS_TOKEN_AUDIENCE,
                     issuer=self.issuer,
+                    leeway=JWT_TIME_CLAIM_LEEWAY_SECONDS,
                     options={"require": ["exp", "aud", "iat", "nbf", "jti"]},
                 )
         except (ExpiredSignatureError, InvalidTokenError):

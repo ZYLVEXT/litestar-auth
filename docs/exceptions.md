@@ -156,7 +156,7 @@ from litestar_auth.exceptions import InvalidPasswordError
 logger = getLogger(__name__)
 
 try:
-    await user_manager.update(user, update)
+    await user_manager.update(update, user)
 except InvalidPasswordError as exc:
     logger.warning("Password validation failed user_id=%s", exc.user_id)
     raise

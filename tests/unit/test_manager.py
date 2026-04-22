@@ -21,6 +21,7 @@ from litestar_auth._manager.user_lifecycle import PRIVILEGED_FIELDS
 from litestar_auth.authentication.strategy.base import TokenInvalidationCapable
 from litestar_auth.config import require_password_length
 from litestar_auth.exceptions import (
+    AuthorizationError,
     ConfigurationError,
     InactiveUserError,
     InvalidPasswordError,
@@ -1541,7 +1542,7 @@ async def test_update_email_change_resets_verification_and_requests_new_token() 
         id=user.id,
         email="updated@example.com",
         hashed_password=password_helper.hash("new-password"),
-        is_active=False,
+        is_active=True,
         is_verified=False,
         is_superuser=False,
     )
@@ -1552,7 +1553,7 @@ async def test_update_email_change_resets_verification_and_requests_new_token() 
         await manager.update(UserUpdate(email="taken@example.com"), user)
 
     result = await manager.update(
-        UserUpdate(email="updated@example.com", password="new-password", is_active=False, is_verified=True),
+        UserUpdate(email="updated@example.com", password="new-password"),
         user,
     )
 
@@ -1560,7 +1561,6 @@ async def test_update_email_change_resets_verification_and_requests_new_token() 
     user_db.update.assert_awaited_once()
     update_payload = user_db.update.await_args.args[1]
     assert update_payload["email"] == "updated@example.com"
-    assert update_payload["is_active"] is False
     assert update_payload["is_verified"] is False
     assert update_payload["hashed_password"] != "new-password"
     assert "password" not in update_payload
@@ -1593,7 +1593,7 @@ async def test_update_email_change_respects_reset_verification_flag() -> None:
 
 
 async def test_update_calls_on_after_update_with_correct_arguments() -> None:
-    """update() calls on_after_update with the updated user and the update dict."""
+    """Explicit privileged updates still call on_after_update with the applied payload."""
     user_db = AsyncMock()
     password_helper = PasswordHelper()
     manager = TrackingUserManager(user_db, password_helper)
@@ -1601,7 +1601,7 @@ async def test_update_calls_on_after_update_with_correct_arguments() -> None:
     updated_user = replace(user, is_active=False)
     user_db.update.return_value = updated_user
 
-    result = await manager.update(UserUpdate(is_active=False), user)
+    result = await manager.update(UserUpdate(is_active=False), user, allow_privileged=True)
 
     assert result is updated_user
     assert len(manager.after_update_events) == 1
@@ -1610,8 +1610,22 @@ async def test_update_calls_on_after_update_with_correct_arguments() -> None:
     assert event_dict == {"is_active": False}
 
 
+async def test_update_rejects_privileged_fields_without_explicit_opt_in() -> None:
+    """Privileged manager updates fail closed unless the caller opts in explicitly."""
+    user_db = AsyncMock()
+    password_helper = PasswordHelper()
+    manager = TrackingUserManager(user_db, password_helper)
+    user = _build_user(password_helper)
+
+    with pytest.raises(AuthorizationError, match="allow_privileged=True"):
+        await manager.update(UserUpdate(is_active=False), user)
+
+    user_db.update.assert_not_awaited()
+    assert manager.after_update_events == []
+
+
 async def test_update_normalizes_roles_from_mapping_payload() -> None:
-    """update() applies the shared normalized role contract for mapping inputs."""
+    """Explicit privileged mapping updates still normalize roles before persistence."""
     user_db = AsyncMock()
     password_helper = PasswordHelper()
     manager = TrackingUserManager(user_db, password_helper)
@@ -1619,7 +1633,11 @@ async def test_update_normalizes_roles_from_mapping_payload() -> None:
     updated_user = replace(user)
     user_db.update.return_value = updated_user
 
-    result = await manager.update({"roles": [" Support ", "admin", "ADMIN"]}, user)
+    result = await manager.update(
+        {"roles": [" Support ", "admin", "ADMIN"]},
+        user,
+        allow_privileged=True,
+    )
 
     assert result is updated_user
     user_db.update.assert_awaited_once_with(user, {"roles": ["admin", "support"]})
@@ -1627,7 +1645,7 @@ async def test_update_normalizes_roles_from_mapping_payload() -> None:
 
 
 async def test_update_normalizes_roles_from_builtin_update_schema() -> None:
-    """update() preserves the normalized ``list[str]`` role contract for built-in DTO payloads."""
+    """Explicit privileged DTO updates preserve the normalized ``list[str]`` role contract."""
     user_db = AsyncMock()
     password_helper = PasswordHelper()
     manager = TrackingUserManager(user_db, password_helper)
@@ -1635,7 +1653,11 @@ async def test_update_normalizes_roles_from_builtin_update_schema() -> None:
     updated_user = replace(user)
     user_db.update.return_value = updated_user
 
-    result = await manager.update(UserUpdate(roles=[" Support ", "admin", "ADMIN"]), user)
+    result = await manager.update(
+        UserUpdate(roles=[" Support ", "admin", "ADMIN"]),
+        user,
+        allow_privileged=True,
+    )
 
     assert result is updated_user
     user_db.update.assert_awaited_once_with(user, {"roles": ["admin", "support"]})

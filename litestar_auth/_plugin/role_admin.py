@@ -106,7 +106,13 @@ class RoleAdminUserNotFoundError(LookupError):
 class _RoleLifecycleManager[UP: UserProtocol[Any]](Protocol):
     """Manager surface required to preserve update-hook parity for CLI role work."""
 
-    async def update(self, user_update: Mapping[str, Any], user: UP) -> UP: ...  # pragma: no cover
+    async def update(
+        self,
+        user_update: Mapping[str, Any],
+        user: UP,
+        *,
+        allow_privileged: bool = False,
+    ) -> UP: ...  # pragma: no cover
 
 
 @dataclass(frozen=True, slots=True)
@@ -643,7 +649,7 @@ class SQLAlchemyRoleAdmin[UP: UserProtocol[Any]]:
             The updated user returned by the manager lifecycle.
         """
         normalized_roles = self.normalized_role_names(roles)
-        return await manager.update({"roles": normalized_roles}, user)
+        return await manager.update({"roles": normalized_roles}, user, allow_privileged=True)
 
     def _user_role_membership(self, user: UP) -> UserRoleMembership:
         """Return the normalized role snapshot for one configured user instance."""

@@ -9,7 +9,7 @@ from litestar_auth._manager._coercions import _as_dict, _managed_user, _require_
 from litestar_auth._manager._protocols import PasswordManagedUserManagerProtocol, UserManagerHooksProtocol
 from litestar_auth._manager.user_policy import UserPolicy
 from litestar_auth.authentication.strategy.base import TokenInvalidationCapable
-from litestar_auth.exceptions import UserAlreadyExistsError, UserIdentifier, UserNotExistsError
+from litestar_auth.exceptions import AuthorizationError, UserAlreadyExistsError, UserIdentifier, UserNotExistsError
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
@@ -148,11 +148,24 @@ class UserLifecycleService[UP, ID]:
         """Validate active and optionally verified account state."""
         UserPolicy.require_account_state(user, require_verified=require_verified)
 
-    async def update(self, user_update: msgspec.Struct | Mapping[str, Any], user: UP) -> UP:
+    async def update(
+        self,
+        user_update: msgspec.Struct | Mapping[str, Any],
+        user: UP,
+        *,
+        allow_privileged: bool = False,
+    ) -> UP:
         """Update mutable user fields while preserving facade semantics."""
         update_dict = self._non_null_update_dict(user_update)
         if not update_dict:
             return user
+        forbidden_privileged_fields = sorted(set(update_dict) & PRIVILEGED_FIELDS)
+        if forbidden_privileged_fields and not allow_privileged:
+            msg = (
+                "Privileged user fields require allow_privileged=True on manager.update(): "
+                f"{forbidden_privileged_fields}."
+            )
+            raise AuthorizationError(msg)
 
         self._normalize_roles_payload(update_dict)
         new_email = await self._normalize_and_validate_email_change(update_dict=update_dict, user=user)

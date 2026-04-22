@@ -137,7 +137,11 @@ async def test_complete_login_bootstraps_user_and_links_account(monkeypatch: pyt
         {"email": "oauth@example.com", "password": "generated-password"},
         safe=True,
     )
-    manager.update.assert_awaited_once_with({"is_verified": True}, created_user)
+    manager.update.assert_awaited_once_with(
+        {"is_verified": True},
+        created_user,
+        allow_privileged=True,
+    )
     manager.require_account_state.assert_called_once_with(verified_user, require_verified=False)
     manager.oauth_account_store.upsert_oauth_account.assert_awaited_once_with(
         verified_user,

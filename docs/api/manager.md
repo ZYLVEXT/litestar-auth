@@ -25,6 +25,11 @@ Across plugin-managed and direct-manager flows, the stable account-state policy 
 `UserPolicy.require_account_state`; custom managers or adapters should preserve the same callable
 shape and semantics when they customize account-state enforcement.
 
+`BaseUserManager.update(...)` now fails closed on privileged fields by default. Direct callers must
+pass `allow_privileged=True` when they intentionally mutate `is_active`, `is_verified`,
+`is_superuser`, or `roles`. Public self-service HTTP flows never set that flag; admin-only routes,
+OAuth verification bootstrap, and role-administration helpers do so explicitly.
+
 `BaseUserManager` is now explicitly documented as a façade over three service entrypoints:
 `manager.users` for CRUD and password lifecycle flows, `manager.tokens` for verify/reset token
 flows, and `manager.totp` for TOTP secret storage. Low-level JWT helpers sit under

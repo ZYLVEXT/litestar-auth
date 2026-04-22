@@ -14,6 +14,7 @@ import litestar_auth._manager.user_lifecycle as user_lifecycle_module
 from litestar_auth._manager.user_lifecycle import UserLifecycleService
 from litestar_auth._manager.user_policy import UserPolicy
 from litestar_auth.exceptions import (
+    AuthorizationError,
     InactiveUserError,
     InvalidPasswordError,
     UnverifiedUserError,
@@ -299,7 +300,7 @@ async def test_update_rejects_duplicate_email_for_another_user() -> None:
 
 
 async def test_update_normalizes_roles_from_mapping_payload() -> None:
-    """update() uses the same normalized role contract as create()."""
+    """Explicit privileged lifecycle updates use the same normalized role contract as create()."""
     user_db = AsyncMock()
     password_helper = PasswordHelper()
     manager = TrackingUserManager(user_db, password_helper)
@@ -308,11 +309,30 @@ async def test_update_normalizes_roles_from_mapping_payload() -> None:
     updated_user = replace(user)
     user_db.update.return_value = updated_user
 
-    result = await service.update({"roles": [" Support ", "admin", "ADMIN"]}, user)
+    result = await service.update(
+        {"roles": [" Support ", "admin", "ADMIN"]},
+        user,
+        allow_privileged=True,
+    )
 
     assert result is updated_user
     user_db.update.assert_awaited_once_with(user, {"roles": ["admin", "support"]})
     assert manager.after_update_events == [(updated_user, {"roles": ["admin", "support"]})]
+
+
+async def test_update_rejects_privileged_fields_without_explicit_opt_in() -> None:
+    """Lifecycle updates fail closed on privileged fields unless the caller opts in explicitly."""
+    user_db = AsyncMock()
+    password_helper = PasswordHelper()
+    manager = TrackingUserManager(user_db, password_helper)
+    service = UserLifecycleService(manager)
+    user = _build_user(password_helper, email="user@example.com")
+
+    with pytest.raises(AuthorizationError, match="allow_privileged=True"):
+        await service.update({"roles": ["admin"]}, user)
+
+    user_db.update.assert_not_awaited()
+    assert manager.after_update_events == []
 
 
 async def test_update_allows_same_normalized_email_without_side_effects() -> None:

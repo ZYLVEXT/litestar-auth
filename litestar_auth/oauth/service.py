@@ -74,7 +74,13 @@ class OAuthServiceUserManagerProtocol[UP: UserProtocol[Any], ID](Protocol):
     ) -> UP:
         """Create and return a new user."""
 
-    async def update(self, user_update: Mapping[str, Any], user: UP) -> UP:
+    async def update(
+        self,
+        user_update: Mapping[str, Any],
+        user: UP,
+        *,
+        allow_privileged: bool = False,
+    ) -> UP:
         """Persist and return updates for an existing user."""
 
     async def on_after_login(self, user: UP) -> None:
@@ -249,7 +255,7 @@ class OAuthService[UP: UserProtocol[Any], ID]:
             safe=True,
         )
         if self._trust_provider_email_verified and email_verified is True:
-            return await user_manager.update({"is_verified": True}, user)
+            return await user_manager.update({"is_verified": True}, user, allow_privileged=True)
         return user
 
     def _validate_existing_email_link_policy(self, *, email_verified: bool | None) -> None:

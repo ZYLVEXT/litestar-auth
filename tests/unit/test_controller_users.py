@@ -71,7 +71,7 @@ class RecordingUserManager:
         """Store the user that helper lookups should resolve."""
         self.user_to_get = user_to_get
         self.require_account_state_calls: list[tuple[DummyUser, bool]] = []
-        self.update_calls: list[tuple[object, DummyUser]] = []
+        self.update_calls: list[tuple[object, DummyUser, bool]] = []
         self.delete_calls: list[UUID] = []
 
     def require_account_state(self, user: DummyUser, *, require_verified: bool) -> None:
@@ -84,7 +84,13 @@ class RecordingUserManager:
             return None
         return self.user_to_get
 
-    async def update(self, user_update: object, user: DummyUser) -> DummyUser:
+    async def update(
+        self,
+        user_update: object,
+        user: DummyUser,
+        *,
+        allow_privileged: bool = False,
+    ) -> DummyUser:
         """Record the update payload and return a mutated copy.
 
         Returns:
@@ -93,7 +99,7 @@ class RecordingUserManager:
         Raises:
             TypeError: If the helper forwards an unexpected payload type.
         """
-        self.update_calls.append((user_update, user))
+        self.update_calls.append((user_update, user, allow_privileged))
         if isinstance(user_update, msgspec.Struct):
             payload = cast("dict[str, Any]", msgspec.to_builtins(user_update))
         elif isinstance(user_update, Mapping):
@@ -267,7 +273,7 @@ async def test_users_handle_update_me_strips_privileged_fields() -> None:
         roles=["member"],
     )
     assert manager.require_account_state_calls == [(user, False)]
-    assert manager.update_calls == [({"email": "updated@example.com", "password": "new-password"}, user)]
+    assert manager.update_calls == [({"email": "updated@example.com", "password": "new-password"}, user, False)]
 
 
 async def test_users_handle_delete_user_rejects_superuser_self_delete() -> None:
@@ -310,10 +316,11 @@ async def test_users_handle_delete_user_soft_deletes_by_disabling_user() -> None
     )
     assert len(manager.update_calls) == 1
     assert manager.delete_calls == []
-    payload, updated_user = manager.update_calls[0]
+    payload, updated_user, allow_privileged = manager.update_calls[0]
     assert isinstance(payload, UserUpdate)
     assert payload.is_active is False
     assert updated_user is user
+    assert allow_privileged is True
 
 
 async def test_users_handle_delete_user_hard_deletes_when_enabled() -> None:

@@ -108,9 +108,15 @@ class ExampleUserManager(OAuthControllerUserManagerProtocol[ExampleUser, str]):
         del user_create, safe, allow_privileged
         return ExampleUser(id=uuid4())
 
-    async def update(self, user_update: object, user: ExampleUser) -> ExampleUser:
+    async def update(
+        self,
+        user_update: object,
+        user: ExampleUser,
+        *,
+        allow_privileged: bool = False,
+    ) -> ExampleUser:
         """Return the provided user because this path is never reached."""
-        del user_update
+        del user_update, allow_privileged
         return user
 
     async def on_after_login(self, user: ExampleUser) -> None:

@@ -61,7 +61,9 @@ policy still comes from `password_validator_factory` or the manager's default
 When you keep the built-in register/verify/reset/users controllers but replace `user_read_schema`
 or `user_update_schema`, keep the default role-aware contract in mind: built-in `UserRead` includes
 `roles`, built-in `UserUpdate` accepts optional `roles`, `/users/me` strips them from self-service
-updates, and admin `PATCH /users/{id}` can persist them.
+updates, and admin `PATCH /users/{id}` can persist them. Outside the built-in controllers,
+direct `BaseUserManager.update(...)` calls must pass `allow_privileged=True` before mutating
+`is_active`, `is_verified`, `is_superuser`, or `roles`.
 
 ## Related
 
