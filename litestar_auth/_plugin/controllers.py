@@ -58,10 +58,12 @@ from litestar_auth.controllers.oauth import (
     _create_oauth_controller_type as _create_plugin_oauth_controller_type,
 )
 from litestar_auth.controllers.totp import (
+    _resolve_enrollment_token_cipher,
     _totp_handle_confirm_enable,
     _totp_handle_disable,
     _totp_handle_enable,
     _totp_handle_verify,
+    _totp_resolve_enrollment_store,
     _totp_resolve_pending_jti_store,
     _totp_validate_replay_and_password,
     _TotpControllerContext,
@@ -91,7 +93,7 @@ if TYPE_CHECKING:
     from litestar_auth.authentication.strategy.jwt import JWTDenylistStore
     from litestar_auth.oauth.client_adapter import OAuthClientProtocol
     from litestar_auth.ratelimit import AuthRateLimitConfig
-    from litestar_auth.totp import TotpAlgorithm, UsedTotpCodeStore
+    from litestar_auth.totp import TotpAlgorithm, TotpEnrollmentStore, UsedTotpCodeStore
     from litestar_auth.types import LoginIdentifier
 
 
@@ -458,10 +460,12 @@ def create_totp_controller[UP: UserProtocol[Any], ID](  # noqa: PLR0913
     user_manager_dependency_key: str,
     used_tokens_store: UsedTotpCodeStore | None = None,
     pending_jti_store: JWTDenylistStore | None = None,
+    enrollment_store: TotpEnrollmentStore | None = None,
     require_replay_protection: bool = True,
     rate_limit_config: AuthRateLimitConfig | None = None,
     requires_verification: bool = False,
     totp_pending_secret: str,
+    totp_secret_key: str | None = None,
     totp_enable_requires_password: bool = True,
     totp_issuer: str = "litestar-auth",
     totp_algorithm: TotpAlgorithm = "SHA256",
@@ -487,6 +491,14 @@ def create_totp_controller[UP: UserProtocol[Any], ID](  # noqa: PLR0913
         pending_jti_store,
         unsafe_testing=unsafe_testing,
     )
+    effective_enrollment_store = _totp_resolve_enrollment_store(
+        enrollment_store,
+        unsafe_testing=unsafe_testing,
+    )
+    enrollment_token_cipher = _resolve_enrollment_token_cipher(
+        totp_secret_key=totp_secret_key,
+        unsafe_testing=unsafe_testing,
+    )
     totp_rate_limit = TotpRateLimitOrchestrator(
         enable=rate_limit_config.totp_enable if rate_limit_config else None,
         confirm_enable=rate_limit_config.totp_confirm_enable if rate_limit_config else None,
@@ -506,6 +518,8 @@ def create_totp_controller[UP: UserProtocol[Any], ID](  # noqa: PLR0913
         effective_pending_jti_store=effective_pending_jti_store,
         id_parser=id_parser,
         unsafe_testing=unsafe_testing,
+        enrollment_token_cipher=enrollment_token_cipher,
+        enrollment_store=effective_enrollment_store,
     )
 
     async def totp_verify_before_request(request: Request[Any, Any, Any]) -> None:
@@ -727,6 +741,7 @@ def build_totp_controller[UP: UserProtocol[Any], ID](
         raise ValueError(msg)
     inventory = resolve_backend_inventory(config) if backend_inventory is None else backend_inventory
     backend_index, backend = inventory.resolve_totp(backend_name=totp_config.totp_backend_name)
+    totp_secret_key = config.user_manager_security.totp_secret_key if config.user_manager_security is not None else None
     return create_totp_controller(
         backend=backend,
         backend_inventory=inventory,
@@ -734,10 +749,12 @@ def build_totp_controller[UP: UserProtocol[Any], ID](
         user_manager_dependency_key=DEFAULT_USER_MANAGER_DEPENDENCY_KEY,
         used_tokens_store=totp_config.totp_used_tokens_store,
         pending_jti_store=totp_config.totp_pending_jti_store,
+        enrollment_store=totp_config.totp_enrollment_store,
         require_replay_protection=totp_config.totp_require_replay_protection,
         rate_limit_config=config.rate_limit_config,
         requires_verification=config.requires_verification,
         totp_pending_secret=totp_config.totp_pending_secret,
+        totp_secret_key=totp_secret_key,
         totp_enable_requires_password=totp_config.totp_enable_requires_password,
         totp_issuer=totp_config.totp_issuer,
         totp_algorithm=totp_config.totp_algorithm,

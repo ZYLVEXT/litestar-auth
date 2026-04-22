@@ -16,6 +16,7 @@ type RedisTTLSeconds = int
 type RedisTTLMilliseconds = int | None
 type RedisScanPattern = str | None
 type RedisEvalResult = bytes | str | int | float
+type RedisNullableEvalResult = RedisEvalResult | None
 
 
 class RedisDeleteClient(Protocol):
@@ -62,6 +63,13 @@ class RedisScriptEvalClient(Protocol):
 
     async def eval(self, script: str, numkeys: int, *keys_and_args: object) -> RedisEvalResult:
         """Execute a Redis Lua script and return its scalar result."""
+
+
+class RedisNullableScriptEvalClient(Protocol):
+    """Async Redis client supporting Lua script evaluation that may return Redis nil."""
+
+    async def eval(self, script: str, numkeys: int, *keys_and_args: object) -> RedisNullableEvalResult:
+        """Execute a Redis Lua script and return its nullable scalar result."""
 
 
 class RedisRateLimiterClient(RedisDeleteClient, RedisScriptEvalClient, Protocol):

@@ -658,6 +658,10 @@ def validate_totp_sub_config[UP: UserProtocol[Any]](
     if pending_jti_store is None and not unsafe_testing:
         msg = "totp_pending_jti_store is required unless unsafe_testing=True."
         raise ValueError(msg)
+    enrollment_store = getattr(totp_config, "totp_enrollment_store", None)
+    if enrollment_store is None and not unsafe_testing:
+        msg = "totp_enrollment_store is required unless unsafe_testing=True."
+        raise ValueError(msg)
     require_replay_protection = bool(getattr(totp_config, "totp_require_replay_protection", False))
     used_tokens_store = getattr(totp_config, "totp_used_tokens_store", None)
     if require_replay_protection and used_tokens_store is None and not unsafe_testing:

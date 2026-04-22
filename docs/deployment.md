@@ -4,8 +4,8 @@ Use this when moving from local development to production, especially for **secr
 
 ## Process topology
 
-- **Single worker / dev** — in-memory JWT denylist, in-memory rate limiting, and in-memory TOTP replay caches are acceptable for local testing only.
-- **Multiple workers or restarts that matter** — use **Redis** (or equivalent shared stores) for: JWT `jti` denylist, the auth rate-limit config, `totp_pending_jti_store`, and `totp_used_tokens_store`. When one async Redis client should back auth rate limiting plus both TOTP stores, use `litestar_auth.contrib.redis.RedisAuthPreset` as the shared-client path and keep the two TOTP stores conceptually separate: pending-token JTI deduplication versus used-code replay protection.
+- **Single worker / dev** — in-memory JWT denylist, in-memory rate limiting, and in-memory TOTP stores are acceptable for local testing only.
+- **Multiple workers or restarts that matter** — use **Redis** (or equivalent shared stores) for: JWT `jti` denylist, the auth rate-limit config, `totp_enrollment_store`, `totp_pending_jti_store`, and `totp_used_tokens_store`. When one async Redis client should back auth rate limiting plus the TOTP stores, use `litestar_auth.contrib.redis.RedisAuthPreset` as the shared-client path and keep the three TOTP stores conceptually separate: pending-enrollment secrets, pending-token JTI deduplication, and used-code replay protection.
 
 ## Secrets and keys
 
@@ -21,7 +21,7 @@ Use this when moving from local development to production, especially for **secr
   `user_manager_security`; each must satisfy the production minimum enforced by
   `validate_secret_length` (32+ characters by default).
 - **`totp_secret_key`** — configure through `user_manager_security` when TOTP is enabled; required in
-  production because stored TOTP secrets must be encrypted at rest.
+  production because stored TOTP secrets and pending-enrollment secrets must be encrypted at rest.
 - **`csrf_secret`** — required for meaningful CSRF protection when using cookie-based auth with the plugin’s CSRF wiring.
 - **`totp_pending_secret`** — required when TOTP is enabled; protects pending login payloads.
 - **`oauth_token_encryption_key`** — required when OAuth providers are configured (encrypts tokens at rest in the DB).
@@ -41,16 +41,17 @@ Use Redis-backed components when you run multiple workers or need durability:
 
 - **JWT denylist** — `RedisJWTDenylistStore` instead of in-memory.
 - **Shared auth surface** — use `litestar_auth.contrib.redis.RedisAuthPreset` when one async Redis
-  client should back auth rate limiting plus both TOTP stores. The maintained production recipe lives
+  client should back auth rate limiting plus the TOTP stores. The maintained production recipe lives
   in [Configuration](configuration.md#redis-backed-auth-surface); it wires
-  `build_rate_limit_config()`, `build_totp_pending_jti_store()`, and
+  `build_rate_limit_config()`, `build_totp_enrollment_store()`, `build_totp_pending_jti_store()`, and
   `build_totp_used_tokens_store()` from the public Redis contrib surface.
-- **Distinct TOTP stores** — keep `totp_pending_jti_store` for pending-login JWT replay prevention
-  and `totp_used_tokens_store` for consumed-code replay prevention, even when both are derived from
-  the same Redis client.
+- **Distinct TOTP stores** — keep `totp_enrollment_store` for pending enrollment secrets,
+  `totp_pending_jti_store` for pending-login JWT replay prevention, and `totp_used_tokens_store`
+  for consumed-code replay prevention, even when all three are derived from the same Redis client.
 - **Low-level direct builders** — keep `AuthRateLimitConfig.from_shared_backend(RedisRateLimiter(...))`
-  plus direct `RedisJWTDenylistStore(...)` / `RedisUsedTotpCodeStore(...)` construction when you
-  intentionally need separate backends or bespoke key prefixes.
+  plus direct `RedisTotpEnrollmentStore(...)` / `RedisJWTDenylistStore(...)` /
+  `RedisUsedTotpCodeStore(...)` construction when you intentionally need separate backends or
+  bespoke key prefixes.
 
 Use [Configuration](configuration.md#redis-backed-auth-surface) as the maintained source
 for the `RedisAuthPreset` flow, the `AUTH_RATE_LIMIT_*` helper exports, namespace
@@ -59,7 +60,7 @@ families, migration recipe, fallback low-level builder/store APIs, and the
 production requirement: those Redis-backed stores are the supported path once multiple workers or
 restarts matter.
 
-The in-memory rate limiter and in-memory denylist are **not** sufficient across processes. The plugin may log startup warnings when in-memory rate limiting is detected outside tests.
+The in-memory rate limiter, in-memory denylist, and in-memory TOTP stores are **not** sufficient across processes. The plugin may log startup warnings when in-memory rate limiting or in-memory TOTP state is detected outside tests.
 
 ## Rate limiting behavior
 

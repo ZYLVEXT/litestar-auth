@@ -94,6 +94,38 @@ def test_create_totp_controller_allows_missing_pending_jti_store_in_testing() ->
 
 
 @pytest.mark.unit
+def test_create_totp_controller_requires_totp_secret_key_outside_testing() -> None:
+    """Production mode must reject plaintext pending-enrollment secret storage."""
+    backend = AsyncMock()
+
+    with pytest.raises(ConfigurationError, match="totp_secret_key is required"):
+        create_totp_controller(
+            backend=backend,
+            user_manager_dependency_key="litestar_auth_user_manager",
+            used_tokens_store=AsyncMock(),
+            pending_jti_store=AsyncMock(),
+            enrollment_store=AsyncMock(),
+            totp_pending_secret="test-totp-pending-secret-thirty-two!",
+        )
+
+
+@pytest.mark.unit
+def test_create_totp_controller_requires_enrollment_store_outside_testing() -> None:
+    """Production mode requires server-side pending enrollment state."""
+    backend = AsyncMock()
+
+    with pytest.raises(ConfigurationError, match="totp_enrollment_store is required"):
+        create_totp_controller(
+            backend=backend,
+            user_manager_dependency_key="litestar_auth_user_manager",
+            used_tokens_store=AsyncMock(),
+            pending_jti_store=AsyncMock(),
+            enrollment_store=None,
+            totp_pending_secret="test-totp-pending-secret-thirty-two!",
+        )
+
+
+@pytest.mark.unit
 def test_totp_controller_endpoint_contract_is_explicit() -> None:
     """Controller-level endpoint coverage and verify-only limiter scope stay explicit."""
     assert TOTP_SENSITIVE_ENDPOINTS == ("enable", "confirm_enable", "verify", "disable")

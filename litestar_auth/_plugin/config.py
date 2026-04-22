@@ -43,7 +43,7 @@ if TYPE_CHECKING:
     from litestar_auth.manager import BaseUserManager, UserManagerSecurity
     from litestar_auth.password import PasswordHelper
     from litestar_auth.ratelimit import AuthRateLimitConfig
-    from litestar_auth.totp import TotpAlgorithm, UsedTotpCodeStore
+    from litestar_auth.totp import TotpAlgorithm, TotpEnrollmentStore, UsedTotpCodeStore
     from litestar_auth.types import StrategyProtocol, TransportProtocol
 
 type UserDatabaseFactory[UP: UserProtocol[Any], ID] = Callable[[AsyncSession], BaseUserStore[UP, ID]]
@@ -277,6 +277,7 @@ class TotpConfig:
     totp_algorithm: TotpAlgorithm = "SHA256"
     totp_used_tokens_store: UsedTotpCodeStore | None = None
     totp_pending_jti_store: JWTDenylistStore | None = None
+    totp_enrollment_store: TotpEnrollmentStore | None = None
     totp_require_replay_protection: bool = True
     totp_enable_requires_password: bool = True
 

@@ -79,6 +79,8 @@ If your app provides `db_session` externally with `db_session_dependency_provide
 | Rate limiting | `InMemoryRateLimiter` for single-process tests | create a fresh limiter or app fixture per test when counters must not leak |
 | TOTP replay protection | omit `totp_used_tokens_store` under `unsafe_testing=True` or use `InMemoryUsedTotpCodeStore` | isolate the store per test; use Redis-backed stores when validating multi-worker behavior |
 | TOTP pending-token JTI dedupe | plugin-built controller allows `pending_jti_store=None` under `unsafe_testing=True` | isolate the app instance per test; use a shared denylist store for production-like flows |
+| TOTP pending enrollment | plugin-built controller creates an `InMemoryTotpEnrollmentStore` under `unsafe_testing=True` when `totp_enrollment_store` is omitted | isolate the app/store per test; use `RedisTotpEnrollmentStore` or equivalent for production-like multi-worker flows |
+| TOTP enrollment secret encryption | plugin-built controller allows `totp_secret_key=None` under `unsafe_testing=True`, storing pending enrollment secrets in plaintext process-local memory | configure a real Fernet key in production — missing `totp_secret_key` fails closed with `ConfigurationError` when `unsafe_testing=False` |
 | In-memory or fake user stores | app-owned fakes and stubs | create new instances per test and avoid module-global auth state |
 
 ## Single-process conveniences vs production-safe stores
@@ -87,6 +89,7 @@ The following shortcuts are for single-process tests that explicitly opt into `u
 
 - in-memory JWT denylist behavior
 - `InMemoryRateLimiter`
+- `InMemoryTotpEnrollmentStore`
 - `InMemoryUsedTotpCodeStore`
 - plugin-built TOTP controller flows without a shared `pending_jti_store`
 
@@ -94,10 +97,11 @@ For production or multi-worker integration environments, configure shared durabl
 
 - `RedisJWTDenylistStore` for JWT revocation or TOTP pending-token deduplication
 - `RedisRateLimiter` for auth endpoint rate limits
+- `RedisTotpEnrollmentStore` for pending TOTP enrollment state
 - `RedisUsedTotpCodeStore` for TOTP replay protection
 
 ## Feature-specific boundaries
 
 - [Rate limiting](rate_limiting.md): `InMemoryRateLimiter` is appropriate for single-process tests with explicit `unsafe_testing`, not for multi-worker deployments.
-- [TOTP](totp.md): `unsafe_testing` can relax replay and pending-token store requirements for app tests, but production still needs explicit shared stores when durability matters.
+- [TOTP](totp.md): `unsafe_testing` can relax replay, pending-token, and enrollment-store requirements for app tests, but production still needs explicit shared stores when durability matters.
 - [Deployment](../deployment.md): use the production checklist when leaving the single-process test harness.

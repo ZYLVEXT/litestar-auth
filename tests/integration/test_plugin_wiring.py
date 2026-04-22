@@ -36,6 +36,7 @@ from litestar_auth.guards import is_authenticated
 from litestar_auth.manager import UserManagerSecurity
 from litestar_auth.password import PasswordHelper
 from litestar_auth.plugin import LitestarAuth, LitestarAuthConfig
+from litestar_auth.totp import InMemoryTotpEnrollmentStore
 from tests.e2e.conftest import SessionMaker as E2ESessionMaker
 from tests.e2e.conftest import assert_structural_session_factory
 
@@ -646,7 +647,7 @@ def test_session_bound_backends_applies_with_session_to_strategies() -> None:
     assert strategy.sessions_seen == [dummy_session]
 
 
-async def test_manual_backends_dependency_preserves_order_and_binds_request_session() -> None:
+def test_manual_backends_dependency_preserves_order_and_binds_request_session() -> None:
     """The request DI surface returns manual backends in startup order with request-bound strategies."""
 
     class _SessionAwareStrategy(InMemoryTokenStrategy):
@@ -657,20 +658,6 @@ async def test_manual_backends_dependency_preserves_order_and_binds_request_sess
         def with_session(self, session: object) -> _SessionAwareStrategy:
             self.bound_session = session
             return self
-
-    @get("/manual-backends-probe", sync_to_thread=False)
-    def manual_backends_probe(
-        db_session: object,
-        litestar_auth_backends: object,
-    ) -> dict[str, object]:
-        backends = cast("list[AuthenticationBackend[ExampleUser, UUID]]", litestar_auth_backends)
-        return {
-            "backend_names": [configured_backend.name for configured_backend in backends],
-            "strategy_sessions_match_db_session": [
-                getattr(configured_backend.strategy, "bound_session", None) is db_session
-                for configured_backend in backends
-            ],
-        }
 
     primary_backend = AuthenticationBackend[ExampleUser, UUID](
         name="primary",
@@ -683,16 +670,18 @@ async def test_manual_backends_dependency_preserves_order_and_binds_request_sess
         strategy=cast("Any", _SessionAwareStrategy(token_prefix="secondary")),
     )
     config = _minimal_litestar_auth_config(backends=[primary_backend, secondary_backend])
-    app = Litestar(route_handlers=[manual_backends_probe], plugins=[LitestarAuth(config)])
+    app_config = LitestarAuth(config).on_app_init(AppConfig())
+    backends_dependency = app_config.dependencies[DEFAULT_BACKENDS_DEPENDENCY_KEY]
+    assert isinstance(backends_dependency, Provide)
+    provider = backends_dependency.dependency
+    db_session = _DummyAsyncSession()
 
-    async with AsyncTestClient(app=app) as client:
-        response = await client.get("/manual-backends-probe")
+    backends = cast("list[AuthenticationBackend[ExampleUser, UUID]]", provider(db_session=db_session))
 
-    assert response.status_code == HTTP_OK
-    assert response.json() == {
-        "backend_names": ["primary", "secondary"],
-        "strategy_sessions_match_db_session": [True, True],
-    }
+    assert [configured_backend.name for configured_backend in backends] == ["primary", "secondary"]
+    assert [
+        getattr(configured_backend.strategy, "bound_session", None) is db_session for configured_backend in backends
+    ] == [True, True]
 
 
 def test_totp_backend_resolves_named_backend() -> None:
@@ -715,6 +704,7 @@ def test_totp_backend_resolves_named_backend() -> None:
         totp_backend_name="secondary",
         totp_pending_jti_store=InMemoryJWTDenylistStore(),
         totp_used_tokens_store=cast("Any", object()),
+        totp_enrollment_store=InMemoryTotpEnrollmentStore(),
     )
     config.user_manager_security = UserManagerSecurity[UUID](
         verification_token_secret="verify-secret-12345678901234567890",
@@ -745,6 +735,7 @@ def test_totp_backend_unknown_name_raises_value_error() -> None:
         totp_backend_name="unknown-backend",
         totp_pending_jti_store=InMemoryJWTDenylistStore(),
         totp_used_tokens_store=cast("Any", object()),
+        totp_enrollment_store=InMemoryTotpEnrollmentStore(),
     )
     config.user_manager_security = UserManagerSecurity[UUID](
         verification_token_secret="verify-secret-12345678901234567890",

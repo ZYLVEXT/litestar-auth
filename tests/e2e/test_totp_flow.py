@@ -22,7 +22,7 @@ from litestar_auth.manager import BaseUserManager, UserManagerSecurity
 from litestar_auth.models import User
 from litestar_auth.password import PasswordHelper
 from litestar_auth.plugin import LitestarAuth, LitestarAuthConfig
-from litestar_auth.totp import InMemoryUsedTotpCodeStore, _generate_totp_code
+from litestar_auth.totp import InMemoryTotpEnrollmentStore, InMemoryUsedTotpCodeStore, _generate_totp_code
 from tests.e2e.conftest import SessionMaker
 
 if TYPE_CHECKING:
@@ -118,6 +118,7 @@ def app() -> Iterator[Litestar]:
         totp_config=TotpConfig(
             totp_pending_secret=TOTP_PENDING_SECRET,
             totp_pending_jti_store=InMemoryJWTDenylistStore(),
+            totp_enrollment_store=InMemoryTotpEnrollmentStore(),
             totp_used_tokens_store=InMemoryUsedTotpCodeStore(),
         ),
     )

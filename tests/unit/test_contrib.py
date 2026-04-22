@@ -29,6 +29,7 @@ from litestar_auth.contrib.redis import (
     RedisAuthPreset,
     RedisAuthRateLimitTier,
     RedisTokenStrategy,
+    RedisTotpEnrollmentStore,
     RedisUsedTotpCodeStore,
 )
 from litestar_auth.contrib.redis import __all__ as redis_all
@@ -46,6 +47,7 @@ from litestar_auth.ratelimit import (
     AUTH_RATE_LIMIT_VERIFICATION_SLOTS,
     AuthRateLimitEndpointGroup,
 )
+from litestar_auth.totp import RedisTotpEnrollmentStore as BaseRedisTotpEnrollmentStore
 from litestar_auth.totp import RedisUsedTotpCodeStore as BaseRedisUsedTotpCodeStore
 from tests._helpers import ExampleUser, cast_fakeredis
 from tests.unit.test_plugin_role_admin import (
@@ -119,6 +121,7 @@ class ExampleUserManager(OAuthControllerUserManagerProtocol[ExampleUser, str]):
 def test_contrib_packages_reexport_public_symbols() -> None:
     """Contrib packages expose the documented convenience imports."""
     assert RedisTokenStrategy is BaseRedisTokenStrategy
+    assert RedisTotpEnrollmentStore is BaseRedisTotpEnrollmentStore
     assert RedisUsedTotpCodeStore is BaseRedisUsedTotpCodeStore
     assert create_provider_oauth_controller is base_create_provider_oauth_controller
 
@@ -130,6 +133,7 @@ def test_contrib_packages_define_all() -> None:
         "RedisAuthPreset",
         "RedisAuthRateLimitTier",
         "RedisTokenStrategy",
+        "RedisTotpEnrollmentStore",
         "RedisUsedTotpCodeStore",
     )
     assert oauth_all == ("create_provider_oauth_controller",)
@@ -1085,6 +1089,7 @@ def test_contrib_redis_public_boundary_tracks_internal_surface() -> None:
     assert redis_module.RedisAuthClientProtocol is redis_surface_module.RedisAuthClientProtocol
     assert redis_module.RedisAuthPreset is redis_surface_module.RedisAuthPreset
     assert redis_module.RedisAuthRateLimitTier is redis_surface_module.RedisAuthRateLimitTier
+    assert redis_module.RedisTotpEnrollmentStore is redis_surface_module.RedisTotpEnrollmentStore
     assert redis_module.RedisTokenStrategy is redis_surface_module.RedisTokenStrategy
     assert redis_module.RedisUsedTotpCodeStore is redis_surface_module.RedisUsedTotpCodeStore
     assert redis_module.__all__ == redis_surface_module.__all__
@@ -1131,13 +1136,14 @@ async def test_contrib_redis_preset_builds_shared_client_auth_components(
     monkeypatch: pytest.MonkeyPatch,
     async_fakeredis: AsyncFakeRedis,
 ) -> None:
-    """The contrib preset derives auth rate limiting plus both Redis-backed TOTP stores."""
+    """The contrib preset derives auth rate limiting plus the Redis-backed TOTP stores."""
 
     def load_optional_redis() -> object:
         return object()
 
     monkeypatch.setattr(ratelimit_module, "_load_redis_asyncio", load_optional_redis)
-    monkeypatch.setattr("litestar_auth.totp._load_redis_asyncio", load_optional_redis)
+    monkeypatch.setattr("litestar_auth.totp._load_used_totp_redis_asyncio", load_optional_redis)
+    monkeypatch.setattr("litestar_auth.totp._load_enrollment_redis_asyncio", load_optional_redis)
     monkeypatch.setattr("litestar_auth.authentication.strategy.jwt._load_redis_asyncio", load_optional_redis)
     redis_client = cast_fakeredis(async_fakeredis, RedisAuthClientProtocol)
     assert isinstance(redis_client, RedisAuthClientProtocol)
@@ -1161,6 +1167,7 @@ async def test_contrib_redis_preset_builds_shared_client_auth_components(
         },
         totp_used_tokens_key_prefix="used:",
         totp_pending_jti_key_prefix="pending:",
+        totp_enrollment_key_prefix="enroll:",
     )
 
     config = preset.build_rate_limit_config(
@@ -1169,6 +1176,7 @@ async def test_contrib_redis_preset_builds_shared_client_auth_components(
         trusted_headers=("X-Real-IP",),
     )
     store = preset.build_totp_used_tokens_store()
+    enrollment_store = preset.build_totp_enrollment_store()
     pending_store = preset.build_totp_pending_jti_store()
 
     assert config.login is not None
@@ -1197,7 +1205,9 @@ async def test_contrib_redis_preset_builds_shared_client_auth_components(
     assert config.verify_token is None
     assert config.request_verify_token is None
     assert store._redis is redis_client
+    assert enrollment_store._redis is redis_client
     assert pending_store.redis is redis_client
+    assert enrollment_store._key("user-1").startswith("enroll:")
     assert pending_store.key_prefix == "pending:"
     assert (await store.mark_used("user-1", 7, 1.25)).stored is True
     await pending_store.deny("pending-jti", ttl_seconds=PENDING_JTI_TTL_SECONDS)
@@ -1272,7 +1282,7 @@ def test_contrib_redis_preset_preserves_totp_lazy_dependency_error(
         msg = "Install litestar-auth[redis] to use RedisUsedTotpCodeStore"
         raise ImportError(msg)
 
-    monkeypatch.setattr("litestar_auth.totp._load_redis_asyncio", fail_load_redis)
+    monkeypatch.setattr("litestar_auth.totp._load_used_totp_redis_asyncio", fail_load_redis)
     preset = RedisAuthPreset(redis=cast_fakeredis(async_fakeredis, RedisAuthClientProtocol))
 
     with pytest.raises(ImportError, match="Install litestar-auth\\[redis\\] to use RedisUsedTotpCodeStore"):
@@ -1294,6 +1304,23 @@ def test_contrib_redis_preset_preserves_pending_jti_lazy_dependency_error(
 
     with pytest.raises(ImportError, match="Install litestar-auth\\[redis\\] to use RedisJWTDenylistStore"):
         preset.build_totp_pending_jti_store()
+
+
+def test_contrib_redis_preset_preserves_enrollment_lazy_dependency_error(
+    monkeypatch: pytest.MonkeyPatch,
+    async_fakeredis: AsyncFakeRedis,
+) -> None:
+    """The contrib preset defers pending-enrollment Redis imports until store construction."""
+
+    def fail_load_redis() -> object:
+        msg = "Install litestar-auth[redis] to use RedisTotpEnrollmentStore"
+        raise ImportError(msg)
+
+    monkeypatch.setattr("litestar_auth.totp._load_enrollment_redis_asyncio", fail_load_redis)
+    preset = RedisAuthPreset(redis=cast_fakeredis(async_fakeredis, RedisAuthClientProtocol))
+
+    with pytest.raises(ImportError, match="Install litestar-auth\\[redis\\] to use RedisTotpEnrollmentStore"):
+        preset.build_totp_enrollment_store()
 
 
 def test_contrib_oauth_preserves_lazy_dependency_error(monkeypatch: pytest.MonkeyPatch) -> None:

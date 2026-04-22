@@ -68,7 +68,7 @@ from litestar_auth.manager import BaseUserManager, TotpSecretStoragePosture, Use
 from litestar_auth.models import User as OrmUser
 from litestar_auth.password import PasswordHelper
 from litestar_auth.ratelimit import AuthRateLimitConfig, EndpointRateLimit, InMemoryRateLimiter, RateLimiterBackend
-from litestar_auth.totp import InMemoryUsedTotpCodeStore
+from litestar_auth.totp import InMemoryTotpEnrollmentStore, InMemoryUsedTotpCodeStore
 from tests.integration.test_orchestrator import (
     DummySessionMaker,
     ExampleUser,
@@ -110,6 +110,23 @@ class _DurableDenylistStore:
         return False
 
 
+class _DurableEnrollmentStore:
+    @property
+    def is_shared_across_workers(self) -> bool:
+        return True
+
+    async def save(self, *, user_id: str, jti: str, secret: str, ttl_seconds: int) -> bool:
+        del user_id, jti, secret, ttl_seconds
+        return True
+
+    async def consume(self, *, user_id: str, jti: str) -> str | None:
+        del user_id, jti
+        return None
+
+    async def clear(self, *, user_id: str) -> None:
+        del user_id
+
+
 def _configured_totp_config(
     *,
     totp_pending_secret: str = "p" * 32,
@@ -127,6 +144,7 @@ def _configured_totp_config(
         totp_pending_secret=totp_pending_secret,
         totp_algorithm=cast("Any", totp_algorithm),
         totp_pending_jti_store=cast("Any", _DurableDenylistStore()),
+        totp_enrollment_store=cast("Any", _DurableEnrollmentStore()),
         totp_used_tokens_store=cast("Any", totp_used_tokens_store),
         totp_require_replay_protection=totp_require_replay_protection,
         totp_enable_requires_password=totp_enable_requires_password,
@@ -294,6 +312,7 @@ def test_warn_insecure_plugin_startup_defaults_emits_all_expected_security_warni
         totp_config=TotpConfig(
             totp_pending_secret="p" * 32,
             totp_pending_jti_store=jwt_strategy_module.InMemoryJWTDenylistStore(),
+            totp_enrollment_store=InMemoryTotpEnrollmentStore(),
             totp_used_tokens_store=cast("Any", InMemoryUsedTotpCodeStore()),
         ),
     )
@@ -308,6 +327,7 @@ def test_warn_insecure_plugin_startup_defaults_emits_all_expected_security_warni
     assert any("process-local in-memory denylist" in message for message in messages)
     assert any("process-local in-memory backend" in message for message in messages)
     assert any("InMemoryUsedTotpCodeStore" in message for message in messages)
+    assert any("InMemoryTotpEnrollmentStore" in message for message in messages)
     assert any("TOTP pending-token replay protection uses InMemoryJWTDenylistStore" in message for message in messages)
     assert any("refresh_max_age is not set" in message for message in messages)
 
@@ -1455,6 +1475,21 @@ def test_validate_totp_sub_config_rejects_missing_pending_jti_store_in_productio
     with pytest.raises(ValueError, match="totp_pending_jti_store is required"):
         validate_totp_sub_config(
             TotpConfig(totp_pending_secret="p" * 32),
+            user_manager_class=PluginUserManager,
+        )
+
+
+def test_validate_totp_sub_config_rejects_missing_enrollment_store_in_production(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Pending enrollment state requires a configured store outside explicit unsafe testing."""
+    del monkeypatch
+    with pytest.raises(ValueError, match="totp_enrollment_store is required"):
+        validate_totp_sub_config(
+            TotpConfig(
+                totp_pending_secret="p" * 32,
+                totp_pending_jti_store=cast("Any", _DurableDenylistStore()),
+            ),
             user_manager_class=PluginUserManager,
         )
 

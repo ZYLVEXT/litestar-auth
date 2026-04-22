@@ -6,7 +6,6 @@ import asyncio
 import importlib
 import inspect
 import threading
-import time
 from types import SimpleNamespace
 from typing import cast
 from unittest.mock import AsyncMock
@@ -127,30 +126,32 @@ def test_make_async_email_verification_client_returns_async_protocol_adapter() -
 async def test_make_async_email_verification_client_offloads_sync_work_from_event_loop() -> None:
     """Blocking sync verification work runs in a worker thread rather than the event loop."""
     event_loop_thread_id = threading.get_ident()
+    running_loop = asyncio.get_running_loop()
     observed_thread_ids: list[int] = []
     release_sync_call = threading.Event()
-    max_event_loop_sleep_seconds = 0.2
+    sync_call_started = asyncio.Event()
 
     class _SyncClient:
         def get_email_verified(self, access_token: str) -> bool:
             observed_thread_ids.append(threading.get_ident())
-            release_sync_call.wait(timeout=0.5)
+            running_loop.call_soon_threadsafe(sync_call_started.set)
+            release_sync_call.wait()
             return access_token == "verified-token"
 
     async_client = client_adapter_module.make_async_email_verification_client(_SyncClient())
 
     verification_task = asyncio.create_task(async_client.get_email_verified("verified-token"))
-    sleep_started_at = time.perf_counter()
-    await asyncio.sleep(0.01)
-    sleep_elapsed = time.perf_counter() - sleep_started_at
+    try:
+        await asyncio.wait_for(sync_call_started.wait(), timeout=1.0)
 
-    assert not verification_task.done()
-    assert sleep_elapsed < max_event_loop_sleep_seconds
-    release_sync_call.set()
+        assert not verification_task.done()
+        assert observed_thread_ids
+        assert observed_thread_ids == [observed_thread_ids[0]]
+        assert observed_thread_ids[0] != event_loop_thread_id
+    finally:
+        release_sync_call.set()
+
     assert await verification_task is True
-    assert observed_thread_ids
-    assert observed_thread_ids == [observed_thread_ids[0]]
-    assert observed_thread_ids[0] != event_loop_thread_id
 
 
 @pytest.mark.parametrize("verified", [True, False])

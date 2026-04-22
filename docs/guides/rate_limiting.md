@@ -57,13 +57,14 @@ rate_limit_config = AuthRateLimitConfig.disabled()
 
 Use [Configuration](../configuration.md#redis-backed-auth-surface) for the maintained
 production Redis/TOTP recipe. That shared-client snippet is the single source of truth for wiring
-`RedisAuthPreset`, `AUTH_RATE_LIMIT_VERIFICATION_SLOTS`, `TotpConfig.totp_pending_jti_store`, and
-`TotpConfig.totp_used_tokens_store` from one shared async Redis client.
+`RedisAuthPreset`, `AUTH_RATE_LIMIT_VERIFICATION_SLOTS`, `TotpConfig.totp_enrollment_store`,
+`TotpConfig.totp_pending_jti_store`, and `TotpConfig.totp_used_tokens_store` from one shared async Redis client.
 
 This guide deliberately does not repeat the full snippet, because the slot inventory, namespace
 families, and shared-client TOTP wiring now live in one maintained place. Keep
 `AuthRateLimitConfig.from_shared_backend()` plus direct `RedisRateLimiter(...)` /
-`RedisJWTDenylistStore(...)` / `RedisUsedTotpCodeStore(...)` construction as the advanced
+`RedisTotpEnrollmentStore(...)` / `RedisJWTDenylistStore(...)` /
+`RedisUsedTotpCodeStore(...)` construction as the advanced
 low-level path when applications intentionally need separate backends or deeper per-slot customization.
 
 Reach for `from_shared_backend()` when the preset is close, but you still need endpoint- or
@@ -121,8 +122,9 @@ prefer `AuthRateLimitSlot`.
 
 - When a limit is exceeded, clients receive **429 Too Many Requests** with **`Retry-After`**.
 - Backends: **`InMemoryRateLimiter`** (single process / dev) or **`RedisRateLimiter`** (production, multiple workers). See [Deployment](../deployment.md).
+- `InMemoryRateLimiter` fails closed for new keys when `max_keys` is reached and no expired counters can be pruned. It logs `event=rate_limit_memory_capacity`; size `max_keys` for local/dev traffic or use Redis for public multi-worker deployments.
 - For the production shared-client Redis path, use the configuration recipe so rate
-  limiting stays aligned with both TOTP replay stores instead of hand-maintaining a partial copy in
+  limiting stays aligned with the TOTP Redis stores instead of hand-maintaining a partial copy in
   this guide.
 - For pytest-driven plugin tests, `InMemoryRateLimiter` is the documented single-process choice described in the [testing guide](testing.md). Keep limiter state isolated per test when counters must not leak.
 

@@ -291,8 +291,11 @@ class OAuthService[UP: UserProtocol[Any], ID]:
         account_id, account_email = await self._client.get_account_identity(token_payload["access_token"])
         oauth_account_store = _require_oauth_account_store(user_manager)
         existing_owner = await oauth_account_store.get_by_oauth_account(self._provider_name, account_id)
-        if existing_owner is not None and getattr(existing_owner, "id", None) != getattr(user, "id", None):
-            _raise_account_already_linked()
+        if existing_owner is not None:
+            existing_owner_id = getattr(existing_owner, "id", None)
+            current_user_id = getattr(user, "id", None)
+            if existing_owner_id is None or current_user_id is None or existing_owner_id != current_user_id:
+                _raise_account_already_linked()
         await self._upsert_account(
             oauth_account_store=oauth_account_store,
             user=user,

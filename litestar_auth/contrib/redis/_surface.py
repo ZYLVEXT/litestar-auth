@@ -24,7 +24,12 @@ from litestar_auth.ratelimit import (
     EndpointRateLimit,
     RateLimiterBackend,
 )
-from litestar_auth.totp import DEFAULT_TOTP_USED_KEY_PREFIX, RedisUsedTotpCodeStore
+from litestar_auth.totp import (
+    DEFAULT_TOTP_ENROLLMENT_KEY_PREFIX,
+    DEFAULT_TOTP_USED_KEY_PREFIX,
+    RedisTotpEnrollmentStore,
+    RedisUsedTotpCodeStore,
+)
 
 
 @dataclass(slots=True, frozen=True)
@@ -60,13 +65,14 @@ class RedisAuthClientProtocol(redis_protocols_module.RedisSharedAuthClient, Prot
 
 @dataclass(slots=True)
 class RedisAuthPreset:
-    """Shared-client Redis preset for auth rate limiting and TOTP replay protection.
+    """Shared-client Redis preset for auth rate limiting and TOTP state stores.
 
     Keep the low-level ``RedisRateLimiter``, ``RedisUsedTotpCodeStore``,
-    ``RedisJWTDenylistStore``, and ``AuthRateLimitConfig.from_shared_backend()``
-    APIs for advanced cases that need fully custom backends. This preset is the
-    higher-level path when one async Redis client should back the auth
-    rate-limit config plus the TOTP replay and pending-token replay stores.
+    ``RedisTotpEnrollmentStore``, ``RedisJWTDenylistStore``, and
+    ``AuthRateLimitConfig.from_shared_backend()`` APIs for advanced cases that
+    need fully custom backends. This preset is the higher-level path when one
+    async Redis client should back the auth rate-limit config plus the TOTP
+    replay, pending-enrollment, and pending-token replay stores.
 
     Args:
         redis: Async Redis client compatible with ``redis.asyncio.Redis`` and
@@ -85,6 +91,9 @@ class RedisAuthPreset:
         totp_pending_jti_key_prefix: Optional default Redis key prefix for the
             pending-login-token JTI denylist store. ``None`` preserves the
             current ``RedisJWTDenylistStore`` default.
+        totp_enrollment_key_prefix: Optional default Redis key prefix for the
+            pending-enrollment store. ``None`` preserves the current
+            ``RedisTotpEnrollmentStore`` default.
     """
 
     redis: RedisAuthClientProtocol
@@ -94,6 +103,7 @@ class RedisAuthPreset:
     )
     totp_used_tokens_key_prefix: str | None = None
     totp_pending_jti_key_prefix: str | None = None
+    totp_enrollment_key_prefix: str | None = None
 
     def __post_init__(self) -> None:
         """Snapshot group-specific rate-limit tiers into a read-only mapping."""
@@ -198,11 +208,29 @@ class RedisAuthPreset:
             return RedisJWTDenylistStore(redis=self.redis)
         return RedisJWTDenylistStore(redis=self.redis, key_prefix=resolved_key_prefix)
 
+    def build_totp_enrollment_store(self, *, key_prefix: str | None = None) -> RedisTotpEnrollmentStore:
+        """Build ``RedisTotpEnrollmentStore`` from the preset's shared Redis client.
+
+        Args:
+            key_prefix: Optional per-call Redis key prefix override. When
+                omitted, the preset uses ``totp_enrollment_key_prefix`` and
+                finally falls back to the current ``RedisTotpEnrollmentStore``
+                default.
+
+        Returns:
+            Redis-backed pending-enrollment store sharing the preset's client.
+        """
+        resolved_key_prefix = self.totp_enrollment_key_prefix if key_prefix is None else key_prefix
+        if resolved_key_prefix is None:
+            resolved_key_prefix = DEFAULT_TOTP_ENROLLMENT_KEY_PREFIX
+        return RedisTotpEnrollmentStore(redis=self.redis, key_prefix=resolved_key_prefix)
+
 
 __all__ = (
     "RedisAuthClientProtocol",
     "RedisAuthPreset",
     "RedisAuthRateLimitTier",
     "RedisTokenStrategy",
+    "RedisTotpEnrollmentStore",
     "RedisUsedTotpCodeStore",
 )

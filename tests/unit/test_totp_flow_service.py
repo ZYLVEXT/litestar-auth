@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import importlib
+import logging
 from datetime import UTC, datetime, timedelta, tzinfo
 from unittest.mock import AsyncMock
 from uuid import UUID, uuid4
@@ -351,7 +352,9 @@ async def test_deny_pending_login_raises_token_error_when_denylist_returns_false
         )
 
 
-async def test_deny_pending_login_warns_in_unsafe_testing_without_denylist_store() -> None:
+async def test_deny_pending_login_warns_in_unsafe_testing_without_denylist_store(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
     """Unsafe testing allows pending-login verification without a denylist backend."""
     user = ExampleUser(id=uuid4(), email="user@example.com")
     service = TotpLoginFlowService[ExampleUser, UUID](
@@ -359,8 +362,15 @@ async def test_deny_pending_login_warns_in_unsafe_testing_without_denylist_store
         totp_pending_secret=TOTP_PENDING_SECRET,
         unsafe_testing=True,
     )
+    totp_flow_module._pending_jti_disabled_logged = False
 
-    with pytest.warns(SecurityWarning, match="unsafe_testing=True"):
+    with (
+        caplog.at_level(logging.CRITICAL, logger=totp_flow_module.logger.name),
+        pytest.warns(
+            SecurityWarning,
+            match="unsafe_testing=True",
+        ),
+    ):
         await service._deny_pending_login(
             PendingTotpLogin(
                 user=user,
@@ -368,6 +378,13 @@ async def test_deny_pending_login_warns_in_unsafe_testing_without_denylist_store
                 expires_at=datetime.now(tz=UTC) + timedelta(seconds=30),
             ),
         )
+
+    assert any(
+        getattr(record, "event", None) == "totp_pending_jti_dedup_disabled"
+        and getattr(record, "unsafe_testing", None) is True
+        for record in caplog.records
+    )
+    totp_flow_module._pending_jti_disabled_logged = False
 
 
 async def test_deny_pending_login_raises_without_store_outside_unsafe_testing() -> None:

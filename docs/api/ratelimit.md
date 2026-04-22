@@ -2,8 +2,8 @@
 
 Use [Configuration](../configuration.md#redis-backed-auth-surface) as the main guide
 for the current Redis-backed auth contract: the `RedisAuthPreset` flow, stable slot and
-group names, namespace families, helper exports, migration behavior, and the paired TOTP
-replay-store setup all live there. This page focuses on the public rate-limit types themselves.
+group names, namespace families, helper exports, migration behavior, and the TOTP Redis-store
+setup all live there. This page focuses on the public rate-limit types themselves.
 
 The higher-level one-client Redis preset lives in `litestar_auth.contrib.redis.RedisAuthPreset`.
 This module owns the lower-level shared builder plus the slot/group helper exports that feed

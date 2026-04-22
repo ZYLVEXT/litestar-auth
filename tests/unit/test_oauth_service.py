@@ -437,6 +437,47 @@ async def test_associate_account_rejects_cross_user_link() -> None:
     manager.oauth_account_store.upsert_oauth_account.assert_not_awaited()
 
 
+@pytest.mark.parametrize(
+    ("current_user_id", "existing_owner_id"),
+    [
+        pytest.param(None, None, id="both-none"),
+        pytest.param(uuid4(), None, id="existing-owner-none"),
+        pytest.param(None, uuid4(), id="current-user-none"),
+    ],
+)
+async def test_associate_account_rejects_when_either_id_is_none(
+    *,
+    current_user_id: UUID | None,
+    existing_owner_id: UUID | None,
+) -> None:
+    """Associate flow never treats ``id=None`` as a match, even when both sides are None."""
+    user = MagicMock()
+    user.id = current_user_id
+    existing_owner = MagicMock()
+    existing_owner.id = existing_owner_id
+    manager = _build_manager()
+    manager.oauth_account_store.get_by_oauth_account.return_value = existing_owner
+    oauth_client = AsyncMock()
+    oauth_client.get_access_token.return_value = {"access_token": "provider-access-token"}
+    oauth_client.get_id_email.return_value = ("provider-user", "user@example.com")
+    service = OAuthService(
+        provider_name="github",
+        client=OAuthClientAdapter(oauth_client),
+    )
+
+    with pytest.raises(ClientException) as exc_info:
+        await service.associate_account(
+            user=user,
+            code="provider-code",
+            redirect_uri="https://app.example/callback",
+            user_manager=manager,
+        )
+
+    extra = exc_info.value.extra
+    assert (extra.get("code") if isinstance(extra, dict) else None) == ErrorCode.OAUTH_ACCOUNT_ALREADY_LINKED
+    manager.oauth_account_store.upsert_oauth_account.assert_not_awaited()
+
+
 async def test_associate_account_links_provider_for_current_user() -> None:
     """Associate flow persists the provider account when there is no cross-user collision."""
     user = ExampleUser(id=uuid4(), email="user@example.com")

@@ -780,6 +780,7 @@ def test_totp_config_defaults_match_expected_values() -> None:
     assert config.totp_algorithm == "SHA256"
     assert config.totp_used_tokens_store is None
     assert config.totp_pending_jti_store is None
+    assert config.totp_enrollment_store is None
     assert config.totp_require_replay_protection is True
     assert config.totp_enable_requires_password is True
 

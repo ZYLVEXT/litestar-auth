@@ -9,6 +9,22 @@ TOTP is enabled by setting `totp_config: TotpConfig` on `LitestarAuthConfig`. Ro
 
 By default **`totp_enable_requires_password=True`**, so step 1 also requires the current password (step-up).
 
+### Enrollment-token confidentiality
+
+The `enrollment_token` does **not** carry the freshly generated TOTP secret.
+It carries only short-lived lookup claims (`sub`, `jti`, and an encoding marker).
+The secret is stored server-side in `totp_enrollment_store`, encrypted first with
+`user_manager_security.totp_secret_key` — the same key used to encrypt the
+persisted secret. In production, both `totp_secret_key` and
+`totp_enrollment_store` are required; plaintext, process-local enrollment state
+is only created automatically when the owning config/controller explicitly sets
+`unsafe_testing=True`.
+
+Each `/2fa/enable` call replaces any previous pending enrollment for that user,
+and `/2fa/enable/confirm` atomically consumes the matching `jti`. A stale token,
+reused token, token from an older `/enable`, or token consumed by an invalid code
+cannot be confirmed later.
+
 ## Login completion
 
 When a login requires a second factor, the client finishes with:
@@ -25,16 +41,18 @@ Pending login JWTs use a JTI denylist internally. In production, configure **`To
 
 Production deployments should configure **`totp_used_tokens_store`** so codes cannot be reused. Without it, the library fails fast unless the owning config/controller explicitly opts into `unsafe_testing=True`.
 
-When the same async Redis client should back auth rate limiting plus both TOTP replay stores, use
+When the same async Redis client should back auth rate limiting plus the TOTP Redis stores, use
 the shared-client recipe in
 [Configuration](../configuration.md#redis-backed-auth-surface). That is the maintained
 `RedisAuthPreset` flow for `build_rate_limit_config()`,
-`build_totp_pending_jti_store()`, and `build_totp_used_tokens_store()` together. Keep manual
-`pending_jti_store` / `totp_used_tokens_store` wiring as the direct path when you intentionally
-use separate backends or bespoke key prefixes.
+`build_totp_enrollment_store()`, `build_totp_pending_jti_store()`, and
+`build_totp_used_tokens_store()` together. Keep manual `totp_enrollment_store` /
+`pending_jti_store` / `totp_used_tokens_store` wiring as the direct path when
+you intentionally use separate backends or bespoke key prefixes.
 
-The two production stores are still distinct even in the shared-client recipe:
+The three production stores are still distinct even in the shared-client recipe:
 
+- **`totp_enrollment_store`** stores pending enrollment secrets and enforces latest-only, single-use confirmation.
 - **`totp_pending_jti_store`** prevents pending-login JWT replay.
 - **`totp_used_tokens_store`** prevents consumed TOTP-code replay.
 
@@ -45,7 +63,7 @@ Algorithm defaults to **SHA256** (`totp_algorithm`).
 ## Related
 
 - [Configuration](../configuration.md#redis-backed-auth-surface) — Redis-backed
-  production recipe for rate limiting plus both TOTP Redis stores.
+  production recipe for rate limiting plus the TOTP Redis stores.
 - [Configuration](../configuration.md) — `TotpConfig`.
 - [TOTP API](../api/totp.md) — helpers and types.
 - [Manager API](../api/manager.md) — manager hooks for secrets and lifecycle.

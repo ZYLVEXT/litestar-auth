@@ -27,7 +27,12 @@ from litestar_auth.exceptions import ErrorCode
 from litestar_auth.manager import BaseUserManager, UserManagerSecurity
 from litestar_auth.password import PasswordHelper
 from litestar_auth.plugin import LitestarAuth, LitestarAuthConfig
-from litestar_auth.totp import InMemoryUsedTotpCodeStore, _current_counter, _generate_totp_code
+from litestar_auth.totp import (
+    InMemoryTotpEnrollmentStore,
+    InMemoryUsedTotpCodeStore,
+    _current_counter,
+    _generate_totp_code,
+)
 from tests.integration.conftest import ExampleUser, InMemoryUserDatabase
 
 if TYPE_CHECKING:
@@ -447,6 +452,7 @@ def build_advanced_app() -> tuple[
         totp_config=TotpConfig(
             totp_pending_secret="plugin-totp-pending-secret-thirty-two!",
             totp_pending_jti_store=InMemoryJWTDenylistStore(),
+            totp_enrollment_store=InMemoryTotpEnrollmentStore(),
             totp_used_tokens_store=used_tokens_store,
         ),
         enable_refresh=True,

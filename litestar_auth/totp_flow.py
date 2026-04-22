@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import secrets
 import warnings
 from collections.abc import Awaitable, Callable
@@ -22,6 +23,8 @@ if TYPE_CHECKING:
 
 _DEFAULT_PENDING_TOKEN_LIFETIME = timedelta(minutes=5)
 _PENDING_JTI_HEX_LENGTH = 32
+logger = logging.getLogger(__name__)
+_pending_jti_disabled_logged = False
 
 
 class InvalidTotpPendingTokenError(Exception):
@@ -30,6 +33,23 @@ class InvalidTotpPendingTokenError(Exception):
 
 class InvalidTotpCodeError(Exception):
     """Raised when a TOTP code cannot complete the pending login flow."""
+
+
+def _warn_pending_jti_disabled() -> None:
+    """Emit warning and structured telemetry for unsafe pending-token replay posture."""
+    global _pending_jti_disabled_logged  # noqa: PLW0603
+    warnings.warn(
+        "TOTP pending-token JTI deduplication is DISABLED because unsafe_testing=True.",
+        SecurityWarning,
+        stacklevel=3,
+    )
+    if _pending_jti_disabled_logged:
+        return
+    logger.critical(
+        "TOTP pending-token JTI deduplication is disabled because unsafe_testing=True.",
+        extra={"event": "totp_pending_jti_dedup_disabled", "unsafe_testing": True},
+    )
+    _pending_jti_disabled_logged = True
 
 
 class TotpFlowUserManagerProtocol[UP: TotpUserProtocol[Any], ID](Protocol):
@@ -170,11 +190,7 @@ class TotpLoginFlowService[UP: TotpUserProtocol[Any], ID]:
                     "Configure a JWTDenylistStore for pending_jti_store."
                 )
                 raise ConfigurationError(msg)
-            warnings.warn(
-                "TOTP pending-token JTI deduplication is DISABLED because unsafe_testing=True.",
-                SecurityWarning,
-                stacklevel=3,
-            )
+            _warn_pending_jti_disabled()
             return
 
         ttl_seconds = max(int((pending_login.expires_at - datetime.now(tz=UTC)).total_seconds()), 1)

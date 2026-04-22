@@ -3,8 +3,9 @@
 Use :meth:`AuthRateLimitConfig.from_shared_backend` for direct shared-backend
 assembly when one :class:`InMemoryRateLimiter` or :class:`RedisRateLimiter`
 should back the standard auth endpoint set. For the higher-level one-client
-Redis preset that also builds a :class:`~litestar_auth.totp.RedisUsedTotpCodeStore`,
-see :class:`litestar_auth.contrib.redis.RedisAuthPreset`. Keep manual
+Redis preset that also builds :class:`~litestar_auth.totp.RedisTotpEnrollmentStore`
+and :class:`~litestar_auth.totp.RedisUsedTotpCodeStore`, see
+:class:`litestar_auth.contrib.redis.RedisAuthPreset`. Keep manual
 ``AuthRateLimitConfig(...)`` plus ``EndpointRateLimit(...)`` assembly for
 advanced cases that need fully custom per-endpoint wiring.
 

@@ -25,7 +25,12 @@ from litestar_auth.models import User
 from litestar_auth.password import PasswordHelper
 from litestar_auth.plugin import LitestarAuth, LitestarAuthConfig
 from litestar_auth.ratelimit import AuthRateLimitConfig, AuthRateLimitSlot, EndpointRateLimit, InMemoryRateLimiter
-from litestar_auth.totp import InMemoryUsedTotpCodeStore, _current_counter, _generate_totp_code
+from litestar_auth.totp import (
+    InMemoryTotpEnrollmentStore,
+    InMemoryUsedTotpCodeStore,
+    _current_counter,
+    _generate_totp_code,
+)
 from tests.e2e.conftest import SessionMaker
 
 pytestmark = [pytest.mark.e2e]
@@ -194,6 +199,7 @@ def _build_app_with_trusted_proxy(
         totp_config=TotpConfig(
             totp_pending_secret="test-totp-pending-secret-thirty-two!",
             totp_pending_jti_store=InMemoryJWTDenylistStore(),
+            totp_enrollment_store=InMemoryTotpEnrollmentStore(),
             totp_used_tokens_store=InMemoryUsedTotpCodeStore(),
         ),
     )

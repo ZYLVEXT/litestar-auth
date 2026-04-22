@@ -1036,6 +1036,17 @@ def test_get_dummy_hash_returns_valid_password_hash() -> None:
     assert password_helper.verify("not-the-secret", dummy_hash) is False
 
 
+def test_login_identifier_digest_normalizes_identifier_and_accepts_long_keys() -> None:
+    """Failed-login correlation digests avoid PII and tolerate long operator secrets."""
+    long_key = "k" * 200
+
+    digest = manager_module._login_identifier_digest(" User@Example.COM ", key=long_key)
+
+    assert digest == manager_module._login_identifier_digest("user@example.com", key=long_key)
+    assert digest != manager_module._login_identifier_digest("other@example.com", key=long_key)
+    assert "user@example.com" not in digest
+
+
 async def test_authenticate_logs_success_and_failure(caplog: pytest.LogCaptureFixture) -> None:
     """Authentication logs successful and failed login events without secrets."""
     user_db = AsyncMock()
@@ -1051,6 +1062,13 @@ async def test_authenticate_logs_success_and_failure(caplog: pytest.LogCaptureFi
     events = [cast("str | None", getattr(record, "event", None)) for record in caplog.records]
     assert events == ["login", "login_failed"]
     assert getattr(caplog.records[0], "user_id", None) == str(existing_user.id)
+    failed_record = caplog.records[1]
+    assert getattr(failed_record, "login_identifier_type", None) == "email"
+    assert getattr(failed_record, "identifier_digest", None) == manager_module._login_identifier_digest(
+        existing_user.email,
+        key=manager.reset_password_token_secret.get_secret_value(),
+    )
+    assert existing_user.email not in failed_record.__dict__.values()
     assert all("token" not in record.getMessage().lower() for record in caplog.records)
     assert all("password" not in record.getMessage().lower() for record in caplog.records)
 

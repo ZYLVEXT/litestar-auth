@@ -34,10 +34,11 @@ def test_secondary_redis_totp_docs_link_to_shared_client_recipe(path: str, confi
         "docs/guides/rate_limiting.md",
     ],
 )
-def test_secondary_redis_totp_docs_keep_both_store_roles_visible(path: str) -> None:
-    """Secondary Redis/TOTP docs should keep pending-token and used-code stores distinct."""
+def test_secondary_redis_totp_docs_keep_store_roles_visible(path: str) -> None:
+    """Secondary Redis/TOTP docs should keep enrollment, pending-token, and used-code stores distinct."""
     content = Path(path).read_text(encoding="utf-8")
 
+    assert "totp_enrollment_store" in content
     assert "totp_pending_jti_store" in content
     assert "totp_used_tokens_store" in content
 

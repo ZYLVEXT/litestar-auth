@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import dataclasses
+import hashlib
 import importlib
 import logging
 import re
@@ -46,6 +47,7 @@ DEFAULT_VERIFY_TOKEN_LIFETIME = timedelta(hours=1)
 DEFAULT_RESET_PASSWORD_TOKEN_LIFETIME = timedelta(hours=1)
 ENCRYPTED_TOTP_SECRET_PREFIX = "fernet:"  # noqa: S105
 _MASKED = "**********"
+_LOGIN_IDENTIFIER_DIGEST_SIZE = 16
 
 
 @dataclasses.dataclass(frozen=True, slots=True)
@@ -115,6 +117,17 @@ def _get_dummy_hash(password_helper: PasswordHelper) -> str:
 def _mask_optional_secret(secret: str | None) -> str | None:
     """Return the standard masked placeholder when a secret is configured."""
     return _MASKED if secret is not None else None
+
+
+def _login_identifier_digest(identifier: str, *, key: str) -> str:
+    """Return a keyed, non-reversible digest for login-failure correlation."""
+    normalized_identifier = identifier.strip().casefold()
+    digest_key = hashlib.sha256(key.encode()).digest()
+    return hashlib.blake2b(
+        normalized_identifier.encode(),
+        digest_size=_LOGIN_IDENTIFIER_DIGEST_SIZE,
+        key=digest_key,
+    ).hexdigest()
 
 
 def _resolve_oauth_account_store[UP: UserProtocol[Any], ID](
@@ -401,7 +414,17 @@ class BaseUserManager[UP: UserProtocol[Any], ID](
             logger=logger,
         )
         if user is None:
-            logger.warning("User login failed", extra={"event": "login_failed"})
+            logger.warning(
+                "User login failed",
+                extra={
+                    "event": "login_failed",
+                    "identifier_digest": _login_identifier_digest(
+                        identifier,
+                        key=self.reset_password_token_secret.get_secret_value(),
+                    ),
+                    "login_identifier_type": mode,
+                },
+            )
             return None
 
         logger.info("User login succeeded", extra={"event": "login", "user_id": str(user.id)})

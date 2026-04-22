@@ -38,7 +38,9 @@ def test_totp_module_executes_under_coverage() -> None:
     reloaded_module.__dict__["ConfigurationError"] = original_configuration_error
 
     assert reloaded_module.InMemoryUsedTotpCodeStore.__name__ == totp.InMemoryUsedTotpCodeStore.__name__
+    assert reloaded_module.InMemoryTotpEnrollmentStore.__name__ == totp.InMemoryTotpEnrollmentStore.__name__
     assert reloaded_module.RedisUsedTotpCodeStore.__name__ == totp.RedisUsedTotpCodeStore.__name__
+    assert reloaded_module.RedisTotpEnrollmentStore.__name__ == totp.RedisTotpEnrollmentStore.__name__
 
 
 def test_generate_totp_secret_returns_base32_secret() -> None:
@@ -525,6 +527,60 @@ def test_in_memory_used_totp_store_rejects_non_positive_max_entries() -> None:
         totp.InMemoryUsedTotpCodeStore(max_entries=0)
 
 
+async def test_in_memory_totp_enrollment_store_consumes_only_latest_jti() -> None:
+    """Process-local pending enrollment state is latest-only and single-use."""
+    store = totp.InMemoryTotpEnrollmentStore()
+
+    assert store.is_shared_across_workers is False
+    assert await store.save(user_id="user-1", jti="old", secret="old-secret", ttl_seconds=60) is True
+    assert await store.save(user_id="user-1", jti="new", secret="new-secret", ttl_seconds=60) is True
+    assert await store.consume(user_id="user-1", jti="old") is None
+    assert await store.consume(user_id="user-1", jti="new") == "new-secret"
+    assert await store.consume(user_id="user-1", jti="new") is None
+
+
+async def test_in_memory_totp_enrollment_store_fails_closed_at_capacity(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """At capacity with active entries, new enrollment state is rejected without eviction."""
+
+    class Clock:
+        def __init__(self) -> None:
+            self.current = 0.0
+
+        def __call__(self) -> float:
+            return self.current
+
+    clock = Clock()
+    store = totp.InMemoryTotpEnrollmentStore(clock=clock, max_entries=1)
+
+    assert await store.save(user_id="user-1", jti="jti-1", secret="secret-1", ttl_seconds=10) is True
+    with caplog.at_level(logging.ERROR, logger=totp.logger.name):
+        assert await store.save(user_id="user-2", jti="jti-2", secret="secret-2", ttl_seconds=10) is False
+
+    assert set(store._entries) == {"user-1"}
+    assert any(getattr(record, "event", None) == "totp_enrollment_store_capacity" for record in caplog.records)
+    clock.current = 11.0
+    assert await store.save(user_id="user-2", jti="jti-2", secret="secret-2", ttl_seconds=10) is True
+    assert await store.consume(user_id="user-2", jti="jti-2") == "secret-2"
+
+
+async def test_in_memory_totp_enrollment_store_clear_removes_pending_secret() -> None:
+    """Explicit clearing invalidates a pending enrollment token for the user."""
+    store = totp.InMemoryTotpEnrollmentStore()
+
+    assert await store.save(user_id="user-1", jti="jti", secret="secret", ttl_seconds=60) is True
+    await store.clear(user_id="user-1")
+
+    assert await store.consume(user_id="user-1", jti="jti") is None
+
+
+def test_in_memory_totp_enrollment_store_rejects_non_positive_max_entries() -> None:
+    """The pending-enrollment store cap must be configured with a positive size."""
+    with pytest.raises(ValueError, match="max_entries must be at least 1"):
+        totp.InMemoryTotpEnrollmentStore(max_entries=0)
+
+
 async def test_redis_used_totp_code_store_first_call_true_second_false(
     async_fakeredis: AsyncFakeRedis,
 ) -> None:
@@ -548,7 +604,7 @@ def test_redis_used_totp_code_store_preserves_lazy_dependency_error(monkeypatch:
         msg = "Install litestar-auth[redis] to use RedisUsedTotpCodeStore"
         raise ImportError(msg)
 
-    monkeypatch.setattr(totp, "_load_redis_asyncio", fail_load_redis)
+    monkeypatch.setattr(totp, "_load_used_totp_redis_asyncio", fail_load_redis)
 
     redis_client_sentinel = cast("totp.RedisUsedTotpCodeStoreClient", object())
     with pytest.raises(ImportError, match="Install litestar-auth\\[redis\\] to use RedisUsedTotpCodeStore"):
@@ -573,16 +629,92 @@ async def test_redis_used_totp_code_store_uses_custom_prefix_and_none_result(
     assert await async_fakeredis.get(key) == b"1"
 
 
+async def test_redis_totp_enrollment_store_replaces_and_consumes_latest_jti(
+    async_fakeredis: AsyncFakeRedis,
+) -> None:
+    """Redis enrollment state uses a single latest user key and atomic consume."""
+    store = totp.RedisTotpEnrollmentStore(
+        redis=cast_fakeredis(async_fakeredis, totp.RedisTotpEnrollmentStoreClient),
+        key_prefix="enroll:",
+    )
+    key = store._key("user-1")
+
+    assert store.is_shared_across_workers is True
+    assert key.startswith("enroll:")
+    assert await store.save(user_id="user-1", jti="old", secret="old-secret", ttl_seconds=60) is True
+    assert await store.save(user_id="user-1", jti="new", secret="new-secret", ttl_seconds=60) is True
+    assert await store.consume(user_id="user-1", jti="old") is None
+    assert await async_fakeredis.get(key) == b"new:new-secret"
+    assert await store.consume(user_id="user-1", jti="new") == "new-secret"
+    assert await store.consume(user_id="user-1", jti="new") is None
+
+
+async def test_redis_totp_enrollment_store_clear_removes_pending_secret(
+    async_fakeredis: AsyncFakeRedis,
+) -> None:
+    """Redis-backed pending enrollment state can be explicitly cleared."""
+    store = totp.RedisTotpEnrollmentStore(
+        redis=cast_fakeredis(async_fakeredis, totp.RedisTotpEnrollmentStoreClient),
+        key_prefix="enroll:",
+    )
+
+    assert await store.save(user_id="user-1", jti="jti", secret="secret", ttl_seconds=60) is True
+    await store.clear(user_id="user-1")
+
+    assert await store.consume(user_id="user-1", jti="jti") is None
+
+
+async def test_redis_totp_enrollment_store_coerces_non_bytes_eval_result(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Non-redis-py compatible clients that return strings are normalized."""
+
+    class _StringEvalRedisClient:
+        async def setex(self, name: str, time: int, value: str) -> object:
+            del name, time, value
+            return True
+
+        async def eval(self, script: str, numkeys: int, *keys_and_args: object) -> object:
+            del script, numkeys, keys_and_args
+            return "secret"
+
+        async def delete(self, *names: str) -> int:
+            del names
+            return 1
+
+    monkeypatch.setattr(totp, "_load_enrollment_redis_asyncio", lambda: None)
+    store = totp.RedisTotpEnrollmentStore(
+        redis=cast("totp.RedisTotpEnrollmentStoreClient", _StringEvalRedisClient()),
+    )
+
+    assert await store.consume(user_id="user-1", jti="jti") == "secret"
+
+
+def test_redis_totp_enrollment_store_preserves_lazy_dependency_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The enrollment store defers the optional Redis import until construction."""
+
+    def fail_load_redis() -> object:
+        msg = "Install litestar-auth[redis] to use RedisTotpEnrollmentStore"
+        raise ImportError(msg)
+
+    monkeypatch.setattr(totp, "_load_enrollment_redis_asyncio", fail_load_redis)
+
+    redis_client_sentinel = cast("totp.RedisTotpEnrollmentStoreClient", object())
+    with pytest.raises(ImportError, match="Install litestar-auth\\[redis\\] to use RedisTotpEnrollmentStore"):
+        totp.RedisTotpEnrollmentStore(redis=redis_client_sentinel)
+
+
 async def test_contrib_redis_preset_builds_totp_store_with_prefix_override(
     monkeypatch: pytest.MonkeyPatch,
     async_fakeredis: AsyncFakeRedis,
 ) -> None:
-    """The contrib preset derives both TOTP Redis stores and lets per-call prefixes win."""
+    """The contrib preset derives TOTP Redis stores and lets per-call prefixes win."""
 
     def load_optional_redis() -> object:
         return object()
 
-    monkeypatch.setattr(totp, "_load_redis_asyncio", load_optional_redis)
+    monkeypatch.setattr(totp, "_load_used_totp_redis_asyncio", load_optional_redis)
+    monkeypatch.setattr(totp, "_load_enrollment_redis_asyncio", load_optional_redis)
     monkeypatch.setattr("litestar_auth.authentication.strategy.jwt._load_redis_asyncio", load_optional_redis)
 
     preset = RedisAuthPreset(
@@ -591,11 +723,15 @@ async def test_contrib_redis_preset_builds_totp_store_with_prefix_override(
         totp_pending_jti_key_prefix="preset-pending:",
     )
     store = preset.build_totp_used_tokens_store(key_prefix="override-used:")
+    enrollment_store = preset.build_totp_enrollment_store(key_prefix="override-enroll:")
     pending_store = preset.build_totp_pending_jti_store(key_prefix="override-pending:")
 
     assert store._key("user-1", 7) == "override-used:user-1:7"
+    assert enrollment_store._key("user-1").startswith("override-enroll:")
     assert pending_store.key_prefix == "override-pending:"
     assert (await store.mark_used("user-1", 7, 1.25)).stored is True
+    assert await enrollment_store.save(user_id="user-1", jti="enroll-jti", secret="secret", ttl_seconds=30) is True
+    assert await enrollment_store.consume(user_id="user-1", jti="enroll-jti") == "secret"
     await pending_store.deny("pending-jti", ttl_seconds=PENDING_JTI_TTL_SECONDS)
     assert await pending_store.is_denied("pending-jti") is True
     assert await async_fakeredis.get("override-used:user-1:7") == b"1"

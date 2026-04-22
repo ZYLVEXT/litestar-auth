@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hmac
 import time
 from typing import TYPE_CHECKING, Any, cast
 from uuid import UUID, uuid4
@@ -40,6 +41,8 @@ SLOW_OPERATION_SECONDS = 0.05
 class SlowPasswordHelper(PasswordHelper):
     """Password helper that injects deterministic latency into hash and verify."""
 
+    _HASH_PREFIX = "slow-test$"
+
     def __init__(self, *, delay_seconds: float) -> None:
         """Store the artificial per-operation delay."""
         super().__init__()
@@ -52,7 +55,7 @@ class SlowPasswordHelper(PasswordHelper):
             The generated password hash.
         """
         time.sleep(self.delay_seconds)
-        return super().hash(password)
+        return f"{self._HASH_PREFIX}{password}"
 
     def verify(self, password: str, hashed: str) -> bool:
         """Sleep before verification to magnify timing differences.
@@ -61,7 +64,15 @@ class SlowPasswordHelper(PasswordHelper):
             ``True`` when the password matches the hash.
         """
         time.sleep(self.delay_seconds)
-        return super().verify(password, hashed)
+        return hmac.compare_digest(hashed, f"{self._HASH_PREFIX}{password}")
+
+    def verify_and_update(self, password: str, hashed: str) -> tuple[bool, str | None]:
+        """Verify a deterministic test hash without invoking expensive real hashers.
+
+        Returns:
+            Verification result plus no replacement hash.
+        """
+        return self.verify(password, hashed), None
 
 
 class TrackingUserManager(BaseUserManager[ExampleUser, UUID]):
@@ -221,9 +232,16 @@ async def test_forgot_password_always_returns_202_and_same_body(
 
 async def test_login_timing_does_not_depend_on_email_existence() -> None:
     """Login timing stays within a narrow bound for missing and existing emails."""
-    app, _, _ = build_app(password_helper=SlowPasswordHelper(delay_seconds=SLOW_OPERATION_SECONDS))
+    app, _, user_manager = build_app(password_helper=SlowPasswordHelper(delay_seconds=SLOW_OPERATION_SECONDS))
+    user_manager._get_dummy_hash()
 
     async with AsyncTestClient(app=app) as client:
+        warmup_response = await client.post(
+            "/auth/login",
+            json={"identifier": "warmup@example.com", "password": "correct-password"},
+        )
+        assert warmup_response.status_code == HTTP_BAD_REQUEST
+
         missing_duration, missing_response = await _timed_post(
             client,
             "/auth/login",
@@ -273,6 +291,9 @@ async def test_forgot_password_timing_does_not_depend_on_email_existence(monkeyp
     app, _, _ = build_app()
 
     async with AsyncTestClient(app=app) as client:
+        warmup_response = await client.post("/auth/forgot-password", json={"email": "warmup@example.com"})
+        assert warmup_response.status_code == HTTP_ACCEPTED
+
         existing_duration, existing_response = await _timed_post(
             client,
             "/auth/forgot-password",

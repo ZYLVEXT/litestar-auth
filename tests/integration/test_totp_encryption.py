@@ -24,7 +24,12 @@ from litestar_auth.authentication.transport.bearer import BearerTransport
 from litestar_auth.controllers import create_auth_controller, create_totp_controller
 from litestar_auth.manager import ENCRYPTED_TOTP_SECRET_PREFIX, BaseUserManager, UserManagerSecurity
 from litestar_auth.password import PasswordHelper
-from litestar_auth.totp import InMemoryUsedTotpCodeStore, _current_counter, _generate_totp_code
+from litestar_auth.totp import (
+    InMemoryTotpEnrollmentStore,
+    InMemoryUsedTotpCodeStore,
+    _current_counter,
+    _generate_totp_code,
+)
 from tests._helpers import auth_middleware_get_request_session, litestar_app_with_user_manager
 from tests.integration.conftest import DummySessionMaker, ExampleUser, InMemoryTokenStrategy, InMemoryUserDatabase
 
@@ -158,7 +163,9 @@ def _build_app() -> tuple[Litestar, InMemoryUserDatabase]:
         user_manager_dependency_key=DEFAULT_USER_MANAGER_DEPENDENCY_KEY,
         used_tokens_store=InMemoryUsedTotpCodeStore(),
         pending_jti_store=InMemoryJWTDenylistStore(),
+        enrollment_store=InMemoryTotpEnrollmentStore(),
         totp_pending_secret=TOTP_PENDING_SECRET,
+        totp_secret_key=TOTP_SECRET_KEY,
         totp_enable_requires_password=False,
         id_parser=UUID,
     )

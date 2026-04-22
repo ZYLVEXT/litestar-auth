@@ -12,6 +12,7 @@ from litestar_auth.contrib.redis._surface import (
     RedisAuthPreset,
     RedisAuthRateLimitTier,
     RedisTokenStrategy,
+    RedisTotpEnrollmentStore,
     RedisUsedTotpCodeStore,
 )
 
@@ -20,5 +21,6 @@ __all__ = (
     "RedisAuthPreset",
     "RedisAuthRateLimitTier",
     "RedisTokenStrategy",
+    "RedisTotpEnrollmentStore",
     "RedisUsedTotpCodeStore",
 )

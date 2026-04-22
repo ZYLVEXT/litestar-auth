@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import hmac
+import importlib
 import logging
 import secrets
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from typing import TYPE_CHECKING, Any, Never, Protocol, cast, runtime_checkable
+from typing import TYPE_CHECKING, Any, Never, Protocol, Self, cast, runtime_checkable
 
 import jwt
 import msgspec  # noqa: TC002
@@ -34,7 +36,9 @@ from litestar_auth.payloads import (
     TotpVerifyRequest,
 )
 from litestar_auth.totp import (
+    InMemoryTotpEnrollmentStore,
     TotpAlgorithm,
+    TotpEnrollmentStore,
     UsedTotpCodeStore,
     generate_totp_secret,
     generate_totp_uri,
@@ -46,6 +50,7 @@ from litestar_auth.types import LoginIdentifier, TotpUserProtocol, UserProtocol
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Sequence
+    from types import ModuleType
 
     from litestar.openapi.spec import SecurityRequirement
 
@@ -59,9 +64,101 @@ INVALID_TOTP_TOKEN_DETAIL = "Invalid or expired 2FA pending token."
 INVALID_TOTP_CODE_DETAIL = "Invalid TOTP code."
 INVALID_ENROLL_TOKEN_DETAIL = "Invalid or expired enrollment token."
 _TOTP_ENROLL_TOKEN_LIFETIME_SECONDS = 300  # 5 minutes
+_ENROLLMENT_ENCODING_CLAIM = "enc"
+_ENROLLMENT_ENCODING_FERNET = "fernet"
+_ENROLLMENT_ENCODING_PLAIN = "plain"
 TOTP_SENSITIVE_ENDPOINTS: tuple[TotpSensitiveEndpoint, ...] = ("enable", "confirm_enable", "verify", "disable")
 TOTP_RATE_LIMITED_ENDPOINTS: tuple[TotpSensitiveEndpoint, ...] = ("verify", "confirm_enable")
 logger = logging.getLogger(__name__)
+
+
+def _load_cryptography_fernet() -> ModuleType:
+    """Import the optional cryptography Fernet module on demand.
+
+    Returns:
+        The imported ``cryptography.fernet`` module.
+
+    Raises:
+        ImportError: If cryptography is not installed.
+    """
+    try:
+        return importlib.import_module("cryptography.fernet")
+    except ImportError as exc:
+        msg = "Install litestar-auth[totp] to use TOTP enrollment-token encryption."
+        raise ImportError(msg) from exc
+
+
+@dataclass(frozen=True, slots=True)
+class _EnrollmentTokenCipher:
+    """Fernet cipher dedicated to server-side TOTP enrollment secret values."""
+
+    _fernet_module: Any
+    _fernet: Any
+
+    @classmethod
+    def from_key(cls, totp_secret_key: str) -> Self:
+        """Build a cipher from a Fernet-compatible key string.
+
+        Returns:
+            A cipher bound to the provided key for enrollment-token claims.
+        """
+        fernet_module = _load_cryptography_fernet()
+        return cls(_fernet_module=fernet_module, _fernet=fernet_module.Fernet(totp_secret_key.encode()))
+
+    def encrypt(self, plaintext: str) -> str:
+        """Return a Fernet token string for the provided plaintext secret.
+
+        Returns:
+            Fernet-encrypted ciphertext decoded as a UTF-8 string.
+        """
+        return cast("str", self._fernet.encrypt(plaintext.encode()).decode())
+
+    def decrypt(self, ciphertext: str) -> str | None:
+        """Decrypt a Fernet token string.
+
+        Returns:
+            The plaintext secret, or ``None`` when the ciphertext is invalid.
+        """
+        try:
+            return cast("str", self._fernet.decrypt(ciphertext.encode()).decode())
+        except self._fernet_module.InvalidToken:
+            return None
+
+
+def _resolve_enrollment_token_cipher(
+    *,
+    totp_secret_key: str | None,
+    unsafe_testing: bool,
+) -> _EnrollmentTokenCipher | None:
+    """Build the enrollment secret-value cipher, enforcing production posture.
+
+    Returns:
+        A cipher when ``totp_secret_key`` is configured, otherwise ``None``
+        (only allowed in explicit ``unsafe_testing`` mode).
+
+    Raises:
+        ConfigurationError: If ``totp_secret_key`` is missing outside explicit
+            ``unsafe_testing`` mode.
+    """
+    if totp_secret_key is not None:
+        return _EnrollmentTokenCipher.from_key(totp_secret_key)
+    if unsafe_testing:
+        return None
+
+    msg = (
+        "totp_secret_key is required when unsafe_testing=False. "
+        "TOTP enrollment secrets must be encrypted before they are written to the enrollment store."
+    )
+    raise ConfigurationError(msg)
+
+
+@dataclass(frozen=True, slots=True)
+class _EnrollmentTokenClaims:
+    """Validated enrollment-token claims needed to consume server-side state."""
+
+    user_id: str
+    jti: str
+    encoding: str
 
 
 @runtime_checkable
@@ -106,6 +203,8 @@ class _TotpControllerContext[UP: UserProtocol[Any], ID]:
     effective_pending_jti_store: JWTDenylistStore | None
     id_parser: Callable[[str], ID] | None
     unsafe_testing: bool
+    enrollment_token_cipher: _EnrollmentTokenCipher | None
+    enrollment_store: TotpEnrollmentStore
 
 
 def _totp_validate_replay_and_password(
@@ -160,6 +259,29 @@ def _totp_resolve_pending_jti_store(
     msg = (
         "pending_jti_store is required when unsafe_testing=False. "
         "Configure a JWTDenylistStore for TOTP pending-token replay protection."
+    )
+    raise ConfigurationError(msg)
+
+
+def _totp_resolve_enrollment_store(
+    enrollment_store: TotpEnrollmentStore | None,
+    *,
+    unsafe_testing: bool,
+) -> TotpEnrollmentStore:
+    """Return the configured TOTP enrollment store.
+
+    Raises:
+        ConfigurationError: If no server-side enrollment store is configured
+            outside explicit ``unsafe_testing`` mode.
+    """
+    if enrollment_store is not None:
+        return enrollment_store
+    if unsafe_testing:
+        return InMemoryTotpEnrollmentStore()
+
+    msg = (
+        "totp_enrollment_store is required when unsafe_testing=False. "
+        "Configure a TotpEnrollmentStore so enrollment tokens are single-use and latest-only."
     )
     raise ConfigurationError(msg)
 
@@ -225,6 +347,7 @@ async def _totp_handle_enable[UP: UserProtocol[Any], ID](
             )
 
     if totp_user.totp_secret is not None:
+        await ctx.enrollment_store.clear(user_id=str(user.id))
         await ctx.totp_rate_limit.on_invalid_attempt("enable", request)
         raise ClientException(
             status_code=400,
@@ -234,11 +357,16 @@ async def _totp_handle_enable[UP: UserProtocol[Any], ID](
 
     secret = generate_totp_secret(algorithm=ctx.totp_algorithm)
     uri = generate_totp_uri(secret, totp_user.email, ctx.totp_issuer, algorithm=ctx.totp_algorithm)
-    enrollment_token = _sign_enrollment_token(
-        user_id=str(user.id),
-        secret=secret,
-        signing_key=ctx.totp_pending_secret,
-    )
+    try:
+        enrollment_token = await _issue_enrollment_token(
+            user_id=str(user.id),
+            secret=secret,
+            signing_key=ctx.totp_pending_secret,
+            cipher=ctx.enrollment_token_cipher,
+            enrollment_store=ctx.enrollment_store,
+        )
+    except TokenError as exc:
+        raise ClientException(status_code=503, detail=str(exc), extra={"code": exc.code}) from exc
     await ctx.totp_rate_limit.on_success("enable", request)
     return TotpEnableResponse(secret=secret, uri=uri, enrollment_token=enrollment_token)
 
@@ -264,11 +392,12 @@ async def _totp_fail_invalid_pending(
 def _sign_enrollment_token(
     *,
     user_id: str,
-    secret: str,
     signing_key: str,
+    jti: str,
+    encoding: str,
     lifetime_seconds: int = _TOTP_ENROLL_TOKEN_LIFETIME_SECONDS,
 ) -> str:
-    """Sign a short-lived JWT containing the TOTP secret for enrollment confirmation.
+    """Sign a short-lived JWT pointing at server-side TOTP enrollment state.
 
     Returns:
         Encoded JWT string.
@@ -280,10 +409,71 @@ def _sign_enrollment_token(
         "iat": issued_at,
         "nbf": issued_at,
         "exp": issued_at + timedelta(seconds=lifetime_seconds),
-        "jti": secrets.token_hex(16),
-        "totp_secret": secret,
+        "jti": jti,
+        _ENROLLMENT_ENCODING_CLAIM: encoding,
     }
     return jwt.encode(payload, signing_key, algorithm="HS256")
+
+
+def _encode_enrollment_secret(secret: str, *, cipher: _EnrollmentTokenCipher | None) -> tuple[str, str]:
+    """Return the server-side enrollment-store value and its encoding marker."""
+    if cipher is None:
+        return secret, _ENROLLMENT_ENCODING_PLAIN
+    return cipher.encrypt(secret), _ENROLLMENT_ENCODING_FERNET
+
+
+def _decode_enrollment_secret(
+    encoded_secret: str,
+    *,
+    cipher: _EnrollmentTokenCipher | None,
+    encoding: str,
+) -> str | None:
+    """Return the plain-text enrollment secret from a server-side store value."""
+    if cipher is None:
+        return encoded_secret if encoding == _ENROLLMENT_ENCODING_PLAIN else None
+    if encoding != _ENROLLMENT_ENCODING_FERNET:
+        return None
+    return cipher.decrypt(encoded_secret)
+
+
+async def _issue_enrollment_token(  # noqa: PLR0913
+    *,
+    user_id: str,
+    secret: str,
+    signing_key: str,
+    cipher: _EnrollmentTokenCipher | None,
+    enrollment_store: TotpEnrollmentStore,
+    lifetime_seconds: int = _TOTP_ENROLL_TOKEN_LIFETIME_SECONDS,
+) -> str:
+    """Store pending enrollment state and return a signed client token.
+
+    Returns:
+        Signed enrollment JWT containing lookup claims for the stored secret.
+
+    Raises:
+        TokenError: If the enrollment store refuses the write.
+    """
+    jti = secrets.token_hex(16)
+    encoded_secret, encoding = _encode_enrollment_secret(secret, cipher=cipher)
+    stored = await enrollment_store.save(
+        user_id=user_id,
+        jti=jti,
+        secret=encoded_secret,
+        ttl_seconds=lifetime_seconds,
+    )
+    if not stored:
+        msg = (
+            "Could not record TOTP enrollment state (in-memory store at capacity). "
+            "Use RedisTotpEnrollmentStore or increase max_entries."
+        )
+        raise TokenError(msg)
+    return _sign_enrollment_token(
+        user_id=user_id,
+        signing_key=signing_key,
+        jti=jti,
+        encoding=encoding,
+        lifetime_seconds=lifetime_seconds,
+    )
 
 
 def _decode_enrollment_token(
@@ -291,11 +481,16 @@ def _decode_enrollment_token(
     *,
     signing_key: str,
     expected_user_id: str,
-) -> str:
-    """Decode and validate an enrollment JWT, returning the embedded TOTP secret.
+    cipher: _EnrollmentTokenCipher | None,
+) -> _EnrollmentTokenClaims:
+    """Decode and validate an enrollment JWT.
+
+    The ``enc`` claim must match the currently configured cipher posture:
+    tokens minted in plaintext mode are rejected when a cipher is active, and
+    Fernet-encoded tokens are rejected when no cipher is configured.
 
     Returns:
-        Plain-text TOTP secret extracted from the token payload.
+        Validated enrollment claims used to consume server-side state.
 
     Raises:
         InvalidTotpPendingTokenError: On any validation failure.
@@ -306,12 +501,23 @@ def _decode_enrollment_token(
             signing_key,
             algorithms=["HS256"],
             audience=TOTP_ENROLL_AUDIENCE,
-            options={"require": ["exp", "aud", "iat", "nbf", "jti", "sub"]},
+            options={
+                "require": [
+                    "exp",
+                    "aud",
+                    "iat",
+                    "nbf",
+                    "jti",
+                    "sub",
+                    _ENROLLMENT_ENCODING_CLAIM,
+                ],
+            },
         )
     except (ExpiredSignatureError, InvalidTokenError) as exc:
         raise InvalidTotpPendingTokenError from exc
 
-    if payload.get("sub") != expected_user_id:
+    subject = payload.get("sub")
+    if not isinstance(subject, str) or not hmac.compare_digest(subject, expected_user_id):
         raise InvalidTotpPendingTokenError
 
     jti = payload.get("jti")
@@ -322,10 +528,34 @@ def _decode_enrollment_token(
     except ValueError as exc:
         raise InvalidTotpPendingTokenError from exc
 
-    secret = payload.get("totp_secret")
-    if not isinstance(secret, str) or not secret:
+    expected_encoding = _ENROLLMENT_ENCODING_FERNET if cipher is not None else _ENROLLMENT_ENCODING_PLAIN
+    encoding = payload.get(_ENROLLMENT_ENCODING_CLAIM)
+    if encoding != expected_encoding:
         raise InvalidTotpPendingTokenError
 
+    return _EnrollmentTokenClaims(user_id=expected_user_id, jti=jti, encoding=encoding)
+
+
+async def _consume_enrollment_secret(
+    claims: _EnrollmentTokenClaims,
+    *,
+    enrollment_store: TotpEnrollmentStore,
+    cipher: _EnrollmentTokenCipher | None,
+) -> str:
+    """Consume server-side enrollment state and return the plain-text TOTP secret.
+
+    Returns:
+        Plain-text TOTP secret for code verification and persistence.
+
+    Raises:
+        InvalidTotpPendingTokenError: If the state is missing, stale, reused, or undecryptable.
+    """
+    encoded_secret = await enrollment_store.consume(user_id=claims.user_id, jti=claims.jti)
+    if not encoded_secret:
+        raise InvalidTotpPendingTokenError
+    secret = _decode_enrollment_secret(encoded_secret, cipher=cipher, encoding=claims.encoding)
+    if not secret:
+        raise InvalidTotpPendingTokenError
     return secret
 
 
@@ -362,6 +592,7 @@ async def _totp_handle_confirm_enable[UP: UserProtocol[Any], ID](
     )
 
     if user.totp_secret is not None:
+        await ctx.enrollment_store.clear(user_id=str(user.id))
         await ctx.totp_rate_limit.on_invalid_attempt("confirm_enable", request)
         raise ClientException(
             status_code=400,
@@ -370,10 +601,16 @@ async def _totp_handle_confirm_enable[UP: UserProtocol[Any], ID](
         )
 
     try:
-        secret = _decode_enrollment_token(
+        claims = _decode_enrollment_token(
             data.enrollment_token,
             signing_key=ctx.totp_pending_secret,
             expected_user_id=str(user.id),
+            cipher=ctx.enrollment_token_cipher,
+        )
+        secret = await _consume_enrollment_secret(
+            claims,
+            enrollment_store=ctx.enrollment_store,
+            cipher=ctx.enrollment_token_cipher,
         )
     except InvalidTotpPendingTokenError:
         await ctx.totp_rate_limit.on_invalid_attempt("confirm_enable", request)
@@ -396,6 +633,7 @@ async def _totp_handle_confirm_enable[UP: UserProtocol[Any], ID](
         )
 
     await user_manager.set_totp_secret(user, secret)
+    await ctx.enrollment_store.clear(user_id=str(user.id))
     await ctx.totp_rate_limit.on_success("confirm_enable", request)
     return TotpConfirmEnableResponse(enabled=True)
 
@@ -506,6 +744,7 @@ async def _totp_handle_disable[UP: UserProtocol[Any], ID](
         msg = INVALID_TOTP_CODE_DETAIL
         raise ClientException(status_code=400, detail=msg, extra={"code": ErrorCode.TOTP_CODE_INVALID})
     await user_manager.set_totp_secret(user, None)
+    await ctx.enrollment_store.clear(user_id=str(user.id))
     await ctx.totp_rate_limit.on_success("disable", request)
 
 
@@ -625,10 +864,12 @@ def create_totp_controller[UP: UserProtocol[Any], ID](  # noqa: PLR0913
     user_manager_dependency_key: str,
     used_tokens_store: UsedTotpCodeStore | None = None,
     pending_jti_store: JWTDenylistStore | None = None,
+    enrollment_store: TotpEnrollmentStore | None = None,
     require_replay_protection: bool = True,
     rate_limit_config: AuthRateLimitConfig | None = None,
     requires_verification: bool = False,
     totp_pending_secret: str,
+    totp_secret_key: str | None = None,
     totp_enable_requires_password: bool = True,
     totp_issuer: str = "litestar-auth",
     totp_algorithm: TotpAlgorithm = "SHA256",
@@ -649,6 +890,10 @@ def create_totp_controller[UP: UserProtocol[Any], ID](  # noqa: PLR0913
         pending_jti_store: Optional denylist store used to reject replayed
             pending-token JTIs after successful `/verify`. Required unless
             ``unsafe_testing=True``.
+        enrollment_store: Server-side store for pending TOTP enrollment secrets.
+            Required unless ``unsafe_testing=True``. Each `/enable` call replaces
+            prior pending enrollment state for that user, and `/enable/confirm`
+            atomically consumes the matching JTI.
         require_replay_protection: When enabled, the controller refuses to start
             without a used-token replay store unless ``unsafe_testing=True``.
         rate_limit_config: Optional auth-endpoint rate-limiter configuration.
@@ -657,6 +902,11 @@ def create_totp_controller[UP: UserProtocol[Any], ID](  # noqa: PLR0913
             users with `is_verified=False`.
         totp_pending_secret: Shared secret for signing and verifying pending-2FA JWTs.
             Must match the value passed to ``create_auth_controller``.
+        totp_secret_key: Fernet-compatible key used to encrypt the TOTP secret
+            before writing it to ``enrollment_store``. Required unless
+            ``unsafe_testing=True``; should be the same key configured on
+            ``UserManagerSecurity`` so pending enrollment secrets and persisted
+            user TOTP secrets use the same encryption posture.
         totp_enable_requires_password: When ``True`` (default), `/enable` requires a JSON body
             with the user's current password and re-authenticates before storing
             a new TOTP secret. Set to ``False`` only if you accept the session-hijack
@@ -684,6 +934,8 @@ def create_totp_controller[UP: UserProtocol[Any], ID](  # noqa: PLR0913
             backend=backend,
             user_manager_dependency_key="litestar_auth_user_manager",
             totp_pending_secret=settings.totp_pending_secret,
+            totp_secret_key=settings.totp_secret_key,
+            enrollment_store=totp_enrollment_store,
         )
         ```
     """
@@ -700,6 +952,14 @@ def create_totp_controller[UP: UserProtocol[Any], ID](  # noqa: PLR0913
     )
     effective_pending_jti_store = _totp_resolve_pending_jti_store(
         pending_jti_store,
+        unsafe_testing=unsafe_testing,
+    )
+    effective_enrollment_store = _totp_resolve_enrollment_store(
+        enrollment_store,
+        unsafe_testing=unsafe_testing,
+    )
+    enrollment_token_cipher = _resolve_enrollment_token_cipher(
+        totp_secret_key=totp_secret_key,
         unsafe_testing=unsafe_testing,
     )
 
@@ -722,6 +982,8 @@ def create_totp_controller[UP: UserProtocol[Any], ID](  # noqa: PLR0913
         effective_pending_jti_store=effective_pending_jti_store,
         id_parser=id_parser,
         unsafe_testing=unsafe_testing,
+        enrollment_token_cipher=enrollment_token_cipher,
+        enrollment_store=effective_enrollment_store,
     )
 
     async def totp_verify_before_request(request: Request[Any, Any, Any]) -> None:

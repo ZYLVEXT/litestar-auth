@@ -58,7 +58,7 @@ from litestar_auth.ratelimit import (
     RedisClientProtocol,
     RedisRateLimiter,
 )
-from litestar_auth.totp import InMemoryUsedTotpCodeStore, SecurityWarning
+from litestar_auth.totp import InMemoryTotpEnrollmentStore, InMemoryUsedTotpCodeStore, SecurityWarning
 from tests._helpers import cast_fakeredis
 from tests.integration.test_orchestrator import (
     DummySession,
@@ -610,6 +610,7 @@ def test_on_app_init_warns_security_warning_for_inmemory_totp_used_store(
         totp_pending_secret="x" * 32,
         totp_pending_jti_store=InMemoryJWTDenylistStore(),
         totp_used_tokens_store=InMemoryUsedTotpCodeStore(),
+        totp_enrollment_store=InMemoryTotpEnrollmentStore(),
     )
     config.user_manager_security = UserManagerSecurity[UUID](
         verification_token_secret="verify-secret-12345678901234567890",
@@ -678,6 +679,7 @@ def test_on_app_init_testing_recipe_suppresses_single_process_security_warnings(
         totp_pending_secret="x" * 32,
         totp_pending_jti_store=InMemoryJWTDenylistStore(),
         totp_used_tokens_store=InMemoryUsedTotpCodeStore(),
+        totp_enrollment_store=InMemoryTotpEnrollmentStore(),
     )
     config.user_manager_security = UserManagerSecurity[UUID](
         verification_token_secret="verify-secret-12345678901234567890",
@@ -1605,6 +1607,7 @@ def test_totp_backend_returns_configured_named_backend() -> None:
         totp_pending_secret="p" * 32,
         totp_backend_name="secondary",
         totp_pending_jti_store=InMemoryJWTDenylistStore(),
+        totp_enrollment_store=InMemoryTotpEnrollmentStore(),
     )
 
     startup_backend = plugin._totp_backend()

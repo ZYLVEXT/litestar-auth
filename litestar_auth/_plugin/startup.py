@@ -15,7 +15,7 @@ from litestar_auth._plugin.rate_limit import iter_rate_limit_endpoints
 from litestar_auth._plugin.security_policy import _describe_jwt_revocation_policy
 from litestar_auth.authentication.strategy.jwt import InMemoryJWTDenylistStore
 from litestar_auth.exceptions import ConfigurationError
-from litestar_auth.totp import InMemoryUsedTotpCodeStore, SecurityWarning
+from litestar_auth.totp import InMemoryTotpEnrollmentStore, InMemoryUsedTotpCodeStore, SecurityWarning
 
 if TYPE_CHECKING:
     from litestar.config.app import AppConfig
@@ -89,14 +89,30 @@ def warn_insecure_plugin_startup_defaults(config: LitestarAuthConfig[Any, Any]) 
         )
 
     totp_config = config.totp_config
-    if totp_config is not None and isinstance(totp_config.totp_used_tokens_store, InMemoryUsedTotpCodeStore):
+    if totp_config is not None and _is_instance_or_reloaded(
+        totp_config.totp_used_tokens_store,
+        InMemoryUsedTotpCodeStore,
+    ):
         warnings.warn(
             "TOTP replay protection uses InMemoryUsedTotpCodeStore; used-code state is not "
             "shared across workers. Use RedisUsedTotpCodeStore for production multi-worker deployments.",
             SecurityWarning,
             stacklevel=2,
         )
-    if totp_config is not None and isinstance(totp_config.totp_pending_jti_store, InMemoryJWTDenylistStore):
+    if totp_config is not None and _is_instance_or_reloaded(
+        totp_config.totp_enrollment_store,
+        InMemoryTotpEnrollmentStore,
+    ):
+        warnings.warn(
+            "TOTP enrollment state uses InMemoryTotpEnrollmentStore; pending enrollment secrets are not "
+            "shared across workers. Use RedisTotpEnrollmentStore for production multi-worker deployments.",
+            SecurityWarning,
+            stacklevel=2,
+        )
+    if totp_config is not None and _is_instance_or_reloaded(
+        totp_config.totp_pending_jti_store,
+        InMemoryJWTDenylistStore,
+    ):
         warnings.warn(
             "TOTP pending-token replay protection uses InMemoryJWTDenylistStore; pending JTI state is not "
             "shared across workers. Use RedisJWTDenylistStore for production multi-worker deployments.",
@@ -211,6 +227,14 @@ def _has_inmemory_rate_limit_backend(config: LitestarAuthConfig[Any, Any]) -> bo
         if not endpoint_limit.backend.is_shared_across_workers:
             return True
     return False
+
+
+def _is_instance_or_reloaded(value: object, expected_type: type[object]) -> bool:
+    """Return whether ``value`` is an instance of ``expected_type`` or its reloaded twin."""
+    value_type = value.__class__
+    return isinstance(value, expected_type) or (
+        value_type.__module__ == expected_type.__module__ and value_type.__name__ == expected_type.__name__
+    )
 
 
 def _warn_refresh_cookie_max_age_mismatch(config: LitestarAuthConfig[Any, Any]) -> None:

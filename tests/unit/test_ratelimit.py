@@ -881,13 +881,14 @@ async def test_contrib_redis_preset_builds_rate_limit_config_with_shared_client_
     monkeypatch: pytest.MonkeyPatch,
     patch_redis_loader: None,
 ) -> None:
-    """The contrib preset preserves group tiers, overrides, and both TOTP Redis store builders."""
+    """The contrib preset preserves group tiers, overrides, and the TOTP Redis store builders."""
     del patch_redis_loader
 
     def load_optional_redis() -> object:
         return object()
 
-    monkeypatch.setattr("litestar_auth.totp._load_redis_asyncio", load_optional_redis)
+    monkeypatch.setattr("litestar_auth.totp._load_used_totp_redis_asyncio", load_optional_redis)
+    monkeypatch.setattr("litestar_auth.totp._load_enrollment_redis_asyncio", load_optional_redis)
     monkeypatch.setattr("litestar_auth.authentication.strategy.jwt._load_redis_asyncio", load_optional_redis)
     redis_client = cast_fakeredis(async_fakeredis, RedisAuthClientProtocol)
     assert isinstance(redis_client, RedisAuthClientProtocol)
@@ -924,6 +925,7 @@ async def test_contrib_redis_preset_builds_rate_limit_config_with_shared_client_
         group_backends={"totp": explicit_totp_backend},
     )
     store = preset.build_totp_used_tokens_store(key_prefix="used:")
+    enrollment_store = preset.build_totp_enrollment_store(key_prefix="enroll:")
     pending_store = preset.build_totp_pending_jti_store(key_prefix="pending:")
 
     assert config.login is not None
@@ -952,7 +954,9 @@ async def test_contrib_redis_preset_builds_rate_limit_config_with_shared_client_
     assert config.verify_token is None
     assert config.request_verify_token is None
     assert store._redis is redis_client
+    assert enrollment_store._redis is redis_client
     assert pending_store.redis is redis_client
+    assert enrollment_store._key("user-1").startswith("enroll:")
     assert pending_store.key_prefix == "pending:"
     assert (await store.mark_used("user-1", 7, 1.25)).stored is True
     await pending_store.deny("pending-jti", ttl_seconds=PENDING_JTI_TTL_SECONDS)
@@ -1509,8 +1513,10 @@ def test_memory_rate_limiter_maybe_sweep_waits_for_configured_interval() -> None
     assert "stale" not in limiter._windows
 
 
-async def test_memory_rate_limiter_evicts_least_recently_active_key_at_capacity() -> None:
-    """Adding a new key evicts the least-recently-active survivor when capped."""
+async def test_memory_rate_limiter_fails_closed_for_new_keys_at_capacity(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Capacity pressure rejects new keys instead of evicting active counters by default."""
     clock = FakeClock()
     limiter = InMemoryRateLimiter(
         max_attempts=2,
@@ -1526,11 +1532,58 @@ async def test_memory_rate_limiter_evicts_least_recently_active_key_at_capacity(
     clock.advance(0.1)
     await limiter.increment("first")
     clock.advance(0.1)
+    with caplog.at_level(logging.WARNING, logger=ratelimit_logger.name):
+        assert await limiter.check("third") is False
+        await limiter.increment("third")
+
+    assert len(limiter._windows) == KEY_CAP
+    assert list(limiter._windows) == ["first", "second"]
+    assert "third" not in limiter._windows
+    assert await limiter.check("first") is False
+    assert any(getattr(record, "event", None) == "rate_limit_memory_capacity" for record in caplog.records)
+
+
+async def test_memory_rate_limiter_reclaims_expired_keys_before_capacity_rejection() -> None:
+    """Capacity checks prune expired idle counters before rejecting a new key."""
+    clock = FakeClock()
+    limiter = InMemoryRateLimiter(
+        max_attempts=2,
+        window_seconds=1,
+        clock=clock,
+        max_keys=1,
+        sweep_interval=100,
+    )
+
+    await limiter.increment("expired")
+    clock.advance(1.1)
+
+    assert await limiter.check("fresh") is True
+    await limiter.increment("fresh")
+    assert set(limiter._windows) == {"fresh"}
+
+
+async def test_memory_rate_limiter_can_use_legacy_lru_eviction_at_capacity() -> None:
+    """The compatibility mode still evicts the least-recently-active survivor when capped."""
+    clock = FakeClock()
+    limiter = InMemoryRateLimiter(
+        max_attempts=2,
+        window_seconds=60,
+        clock=clock,
+        max_keys=KEY_CAP,
+        sweep_interval=100,
+        fail_closed_on_capacity=False,
+    )
+
+    await limiter.increment("first")
+    clock.advance(0.1)
+    await limiter.increment("second")
+    clock.advance(0.1)
+    await limiter.increment("first")
+    clock.advance(0.1)
     await limiter.increment("third")
 
     assert len(limiter._windows) == KEY_CAP
     assert list(limiter._windows) == ["first", "third"]
-    assert await limiter.check("second") is True
     assert await limiter.check("first") is False
 
 

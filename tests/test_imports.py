@@ -70,7 +70,14 @@ from litestar_auth.authentication.strategy.db_models import AccessToken, Refresh
 from litestar_auth.authentication.strategy.jwt import InMemoryJWTDenylistStore, JWTDenylistStore, RedisJWTDenylistStore
 from litestar_auth.authentication.transport import Transport
 from litestar_auth.config import require_password_length
-from litestar_auth.contrib.redis import RedisAuthClientProtocol, RedisAuthPreset, RedisAuthRateLimitTier
+from litestar_auth.contrib.redis import (
+    RedisAuthClientProtocol,
+    RedisAuthPreset,
+    RedisAuthRateLimitTier,
+)
+from litestar_auth.contrib.redis import (
+    RedisTotpEnrollmentStore as ContribRedisTotpEnrollmentStore,
+)
 from litestar_auth.controllers import (
     TotpUserManagerProtocol,
     create_auth_controller,
@@ -130,7 +137,9 @@ from litestar_auth.ratelimit import (
 )
 from litestar_auth.schemas import UserCreate, UserRead, UserUpdate
 from litestar_auth.totp import (
+    InMemoryTotpEnrollmentStore,
     InMemoryUsedTotpCodeStore,
+    RedisTotpEnrollmentStore,
     RedisUsedTotpCodeStore,
     generate_totp_secret,
     generate_totp_uri,
@@ -197,6 +206,7 @@ REMOVED_ROOT_SECONDARY_EXPORTS = (
     "EndpointRateLimit",
     "InMemoryJWTDenylistStore",
     "InMemoryRateLimiter",
+    "InMemoryTotpEnrollmentStore",
     "InMemoryUsedTotpCodeStore",
     "InvalidPasswordError",
     "InvalidResetPasswordTokenError",
@@ -208,12 +218,15 @@ REMOVED_ROOT_SECONDARY_EXPORTS = (
     "RedisJWTDenylistStore",
     "RedisRateLimiter",
     "RedisTokenStrategy",
+    "RedisTotpEnrollmentStore",
     "RedisUsedTotpCodeStore",
     "RefreshToken",
     "Strategy",
     "TokenError",
+    "TotpEnrollmentStore",
     "TotpUserManagerProtocol",
     "Transport",
+    "UsedTotpCodeStore",
     "UserAlreadyExistsError",
     "UserNotExistsError",
     "create_auth_controller",
@@ -609,7 +622,8 @@ async def test_root_package_supports_documented_redis_migration_recipe_and_totp_
         return object()
 
     monkeypatch.setattr(ratelimit_module, "_load_redis_asyncio", load_optional_redis)
-    monkeypatch.setattr(totp_module, "_load_redis_asyncio", load_optional_redis)
+    monkeypatch.setattr(totp_module, "_load_used_totp_redis_asyncio", load_optional_redis)
+    monkeypatch.setattr(totp_module, "_load_enrollment_redis_asyncio", load_optional_redis)
 
     current_endpoint_class = ratelimit_module.EndpointRateLimit
     rate_limit_redis_client = async_fakeredis_factory()
@@ -663,15 +677,18 @@ async def test_root_package_supports_documented_redis_migration_recipe_and_totp_
         },
     )
     used_tokens_store = RedisUsedTotpCodeStore(redis=totp_redis)
+    enrollment_store = RedisTotpEnrollmentStore(redis=totp_redis)
     pending_jti_store = RedisJWTDenylistStore(redis=totp_redis)
     totp_config = TotpConfig(
         totp_pending_secret="p" * 32,
         totp_pending_jti_store=pending_jti_store,
         totp_used_tokens_store=used_tokens_store,
+        totp_enrollment_store=enrollment_store,
     )
 
     assert current_root_module.TotpConfig is current_plugin_module.TotpConfig
     assert AuthRateLimitConfig.__name__ == ratelimit_module.AuthRateLimitConfig.__name__
+    assert RedisTotpEnrollmentStore.__name__ == totp_module.RedisTotpEnrollmentStore.__name__
     assert RedisUsedTotpCodeStore.__name__ == totp_module.RedisUsedTotpCodeStore.__name__
     assert rate_limit_config.login == current_endpoint_class(
         backend=credential_backend,
@@ -686,6 +703,7 @@ async def test_root_package_supports_documented_redis_migration_recipe_and_totp_
     assert rate_limit_config.request_verify_token is None
     assert totp_config.totp_pending_jti_store is pending_jti_store
     assert totp_config.totp_used_tokens_store is used_tokens_store
+    assert totp_config.totp_enrollment_store is enrollment_store
     assert (await used_tokens_store.mark_used("user-1", 7, 60.0)).stored is True
     await pending_jti_store.deny("pending-jti", ttl_seconds=ONE_MINUTE_TTL_SECONDS)
     assert await pending_jti_store.is_denied("pending-jti") is True
@@ -710,10 +728,13 @@ def test_contrib_redis_module_exposes_high_level_preset_without_root_reexport() 
         "RedisAuthPreset",
         "RedisAuthRateLimitTier",
         "RedisTokenStrategy",
+        "RedisTotpEnrollmentStore",
         "RedisUsedTotpCodeStore",
     )
     assert redis_contrib_module.RedisAuthClientProtocol is RedisAuthClientProtocol
+    assert redis_contrib_module.RedisTotpEnrollmentStore is ContribRedisTotpEnrollmentStore
     assert preset_hints["redis"] is RedisAuthClientProtocol
+    assert hasattr(RedisAuthPreset, "build_totp_enrollment_store")
     assert hasattr(RedisAuthPreset, "build_totp_pending_jti_store")
     assert "RedisAuthClientProtocol" not in __all__
     assert "RedisAuthPreset" not in __all__
@@ -727,13 +748,14 @@ async def test_contrib_redis_preset_supports_documented_shared_client_recipe(
     monkeypatch: pytest.MonkeyPatch,
     async_fakeredis: AsyncFakeRedis,
 ) -> None:
-    """The canonical contrib preset recipe derives rate limiting plus both TOTP Redis stores."""
+    """The canonical contrib preset recipe derives rate limiting plus the TOTP Redis stores."""
 
     def load_optional_redis() -> object:
         return object()
 
     monkeypatch.setattr(ratelimit_module, "_load_redis_asyncio", load_optional_redis)
-    monkeypatch.setattr(totp_module, "_load_redis_asyncio", load_optional_redis)
+    monkeypatch.setattr(totp_module, "_load_used_totp_redis_asyncio", load_optional_redis)
+    monkeypatch.setattr(totp_module, "_load_enrollment_redis_asyncio", load_optional_redis)
     monkeypatch.setattr("litestar_auth.authentication.strategy.jwt._load_redis_asyncio", load_optional_redis)
     redis_client = cast_fakeredis(async_fakeredis, RedisAuthClientProtocol)
     assert isinstance(redis_client, RedisAuthClientProtocol)
@@ -763,10 +785,12 @@ async def test_contrib_redis_preset_supports_documented_shared_client_recipe(
     )
     used_tokens_store = preset.build_totp_used_tokens_store()
     pending_jti_store = preset.build_totp_pending_jti_store()
+    enrollment_store = preset.build_totp_enrollment_store()
     totp_config = TotpConfig(
         totp_pending_secret="p" * 32,
         totp_pending_jti_store=pending_jti_store,
         totp_used_tokens_store=used_tokens_store,
+        totp_enrollment_store=enrollment_store,
     )
 
     assert rate_limit_config.login is not None
@@ -787,8 +811,10 @@ async def test_contrib_redis_preset_supports_documented_shared_client_recipe(
     assert rate_limit_config.request_verify_token is None
     assert totp_config.totp_pending_jti_store is pending_jti_store
     assert totp_config.totp_used_tokens_store is used_tokens_store
+    assert totp_config.totp_enrollment_store is enrollment_store
     assert used_tokens_store._redis is redis_client
     assert pending_jti_store.redis is redis_client
+    assert enrollment_store._redis is redis_client
     assert (await used_tokens_store.mark_used("user-1", 7, 60.0)).stored is True
     await pending_jti_store.deny("pending-jti", ttl_seconds=ONE_MINUTE_TTL_SECONDS)
     assert await pending_jti_store.is_denied("pending-jti") is True
@@ -993,9 +1019,11 @@ def test_root_package_does_not_reexport_secondary_surfaces() -> None:
     assert EndpointRateLimit is not None
     assert AuthRateLimitConfig is not None
     assert InMemoryJWTDenylistStore is not None
+    assert InMemoryTotpEnrollmentStore is not None
     assert InMemoryUsedTotpCodeStore is not None
     assert JWTDenylistStore is not None
     assert RedisJWTDenylistStore is not None
+    assert RedisTotpEnrollmentStore is not None
     assert RedisUsedTotpCodeStore is not None
     assert BaseUserStore is not None
     assert SQLAlchemyUserDatabase is not None

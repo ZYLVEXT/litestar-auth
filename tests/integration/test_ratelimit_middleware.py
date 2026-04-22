@@ -173,6 +173,7 @@ def build_app(*, rate_limit_config: AuthRateLimitConfig | None = None) -> Litest
             totp_pending_secret=TOTP_PENDING_SECRET,
             totp_enable_requires_password=False,
             id_parser=UUID,
+            unsafe_testing=True,
         ),
     ]
     middleware = DefineMiddleware(

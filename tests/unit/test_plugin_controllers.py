@@ -33,6 +33,7 @@ from litestar_auth._plugin.controllers import (
 from litestar_auth.authentication.backend import AuthenticationBackend
 from litestar_auth.authentication.transport.bearer import BearerTransport
 from litestar_auth.manager import UserManagerSecurity
+from litestar_auth.totp import InMemoryTotpEnrollmentStore
 from tests.integration.test_orchestrator import (
     DummySessionMaker,
     ExampleUser,
@@ -174,6 +175,7 @@ def test_build_totp_controller_forwards_named_backend_and_config(monkeypatch: py
     secondary_backend = _backend(name="secondary", token_prefix="secondary")
     used_tokens_store = cast("Any", object())
     pending_jti_store = cast("Any", object())
+    enrollment_store = cast("Any", object())
     config = _minimal_config(
         backends=[primary_backend, secondary_backend],
         totp_config=TotpConfig(
@@ -183,6 +185,7 @@ def test_build_totp_controller_forwards_named_backend_and_config(monkeypatch: py
             totp_algorithm=cast("Any", "SHA512"),
             totp_used_tokens_store=used_tokens_store,
             totp_pending_jti_store=pending_jti_store,
+            totp_enrollment_store=enrollment_store,
             totp_require_replay_protection=False,
             totp_enable_requires_password=False,
         ),
@@ -203,9 +206,11 @@ def test_build_totp_controller_forwards_named_backend_and_config(monkeypatch: py
     assert captured["user_manager_dependency_key"] == "litestar_auth_user_manager"
     assert captured["used_tokens_store"] is used_tokens_store
     assert captured["pending_jti_store"] is pending_jti_store
+    assert captured["enrollment_store"] is enrollment_store
     assert captured["require_replay_protection"] is False
     assert captured["requires_verification"] is False
     assert captured["totp_pending_secret"] == "p" * 32
+    assert captured["totp_secret_key"] is None
     assert captured["totp_enable_requires_password"] is False
     assert captured["totp_issuer"] == "Example Issuer"
     assert captured["totp_algorithm"] == "SHA512"
@@ -237,6 +242,29 @@ def test_build_totp_controller_defaults_to_primary_backend_when_name_is_unset(
     assert isinstance(captured["backend"], _current_startup_backend_template_type())
     assert captured["backend"].name == primary_backend.name
     assert captured["backend_index"] == 0
+
+
+def test_build_totp_controller_forwards_totp_secret_key_from_user_manager_security(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """TOTP controller assembly forwards the Fernet key configured on UserManagerSecurity."""
+    config = _minimal_config(totp_config=TotpConfig(totp_pending_secret="p" * 32))
+    config.user_manager_security = UserManagerSecurity[UUID](
+        verification_token_secret="v" * 32,
+        reset_password_token_secret="r" * 32,
+        totp_secret_key="fernet-secret-key-for-plugin-wiring",
+        id_parser=UUID,
+    )
+    captured: dict[str, object] = {}
+
+    def _create_totp_controller(**kwargs: object) -> str:
+        captured.update(kwargs)
+        return "totp-controller"
+
+    monkeypatch.setattr(controllers_module, "create_totp_controller", _create_totp_controller)
+
+    assert build_totp_controller(config) == "totp-controller"
+    assert captured["totp_secret_key"] == "fernet-secret-key-for-plugin-wiring"
 
 
 def test_build_totp_controller_raises_for_unknown_named_backend_after_index_scan() -> None:
@@ -311,7 +339,12 @@ def test_resolve_request_backend_raises_when_backend_name_changes() -> None:
 
 async def test_create_totp_controller_enable_validation_callback_runs_background_task() -> None:
     """Plugin TOTP enable handlers keep the invalid-payload background callback wired."""
-    config = _minimal_config(totp_config=TotpConfig(totp_pending_secret="p" * 32))
+    config = _minimal_config(
+        totp_config=TotpConfig(
+            totp_pending_secret="p" * 32,
+            totp_enrollment_store=InMemoryTotpEnrollmentStore(),
+        ),
+    )
     inventory = resolve_backend_inventory(config)
     controller_cls = controllers_module.create_totp_controller(
         backend=config.resolve_startup_backends()[0],
@@ -322,6 +355,7 @@ async def test_create_totp_controller_enable_validation_callback_runs_background
         require_replay_protection=False,
         totp_pending_secret="p" * 32,
         totp_enable_requires_password=True,
+        unsafe_testing=True,
     )
     controller_handler = cast("Any", controller_cls).enable
     exception_handler = controller_handler.exception_handlers[ValidationException]

@@ -1,3 +1,47 @@
+## Unreleased
+
+### Security
+
+- **TOTP enrollment JWTs no longer carry the generated TOTP secret** — the short-lived JWT returned
+  by `/2fa/enable` now carries only lookup claims. The pending secret is stored server-side in
+  `TotpEnrollmentStore`, encrypted first with `user_manager_security.totp_secret_key`, and
+  `/2fa/enable/confirm` atomically consumes the matching `jti`. Each new `/2fa/enable` replaces the
+  user's previous pending enrollment, so stale, reused, and invalid-code-consumed enrollment tokens
+  cannot be confirmed later.
+- **`create_totp_controller(..., totp_secret_key=..., enrollment_store=...)` is required in production** —
+  **Breaking for callers of the manual controller factory.** `totp_secret_key` protects the
+  server-side pending enrollment secret and persisted user TOTP secret; `enrollment_store` enforces
+  latest-only, single-use enrollment confirmation. Omitting either now fails closed with
+  `ConfigurationError`; opt out only with `unsafe_testing=True`. The plugin-owned path forwards
+  `UserManagerSecurity.totp_secret_key` automatically, but production `TotpConfig` must now provide
+  `totp_enrollment_store`.
+- **Failed-login logs now include a keyed identifier digest** — `BaseUserManager.authenticate()`
+  still avoids plaintext emails/usernames in logs, but failed attempts now carry
+  `identifier_digest` and `login_identifier_type` fields so operators can correlate brute-force
+  activity during incident response.
+- **`unsafe_testing=True` pending-JTI bypass now emits structured critical telemetry** — the existing
+  `SecurityWarning` remains, and the first bypass per process also logs
+  `event=totp_pending_jti_dedup_disabled`.
+- **`InMemoryRateLimiter` now fails closed at key capacity by default** — new keys are rejected and
+  logged with `event=rate_limit_memory_capacity` when `max_keys` is reached and no expired counters
+  can be pruned. Legacy LRU eviction is still available with `fail_closed_on_capacity=False`.
+- **OAuth associate flow no longer treats two `None` IDs as a match** — `OAuthService.associate_account`
+  now explicitly rejects any candidate where either the existing owner or the current user lacks a
+  resolved `id`. This is a defense-in-depth change against downstream stores that return
+  partially-constructed users; the stable `OAUTH_ACCOUNT_ALREADY_LINKED` client error is reused.
+
+### Migration
+
+- Set `user_manager_security.totp_secret_key` (Fernet key) when you enable `TotpConfig`. The plugin
+  already required this for at-rest encryption of persisted secrets; it is now also required for
+  pending-enrollment secret storage.
+- Configure `TotpConfig.totp_enrollment_store`, typically via
+  `RedisAuthPreset.build_totp_enrollment_store()` for Redis-backed deployments.
+- For manual controller wiring, pass both `totp_secret_key=settings.totp_secret_key` and
+  `enrollment_store=...` to `create_totp_controller(...)` alongside the existing
+  `totp_pending_secret=...`. Tests that intentionally use plaintext, process-local enrollment
+  state must opt in with `unsafe_testing=True`.
+
 ## 1.11.0 (2026-04-20)
 
 ### Added
