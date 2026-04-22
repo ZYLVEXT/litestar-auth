@@ -98,7 +98,7 @@ class TrackingUserManager(BaseUserManager[ExampleUser, UUID]):
         self.registration_events: list[tuple[ExampleUser, str]] = []
         self.logged_in_users: list[ExampleUser] = []
         self.verified_users: list[ExampleUser] = []
-        self.request_verify_events: list[tuple[ExampleUser, str]] = []
+        self.request_verify_events: list[tuple[ExampleUser | None, str | None]] = []
         self.forgot_password_events: list[tuple[ExampleUser | None, str | None]] = []
         self.reset_users: list[ExampleUser] = []
         self.after_update_events: list[tuple[ExampleUser, dict]] = []
@@ -118,7 +118,7 @@ class TrackingUserManager(BaseUserManager[ExampleUser, UUID]):
         """Record a successful verification."""
         self.verified_users.append(user)
 
-    async def on_after_request_verify_token(self, user: ExampleUser, token: str) -> None:
+    async def on_after_request_verify_token(self, user: ExampleUser | None, token: str | None) -> None:
         """Record a verification-token request."""
         self.request_verify_events.append((user, token))
 
@@ -1176,8 +1176,8 @@ async def test_request_verify_token_generates_token_for_existing_unverified_user
     assert isinstance(token, str)
 
 
-async def test_request_verify_token_ignores_missing_and_verified_users() -> None:
-    """Requesting a verify token ignores missing users and already-verified users."""
+async def test_request_verify_token_hides_missing_and_verified_users() -> None:
+    """Requesting a verify token always runs the hook with redacted public data."""
     user_db = AsyncMock()
     password_helper = PasswordHelper()
     manager = TrackingUserManager(user_db, password_helper)
@@ -1187,7 +1187,7 @@ async def test_request_verify_token_ignores_missing_and_verified_users() -> None
     assert await manager.request_verify_token("missing@example.com") is None
     assert await manager.request_verify_token(verified_user.email) is None
 
-    assert manager.request_verify_events == []
+    assert manager.request_verify_events == [(None, None), (None, None)]
 
 
 async def test_forgot_password_generates_token_and_hides_missing_users() -> None:
@@ -2093,6 +2093,7 @@ async def test_base_hooks_are_noops() -> None:
     assert await manager.on_after_login(user) is None
     assert await manager.on_after_verify(user) is None
     assert await manager.on_after_request_verify_token(user, "token") is None
+    assert await manager.on_after_request_verify_token(None, None) is None
     assert await manager.on_after_forgot_password(user, "token") is None
     assert await manager.on_after_reset_password(user) is None
     assert await manager.on_after_update(user, {"email": user.email}) is None

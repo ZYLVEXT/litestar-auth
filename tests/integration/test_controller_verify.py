@@ -65,9 +65,9 @@ class TrackingUserManager(BaseUserManager[ExampleUser, UUID]):
             backends=backends,
             login_identifier=login_identifier,
         )
-        self.request_verify_events: list[tuple[ExampleUser, str]] = []
+        self.request_verify_events: list[tuple[ExampleUser | None, str | None]] = []
 
-    async def on_after_request_verify_token(self, user: ExampleUser, token: str) -> None:
+    async def on_after_request_verify_token(self, user: ExampleUser | None, token: str | None) -> None:
         """Record each requested verification token."""
         self.request_verify_events.append((user, token))
 
@@ -241,6 +241,29 @@ async def test_request_verify_token_calls_hook_for_existing_unverified_user(
     event_user, token = user_manager.request_verify_events[0]
     assert event_user is user
     assert isinstance(token, str)
+
+
+@pytest.mark.parametrize("email", ["missing@example.com", "verified@example.com"])
+async def test_request_verify_token_redacts_verified_and_missing_accounts(
+    email: str,
+    client: tuple[AsyncTestClient[Litestar], InMemoryUserDatabase, TrackingUserManager],
+) -> None:
+    """Verify-token requests keep the public hook payload redacted when not deliverable."""
+    test_client, user_db, user_manager = client
+    if email == "verified@example.com":
+        user = ExampleUser(
+            id=uuid4(),
+            email=email,
+            hashed_password=PasswordHelper().hash("plain-password"),
+            is_verified=True,
+        )
+        user_db.users_by_id[user.id] = user
+        user_db.user_ids_by_email[user.email] = user.id
+
+    response = await test_client.post("/auth/request-verify-token", json={"email": email})
+
+    assert response.status_code == HTTP_ACCEPTED
+    assert user_manager.request_verify_events == [(None, None)]
 
 
 async def test_verify_flows_stay_email_and_token_based_under_username_login_mode() -> None:

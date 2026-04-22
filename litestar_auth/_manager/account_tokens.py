@@ -256,14 +256,25 @@ class AccountTokensService[UP, ID]:
         return updated_user
 
     async def request_verify_token(self, email: str) -> None:
-        """Generate a verification token for an unverified user."""
-        email = self._manager._normalize_email(email)
-        user = await self._manager.user_db.get_by_email(email)
-        if user is None or _managed_user(user).is_verified:
-            return
+        """Generate a verification token without exposing account state."""
+        normalized_email = self._manager._normalize_email(email)
+        user = await self._manager.user_db.get_by_email(normalized_email)
+        deliverable = user is not None and not _managed_user(user).is_verified
+        token = (
+            self.write_verify_token(user)
+            if deliverable
+            else self._token_security.write_token(
+                subject="verification-placeholder",
+                secret=self._manager.account_token_secrets.verification_token_secret.get_secret_value(),
+                audience=self._verify_token_audience,
+                lifetime=self._manager.verification_token_lifetime,
+            )
+        )
 
-        token = self.write_verify_token(user)
-        await self._manager.on_after_request_verify_token(user, token)
+        await self._manager.on_after_request_verify_token(
+            user if deliverable else None,
+            token if deliverable else None,
+        )
 
     async def forgot_password(self, email: str, *, dummy_hash: str) -> None:
         """Generate a reset token without exposing user existence."""

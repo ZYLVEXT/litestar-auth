@@ -867,7 +867,7 @@ def create_totp_controller[UP: UserProtocol[Any], ID](  # noqa: PLR0913
     enrollment_store: TotpEnrollmentStore | None = None,
     require_replay_protection: bool = True,
     rate_limit_config: AuthRateLimitConfig | None = None,
-    requires_verification: bool = False,
+    requires_verification: bool = True,
     totp_pending_secret: str,
     totp_secret_key: str | None = None,
     totp_enable_requires_password: bool = True,
@@ -897,9 +897,9 @@ def create_totp_controller[UP: UserProtocol[Any], ID](  # noqa: PLR0913
         require_replay_protection: When enabled, the controller refuses to start
             without a used-token replay store unless ``unsafe_testing=True``.
         rate_limit_config: Optional auth-endpoint rate-limiter configuration.
-        requires_verification: When ``True``, `/2fa/verify` applies the same
-            account-state policy as `/login`, rejecting inactive users and
-            users with `is_verified=False`.
+        requires_verification: When ``True`` (default), `/2fa/verify` applies
+            the same account-state policy as `/login`, rejecting inactive users
+            and users with `is_verified=False`.
         totp_pending_secret: Shared secret for signing and verifying pending-2FA JWTs.
             Must match the value passed to ``create_auth_controller``.
         totp_secret_key: Fernet-compatible key used to encrypt the TOTP secret

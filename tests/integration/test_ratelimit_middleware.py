@@ -133,6 +133,7 @@ def build_app(*, rate_limit_config: AuthRateLimitConfig | None = None) -> Litest
         id=uuid4(),
         email="user@example.com",
         hashed_password=password_helper.hash("correct-password"),
+        is_verified=True,
     )
     user_db = InMemoryUserDatabase([existing_user])
     user_manager = BaseUserManager[ExampleUser, UUID](

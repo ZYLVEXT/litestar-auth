@@ -21,10 +21,18 @@ With `include_register=True` (default), clients can call `POST {auth_path}/regis
 
 With `include_verify=True`:
 
-- `POST .../request-verify-token` — `RequestVerifyToken` with `email`; issues a new verification token.
+- `POST .../request-verify-token` — `RequestVerifyToken` with `email`; issues a new verification
+  token when the email belongs to an existing unverified user, while keeping the public response and
+  manager hook contract enumeration-resistant.
 - `POST .../verify` — `VerifyToken` with `token`; consumes a verification token.
 
-The library **does not send email**. Implement `on_after_request_verify_token` and related hooks on your user manager to enqueue mail or notifications.
+`LitestarAuthConfig.requires_verification` now defaults to `True`, so newly registered accounts must
+verify their email before `/login` or built-in `/2fa/verify` can complete unless you opt out
+explicitly.
+
+The library **does not send email**. Implement `on_after_request_verify_token` and related hooks on
+your user manager to enqueue mail or notifications, and make sure the hook performs equivalent async
+work even when it receives `user=None` / `token=None` for unknown or already-verified emails.
 
 ## Password reset
 

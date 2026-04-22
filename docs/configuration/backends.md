@@ -65,7 +65,7 @@ Controller selection follows that startup inventory:
 | `include_reset_password` | `True` | Forgot + reset password |
 | `include_users` | `False` | User management routes |
 | `enable_refresh` | `False` | `POST .../refresh` |
-| `requires_verification` | `False` | Stricter login / TOTP-verify policy |
+| `requires_verification` | `True` | Stricter login / TOTP-verify policy |
 | `hard_delete` | `False` | Physical vs soft delete semantics for user delete |
 | `login_identifier` | `"email"` | `"email"` or `"username"` for `POST {auth_path}/login` credential lookup |
 

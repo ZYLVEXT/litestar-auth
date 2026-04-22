@@ -542,7 +542,7 @@ async def test_login_uses_manager_account_state_validator_when_available() -> No
     )
 
     assert isinstance(response, Response)
-    user_manager.require_account_state.assert_called_once_with(user, require_verified=False)
+    user_manager.require_account_state.assert_called_once_with(user, require_verified=True)
 
 
 async def test_login_rejects_invalid_identifier_before_authentication() -> None:

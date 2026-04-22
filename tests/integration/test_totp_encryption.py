@@ -137,6 +137,7 @@ def _build_app() -> tuple[Litestar, InMemoryUserDatabase]:
         id=uuid4(),
         email="user@example.com",
         hashed_password=password_helper.hash("correct-password"),
+        is_verified=True,
     )
     user_db = InMemoryUserDatabase([user])
     user_manager = BaseUserManager[ExampleUser, UUID](

@@ -84,7 +84,7 @@ async def test_forgot_password_existing_user_calls_hook_with_valid_reset_token()
 
 @pytest.mark.parametrize("verified_state", ["unverified", "verified"])
 async def test_request_verify_token_only_emits_hook_for_unverified_users(verified_state: str) -> None:
-    """Verification-token requests are no-ops for verified or missing accounts."""
+    """Verification-token requests redact verified accounts while preserving hook flow."""
     user_db = AsyncMock()
     password_helper = PasswordHelper()
     manager = TrackingUserManager(user_db, password_helper)
@@ -95,12 +95,13 @@ async def test_request_verify_token_only_emits_hook_for_unverified_users(verifie
 
     user_db.get_by_email.assert_awaited_once_with("user@example.com")
     if verified_state == "verified":
-        assert manager.request_verify_events == []
+        assert manager.request_verify_events == [(None, None)]
         return
 
     assert len(manager.request_verify_events) == 1
     event_user, token = manager.request_verify_events[0]
     assert event_user is user
+    assert isinstance(token, str)
     decoded_subject = manager._account_token_security.read_token_subject(
         token,
         secret=manager.verification_token_secret.get_secret_value(),
@@ -110,8 +111,8 @@ async def test_request_verify_token_only_emits_hook_for_unverified_users(verifie
     assert decoded_subject == user.id
 
 
-async def test_request_verify_token_missing_user_is_noop() -> None:
-    """Unknown email does not generate a verification event."""
+async def test_request_verify_token_missing_user_calls_hook_with_redacted_values() -> None:
+    """Unknown email still triggers the redacted hook path."""
     user_db = AsyncMock()
     password_helper = PasswordHelper()
     manager = TrackingUserManager(user_db, password_helper)
@@ -120,7 +121,7 @@ async def test_request_verify_token_missing_user_is_noop() -> None:
     await manager._account_tokens.request_verify_token("missing@example.com")
 
     user_db.get_by_email.assert_awaited_once_with("missing@example.com")
-    assert manager.request_verify_events == []
+    assert manager.request_verify_events == [(None, None)]
 
 
 async def test_verify_marks_user_verified_and_calls_hook() -> None:

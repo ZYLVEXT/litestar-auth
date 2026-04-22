@@ -367,7 +367,7 @@ def create_auth_controller[UP: UserProtocol[Any], ID](  # noqa: PLR0913
     backend: AuthenticationBackend[UP, ID],
     rate_limit_config: AuthRateLimitConfig | None = None,
     enable_refresh: bool = False,
-    requires_verification: bool = False,
+    requires_verification: bool = True,
     login_identifier: LoginIdentifier = "email",
     totp_pending_secret: str | None = None,
     totp_pending_lifetime: timedelta = _DEFAULT_PENDING_TOKEN_LIFETIME,
@@ -382,8 +382,8 @@ def create_auth_controller[UP: UserProtocol[Any], ID](  # noqa: PLR0913
         rate_limit_config: Optional auth-endpoint rate-limiter configuration.
         enable_refresh: When ``True``, issue refresh tokens on login and add
             ``POST /refresh`` for refresh-token rotation.
-        requires_verification: When ``True``, unverified users receive
-            ``LOGIN_USER_NOT_VERIFIED`` (400) instead of a token.
+        requires_verification: When ``True`` (default), unverified users
+            receive ``LOGIN_USER_NOT_VERIFIED`` (400) instead of a token.
         login_identifier: Which user attribute is used to interpret the login
             ``identifier`` field (``email`` or ``username``). Must match
             ``LitestarAuthConfig.login_identifier`` when using the plugin.

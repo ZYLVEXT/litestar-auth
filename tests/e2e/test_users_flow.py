@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import sqlite3
-from typing import TYPE_CHECKING, Any, Self, cast
+from typing import TYPE_CHECKING, Any, ClassVar, Self, cast
 from uuid import UUID
 
 import pytest
@@ -189,6 +189,13 @@ class SessionMaker:
 class UsersFlowManager(BaseUserManager[User, UUID]):
     """Concrete manager used by the users e2e app."""
 
+    verification_tokens: ClassVar[dict[str, str]] = {}
+
+    async def on_after_request_verify_token(self, user: User | None, token: str | None) -> None:
+        """Capture re-verification tokens emitted after identity changes."""
+        if user is not None and token is not None:
+            type(self).verification_tokens[user.email] = token
+
 
 async def _login_headers(
     client: AsyncTestClient[Litestar],
@@ -206,6 +213,31 @@ async def _login_headers(
     return {"Authorization": f"Bearer {response.json()['access_token']}"}
 
 
+async def _verify_then_login_headers(
+    client: AsyncTestClient[Litestar],
+    *,
+    email: str,
+    password: str,
+) -> dict[str, str]:
+    """Verify the current email address and then return fresh bearer headers.
+
+    Returns:
+        Authorization headers for the newly verified account.
+    """
+    response = await client.post("/auth/login", json={"identifier": email, "password": password})
+    assert response.status_code == HTTP_BAD_REQUEST
+    login_payload = response.json()
+    login_code = login_payload.get("code") or (login_payload.get("extra") or {}).get("code")
+    assert login_code == ErrorCode.LOGIN_USER_NOT_VERIFIED
+
+    verify_token = UsersFlowManager.verification_tokens[email]
+    response = await client.post("/auth/verify", json={"token": verify_token})
+    assert response.status_code == HTTP_OK
+    assert response.json()["is_verified"] is True
+
+    return await _login_headers(client, email=email, password=password)
+
+
 def _assert_public_user(payload: dict[str, object], expected: dict[str, object]) -> None:
     """Assert a public user payload matches the expected values."""
     assert payload == expected
@@ -218,6 +250,7 @@ def app() -> Iterator[tuple[Litestar, Engine, PasswordHelper, dict[str, UUID]]]:
     Yields:
         App under test, backing engine, password helper, and seeded user ids.
     """
+    UsersFlowManager.verification_tokens.clear()
     engine = create_engine(
         "sqlite+pysqlite:///:memory:",
         connect_args={"check_same_thread": False},
@@ -303,6 +336,7 @@ def app() -> Iterator[tuple[Litestar, Engine, PasswordHelper, dict[str, UUID]]]:
         password_helper,
         user_ids,
     )
+    UsersFlowManager.verification_tokens.clear()
     engine.dispose()
 
 
@@ -375,7 +409,7 @@ async def test_users_crud_flow_via_plugin(
     response = await test_client.get("/users", headers=regular_headers)
     assert response.status_code == HTTP_UNAUTHORIZED
 
-    regular_headers = await _login_headers(
+    regular_headers = await _verify_then_login_headers(
         test_client,
         email="member-updated@example.com",
         password="member-new-password",
@@ -411,7 +445,7 @@ async def test_users_crud_flow_via_plugin(
             "id": str(user_ids["member"]),
             "email": "member-updated@example.com",
             "is_active": True,
-            "is_verified": False,
+            "is_verified": True,
             "is_superuser": False,
             "roles": ["member"],
         },

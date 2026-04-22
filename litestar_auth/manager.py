@@ -159,8 +159,16 @@ class UserManagerHooks[UP]:
         del self
         del user
 
-    async def on_after_request_verify_token(self, user: UP, token: str) -> None:
-        """Hook invoked after a verification token is requested."""
+    async def on_after_request_verify_token(self, user: UP | None, token: str | None) -> None:
+        """Hook invoked after a verify-token request is processed.
+
+        SECURITY: When ``user`` is ``None``, the email either did not match any
+        account or already belongs to a verified user. To prevent user
+        enumeration via timing, your implementation MUST perform equivalent I/O
+        in both cases (e.g. always enqueue a background task, whether or not an
+        email will actually be sent). Do NOT conditionally skip work based on
+        whether ``user`` is ``None``.
+        """
         del self
         del user
         del token

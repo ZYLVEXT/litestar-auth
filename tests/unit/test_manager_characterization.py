@@ -60,10 +60,11 @@ class CharacterizationManager(BaseUserManager[ExampleUser, UUID]):
         """Record the verification lifecycle event."""
         self.events.append(("verify", user.id))
 
-    async def on_after_request_verify_token(self, user: ExampleUser, token: str) -> None:
+    async def on_after_request_verify_token(self, user: ExampleUser | None, token: str | None) -> None:
         """Record the verification-token request lifecycle event."""
-        self.events.append(("request_verify", user.id))
-        self.verify_tokens.append(token)
+        if user is not None and token is not None:
+            self.events.append(("request_verify", user.id))
+            self.verify_tokens.append(token)
 
     async def on_after_forgot_password(self, user: ExampleUser | None, token: str | None) -> None:
         """Record the forgot-password lifecycle event."""

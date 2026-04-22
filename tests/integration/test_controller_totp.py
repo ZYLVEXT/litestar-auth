@@ -1344,6 +1344,7 @@ async def test_plugin_mounts_totp_routes_under_custom_auth_path() -> None:
         id=uuid4(),
         email="user@example.com",
         hashed_password=password_helper.hash("correct-password"),
+        is_verified=True,
     )
     user_db = InMemoryUserDatabase([user])
     backend = AuthenticationBackend[ExampleUser, UUID](
@@ -1430,6 +1431,7 @@ async def test_plugin_allows_opt_out_of_totp_step_up_enrollment() -> None:
         id=uuid4(),
         email="user@example.com",
         hashed_password=password_helper.hash("correct-password"),
+        is_verified=True,
     )
     user_db = InMemoryUserDatabase([user])
     backend = AuthenticationBackend[ExampleUser, UUID](

@@ -414,7 +414,7 @@ class LitestarAuthConfig[UP: UserProtocol[Any], ID]:
     include_users: bool = False
     include_openapi_security: bool = True
     enable_refresh: bool = False
-    requires_verification: bool = False
+    requires_verification: bool = True
     hard_delete: bool = False
     totp_config: TotpConfig | None = None
     oauth_config: OAuthConfig | None = None

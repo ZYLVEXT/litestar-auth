@@ -208,7 +208,7 @@ def test_build_totp_controller_forwards_named_backend_and_config(monkeypatch: py
     assert captured["pending_jti_store"] is pending_jti_store
     assert captured["enrollment_store"] is enrollment_store
     assert captured["require_replay_protection"] is False
-    assert captured["requires_verification"] is False
+    assert captured["requires_verification"] is True
     assert captured["totp_pending_secret"] == "p" * 32
     assert captured["totp_secret_key"] is None
     assert captured["totp_enable_requires_password"] is False
