@@ -80,6 +80,12 @@ If you intentionally disable plugin-managed OpenAPI security, register `auth_con
 
 Compose them with `AuthenticationBackend`. This keeps cookie CSRF concerns and JWT claim validation independent.
 
+For Redis-backed opaque tokens, `RedisTokenStrategy.invalidate_all_tokens(user)` invalidates tokens
+through the per-user Redis index written by current `write_token(...)` calls. It does not perform a
+global keyspace scan, so token keys created by older deployments without that index remain valid only
+until their Redis TTL expires. Flush or rotate those pre-index keys during an upgrade if immediate
+revocation is required.
+
 ## Cookie authentication and CSRF
 
 `CookieTransport` defaults toward browser-safe settings (`httponly`, `secure`, `SameSite=Lax`). For local development you may disable `secure`.
@@ -88,7 +94,7 @@ When any cookie transport is present, the plugin configures Litestar **CSRF** if
 
 ## JWT
 
-JWTs include standard time claims (`iat`, `exp`, `nbf`). Access-token validation accepts a small built-in leeway for normal clock skew, so minor NTP drift does not force unnecessary re-authentication at the edge of token lifetime. Revocation uses a **denylist** store; default in-memory storage is suitable for single-process dev only—use a shared store (e.g. Redis) in multi-worker production. The in-memory denylist rejects new revocations under capacity pressure (after pruning expired entries) rather than evicting an existing revoked JTI; size `max_entries` or use Redis if you issue many concurrent revocations. When a new revocation cannot be stored, `destroy_token` raises `TokenError` (HTTP **503** / `TOKEN_PROCESSING_FAILED` on bundled routes); pending-login TOTP verification uses the same fail-closed pattern for recording the spent pending JTI.
+JWTs include standard time claims (`iat`, `exp`, `nbf`). Access-token validation accepts a small built-in leeway for normal clock skew, so minor NTP drift does not force unnecessary re-authentication at the edge of token lifetime. Revocation uses a **denylist** store; pass a shared store (e.g. Redis) in multi-worker production, or set `allow_inmemory_denylist=True` only for explicit single-process development/test wiring. The in-memory denylist rejects new revocations under capacity pressure (after pruning expired entries) rather than evicting an existing revoked JTI; size `max_entries` or use Redis if you issue many concurrent revocations. When a new revocation cannot be stored, `destroy_token` raises `TokenError` (HTTP **503** / `TOKEN_PROCESSING_FAILED` on bundled routes); pending-login TOTP verification uses the same fail-closed pattern for recording the spent pending JTI.
 
 ## Rate limiting
 
@@ -104,5 +110,5 @@ Treat those as application responsibilities.
 
 ## Related
 
-- [Configuration](../configuration.md) — `csrf_secret`, `allow_legacy_plaintext_tokens`, OAuth encryption key.
+- [Configuration](../configuration.md) — `csrf_secret`, JWT/TOTP downgrade controls, OAuth encryption key.
 - [Exceptions API](../api/exceptions.md) — error types returned to clients.

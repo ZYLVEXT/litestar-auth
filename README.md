@@ -77,6 +77,7 @@ backend = AuthenticationBackend[User, UUID](
         secret="replace-with-32+-char-jwt-secret",
         lifetime=timedelta(minutes=15),
         subject_decoder=UUID,
+        allow_inmemory_denylist=True,
     ),
 )
 
@@ -90,7 +91,6 @@ config = LitestarAuthConfig[User, UUID](
         verification_token_secret="replace-with-32+-char-secret-for-verify",
         reset_password_token_secret="replace-with-32+-char-secret-for-reset",
     ),
-    allow_nondurable_jwt_revocation=True,
     include_users=False,
 )
 

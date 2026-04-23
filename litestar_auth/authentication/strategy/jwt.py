@@ -45,19 +45,19 @@ _ALLOWED_ALGORITHMS = frozenset(
         "ES512",
     },
 )
-_NONDURABLE_JWT_REVOCATION_VALIDATION_ERROR = (
-    "JWTStrategy is configured with a process-local in-memory denylist. "
-    "For production deployments, configure a durable denylist store (e.g. RedisJWTDenylistStore) "
-    "or use RedisTokenStrategy / DatabaseTokenStrategy. "
-    "To explicitly accept nondurable logout semantics, set allow_nondurable_jwt_revocation=True."
+_MISSING_JWT_DENYLIST_STORE_ERROR = (
+    "JWTStrategy requires explicit JWT revocation storage. "
+    "Configure denylist_store=RedisJWTDenylistStore(...) or another shared JWTDenylistStore for production. "
+    "For single-process tests, development, or consciously single-process apps only, set "
+    "allow_inmemory_denylist=True to construct InMemoryJWTDenylistStore explicitly."
 )
-_NONDURABLE_JWT_REVOCATION_STARTUP_WARNING = (
-    "JWTStrategy is configured with a process-local in-memory denylist. "
-    "Revoked tokens are not visible across workers; use RedisJWTDenylistStore or "
-    "allow_nondurable_jwt_revocation=True only with full understanding of the tradeoff."
+_INMEMORY_JWT_DENYLIST_STARTUP_WARNING = (
+    "JWTStrategy is configured with an explicit process-local in-memory denylist. "
+    "Revoked tokens are not visible across workers; use RedisJWTDenylistStore or another shared "
+    "JWTDenylistStore for production deployments that rely on revocation."
 )
 
-type JWTRevocationPostureKey = Literal["compatibility_in_memory", "shared_store"]
+type JWTRevocationPostureKey = Literal["in_memory", "shared_store"]
 
 
 class JWTDenylistStore(Protocol):
@@ -196,13 +196,13 @@ class JWTRevocationPosture:
     requires_explicit_production_opt_in: bool
 
     @classmethod
-    def compatibility_in_memory(cls, *, denylist_store_type: str) -> Self:
-        """Return the compatibility-grade in-memory revocation posture."""
+    def in_memory(cls, *, denylist_store_type: str) -> Self:
+        """Return the explicit process-local in-memory revocation posture."""
         return cls(
-            key="compatibility_in_memory",
+            key="in_memory",
             denylist_store_type=denylist_store_type,
             revocation_is_durable=False,
-            requires_explicit_production_opt_in=True,
+            requires_explicit_production_opt_in=False,
         )
 
     @classmethod
@@ -224,33 +224,50 @@ class JWTRevocationPosture:
         """
         store_type = type(denylist_store).__name__
         if isinstance(denylist_store, InMemoryJWTDenylistStore):
-            return cls.compatibility_in_memory(denylist_store_type=store_type)
+            return cls.in_memory(denylist_store_type=store_type)
         return cls.shared_store(denylist_store_type=store_type)
 
     @property
     def production_validation_error(self) -> str | None:
-        """Return the plugin validation error for this posture, if any."""
-        if not self.requires_explicit_production_opt_in:
-            return None
-        return _NONDURABLE_JWT_REVOCATION_VALIDATION_ERROR
+        """Return the plugin validation error for this posture, if any.
+
+        JWT revocation storage is validated at strategy construction time, so
+        constructed postures do not require a second plugin-level compatibility
+        override.
+        """
+        return None
 
     @property
     def startup_warning(self) -> str | None:
         """Return the startup warning for this posture, if any."""
-        if not self.requires_explicit_production_opt_in:
+        if self.revocation_is_durable:
             return None
-        return _NONDURABLE_JWT_REVOCATION_STARTUP_WARNING
+        return _INMEMORY_JWT_DENYLIST_STARTUP_WARNING
 
 
 def _resolve_jwt_revocation(
     denylist_store: JWTDenylistStore | None,
+    *,
+    allow_inmemory_denylist: bool,
 ) -> tuple[JWTDenylistStore, JWTRevocationPosture]:
     """Resolve the effective denylist backend and its explicit posture contract.
 
     Returns:
         Tuple of the denylist backend used at runtime and the posture it reports.
+
+    Raises:
+        ValueError: If no denylist store is configured or both configuration paths are supplied.
     """
-    resolved_denylist_store = denylist_store or InMemoryJWTDenylistStore()
+    if denylist_store is not None:
+        if allow_inmemory_denylist:
+            msg = "allow_inmemory_denylist=True cannot be combined with denylist_store."
+            raise ValueError(msg)
+        return denylist_store, JWTRevocationPosture.from_denylist_store(denylist_store)
+
+    if not allow_inmemory_denylist:
+        raise ValueError(_MISSING_JWT_DENYLIST_STORE_ERROR)
+
+    resolved_denylist_store = InMemoryJWTDenylistStore()
     return resolved_denylist_store, JWTRevocationPosture.from_denylist_store(resolved_denylist_store)
 
 
@@ -280,16 +297,16 @@ class JWTStrategy(Strategy[UP, ID]):
     """Stateless strategy that stores user identifiers inside JWTs.
 
     JWT access tokens issued by this strategy are designed to be short-lived
-    and stateless. This implementation also maintains a lightweight, in-memory
-    denylist keyed by the ``jti`` claim so that individual tokens can be
-    explicitly revoked before expiration when :meth:`destroy_token` is called.
+    and stateless. Revocation uses the configured denylist keyed by the ``jti``
+    claim so individual tokens can be explicitly revoked before expiration when
+    :meth:`destroy_token` is called.
 
-    The in-memory denylist is process-local and is not persisted across worker
-    restarts; deployments that require stronger revocation guarantees should
-    wrap or subclass this strategy and back the denylist with a shared store
-    such as Redis. Inspect :attr:`revocation_posture` to determine whether a
-    concrete strategy instance is using the compatibility-grade in-memory
-    posture or a durable shared-store posture.
+    Production deployments should pass a shared denylist store such as
+    :class:`RedisJWTDenylistStore`. Single-process tests, development apps, and
+    consciously single-process deployments can opt into :class:`InMemoryJWTDenylistStore` with
+    ``allow_inmemory_denylist=True``. Inspect :attr:`revocation_posture` to
+    determine whether a concrete strategy instance uses process-local or durable
+    shared-store revocation.
     """
 
     def __init__(  # noqa: PLR0913
@@ -302,6 +319,7 @@ class JWTStrategy(Strategy[UP, ID]):
         subject_decoder: Callable[[str], ID] | None = None,
         issuer: str | None = None,
         denylist_store: JWTDenylistStore | None = None,
+        allow_inmemory_denylist: bool = False,
         session_fingerprint_getter: Callable[[UP], str | None] | None = None,
         session_fingerprint_claim: str = "sfp",
     ) -> None:
@@ -317,8 +335,11 @@ class JWTStrategy(Strategy[UP, ID]):
                 into the identifier type expected by the user manager.
             issuer: Optional issuer string to embed in the ``iss`` claim and
                 validate when decoding.
-            denylist_store: Optional shared denylist backend for durable token
-                revocation across workers.
+            denylist_store: Shared denylist backend for token revocation across
+                workers. Omit only when using ``allow_inmemory_denylist=True``.
+            allow_inmemory_denylist: Explicitly construct a process-local
+                :class:`InMemoryJWTDenylistStore` for single-process tests or
+                development. Do not combine with ``denylist_store``.
             session_fingerprint_getter: Optional callable that returns a fingerprint
                 representing a user's current security state. When the returned value
                 is embedded into tokens, password/email changes can invalidate old
@@ -327,7 +348,9 @@ class JWTStrategy(Strategy[UP, ID]):
                 fingerprint.
 
         Raises:
-            ValueError: Raised when the configured algorithm is not allow-listed.
+            ValueError: Raised when the configured algorithm is not allow-listed, when
+                no denylist store is configured, or when both revocation configuration
+                paths are supplied.
         """
         if algorithm not in _ALLOWED_ALGORITHMS:
             msg = f"Unsupported JWT algorithm '{algorithm}'. Allowed algorithms: {sorted(_ALLOWED_ALGORITHMS)}"
@@ -340,7 +363,10 @@ class JWTStrategy(Strategy[UP, ID]):
         self.lifetime = lifetime
         self.subject_decoder = subject_decoder
         self.issuer = issuer
-        self._denylist_store, self._revocation_posture = _resolve_jwt_revocation(denylist_store)
+        self._denylist_store, self._revocation_posture = _resolve_jwt_revocation(
+            denylist_store,
+            allow_inmemory_denylist=allow_inmemory_denylist,
+        )
         # Security: always derive the fingerprint HMAC key from the signing secret
         # (kept private by the strategy), never from the public verify_key.
         fingerprint_key = self.secret.encode()

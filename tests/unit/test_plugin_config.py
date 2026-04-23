@@ -371,7 +371,6 @@ def test_litestar_auth_config_direct_custom_manager_factory_path_builds_expected
         user_db: BaseUserStore[ExampleUser, UUID],
         config: LitestarAuthConfig[ExampleUser, UUID],
         backends: tuple[object, ...] = (),
-        skip_reuse_warning: bool = False,
     ) -> BaseUserManager[ExampleUser, UUID]:
         msg = "factory should not be invoked during config construction"
         raise AssertionError(msg)
@@ -415,20 +414,17 @@ def test_litestar_auth_config_direct_custom_manager_factory_invokes_factory_for_
         user_db: BaseUserStore[ExampleUser, UUID],
         config: LitestarAuthConfig[ExampleUser, UUID],
         backends: tuple[object, ...] = (),
-        skip_reuse_warning: bool = False,
     ) -> BaseUserManager[ExampleUser, UUID]:
         captured.update(
             session=session,
             user_db=user_db,
             config=config,
             backends=backends,
-            skip_reuse_warning=skip_reuse_warning,
         )
         return PluginUserManager(
             user_db,
             security=cast("UserManagerSecurity[UUID]", config.user_manager_security),
             backends=backends,
-            skip_reuse_warning=skip_reuse_warning,
         )
 
     default_backend = AuthenticationBackend[ExampleUser, UUID](
@@ -471,9 +467,7 @@ async def test_litestar_auth_config_direct_custom_manager_factory_wrong_return_t
         user_db: BaseUserStore[ExampleUser, UUID],
         config: LitestarAuthConfig[ExampleUser, UUID],
         backends: tuple[object, ...] = (),
-        skip_reuse_warning: bool = False,
     ) -> BaseUserManager[ExampleUser, UUID]:
-        del skip_reuse_warning
         return cast("BaseUserManager[ExampleUser, UUID]", object())
 
     config = LitestarAuthConfig[ExampleUser, UUID](
@@ -524,7 +518,6 @@ def test_litestar_auth_config_rejects_direct_class_and_factory_conflict() -> Non
         user_db: BaseUserStore[ExampleUser, UUID],
         config: LitestarAuthConfig[ExampleUser, UUID],
         backends: tuple[object, ...] = (),
-        skip_reuse_warning: bool = False,
     ) -> BaseUserManager[ExampleUser, UUID]:
         msg = "factory should not be invoked during config construction"
         raise AssertionError(msg)
@@ -558,7 +551,6 @@ def test_litestar_auth_config_direct_manager_paths_run_post_init_once(monkeypatc
         user_db: BaseUserStore[ExampleUser, UUID],
         config: LitestarAuthConfig[ExampleUser, UUID],
         backends: tuple[object, ...] = (),
-        skip_reuse_warning: bool = False,
     ) -> BaseUserManager[ExampleUser, UUID]:
         msg = "factory should not be invoked during config construction"
         raise AssertionError(msg)
@@ -638,7 +630,6 @@ def test_litestar_auth_config_direct_manager_paths_run_each_post_init_validation
         user_db: BaseUserStore[ExampleUser, UUID],
         config: LitestarAuthConfig[ExampleUser, UUID],
         backends: tuple[object, ...] = (),
-        skip_reuse_warning: bool = False,
     ) -> BaseUserManager[ExampleUser, UUID]:
         msg = "factory should not be invoked during config construction"
         raise AssertionError(msg)
@@ -667,7 +658,6 @@ def test_litestar_auth_config_rejects_both_user_manager_class_and_factory() -> N
         user_db: BaseUserStore[ExampleUser, UUID],
         config: LitestarAuthConfig[ExampleUser, UUID],
         backends: tuple[object, ...] = (),
-        skip_reuse_warning: bool = False,
     ) -> BaseUserManager[ExampleUser, UUID]:
         msg = "factory should not be invoked during config construction"
         raise AssertionError(msg)
@@ -1024,6 +1014,12 @@ def test_litestar_auth_config_database_token_auth_defaults_to_none() -> None:
     assert config.database_token_auth is None
 
 
+def test_database_token_configs_omit_removed_legacy_plaintext_fields() -> None:
+    """The DB-token preset and plugin config expose only the digest-only contract."""
+    assert "accept_legacy_plaintext_tokens" not in DatabaseTokenAuthConfig.__dataclass_fields__
+    assert "allow_legacy_plaintext_tokens" not in LitestarAuthConfig.__dataclass_fields__
+
+
 def test_database_token_auth_field_builds_canonical_db_bearer_backend() -> None:
     """The DB-token config field builds the canonical bearer + database-token backend lazily."""
     configured_token_bytes = 48
@@ -1034,7 +1030,6 @@ def test_database_token_auth_field_builds_canonical_db_bearer_backend() -> None:
             max_age=timedelta(minutes=5),
             refresh_max_age=timedelta(hours=12),
             token_bytes=configured_token_bytes,
-            accept_legacy_plaintext_tokens=True,
         ),
         user_model=ExampleUser,
         user_manager_class=PluginUserManager,
@@ -1053,7 +1048,6 @@ def test_database_token_auth_field_builds_canonical_db_bearer_backend() -> None:
     assert preset.max_age == timedelta(minutes=5)
     assert preset.refresh_max_age == timedelta(hours=12)
     assert preset.token_bytes == configured_token_bytes
-    assert preset.accept_legacy_plaintext_tokens is True
 
     backend = config.resolve_startup_backends()[0]
     database_token_strategy_type = _current_database_token_strategy_type()
@@ -1064,7 +1058,6 @@ def test_database_token_auth_field_builds_canonical_db_bearer_backend() -> None:
     assert backend.strategy.max_age == timedelta(minutes=5)
     assert backend.strategy.refresh_max_age == timedelta(hours=12)
     assert backend.strategy.token_bytes == configured_token_bytes
-    assert backend.strategy.accept_legacy_plaintext_tokens is True
     assert require_session_maker(config) is session_maker
 
 
@@ -1248,7 +1241,6 @@ def test_build_database_token_backend_binds_the_explicit_runtime_session() -> No
             token_hash_secret="x" * 40,
             backend_name="opaque-db",
             refresh_max_age=timedelta(days=14),
-            accept_legacy_plaintext_tokens=True,
         ),
         session=cast("Any", active_session),
         unsafe_testing=True,
@@ -1259,7 +1251,6 @@ def test_build_database_token_backend_binds_the_explicit_runtime_session() -> No
     assert isinstance(backend.strategy, database_token_strategy_type)
     assert backend.strategy.session is active_session
     assert backend.strategy.refresh_max_age == timedelta(days=14)
-    assert backend.strategy.accept_legacy_plaintext_tokens is True
 
 
 def test_database_token_auth_rejects_manual_backends() -> None:
@@ -1393,7 +1384,6 @@ def test_resolve_backends_preserves_database_token_runtime_contract_details() ->
             token_hash_secret="x" * 40,
             backend_name="opaque-db",
             refresh_max_age=timedelta(days=14),
-            accept_legacy_plaintext_tokens=True,
         ),
         user_model=ExampleUser,
         user_manager_class=PluginUserManager,
@@ -1424,7 +1414,6 @@ def test_resolve_backends_preserves_database_token_runtime_contract_details() ->
     assert isinstance(runtime_backends[0].strategy, database_token_strategy_type)
     assert cast("Any", runtime_backends[0].strategy).session is active_session
     assert cast("Any", runtime_backends[0].strategy).refresh_max_age == timedelta(days=14)
-    assert cast("Any", runtime_backends[0].strategy).accept_legacy_plaintext_tokens is True
 
 
 def test_resolve_startup_backends_reject_post_init_mixing_of_preset_and_manual_backends() -> None:

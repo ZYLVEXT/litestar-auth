@@ -389,6 +389,7 @@ def app() -> Iterator[tuple[Litestar, Engine, LitestarAuthConfig[User, UUID]]]:
             JWTStrategy[User, UUID](
                 secret="jwt-role-admin-secret-12345678901234567890",
                 subject_decoder=UUID,
+                allow_inmemory_denylist=True,
             ),
         ),
     )
@@ -397,7 +398,6 @@ def app() -> Iterator[tuple[Litestar, Engine, LitestarAuthConfig[User, UUID]]]:
         session_maker=cast("Any", SessionMaker(engine)),
         user_model=User,
         user_manager_class=RoleAdminTestUserManager,
-        allow_nondurable_jwt_revocation=True,
         user_manager_security=UserManagerSecurity[UUID](
             verification_token_secret="verify-secret-12345678901234567890",
             reset_password_token_secret="reset-secret-123456789012345678901",

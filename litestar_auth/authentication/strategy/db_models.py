@@ -79,9 +79,9 @@ class DatabaseTokenModels:
 
 
 def import_token_orm_models() -> tuple[type[AccessToken], type[RefreshToken]]:
-    """Return the bundled token ORM models for compatibility and low-level imports.
+    """Return the bundled token ORM models for low-level module imports.
 
     Prefer ``litestar_auth.models.import_token_orm_models()`` for public explicit mapper
-    registration. This module-level helper remains available for strategy-layer compatibility.
+    registration and application code.
     """
     return AccessToken, RefreshToken

@@ -25,8 +25,8 @@ password-column hook.
 | ---- | -------------- | ----- |
 | Bundled token metadata bootstrap | `from litestar_auth.models import import_token_orm_models` | Explicit helper for metadata registration and Alembic-style autogenerate. |
 | Bundled token runtime bootstrap | `DatabaseTokenAuthConfig` / `LitestarAuthConfig(..., database_token_auth=...)` | `LitestarAuth.on_app_init()` calls the same helper lazily when bundled DB-token models are active. |
-| App-owned ORM classes | `UserModelMixin`, `UserAuthRelationshipMixin`, `UserRoleRelationshipMixin`, `RoleMixin`, `UserRoleAssociationMixin`, `AccessTokenMixin`, `RefreshTokenMixin`, `OAuthAccountMixin` | Compose them on the application's own registry instead of copying mapper wiring. |
-| App-owned relational role tables | `UserRoleRelationshipMixin`, `RoleMixin`, `UserRoleAssociationMixin` | Optional role persistence path that keeps `user.roles` as the normalized flat contract. |
+| App-owned ORM classes | `from litestar_auth.models.mixins import UserModelMixin, UserAuthRelationshipMixin, UserRoleRelationshipMixin, RoleMixin, UserRoleAssociationMixin, AccessTokenMixin, RefreshTokenMixin, OAuthAccountMixin` | Compose them on the application's own registry instead of copying mapper wiring. |
+| App-owned relational role tables | `from litestar_auth.models.mixins import UserRoleRelationshipMixin, RoleMixin, UserRoleAssociationMixin` | Optional role persistence path that keeps `user.roles` as the normalized flat contract. |
 | Custom token strategy tables | `DatabaseTokenModels(...)` | Only needed when `DatabaseTokenStrategy` should use custom token models at runtime. |
 | SQLAlchemy user store | `litestar_auth.db.sqlalchemy.SQLAlchemyUserDatabase` | `user_model` is required; `oauth_account_model` is optional unless OAuth methods are used. |
 | Legacy password column name | `UserModelMixin.auth_hashed_password_column_name` | Keeps the runtime attribute contract on `user.hashed_password`. |
@@ -43,25 +43,15 @@ AccessToken, RefreshToken = import_token_orm_models()
 
 Call that helper yourself during metadata registration or Alembic-style autogenerate so token discovery stays with the models boundary. For plugin-managed runtime, `LitestarAuth.on_app_init()` now calls the same helper lazily when the active DB-token strategy still uses the bundled `AccessToken` / `RefreshToken` classes, so apps no longer need a separate import side effect only to make the plugin work. Keep the explicit helper for metadata/Alembic flows or any non-plugin code path that needs the tables.
 
-Existing code can keep the strategy-layer import temporarily:
-
-```python
-from litestar_auth.authentication.strategy import (
-    import_token_orm_models as import_token_orm_models_compat,
-)
-```
-
-Treat that path as compatibility-only. New code should import from `litestar_auth.models`.
-
 If you use the library `AccessToken` and `RefreshToken` models, your user class should declare relationships compatible with them instead of copying mapper wiring from the reference `User` class:
 
 - Table names: `access_token`, `refresh_token`; `user_id` foreign keys target **`user.id`** (your user model’s table must be named `user`, or you must align FKs and relationships with your schema).
-- Compose the side-effect-free model mixins from `litestar_auth.models` when you want the bundled field and relationship contract without copying boilerplate from the reference ORM classes:
+- Compose the side-effect-free model mixins from `litestar_auth.models.mixins` when you want the bundled field and relationship contract without copying boilerplate from the reference ORM classes:
 
 ```python
 from advanced_alchemy.base import UUIDBase
 
-from litestar_auth.models import UserAuthRelationshipMixin, UserModelMixin
+from litestar_auth.models.mixins import UserAuthRelationshipMixin, UserModelMixin
 
 
 class User(UserModelMixin, UserAuthRelationshipMixin, UUIDBase):
@@ -81,7 +71,7 @@ tables with `RoleMixin` and `UserRoleAssociationMixin`. That keeps the public
 from advanced_alchemy.base import UUIDPrimaryKey, create_registry
 from sqlalchemy.orm import DeclarativeBase
 
-from litestar_auth.models import (
+from litestar_auth.models.mixins import (
     RoleMixin,
     UserModelMixin,
     UserRoleAssociationMixin,
@@ -156,7 +146,7 @@ If the user table is not `user`, or if you want app-owned token / OAuth tables, 
 from advanced_alchemy.base import UUIDPrimaryKey, create_registry
 from sqlalchemy.orm import DeclarativeBase
 
-from litestar_auth.models import (
+from litestar_auth.models.mixins import (
     AccessTokenMixin,
     OAuthAccountMixin,
     RefreshTokenMixin,

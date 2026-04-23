@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING, Any, cast
 from uuid import UUID, uuid4
 
 import pytest
+from cryptography.fernet import Fernet
 from litestar.middleware import DefineMiddleware
 from litestar.testing import AsyncTestClient
 
@@ -42,6 +43,7 @@ HTTP_BAD_REQUEST = 400
 HTTP_TOO_MANY_REQUESTS = 429
 
 TOTP_PENDING_SECRET = "test-totp-pending-secret-thirty-two!"
+TOTP_SECRET_KEY = Fernet.generate_key().decode()
 
 
 def build_rate_limit_config() -> AuthRateLimitConfig:
@@ -142,6 +144,7 @@ def build_app(*, rate_limit_config: AuthRateLimitConfig | None = None) -> Litest
         security=UserManagerSecurity[UUID](
             verification_token_secret="verify-secret-1234567890-1234567890",
             reset_password_token_secret="reset-password-secret-1234567890-1234567890",
+            totp_secret_key=TOTP_SECRET_KEY,
             id_parser=UUID,
         ),
         reset_password_token_lifetime=timedelta(hours=1),
@@ -172,6 +175,7 @@ def build_app(*, rate_limit_config: AuthRateLimitConfig | None = None) -> Litest
             pending_jti_store=InMemoryJWTDenylistStore(),
             rate_limit_config=rate_limit_config,
             totp_pending_secret=TOTP_PENDING_SECRET,
+            totp_secret_key=TOTP_SECRET_KEY,
             totp_enable_requires_password=False,
             id_parser=UUID,
             unsafe_testing=True,

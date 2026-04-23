@@ -57,7 +57,6 @@ class E2EUserManager(BaseUserManager[User, UUID]):
         verification_token_secret: str,
         reset_password_token_secret: str,
         backends: tuple[object, ...] = (),
-        skip_reuse_warning: bool = False,
     ) -> None:
         """Initialize the manager with the shared verification tracker."""
         super().__init__(
@@ -69,7 +68,6 @@ class E2EUserManager(BaseUserManager[User, UUID]):
                 id_parser=UUID,
             ),
             backends=backends,
-            skip_reuse_warning=skip_reuse_warning,
         )
         self._verification_tracker = verification_tracker
 
@@ -122,7 +120,11 @@ def app() -> Iterator[tuple[Litestar, VerificationTracker]]:
         transport=BearerTransport(),
         strategy=cast(
             "Any",
-            JWTStrategy[User, UUID](secret="jwt-bearer-secret-1234567890-extra", subject_decoder=UUID),
+            JWTStrategy[User, UUID](
+                secret="jwt-bearer-secret-1234567890-extra",
+                subject_decoder=UUID,
+                allow_inmemory_denylist=True,
+            ),
         ),
     )
     cookie_backend = AuthenticationBackend[User, UUID](
@@ -130,7 +132,11 @@ def app() -> Iterator[tuple[Litestar, VerificationTracker]]:
         transport=CookieTransport(cookie_name=AUTH_COOKIE_NAME),
         strategy=cast(
             "Any",
-            JWTStrategy[User, UUID](secret="jwt-cookie-secret-1234567890-extra", subject_decoder=UUID),
+            JWTStrategy[User, UUID](
+                secret="jwt-cookie-secret-1234567890-extra",
+                subject_decoder=UUID,
+                allow_inmemory_denylist=True,
+            ),
         ),
     )
 
@@ -140,7 +146,6 @@ def app() -> Iterator[tuple[Litestar, VerificationTracker]]:
         user_db: object,
         config: LitestarAuthConfig[User, UUID],
         backends: tuple[object, ...] = (),
-        skip_reuse_warning: bool = False,
     ) -> E2EUserManager:
         del session
         security = config.user_manager_security
@@ -152,7 +157,6 @@ def app() -> Iterator[tuple[Litestar, VerificationTracker]]:
             verification_token_secret=cast("str", security.verification_token_secret),
             reset_password_token_secret=cast("str", security.reset_password_token_secret),
             backends=backends,
-            skip_reuse_warning=skip_reuse_warning,
         )
 
     config = LitestarAuthConfig[User, UUID](
@@ -161,7 +165,6 @@ def app() -> Iterator[tuple[Litestar, VerificationTracker]]:
         user_model=User,
         user_manager_factory=_build_user_manager,
         csrf_secret="c" * 32,
-        allow_nondurable_jwt_revocation=True,
         user_manager_security=UserManagerSecurity[UUID](
             verification_token_secret="verify-secret-1234567890-1234567890",
             reset_password_token_secret="reset-secret-1234567890-1234567890",

@@ -416,7 +416,7 @@ def test_public_user_schema_reuse_surface_stays_importable() -> None:
 
 
 def test_models_and_strategy_modules_expose_documented_orm_setup_surface() -> None:
-    """The ORM docs point to a models-owned setup flow plus explicit strategy compatibility APIs."""
+    """The ORM docs point to models-owned bootstrap plus the strategy runtime contract."""
     access_token_model, refresh_token_model = models_module.import_token_orm_models()
     token_models = strategy_module.DatabaseTokenModels(
         access_token_model=access_token_model,
@@ -446,7 +446,6 @@ def test_models_and_strategy_modules_expose_documented_orm_setup_surface() -> No
         "RefreshableStrategy",
         "Strategy",
         "UserManagerProtocol",
-        "import_token_orm_models",
     )
     assert models_module.AccessTokenMixin.__name__ == "AccessTokenMixin"
     assert models_module.OAuthAccountMixin.__name__ == "OAuthAccountMixin"
@@ -459,17 +458,17 @@ def test_models_and_strategy_modules_expose_documented_orm_setup_surface() -> No
     assert models_module.UserRoleAssociationMixin.__name__ == "UserRoleAssociationMixin"
     assert models_module.UserRoleRelationshipMixin.__name__ == "UserRoleRelationshipMixin"
     assert models_module.import_token_orm_models.__module__ == "litestar_auth.models.tokens"
-    assert strategy_module.import_token_orm_models.__module__ == "litestar_auth.authentication.strategy.db_models"
-    assert strategy_module.import_token_orm_models() == (access_token_model, refresh_token_model)
+    assert not hasattr(strategy_module, "import_token_orm_models")
     assert token_models == strategy_module.DatabaseTokenModels()
 
 
 def test_root_package_does_not_promote_token_orm_bootstrap_helper() -> None:
-    """The canonical token bootstrap helper stays on ``litestar_auth.models`` rather than the root package."""
+    """The token bootstrap helper stays on ``litestar_auth.models`` rather than root or strategy modules."""
     assert "import_token_orm_models" not in __all__
     assert not hasattr(litestar_auth, "import_token_orm_models")
     assert "import_token_orm_models" in models_module.__all__
-    assert "import_token_orm_models" in strategy_module.__all__
+    assert "import_token_orm_models" not in strategy_module.__all__
+    assert not hasattr(strategy_module, "import_token_orm_models")
 
 
 def test_root_and_db_packages_keep_orm_symbols_on_documented_modules() -> None:
@@ -1077,6 +1076,8 @@ def test_plugin_module_public_exports_no_compat_shims() -> None:
     assert not hasattr(current_root_module, "StartupBackendTemplate")
     assert "AuthPlugin" not in plugin_module.__all__
     assert not hasattr(plugin_module, "AuthPlugin")
+    for name in ("_ScopedUserDatabaseProxy", "_UserManagerFactory"):
+        assert not hasattr(current_plugin_internals, name)
     for name in (
         "DEFAULT_CONFIG_DEPENDENCY_KEY",
         "DEFAULT_USER_MANAGER_DEPENDENCY_KEY",

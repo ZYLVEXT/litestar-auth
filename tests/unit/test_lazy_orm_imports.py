@@ -177,15 +177,12 @@ def test_models_package_token_registration_helper_keeps_user_and_oauth_submodule
     """The canonical models-layer token helper does not import ``models.user`` or ``models.oauth``."""
     proc = _run_isolated(
         "import sys\n"
-        "import litestar_auth.authentication.strategy as strategy\n"
         "import litestar_auth.models as models\n"
         "assert 'litestar_auth.models.user' not in sys.modules\n"
         "assert 'litestar_auth.models.oauth' not in sys.modules\n"
-        "canonical_models = models.import_token_orm_models()\n"
-        "compatibility_models = strategy.import_token_orm_models()\n"
-        "assert canonical_models == compatibility_models\n"
-        "assert [model.__name__ for model in canonical_models] == ['AccessToken', 'RefreshToken']\n"
-        "assert [model.__module__ for model in canonical_models] == [\n"
+        "token_models = models.import_token_orm_models()\n"
+        "assert [model.__name__ for model in token_models] == ['AccessToken', 'RefreshToken']\n"
+        "assert [model.__module__ for model in token_models] == [\n"
         "    'litestar_auth.authentication.strategy.db_models',\n"
         "    'litestar_auth.authentication.strategy.db_models',\n"
         "]\n"
@@ -200,10 +197,8 @@ def test_models_package_token_registration_helper_stays_lazy_until_reference_map
     proc = _run_isolated(
         "import sys\n"
         "from sqlalchemy import inspect\n"
-        "import litestar_auth.authentication.strategy as strategy\n"
         "import litestar_auth.models as models\n"
         "access_token_model, refresh_token_model = models.import_token_orm_models()\n"
-        "assert strategy.import_token_orm_models() == (access_token_model, refresh_token_model)\n"
         "assert 'litestar_auth.models.oauth' not in sys.modules\n"
         "assert 'litestar_auth.models.user' not in sys.modules\n"
         "from litestar_auth.models.oauth import OAuthAccount\n"
@@ -215,8 +210,7 @@ def test_models_package_token_registration_helper_stays_lazy_until_reference_map
         "assert 'litestar_auth.models.user' in sys.modules\n"
         "assert relationships['access_tokens'].mapper.class_ is access_token_model\n"
         "assert relationships['refresh_tokens'].mapper.class_ is refresh_token_model\n"
-        "assert relationships['oauth_accounts'].mapper.class_ is OAuthAccount\n"
-        "assert strategy.import_token_orm_models() == (access_token_model, refresh_token_model)\n",
+        "assert relationships['oauth_accounts'].mapper.class_ is OAuthAccount\n",
     )
     assert proc.returncode == 0, proc.stdout + proc.stderr
 
@@ -235,19 +229,23 @@ def test_accessing_user_model_maps_slim_auth_column_inventory() -> None:
 
 
 def test_import_strategy_package_keeps_models_namespace_unloaded() -> None:
-    """Importing ``litestar_auth.authentication.strategy`` keeps the compatibility path model-lazy."""
+    """Importing ``litestar_auth.authentication.strategy`` does not expose the removed token helper."""
     proc = _run_isolated(
         "import sys\n"
         "import litestar_auth.authentication.strategy as strategy\n"
         "assert 'litestar_auth.models' not in sys.modules\n"
         "assert 'litestar_auth.models.oauth' not in sys.modules\n"
         "assert 'litestar_auth.models.user' not in sys.modules\n"
-        "token_models = strategy.import_token_orm_models()\n"
-        "assert [model.__name__ for model in token_models] == ['AccessToken', 'RefreshToken']\n"
-        "assert [model.__module__ for model in token_models] == [\n"
-        "    'litestar_auth.authentication.strategy.db_models',\n"
-        "    'litestar_auth.authentication.strategy.db_models',\n"
-        "]\n"
+        "assert strategy.__all__ == (\n"
+        "    'DatabaseTokenModels',\n"
+        "    'DatabaseTokenStrategy',\n"
+        "    'JWTStrategy',\n"
+        "    'RedisTokenStrategy',\n"
+        "    'RefreshableStrategy',\n"
+        "    'Strategy',\n"
+        "    'UserManagerProtocol',\n"
+        ")\n"
+        "assert not hasattr(strategy, 'import_token_orm_models')\n"
         "assert 'litestar_auth.authentication.strategy.db_models' in sys.modules\n"
         "assert 'litestar_auth.models' not in sys.modules\n",
     )

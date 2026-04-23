@@ -26,7 +26,7 @@ _EXPECTED_PAIR = 2
 
 
 def _bearer_backend(name: str = "jwt") -> StartupBackendTemplate[Any, Any]:
-    strategy = JWTStrategy(secret="s" * 32, algorithm="HS256")
+    strategy = JWTStrategy(secret="s" * 32, algorithm="HS256", allow_inmemory_denylist=True)
     backend = AuthenticationBackend(name=name, transport=BearerTransport(), strategy=strategy)  # ty:ignore[invalid-argument-type]
     return StartupBackendTemplate.from_runtime_backend(backend)
 
@@ -53,7 +53,7 @@ class TestSecuritySchemeForTransport:
     def test_bearer_transport_with_jwt_strategy(self) -> None:
         """Bearer transport with JWT strategy sets bearer_format to JWT."""
         transport = BearerTransport()
-        strategy = JWTStrategy(secret="s" * 32, algorithm="HS256")
+        strategy = JWTStrategy(secret="s" * 32, algorithm="HS256", allow_inmemory_denylist=True)
         scheme = security_scheme_for_transport(transport, strategy=strategy)  # ty:ignore[invalid-argument-type]
 
         assert scheme.type == "http"

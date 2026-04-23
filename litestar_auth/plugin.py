@@ -156,14 +156,11 @@ class LitestarAuth[UP: UserProtocol[Any], ID](InitPlugin, CLIPlugin):
             oauth_token_encryption=self._oauth_token_encryption,
         )
         bound_backends = tuple(backends or self._session_bound_backends(session))
-        # Plugin validation already emitted the reused-secret warning for this effective
-        # config-owned baseline, so plugin-managed builder paths suppress a duplicate.
         return self._user_manager_factory(
             session=session,
             user_db=user_db,
             config=self.config,
             backends=bound_backends,
-            skip_reuse_warning=True,
         )
 
     def _build_authenticator(self, session: AsyncSession) -> Authenticator[UP, ID]:

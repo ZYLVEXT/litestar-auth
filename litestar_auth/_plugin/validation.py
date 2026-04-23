@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import inspect
-import logging
 import warnings
 from typing import TYPE_CHECKING, Any, cast
 
@@ -19,18 +18,13 @@ from litestar_auth._plugin.config import (
 from litestar_auth._plugin.middleware import get_cookie_transports
 from litestar_auth._plugin.oauth_contract import _build_oauth_route_registration_contract
 from litestar_auth._plugin.rate_limit import iter_rate_limit_endpoints
-from litestar_auth._plugin.security_policy import _describe_jwt_revocation_policy
-from litestar_auth.authentication.strategy.db import (
-    DatabaseTokenStrategy,
-    build_legacy_plaintext_tokens_validation_message,
-)
 from litestar_auth.authentication.strategy.jwt import JWTStrategy
 from litestar_auth.config import (
     MINIMUM_SECRET_LENGTH,
     OAuthProviderConfig,
     resolve_trusted_proxy_setting,
     validate_secret_length,
-    warn_if_secret_roles_are_reused,
+    validate_secret_roles_are_distinct,
 )
 from litestar_auth.exceptions import ConfigurationError
 from litestar_auth.schemas import UserRead, UserUpdate
@@ -40,7 +34,7 @@ from litestar_auth.types import UserProtocol
 if TYPE_CHECKING:
     from litestar_auth._plugin.session_binding import _AccountStateValidator as PluginAccountStateValidator
 
-logger = logging.getLogger("litestar_auth.plugin")
+_SUPPORTED_TOTP_ALGORITHMS = ("SHA256", "SHA512")
 
 
 def validate_session_maker_or_external_db_session[UP: UserProtocol[Any], ID](
@@ -285,12 +279,9 @@ def _validate_totp_pending_secret_config[UP: UserProtocol[Any], ID](config: Lite
     if not getattr(totp_config, "totp_algorithm", None):
         msg = "totp_algorithm must be configured when totp_config is set."
         raise ValueError(msg)
-    if totp_config.totp_algorithm == "SHA1" and not config.unsafe_testing:
-        logger.warning(
-            "TOTP is configured with SHA1. For new deployments, consider using SHA256 or SHA512 "
-            "if supported by your authenticator clients.",
-            extra={"event": "totp_sha1_configured"},
-        )
+    if totp_config.totp_algorithm not in _SUPPORTED_TOTP_ALGORITHMS:
+        msg = "totp_algorithm must be one of: SHA256, SHA512."
+        raise ValueError(msg)
 
 
 def _validate_backend_strategy_security[UP: UserProtocol[Any], ID](config: LitestarAuthConfig[UP, ID]) -> None:
@@ -300,13 +291,6 @@ def _validate_backend_strategy_security[UP: UserProtocol[Any], ID](config: Lites
             backend_name=getattr(backend, "name", None),
             strategy=getattr(backend, "strategy", None),
         )
-
-    for backend in config.resolve_startup_backends():
-        strategy = getattr(backend, "strategy", None)
-        _validate_database_strategy_legacy_mode(config=config, strategy=strategy)
-        if isinstance(strategy, JWTStrategy):
-            _validate_jwt_strategy_revocation(config=config, strategy=strategy)
-            break
 
 
 def _warn_backend_name_strategy_mismatch(*, backend_name: object, strategy: object) -> None:
@@ -323,74 +307,6 @@ def _warn_backend_name_strategy_mismatch(*, backend_name: object, strategy: obje
     )
 
 
-def _validate_database_strategy_legacy_mode[UP: UserProtocol[Any], ID](
-    *,
-    config: LitestarAuthConfig[UP, ID],
-    strategy: object,
-) -> None:
-    """Validate temporary plaintext-token compatibility mode for DB strategy.
-
-    Raises:
-        ValueError: If migration-only plaintext token compatibility is enabled in production.
-    """
-    if not (
-        isinstance(strategy, DatabaseTokenStrategy)
-        and strategy.accept_legacy_plaintext_tokens
-        and not _database_strategy_legacy_rollout_enabled(config)
-        and not config.unsafe_testing
-    ):
-        return
-
-    msg = build_legacy_plaintext_tokens_validation_message(
-        rollout_setting=_database_strategy_legacy_rollout_setting_hint(config),
-    )
-    raise ValueError(msg)
-
-
-def _database_strategy_legacy_rollout_enabled[UP: UserProtocol[Any], ID](
-    config: LitestarAuthConfig[UP, ID],
-) -> bool:
-    """Return whether DB-token legacy plaintext rollout mode is explicitly enabled."""
-    database_token_auth = config.database_token_auth
-    if database_token_auth is not None:
-        return database_token_auth.accept_legacy_plaintext_tokens
-    return config.allow_legacy_plaintext_tokens
-
-
-def _database_strategy_legacy_rollout_setting_hint[UP: UserProtocol[Any], ID](
-    config: LitestarAuthConfig[UP, ID],
-) -> str:
-    """Return the config knob that controls DB-token legacy plaintext rollout."""
-    if config.database_token_auth is not None:
-        return "DatabaseTokenAuthConfig.accept_legacy_plaintext_tokens=True"
-    return "LitestarAuthConfig.allow_legacy_plaintext_tokens=True"
-
-
-def _validate_jwt_strategy_revocation[UP: UserProtocol[Any], ID](
-    *,
-    config: LitestarAuthConfig[UP, ID],
-    strategy: JWTStrategy[UP, ID],
-) -> None:
-    """Validate durable revocation requirements for JWT strategy.
-
-    Raises:
-        ValueError: If JWT revocation storage is nondurable in production.
-    """
-    notice = _describe_jwt_revocation_policy(strategy.revocation_posture)
-    if (
-        notice is None
-        or not notice.requires_explicit_production_opt_in
-        or config.allow_nondurable_jwt_revocation
-        or config.unsafe_testing
-    ):
-        return
-
-    msg = notice.production_validation_error
-    if msg is None:  # pragma: no cover - posture branch above guarantees a message
-        return
-    raise ValueError(msg)
-
-
 def _validate_totp_encryption_key[UP: UserProtocol[Any], ID](config: LitestarAuthConfig[UP, ID]) -> None:
     """Require TOTP secret encryption key in production when TOTP is enabled.
 
@@ -405,7 +321,7 @@ def _validate_totp_encryption_key[UP: UserProtocol[Any], ID](config: LitestarAut
         return
 
     msg = notice.production_validation_error
-    if msg is None:  # pragma: no cover - compatibility plaintext posture always provides a validation error
+    if msg is None:  # pragma: no cover - missing-key posture always provides a validation error
         return
     raise ConfigurationError(msg)
 
@@ -463,12 +379,11 @@ def validate_user_manager_security_config[UP: UserProtocol[Any], ID](config: Lit
         return
 
     effective_security = manager_inputs.effective_security
-    warn_if_secret_roles_are_reused(
+    validate_secret_roles_are_distinct(
         verification_token_secret=effective_security.verification_token_secret,
         reset_password_token_secret=effective_security.reset_password_token_secret,
         totp_secret_key=effective_security.totp_secret_key,
         totp_pending_secret=config.totp_config.totp_pending_secret if config.totp_config is not None else None,
-        warning_options=(SecurityWarning, 2),
     )
 
 

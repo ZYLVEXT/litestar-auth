@@ -22,7 +22,6 @@ from litestar_auth._roles import normalize_role_name, normalize_roles
 from litestar_auth.authentication.strategy import (
     DatabaseTokenModels as DatabaseTokenModelsFromStrategy,
 )
-from litestar_auth.authentication.strategy import import_token_orm_models as import_token_orm_models_from_strategy
 from litestar_auth.authentication.strategy.db_models import AccessToken, DatabaseTokenModels, RefreshToken
 from litestar_auth.exceptions import ConfigurationError
 from litestar_auth.models import (
@@ -534,7 +533,6 @@ def test_access_token_model_creates_schema_and_relationship() -> None:
 def test_models_package_import_token_orm_models_returns_token_model_classes() -> None:
     """The canonical models-layer helper returns the mapped token model classes."""
     assert import_token_orm_models_from_models() == (AccessToken, RefreshToken)
-    assert import_token_orm_models_from_strategy() == import_token_orm_models_from_models()
 
 
 def test_models_package_import_token_orm_models_matches_database_token_models_defaults() -> None:
@@ -543,7 +541,6 @@ def test_models_package_import_token_orm_models_matches_database_token_models_de
     token_models = DatabaseTokenModels()
 
     assert import_token_orm_models_from_models.__module__ == "litestar_auth.models.tokens"
-    assert import_token_orm_models_from_strategy.__module__ == "litestar_auth.authentication.strategy.db_models"
     assert (token_models.access_token_model, token_models.refresh_token_model) == (
         access_token_model,
         refresh_token_model,
@@ -984,10 +981,8 @@ def test_models_package_import_token_orm_models_keeps_user_relationship_unresolv
     code = (
         "import sys\n"
         "from sqlalchemy.exc import InvalidRequestError\n"
-        "from litestar_auth.authentication.strategy import import_token_orm_models as strategy_import_token_orm_models\n"
         "from litestar_auth.models import import_token_orm_models\n"
         "AccessToken, RefreshToken = import_token_orm_models()\n"
-        "assert strategy_import_token_orm_models() == (AccessToken, RefreshToken)\n"
         'assert "litestar_auth.models.user" not in sys.modules\n'
         'assert "litestar_auth.models.oauth" not in sys.modules\n'
         "assert (AccessToken.__name__, RefreshToken.__name__) == ('AccessToken', 'RefreshToken')\n"
@@ -1226,10 +1221,8 @@ def test_models_package_import_token_orm_models_resolves_to_reference_user_relat
     """After the bundled ``User`` model loads, the helper-returned token classes bind correctly."""
     code = (
         "from sqlalchemy import inspect\n"
-        "from litestar_auth.authentication.strategy import import_token_orm_models as strategy_import_token_orm_models\n"
         "from litestar_auth.models import import_token_orm_models\n"
         "AccessToken, RefreshToken = import_token_orm_models()\n"
-        "assert strategy_import_token_orm_models() == (AccessToken, RefreshToken)\n"
         "from litestar_auth.models import User\n"
         "from litestar_auth.models.oauth import OAuthAccount\n"
         "user_relationships = inspect(User).relationships\n"
@@ -1252,15 +1245,13 @@ def test_models_package_import_token_orm_models_resolves_to_reference_user_relat
 
 
 @pytest.mark.imports
-def test_db_models_side_effect_import_still_exposes_token_registration_helper() -> None:
-    """Importing the db-models module for mapper registration still works in isolation."""
+def test_db_models_module_still_exposes_low_level_token_registration_helper() -> None:
+    """Importing the db-models module directly still exposes its low-level helper."""
     code = (
         "from importlib import import_module\n"
         "db_models = import_module('litestar_auth.authentication.strategy.db_models')\n"
-        "from litestar_auth.authentication.strategy import import_token_orm_models\n"
         "from litestar_auth.models import import_token_orm_models as import_token_orm_models_from_models\n"
         "assert db_models.import_token_orm_models() == (db_models.AccessToken, db_models.RefreshToken)\n"
-        "assert import_token_orm_models() == (db_models.AccessToken, db_models.RefreshToken)\n"
         "assert import_token_orm_models_from_models() == (db_models.AccessToken, db_models.RefreshToken)\n"
     )
     result = subprocess.run(

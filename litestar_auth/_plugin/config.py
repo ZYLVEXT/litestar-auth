@@ -330,10 +330,9 @@ class UserManagerFactory[UP: UserProtocol[Any], ID](Protocol):
     Implementations receive ``backends`` session-bound to the current request; pass them
     through to ``BaseUserManager`` (or equivalent) so credential changes revoke persisted
     sessions consistently. Plugin validation remains authoritative for the
-    ``user_manager_security`` surface. Plugin-managed paths pass ``skip_reuse_warning=True``
-    after validation has already emitted the reused-secret warning for the same config-owned
-    baseline. Factories that diverge from that baseline can ignore the flag and still surface
-    the manager-owned warning for the secrets they actually wire.
+    ``user_manager_security`` surface. If a factory builds ``BaseUserManager`` with a
+    divergent manager-owned secret surface, the manager constructor enforces the same
+    distinct-secret validation for the roles it actually wires.
     """
 
     def __call__(
@@ -343,7 +342,6 @@ class UserManagerFactory[UP: UserProtocol[Any], ID](Protocol):
         user_db: BaseUserStore[UP, ID],
         config: LitestarAuthConfig[UP, ID],
         backends: tuple[object, ...] = (),
-        skip_reuse_warning: bool = False,
     ) -> BaseUserManager[UP, ID]: ...  # pragma: no cover
 
 
@@ -357,7 +355,6 @@ class DatabaseTokenAuthConfig:
     max_age: timedelta = DEFAULT_DATABASE_TOKEN_MAX_AGE
     refresh_max_age: timedelta = DEFAULT_DATABASE_TOKEN_REFRESH_MAX_AGE
     token_bytes: int = DEFAULT_DATABASE_TOKEN_BYTES
-    accept_legacy_plaintext_tokens: bool = False
 
 
 @dataclass(slots=True)
@@ -393,7 +390,6 @@ class LitestarAuthConfig[UP: UserProtocol[Any], ID]:
         provider-specific settings.
     Security and token policy:
         ``csrf_secret``, ``csrf_header_name``, ``unsafe_testing``,
-        ``allow_legacy_plaintext_tokens``, ``allow_nondurable_jwt_revocation``,
         ``id_parser``, ``superuser_role_name``.
     API schemas and DB-session dependency injection:
         ``user_read_schema``, ``user_create_schema``, ``user_update_schema``,
@@ -438,8 +434,6 @@ class LitestarAuthConfig[UP: UserProtocol[Any], ID]:
     csrf_secret: str | None = field(default=None, repr=False)
     csrf_header_name: str = "X-CSRF-Token"
     unsafe_testing: bool = False
-    allow_legacy_plaintext_tokens: bool = False
-    allow_nondurable_jwt_revocation: bool = False
     id_parser: Callable[[str], ID] | None = None
     user_read_schema: type[msgspec.Struct] | None = None
     user_create_schema: type[msgspec.Struct] | None = None

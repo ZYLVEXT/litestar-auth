@@ -241,7 +241,7 @@ async def test_register_rejects_schema_validation_errors() -> None:
 
 
 async def test_register_rejects_malformed_json_with_controller_error_contract() -> None:
-    """Register keeps the legacy 400 malformed-body payload shape."""
+    """Register keeps the controller 400 malformed-body error contract."""
     app, _user_db, _user_manager = build_app()
 
     async with AsyncTestClient(app=app) as test_client:

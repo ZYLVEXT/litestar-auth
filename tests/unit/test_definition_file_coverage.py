@@ -25,7 +25,6 @@ import litestar_auth.authentication.strategy.base as strategy_base_module
 import litestar_auth.authentication.transport.base as transport_base_module
 import litestar_auth.db.base as db_base_module
 import litestar_auth.models.mixins as model_mixins_module
-import litestar_auth.models.user_relationships as user_relationships_module
 import litestar_auth.schemas as schemas_module
 import litestar_auth.types as types_module
 from litestar_auth.authentication.strategy.db_models import AccessToken as ModelsAccessToken
@@ -605,20 +604,6 @@ def test_auth_model_mixins_cover_relationship_option_override_contracts() -> Non
         for constraint in ConfiguredCoverageOAuthAccount.__table__.constraints
         if constraint.name is not None
     } == {"uq_coverage_configured_oauth_identity"}
-
-
-def test_models_user_relationships_module_reload_preserves_contract_exports() -> None:
-    """Reload the shared user-relationship contract module and verify its declarative surface."""
-    reloaded_module = _reload_module(user_relationships_module)
-
-    assert reloaded_module.__all__ == ("UserAuthRelationshipMixin", "UserRoleRelationshipMixin")
-    assert sorted(
-        name
-        for name in ("access_tokens", "oauth_accounts", "refresh_tokens")
-        if name in reloaded_module.UserAuthRelationshipMixin.__dict__
-    ) == ["access_tokens", "oauth_accounts", "refresh_tokens"]
-    assert issubclass(ModelsUser, UserAuthRelationshipMixin)
-    assert issubclass(ModelsUser, UserRoleRelationshipMixin)
 
 
 def test_models_user_module_columns_and_relationships() -> None:

@@ -136,7 +136,6 @@ def build_user_manager[UP: UserProtocol[Any], ID](
     user_db: BaseUserStore[UP, ID],
     config: LitestarAuthConfig[UP, ID],
     backends: tuple[object, ...] = (),
-    skip_reuse_warning: bool = False,
 ) -> BaseUserManager[UP, ID]:
     """Instantiate the configured user manager through the explicit factory contract.
 
@@ -146,8 +145,6 @@ def build_user_manager[UP: UserProtocol[Any], ID](
         user_db: User persistence adapter for this session.
         config: Plugin configuration.
         backends: Session-bound authentication backends for this manager instance.
-        skip_reuse_warning: When ``True``, suppress the manager-owned reused-secret warning
-            because plugin validation already emitted it for the same baseline.
 
     Returns:
         A request-scoped user manager instance built from the plugin config. When
@@ -173,8 +170,6 @@ def build_user_manager[UP: UserProtocol[Any], ID](
         password_validator=resolve_password_validator(config),
         backends=backends,
     ).build_kwargs()
-    if skip_reuse_warning:
-        constructor_kwargs["skip_reuse_warning"] = True
     return user_manager_class(user_db, **constructor_kwargs)
 
 

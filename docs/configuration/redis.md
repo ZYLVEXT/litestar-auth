@@ -70,6 +70,17 @@ change the preset's runtime budget layout.
 `build_totp_pending_jti_store()` follow the same precedence: per-call `key_prefix=` wins over the
 preset default, and `None` preserves each low-level store's current built-in prefix.
 
+### Redis opaque-token invalidation
+
+`RedisTokenStrategy` writes each opaque token under a TTL-backed token key and records that key in a
+per-user Redis set. `invalidate_all_tokens(user)` uses only that per-user set: indexed tokens and
+the index key are deleted together, and the strategy does not scan the broader keyspace.
+
+If you are upgrading from a version that created Redis token keys without the per-user index, those
+orphaned keys are not force-invalidated by `invalidate_all_tokens(...)`; they remain valid only
+until their existing Redis TTL expires. Rotate or flush pre-index token keys before upgrading if you
+need immediate global invalidation of those sessions.
+
 The shared builder itself exposes typed public identifiers and slot-set helpers from
 `litestar_auth.ratelimit`:
 

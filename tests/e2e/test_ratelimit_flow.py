@@ -119,7 +119,11 @@ def _build_app_with_trusted_proxy(
         transport=BearerTransport(),
         strategy=cast(
             "Any",
-            JWTStrategy[User, UUID](secret="jwt-bearer-secret-1234567890-extra", subject_decoder=UUID),
+            JWTStrategy[User, UUID](
+                secret="jwt-bearer-secret-1234567890-extra",
+                subject_decoder=UUID,
+                allow_inmemory_denylist=True,
+            ),
         ),
     )
     rate_limit_config = (
@@ -187,7 +191,6 @@ def _build_app_with_trusted_proxy(
         session_maker=cast("Any", SessionMaker(engine)),
         user_model=User,
         user_manager_class=RateLimitUserManager,
-        allow_nondurable_jwt_revocation=True,
         user_manager_security=UserManagerSecurity[UUID](
             verification_token_secret="verify-secret-1234567890-1234567890",
             reset_password_token_secret="reset-secret-1234567890-1234567890",

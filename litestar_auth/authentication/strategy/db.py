@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import logging
 import secrets
 from datetime import UTC, datetime, timedelta
 from functools import cache
@@ -24,26 +23,6 @@ type AsyncSessionT = AsyncSession | async_scoped_session[AsyncSession]
 DEFAULT_MAX_AGE = timedelta(hours=1)
 DEFAULT_REFRESH_MAX_AGE = timedelta(days=30)
 DEFAULT_TOKEN_BYTES = 32
-
-logger = logging.getLogger(__name__)
-
-
-def build_legacy_plaintext_tokens_warning_message() -> str:
-    """Return the runtime warning text for migration-only plaintext-token compatibility."""
-    return (
-        "DatabaseTokenStrategy is configured to accept legacy plaintext tokens. "
-        "This migration-only mode increases the impact of database compromise and should be disabled "
-        "after you rotate sessions and purge legacy rows."
-    )
-
-
-def build_legacy_plaintext_tokens_validation_message(*, rollout_setting: str) -> str:
-    """Return the production validation error for migration-only plaintext-token compatibility."""
-    return (
-        "DatabaseTokenStrategy accept_legacy_plaintext_tokens=True is migration-only and disabled by "
-        "default in production. To explicitly accept temporary plaintext-token compatibility during a "
-        f"controlled rollout, set {rollout_setting} and remove it after rotating sessions and purging legacy rows."
-    )
 
 
 @cache
@@ -76,7 +55,6 @@ class DatabaseTokenStrategy[UP: UserProtocol[Any], ID](Strategy[UP, ID], Refresh
         max_age: timedelta = DEFAULT_MAX_AGE,
         refresh_max_age: timedelta = DEFAULT_REFRESH_MAX_AGE,
         token_bytes: int = DEFAULT_TOKEN_BYTES,
-        accept_legacy_plaintext_tokens: bool = False,
         unsafe_testing: bool = False,
     ) -> None:
         """Initialize the strategy.
@@ -89,11 +67,8 @@ class DatabaseTokenStrategy[UP: UserProtocol[Any], ID](Strategy[UP, ID], Refresh
             max_age: Maximum token age before it is rejected.
             refresh_max_age: Maximum refresh-token age before it is rejected.
             token_bytes: Number of random bytes used for token generation.
-            accept_legacy_plaintext_tokens: When enabled, accept previously persisted raw tokens
-                stored before digest-at-rest hardening. This is intended for migrations only.
-            unsafe_testing: Explicit per-instance test-only override for flows that need to
-                suppress production-only warnings around temporary insecure
-                compatibility modes.
+            unsafe_testing: Reserved for test-only constructor parity with plugin-managed
+                strategy construction. It currently has no runtime effect.
 
         Raises:
             ConfigurationError: When ``token_hash_secret`` fails minimum-length requirements.
@@ -113,13 +88,7 @@ class DatabaseTokenStrategy[UP: UserProtocol[Any], ID](Strategy[UP, ID], Refresh
         self.max_age = max_age
         self.refresh_max_age = refresh_max_age
         self.token_bytes = token_bytes
-        self.accept_legacy_plaintext_tokens = accept_legacy_plaintext_tokens
         self.unsafe_testing = unsafe_testing
-        if accept_legacy_plaintext_tokens and not unsafe_testing:
-            logger.warning(
-                build_legacy_plaintext_tokens_warning_message(),
-                extra={"event": "db_tokens_accept_legacy_plaintext"},
-            )
 
     def with_session(self, session: AsyncSessionT) -> DatabaseTokenStrategy[UP, ID]:
         """Return a copy of the strategy bound to the provided async session."""
@@ -130,7 +99,6 @@ class DatabaseTokenStrategy[UP: UserProtocol[Any], ID](Strategy[UP, ID], Refresh
             max_age=self.max_age,
             refresh_max_age=self.refresh_max_age,
             token_bytes=self.token_bytes,
-            accept_legacy_plaintext_tokens=self.accept_legacy_plaintext_tokens,
             unsafe_testing=self.unsafe_testing,
         )
 
@@ -178,20 +146,13 @@ class DatabaseTokenStrategy[UP: UserProtocol[Any], ID](Strategy[UP, ID], Refresh
         *,
         load: list[Any],
     ) -> object | None:
-        """Look up a token row by digest, optionally falling back to legacy plaintext.
-
-        When legacy mode is active, both queries execute unconditionally to
-        prevent timing side-channels that reveal token storage format.
+        """Look up a token row by digest.
 
         Returns:
             Persisted token row when found, otherwise ``None``.
         """
         token_digest = self._token_digest(raw_token)
-        entity = await repository.get_one_or_none(token=token_digest, load=load)
-        legacy_entity: object | None = None
-        if self.accept_legacy_plaintext_tokens:
-            legacy_entity = await repository.get_one_or_none(token=raw_token, load=load)
-        return entity if entity is not None else legacy_entity
+        return await repository.get_one_or_none(token=token_digest, load=load)
 
     async def cleanup_expired_tokens(self, session: AsyncSession) -> int:
         """Delete expired access and refresh tokens for the configured TTLs.
@@ -261,8 +222,6 @@ class DatabaseTokenStrategy[UP: UserProtocol[Any], ID](Strategy[UP, ID], Refresh
         del user
         token_digest = self._token_digest(token)
         await self._repository().delete_where(token=token_digest, auto_commit=False)
-        if self.accept_legacy_plaintext_tokens:
-            await self._repository().delete_where(token=token, auto_commit=False)
         await self.session.commit()
 
     @override

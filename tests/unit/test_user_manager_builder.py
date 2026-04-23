@@ -226,27 +226,6 @@ def test_build_user_manager_passes_only_canonical_kwargs() -> None:
     assert typed_manager.received_security.totp_secret_key == "t" * 32
 
 
-def test_build_user_manager_passes_skip_reuse_warning_only_when_requested() -> None:
-    """The default builder adds the skip flag only for plugin-managed duplicate suppression."""
-
-    class _KwargsWrapperManager(PluginUserManager):
-        def __init__(self, user_db: object, **kwargs: object) -> None:
-            self.received_manager_kwargs = dict(kwargs)
-            super().__init__(cast("Any", user_db), **cast("Any", self.received_manager_kwargs))
-
-    config = _minimal_config(user_manager_class=_KwargsWrapperManager)
-
-    manager = user_manager_builder_module.build_user_manager(
-        session=cast("Any", DummySession()),
-        user_db=InMemoryUserDatabase([]),
-        config=config,
-        skip_reuse_warning=True,
-    )
-    typed_manager = cast("_KwargsWrapperManager", manager)
-
-    assert typed_manager.received_manager_kwargs["skip_reuse_warning"] is True
-
-
 def test_build_user_manager_rejects_missing_manager_class_without_custom_factory() -> None:
     """Default builder fails closed when neither manager path owns construction."""
     config = _minimal_config()

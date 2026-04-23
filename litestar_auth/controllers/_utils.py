@@ -153,7 +153,7 @@ def _create_request_body_exception_handlers(  # noqa: PLR0913
     on_validation_error: ErrorCallback | None = None,
     on_decode_error: ErrorCallback | None = None,
 ) -> ExceptionHandlersMap:
-    """Create route-local handlers that preserve legacy body-error payloads with typed ``data`` params.
+    """Create route-local handlers that preserve the controller body-error contract for typed ``data`` params.
 
     Returns:
         Mapping of body-related exceptions to route-local response adapters.
@@ -213,7 +213,7 @@ def _configure_request_body_handler(  # noqa: PLR0913
     on_validation_error: ErrorCallback | None = None,
     on_decode_error: ErrorCallback | None = None,
 ) -> None:
-    """Attach a typed ``data`` signature and legacy body-error handlers to a route handler."""
+    """Attach a typed ``data`` signature and controller body-error handlers to a route handler."""
     _set_data_parameter_annotation(route_handler.fn, schema=schema)
     route_handler.exception_handlers = {
         **(route_handler.exception_handlers or {}),

@@ -274,18 +274,34 @@ async def test_redis_jwt_denylist_store_enforces_minimum_ttl(
 def test_jwt_strategy_rejects_unsupported_algorithms() -> None:
     """Initialization fails fast for algorithms outside the allow list."""
     with pytest.raises(ValueError, match="Unsupported JWT algorithm 'none'"):
-        JWTStrategy(secret=DEFAULT_SECRET, algorithm="none")
+        JWTStrategy(secret=DEFAULT_SECRET, algorithm="none", allow_inmemory_denylist=True)
 
 
-def test_jwt_strategy_revocation_posture_reports_inmemory_compatibility_mode() -> None:
-    """Default JWT strategy posture keeps the in-memory compatibility contract explicit."""
-    strategy = JWTStrategy(secret=DEFAULT_SECRET)
+def test_jwt_strategy_requires_explicit_revocation_store_or_inmemory_opt_in() -> None:
+    """Constructing JWTStrategy without revocation storage fails closed."""
+    with pytest.raises(ValueError, match="requires explicit JWT revocation storage"):
+        JWTStrategy(secret=DEFAULT_SECRET)
 
-    assert strategy.revocation_posture.key == "compatibility_in_memory"
+
+def test_jwt_strategy_rejects_conflicting_revocation_configuration() -> None:
+    """Callers must pick one JWT revocation configuration path."""
+    with pytest.raises(ValueError, match="cannot be combined with denylist_store"):
+        JWTStrategy(
+            secret=DEFAULT_SECRET,
+            denylist_store=_RecordingDenylistStore(),
+            allow_inmemory_denylist=True,
+        )
+
+
+def test_jwt_strategy_revocation_posture_reports_explicit_inmemory_mode() -> None:
+    """Explicit in-memory opt-in reports the process-local revocation contract."""
+    strategy = JWTStrategy(secret=DEFAULT_SECRET, allow_inmemory_denylist=True)
+
+    assert strategy.revocation_posture.key == "in_memory"
     assert strategy.revocation_posture.denylist_store_type == "InMemoryJWTDenylistStore"
     assert strategy.revocation_posture.revocation_is_durable is False
-    assert strategy.revocation_posture.requires_explicit_production_opt_in is True
-    assert strategy.revocation_posture.production_validation_error is not None
+    assert strategy.revocation_posture.requires_explicit_production_opt_in is False
+    assert strategy.revocation_posture.production_validation_error is None
     assert strategy.revocation_posture.startup_warning is not None
 
 
@@ -306,7 +322,7 @@ def test_jwt_strategy_revocation_is_durable_reflects_store_backend(async_fakered
     """Shared denylist backends report durable revocation."""
     shared_store = RedisJWTDenylistStore(redis=cast_fakeredis(async_fakeredis, RedisExpiringValueStoreClient))
 
-    assert JWTStrategy(secret=DEFAULT_SECRET).revocation_is_durable is False
+    assert JWTStrategy(secret=DEFAULT_SECRET, allow_inmemory_denylist=True).revocation_is_durable is False
     assert JWTStrategy(secret=DEFAULT_SECRET, denylist_store=shared_store).revocation_is_durable is True
 
 
@@ -331,7 +347,7 @@ async def test_jwt_strategy_is_token_denied_delegates_to_store() -> None:
 def test_jwt_strategy_validate_fingerprint_handles_missing_and_mismatched_claims() -> None:
     """Fingerprint validation rejects missing claims and mismatches for fingerprinted users."""
     user = ExampleUser(id=uuid4(), email="user@example.com", hashed_password="hashed")
-    strategy = JWTStrategy(secret=DEFAULT_SECRET)
+    strategy = JWTStrategy(secret=DEFAULT_SECRET, allow_inmemory_denylist=True)
     current = strategy.session_fingerprint_getter(user)
 
     assert current is not None
@@ -343,7 +359,11 @@ def test_jwt_strategy_validate_fingerprint_handles_missing_and_mismatched_claims
 
 def test_jwt_strategy_validate_fingerprint_accepts_missing_server_fingerprint_without_claim() -> None:
     """Fingerprint validation is skipped only when both sides are absent."""
-    strategy = JWTStrategy(secret=DEFAULT_SECRET, session_fingerprint_getter=lambda _: None)
+    strategy = JWTStrategy(
+        secret=DEFAULT_SECRET,
+        session_fingerprint_getter=lambda _: None,
+        allow_inmemory_denylist=True,
+    )
     user = ExampleUser(id=uuid4())
 
     assert strategy._validate_fingerprint({}, cast("Any", user)) is True
@@ -353,7 +373,7 @@ def test_jwt_strategy_validate_fingerprint_accepts_missing_server_fingerprint_wi
 def test_jwt_strategy_validate_fingerprint_rejects_missing_token_claim_for_known_fingerprint() -> None:
     """A user fingerprint that exists server-side must also be present in the token."""
     user = ExampleUser(id=uuid4(), email="user@example.com", hashed_password="hashed")
-    strategy = JWTStrategy(secret=DEFAULT_SECRET)
+    strategy = JWTStrategy(secret=DEFAULT_SECRET, allow_inmemory_denylist=True)
 
     assert strategy._validate_fingerprint({}, user) is False
 
@@ -370,8 +390,8 @@ def test_jwt_strategy_decodes_verified_tokens_with_and_without_issuer() -> None:
         "exp": now + timedelta(minutes=5),
         "jti": "decode-jti",
     }
-    strategy_without_issuer = JWTStrategy(secret=DEFAULT_SECRET)
-    strategy_with_issuer = JWTStrategy(secret=DEFAULT_SECRET, issuer="litestar-auth")
+    strategy_without_issuer = JWTStrategy(secret=DEFAULT_SECRET, allow_inmemory_denylist=True)
+    strategy_with_issuer = JWTStrategy(secret=DEFAULT_SECRET, issuer="litestar-auth", allow_inmemory_denylist=True)
 
     assert strategy_without_issuer._decode_verified_access_token(_make_token(payload=base_payload)) is not None
     assert (
@@ -387,7 +407,7 @@ def test_jwt_strategy_applies_bounded_clock_skew_leeway() -> None:
     """Verified token decoding tolerates small skew while still rejecting stale/future tokens."""
     user = ExampleUser(id=uuid4())
     now = datetime.now(tz=UTC)
-    strategy = JWTStrategy(secret=DEFAULT_SECRET)
+    strategy = JWTStrategy(secret=DEFAULT_SECRET, allow_inmemory_denylist=True)
 
     slightly_expired = _make_token(
         payload={
@@ -438,7 +458,7 @@ def test_jwt_strategy_applies_bounded_clock_skew_leeway() -> None:
 
 def test_jwt_strategy_decodes_invalid_token_as_none() -> None:
     """Invalid JWT payloads are rejected during verified decode."""
-    strategy = JWTStrategy(secret=DEFAULT_SECRET)
+    strategy = JWTStrategy(secret=DEFAULT_SECRET, allow_inmemory_denylist=True)
 
     assert strategy._decode_verified_access_token("not-a-jwt") is None
 
@@ -449,6 +469,7 @@ async def test_jwt_strategy_read_token_returns_none_when_subject_decoder_returns
     strategy = JWTStrategy(
         secret=DEFAULT_SECRET,
         subject_decoder=cast("Callable[[str], ID]", _subject_decoder_returns_none),
+        allow_inmemory_denylist=True,
     )
     user_manager = ExampleUserManager(user)
 
@@ -470,7 +491,7 @@ async def test_jwt_strategy_read_token_returns_none_when_subject_decoder_returns
 async def test_jwt_strategy_read_token_returns_none_when_token_is_missing() -> None:
     """Missing transport tokens short-circuit before decode or user lookup."""
     user_manager = AsyncMock()
-    strategy = JWTStrategy(secret=DEFAULT_SECRET)
+    strategy = JWTStrategy(secret=DEFAULT_SECRET, allow_inmemory_denylist=True)
 
     assert await strategy.read_token(None, user_manager) is None
     user_manager.get.assert_not_awaited()
@@ -509,7 +530,7 @@ async def test_jwt_strategy_read_token_rejects_missing_or_empty_subject(
     subject_decoder: Callable[[str], object],
 ) -> None:
     """Missing or empty ``sub`` claims are rejected before user resolution."""
-    strategy = JWTStrategy(secret=DEFAULT_SECRET, subject_decoder=subject_decoder)
+    strategy = JWTStrategy(secret=DEFAULT_SECRET, subject_decoder=subject_decoder, allow_inmemory_denylist=True)
     user_manager = AsyncMock()
 
     assert await strategy.read_token(_make_token(payload=payload), user_manager) is None
@@ -537,6 +558,7 @@ async def test_jwt_strategy_read_token_rejects_invalid_decoder_and_denied_token(
     decoder_error_strategy = JWTStrategy(
         secret=DEFAULT_SECRET,
         subject_decoder=cast("Callable[[str], ID]", _subject_decoder_raises_value_error),
+        allow_inmemory_denylist=True,
     )
     decoder_error_token = _make_token(
         payload={
@@ -556,7 +578,7 @@ async def test_jwt_strategy_read_token_rejects_invalid_decoder_and_denied_token(
 async def test_jwt_strategy_read_token_returns_none_when_user_manager_cannot_resolve_user() -> None:
     """Valid tokens are rejected when the subject no longer resolves to a user."""
     user = ExampleUser(id=uuid4(), email="user@example.com", hashed_password="hashed")
-    strategy = JWTStrategy(secret=DEFAULT_SECRET, subject_decoder=UUID)
+    strategy = JWTStrategy(secret=DEFAULT_SECRET, subject_decoder=UUID, allow_inmemory_denylist=True)
 
     token = await strategy.write_token(cast("Any", user))
 
@@ -567,7 +589,7 @@ async def test_jwt_strategy_read_token_rejects_fingerprint_mismatch() -> None:
     """Tokens become unreadable when the user's current fingerprint has changed."""
     original_user = ExampleUser(id=uuid4(), email="user@example.com", hashed_password="original-hash")
     current_user = ExampleUser(id=original_user.id, email=original_user.email, hashed_password="new-hash")
-    strategy = JWTStrategy(secret=DEFAULT_SECRET, subject_decoder=UUID)
+    strategy = JWTStrategy(secret=DEFAULT_SECRET, subject_decoder=UUID, allow_inmemory_denylist=True)
     user_manager = ExampleUserManager(current_user)
 
     token = await strategy.write_token(original_user)
@@ -578,7 +600,7 @@ async def test_jwt_strategy_read_token_rejects_fingerprint_mismatch() -> None:
 async def test_jwt_strategy_read_token_returns_user_when_subject_is_used_directly() -> None:
     """Without a subject decoder, the raw ``sub`` value is passed to the user manager."""
     user = ExampleUser(id=uuid4(), email="user@example.com", hashed_password="hashed")
-    strategy = JWTStrategy(secret=DEFAULT_SECRET)
+    strategy = JWTStrategy(secret=DEFAULT_SECRET, allow_inmemory_denylist=True)
     user_manager = AsyncMock()
     user_manager.get.return_value = user
 
@@ -591,7 +613,7 @@ async def test_jwt_strategy_read_token_returns_user_when_subject_is_used_directl
 async def test_jwt_strategy_write_token_includes_issuer_and_fingerprint_claims() -> None:
     """Issued access tokens include issuer and session fingerprint when available."""
     user = ExampleUser(id=uuid4(), email="user@example.com", hashed_password="hashed-password")
-    strategy = JWTStrategy(secret=DEFAULT_SECRET, issuer="litestar-auth")
+    strategy = JWTStrategy(secret=DEFAULT_SECRET, issuer="litestar-auth", allow_inmemory_denylist=True)
 
     token = await strategy.write_token(user)
     payload = jwt.decode(
@@ -609,7 +631,11 @@ async def test_jwt_strategy_write_token_includes_issuer_and_fingerprint_claims()
 async def test_jwt_strategy_write_token_skips_fingerprint_when_getter_returns_none() -> None:
     """Tokens omit the fingerprint claim when the configured getter yields ``None``."""
     user = ExampleUser(id=uuid4())
-    strategy = JWTStrategy[ExampleUser, str](secret=DEFAULT_SECRET, session_fingerprint_getter=lambda _: None)
+    strategy = JWTStrategy[ExampleUser, str](
+        secret=DEFAULT_SECRET,
+        session_fingerprint_getter=lambda _: None,
+        allow_inmemory_denylist=True,
+    )
 
     token = await strategy.write_token(user)
     payload = jwt.decode(token, DEFAULT_SECRET, algorithms=["HS256"], audience=JWT_ACCESS_TOKEN_AUDIENCE)

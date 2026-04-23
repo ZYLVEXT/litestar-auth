@@ -2,10 +2,7 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
-
-if TYPE_CHECKING:
-    from collections.abc import AsyncIterator
+from typing import Protocol, runtime_checkable
 
 type RedisKey = str
 type RedisStoredValue = bytes | str
@@ -14,7 +11,6 @@ type RedisDeleteCount = int
 type RedisSetIfMissingResult = bool | None
 type RedisTTLSeconds = int
 type RedisTTLMilliseconds = int | None
-type RedisScanPattern = str | None
 type RedisEvalResult = bytes | str | int | float
 type RedisNullableEvalResult = RedisEvalResult | None
 
@@ -104,16 +100,3 @@ class RedisKeyExpiryClient(Protocol):
 
     async def expire(self, name: RedisKey, time: RedisTTLSeconds) -> bool:
         """Set the TTL for a key in seconds."""
-
-
-class RedisScanClient(Protocol):
-    """Async Redis client supporting keyspace iteration."""
-
-    def scan_iter(
-        self,
-        match: RedisScanPattern = None,
-        count: int | None = None,
-        _type: str | None = None,
-        **kwargs: Any,  # noqa: ANN401
-    ) -> AsyncIterator[str]:
-        """Iterate over Redis keys matching a pattern."""

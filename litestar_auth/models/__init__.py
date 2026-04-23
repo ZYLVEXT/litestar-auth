@@ -1,8 +1,7 @@
 """ORM models package.
 
 Use :func:`import_token_orm_models` from this package as the explicit bootstrap helper
-for the bundled token tables so mapper discovery stays under the models boundary. The strategy
-layer still exposes the same helper only as a compatibility re-export for existing imports.
+for the bundled token tables so mapper discovery stays under the models boundary.
 
 Import :mod:`litestar_auth.models.oauth` when you need
 :class:`~litestar_auth.models.oauth.OAuthAccount` without registering the library

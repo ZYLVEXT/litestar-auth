@@ -59,8 +59,6 @@ def _assert_exported_symbols(module: ModuleType, *, expected_names: Iterable[str
             (
                 "DEFAULT_BACKENDS_DEPENDENCY_KEY",
                 "LitestarAuthConfig",
-                "_ScopedUserDatabaseProxy",
-                "_UserManagerFactory",
             ),
             id="_plugin",
         ),
@@ -79,7 +77,6 @@ def _assert_exported_symbols(module: ModuleType, *, expected_names: Iterable[str
                 "RefreshableStrategy",
                 "Strategy",
                 "UserManagerProtocol",
-                "import_token_orm_models",
             ),
             id="authentication.strategy",
         ),
@@ -160,8 +157,8 @@ def test_root_reexport_module_executes_under_coverage(monkeypatch: pytest.Monkey
     assert isinstance(capturing_logger.handlers[0], logging.NullHandler)
 
 
-def test_models_and_strategy_token_registration_helpers_share_the_same_db_models() -> None:
-    """The canonical models helper and strategy compatibility helper resolve to the same classes."""
+def test_models_package_owns_token_registration_helper_and_strategy_keeps_db_token_contract() -> None:
+    """The models package owns the token bootstrap helper while strategy keeps its runtime contract."""
     assert models_module.__all__ == (
         "AccessTokenMixin",
         "OAuthAccount",
@@ -185,15 +182,12 @@ def test_models_and_strategy_token_registration_helpers_share_the_same_db_models
         "RefreshableStrategy",
         "Strategy",
         "UserManagerProtocol",
-        "import_token_orm_models",
     )
     assert models_module.import_token_orm_models.__module__ == "litestar_auth.models.tokens"
-    assert strategy_module.import_token_orm_models.__module__ == "litestar_auth.authentication.strategy.db_models"
     assert not hasattr(litestar_auth_module, "import_token_orm_models")
+    assert not hasattr(strategy_module, "import_token_orm_models")
     assert strategy_module.DatabaseTokenModels is DatabaseTokenModels
     assert models_module.import_token_orm_models() == (AccessToken, RefreshToken)
-    assert strategy_module.import_token_orm_models() == (AccessToken, RefreshToken)
-    assert strategy_module.import_token_orm_models() == models_module.import_token_orm_models()
 
 
 def test_ratelimit_reexport_module_exposes_identifier_aliases_and_keeps_catalog_internal() -> None:

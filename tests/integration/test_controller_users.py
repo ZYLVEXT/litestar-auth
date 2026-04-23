@@ -437,7 +437,7 @@ async def test_users_patch_routes_reject_malformed_json_with_controller_error_co
     ],
     route_path: str,
 ) -> None:
-    """Both patch routes preserve the legacy 400 malformed-body payload shape."""
+    """Both patch routes preserve the controller 400 malformed-body error contract."""
     test_client, _, _, strategy, admin_user, regular_user = client
     target_user = regular_user if route_path == "/users/me" else admin_user
     request_path = route_path.format(user_id=regular_user.id)

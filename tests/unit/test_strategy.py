@@ -96,7 +96,7 @@ def test_strategy_base_keeps_single_token_invalidation_protocol() -> None:
 async def test_jwt_strategy_writes_token_with_subject_and_expiry() -> None:
     """JWTStrategy encodes the user id and expiration claim."""
     user = ExampleUser(id=uuid4())
-    strategy = JWTStrategy[ExampleUser, str](secret=DEFAULT_SECRET)
+    strategy = JWTStrategy[ExampleUser, str](secret=DEFAULT_SECRET, allow_inmemory_denylist=True)
 
     assert isinstance(strategy, Strategy)
 
@@ -117,7 +117,7 @@ async def test_jwt_strategy_writes_token_with_subject_and_expiry() -> None:
 async def test_jwt_strategy_reads_valid_token_via_user_manager() -> None:
     """JWTStrategy decodes a token and resolves the user through the manager."""
     user = ExampleUser(id=uuid4())
-    strategy = JWTStrategy(secret=DEFAULT_SECRET, subject_decoder=UUID)
+    strategy = JWTStrategy(secret=DEFAULT_SECRET, subject_decoder=UUID, allow_inmemory_denylist=True)
     user_manager = ExampleUserManager(user)
 
     token = await strategy.write_token(user)
@@ -166,7 +166,7 @@ async def test_jwt_strategy_returns_none_for_invalid_or_expired_tokens(
 ) -> None:
     """JWTStrategy rejects malformed, expired, and undecodable tokens."""
     user = ExampleUser(id=uuid4())
-    strategy = JWTStrategy(secret=DEFAULT_SECRET, subject_decoder=subject_decoder)
+    strategy = JWTStrategy(secret=DEFAULT_SECRET, subject_decoder=subject_decoder, allow_inmemory_denylist=True)
     user_manager = ExampleUserManager(user)
 
     token = token_factory(DEFAULT_SECRET)
@@ -178,7 +178,7 @@ async def test_jwt_strategy_returns_none_for_wrong_issuer_when_issuer_configured
     """JWTStrategy rejects tokens whose issuer does not match the configured issuer."""
     user = ExampleUser(id=uuid4())
     issuer = "litestar-auth"
-    strategy = JWTStrategy(secret=DEFAULT_SECRET, subject_decoder=UUID, issuer=issuer)
+    strategy = JWTStrategy(secret=DEFAULT_SECRET, subject_decoder=UUID, issuer=issuer, allow_inmemory_denylist=True)
     user_manager = ExampleUserManager(user)
 
     # Token signed with same secret but different issuer.
@@ -220,6 +220,7 @@ async def test_jwt_strategy_read_token_returns_none_when_subject_decoder_raises(
     strategy = JWTStrategy(
         secret=DEFAULT_SECRET,
         subject_decoder=decoder,
+        allow_inmemory_denylist=True,
     )
     user_manager = ExampleUserManager(user)
 
@@ -252,7 +253,7 @@ def _make_valid_jwt_payload(**overrides: object) -> dict[str, object]:
 
 async def test_jwt_strategy_read_token_returns_none_when_sub_missing() -> None:
     """JWTStrategy.read_token returns None when payload has no sub claim."""
-    strategy = JWTStrategy(secret=DEFAULT_SECRET)
+    strategy = JWTStrategy(secret=DEFAULT_SECRET, allow_inmemory_denylist=True)
     user_manager = ExampleUserManager(ExampleUser(id=uuid4()))
 
     token = jwt.encode(
@@ -266,7 +267,7 @@ async def test_jwt_strategy_read_token_returns_none_when_sub_missing() -> None:
 
 async def test_jwt_strategy_read_token_returns_none_when_sub_empty() -> None:
     """JWTStrategy.read_token returns None when sub is empty string."""
-    strategy = JWTStrategy(secret=DEFAULT_SECRET)
+    strategy = JWTStrategy(secret=DEFAULT_SECRET, allow_inmemory_denylist=True)
     user_manager = ExampleUserManager(ExampleUser(id=uuid4()))
 
     token = jwt.encode(
@@ -280,7 +281,7 @@ async def test_jwt_strategy_read_token_returns_none_when_sub_empty() -> None:
 
 async def test_jwt_strategy_read_token_returns_none_when_sub_not_string() -> None:
     """JWTStrategy.read_token returns None when sub is not a string (e.g. int)."""
-    strategy = JWTStrategy(secret=DEFAULT_SECRET)
+    strategy = JWTStrategy(secret=DEFAULT_SECRET, allow_inmemory_denylist=True)
     user_manager = ExampleUserManager(ExampleUser(id=uuid4()))
 
     token = jwt.encode(
@@ -294,7 +295,7 @@ async def test_jwt_strategy_read_token_returns_none_when_sub_not_string() -> Non
 
 async def test_jwt_strategy_destroy_token_handles_invalid_token() -> None:
     """JWTStrategy.destroy_token ignores tokens that cannot be decoded."""
-    strategy = JWTStrategy(secret=DEFAULT_SECRET)
+    strategy = JWTStrategy(secret=DEFAULT_SECRET, allow_inmemory_denylist=True)
 
     await strategy.destroy_token("not-a-jwt", ExampleUser(id=uuid4()))
 
@@ -319,6 +320,7 @@ async def test_jwt_strategy_supports_custom_algorithm_and_lifetime() -> None:
         secret=HS512_SECRET,
         algorithm="HS512",
         lifetime=lifetime,
+        allow_inmemory_denylist=True,
     )
 
     token = await strategy.write_token(user)
@@ -333,7 +335,7 @@ async def test_jwt_strategy_supports_custom_algorithm_and_lifetime() -> None:
 async def test_jwt_strategy_uses_default_15_minute_lifetime() -> None:
     """JWTStrategy default lifetime is approximately 15 minutes."""
     user = ExampleUser(id=uuid4())
-    strategy = JWTStrategy[ExampleUser, str](secret=DEFAULT_SECRET)
+    strategy = JWTStrategy[ExampleUser, str](secret=DEFAULT_SECRET, allow_inmemory_denylist=True)
 
     token = await strategy.write_token(user)
     payload = jwt.decode(token, DEFAULT_SECRET, algorithms=["HS256"], audience=JWT_ACCESS_TOKEN_AUDIENCE)
@@ -351,6 +353,7 @@ async def test_jwt_strategy_supports_rs256_with_separate_verify_key() -> None:
         verify_key=RSA_PUBLIC_KEY,
         algorithm="RS256",
         subject_decoder=UUID,
+        allow_inmemory_denylist=True,
     )
     user_manager = ExampleUserManager(user)
 
@@ -367,7 +370,7 @@ async def test_jwt_strategy_uses_secret_key_for_default_session_fingerprint() ->
     """Default fingerprints are keyed with the JWT secret for symmetric algorithms."""
     password = "hashed-password"
     user = type("FingerprintUser", (), {"id": uuid4(), "email": "user@example.com", "hashed_password": password})()
-    strategy = JWTStrategy(secret=DEFAULT_SECRET)
+    strategy = JWTStrategy(secret=DEFAULT_SECRET, allow_inmemory_denylist=True)
 
     token = await strategy.write_token(user)
     payload = jwt.decode(token, DEFAULT_SECRET, algorithms=["HS256"], audience=JWT_ACCESS_TOKEN_AUDIENCE)
@@ -385,6 +388,7 @@ async def test_jwt_strategy_uses_signing_secret_for_default_session_fingerprint_
         secret=RSA_PRIVATE_KEY,
         verify_key=RSA_PUBLIC_KEY,
         algorithm="RS256",
+        allow_inmemory_denylist=True,
     )
 
     token = await strategy.write_token(user)
@@ -402,7 +406,11 @@ async def test_jwt_strategy_preserves_custom_session_fingerprint_getter() -> Non
     def custom_getter(candidate: object) -> str | None:
         return f"custom:{getattr(candidate, 'id', 'missing')}"
 
-    strategy = JWTStrategy(secret=DEFAULT_SECRET, session_fingerprint_getter=custom_getter)
+    strategy = JWTStrategy(
+        secret=DEFAULT_SECRET,
+        session_fingerprint_getter=custom_getter,
+        allow_inmemory_denylist=True,
+    )
     token = await strategy.write_token(user)
     payload = jwt.decode(token, DEFAULT_SECRET, algorithms=["HS256"], audience=JWT_ACCESS_TOKEN_AUDIENCE)
 
@@ -414,7 +422,7 @@ async def test_jwt_strategy_includes_jti_and_iss_when_issuer_set() -> None:
     """JWTStrategy emits jti and iss claims when issuer is configured."""
     user = ExampleUser(id=uuid4())
     issuer = "litestar-auth"
-    strategy = JWTStrategy[ExampleUser, str](secret=DEFAULT_SECRET, issuer=issuer)
+    strategy = JWTStrategy[ExampleUser, str](secret=DEFAULT_SECRET, issuer=issuer, allow_inmemory_denylist=True)
 
     token = await strategy.write_token(user)
     payload = jwt.decode(
@@ -436,7 +444,7 @@ async def test_jwt_strategy_includes_jti_and_iss_when_issuer_set() -> None:
 async def test_jwt_strategy_destroy_token_revokes_token_via_denylist() -> None:
     """JWTStrategy destroy_token adds the token's jti to an in-memory denylist."""
     user = ExampleUser(id=uuid4())
-    strategy = JWTStrategy(secret=DEFAULT_SECRET, subject_decoder=UUID)
+    strategy = JWTStrategy(secret=DEFAULT_SECRET, subject_decoder=UUID, allow_inmemory_denylist=True)
     user_manager = ExampleUserManager(user)
 
     token = await strategy.write_token(user)
@@ -450,7 +458,7 @@ async def test_jwt_strategy_destroy_token_revokes_token_via_denylist() -> None:
 async def test_jwt_strategy_returns_none_when_audience_claim_missing() -> None:
     """JWTStrategy rejects tokens that do not include an audience."""
     user = ExampleUser(id=uuid4())
-    strategy = JWTStrategy(secret=DEFAULT_SECRET, subject_decoder=UUID)
+    strategy = JWTStrategy(secret=DEFAULT_SECRET, subject_decoder=UUID, allow_inmemory_denylist=True)
     user_manager = ExampleUserManager(user)
 
     token = jwt.encode(
@@ -470,7 +478,7 @@ async def test_jwt_strategy_returns_none_when_audience_claim_missing() -> None:
 async def test_jwt_strategy_returns_none_when_iat_claim_missing() -> None:
     """JWTStrategy rejects tokens that do not include an issued-at timestamp."""
     user = ExampleUser(id=uuid4())
-    strategy = JWTStrategy(secret=DEFAULT_SECRET, subject_decoder=UUID)
+    strategy = JWTStrategy(secret=DEFAULT_SECRET, subject_decoder=UUID, allow_inmemory_denylist=True)
     user_manager = ExampleUserManager(user)
 
     token = jwt.encode(
@@ -485,7 +493,7 @@ async def test_jwt_strategy_returns_none_when_iat_claim_missing() -> None:
 async def test_jwt_strategy_returns_none_when_nbf_claim_missing() -> None:
     """JWTStrategy rejects tokens that do not include a not-before timestamp."""
     user = ExampleUser(id=uuid4())
-    strategy = JWTStrategy(secret=DEFAULT_SECRET, subject_decoder=UUID)
+    strategy = JWTStrategy(secret=DEFAULT_SECRET, subject_decoder=UUID, allow_inmemory_denylist=True)
     user_manager = ExampleUserManager(user)
 
     token = jwt.encode(
@@ -505,7 +513,7 @@ async def test_jwt_strategy_returns_none_when_nbf_claim_missing() -> None:
 async def test_jwt_strategy_returns_none_when_nbf_claim_is_in_future() -> None:
     """JWTStrategy rejects tokens whose not-before timestamp is in the future."""
     user = ExampleUser(id=uuid4())
-    strategy = JWTStrategy(secret=DEFAULT_SECRET, subject_decoder=UUID)
+    strategy = JWTStrategy(secret=DEFAULT_SECRET, subject_decoder=UUID, allow_inmemory_denylist=True)
     user_manager = ExampleUserManager(user)
 
     token = jwt.encode(
@@ -526,7 +534,7 @@ async def test_jwt_strategy_returns_none_when_nbf_claim_is_in_future() -> None:
 def test_jwt_strategy_rejects_disallowed_algorithm() -> None:
     """JWTStrategy refuses insecure or unknown algorithms at construction time."""
     with pytest.raises(ValueError, match="Unsupported JWT algorithm"):
-        JWTStrategy(secret=DEFAULT_SECRET, algorithm="none")
+        JWTStrategy(secret=DEFAULT_SECRET, algorithm="none", allow_inmemory_denylist=True)
 
 
 def test_redis_strategy_lazy_import_error_message(monkeypatch: pytest.MonkeyPatch) -> None:

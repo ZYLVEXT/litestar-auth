@@ -14,7 +14,7 @@ import time
 import warnings
 from dataclasses import dataclass
 from functools import partial
-from typing import TYPE_CHECKING, Any, Literal, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Literal, Protocol, runtime_checkable
 from urllib.parse import quote, urlencode
 
 from litestar_auth._optional_deps import _require_redis_asyncio
@@ -29,13 +29,11 @@ from litestar_auth.exceptions import ConfigurationError
 if TYPE_CHECKING:
     from collections.abc import Callable, Hashable
 
-SECRET_BYTES = 20
 TIME_STEP_SECONDS = 30
 TOTP_DRIFT_STEPS: int = 1
 
 # RFC 4226 S4 recommends HMAC key length matching the hash output length.
 _SECRET_BYTES_BY_ALGORITHM: dict[TotpAlgorithm, int] = {
-    "SHA1": 20,
     "SHA256": 32,
     "SHA512": 64,
 }
@@ -44,17 +42,13 @@ _SECRET_BYTES_BY_ALGORITHM: dict[TotpAlgorithm, int] = {
 # step-sized windows (e.g. 90 s when drift is 1 and the step is 30 s).
 USED_TOTP_CODE_TTL_SECONDS = TIME_STEP_SECONDS * (2 * TOTP_DRIFT_STEPS + 1)
 TOTP_DIGITS = 6
-# Default algorithm for new TOTP enrollments. Deployments that need legacy
-# authenticator compatibility can override this via the totp_algorithm
-# parameter and choose "SHA1" explicitly.
 TOTP_ALGORITHM = "SHA256"
 
-type TotpAlgorithm = Literal["SHA1", "SHA256", "SHA512"]
+type TotpAlgorithm = Literal["SHA256", "SHA512"]
 
-_TOTP_HASH_MAP: dict[TotpAlgorithm, Any] = {
-    "SHA1": hashlib.sha1,
-    "SHA256": hashlib.sha256,
-    "SHA512": hashlib.sha512,
+_TOTP_HASH_MAP: dict[TotpAlgorithm, str] = {
+    "SHA256": "sha256",
+    "SHA512": "sha512",
 }
 
 DEFAULT_TOTP_USED_KEY_PREFIX = "litestar_auth:totp:used:"
@@ -77,6 +71,19 @@ logger = logging.getLogger(__name__)
 
 _load_used_totp_redis_asyncio = partial(_require_redis_asyncio, feature_name="RedisUsedTotpCodeStore")
 _load_enrollment_redis_asyncio = partial(_require_redis_asyncio, feature_name="RedisTotpEnrollmentStore")
+
+
+def _validate_totp_algorithm(algorithm: TotpAlgorithm) -> TotpAlgorithm:
+    """Return ``algorithm`` when supported, otherwise raise a clear error.
+
+    Raises:
+        ValueError: If ``algorithm`` is not supported.
+    """
+    if algorithm in _TOTP_HASH_MAP:
+        return algorithm
+    supported_algorithms = ", ".join(_TOTP_HASH_MAP)
+    msg = f"Unsupported TOTP algorithm {algorithm!r}. Supported algorithms: {supported_algorithms}."
+    raise ValueError(msg)
 
 
 @dataclass(frozen=True, slots=True)
@@ -419,9 +426,7 @@ def generate_totp_secret(algorithm: TotpAlgorithm = TOTP_ALGORITHM) -> str:
     """Generate a base32-encoded TOTP secret sized to the algorithm's HMAC output.
 
     Per RFC 4226 Section 4, the shared secret length should match the HMAC
-    output length: 20 bytes for SHA-1, 32 bytes for SHA-256, 64 bytes for
-    SHA-512.  The ``SECRET_BYTES`` constant is retained for backward
-    compatibility but is no longer the sole source of truth.
+    output length: 32 bytes for SHA-256 or 64 bytes for SHA-512.
 
     Args:
         algorithm: TOTP hash algorithm; determines secret byte length.
@@ -429,7 +434,7 @@ def generate_totp_secret(algorithm: TotpAlgorithm = TOTP_ALGORITHM) -> str:
     Returns:
         A random base32 secret without RFC padding.
     """
-    secret_bytes = _SECRET_BYTES_BY_ALGORITHM.get(algorithm, SECRET_BYTES)
+    secret_bytes = _SECRET_BYTES_BY_ALGORITHM[_validate_totp_algorithm(algorithm)]
     random_bytes = secrets.token_bytes(secret_bytes)
     return base64.b32encode(random_bytes).decode("ascii").rstrip("=")
 
@@ -446,6 +451,7 @@ def generate_totp_uri(
     Returns:
         An ``otpauth://`` URI for authenticator apps.
     """
+    algorithm = _validate_totp_algorithm(algorithm)
     label = quote(f"{issuer}:{email}")
     query_params: dict[str, str] = {
         "secret": secret,
@@ -532,7 +538,7 @@ def _verify_totp_counter(secret: str, code: str, *, algorithm: TotpAlgorithm = T
             expected_code = _generate_totp_code(secret, candidate_counter, algorithm=algorithm)
             if hmac.compare_digest(expected_code, code):
                 return candidate_counter
-    except (binascii.Error, ValueError):
+    except binascii.Error:
         return None
 
     return None
@@ -560,6 +566,7 @@ def _generate_totp_code(
     Returns:
         A zero-padded 6-digit TOTP string.
     """
+    algorithm = _validate_totp_algorithm(algorithm)
     secret_bytes = _decode_secret(secret)
     counter_bytes = struct.pack(">Q", counter)
     digest = hmac.new(secret_bytes, counter_bytes, _TOTP_HASH_MAP[algorithm]).digest()

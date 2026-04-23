@@ -33,7 +33,6 @@ from litestar_auth._superuser_role import DEFAULT_SUPERUSER_ROLE_NAME, normalize
 from litestar_auth.config import RESET_PASSWORD_TOKEN_AUDIENCE, VERIFY_TOKEN_AUDIENCE
 from litestar_auth.db.base import BaseOAuthAccountStore
 from litestar_auth.password import PasswordHelper
-from litestar_auth.totp import SecurityWarning
 from litestar_auth.types import LoginIdentifier, UserProtocol
 
 if TYPE_CHECKING:
@@ -236,7 +235,6 @@ class BaseUserManager[UP: UserProtocol[Any], ID](
         backends: tuple[object, ...] = (),
         login_identifier: LoginIdentifier = "email",
         superuser_role_name: str = DEFAULT_SUPERUSER_ROLE_NAME,
-        skip_reuse_warning: bool = False,
         unsafe_testing: bool = False,
     ) -> None:
         """Initialize the user manager.
@@ -260,9 +258,6 @@ class BaseUserManager[UP: UserProtocol[Any], ID](
                 when ``login_identifier`` is not passed explicitly to ``authenticate``.
             superuser_role_name: Normalized role name that represents superuser privileges
                 for plugin-managed guards.
-            skip_reuse_warning: When ``True``, suppress the reused-secret warning because an
-                upstream plugin-managed validation path has already emitted it for the same
-                effective secret surface.
             unsafe_testing: Explicit per-instance test-only override for flows that need
                 generated fallback secrets or other single-process shortcuts. Do not
                 enable this for production traffic.
@@ -277,12 +272,11 @@ class BaseUserManager[UP: UserProtocol[Any], ID](
         )
         resolved_verification_token_secret = account_token_secrets.verification_token_secret.get_secret_value()
         resolved_reset_password_token_secret = account_token_secrets.reset_password_token_secret.get_secret_value()
-        if not unsafe_testing and not skip_reuse_warning:
-            _config.warn_if_secret_roles_are_reused(
+        if not unsafe_testing:
+            _config.validate_secret_roles_are_distinct(
                 verification_token_secret=resolved_verification_token_secret,
                 reset_password_token_secret=resolved_reset_password_token_secret,
                 totp_secret_key=resolved_security.totp_secret_key,
-                warning_options=(SecurityWarning, 4),
             )
         self.user_db = user_db
         self.oauth_account_store = oauth_account_store or _resolve_oauth_account_store(user_db)

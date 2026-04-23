@@ -21,14 +21,13 @@ class InMemoryRateLimiter:
     for shared storage (e.g. multi-worker or multi-pod).
     """
 
-    def __init__(  # noqa: PLR0913
+    def __init__(
         self,
         *,
         max_attempts: int,
         window_seconds: float,
         max_keys: int = 100_000,
         sweep_interval: int = 1_000,
-        fail_closed_on_capacity: bool = True,
         clock: Callable[[], float] = time.monotonic,
     ) -> None:
         """Store the limiter configuration and request counters.
@@ -48,7 +47,6 @@ class InMemoryRateLimiter:
         self.window_seconds = window_seconds
         self.max_keys = max_keys
         self.sweep_interval = sweep_interval
-        self.fail_closed_on_capacity = fail_closed_on_capacity
         self._clock = clock
         self._lock = asyncio.Lock()
         self._windows: dict[str, SlidingWindow] = {}
@@ -66,7 +64,7 @@ class InMemoryRateLimiter:
             self._maybe_sweep(now)
             timestamps = self._prune(key, now)
             if timestamps is None:
-                if self.fail_closed_on_capacity and self._is_at_capacity_after_prune(now):
+                if self._is_at_capacity_after_prune(now):
                     self._log_capacity_rejection()
                     return False
                 return True
@@ -80,10 +78,9 @@ class InMemoryRateLimiter:
             self._maybe_sweep(now)
             timestamps = self._prune(key, now)
             if timestamps is None:
-                if self.fail_closed_on_capacity and self._is_at_capacity_after_prune(now):
+                if self._is_at_capacity_after_prune(now):
                     self._log_capacity_rejection()
                     return
-                self._evict_oldest_keys()
                 timestamps = deque()
                 self._windows[key] = timestamps
 
@@ -143,17 +140,6 @@ class InMemoryRateLimiter:
             return False
         self._sweep_all(now)
         return len(self._windows) >= self.max_keys
-
-    def _evict_oldest_keys(self) -> None:
-        """Keep the tracked-key count below the configured cap in legacy eviction mode.
-
-        Evicts the least-recently-active key (earliest last timestamp)
-        rather than the first-inserted key, preventing attackers from
-        resetting their own rate-limit window through eviction pressure.
-        """
-        while len(self._windows) >= self.max_keys:
-            lru_key = min(self._windows, key=lambda k: self._windows[k][-1] if self._windows[k] else 0.0)
-            del self._windows[lru_key]
 
     def _log_capacity_rejection(self) -> None:
         """Emit structured telemetry for fail-closed capacity pressure."""

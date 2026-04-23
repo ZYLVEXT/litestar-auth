@@ -23,7 +23,7 @@ class OAuthAccount(OAuthAccountMixin, UUIDBase):
     The ``user`` relationship targets the declarative class named ``User`` in the
     same registry (the bundled :class:`~litestar_auth.models.user.User` or your
     replacement). The default inverse side lives in
-    :class:`~litestar_auth.models.user_relationships.UserAuthRelationshipMixin`.
+    :class:`~litestar_auth.models.mixins.UserAuthRelationshipMixin`.
     Configure ``foreign_keys`` / ``overlaps`` on subclasses if you remap
     relationships (see the custom user + OAuth cookbook).
     """

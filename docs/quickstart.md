@@ -37,7 +37,7 @@ if __name__ == "__main__":
 
 ## 3. Save the application as `app.py`
 
-This example keeps logout revocation state in-process with `allow_nondurable_jwt_revocation=True` so it works without Redis. The `UserManager` hook prints the verification token to the server console so you can finish the flow without wiring email first.
+This local example keeps logout revocation state in-process with `allow_inmemory_denylist=True` so it works without Redis. Use a shared `denylist_store` such as `RedisJWTDenylistStore` for multi-worker production. The `UserManager` hook prints the verification token to the server console so you can finish the flow without wiring email first.
 
 ```python
 """Minimal Litestar auth quickstart app mirrored in docs/quickstart.md."""
@@ -93,6 +93,7 @@ backend = AuthenticationBackend[User, UUID](
         secret="replace-with-32+-char-jwt-secret",
         lifetime=timedelta(minutes=15),
         subject_decoder=UUID,
+        allow_inmemory_denylist=True,
     ),
 )
 
@@ -106,7 +107,6 @@ config = LitestarAuthConfig[User, UUID](
         verification_token_secret="replace-with-32+-char-secret-for-verify",
         reset_password_token_secret="replace-with-32+-char-secret-for-reset",
     ),
-    allow_nondurable_jwt_revocation=True,
     include_users=False,
 )
 

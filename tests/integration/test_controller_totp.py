@@ -49,7 +49,7 @@ from litestar_auth.controllers.totp import (
     _totp_validate_replay_and_password,
 )
 from litestar_auth.exceptions import ConfigurationError, ErrorCode, TokenError
-from litestar_auth.manager import BaseUserManager, UserManagerSecurity
+from litestar_auth.manager import ENCRYPTED_TOTP_SECRET_PREFIX, BaseUserManager, UserManagerSecurity
 from litestar_auth.password import PasswordHelper
 from litestar_auth.plugin import LitestarAuth, LitestarAuthConfig
 from litestar_auth.ratelimit import AuthRateLimitConfig, EndpointRateLimit
@@ -86,6 +86,20 @@ _DEFAULT_PENDING_JTI_STORE = object()
 _DEFAULT_ENROLLMENT_STORE = object()
 
 
+def _decrypt_test_totp_secret(stored_secret: str) -> str:
+    """Return the plaintext value for a test encrypted TOTP secret."""
+    assert stored_secret.startswith(ENCRYPTED_TOTP_SECRET_PREFIX)
+    encrypted_value = stored_secret.removeprefix(ENCRYPTED_TOTP_SECRET_PREFIX).encode()
+    return Fernet(TOTP_SECRET_KEY.encode()).decrypt(encrypted_value).decode()
+
+
+def _assert_encrypted_totp_secret_matches(stored_secret: str | None, plaintext_secret: str) -> None:
+    """Assert that a stored TOTP secret is encrypted and decrypts to the expected value."""
+    assert stored_secret is not None
+    assert stored_secret != plaintext_secret
+    assert _decrypt_test_totp_secret(stored_secret) == plaintext_secret
+
+
 class TrackingUserManager(BaseUserManager[ExampleUser, UUID]):
     """Concrete manager that records completed login hooks."""
 
@@ -98,6 +112,7 @@ class TrackingUserManager(BaseUserManager[ExampleUser, UUID]):
         *,
         backends: tuple[object, ...] = (),
         login_identifier: Literal["email", "username"] = "email",
+        totp_secret_key: str | None = TOTP_SECRET_KEY,
     ) -> None:
         """Initialize the manager with deterministic hook tracking."""
         super().__init__(
@@ -106,6 +121,7 @@ class TrackingUserManager(BaseUserManager[ExampleUser, UUID]):
             security=UserManagerSecurity[UUID](
                 verification_token_secret=verification_token_secret,
                 reset_password_token_secret=reset_password_token_secret,
+                totp_secret_key=totp_secret_key,
             ),
             backends=backends,
             login_identifier=login_identifier,
@@ -384,7 +400,7 @@ async def test_enable_2fa_returns_secret_and_uri(
 
     # secret persisted after confirmation
     stored_user = next(iter(user_db.users_by_id.values()))
-    assert stored_user.totp_secret == body["secret"]
+    _assert_encrypted_totp_secret_matches(stored_user.totp_secret, body["secret"])
 
 
 async def test_enable_2fa_keeps_email_in_the_otpauth_uri_under_username_login_mode(
@@ -1016,7 +1032,8 @@ async def test_login_with_2fa_enabled_returns_pending_token(
         json={"password": "correct-password"},
         headers={"Authorization": f"Bearer {token}"},
     )
-    await _confirm_enrollment(client, token=token, enable_body=enable_resp.json())
+    enable_body = enable_resp.json()
+    await _confirm_enrollment(client, token=token, enable_body=enable_body)
 
     # login again — should return pending
     pending_resp = await client.post(
@@ -1243,7 +1260,7 @@ async def test_confirm_enable_rejects_replayed_enrollment_token(
     code = body.get("code") or (body.get("extra") or {}).get("code")
     assert code == ErrorCode.TOTP_ALREADY_ENABLED
     assert body["detail"] == "TOTP is already enabled."
-    assert user.totp_secret == enable_body["secret"]
+    _assert_encrypted_totp_secret_matches(user.totp_secret, enable_body["secret"])
 
 
 async def test_confirm_enable_rejects_stale_enrollment_token_after_new_enable(
@@ -1293,7 +1310,7 @@ async def test_confirm_enable_rejects_stale_enrollment_token_after_new_enable(
     code = stale_body.get("code") or (stale_body.get("extra") or {}).get("code")
     assert code == ErrorCode.TOTP_ENROLL_BAD_TOKEN
     assert latest_confirm.status_code == HTTP_CREATED
-    assert user.totp_secret == second_body["secret"]
+    _assert_encrypted_totp_secret_matches(user.totp_secret, second_body["secret"])
 
 
 async def test_confirm_enable_consumes_enrollment_token_on_invalid_code(
@@ -1499,7 +1516,8 @@ async def test_verify_with_wrong_code_returns_400(
         json={"password": "correct-password"},
         headers={"Authorization": f"Bearer {token}"},
     )
-    await _confirm_enrollment(client, token=token, enable_body=enable_resp.json())
+    enable_body = enable_resp.json()
+    await _confirm_enrollment(client, token=token, enable_body=enable_body)
 
     pending_resp = await client.post(
         "/auth/login",
@@ -1662,7 +1680,8 @@ async def test_verify_with_invalid_pending_token_returns_400(
         json={"password": "correct-password"},
         headers={"Authorization": f"Bearer {token}"},
     )
-    await _confirm_enrollment(client, token=token, enable_body=enable_resp.json())
+    enable_body = enable_resp.json()
+    await _confirm_enrollment(client, token=token, enable_body=enable_body)
 
     resp = await client.post(
         "/auth/2fa/verify",
@@ -1793,7 +1812,7 @@ async def test_disable_then_enable_allows_reenrollment(
     second_secret = second_body["secret"]
     assert second_secret != first_secret
     await _confirm_enrollment(client, token=access_token, enable_body=second_body)
-    assert next(iter(user_db.users_by_id.values())).totp_secret == second_secret
+    _assert_encrypted_totp_secret_matches(next(iter(user_db.users_by_id.values())).totp_secret, second_secret)
 
 
 @pytest.mark.filterwarnings("ignore::litestar_auth.totp.SecurityWarning")
@@ -1813,16 +1832,15 @@ async def test_disable_2fa_with_wrong_code_returns_400(
         json={"password": "correct-password"},
         headers={"Authorization": f"Bearer {token}"},
     )
-    await _confirm_enrollment(client, token=token, enable_body=enable_resp.json())
+    enable_body = enable_resp.json()
+    await _confirm_enrollment(client, token=token, enable_body=enable_body)
 
     pending_resp = await client.post(
         "/auth/login",
         json={"identifier": "user@example.com", "password": "correct-password"},
     )
     pending_token = pending_resp.json()["pending_token"]
-    secret = next(iter(client_and_db[1].users_by_id.values())).totp_secret
-    assert isinstance(secret, str)
-    valid_code = _generate_totp_code(secret, _current_counter())
+    valid_code = _generate_totp_code(enable_body["secret"], _current_counter())
     verify_resp = await client.post(
         "/auth/2fa/verify",
         json={"pending_token": pending_token, "code": valid_code},

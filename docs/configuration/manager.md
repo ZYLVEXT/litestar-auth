@@ -210,18 +210,15 @@ follow the default `BaseUserManager` constructor surface must be configured with
 `user_manager_factory=...`.
 
 The supported production posture is one distinct high-entropy value per secret role. Outside
-explicit `unsafe_testing`, `LitestarAuth(config)` validation is the authoritative warning owner for the
-config-managed secret surface: it warns once when one configured value is reused across
-verification, reset-password, and TOTP roles, including `totp_config.totp_pending_secret` when
-that controller flow is enabled. Request-scoped `BaseUserManager` construction receives the same
-validated baseline and suppresses the duplicate warning when the effective
-`verification_token_secret` / `reset_password_token_secret` / `totp_secret_key` values match the
-config-owned surface. If a custom `user_manager_factory` diverges from that validated secret
-surface, the manager constructor surfaces an additional warning for the manager-owned roles it
-actually wires. Direct `BaseUserManager(..., security=UserManagerSecurity(...))` construction still
-applies the same warning for the manager-owned secret roles supplied on that bundle
-(`verification_token_secret`, `reset_password_token_secret`, and `totp_secret_key`). A future major
-release may reject reused secret material.
+explicit `unsafe_testing`, `LitestarAuth(config)` validation raises `ConfigurationError` when one
+configured value is reused across verification, reset-password, and TOTP roles, including
+`totp_config.totp_pending_secret` when that controller flow is enabled. Direct
+`BaseUserManager(..., security=UserManagerSecurity(...))` construction applies the same
+fail-closed validation for the manager-owned secret roles supplied on that bundle
+(`verification_token_secret`, `reset_password_token_secret`, and `totp_secret_key`). Custom
+`user_manager_factory` implementations should keep their manager-owned secret wiring aligned with
+`user_manager_security`; if they construct a manager with reused secret material, that manager
+constructor raises for the roles it actually receives.
 
 | Setting | Token audience or flow | Supported production posture |
 | ------- | ---------------------- | ---------------------------- |

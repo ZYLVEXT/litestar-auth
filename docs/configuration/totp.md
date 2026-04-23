@@ -9,7 +9,7 @@ Use this page for `TotpConfig` fields and the plugin-owned TOTP route contract.
 | `totp_pending_secret` | (required) | Secret for pending-2FA JWTs; must align with auth controller. |
 | `totp_backend_name` | `None` | Which named `AuthenticationBackend` issues tokens after 2FA. |
 | `totp_issuer` | `"litestar-auth"` | Issuer in otpauth URI. |
-| `totp_algorithm` | `"SHA256"` | TOTP hash algorithm. |
+| `totp_algorithm` | `"SHA256"` | TOTP hash algorithm; supported values are `"SHA256"` and `"SHA512"`. |
 | `totp_pending_jti_store` | `None` | JWT JTI denylist for pending login tokens. Required unless the owning config/controller explicitly sets `unsafe_testing=True`. Use a shared store such as `RedisJWTDenylistStore` for multi-worker deployments. |
 | `totp_enrollment_store` | `None` | Server-side pending-enrollment store. Required unless the owning config/controller explicitly sets `unsafe_testing=True`. Use a shared store such as `RedisTotpEnrollmentStore` for multi-worker deployments. |
 | `totp_used_tokens_store` | `None` | Replay store for consumed TOTP codes (required unless the owning config/controller explicitly sets `unsafe_testing=True`). See [Redis-backed auth surface](redis.md#redis-backed-auth-surface) for the Redis setup and import paths. |

@@ -8,7 +8,7 @@ Names are loaded lazily (PEP 562) when accessed on the package.
 
 | Goal | Import |
 |------|--------|
-| Shared auth-model mixins without registering reference mappers | `from litestar_auth.models import UserModelMixin, UserAuthRelationshipMixin, UserRoleRelationshipMixin, RoleMixin, UserRoleAssociationMixin, OAuthAccountMixin, AccessTokenMixin, RefreshTokenMixin` |
+| Shared auth-model mixins without registering reference mappers | `from litestar_auth.models.mixins import UserModelMixin, UserAuthRelationshipMixin, UserRoleRelationshipMixin, RoleMixin, UserRoleAssociationMixin, OAuthAccountMixin, AccessTokenMixin, RefreshTokenMixin` |
 | Bundled `AccessToken` / `RefreshToken` mapper bootstrap | `from litestar_auth.models import import_token_orm_models` |
 | Bundled role tables without loading reference `User` | `from litestar_auth.models.role import Role, UserRole` |
 | OAuth table contract **without** loading reference `User` | `from litestar_auth.models.oauth import OAuthAccount` |

@@ -352,14 +352,16 @@ def build_app(
     backend = AuthenticationBackend[User, UUID](
         name="bearer",
         transport=BearerTransport(),
-        strategy=cast("Any", JWTStrategy[User, UUID](secret=jwt_secret, subject_decoder=UUID)),
+        strategy=cast(
+            "Any",
+            JWTStrategy[User, UUID](secret=jwt_secret, subject_decoder=UUID, allow_inmemory_denylist=True),
+        ),
     )
     config = LitestarAuthConfig[User, UUID](
         backends=[backend],
         session_maker=cast("Any", session_maker),
         user_model=User,
         user_manager_class=OAuthUserManager,
-        allow_nondurable_jwt_revocation=True,
         user_db_factory=lambda session: SQLAlchemyUserDatabase(
             session,
             user_model=User,

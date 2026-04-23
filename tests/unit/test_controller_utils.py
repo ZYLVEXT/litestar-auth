@@ -274,7 +274,7 @@ async def test_decode_request_body_uses_custom_decode_metadata() -> None:
 
 
 def test_configure_request_body_handler_updates_data_signature_and_handlers() -> None:
-    """Request-body helper rewrites the ``data`` annotation and installs legacy error handlers."""
+    """Request-body helper rewrites the ``data`` annotation and installs controller error handlers."""
 
     def handler(self: object, request: object, data: msgspec.Struct) -> msgspec.Struct:
         del self

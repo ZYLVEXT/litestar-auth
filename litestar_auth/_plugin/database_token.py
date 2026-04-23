@@ -10,7 +10,6 @@ from litestar_auth.types import UserProtocol
 
 if TYPE_CHECKING:
     from datetime import timedelta  # pragma: no cover
-    from logging import Logger  # pragma: no cover
 
     from sqlalchemy.ext.asyncio import AsyncSession  # pragma: no cover
 
@@ -85,7 +84,6 @@ class _DatabaseTokenStrategySettings:
     max_age: timedelta
     refresh_max_age: timedelta
     token_bytes: int
-    accept_legacy_plaintext_tokens: bool
     unsafe_testing: bool
 
 
@@ -98,8 +96,6 @@ class _StartupOnlyDatabaseTokenStrategyMixin[UP: UserProtocol[Any], ID]:
         settings: _DatabaseTokenStrategySettings,
         token_models: DatabaseTokenModels,
         runtime_strategy_cls: type[Any],
-        legacy_warning_message: str,
-        database_token_logger: Logger,
     ) -> None:
         self._runtime_strategy_settings = settings
         self._runtime_strategy_cls = runtime_strategy_cls
@@ -110,13 +106,7 @@ class _StartupOnlyDatabaseTokenStrategyMixin[UP: UserProtocol[Any], ID]:
         self.max_age = settings.max_age
         self.refresh_max_age = settings.refresh_max_age
         self.token_bytes = settings.token_bytes
-        self.accept_legacy_plaintext_tokens = settings.accept_legacy_plaintext_tokens
         self.unsafe_testing = settings.unsafe_testing
-        if self.accept_legacy_plaintext_tokens and not self.unsafe_testing:
-            database_token_logger.warning(
-                legacy_warning_message,
-                extra={"event": "db_tokens_accept_legacy_plaintext"},
-            )
 
     def _raise_startup_only_runtime_error(self) -> Never:
         del self
@@ -133,7 +123,6 @@ class _StartupOnlyDatabaseTokenStrategyMixin[UP: UserProtocol[Any], ID]:
                 max_age=settings.max_age,
                 refresh_max_age=settings.refresh_max_age,
                 token_bytes=settings.token_bytes,
-                accept_legacy_plaintext_tokens=settings.accept_legacy_plaintext_tokens,
                 unsafe_testing=settings.unsafe_testing,
             ),
         )
@@ -184,13 +173,7 @@ def _build_startup_only_database_token_strategy[UP: UserProtocol[Any], ID](
     Returns:
         Startup-only strategy carrying DB-token metadata without a placeholder session.
     """
-    from litestar_auth.authentication.strategy.db import (  # noqa: PLC0415
-        DatabaseTokenStrategy,
-        build_legacy_plaintext_tokens_warning_message,
-    )
-    from litestar_auth.authentication.strategy.db import (  # noqa: PLC0415
-        logger as database_token_logger,
-    )
+    from litestar_auth.authentication.strategy.db import DatabaseTokenStrategy  # noqa: PLC0415
     from litestar_auth.authentication.strategy.db_models import DatabaseTokenModels  # noqa: PLC0415
 
     class _StartupOnlyDatabaseTokenStrategy(_StartupOnlyDatabaseTokenStrategyMixin, DatabaseTokenStrategy):
@@ -201,7 +184,6 @@ def _build_startup_only_database_token_strategy[UP: UserProtocol[Any], ID](
         max_age=database_token_auth.max_age,
         refresh_max_age=database_token_auth.refresh_max_age,
         token_bytes=database_token_auth.token_bytes,
-        accept_legacy_plaintext_tokens=database_token_auth.accept_legacy_plaintext_tokens,
         unsafe_testing=unsafe_testing,
     )
     return cast(
@@ -210,8 +192,6 @@ def _build_startup_only_database_token_strategy[UP: UserProtocol[Any], ID](
             settings=settings,
             token_models=DatabaseTokenModels(),
             runtime_strategy_cls=DatabaseTokenStrategy,
-            legacy_warning_message=build_legacy_plaintext_tokens_warning_message(),
-            database_token_logger=database_token_logger,
         ),
     )
 
@@ -250,7 +230,6 @@ def _build_database_token_backend[UP: UserProtocol[Any], ID](
                 max_age=database_token_auth.max_age,
                 refresh_max_age=database_token_auth.refresh_max_age,
                 token_bytes=database_token_auth.token_bytes,
-                accept_legacy_plaintext_tokens=database_token_auth.accept_legacy_plaintext_tokens,
                 unsafe_testing=unsafe_testing,
             ),
         )

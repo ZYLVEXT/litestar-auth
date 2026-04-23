@@ -21,6 +21,7 @@ if TYPE_CHECKING:
     from tests._helpers import AsyncFakeRedis
 
 REDIS_TOKEN_HASH_SECRET = "redis-token-hash-secret-1234567890"
+INDEXED_TOKEN_COUNT = 2
 
 pytestmark = pytest.mark.unit
 
@@ -120,7 +121,7 @@ async def test_manager_update_invalidates_tokens_only_on_email_or_password_chang
 async def test_redis_strategy_invalidate_all_tokens_deletes_only_matching_subjects(
     async_fakeredis: AsyncFakeRedis,
 ) -> None:
-    """Redis invalidation scans keys and removes those belonging to the user."""
+    """Redis invalidation removes keys recorded in the user's token index."""
     strategy = RedisTokenStrategy(
         redis=cast_fakeredis(async_fakeredis, RedisClientProtocol),
         token_hash_secret=REDIS_TOKEN_HASH_SECRET,
@@ -134,6 +135,12 @@ async def test_redis_strategy_invalidate_all_tokens_deletes_only_matching_subjec
     assert await async_fakeredis.setex("litestar_auth:token:token-b", 10, str(other_user.id)) is True
     assert await async_fakeredis.setex("litestar_auth:token:token-c", 10, str(user.id)) is True
     assert await async_fakeredis.setex("other-prefix:token-d", 10, str(user.id)) is True
+    indexed_token_count = await async_fakeredis.sadd(  # ty: ignore[invalid-await]
+        strategy._user_index_key(str(user.id)),
+        "litestar_auth:token:token-a",
+        "litestar_auth:token:token-c",
+    )
+    assert indexed_token_count == INDEXED_TOKEN_COUNT
 
     await strategy.invalidate_all_tokens(user)
 
@@ -141,6 +148,7 @@ async def test_redis_strategy_invalidate_all_tokens_deletes_only_matching_subjec
     assert await async_fakeredis.get("litestar_auth:token:token-c") is None
     assert await async_fakeredis.get("litestar_auth:token:token-b") == str(other_user.id).encode()
     assert await async_fakeredis.get("other-prefix:token-d") == str(user.id).encode()
+    assert await async_fakeredis.exists(strategy._user_index_key(str(user.id))) == 0
 
 
 @pytest.mark.unit

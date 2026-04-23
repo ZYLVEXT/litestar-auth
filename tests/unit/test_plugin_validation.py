@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import importlib
-import logging
 import warnings
 from dataclasses import dataclass
 from datetime import timedelta
@@ -16,7 +15,6 @@ import pytest
 from litestar.config.app import AppConfig
 
 import litestar_auth._plugin.config as plugin_config_module
-import litestar_auth._plugin.database_token as database_token_module
 import litestar_auth._plugin.middleware as middleware_module
 import litestar_auth._plugin.rate_limit as rate_limit_module
 import litestar_auth._plugin.security_policy as plugin_security_policy_module
@@ -56,6 +54,7 @@ from litestar_auth._plugin.validation import (
     validate_user_model_login_identifier_fields,
 )
 from litestar_auth.authentication.backend import AuthenticationBackend
+from litestar_auth.authentication.strategy.db import DatabaseTokenStrategy
 from litestar_auth.authentication.transport.bearer import BearerTransport
 from litestar_auth.authentication.transport.cookie import CookieTransport
 from litestar_auth.config import (
@@ -216,15 +215,15 @@ def test_plugin_security_policy_docs_snippet_matches_shared_policy_wording() -> 
 
 
 def test_describe_jwt_revocation_policy_accepts_reloaded_posture() -> None:
-    """Plugin validation reuses the direct JWT posture contract even after reloads."""
+    """Plugin notices reuse the direct JWT posture contract even after reloads."""
     reloaded_jwt_module = importlib.reload(jwt_strategy_module)
-    strategy = reloaded_jwt_module.JWTStrategy(secret=JWT_SECRET)
+    strategy = reloaded_jwt_module.JWTStrategy(secret=JWT_SECRET, allow_inmemory_denylist=True)
 
     notice = plugin_security_policy_module._describe_jwt_revocation_policy(strategy.revocation_posture)
 
     assert notice is not None
     assert notice.policy.key == "jwt_revocation"
-    assert notice.posture_key == "compatibility_in_memory"
+    assert notice.posture_key == "in_memory"
     assert notice.requires_explicit_production_opt_in is strategy.revocation_posture.requires_explicit_production_opt_in
     assert notice.production_validation_error == strategy.revocation_posture.production_validation_error
     assert notice.startup_warning == strategy.revocation_posture.startup_warning
@@ -248,8 +247,8 @@ def _build_direct_manager(*, totp_secret_key: str | None = None) -> BaseUserMana
     )
 
 
-def test_resolve_plugin_managed_totp_secret_storage_policy_matches_plaintext_posture() -> None:
-    """Plugin-owned TOTP wiring reuses the same direct-manager plaintext posture contract."""
+def test_resolve_plugin_managed_totp_secret_storage_policy_matches_missing_key_posture() -> None:
+    """Plugin-owned TOTP wiring reuses the same direct-manager missing-key posture contract."""
     config = _minimal_config(totp_config=TotpConfig(totp_pending_secret="p" * 32))
     posture = _build_direct_manager().totp_secret_storage_posture
 
@@ -339,7 +338,7 @@ def test_warn_insecure_plugin_startup_defaults_warns_for_reloaded_jwt_strategy(
     """JWT denylist warnings survive strategy-module reloads used in coverage tests."""
     del monkeypatch
     reloaded_jwt_module = importlib.reload(jwt_strategy_module)
-    strategy = reloaded_jwt_module.JWTStrategy(secret=JWT_SECRET)
+    strategy = reloaded_jwt_module.JWTStrategy(secret=JWT_SECRET, allow_inmemory_denylist=True)
     config = _minimal_config(
         backends=[
             AuthenticationBackend[ExampleUser, UUID](
@@ -452,18 +451,6 @@ def test_warn_insecure_plugin_startup_defaults_skips_refresh_warning_when_refres
     assert not [record for record in records if "refresh_max_age" in str(record.message)]
 
 
-def test_validate_backend_strategy_security_rejects_legacy_plaintext_tokens(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Production validation rejects migration-only plaintext-token compatibility mode."""
-    config = _minimal_config(
-        backends=[_database_backend(accept_legacy_plaintext_tokens=True)],
-    )
-
-    with pytest.raises(ValueError, match="migration-only"):
-        _validate_backend_strategy_security(config)
-
-
 def test_validate_backend_strategy_security_skips_non_database_strategies(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -477,7 +464,7 @@ def test_validate_backend_strategy_security_warns_for_jwt_named_non_jwt_strategy
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """JWT-like backend names emit an advisory warning when the strategy is not JWT-based."""
-    backend = _database_backend(accept_legacy_plaintext_tokens=False)
+    backend = _database_backend()
     backend.name = "Jwt-database"
     config = _minimal_config(backends=[backend])
 
@@ -503,110 +490,21 @@ def test_validate_backend_strategy_security_does_not_warn_for_neutral_backend_na
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Neutral backend names stay silent even when the strategy is not JWT-based."""
-    config = _minimal_config(backends=[_database_backend(accept_legacy_plaintext_tokens=False)])
+    config = _minimal_config(backends=[_database_backend()])
 
     with warnings.catch_warnings():
         warnings.simplefilter("error")
         _validate_backend_strategy_security(config)
 
 
-def test_validate_backend_strategy_security_allows_explicit_plaintext_token_override(
+def test_validate_backend_strategy_security_allows_explicit_inmemory_jwt_revocation(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """The explicit compatibility override keeps the legacy DB-token mode available."""
-    config = _minimal_config(
-        backends=[_database_backend(accept_legacy_plaintext_tokens=True)],
-    )
-    config.allow_legacy_plaintext_tokens = True
-
-    _validate_backend_strategy_security(config)
-
-
-def test_validate_backend_strategy_security_allows_database_token_preset_legacy_mode_without_top_level_override(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """The canonical DB-token preset uses its nested settings as the rollout source of truth."""
-    config = LitestarAuthConfig[ExampleUser, UUID](
-        database_token_auth=DatabaseTokenAuthConfig(
-            token_hash_secret=TOKEN_HASH_SECRET,
-            accept_legacy_plaintext_tokens=True,
-        ),
-        user_model=ExampleUser,
-        user_manager_class=PluginUserManager,
-        session_maker=cast("Any", DummySessionMaker()),
-        user_db_factory=lambda _session: InMemoryUserDatabase([]),
-        user_manager_security=UserManagerSecurity[UUID](
-            verification_token_secret="v" * 32,
-            reset_password_token_secret="r" * 32,
-        ),
-    )
-
-    _validate_backend_strategy_security(config)
-
-
-def test_validate_backend_strategy_security_uses_database_token_preset_rollout_hint(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Preset validation errors point callers to the nested DB-token settings object."""
-    config = LitestarAuthConfig[ExampleUser, UUID](
-        database_token_auth=DatabaseTokenAuthConfig(
-            token_hash_secret=TOKEN_HASH_SECRET,
-        ),
-        user_model=ExampleUser,
-        user_manager_class=PluginUserManager,
-        session_maker=cast("Any", DummySessionMaker()),
-        user_db_factory=lambda _session: InMemoryUserDatabase([]),
-        user_manager_security=UserManagerSecurity[UUID](
-            verification_token_secret="v" * 32,
-            reset_password_token_secret="r" * 32,
-        ),
-    )
-    legacy_backend = AuthenticationBackend[ExampleUser, UUID](
-        name="database",
-        transport=BearerTransport(),
-        strategy=cast(
-            "Any",
-            validation_module.DatabaseTokenStrategy(
-                session=cast("Any", object()),
-                token_hash_secret=TOKEN_HASH_SECRET,
-                accept_legacy_plaintext_tokens=True,
-            ),
-        ),
-    )
-
-    def _build_legacy_backend(
-        _database_token_auth: DatabaseTokenAuthConfig,
-        *,
-        session: object | None = None,
-        unsafe_testing: bool = False,
-    ) -> AuthenticationBackend[ExampleUser, UUID]:
-        del _database_token_auth
-        del session
-        del unsafe_testing
-        return legacy_backend
-
-    monkeypatch.setattr(
-        database_token_module,
-        "_build_database_token_backend",
-        _build_legacy_backend,
-    )
-
-    with pytest.raises(ValueError, match=r"DatabaseTokenAuthConfig\.accept_legacy_plaintext_tokens=True"):
-        _validate_backend_strategy_security(config)
-
-
-def test_validate_backend_strategy_security_rejects_nondurable_jwt_revocation(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Production validation rejects JWT denylist storage that is only process-local."""
+    """JWTStrategy owns the explicit process-local revocation opt-in."""
     del monkeypatch
-    backend = _jwt_backend()
-    config = _minimal_config(backends=[backend])
-    strategy = cast("Any", backend.strategy)
+    config = _minimal_config(backends=[_jwt_backend()])
 
-    with pytest.raises(ValueError, match="process-local in-memory denylist") as exc_info:
-        _validate_backend_strategy_security(config)
-    assert str(exc_info.value) == strategy.revocation_posture.production_validation_error
+    _validate_backend_strategy_security(config)
 
 
 def test_validate_backend_strategy_security_allows_durable_jwt_revocation(
@@ -614,26 +512,6 @@ def test_validate_backend_strategy_security_allows_durable_jwt_revocation(
 ) -> None:
     """A durable denylist store satisfies the JWT revocation validation."""
     config = _minimal_config(backends=[_jwt_backend(denylist_store=_DurableDenylistStore())])
-
-    _validate_backend_strategy_security(config)
-
-
-def test_validate_backend_strategy_security_allows_nondurable_jwt_override(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """The explicit nondurable-JWT override keeps the production config valid."""
-    config = _minimal_config(backends=[_jwt_backend()])
-    config.allow_nondurable_jwt_revocation = True
-
-    _validate_backend_strategy_security(config)
-
-
-def test_validate_backend_strategy_security_allows_nondurable_jwt_revocation_in_testing(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Explicit unsafe testing preserves the single-process JWT denylist branch."""
-    config = _minimal_config(backends=[_jwt_backend()])
-    config.unsafe_testing = True
 
     _validate_backend_strategy_security(config)
 
@@ -1180,35 +1058,14 @@ def test_validate_rate_limit_config_rejects_invalid_totp_confirm_enable_trusted_
     assert type(exc_info.value).__name__ == "ConfigurationError"
 
 
-def test_validate_totp_pending_secret_config_logs_sha1_warning(
-    monkeypatch: pytest.MonkeyPatch,
-    caplog: pytest.LogCaptureFixture,
-) -> None:
-    """Production validation logs when TOTP is configured with SHA1."""
+def test_validate_totp_pending_secret_config_rejects_unsupported_algorithm() -> None:
+    """Production validation rejects algorithms outside the supported TOTP set."""
     config = _minimal_config(
         totp_config=_configured_totp_config(totp_algorithm="SHA1"),
     )
 
-    with caplog.at_level(logging.WARNING, logger="litestar_auth.plugin"):
+    with pytest.raises(ValueError, match="totp_algorithm must be one of: SHA256, SHA512"):
         _validate_totp_pending_secret_config(config)
-
-    assert "SHA1" in caplog.text
-    assert "SHA256 or SHA512" in caplog.text
-
-
-def test_validate_totp_pending_secret_config_is_silent_for_non_sha1(
-    monkeypatch: pytest.MonkeyPatch,
-    caplog: pytest.LogCaptureFixture,
-) -> None:
-    """Non-SHA1 algorithms skip the production warning path."""
-    config = _minimal_config(
-        totp_config=_configured_totp_config(totp_algorithm="SHA256"),
-    )
-
-    with caplog.at_level(logging.WARNING, logger="litestar_auth.plugin"):
-        _validate_totp_pending_secret_config(config)
-
-    assert not caplog.text
 
 
 def test_validate_totp_pending_secret_config_requires_algorithm() -> None:
@@ -1299,7 +1156,12 @@ def test_validate_totp_encryption_key_requires_secret_in_production(
         match="totp_secret_key is required in production",
     ) as exc_info:
         _validate_totp_encryption_key(config)
-    assert str(exc_info.value) == TotpSecretStoragePosture.compatibility_plaintext().production_validation_error
+    assert (
+        str(exc_info.value)
+        == TotpSecretStoragePosture.fernet_encrypted(
+            key_configured=False,
+        ).production_validation_error
+    )
 
 
 def test_validate_totp_encryption_key_allows_configured_secret_in_production(
@@ -1363,7 +1225,12 @@ def test_validate_totp_encryption_key_rejects_empty_secret_in_production(
         match="totp_secret_key is required in production",
     ) as exc_info:
         _validate_totp_encryption_key(config)
-    assert str(exc_info.value) == TotpSecretStoragePosture.compatibility_plaintext().production_validation_error
+    assert (
+        str(exc_info.value)
+        == TotpSecretStoragePosture.fernet_encrypted(
+            key_configured=False,
+        ).production_validation_error
+    )
 
 
 def test_validate_user_manager_security_config_allows_factory_owned_manager_without_typed_security() -> None:
@@ -1406,10 +1273,8 @@ def test_validate_config_accepts_typed_user_manager_security_contract() -> None:
     validate_user_manager_security_config(config)
 
 
-def test_validate_user_manager_security_config_warns_when_secret_roles_share_one_value(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Production validation warns when verify/reset/TOTP roles reuse one value."""
+def test_validate_user_manager_security_config_rejects_when_secret_roles_share_one_value() -> None:
+    """Production validation fails closed when verify/reset/TOTP roles reuse one value."""
     shared_secret = "shared-secret-role-value-1234567890"
     config = _minimal_config(
         user_manager_security=UserManagerSecurity[UUID](
@@ -1423,11 +1288,10 @@ def test_validate_user_manager_security_config_warns_when_secret_roles_share_one
         ),
     )
 
-    with pytest.warns(validation_module.SecurityWarning, match="supported production posture") as records:
+    with pytest.raises(ConfigurationError, match="Distinct secrets/keys") as exc_info:
         validate_user_manager_security_config(config)
 
-    assert len(records) == 1
-    message = str(records[0].message)
+    message = str(exc_info.value)
     assert "verification_token_secret" in message
     assert "reset_password_token_secret" in message
     assert "totp_secret_key" in message
@@ -1436,6 +1300,26 @@ def test_validate_user_manager_security_config_warns_when_secret_roles_share_one
     assert RESET_PASSWORD_TOKEN_AUDIENCE in message
     assert TOTP_PENDING_AUDIENCE in message
     assert TOTP_ENROLL_AUDIENCE in message
+    assert shared_secret not in message
+
+
+def test_validate_user_manager_security_config_allows_reused_roles_under_unsafe_testing() -> None:
+    """The reused-secret validation bypass is explicit and scoped to unsafe testing."""
+    shared_secret = "shared-secret-role-value-1234567890"
+    config = _minimal_config(
+        user_manager_security=UserManagerSecurity[UUID](
+            verification_token_secret=shared_secret,
+            reset_password_token_secret=shared_secret,
+            totp_secret_key=shared_secret,
+        ),
+        totp_config=_configured_totp_config(
+            totp_pending_secret=shared_secret,
+            totp_used_tokens_store=cast("Any", InMemoryUsedTotpCodeStore()),
+        ),
+    )
+    config.unsafe_testing = True
+
+    validate_user_manager_security_config(config)
 
 
 def test_validate_totp_config_warns_for_insecure_cookie_transport(
@@ -2048,7 +1932,7 @@ def _cookie_backend(
 
 def _jwt_backend(*, denylist_store: object | None = None) -> AuthenticationBackend[ExampleUser, UUID]:
     strategy = (
-        validation_module.JWTStrategy(secret=JWT_SECRET)
+        validation_module.JWTStrategy(secret=JWT_SECRET, allow_inmemory_denylist=True)
         if denylist_store is None
         else validation_module.JWTStrategy(
             # Build from the class object currently referenced by validation.py to
@@ -2072,16 +1956,15 @@ def _non_jwt_backend() -> AuthenticationBackend[ExampleUser, UUID]:
     )
 
 
-def _database_backend(*, accept_legacy_plaintext_tokens: bool) -> AuthenticationBackend[ExampleUser, UUID]:
+def _database_backend() -> AuthenticationBackend[ExampleUser, UUID]:
     return AuthenticationBackend[ExampleUser, UUID](
         name="db",
         transport=BearerTransport(),
         strategy=cast(
             "Any",
-            validation_module.DatabaseTokenStrategy(
+            DatabaseTokenStrategy(
                 session=cast("Any", object()),
                 token_hash_secret=TOKEN_HASH_SECRET,
-                accept_legacy_plaintext_tokens=accept_legacy_plaintext_tokens,
             ),
         ),
     )

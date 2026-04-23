@@ -99,6 +99,7 @@ def app() -> Iterator[Litestar]:
             JWTStrategy[User, UUID](
                 secret="jwt-bearer-secret-1234567890-extra",
                 subject_decoder=UUID,
+                allow_inmemory_denylist=True,
             ),
         ),
     )
@@ -107,7 +108,6 @@ def app() -> Iterator[Litestar]:
         session_maker=cast("Any", SessionMaker(engine)),
         user_model=User,
         user_manager_class=TOTPUserManager,
-        allow_nondurable_jwt_revocation=True,
         user_manager_security=UserManagerSecurity[UUID](
             verification_token_secret="verify-secret-1234567890-1234567890",
             reset_password_token_secret="reset-secret-1234567890-1234567890",

@@ -43,16 +43,15 @@ class _JWTRevocationPolicyLike(Protocol):
 
 _JWT_REVOCATION_POLICY = _PluginSecurityPolicy(
     key="jwt_revocation",
-    plugin_surface="allow_nondurable_jwt_revocation=True",
+    plugin_surface="JWTStrategy(allow_inmemory_denylist=True)",
     contract_reference="JWTStrategy.revocation_posture",
     docs_summary=(
-        "`JWTStrategy(secret=...)` defaults to the compatibility-grade `compatibility_in_memory` posture "
-        "unless you provide a shared denylist store."
+        "`JWTStrategy` requires an explicit `denylist_store`, or `allow_inmemory_denylist=True` for "
+        "single-process in-memory revocation."
     ),
     production_requirement=(
-        "Plugin-managed production rejects this posture unless "
-        "`allow_nondurable_jwt_revocation=True` or `unsafe_testing=True`; startup still warns when you "
-        "explicitly accept the single-process tradeoff."
+        "Plugin-managed production has no separate JWT revocation compatibility flag; startup warns when "
+        "a strategy is explicitly wired to process-local in-memory revocation."
     ),
 )
 _TOTP_SECRET_STORAGE_POLICY = _PluginSecurityPolicy(
@@ -60,8 +59,8 @@ _TOTP_SECRET_STORAGE_POLICY = _PluginSecurityPolicy(
     plugin_surface="user_manager_security.totp_secret_key",
     contract_reference="BaseUserManager.totp_secret_storage_posture",
     docs_summary=(
-        "Omitting `totp_secret_key` keeps the compatibility-grade `compatibility_plaintext` posture "
-        "so legacy plaintext TOTP secrets still round-trip."
+        "`BaseUserManager.totp_secret_storage_posture` is the Fernet-encrypted at-rest contract; "
+        "omitting `totp_secret_key` means non-null persisted TOTP secrets cannot be stored or read."
     ),
     production_requirement=(
         "With `totp_config` enabled, plugin-managed production requires `user_manager_security.totp_secret_key` "

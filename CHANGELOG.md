@@ -31,12 +31,66 @@
   exception message.** `InsufficientRolesError` still stores structured role context on the
   exception instance, but the generated message and bundled plugin exception wiring now expose only
   generic prose plus the stable `code`, keeping role names out of ordinary logs and wire payloads.
+- **Database-backed opaque tokens no longer accept legacy plaintext compatibility flags** —
+  **Breaking for callers that passed `accept_legacy_plaintext_tokens` to
+  `DatabaseTokenStrategy` / `DatabaseTokenAuthConfig` or
+  `allow_legacy_plaintext_tokens` to `LitestarAuthConfig`.** The DB-token strategy now reads and
+  deletes opaque tokens by keyed digest only. Rotate or invalidate any lingering plaintext DB-token
+  rows before upgrading.
+- **`InMemoryRateLimiter` always fails closed at key capacity** — **Breaking for callers that
+  explicitly enabled the removed legacy LRU mode.** New keys are rejected and logged with
+  `event=rate_limit_memory_capacity` when `max_keys` is reached and no expired counters can be
+  pruned, and the compatibility-only `fail_closed_on_capacity` constructor parameter has been
+  removed.
+- **Redis-backed opaque-token invalidation is now index-only** — **Breaking for callers that passed
+  `max_scan_keys` to `RedisTokenStrategy` or relied on scan-based invalidation of pre-index token
+  keys.** `RedisTokenStrategy.invalidate_all_tokens(...)` now deletes only tokens recorded in the
+  per-user Redis index written by current `write_token(...)` calls. Token keys created by older
+  deployments without that index are not discovered by a keyspace scan and expire naturally by their
+  Redis TTL; rotate or flush them before upgrading if immediate revocation is required.
+- **Secret-role reuse now fails closed in production** — **Breaking for deployments that reused one
+  configured value across `verification_token_secret`, `reset_password_token_secret`,
+  `totp_pending_secret`, or `totp_secret_key`.** `LitestarAuth(config)` validation and direct
+  `BaseUserManager(..., security=UserManagerSecurity(...))` construction now raise
+  `ConfigurationError` outside explicit `unsafe_testing=True` instead of emitting
+  `SecurityWarning`. Configure one distinct high-entropy value per role; error messages identify
+  the reused roles and audiences without exposing the secret value.
+- **TOTP no longer supports SHA1 algorithms** — **Breaking for deployments with SHA1-enrolled
+  authenticator clients.** `TotpAlgorithm`, `TotpConfig.totp_algorithm`,
+  `create_totp_controller(..., totp_algorithm=...)`, and the low-level TOTP helpers now accept
+  only `SHA256` or `SHA512`. The compatibility `SECRET_BYTES` constant was removed, and generated
+  secrets are sized directly from the selected supported algorithm. Re-enroll existing SHA1 users
+  before upgrading.
+- **Persisted TOTP secrets now require encrypted storage** — **Breaking for direct/custom manager
+  integrations that omitted `UserManagerSecurity.totp_secret_key` and stored plaintext TOTP
+  secrets.** `BaseUserManager.totp_secret_storage_posture` now reports only the
+  `fernet_encrypted` contract, non-null TOTP secret writes require `totp_secret_key`, and unprefixed
+  legacy plaintext persisted values fail closed on read. Configure a Fernet key and encrypt, rotate,
+  or disable existing plaintext TOTP secrets before upgrading.
+- **JWT revocation storage must be explicit** — **Breaking for callers using
+  `JWTStrategy(secret=...)` without a denylist store.** The strategy no longer constructs
+  `InMemoryJWTDenylistStore` implicitly. Pass `denylist_store=RedisJWTDenylistStore(...)` or another
+  shared `JWTDenylistStore` for production, or set `allow_inmemory_denylist=True` for deliberate
+  single-process development, test, or consciously single-process app wiring. The plugin-level
+  `allow_nondurable_jwt_revocation` flag was removed because the strategy constructor now owns that
+  opt-in.
 
 ### Internal
 
 - **`pytest -n auto` is now capped at 8 workers** — `pyproject.toml` adds `--maxprocesses=8` to the
   default pytest options because the async/ASGI-heavy suite reproducibly triggers macOS
   socket/event-loop teardown warnings when xdist fans out to all logical CPUs.
+
+### Changed
+
+- **Compatibility import re-exports were removed** — **Breaking for callers importing
+  `UserAuthRelationshipMixin` / `UserRoleRelationshipMixin` from
+  `litestar_auth.models.user_relationships`, `import_token_orm_models` from
+  `litestar_auth.authentication.strategy`, or `_ScopedUserDatabaseProxy` /
+  `_UserManagerFactory` from `litestar_auth._plugin`.** Import relationship mixins from
+  `litestar_auth.models.mixins`, the bundled token bootstrap helper from
+  `litestar_auth.models`, and session-binding internals from
+  `litestar_auth._plugin.session_binding`.
 
 ## 2.0.0 (2026-04-22)
 

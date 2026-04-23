@@ -76,13 +76,13 @@ def test_totp_secrets_module_executes_under_coverage() -> None:
     assert reloaded_module.TotpSecretsService.__name__ == TotpSecretsService.__name__
 
 
-def test_totp_secret_storage_posture_reports_plaintext_compatibility_without_key() -> None:
-    """Missing keys keep the plaintext compatibility contract explicit."""
+def test_totp_secret_storage_posture_requires_key_without_plaintext_branch() -> None:
+    """Missing keys keep the encrypted-at-rest contract but require configuration."""
     posture = TotpSecretStoragePosture.from_secret_key(None)
 
-    assert posture == TotpSecretStoragePosture.compatibility_plaintext()
-    assert posture.key == "compatibility_plaintext"
-    assert posture.encrypts_at_rest is False
+    assert posture == TotpSecretStoragePosture.fernet_encrypted(key_configured=False)
+    assert posture.key == "fernet_encrypted"
+    assert posture.encrypts_at_rest is True
     assert posture.requires_explicit_production_opt_in is True
     assert posture.production_validation_error is not None
 
@@ -101,7 +101,7 @@ def test_totp_secret_storage_posture_reports_fernet_encrypted_with_key() -> None
 @pytest.mark.parametrize(
     ("totp_secret_key", "expected_key", "encrypts_at_rest"),
     [
-        pytest.param(None, "compatibility_plaintext", False, id="plaintext"),
+        pytest.param(None, "fernet_encrypted", True, id="missing-key"),
         pytest.param("test-key", "fernet_encrypted", True, id="encrypted"),
     ],
 )
@@ -117,7 +117,7 @@ def test_service_storage_posture_tracks_manager_key(
 
     assert posture.key == expected_key
     assert posture.encrypts_at_rest is encrypts_at_rest
-    assert posture.requires_explicit_production_opt_in is (not encrypts_at_rest)
+    assert posture.requires_explicit_production_opt_in is (totp_secret_key is None)
 
 
 async def test_set_secret_delegates_to_user_store_with_encrypted_value() -> None:
@@ -142,30 +142,37 @@ async def test_set_secret_delegates_to_user_store_with_encrypted_value() -> None
     )
 
 
-async def test_set_secret_stores_plaintext_when_encryption_disabled() -> None:
-    """set_secret() should pass through plaintext when no key is configured."""
+async def test_set_secret_requires_key_for_non_null_secret() -> None:
+    """set_secret() fails closed instead of storing plaintext when no key is configured."""
     user_db = AsyncMock()
     manager = _Manager(user_db=user_db)
     service = TotpSecretsService(manager, prefix=PREFIX)
     user = ExampleUser(id=uuid4())
-    updated_user = ExampleUser(id=user.id, totp_secret="plain-secret")
     loader = Mock(side_effect=AssertionError("loader should not be used"))
-    user_db.update.return_value = updated_user
 
-    result = await service.set_secret(user, "plain-secret", load_cryptography_fernet=loader)
+    with pytest.raises(RuntimeError, match="totp_secret_key is required"):
+        await service.set_secret(user, "plain-secret", load_cryptography_fernet=loader)
 
-    assert result is updated_user
-    user_db.update.assert_awaited_once_with(user, {"totp_secret": "plain-secret"})
+    user_db.update.assert_not_awaited()
     loader.assert_not_called()
 
 
-@pytest.mark.parametrize("secret", [None, "plain-secret"])
-async def test_read_secret_returns_unencrypted_values(secret: str | None) -> None:
-    """read_secret() should return plaintext or ``None`` unchanged."""
+async def test_read_secret_returns_none_without_loader() -> None:
+    """read_secret() should return ``None`` unchanged."""
     service = TotpSecretsService(_Manager(user_db=AsyncMock()), prefix=PREFIX)
     loader = Mock(side_effect=AssertionError("loader should not be used"))
 
-    assert await service.read_secret(secret, load_cryptography_fernet=loader) == secret
+    assert await service.read_secret(None, load_cryptography_fernet=loader) is None
+    loader.assert_not_called()
+
+
+async def test_read_secret_rejects_unprefixed_plaintext_values() -> None:
+    """read_secret() fails closed for legacy plaintext persisted values."""
+    service = TotpSecretsService(_Manager(user_db=AsyncMock(), totp_secret_key="test-key"), prefix=PREFIX)
+    loader = Mock(side_effect=AssertionError("loader should not be used"))
+
+    with pytest.raises(RuntimeError, match="encrypted at rest"):
+        await service.read_secret("plain-secret", load_cryptography_fernet=loader)
     loader.assert_not_called()
 
 
@@ -221,13 +228,22 @@ def test_prepare_secret_for_storage_encrypts_and_prefixes_values() -> None:
     )
 
 
-@pytest.mark.parametrize("secret", [None, "plain-secret"])
-def test_prepare_secret_for_storage_returns_plain_value_when_encryption_disabled(secret: str | None) -> None:
-    """prepare_secret_for_storage() should skip the loader when encryption is disabled."""
+def test_prepare_secret_for_storage_returns_none_without_loader() -> None:
+    """prepare_secret_for_storage() should preserve ``None`` without loading cryptography."""
     service = TotpSecretsService(_Manager(user_db=AsyncMock()), prefix=PREFIX)
     loader = Mock(side_effect=AssertionError("loader should not be used"))
 
-    assert service.prepare_secret_for_storage(secret, load_cryptography_fernet=loader) == secret
+    assert service.prepare_secret_for_storage(None, load_cryptography_fernet=loader) is None
+    loader.assert_not_called()
+
+
+def test_prepare_secret_for_storage_requires_key_for_non_null_secret() -> None:
+    """prepare_secret_for_storage() fails closed instead of returning plaintext."""
+    service = TotpSecretsService(_Manager(user_db=AsyncMock()), prefix=PREFIX)
+    loader = Mock(side_effect=AssertionError("loader should not be used"))
+
+    with pytest.raises(RuntimeError, match="totp_secret_key is required"):
+        service.prepare_secret_for_storage("plain-secret", load_cryptography_fernet=loader)
     loader.assert_not_called()
 
 

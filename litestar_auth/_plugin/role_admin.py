@@ -160,7 +160,6 @@ class _ManagerLifecycleRoleUpdater[UP: UserProtocol[Any]]:
             user_db=user_db,
             config=self.config,
             backends=bound_backends,
-            skip_reuse_warning=True,
         )
 
 

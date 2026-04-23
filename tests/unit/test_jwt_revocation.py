@@ -88,7 +88,7 @@ async def test_jwt_session_fingerprint_invalidates_after_email_change() -> None:
     user = _User(id=uuid4(), email="user@example.com", hashed_password=password_helper.hash("pw"))
     user_manager = _UserManager(user)
 
-    strategy = JWTStrategy(secret="secret-1234567890-1234567890-1234567890")
+    strategy = JWTStrategy(secret="secret-1234567890-1234567890-1234567890", allow_inmemory_denylist=True)
     token = await strategy.write_token(cast("Any", user))
     assert await strategy.read_token(token, cast("Any", user_manager)) is user
 
@@ -104,7 +104,7 @@ async def test_jwt_without_fingerprint_claim_is_rejected_when_user_fingerprint_i
     user_manager = _UserManager(user)
 
     secret = "secret-1234567890-1234567890-1234567890"
-    strategy = JWTStrategy(secret=secret)
+    strategy = JWTStrategy(secret=secret, allow_inmemory_denylist=True)
 
     now = datetime.now(tz=UTC)
     payload = {
@@ -127,7 +127,7 @@ async def test_jwt_with_non_string_fingerprint_claim_is_rejected_when_user_finge
     user_manager = _UserManager(user)
 
     secret = "secret-1234567890-1234567890-1234567890"
-    strategy = JWTStrategy(secret=secret)
+    strategy = JWTStrategy(secret=secret, allow_inmemory_denylist=True)
 
     now = datetime.now(tz=UTC)
     payload = {
@@ -149,7 +149,7 @@ async def test_jwt_without_fingerprint_claim_keeps_graceful_degradation_when_use
     user = _User(id=uuid4(), email="user@example.com", hashed_password="hashed")
     user_manager = _UserManager(user)
     secret = "secret-1234567890-1234567890-1234567890"
-    strategy = JWTStrategy(secret=secret, session_fingerprint_getter=lambda _: None)
+    strategy = JWTStrategy(secret=secret, session_fingerprint_getter=lambda _: None, allow_inmemory_denylist=True)
 
     now = datetime.now(tz=UTC)
     payload = {
@@ -278,7 +278,11 @@ async def test_jwt_strategy_read_token_returns_none_when_user_manager_cannot_res
     """A valid token should still be rejected when the subject no longer resolves to a user."""
     password_helper = PasswordHelper()
     user = _User(id=uuid4(), email="user@example.com", hashed_password=password_helper.hash("pw"))
-    strategy = JWTStrategy(secret="secret-1234567890-1234567890-1234567890", subject_decoder=UUID)
+    strategy = JWTStrategy(
+        secret="secret-1234567890-1234567890-1234567890",
+        subject_decoder=UUID,
+        allow_inmemory_denylist=True,
+    )
 
     token = await strategy.write_token(cast("Any", user))
 
@@ -373,30 +377,30 @@ async def test_jwt_strategy_read_token_returns_none_for_missing_input() -> None:
     """read_token() should return None immediately when no token is provided."""
     password_helper = PasswordHelper()
     user = _User(id=uuid4(), email="user@example.com", hashed_password=password_helper.hash("pw"))
-    strategy = JWTStrategy(secret="secret-1234567890-1234567890-1234567890")
+    strategy = JWTStrategy(secret="secret-1234567890-1234567890-1234567890", allow_inmemory_denylist=True)
 
     assert await strategy.read_token(None, cast("Any", _UserManager(user))) is None
 
 
 @pytest.mark.unit
-def test_jwt_strategy_revocation_posture_distinguishes_default_and_shared_store_modes(
+def test_jwt_strategy_revocation_posture_distinguishes_inmemory_and_shared_store_modes(
     async_fakeredis: AsyncFakeRedis,
 ) -> None:
-    """Direct JWTStrategy wiring exposes explicit compatibility and shared-store branches."""
-    default_strategy = JWTStrategy(secret="secret-1234567890-1234567890-1234567890")
+    """Direct JWTStrategy wiring exposes explicit in-memory and shared-store branches."""
+    inmemory_strategy = JWTStrategy(secret="secret-1234567890-1234567890-1234567890", allow_inmemory_denylist=True)
     shared_strategy = JWTStrategy(
         secret="secret-1234567890-1234567890-1234567890",
         denylist_store=RedisJWTDenylistStore(redis=cast_fakeredis(async_fakeredis, RedisExpiringValueStoreClient)),
     )
 
-    default_posture = default_strategy.revocation_posture
-    assert default_posture.key == "compatibility_in_memory"
-    assert default_posture.denylist_store_type == "InMemoryJWTDenylistStore"
-    assert default_posture.revocation_is_durable is False
-    assert default_strategy.revocation_is_durable is default_posture.revocation_is_durable
-    assert default_posture.requires_explicit_production_opt_in is True
-    assert default_posture.production_validation_error is not None
-    assert default_posture.startup_warning is not None
+    inmemory_posture = inmemory_strategy.revocation_posture
+    assert inmemory_posture.key == "in_memory"
+    assert inmemory_posture.denylist_store_type == "InMemoryJWTDenylistStore"
+    assert inmemory_posture.revocation_is_durable is False
+    assert inmemory_strategy.revocation_is_durable is inmemory_posture.revocation_is_durable
+    assert inmemory_posture.requires_explicit_production_opt_in is False
+    assert inmemory_posture.production_validation_error is None
+    assert inmemory_posture.startup_warning is not None
 
     shared_posture = shared_strategy.revocation_posture
     assert shared_posture.key == "shared_store"
@@ -420,7 +424,7 @@ async def test_jwt_redis_denylist_protocol_stubs_are_callable() -> None:
 @pytest.mark.unit
 async def test_jwt_strategy_is_token_denied_false_without_string_jti() -> None:
     """Denylist lookup runs only when ``jti`` is a string."""
-    strategy = JWTStrategy(secret="secret-1234567890-1234567890-1234567890")
+    strategy = JWTStrategy(secret="secret-1234567890-1234567890-1234567890", allow_inmemory_denylist=True)
     assert await strategy._is_token_denied({}) is False
     non_string_jti: dict[str, object] = {"jti": 123}
     assert await strategy._is_token_denied(non_string_jti) is False
@@ -444,6 +448,7 @@ def test_jwt_strategy_validate_fingerprint_accepts_when_getter_returns_none() ->
     strategy = JWTStrategy(
         secret="secret-1234567890-1234567890-1234567890",
         session_fingerprint_getter=lambda _: None,
+        allow_inmemory_denylist=True,
     )
     assert strategy._validate_fingerprint({}, cast("Any", user)) is True
 
@@ -453,7 +458,7 @@ def test_jwt_strategy_validate_fingerprint_compares_digest() -> None:
     """Fingerprint helper enforces constant-time equality when both sides are present."""
     password_helper = PasswordHelper()
     user = _User(id=uuid4(), email="user@example.com", hashed_password=password_helper.hash("pw"))
-    strategy = JWTStrategy(secret="secret-1234567890-1234567890-1234567890")
+    strategy = JWTStrategy(secret="secret-1234567890-1234567890-1234567890", allow_inmemory_denylist=True)
     current = strategy.session_fingerprint_getter(cast("Any", user))
     assert current is not None
     claim = strategy.session_fingerprint_claim

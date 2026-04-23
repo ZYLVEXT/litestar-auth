@@ -41,6 +41,7 @@ from litestar_auth.manager import (
 from litestar_auth.manager import logger as manager_logger
 from litestar_auth.password import PasswordHelper
 from litestar_auth.schemas import UserCreate, UserUpdate
+from litestar_auth.totp import SecurityWarning
 from tests._helpers import ExampleUser
 
 if TYPE_CHECKING:
@@ -402,14 +403,14 @@ def test_manager_init_no_deprecation_when_only_unsafe_testing_with_default_secre
     assert len(unsafe_testing_warns) == EXPECTED_SECRET_FALLBACK_WARNINGS
 
 
-def test_manager_init_warns_when_typed_secret_roles_are_reused_in_production() -> None:
-    """Direct manager construction warns instead of failing when roles reuse one value."""
+def test_manager_init_rejects_reused_typed_secret_roles_in_production() -> None:
+    """Direct manager construction fails closed when roles reuse one value."""
     user_db = AsyncMock()
     password_helper = PasswordHelper()
     shared_secret = "shared-manager-secret-role-1234567890"
 
-    with pytest.warns(manager_module.SecurityWarning, match="supported production posture") as records:
-        manager = BaseUserManager(
+    with pytest.raises(ConfigurationError, match="Distinct secrets/keys") as exc_info:
+        BaseUserManager(
             user_db,
             password_helper=password_helper,
             security=UserManagerSecurity[UUID](
@@ -419,21 +420,18 @@ def test_manager_init_warns_when_typed_secret_roles_are_reused_in_production() -
             ),
         )
 
-    assert len(records) == 1
-    message = str(records[0].message)
+    message = str(exc_info.value)
     assert "verification_token_secret" in message
     assert "reset_password_token_secret" in message
     assert "totp_secret_key" in message
     assert manager_module.VERIFY_TOKEN_AUDIENCE in message
     assert RESET_PASSWORD_TOKEN_AUDIENCE in message
     assert "no JWT audience" in message
-    assert manager.verification_token_secret.get_secret_value() == shared_secret
-    assert manager.reset_password_token_secret.get_secret_value() == shared_secret
-    assert manager.totp_secret_key == shared_secret
+    assert shared_secret not in message
 
 
-def test_manager_init_skips_reused_secret_warning_when_explicitly_requested() -> None:
-    """Plugin-managed builders can suppress a duplicate reused-secret warning explicitly."""
+def test_manager_init_allows_reused_secret_roles_under_explicit_unsafe_testing() -> None:
+    """Explicit unsafe testing is the only bypass for reused manager-owned secret material."""
     user_db = AsyncMock()
     password_helper = PasswordHelper()
     shared_secret = "shared-manager-secret-role-1234567890"
@@ -448,10 +446,10 @@ def test_manager_init_skips_reused_secret_warning_when_explicitly_requested() ->
                 reset_password_token_secret=shared_secret,
                 totp_secret_key=shared_secret,
             ),
-            skip_reuse_warning=True,
+            unsafe_testing=True,
         )
 
-    assert not [warning for warning in caught if issubclass(warning.category, manager_module.SecurityWarning)]
+    assert not [warning for warning in caught if issubclass(warning.category, SecurityWarning)]
     assert manager.verification_token_secret.get_secret_value() == shared_secret
     assert manager.reset_password_token_secret.get_secret_value() == shared_secret
     assert manager.totp_secret_key == shared_secret
@@ -2002,16 +2000,17 @@ async def test_invalidate_all_tokens_calls_backend_strategies() -> None:
     invalidate_two.assert_awaited_once_with(user)
 
 
-async def test_set_totp_secret_passthrough_when_no_encryption() -> None:
-    """set_totp_secret stores the provided secret directly when encryption is disabled."""
+async def test_set_totp_secret_requires_key_for_non_null_secret() -> None:
+    """set_totp_secret fails closed instead of storing plaintext without a key."""
     user_db = AsyncMock()
     password_helper = PasswordHelper()
     manager = TrackingUserManager(user_db, password_helper)
     user = _build_user(password_helper)
-    user_db.update.return_value = user
 
-    assert await manager.set_totp_secret(user, "plain-secret") is user
-    user_db.update.assert_awaited_once_with(user, {"totp_secret": "plain-secret"})
+    with pytest.raises(RuntimeError, match="totp_secret_key is required"):
+        await manager.set_totp_secret(user, "plain-secret")
+
+    user_db.update.assert_not_awaited()
 
 
 async def test_totp_secret_helpers_delegate_to_totp_service() -> None:
@@ -2050,14 +2049,24 @@ async def test_read_totp_secret_requires_key_when_encrypted() -> None:
         await manager.read_totp_secret(f"{manager_module.ENCRYPTED_TOTP_SECRET_PREFIX}encrypted")
 
 
-async def test_read_totp_secret_returns_plain_value_when_not_encrypted() -> None:
-    """Non-encrypted values pass through read_totp_secret unchanged."""
+async def test_read_totp_secret_returns_none_when_totp_disabled() -> None:
+    """Missing TOTP secrets still read as disabled."""
     user_db = AsyncMock()
     password_helper = PasswordHelper()
     manager = TrackingUserManager(user_db, password_helper)
 
     assert await manager.read_totp_secret(None) is None
-    assert await manager.read_totp_secret("plain") == "plain"
+
+
+async def test_read_totp_secret_rejects_unprefixed_plaintext_value() -> None:
+    """Non-null TOTP secrets must use the encrypted storage prefix."""
+    user_db = AsyncMock()
+    password_helper = PasswordHelper()
+    manager = TrackingUserManager(user_db, password_helper)
+    manager.totp_secret_key = "a" * 32
+
+    with pytest.raises(RuntimeError, match="encrypted at rest"):
+        await manager.read_totp_secret("plain")
 
 
 async def test_read_totp_secret_raises_when_decryption_fails(monkeypatch: pytest.MonkeyPatch) -> None:

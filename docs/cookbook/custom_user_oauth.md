@@ -16,7 +16,7 @@ password-column hook, use
 from advanced_alchemy.base import UUIDPrimaryKey, create_registry
 from sqlalchemy.orm import DeclarativeBase
 
-from litestar_auth.models import OAuthAccountMixin, UserAuthRelationshipMixin, UserModelMixin
+from litestar_auth.models.mixins import OAuthAccountMixin, UserAuthRelationshipMixin, UserModelMixin
 
 
 class AppBase(DeclarativeBase):
@@ -66,7 +66,7 @@ That keeps `BaseUserManager`, `SQLAlchemyUserDatabase`, and JWT fingerprinting o
 
 `from litestar_auth.models import User` (or `from litestar_auth.models.user import User`) loads the bundled reference `User` and registers a mapper for table `user`, which **conflicts** with your app model when you already map that table yourself.
 
-The mixins exposed from `litestar_auth.models` are side-effect free: importing them does **not** register the bundled `User` or `OAuthAccount` mappers.
+The mixins exposed from `litestar_auth.models.mixins` are side-effect free: importing them does **not** register the bundled `User` or `OAuthAccount` mappers.
 
 That same `litestar_auth.models` package is also the main ORM setup entrypoint for the bundled DB-token tables:
 

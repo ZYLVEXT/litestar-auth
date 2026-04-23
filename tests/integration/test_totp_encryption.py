@@ -201,22 +201,21 @@ async def test_set_totp_secret_encrypts_and_read_totp_secret_decrypts(monkeypatc
     assert await manager.read_totp_secret(stored_secret) == "JBSWY3DPEHPK3PXP"
 
 
-async def test_read_totp_secret_preserves_plaintext_for_backward_compatibility() -> None:
-    """Plaintext secrets still work when encryption is disabled or newly enabled."""
+async def test_read_totp_secret_rejects_plaintext_persisted_values() -> None:
+    """Plaintext persisted TOTP secrets fail closed instead of round-tripping."""
     user_db = AsyncMock()
     plaintext_secret = "JBSWY3DPEHPK3PXP"
 
-    assert await _build_manager(user_db).read_totp_secret(plaintext_secret) == plaintext_secret
-    assert (
+    with pytest.raises(RuntimeError, match="encrypted at rest"):
+        await _build_manager(user_db).read_totp_secret(plaintext_secret)
+    with pytest.raises(RuntimeError, match="encrypted at rest"):
         await _build_manager(user_db, totp_secret_key=TOTP_SECRET_KEY).read_totp_secret(plaintext_secret)
-        == plaintext_secret
-    )
 
 
 @pytest.mark.parametrize(
     ("totp_secret_key", "expected_key", "encrypts_at_rest"),
     [
-        pytest.param(None, "compatibility_plaintext", False, id="plaintext"),
+        pytest.param(None, "fernet_encrypted", True, id="missing-key"),
         pytest.param(TOTP_SECRET_KEY, "fernet_encrypted", True, id="encrypted"),
     ],
 )
@@ -226,7 +225,7 @@ def test_direct_base_user_manager_totp_secret_storage_posture_reports_supported_
     expected_key: str,
     encrypts_at_rest: bool,
 ) -> None:
-    """Direct BaseUserManager construction exposes explicit plaintext and encrypted branches."""
+    """Direct BaseUserManager construction exposes only the encrypted-at-rest contract."""
     manager = _build_manager(
         AsyncMock(),
         totp_secret_key=totp_secret_key,
@@ -235,11 +234,11 @@ def test_direct_base_user_manager_totp_secret_storage_posture_reports_supported_
     posture = manager.totp_secret_storage_posture
     assert posture.key == expected_key
     assert posture.encrypts_at_rest is encrypts_at_rest
-    assert posture.requires_explicit_production_opt_in is (not encrypts_at_rest)
-    if encrypts_at_rest:
-        assert posture.production_validation_error is None
-    else:
+    assert posture.requires_explicit_production_opt_in is (totp_secret_key is None)
+    if totp_secret_key is None:
         assert posture.production_validation_error is not None
+    else:
+        assert posture.production_validation_error is None
 
 
 async def test_read_totp_secret_raises_runtime_error_on_decrypt_failure(

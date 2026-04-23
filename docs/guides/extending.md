@@ -62,13 +62,11 @@ If your manager narrows or renames that constructor surface, configure `user_man
 
 Set `user_manager_factory` on `LitestarAuthConfig` for full control over manager construction when your manager does not follow the default builder contract (must match the `UserManagerFactory` contract). The factory receives `session`, `user_db`, `config`, and request-bound `backends`; it does not receive side-channel `password_helper`, `password_validator`, or `security` kwargs from the plugin. If your custom builder still wants password-policy enforcement or a custom superuser role, read those values from `config` and pass them explicitly inside the factory.
 
-Plugin-managed manager construction inherits the plugin-owned secret-role reuse baseline. If your
-custom factory instantiates `BaseUserManager` (or a subclass) with the same
-verification/reset/TOTP secrets that were already validated during `LitestarAuth(config)`, manager
-construction suppresses the duplicate warning. If the custom factory diverges from that
-config-owned surface, the manager constructor surfaces the additional warning for the manager-owned
-roles it actually wires. Keep custom factories aligned with `user_manager_security` unless you
-intentionally want the factory-built manager to carry that additional warning.
+Plugin-managed manager construction inherits the plugin-owned secret-role validation baseline. If
+your custom factory instantiates `BaseUserManager` (or a subclass), keep its
+verification/reset/TOTP secrets aligned with `user_manager_security`. Outside explicit
+`unsafe_testing`, both `LitestarAuth(config)` validation and direct manager construction raise
+`ConfigurationError` when one configured value is reused across secret roles.
 
 Generated controllers and plugin-owned flows also resolve one stable account-state callable from
 `user_manager_class`: `require_account_state(user, *, require_verified=False)`. Inheriting

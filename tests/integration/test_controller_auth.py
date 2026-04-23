@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING, Any, Literal, cast
 from uuid import UUID, uuid4
 
 import pytest
+from cryptography.fernet import Fernet
 from litestar import Litestar, Request, get
 from litestar.middleware import DefineMiddleware
 from litestar.testing import AsyncTestClient
@@ -23,7 +24,7 @@ from litestar_auth.exceptions import ErrorCode
 if TYPE_CHECKING:
     from litestar_auth.db.base import BaseUserStore
 from litestar_auth.guards import is_active
-from litestar_auth.manager import BaseUserManager, UserManagerSecurity
+from litestar_auth.manager import ENCRYPTED_TOTP_SECRET_PREFIX, BaseUserManager, UserManagerSecurity
 from litestar_auth.password import PasswordHelper
 from litestar_auth.plugin import LitestarAuth, LitestarAuthConfig
 from tests._helpers import auth_middleware_get_request_session, litestar_app_with_user_manager
@@ -43,6 +44,13 @@ HTTP_UNPROCESSABLE_ENTITY = 422
 
 _LOGIN_TEST_EMAIL = "user@example.com"
 _LOGIN_TEST_USERNAME = "testuser"
+TOTP_SECRET_KEY = Fernet.generate_key().decode()
+
+
+def _encrypt_test_totp_secret(secret: str) -> str:
+    """Return an encrypted persisted TOTP secret for auth-controller tests."""
+    encrypted_value = Fernet(TOTP_SECRET_KEY.encode()).encrypt(secret.encode()).decode()
+    return f"{ENCRYPTED_TOTP_SECRET_PREFIX}{encrypted_value}"
 
 
 def login_identifier_credential(login_identifier: Literal["email", "username"]) -> str:
@@ -67,7 +75,7 @@ class TrackingUserManager(BaseUserManager[ExampleUser, UUID]):
         *,
         backends: tuple[object, ...] = (),
         login_identifier: Literal["email", "username"] = "email",
-        skip_reuse_warning: bool = False,
+        totp_secret_key: str | None = TOTP_SECRET_KEY,
     ) -> None:
         """Initialize the manager with deterministic hook tracking."""
         super().__init__(
@@ -76,10 +84,10 @@ class TrackingUserManager(BaseUserManager[ExampleUser, UUID]):
             security=UserManagerSecurity[UUID](
                 verification_token_secret=verification_token_secret,
                 reset_password_token_secret=reset_password_token_secret,
+                totp_secret_key=totp_secret_key,
             ),
             backends=backends,
             login_identifier=login_identifier,
-            skip_reuse_warning=skip_reuse_warning,
         )
         self.logged_in_users: list[ExampleUser] = []
 
@@ -143,7 +151,7 @@ def build_app(  # noqa: PLR0913
         hashed_password=initial_hashed_password or password_helper.hash("correct-password"),
         is_active=initial_is_active,
         is_verified=initial_is_verified,
-        totp_secret=initial_totp_secret,
+        totp_secret=_encrypt_test_totp_secret(initial_totp_secret) if initial_totp_secret is not None else None,
     )
     user_db = InMemoryUserDatabase(users=[user])
     user_manager = TrackingUserManager(
@@ -297,7 +305,6 @@ def build_cookie_plugin_app(*, login_identifier: Literal["email", "username"] = 
         user_db: object,
         config: LitestarAuthConfig[ExampleUser, UUID],
         backends: tuple[object, ...] = (),
-        skip_reuse_warning: bool = False,
     ) -> TrackingUserManager:
         del session
         security = config.user_manager_security
@@ -309,7 +316,6 @@ def build_cookie_plugin_app(*, login_identifier: Literal["email", "username"] = 
             reset_password_token_secret=security.reset_password_token_secret,
             backends=backends,
             login_identifier=config.login_identifier,
-            skip_reuse_warning=skip_reuse_warning,
         )
 
     config = LitestarAuthConfig[ExampleUser, UUID](

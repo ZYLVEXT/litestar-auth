@@ -1562,31 +1562,6 @@ async def test_memory_rate_limiter_reclaims_expired_keys_before_capacity_rejecti
     assert set(limiter._windows) == {"fresh"}
 
 
-async def test_memory_rate_limiter_can_use_legacy_lru_eviction_at_capacity() -> None:
-    """The compatibility mode still evicts the least-recently-active survivor when capped."""
-    clock = FakeClock()
-    limiter = InMemoryRateLimiter(
-        max_attempts=2,
-        window_seconds=60,
-        clock=clock,
-        max_keys=KEY_CAP,
-        sweep_interval=100,
-        fail_closed_on_capacity=False,
-    )
-
-    await limiter.increment("first")
-    clock.advance(0.1)
-    await limiter.increment("second")
-    clock.advance(0.1)
-    await limiter.increment("first")
-    clock.advance(0.1)
-    await limiter.increment("third")
-
-    assert len(limiter._windows) == KEY_CAP
-    assert list(limiter._windows) == ["first", "third"]
-    assert await limiter.check("first") is False
-
-
 def test_redis_rate_limiter_implements_shared_backend_protocol(
     async_fakeredis: AsyncFakeRedis,
     patch_redis_loader: None,

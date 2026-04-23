@@ -49,25 +49,23 @@ The default no-op lifecycle hook implementations live on `UserManagerHooks`, whi
 keeps the manager surface easier to navigate and document.
 
 `BaseUserManager.totp_secret_storage_posture` is the stable direct-manager contract for persisted
-TOTP secrets. On `security=UserManagerSecurity(...)`, leaving `totp_secret_key` unset or `None` keeps
-the compatibility-grade `compatibility_plaintext` branch so legacy plaintext secrets still
-round-trip, while providing a Fernet key on that same bundle flips the posture to `fernet_encrypted`
-and causes newly persisted secrets to be encrypted at rest. When the plugin owns TOTP wiring, its
-validation path reads the same posture contract instead of special-casing manager instances.
+TOTP secrets. It reports the Fernet-encrypted at-rest posture; providing a Fernet key through
+`security=UserManagerSecurity(totp_secret_key=...)` enables encrypted storage and decryption. Leaving
+`totp_secret_key` unset or `None` is valid for direct managers that do not persist TOTP secrets, but
+non-null TOTP secret writes and unprefixed legacy plaintext reads fail closed. When the plugin owns
+TOTP wiring, its validation path reads the same posture contract instead of special-casing manager
+instances.
 
 For production, keep `verification_token_secret`, `reset_password_token_secret`, and
-`totp_secret_key` distinct on `UserManagerSecurity`. Outside testing, `BaseUserManager(...)` warns
-when one configured value is reused across those roles (as resolved from the `security` bundle).
-Distinct audiences (`litestar-auth:verify` and `litestar-auth:reset-password`) already scope the JWT
-flows correctly, but separate secrets still reduce blast radius and keep TOTP encryption independent
-of JWT signing. For plugin-managed apps,
-that broader config-owned warning is emitted during `LitestarAuth(config)` validation. The
-request-scoped manager instance does not warn a second time when its effective
-verification/reset/TOTP secret surface matches the validated plugin config. If a custom
-`user_manager_factory` constructs `BaseUserManager` with a different verification/reset/TOTP secret
-surface, the manager emits an additional warning for the divergent manager-owned roles it actually
-receives. When the plugin also owns `totp_config.totp_pending_secret`, validation extends the
-config-owned warning to the `litestar-auth:2fa-pending` / `litestar-auth:2fa-enroll` controller
-flow.
+`totp_secret_key` distinct on `UserManagerSecurity`. Outside testing, `BaseUserManager(...)` raises
+`ConfigurationError` when one configured value is reused across those roles (as resolved from the
+`security` bundle). Distinct audiences (`litestar-auth:verify` and `litestar-auth:reset-password`)
+already scope the JWT flows correctly, but separate secrets still reduce blast radius and keep TOTP
+encryption independent of JWT signing. For plugin-managed apps, `LitestarAuth(config)` validation
+enforces the broader config-owned surface, including `totp_config.totp_pending_secret` and its
+`litestar-auth:2fa-pending` / `litestar-auth:2fa-enroll` controller flow when TOTP is enabled. If a
+custom `user_manager_factory` constructs `BaseUserManager` with a different verification/reset/TOTP
+secret surface, the manager applies the same fail-closed validation for the roles it actually
+receives.
 
 ::: litestar_auth.manager

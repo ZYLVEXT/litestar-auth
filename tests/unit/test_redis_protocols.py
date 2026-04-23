@@ -31,13 +31,6 @@ def test_redis_protocol_module_executes_under_coverage_and_keeps_expected_signat
         "self",
         "name",
     )
-    assert tuple(inspect.signature(reloaded_module.RedisScanClient.scan_iter).parameters) == (
-        "self",
-        "match",
-        "count",
-        "_type",
-        "kwargs",
-    )
     assert redis_contrib_module.RedisAuthClientProtocol.__name__ == "RedisAuthClientProtocol"
     assert tuple(inspect.signature(redis_contrib_module.RedisAuthClientProtocol.eval).parameters) == (
         "self",

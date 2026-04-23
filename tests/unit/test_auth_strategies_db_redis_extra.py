@@ -8,22 +8,11 @@ from uuid import UUID, uuid4
 
 import pytest
 
-from litestar_auth._plugin.config import DatabaseTokenAuthConfig
-from litestar_auth.authentication.backend import AuthenticationBackend
 from litestar_auth.authentication.strategy.base import SessionBindable
 from litestar_auth.authentication.strategy.db import DatabaseTokenStrategy
 from litestar_auth.authentication.strategy.redis import RedisClientProtocol, RedisTokenStrategy
-from litestar_auth.authentication.transport.bearer import BearerTransport
-from litestar_auth.manager import UserManagerSecurity
 from litestar_auth.models import User
-from litestar_auth.plugin import LitestarAuth, LitestarAuthConfig
 from tests._helpers import cast_fakeredis
-from tests.integration.test_orchestrator import (
-    DummySessionMaker,
-    ExampleUser,
-    InMemoryUserDatabase,
-    PluginUserManager,
-)
 
 if TYPE_CHECKING:
     from tests._helpers import AsyncFakeRedis
@@ -65,26 +54,6 @@ class _FakeSession:
         self.committed = True
 
 
-def _minimal_plugin_config(
-    *,
-    backend: AuthenticationBackend[ExampleUser, UUID],
-    allow_legacy_plaintext_tokens: bool = False,
-) -> LitestarAuthConfig[ExampleUser, UUID]:
-    user_db = InMemoryUserDatabase([])
-    return LitestarAuthConfig[ExampleUser, UUID](
-        backends=[backend],
-        session_maker=cast("Any", DummySessionMaker()),
-        user_model=ExampleUser,
-        user_manager_class=PluginUserManager,
-        user_db_factory=lambda _session: user_db,
-        user_manager_security=UserManagerSecurity[UUID](
-            verification_token_secret="x" * 32,
-            reset_password_token_secret="y" * 32,
-        ),
-        allow_legacy_plaintext_tokens=allow_legacy_plaintext_tokens,
-    )
-
-
 def test_database_token_strategy_with_session_clones_configuration() -> None:
     """with_session() should return a new instance bound to the provided session."""
     base_session = _FakeSession()
@@ -124,82 +93,14 @@ def test_database_token_strategy_accepts_user_uuid_type_parameters() -> None:
     assert isinstance(strategy, DatabaseTokenStrategy)
 
 
-def test_database_token_strategy_warns_when_accepting_legacy_plaintext_tokens(
-    caplog: pytest.LogCaptureFixture,
-) -> None:
-    """accept_legacy_plaintext_tokens should emit a warning outside explicit unsafe testing."""
-    caplog.clear()
-    with caplog.at_level("WARNING"):
-        DatabaseTokenStrategy(
+def test_database_token_strategy_rejects_removed_legacy_plaintext_kwarg() -> None:
+    """The legacy plaintext compatibility kwarg has been removed from the public constructor."""
+    with pytest.raises(TypeError, match="accept_legacy_plaintext_tokens"):
+        cast("Any", DatabaseTokenStrategy)(
             session=cast("Any", _FakeSession()),
             token_hash_secret="test-token-hash-secret-1234567890-1234567890",
             accept_legacy_plaintext_tokens=True,
         )
-    assert any(
-        "accept legacy plaintext tokens" in record.getMessage().lower()
-        for record in caplog.records
-        if record.levelname == "WARNING"
-    )
-
-
-def test_plugin_rejects_legacy_plaintext_tokens_without_explicit_rollout_flag() -> None:
-    """Plugin config fails fast when legacy plaintext mode is enabled without explicit opt-in."""
-    strategy = DatabaseTokenStrategy(
-        session=cast("Any", _FakeSession()),
-        token_hash_secret="test-token-hash-secret-1234567890-1234567890",
-        accept_legacy_plaintext_tokens=True,
-    )
-    backend = AuthenticationBackend[ExampleUser, UUID](
-        name="db",
-        transport=BearerTransport(),
-        strategy=cast("Any", strategy),
-    )
-    config = _minimal_plugin_config(backend=backend)
-
-    with pytest.raises(ValueError, match=r"allow_legacy_plaintext_tokens=True"):
-        LitestarAuth(config)
-
-
-def test_plugin_allows_legacy_plaintext_tokens_with_explicit_rollout_flag() -> None:
-    """Plugin config allows migration mode only when explicitly acknowledged."""
-    strategy = DatabaseTokenStrategy(
-        session=cast("Any", _FakeSession()),
-        token_hash_secret="test-token-hash-secret-1234567890-1234567890",
-        accept_legacy_plaintext_tokens=True,
-    )
-    backend = AuthenticationBackend[ExampleUser, UUID](
-        name="db",
-        transport=BearerTransport(),
-        strategy=cast("Any", strategy),
-    )
-    config = _minimal_plugin_config(
-        backend=backend,
-        allow_legacy_plaintext_tokens=True,
-    )
-
-    plugin = LitestarAuth(config)
-    assert plugin is not None
-
-
-def test_plugin_allows_database_token_preset_legacy_plaintext_tokens_without_top_level_rollout_flag() -> None:
-    """The canonical DB-token preset no longer requires a duplicate top-level rollout flag."""
-    config = LitestarAuthConfig[ExampleUser, UUID](
-        database_token_auth=DatabaseTokenAuthConfig(
-            token_hash_secret="test-token-hash-secret-1234567890-1234567890",
-            accept_legacy_plaintext_tokens=True,
-        ),
-        user_model=ExampleUser,
-        user_manager_class=PluginUserManager,
-        session_maker=cast("Any", DummySessionMaker()),
-        user_db_factory=lambda _session: InMemoryUserDatabase([]),
-        user_manager_security=UserManagerSecurity[UUID](
-            verification_token_secret="x" * 32,
-            reset_password_token_secret="y" * 32,
-        ),
-    )
-
-    plugin = LitestarAuth(config)
-    assert plugin is not None
 
 
 async def test_database_token_strategy_cleanup_expired_tokens_uses_rowcount_and_commit() -> None:
@@ -224,7 +125,7 @@ async def test_database_token_strategy_cleanup_expired_tokens_uses_rowcount_and_
 async def test_redis_token_strategy_read_token_none_and_invalidate_all_tokens(
     async_fakeredis: AsyncFakeRedis,
 ) -> None:
-    """RedisTokenStrategy.read_token(None) and invalidate_all_tokens should cover remaining branches."""
+    """RedisTokenStrategy.read_token(None) and missing-index invalidation should cover remaining branches."""
     strategy = RedisTokenStrategy(
         redis=cast_fakeredis(async_fakeredis, RedisClientProtocol),
         token_hash_secret=REDIS_TOKEN_HASH_SECRET,
@@ -240,7 +141,7 @@ async def test_redis_token_strategy_read_token_none_and_invalidate_all_tokens(
 
     await strategy.invalidate_all_tokens(user)
 
-    assert await async_fakeredis.get(strategy._key(token)) is None
+    assert await async_fakeredis.get(strategy._key(token)) == str(user.id).encode()
 
 
 async def test_redis_token_strategy_invalidate_all_tokens_uses_index_when_present(
@@ -260,10 +161,10 @@ async def test_redis_token_strategy_invalidate_all_tokens_uses_index_when_presen
     assert await async_fakeredis.exists(strategy._user_index_key(str(user.id))) == 0
 
 
-async def test_redis_token_strategy_invalidate_all_tokens_scan_skips_foreign_keys(
+async def test_redis_token_strategy_invalidate_all_tokens_without_index_leaves_foreign_keys(
     async_fakeredis: AsyncFakeRedis,
 ) -> None:
-    """Fallback scanning should ignore keys that belong to other users."""
+    """Index-only invalidation should not inspect unrelated token keys."""
     strategy = RedisTokenStrategy(
         redis=cast_fakeredis(async_fakeredis, RedisClientProtocol),
         token_hash_secret=REDIS_TOKEN_HASH_SECRET,

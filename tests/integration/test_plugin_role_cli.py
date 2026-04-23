@@ -679,7 +679,6 @@ def _build_tracking_roles_cli[UP: SQLAlchemyUserModelProtocol](
         user_db: BaseUserStore[UP, UUID],
         config: LitestarAuthConfig[UP, UUID],
         backends: tuple[object, ...] = (),
-        skip_reuse_warning: bool = False,
     ) -> BaseUserManager[UP, UUID]:
         del session
         security = config.user_manager_security
@@ -691,7 +690,6 @@ def _build_tracking_roles_cli[UP: SQLAlchemyUserModelProtocol](
             security=security,
             backends=backends,
             login_identifier=config.login_identifier,
-            skip_reuse_warning=skip_reuse_warning,
             unsafe_testing=config.unsafe_testing,
         )
 

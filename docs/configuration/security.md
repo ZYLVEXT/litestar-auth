@@ -9,18 +9,17 @@ Use this page for CSRF settings, token downgrade policy, schemas, dependency key
 | `csrf_secret` | `None` | Enables Litestar CSRF config when cookie transports are used. |
 | `csrf_header_name` | `"X-CSRF-Token"` | Header Litestar expects for CSRF token. |
 | `unsafe_testing` | `False` | Explicit per-config test-only override for generated fallback secrets, single-process validation shortcuts, and startup-warning suppression. Never enable it for production traffic. |
-| `allow_legacy_plaintext_tokens` | `False` | **Migration only** — accept legacy plaintext DB tokens for manual `DatabaseTokenStrategy` setups. The DB-token preset reads this from `DatabaseTokenAuthConfig.accept_legacy_plaintext_tokens` instead. |
-| `allow_nondurable_jwt_revocation` | `False` | Opt in to the compatibility-grade `JWTStrategy.revocation_posture` reported by the default in-memory denylist. |
 | `id_parser` | `None` | Parse path/query user ids (e.g. `UUID`). Defaults from `user_manager_security.id_parser` when that typed contract is configured. |
 
-The plugin-managed JWT/TOTP downgrade surfaces use the same shared posture wording as runtime startup and validation:
+The plugin-managed JWT/TOTP security surfaces use the same shared posture wording as runtime startup and validation:
 
 --8<-- "docs/snippets/plugin_security_tradeoffs.md"
 
-For direct/manual wiring, these flags only decide whether plugin-managed validation accepts a compatibility-grade branch; the underlying runtime objects still report that branch explicitly:
+For direct/manual wiring, the underlying runtime objects report their own posture explicitly:
 
-- `JWTStrategy(secret=...)` reports `revocation_posture.key == "compatibility_in_memory"` and `revocation_is_durable == False` until you pass a shared denylist store. The default `InMemoryJWTDenylistStore` fails closed when its `max_entries` cap is hit and no expired JTIs can be pruned: new revocations are skipped (logged) rather than dropping an active revocation entry. `JWTDenylistStore.deny` returns `False` in that case; `JWTStrategy.destroy_token` raises `TokenError`, and plugin HTTP logout surfaces **503** with `TOKEN_PROCESSING_FAILED`. The same capacity signal applies to TOTP pending-login JTI recording after a successful code check: verification responds with **503** instead of issuing a session when the pending-token denylist cannot store the spent JTI.
-- Direct `BaseUserManager(..., security=UserManagerSecurity(...))` with `totp_secret_key` omitted or `None` reports `totp_secret_storage_posture.key == "compatibility_plaintext"`. Setting `user_manager_security.totp_secret_key` on `LitestarAuthConfig` (passed through to `UserManagerSecurity`) or supplying a non-`None` `totp_secret_key` on a direct `UserManagerSecurity(...)` bundle flips the posture to `fernet_encrypted`; the TOTP controller uses that same key to encrypt pending-enrollment secret values before writing them to `totp_enrollment_store`.
+- `JWTStrategy(secret=..., denylist_store=RedisJWTDenylistStore(...))` reports `revocation_posture.key == "shared_store"` and `revocation_is_durable == True`.
+- `JWTStrategy(secret=..., allow_inmemory_denylist=True)` reports `revocation_posture.key == "in_memory"` and `revocation_is_durable == False`. `InMemoryJWTDenylistStore` fails closed when its `max_entries` cap is hit and no expired JTIs can be pruned: new revocations are skipped (logged) rather than dropping an active revocation entry. `JWTDenylistStore.deny` returns `False` in that case; `JWTStrategy.destroy_token` raises `TokenError`, and plugin HTTP logout surfaces **503** with `TOKEN_PROCESSING_FAILED`. The same capacity signal applies to TOTP pending-login JTI recording after a successful code check: verification responds with **503** instead of issuing a session when the pending-token denylist cannot store the spent JTI.
+- Direct `BaseUserManager(..., security=UserManagerSecurity(...))` reports `totp_secret_storage_posture.key == "fernet_encrypted"` for persisted TOTP secrets. Setting `user_manager_security.totp_secret_key` on `LitestarAuthConfig` (passed through to `UserManagerSecurity`) or supplying a non-`None` `totp_secret_key` on a direct `UserManagerSecurity(...)` bundle enables encrypted reads and writes; omitting the key leaves disabled TOTP (`None`) readable but makes non-null TOTP secret persistence fail closed. The TOTP controller uses that same key to encrypt pending-enrollment secret values before writing them to `totp_enrollment_store`.
 
 ## Schemas and DI
 

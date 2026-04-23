@@ -380,15 +380,14 @@ def test_bundled_token_bootstrap_detection_skips_custom_token_models() -> None:
     assert plugin_module._plugin_config._uses_bundled_database_token_models(config) is False
 
 
-def test_on_app_init_warns_for_nondurable_jwt_strategy_when_acknowledged() -> None:
-    """Lifecycle startup still surfaces the JWT durability warning after explicit opt-in."""
+def test_on_app_init_warns_for_explicit_inmemory_jwt_strategy() -> None:
+    """Lifecycle startup surfaces the JWT durability warning after explicit opt-in."""
     backend = AuthenticationBackend[ExampleUser, UUID](
         name="jwt-backend",
         transport=CookieTransport(),
-        strategy=cast("Any", JWTStrategy(secret="a" * 32, algorithm="HS256")),
+        strategy=cast("Any", JWTStrategy(secret="a" * 32, algorithm="HS256", allow_inmemory_denylist=True)),
     )
     config = _minimal_config(backends=[backend])
-    config.allow_nondurable_jwt_revocation = True
     config.csrf_secret = "c" * 32
     plugin = LitestarAuth(config)
 
@@ -662,7 +661,7 @@ def test_on_app_init_testing_recipe_suppresses_single_process_security_warnings(
             AuthenticationBackend[ExampleUser, UUID](
                 name="jwt",
                 transport=BearerTransport(),
-                strategy=cast("Any", JWTStrategy(secret="a" * 32, algorithm="HS256")),
+                strategy=cast("Any", JWTStrategy(secret="a" * 32, algorithm="HS256", allow_inmemory_denylist=True)),
             ),
         ],
     )
@@ -907,7 +906,7 @@ def test_build_user_manager_wraps_user_db_and_passes_bound_backends(monkeypatch:
     manager = plugin._build_user_manager(cast("Any", session))
 
     assert manager == "manager"
-    assert set(captured) == {"session", "user_db", "config", "backends", "skip_reuse_warning"}
+    assert set(captured) == {"session", "user_db", "config", "backends"}
     assert captured["session"] is session
     assert captured["config"] is plugin.config
     assert captured["user_db"] == _ScopedProxyRecorder(
@@ -952,43 +951,6 @@ def test_build_user_manager_passes_superuser_role_name_from_config() -> None:
     assert manager.superuser_role_name == "admin"
 
 
-def test_build_user_manager_uses_plugin_warning_owner_for_default_builder(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """The bundled manager builder passes the explicit reused-secret skip flag."""
-    plugin = LitestarAuth(_minimal_config())
-    captured: list[bool] = []
-
-    def _record_factory(**kwargs: object) -> object:
-        captured.append(cast("bool", kwargs["skip_reuse_warning"]))
-        return plugin_module._plugin_config.build_user_manager(**kwargs)
-
-    monkeypatch.setattr(plugin, "_user_manager_factory", _record_factory)
-
-    plugin._build_user_manager(cast("Any", DummySession()))
-
-    assert captured == [True]
-
-
-def test_build_user_manager_uses_plugin_warning_owner_baseline_for_custom_factory(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Custom factories receive the explicit reused-secret skip flag from the plugin."""
-    plugin = LitestarAuth(_minimal_config())
-    captured: list[bool] = []
-
-    def _record_factory(**kwargs: object) -> object:
-        captured.append(cast("bool", kwargs["skip_reuse_warning"]))
-        return "manager"
-
-    monkeypatch.setattr(plugin, "_user_manager_factory", _record_factory)
-
-    manager = plugin._build_user_manager(cast("Any", DummySession()))
-
-    assert manager == "manager"
-    assert captured == [True]
-
-
 def test_build_user_manager_passes_typed_security_to_security_only_manager() -> None:
     """Plugin-owned construction forwards the typed security bundle end-to-end when supported."""
 
@@ -1003,7 +965,6 @@ def test_build_user_manager_passes_typed_security_to_security_only_manager() -> 
             backends: tuple[object, ...] = (),
             login_identifier: Literal["email", "username"] = "email",
             superuser_role_name: str = DEFAULT_SUPERUSER_ROLE_NAME,
-            skip_reuse_warning: bool = False,
             unsafe_testing: bool = False,
         ) -> None:
             self.received_security = security
@@ -1015,7 +976,6 @@ def test_build_user_manager_passes_typed_security_to_security_only_manager() -> 
                 backends=backends,
                 login_identifier=login_identifier,
                 superuser_role_name=superuser_role_name,
-                skip_reuse_warning=skip_reuse_warning,
                 unsafe_testing=unsafe_testing,
             )
 
@@ -1218,7 +1178,6 @@ def test_session_bound_backends_rebinds_database_token_backends_in_order_and_pre
         session=cast("Any", object()),
         token_hash_secret="b" * 40,
         refresh_max_age=timedelta(days=14),
-        accept_legacy_plaintext_tokens=True,
     )
     second_backend = authentication_backend_type(
         name="secondary",
@@ -1226,7 +1185,6 @@ def test_session_bound_backends_rebinds_database_token_backends_in_order_and_pre
         strategy=second_strategy,
     )
     config = _minimal_config(backends=[first_backend, second_backend])
-    config.allow_legacy_plaintext_tokens = True
     plugin = LitestarAuth(config)
     active_session = object()
 
@@ -1244,7 +1202,6 @@ def test_session_bound_backends_rebinds_database_token_backends_in_order_and_pre
     assert rebound_backends[0].strategy.session is active_session
     assert rebound_backends[1].strategy.session is active_session
     assert rebound_backends[1].strategy.refresh_max_age == second_strategy.refresh_max_age
-    assert rebound_backends[1].strategy.accept_legacy_plaintext_tokens is True
 
 
 def test_session_bound_backends_realizes_database_token_preset_from_request_session() -> None:
@@ -1254,7 +1211,6 @@ def test_session_bound_backends_realizes_database_token_preset_from_request_sess
             token_hash_secret="a" * 40,
             max_age=timedelta(minutes=10),
             refresh_max_age=timedelta(days=14),
-            accept_legacy_plaintext_tokens=True,
         ),
         user_model=ExampleUser,
         user_manager_class=PluginUserManager,
@@ -1266,7 +1222,6 @@ def test_session_bound_backends_realizes_database_token_preset_from_request_sess
         ),
         enable_refresh=True,
     )
-    config.allow_legacy_plaintext_tokens = True
     plugin = LitestarAuth(config)
     active_session = type("_ActiveSession", (), {"marker": "request-session"})()
     startup_backend_template_type = _current_startup_backend_template_type()
@@ -1286,7 +1241,6 @@ def test_session_bound_backends_realizes_database_token_preset_from_request_sess
     assert isinstance(rebound_strategy, database_token_strategy_type)
     assert rebound_strategy.session is active_session
     assert rebound_strategy.refresh_max_age == timedelta(days=14)
-    assert rebound_strategy.accept_legacy_plaintext_tokens is True
 
 
 def test_build_authenticator_uses_session_bound_backends_and_manager(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1547,7 +1501,6 @@ def test_provide_request_backends_realizes_database_token_preset_from_request_se
             token_hash_secret="a" * 40,
             max_age=timedelta(minutes=10),
             refresh_max_age=timedelta(days=14),
-            accept_legacy_plaintext_tokens=True,
         ),
         user_model=ExampleUser,
         user_manager_class=PluginUserManager,
@@ -1559,7 +1512,6 @@ def test_provide_request_backends_realizes_database_token_preset_from_request_se
         ),
         enable_refresh=True,
     )
-    config.allow_legacy_plaintext_tokens = True
     plugin = LitestarAuth(config)
     active_session = type("_ActiveSession", (), {"marker": "request-session"})()
     startup_backend_template_type = _current_startup_backend_template_type()

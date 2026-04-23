@@ -68,7 +68,7 @@ class _SecretRole:
     audiences: tuple[str, ...] = ()
 
     def render_usage(self) -> str:
-        """Return one human-readable description for warnings and docs."""
+        """Return one human-readable description for errors and docs."""
         if self.audiences:
             audience_list = ", ".join(self.audiences)
             return f"{self.setting_name} ({self.protected_surface}; audiences: {audience_list})"
@@ -184,20 +184,23 @@ def _resolve_token_secret(
     return secret
 
 
-def warn_if_secret_roles_are_reused(
+def validate_secret_roles_are_distinct(
     *,
     verification_token_secret: str | None,
     reset_password_token_secret: str | None,
     totp_secret_key: str | None = None,
     totp_pending_secret: str | None = None,
-    warning_options: tuple[type[Warning], int] = (UserWarning, 2),
 ) -> None:
-    """Warn when one configured secret value is reused across distinct auth roles.
+    """Raise when one configured secret value is reused across distinct auth roles.
 
     Distinct JWT audiences already keep verification, reset-password, and TOTP
-    tokens scoped to their own flows. The warning exists because production
-    deployments should still keep those secrets separate so one compromise does
-    not widen the blast radius across multiple roles.
+    tokens scoped to their own flows. Production deployments must still keep
+    those secrets separate so one compromise does not widen the blast radius
+    across multiple roles.
+
+    Raises:
+        ConfigurationError: If one configured secret value is reused across
+            multiple roles.
     """
     configured_roles = (
         (_VERIFICATION_TOKEN_SECRET_ROLE, verification_token_secret),
@@ -221,18 +224,16 @@ def warn_if_secret_roles_are_reused(
 
     reused_roles.sort(key=lambda roles: tuple(role.setting_name for role in roles))
     role_descriptions = "; ".join(", ".join(role.render_usage() for role in roles) for roles in reused_roles)
-    warning_cls, warning_stacklevel = warning_options
-    warnings.warn(
+    msg = (
         "Distinct secrets/keys are the supported production posture for "
         "verification, reset-password, and TOTP roles. Distinct JWT audiences "
         "still prevent token cross-use, but reusing one configured value across "
         "roles increases blast radius if that secret leaks. "
         f"Detected shared secret material across: {role_descriptions}. "
-        "Current releases only warn to preserve compatibility; future major "
-        "releases may reject reused secret material.",
-        warning_cls,
-        stacklevel=warning_stacklevel,
+        "Configure one distinct high-entropy value for each secret role, or use "
+        "unsafe_testing=True only for test-owned single-process setups."
     )
+    raise ConfigurationError(msg)
 
 
 def resolve_trusted_proxy_setting(*, trusted_proxy: object) -> bool:

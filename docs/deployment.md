@@ -22,15 +22,18 @@ Use this when moving from local development to production, especially for **secr
   `validate_secret_length` (32+ characters by default).
 - **`totp_secret_key`** — configure through `user_manager_security` when TOTP is enabled; required in
   production because stored TOTP secrets and pending-enrollment secrets must be encrypted at rest.
+  Existing plaintext persisted TOTP secrets must be encrypted, rotated, or cleared before upgrading
+  to versions that enforce encrypted-only TOTP secret storage.
 - **`csrf_secret`** — required for meaningful CSRF protection when using cookie-based auth with the plugin’s CSRF wiring.
 - **`totp_pending_secret`** — required when TOTP is enabled; protects pending login payloads.
 - **`oauth_token_encryption_key`** — required when OAuth providers are configured (encrypts tokens at rest in the DB).
 - **`token_hash_secret`** (database opaque token strategy) — protects digest-at-rest storage for DB tokens.
 - Keep **`verification_token_secret`**, **`reset_password_token_secret`**,
-  **`totp_pending_secret`**, and **`totp_secret_key`** distinct. Current releases warn on reuse in
-  production to preserve compatibility. For plugin-managed apps the warning is emitted once during
-  `LitestarAuth(config)` validation; direct `BaseUserManager(...)` construction keeps its own
-  manager-scoped warning path. Distinct values are still the supported posture:
+  **`totp_pending_secret`**, and **`totp_secret_key`** distinct. Production configuration now
+  rejects reuse with `ConfigurationError`; only explicit `unsafe_testing=True` test setups bypass
+  this validation. For plugin-managed apps the error is raised during `LitestarAuth(config)`
+  validation; direct `BaseUserManager(...)` construction enforces the same rule for its
+  manager-owned secret roles. Distinct values are the supported posture:
   `litestar-auth:verify`, `litestar-auth:reset-password`, and
   `litestar-auth:2fa-pending` / `litestar-auth:2fa-enroll` already separate JWT audiences, while
   `totp_secret_key` should remain a dedicated encryption key with no JWT audience.

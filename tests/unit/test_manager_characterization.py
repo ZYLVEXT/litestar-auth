@@ -300,10 +300,11 @@ async def test_totp_secret_facade_characterization(monkeypatch: pytest.MonkeyPat
     updated_user = await manager.set_totp_secret(user, "JBSWY3DPEHPK3PXP")
     stored_secret = user_db.update.await_args.args[1]["totp_secret"]
     decrypted_secret = await manager.read_totp_secret(stored_secret)
-    plaintext_secret = await manager.read_totp_secret("plain-secret")
 
     assert updated_user is encrypted_user
     assert stored_secret.startswith(ENCRYPTED_TOTP_SECRET_PREFIX)
     assert stored_secret != "JBSWY3DPEHPK3PXP"
     assert decrypted_secret == "JBSWY3DPEHPK3PXP"
-    assert plaintext_secret == "plain-secret"
+
+    with pytest.raises(RuntimeError, match="encrypted at rest"):
+        await manager.read_totp_secret("plain-secret")

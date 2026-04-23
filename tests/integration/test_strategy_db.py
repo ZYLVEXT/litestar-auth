@@ -357,7 +357,6 @@ async def test_database_token_strategy_initializes_defaults_and_rebinds_session(
 
     assert isinstance(strategy, Strategy)
     assert isinstance(strategy, RefreshableStrategy)
-    assert strategy.accept_legacy_plaintext_tokens is False
 
     token = await strategy.write_token(user)
     rebound_session = _strategy_session(session)
@@ -369,7 +368,6 @@ async def test_database_token_strategy_initializes_defaults_and_rebinds_session(
     assert rebound_strategy.max_age == strategy.max_age
     assert rebound_strategy.refresh_max_age == strategy.refresh_max_age
     assert rebound_strategy.token_bytes == strategy.token_bytes
-    assert rebound_strategy.accept_legacy_plaintext_tokens is False
     assert rebound_strategy.token_models == strategy.token_models
     assert resolved_user is not None
     assert resolved_user.id == user.id
@@ -508,26 +506,6 @@ async def test_database_token_strategy_cleanup_expired_tokens_supports_custom_to
         session.scalar(select(CustomRefreshToken).where(CustomRefreshToken.token == "fresh-custom-refresh-token"))
         is not None
     )
-
-
-async def test_database_token_strategy_accepts_legacy_plaintext_mode_when_enabled(session: Session) -> None:
-    """Legacy plaintext migration mode remains opt-in and preserves compatibility."""
-    user = _create_user(session, email="legacy-init@example.com")
-    legacy_token = "legacy-init-token"
-    session.add(AccessToken(token=legacy_token, user_id=user.id))
-    session.commit()
-
-    strategy = DatabaseTokenStrategy(
-        session=_strategy_session(session),
-        token_hash_secret=_TOKEN_HASH_SECRET,
-        accept_legacy_plaintext_tokens=True,
-    )
-
-    resolved_user = await strategy.read_token(legacy_token, UnusedUserManager())
-
-    assert strategy.accept_legacy_plaintext_tokens is True
-    assert resolved_user is not None
-    assert resolved_user.id == user.id
 
 
 async def test_database_token_strategy_rejects_legacy_plaintext_access_tokens_by_default(session: Session) -> None:
@@ -725,51 +703,6 @@ async def test_database_token_strategy_cleanup_expired_tokens(session: Session) 
     assert session.scalar(select(RefreshToken).where(RefreshToken.token == "expired-refresh-token")) is None
     assert session.scalar(select(AccessToken).where(AccessToken.token == "fresh-access-token")) is not None
     assert session.scalar(select(RefreshToken).where(RefreshToken.token == "fresh-refresh-token")) is not None
-
-
-async def test_database_token_strategy_supports_legacy_plaintext_access_tokens(session: Session) -> None:
-    """Legacy plaintext access tokens can still be read and destroyed during migration."""
-    user = _create_user(session, email="legacy-access@example.com")
-    legacy_token = "legacy-plaintext-access-token"
-    session.add(AccessToken(token=legacy_token, user_id=user.id))
-    session.commit()
-
-    strategy = DatabaseTokenStrategy(
-        session=_strategy_session(session),
-        token_hash_secret=_TOKEN_HASH_SECRET,
-        accept_legacy_plaintext_tokens=True,
-    )
-
-    resolved_user = await strategy.read_token(legacy_token, UnusedUserManager())
-    await strategy.destroy_token(legacy_token, user)
-
-    assert resolved_user is not None
-    assert resolved_user.id == user.id
-    assert session.scalar(select(AccessToken).where(AccessToken.token == legacy_token)) is None
-
-
-async def test_database_token_strategy_rotates_legacy_plaintext_refresh_tokens(session: Session) -> None:
-    """Refresh-token rotation falls back to legacy plaintext rows when enabled."""
-    user = _create_user(session, email="legacy-refresh@example.com")
-    legacy_refresh_token = "legacy-plaintext-refresh-token"
-    session.add(RefreshToken(token=legacy_refresh_token, user_id=user.id))
-    session.commit()
-
-    strategy = DatabaseTokenStrategy(
-        session=_strategy_session(session),
-        token_hash_secret=_TOKEN_HASH_SECRET,
-        accept_legacy_plaintext_tokens=True,
-    )
-
-    rotation = await strategy.rotate_refresh_token(legacy_refresh_token, UnusedUserManager())
-    persisted_tokens = session.scalars(select(RefreshToken).where(RefreshToken.user_id == user.id)).all()
-
-    assert rotation is not None
-    rotated_user, rotated_refresh_token = rotation
-    assert rotated_user.id == user.id
-    assert rotated_refresh_token != legacy_refresh_token
-    assert len(persisted_tokens) == 1
-    assert persisted_tokens[0].token != legacy_refresh_token
 
 
 async def test_database_token_strategy_writes_and_rotates_refresh_tokens(session: Session) -> None:

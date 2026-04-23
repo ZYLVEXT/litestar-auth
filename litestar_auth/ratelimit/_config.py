@@ -273,7 +273,6 @@ def _clone_backend_with_capped_attempts(backend: RateLimiterBackend, *, max_atte
             window_seconds=backend.window_seconds,
             max_keys=backend.max_keys,
             sweep_interval=backend.sweep_interval,
-            fail_closed_on_capacity=backend.fail_closed_on_capacity,
         )
     if isinstance(backend, RedisRateLimiter):
         return RedisRateLimiter(

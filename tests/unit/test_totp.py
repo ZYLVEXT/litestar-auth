@@ -55,13 +55,19 @@ def test_generate_totp_secret_returns_base32_secret() -> None:
 
 @pytest.mark.parametrize(
     ("algorithm", "expected_bytes"),
-    [("SHA1", 20), ("SHA256", 32), ("SHA512", 64)],
+    [("SHA256", 32), ("SHA512", 64)],
 )
 def test_generate_totp_secret_size_matches_algorithm(algorithm: str, expected_bytes: int) -> None:
     """Secret byte length matches the HMAC output length per RFC 4226 S4."""
     secret = totp.generate_totp_secret(algorithm=algorithm)  # ty: ignore[invalid-argument-type]
     decoded = totp._decode_secret(secret)
     assert len(decoded) == expected_bytes
+
+
+def test_generate_totp_secret_rejects_unsupported_algorithm() -> None:
+    """Unsupported legacy TOTP algorithms fail with an explicit error."""
+    with pytest.raises(ValueError, match="Unsupported TOTP algorithm 'SHA1'"):
+        totp.generate_totp_secret(algorithm=cast("totp.TotpAlgorithm", "SHA1"))
 
 
 def test_totp_default_algorithm_is_sha256() -> None:
@@ -88,7 +94,7 @@ def test_generate_totp_uri_returns_otpauth_uri() -> None:
 
 
 def test_generate_totp_uri_includes_algorithm_for_sha256() -> None:
-    """Non-default algorithms are encoded into the otpauth URI query string."""
+    """Explicit algorithms are encoded into the otpauth URI query string."""
     uri = totp.generate_totp_uri("ABCDEF123456", "user@example.com", "Litestar Auth", algorithm="SHA256")
     parsed = urlparse(uri)
     query = parse_qs(parsed.query)
@@ -96,7 +102,7 @@ def test_generate_totp_uri_includes_algorithm_for_sha256() -> None:
     assert query["algorithm"] == ["SHA256"]
 
 
-@pytest.mark.parametrize("algorithm", ["SHA1", "SHA256", "SHA512"])
+@pytest.mark.parametrize("algorithm", ["SHA256", "SHA512"])
 def test_generate_totp_uri_preserves_selected_algorithm(algorithm: str) -> None:
     """The otpauth URI query uses the selected TOTP algorithm."""
     uri = totp.generate_totp_uri("ABCDEF123456", "user@example.com", "Litestar Auth", algorithm=algorithm)  # ty: ignore[invalid-argument-type]
@@ -109,16 +115,13 @@ def test_generate_totp_uri_preserves_selected_algorithm(algorithm: str) -> None:
 def test_generate_totp_code_uses_selected_algorithm() -> None:
     """Different algorithms produce different codes for the same inputs."""
     counter = 1
-    sha1_code = totp._generate_totp_code(RFC_SECRET, counter, algorithm="SHA1")
     sha256_code = totp._generate_totp_code(RFC_SECRET, counter, algorithm="SHA256")
     sha512_code = totp._generate_totp_code(RFC_SECRET, counter, algorithm="SHA512")
 
-    assert sha1_code != sha256_code
-    assert sha1_code != sha512_code
     assert sha256_code != sha512_code
 
 
-@pytest.mark.parametrize("algorithm", ["SHA1", "SHA256", "SHA512"])
+@pytest.mark.parametrize("algorithm", ["SHA256", "SHA512"])
 def test_verify_totp_accepts_current_window_code(monkeypatch: pytest.MonkeyPatch, algorithm: str) -> None:
     """Verification succeeds for the current 30-second time step across algorithms."""
     monkeypatch.setattr(totp.time, "time", lambda: 59.0)

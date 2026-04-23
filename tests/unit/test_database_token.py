@@ -98,7 +98,7 @@ def test_resolve_database_token_strategy_session() -> None:
 @pytest.mark.asyncio
 async def test_startup_only_strategy_runtime_methods_fail_closed() -> None:
     """Startup-only strategies reject token operations until session binding."""
-    auth = DatabaseTokenAuthConfig(token_hash_secret="z" * 40, accept_legacy_plaintext_tokens=True)
+    auth = DatabaseTokenAuthConfig(token_hash_secret="z" * 40)
     strategy = cast(
         "Any",
         database_token_module._build_startup_only_database_token_strategy(

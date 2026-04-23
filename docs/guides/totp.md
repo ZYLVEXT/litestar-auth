@@ -58,7 +58,7 @@ The three production stores are still distinct even in the shared-client recipe:
 
 For pytest-driven plugin tests, see the [testing guide](testing.md). Under **`unsafe_testing=True`**, the plugin can run without **`totp_used_tokens_store`**, but that is a single-process testing convenience rather than a production-safe replay-protection setup.
 
-Algorithm defaults to **SHA256** (`totp_algorithm`).
+Algorithm defaults to **SHA256** (`totp_algorithm`). Supported algorithms are **SHA256** and **SHA512**.
 
 ## Related
 
