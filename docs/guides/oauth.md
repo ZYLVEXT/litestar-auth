@@ -139,7 +139,7 @@ user_db = SQLAlchemyUserDatabase(
 )
 ```
 
-For ad-hoc ORM queries against `OAuthAccount`, bind the same policy to the session with `bind_oauth_token_encryption(session, OAuthTokenEncryption(...))` before loading encrypted token columns. In tests you can use `OAuthTokenEncryption(key=None)` as the explicit plaintext policy; production OAuth deployments should always supply a Fernet key. The mapper listeners keep temporary plaintext snapshots only for the duration of a write and now clear them again if the ORM transaction rolls back.
+For ad-hoc ORM queries against `OAuthAccount`, bind the same policy to the session with `bind_oauth_token_encryption(session, OAuthTokenEncryption(...))` before loading encrypted token columns. In tests you can use `OAuthTokenEncryption(key=None, unsafe_testing=True)` as the explicit plaintext policy; production OAuth deployments should always supply a Fernet key. Policy-shaped wrappers and objects retained across development/test module reloads are ignored or rejected; create a fresh `OAuthTokenEncryption(...)` before binding. The mapper listeners keep temporary plaintext snapshots only for the duration of a write and now clear them again if the ORM transaction rolls back.
 
 ## Cookies
 
@@ -159,6 +159,7 @@ Default **`oauth_associate_by_email=False`** avoids implicit login-time linking 
 - Lazy client loader: `litestar_auth.oauth.load_httpx_oauth_client`
 
 Use `OAuthConfig` on `LitestarAuthConfig` for the default plugin-owned route table. Reach for `create_provider_oauth_controller(...)` or the lower-level controller factories only when you intentionally assemble a custom OAuth route layout.
+The legacy `litestar_auth.contrib.oauth` re-export path has been removed; import manual OAuth helpers from `litestar_auth.oauth`.
 
 ## Custom `User` and `OAuthAccount`
 

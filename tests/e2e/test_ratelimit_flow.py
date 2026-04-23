@@ -130,7 +130,7 @@ def _build_app_with_trusted_proxy(
         AuthRateLimitConfig.from_shared_backend(
             credential_rate_limiter,
             group_backends={"totp": totp_rate_limiter, "refresh": refresh_rate_limiter},
-            disabled={"verify_token", "request_verify_token"},
+            disabled={AuthRateLimitSlot.VERIFY_TOKEN, AuthRateLimitSlot.REQUEST_VERIFY_TOKEN},
             endpoint_overrides={
                 AuthRateLimitSlot.FORGOT_PASSWORD: EndpointRateLimit(
                     backend=credential_rate_limiter,

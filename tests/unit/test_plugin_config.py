@@ -15,20 +15,23 @@ import msgspec
 import pytest
 
 import litestar_auth._plugin.config as plugin_config_module
+import litestar_auth._plugin.database_token as database_token_module
 from litestar_auth import DEFAULT_SUPERUSER_ROLE_NAME
 from litestar_auth._plugin.config import (
     DatabaseTokenAuthConfig,
     OAuthConfig,
     TotpConfig,
-    build_user_manager,
-    default_password_validator_factory,
     require_session_maker,
-    resolve_password_validator,
-    resolve_user_manager_factory,
 )
 from litestar_auth._plugin.oauth_contract import _build_oauth_route_registration_contract
 from litestar_auth._plugin.scoped_session import SessionFactory
-from litestar_auth._plugin.user_manager_builder import _DefaultUserManagerBuilderContract
+from litestar_auth._plugin.user_manager_builder import (
+    _DefaultUserManagerBuilderContract,
+    build_user_manager,
+    default_password_validator_factory,
+    resolve_password_validator,
+    resolve_user_manager_factory,
+)
 from litestar_auth.authentication.backend import AuthenticationBackend
 from litestar_auth.authentication.strategy.db_models import AccessToken, RefreshToken
 from litestar_auth.authentication.transport.bearer import BearerTransport
@@ -125,6 +128,20 @@ def test_plugin_config_module_executes_under_coverage() -> None:
     assert reloaded_module.LitestarAuthConfig.__name__ == LitestarAuthConfig.__name__
     assert reloaded_module.DatabaseTokenAuthConfig.__name__ == DatabaseTokenAuthConfig.__name__
     assert reloaded_module.OAuthConfig.__name__ == OAuthConfig.__name__
+
+
+def test_plugin_config_module_does_not_reexport_database_token_helpers() -> None:
+    """DB-token helpers are owned by ``database_token``, not lazily forwarded by config."""
+    for name in (
+        "_backend_uses_bundled_database_token_models",
+        "_build_database_token_backend",
+        "_build_database_token_backend_template",
+        "_is_bundled_token_model",
+        "_is_database_token_strategy_instance",
+        "_uses_bundled_database_token_models",
+        "build_database_token_backend",
+    ):
+        assert not hasattr(plugin_config_module, name)
 
 
 def test_oauth_contract_module_executes_under_coverage() -> None:
@@ -681,8 +698,8 @@ def test_litestar_auth_config_resolve_password_helper_memoizes_default_helper() 
     second = config.resolve_password_helper()
 
     assert first is second
+    assert len(first.password_hash.hashers) == 1
     assert first.password_hash.hashers[0].__class__.__name__ == "Argon2Hasher"
-    assert first.password_hash.hashers[1].__class__.__name__ == "BcryptHasher"
 
 
 def test_litestar_auth_config_resolve_password_helper_survives_password_module_reload() -> None:
@@ -1148,14 +1165,6 @@ def test_startup_database_token_templates_do_not_embed_a_placeholder_session() -
     assert "session" not in vars(cast("Any", startup_backend.strategy))
 
 
-def test_resolve_database_token_strategy_session_without_session_fails_closed() -> None:
-    """The legacy helper still returns a placeholder that raises the canonical runtime error."""
-    startup_session = plugin_config_module.resolve_database_token_strategy_session()
-
-    with pytest.raises(RuntimeError, match=_DB_TOKEN_STARTUP_ONLY_FAIL_CLOSED):
-        _ = startup_session.execute
-
-
 def test_startup_backend_template_eq_identity_short_circuits() -> None:
     """StartupBackendTemplate.__eq__ returns True for the same instance."""
     backend = AuthenticationBackend[ExampleUser, UUID](
@@ -1254,7 +1263,7 @@ async def test_startup_database_token_templates_fail_closed_for_remaining_runtim
 def test_build_database_token_backend_binds_the_explicit_runtime_session() -> None:
     """The direct runtime builder still returns a real session-bound DB-token backend."""
     active_session = DummySession()
-    backend = plugin_config_module.build_database_token_backend(
+    backend = database_token_module.build_database_token_backend(
         DatabaseTokenAuthConfig(
             token_hash_secret="x" * 40,
             backend_name="opaque-db",
@@ -1571,12 +1580,13 @@ def test_build_user_manager_injects_default_password_helper_without_prior_materi
         user_db=InMemoryUserDatabase([]),
         config=config,
     )
+    typed_manager = cast("_PasswordHelperRequiredManager", manager)
 
-    hashed_password = manager.received_password_helper.hash("shared-password")
+    hashed_password = typed_manager.received_password_helper.hash("shared-password")
 
-    assert manager.received_password_helper.verify("shared-password", hashed_password) is True
-    assert manager.password_helper is manager.received_password_helper
-    assert config.get_default_password_helper() is manager.received_password_helper
+    assert typed_manager.received_password_helper.verify("shared-password", hashed_password) is True
+    assert manager.password_helper is typed_manager.received_password_helper
+    assert config.get_default_password_helper() is typed_manager.received_password_helper
 
 
 async def test_build_user_manager_applies_current_password_surface_from_config() -> None:
@@ -1737,12 +1747,13 @@ def test_build_user_manager_passes_canonical_kwargs_through_kwargs_wrapper() -> 
         config=config,
         backends=("bound-backend",),
     )
-    typed_manager = manager
+    typed_manager = cast("_KwargsWrapperManager", manager)
+    received_security = cast("UserManagerSecurity[UUID]", typed_manager.received_manager_kwargs["security"])
 
-    assert typed_manager.received_manager_kwargs["security"].verification_token_secret == verification_secret
-    assert typed_manager.received_manager_kwargs["security"].reset_password_token_secret == reset_secret
-    assert typed_manager.received_manager_kwargs["security"].totp_secret_key == totp_secret_key
-    assert typed_manager.received_manager_kwargs["security"].id_parser is UUID
+    assert received_security.verification_token_secret == verification_secret
+    assert received_security.reset_password_token_secret == reset_secret
+    assert received_security.totp_secret_key == totp_secret_key
+    assert received_security.id_parser is UUID
     assert "verification_token_secret" not in typed_manager.received_manager_kwargs
     assert "reset_password_token_secret" not in typed_manager.received_manager_kwargs
     assert "totp_secret_key" not in typed_manager.received_manager_kwargs
@@ -1809,7 +1820,7 @@ def test_build_user_manager_passes_typed_security_to_security_only_manager() -> 
         config=config,
         backends=("bound-backend",),
     )
-    typed_manager = manager
+    typed_manager = cast("_SecurityOnlyManager", manager)
 
     assert typed_manager.received_security.verification_token_secret == verification_secret
     assert typed_manager.received_security.reset_password_token_secret == reset_secret
@@ -1913,8 +1924,9 @@ def test_build_user_manager_preserves_configured_unsafe_testing_flag() -> None:
         user_db=InMemoryUserDatabase([]),
         config=config,
     )
+    typed_manager = cast("_UnsafeTestingManager", manager)
 
-    assert manager.received_unsafe_testing is True
+    assert typed_manager.received_unsafe_testing is True
     assert manager.unsafe_testing is True
 
 
@@ -2035,7 +2047,7 @@ def test_uses_bundled_database_token_models_detects_manual_db_backend_with_bundl
 
     assert strategy.access_token_model is AccessToken
     assert strategy.refresh_token_model is RefreshToken
-    assert plugin_config_module._uses_bundled_database_token_models(config) is True
+    assert database_token_module._uses_bundled_database_token_models(config) is True
 
 
 def test_is_database_token_strategy_instance_returns_false_when_module_not_loaded(
@@ -2052,7 +2064,7 @@ def test_is_database_token_strategy_instance_returns_false_when_module_not_loade
     }
     monkeypatch.setattr(sys, "modules", fake_modules)
 
-    assert plugin_config_module._is_database_token_strategy_instance(object()) is False
+    assert database_token_module._is_database_token_strategy_instance(object()) is False
 
 
 def test_is_bundled_token_model_returns_false_when_module_not_loaded(
@@ -2072,7 +2084,7 @@ def test_is_bundled_token_model_returns_false_when_module_not_loaded(
     }
     monkeypatch.setattr(sys, "modules", fake_modules)
 
-    assert plugin_config_module._is_bundled_token_model(object(), attribute_name="AccessToken") is False
+    assert database_token_module._is_bundled_token_model(object(), attribute_name="AccessToken") is False
 
 
 def test_resolve_user_manager_factory_returns_explicit_factory_when_configured() -> None:
@@ -2088,7 +2100,7 @@ def test_resolve_user_manager_factory_defaults_to_build_user_manager() -> None:
     """Configs without an override use the module-level default builder."""
     config = _minimal_config()
 
-    assert resolve_user_manager_factory(config) is plugin_config_module.build_user_manager
+    assert resolve_user_manager_factory(config) is build_user_manager
 
 
 def _invalid_db_session_config_kwargs(invalid_db_session_key: str) -> dict[str, Any]:

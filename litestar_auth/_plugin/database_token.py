@@ -23,26 +23,6 @@ if TYPE_CHECKING:
     from litestar_auth.types import StrategyProtocol  # pragma: no cover
 
 
-class _StartupOnlyDatabaseTokenSession:
-    """Fail-closed sentinel returned when a request ``AsyncSession`` is unavailable at the call site.
-
-    Any attribute access raises :class:`RuntimeError`, so callers that obtained a
-    backend from the startup inventory (no request scope yet) cannot accidentally
-    perform request-time DB work. Request-time code must obtain a real session via
-    :meth:`LitestarAuthConfig.resolve_backends`; the startup inventory from
-    :meth:`LitestarAuthConfig.resolve_startup_backends` is not sufficient for
-    session-bound database-token operations.
-    """
-
-    def __getattr__(self, name: str) -> Never:
-        """Raise when startup-only backends are used for request-time DB work."""
-        del name
-        _raise_startup_only_database_token_runtime_error()
-
-
-_STARTUP_ONLY_DATABASE_TOKEN_SESSION = _StartupOnlyDatabaseTokenSession()
-
-
 def _raise_startup_only_database_token_runtime_error() -> Never:
     """Raise the shared fail-closed error for startup-only DB-token backends.
 
@@ -61,19 +41,6 @@ def _raise_startup_only_database_token_runtime_error() -> Never:
         "request-scoped backend instances for login, refresh, logout, or token validation."
     )
     raise RuntimeError(msg)
-
-
-def resolve_database_token_strategy_session(session: AsyncSession | None = None) -> AsyncSession:
-    """Return ``session`` if provided, otherwise a fail-closed sentinel for missing-session call sites.
-
-    Returns:
-        The provided request ``AsyncSession`` when available, otherwise a sentinel
-        whose first attribute access raises the startup-only runtime error. Prefer
-        obtaining request-bound backends via :meth:`LitestarAuthConfig.resolve_backends`;
-        the startup inventory from :meth:`LitestarAuthConfig.resolve_startup_backends`
-        uses an explicit startup-only strategy wrapper instead of this sentinel.
-    """
-    return session if session is not None else cast("AsyncSession", _STARTUP_ONLY_DATABASE_TOKEN_SESSION)
 
 
 @dataclass(frozen=True, slots=True)

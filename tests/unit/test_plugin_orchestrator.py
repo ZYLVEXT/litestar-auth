@@ -19,7 +19,9 @@ from litestar.config.csrf import CSRFConfig
 from litestar.exceptions import ClientException
 from litestar.middleware import DefineMiddleware
 
+import litestar_auth._plugin.database_token as database_token_module
 import litestar_auth._plugin.startup as startup_module
+import litestar_auth._plugin.user_manager_builder as user_manager_builder_module
 import litestar_auth.plugin as plugin_module
 from litestar_auth import DEFAULT_SUPERUSER_ROLE_NAME
 from litestar_auth._plugin import (
@@ -38,7 +40,6 @@ from litestar_auth.authentication import Authenticator, LitestarAuthMiddleware
 from litestar_auth.authentication.backend import AuthenticationBackend
 from litestar_auth.authentication.strategy.db import DatabaseTokenStrategy
 from litestar_auth.authentication.strategy.db_models import DatabaseTokenModels
-from litestar_auth.authentication.strategy.jwt import InMemoryJWTDenylistStore, JWTStrategy
 from litestar_auth.authentication.transport.bearer import BearerTransport
 from litestar_auth.authentication.transport.cookie import CookieTransport
 from litestar_auth.config import require_password_length
@@ -106,6 +107,34 @@ def _current_authentication_backend_type() -> type[Any]:
     """Return the current backend class after reload-oriented tests."""
     backend_module = importlib.import_module("litestar_auth.authentication.backend")
     return cast("type[Any]", backend_module.AuthenticationBackend)
+
+
+def _current_inmemory_jwt_denylist_store() -> object:
+    """Return a JWT denylist store instance from the current strategy module."""
+    jwt_module = importlib.import_module("litestar_auth.authentication.strategy.jwt")
+    store_type = cast("type[Any]", jwt_module.InMemoryJWTDenylistStore)
+    return store_type()
+
+
+def _current_jwt_strategy() -> object:
+    """Return a JWT strategy instance from the current strategy module."""
+    jwt_module = importlib.import_module("litestar_auth.authentication.strategy.jwt")
+    strategy_type = cast("type[Any]", jwt_module.JWTStrategy)
+    return strategy_type(secret="a" * 32, algorithm="HS256", allow_inmemory_denylist=True)
+
+
+def _current_inmemory_used_totp_code_store() -> object:
+    """Return a used-code store instance from the current TOTP module."""
+    totp_module = importlib.import_module("litestar_auth.totp")
+    store_type = cast("type[Any]", totp_module.InMemoryUsedTotpCodeStore)
+    return store_type()
+
+
+def _current_inmemory_totp_enrollment_store() -> object:
+    """Return an enrollment store instance from the current TOTP module."""
+    totp_module = importlib.import_module("litestar_auth.totp")
+    store_type = cast("type[Any]", totp_module.InMemoryTotpEnrollmentStore)
+    return store_type()
 
 
 def test_plugin_module_executes_under_coverage() -> None:
@@ -377,7 +406,7 @@ def test_bundled_token_bootstrap_detection_skips_custom_token_models() -> None:
     )
     config = _minimal_config(backends=[custom_backend, other_backend])
 
-    assert plugin_module._plugin_config._uses_bundled_database_token_models(config) is False
+    assert database_token_module._uses_bundled_database_token_models(config) is False
 
 
 def test_on_app_init_warns_for_explicit_inmemory_jwt_strategy() -> None:
@@ -385,7 +414,7 @@ def test_on_app_init_warns_for_explicit_inmemory_jwt_strategy() -> None:
     backend = AuthenticationBackend[ExampleUser, UUID](
         name="jwt-backend",
         transport=CookieTransport(),
-        strategy=cast("Any", JWTStrategy(secret="a" * 32, algorithm="HS256", allow_inmemory_denylist=True)),
+        strategy=cast("Any", _current_jwt_strategy()),
     )
     config = _minimal_config(backends=[backend])
     config.csrf_secret = "c" * 32
@@ -611,9 +640,9 @@ def test_on_app_init_warns_security_warning_for_inmemory_totp_used_store(
     config = _minimal_config()
     config.totp_config = TotpConfig(
         totp_pending_secret="x" * 32,
-        totp_pending_jti_store=InMemoryJWTDenylistStore(),
-        totp_used_tokens_store=InMemoryUsedTotpCodeStore(),
-        totp_enrollment_store=InMemoryTotpEnrollmentStore(),
+        totp_pending_jti_store=cast("Any", _current_inmemory_jwt_denylist_store()),
+        totp_used_tokens_store=cast("Any", _current_inmemory_used_totp_code_store()),
+        totp_enrollment_store=cast("Any", _current_inmemory_totp_enrollment_store()),
     )
     config.user_manager_security = UserManagerSecurity[UUID](
         verification_token_secret="verify-secret-12345678901234567890",
@@ -625,6 +654,38 @@ def test_on_app_init_warns_security_warning_for_inmemory_totp_used_store(
 
     with pytest.warns(SecurityWarning, match="InMemoryUsedTotpCodeStore"):
         plugin.on_app_init(AppConfig())
+
+
+def test_warn_insecure_plugin_startup_defaults_ignores_reload_stale_inmemory_totp_stores() -> None:
+    """Reload-stale TOTP stores no longer satisfy startup's current-module type checks."""
+    stale_used_store = type(
+        "InMemoryUsedTotpCodeStore",
+        (),
+        {"__module__": "litestar_auth.totp"},
+    )()
+    stale_enrollment_store = type(
+        "InMemoryTotpEnrollmentStore",
+        (),
+        {"__module__": "litestar_auth.totp"},
+    )()
+    stale_pending_jti_store = type(
+        "InMemoryJWTDenylistStore",
+        (),
+        {"__module__": "litestar_auth.authentication.strategy.jwt"},
+    )()
+    config = _minimal_config()
+    config.totp_config = TotpConfig(
+        totp_pending_secret="x" * 32,
+        totp_pending_jti_store=cast("Any", stale_pending_jti_store),
+        totp_used_tokens_store=cast("Any", stale_used_store),
+        totp_enrollment_store=cast("Any", stale_enrollment_store),
+    )
+
+    with warnings.catch_warnings(record=True) as records:
+        warnings.simplefilter("always")
+        startup_module.warn_insecure_plugin_startup_defaults(config)
+
+    assert not records
 
 
 def test_on_app_init_allows_missing_oauth_token_encryption_key_in_testing(
@@ -661,7 +722,7 @@ def test_on_app_init_testing_recipe_suppresses_single_process_security_warnings(
             AuthenticationBackend[ExampleUser, UUID](
                 name="jwt",
                 transport=BearerTransport(),
-                strategy=cast("Any", JWTStrategy(secret="a" * 32, algorithm="HS256", allow_inmemory_denylist=True)),
+                strategy=cast("Any", _current_jwt_strategy()),
             ),
         ],
     )
@@ -680,7 +741,7 @@ def test_on_app_init_testing_recipe_suppresses_single_process_security_warnings(
     )
     config.totp_config = TotpConfig(
         totp_pending_secret="x" * 32,
-        totp_pending_jti_store=InMemoryJWTDenylistStore(),
+        totp_pending_jti_store=cast("Any", _current_inmemory_jwt_denylist_store()),
         totp_used_tokens_store=InMemoryUsedTotpCodeStore(),
         totp_enrollment_store=InMemoryTotpEnrollmentStore(),
     )
@@ -901,7 +962,7 @@ def test_build_user_manager_wraps_user_db_and_passes_bound_backends(monkeypatch:
         captured.update(kwargs)
         return "manager"
 
-    plugin._user_manager_factory = _factory
+    plugin._user_manager_factory = cast("Any", _factory)
 
     manager = plugin._build_user_manager(cast("Any", session))
 
@@ -1062,7 +1123,7 @@ def test_build_user_manager_allows_nonstandard_manager_contract_through_factory(
         return LegacyManagerWithoutSecurity(
             cast("Any", kwargs["user_db"]),
             password_helper=session_config.resolve_password_helper(),
-            password_validator=plugin_module._plugin_config.resolve_password_validator(session_config),
+            password_validator=user_manager_builder_module.resolve_password_validator(session_config),
             verification_token_secret=cast("str", security.verification_token_secret),
             reset_password_token_secret=cast("str", security.reset_password_token_secret),
             id_parser=session_config.id_parser,
@@ -1578,7 +1639,7 @@ def test_totp_backend_returns_configured_named_backend() -> None:
     plugin.config.totp_config = TotpConfig(
         totp_pending_secret="p" * 32,
         totp_backend_name="secondary",
-        totp_pending_jti_store=InMemoryJWTDenylistStore(),
+        totp_pending_jti_store=cast("Any", _current_inmemory_jwt_denylist_store()),
         totp_enrollment_store=InMemoryTotpEnrollmentStore(),
     )
 

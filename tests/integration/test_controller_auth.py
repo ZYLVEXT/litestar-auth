@@ -11,6 +11,8 @@ from cryptography.fernet import Fernet
 from litestar import Litestar, Request, get
 from litestar.middleware import DefineMiddleware
 from litestar.testing import AsyncTestClient
+from pwdlib import PasswordHash
+from pwdlib.hashers.argon2 import Argon2Hasher
 from pwdlib.hashers.bcrypt import BcryptHasher
 
 from litestar_auth.authentication.authenticator import Authenticator
@@ -120,6 +122,7 @@ def build_app(  # noqa: PLR0913
     *,
     login_identifier: Literal["email", "username"] = "email",
     initial_hashed_password: str | None = None,
+    password_helper: PasswordHelper | None = None,
     requires_verification: bool = False,
     initial_is_verified: bool = True,
     initial_is_active: bool = True,
@@ -133,6 +136,7 @@ def build_app(  # noqa: PLR0913
         login_identifier: Credential lookup mode for the controller and manager.
         initial_hashed_password: Optional precomputed hash for the test user.
             When omitted, the user gets an Argon2 hash of "correct-password".
+        password_helper: Optional helper used by the seeded manager and default password hashing.
         requires_verification: When True, login returns 400 for unverified users.
         initial_is_verified: Whether the test user is marked verified.
         initial_is_active: Whether the test user is marked active.
@@ -143,12 +147,12 @@ def build_app(  # noqa: PLR0913
     Returns:
         Litestar application, the backing token strategy, and the tracking manager.
     """
-    password_helper = PasswordHelper()
+    resolved_password_helper = password_helper or PasswordHelper()
     user = ExampleUser(
         id=uuid4(),
         email=_LOGIN_TEST_EMAIL,
         username=_LOGIN_TEST_USERNAME if login_identifier == "username" else "",
-        hashed_password=initial_hashed_password or password_helper.hash("correct-password"),
+        hashed_password=initial_hashed_password or resolved_password_helper.hash("correct-password"),
         is_active=initial_is_active,
         is_verified=initial_is_verified,
         totp_secret=_encrypt_test_totp_secret(initial_totp_secret) if initial_totp_secret is not None else None,
@@ -156,7 +160,7 @@ def build_app(  # noqa: PLR0913
     user_db = InMemoryUserDatabase(users=[user])
     user_manager = TrackingUserManager(
         user_db,
-        password_helper,
+        resolved_password_helper,
         verification_token_secret="test-secret-12345-verify-secret-12345",
         reset_password_token_secret="test-secret-12345-reset-secret-12345",
         login_identifier=login_identifier,
@@ -187,6 +191,11 @@ def build_app(  # noqa: PLR0913
         middleware=[middleware],
     )
     return app, strategy, user_manager
+
+
+def _legacy_password_helper() -> PasswordHelper:
+    """Return an explicit bcrypt-capable helper for migration-path integration tests."""
+    return PasswordHelper(password_hash=PasswordHash((Argon2Hasher(), BcryptHasher())))
 
 
 def build_cookie_refresh_app() -> tuple[Litestar, InMemoryRefreshTokenStrategy]:
@@ -612,13 +621,37 @@ async def test_login_hook_is_not_called_for_invalid_credentials(
 
 
 @pytest.mark.parametrize("login_identifier", ["email", "username"])
-async def test_login_with_bcrypt_hash_upgrades_to_argon2(
+async def test_login_with_bcrypt_hash_fails_closed_with_default_helper(
     login_identifier: Literal["email", "username"],
 ) -> None:
-    """Login with a user whose password is stored as bcrypt upgrades the hash to Argon2."""
+    """Login with a bcrypt hash fails when the app keeps the default Argon2-only helper."""
     cred = login_identifier_credential(login_identifier)
     bcrypt_hash = BcryptHasher().hash("correct-password")
     app, _, user_manager = build_app(login_identifier=login_identifier, initial_hashed_password=bcrypt_hash)
+
+    async with AsyncTestClient(app=app) as client:
+        response = await client.post(
+            "/auth/login",
+            json={"identifier": cred, "password": "correct-password"},
+        )
+    assert response.status_code == HTTP_BAD_REQUEST
+    stored = await user_manager.user_db.get_by_email(_LOGIN_TEST_EMAIL)
+    assert stored is not None
+    assert stored.hashed_password == bcrypt_hash
+
+
+@pytest.mark.parametrize("login_identifier", ["email", "username"])
+async def test_login_with_bcrypt_hash_upgrades_to_argon2_when_custom_helper_keeps_bcrypt(
+    login_identifier: Literal["email", "username"],
+) -> None:
+    """Explicit bcrypt-capable helpers still allow login and opportunistic Argon2 upgrades."""
+    cred = login_identifier_credential(login_identifier)
+    bcrypt_hash = BcryptHasher().hash("correct-password")
+    app, _, user_manager = build_app(
+        login_identifier=login_identifier,
+        initial_hashed_password=bcrypt_hash,
+        password_helper=_legacy_password_helper(),
+    )
 
     async with AsyncTestClient(app=app) as client:
         response = await client.post(

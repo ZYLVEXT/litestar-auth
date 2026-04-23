@@ -35,7 +35,7 @@ The DB-token preset entrypoint is exported from both the root package and `lites
 The root package also exports `DEFAULT_SUPERUSER_ROLE_NAME` for applications that want to reference
 the built-in `"superuser"` role while configuring `LitestarAuthConfig.superuser_role_name`.
 
-For OAuth, plugin-managed apps should configure `OAuthConfig` on `LitestarAuthConfig` with `oauth_providers` as a sequence of `OAuthProviderConfig(name=..., client=...)`. `litestar_auth.oauth.create_provider_oauth_controller` plus `litestar_auth.controllers.create_oauth_controller` / `create_oauth_associate_controller` remain the manual route-table path for custom layouts.
+For OAuth, plugin-managed apps should configure `OAuthConfig` on `LitestarAuthConfig` with `oauth_providers` as a sequence of `OAuthProviderConfig(name=..., client=...)`. `litestar_auth.oauth.create_provider_oauth_controller` plus `litestar_auth.controllers.create_oauth_controller` / `create_oauth_associate_controller` remain the manual route-table path for custom layouts. The removed `litestar_auth.contrib.oauth` shim is not part of the public import boundary.
 
 Opaque DB-token wiring:
 

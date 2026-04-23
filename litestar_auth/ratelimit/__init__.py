@@ -12,27 +12,19 @@ advanced cases that need fully custom per-endpoint wiring.
 Examples:
     Build the shared-backend recipe::
 
-        from litestar_auth.ratelimit import (
-            AUTH_RATE_LIMIT_VERIFICATION_SLOTS,
-            AuthRateLimitConfig,
-            RedisRateLimiter,
-        )
+        from litestar_auth.ratelimit import AuthRateLimitConfig, AuthRateLimitSlot, RedisRateLimiter
 
         rate_limit_config = AuthRateLimitConfig.from_shared_backend(
             RedisRateLimiter(redis=redis_client, max_attempts=5, window_seconds=60),
-            disabled=AUTH_RATE_LIMIT_VERIFICATION_SLOTS,
+            disabled={AuthRateLimitSlot.VERIFY_TOKEN, AuthRateLimitSlot.REQUEST_VERIFY_TOKEN},
         )
 """
 
 from __future__ import annotations
 
 from ._config import (
-    AUTH_RATE_LIMIT_ENDPOINT_SLOTS,
-    AUTH_RATE_LIMIT_ENDPOINT_SLOTS_BY_GROUP,
-    AUTH_RATE_LIMIT_VERIFICATION_SLOTS,
     AuthRateLimitConfig,
     AuthRateLimitEndpointGroup,
-    AuthRateLimitEndpointSlot,
     AuthRateLimitSlot,
     EndpointRateLimit,
     RateLimitScope,
@@ -52,13 +44,9 @@ from ._protocol import RateLimiterBackend, RedisClientProtocol, RedisPipelinePro
 from ._redis import RedisRateLimiter
 
 __all__ = (
-    "AUTH_RATE_LIMIT_ENDPOINT_SLOTS",
-    "AUTH_RATE_LIMIT_ENDPOINT_SLOTS_BY_GROUP",
-    "AUTH_RATE_LIMIT_VERIFICATION_SLOTS",
     "DEFAULT_KEY_PREFIX",
     "AuthRateLimitConfig",
     "AuthRateLimitEndpointGroup",
-    "AuthRateLimitEndpointSlot",
     "AuthRateLimitSlot",
     "EndpointRateLimit",
     "InMemoryRateLimiter",

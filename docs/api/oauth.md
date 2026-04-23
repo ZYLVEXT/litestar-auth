@@ -22,5 +22,6 @@ These helpers cover the supported manual OAuth client contract used by `create_p
 See [OAuth2 login and account linking](../guides/oauth.md#manual-oauth-client-contract) for the full behavioral contract.
 
 Public OAuth helpers are implemented in `litestar_auth.oauth.router` (the `litestar_auth.oauth` package re-exports them lazily).
+The old `litestar_auth.contrib.oauth` package is no longer a compatibility import path.
 
 ::: litestar_auth.oauth.router

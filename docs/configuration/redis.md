@@ -13,8 +13,8 @@ pending-enrollment state, replay protection, pending-login-token JTI deduplicati
 
 For the usual Redis deployment where one async Redis client should back auth rate limiting, TOTP
 pending enrollment, replay protection, and pending-login-token JTI deduplication, start with
-`litestar_auth.contrib.redis.RedisAuthPreset` plus the verification-slot helper from
-`litestar_auth.ratelimit`:
+`litestar_auth.contrib.redis.RedisAuthPreset` plus explicit verification slots from
+`litestar_auth.ratelimit.AuthRateLimitSlot`:
 
 For strict typing, annotate the shared client with
 `litestar_auth.contrib.redis.RedisAuthClientProtocol`. The shared-client recipe assumes a
@@ -29,7 +29,7 @@ from litestar_auth.contrib.redis import (
     RedisAuthPreset,
     RedisAuthRateLimitTier,
 )
-from litestar_auth.ratelimit import AUTH_RATE_LIMIT_VERIFICATION_SLOTS
+from litestar_auth.ratelimit import AuthRateLimitSlot
 
 redis_client: RedisAuthClientProtocol
 redis_auth = RedisAuthPreset(
@@ -41,7 +41,7 @@ redis_auth = RedisAuthPreset(
     },
 )
 rate_limit_config = redis_auth.build_rate_limit_config(
-    disabled=AUTH_RATE_LIMIT_VERIFICATION_SLOTS,
+    disabled={AuthRateLimitSlot.VERIFY_TOKEN, AuthRateLimitSlot.REQUEST_VERIFY_TOKEN},
 )
 totp_config = TotpConfig(
     totp_pending_secret="replace-with-32+-char-secret",
@@ -57,8 +57,7 @@ totp_config = TotpConfig(
   `RedisAuthRateLimitTier`, `RedisAuthClientProtocol`, `RedisTokenStrategy`,
   `RedisTotpEnrollmentStore`, and `RedisUsedTotpCodeStore`.
 - `litestar_auth.ratelimit` owns the lower-level shared-builder surface such as
-  `AuthRateLimitConfig.from_shared_backend()`, `RedisRateLimiter`, the typed slot/group aliases, and
-  the slot-set helpers.
+  `AuthRateLimitConfig.from_shared_backend()`, `RedisRateLimiter`, the typed slot enum, and the group alias.
 
 `RedisAuthPreset.build_rate_limit_config()` forwards the live shared-builder inputs:
 `enabled`, `disabled`, `group_backends`, and `endpoint_overrides`, plus the shared proxy and
@@ -81,29 +80,23 @@ orphaned keys are not force-invalidated by `invalidate_all_tokens(...)`; they re
 until their existing Redis TTL expires. Rotate or flush pre-index token keys before upgrading if you
 need immediate global invalidation of those sessions.
 
-The shared builder itself exposes typed public identifiers and slot-set helpers from
+The shared builder itself exposes typed public identifiers from
 `litestar_auth.ratelimit`:
 
 ```python
-from litestar_auth.ratelimit import (
-    AUTH_RATE_LIMIT_ENDPOINT_SLOTS,
-    AUTH_RATE_LIMIT_ENDPOINT_SLOTS_BY_GROUP,
-    AUTH_RATE_LIMIT_VERIFICATION_SLOTS,
-    AuthRateLimitEndpointGroup,
-    AuthRateLimitEndpointSlot,
-)
+from litestar_auth.ratelimit import AuthRateLimitEndpointGroup, AuthRateLimitSlot
+
+all_slots = tuple(AuthRateLimitSlot)
+verification_slots = {AuthRateLimitSlot.VERIFY_TOKEN, AuthRateLimitSlot.REQUEST_VERIFY_TOKEN}
 ```
 
-- `AUTH_RATE_LIMIT_ENDPOINT_SLOTS` exposes the ordered supported slot inventory for explicit
-  `enabled=...` calls.
-- `AUTH_RATE_LIMIT_ENDPOINT_SLOTS_BY_GROUP` exposes read-only group-to-slot frozensets keyed by
-  `AuthRateLimitEndpointGroup`.
-- `AUTH_RATE_LIMIT_VERIFICATION_SLOTS` is the convenience alias for
-  `AUTH_RATE_LIMIT_ENDPOINT_SLOTS_BY_GROUP["verification"]`, which is useful for `disabled=...`
-  when verification routes stay off.
-- `AuthRateLimitEndpointSlot` names the per-endpoint keys accepted by `enabled`, `disabled`, and
+- `AuthRateLimitSlot` names the per-endpoint enum keys accepted by `enabled`, `disabled`, and
   `endpoint_overrides`.
 - `AuthRateLimitEndpointGroup` names the shared-backend keys accepted by `group_backends`.
+- Use `tuple(AuthRateLimitSlot)` for explicit `enabled=...` calls that should include every
+  supported slot.
+- Use `{AuthRateLimitSlot.VERIFY_TOKEN, AuthRateLimitSlot.REQUEST_VERIFY_TOKEN}` for
+  `disabled=...` when verification routes stay off.
 
 ### Low-level Redis builder path
 
@@ -114,9 +107,8 @@ when you need separate backends, bespoke key prefixes, or fully manual wiring:
 
 ```python
 from litestar_auth.ratelimit import (
-    AUTH_RATE_LIMIT_ENDPOINT_SLOTS,
-    AUTH_RATE_LIMIT_ENDPOINT_SLOTS_BY_GROUP,
     AuthRateLimitConfig,
+    AuthRateLimitSlot,
     RedisRateLimiter,
 )
 from litestar_auth.totp import RedisTotpEnrollmentStore, RedisUsedTotpCodeStore
@@ -124,8 +116,8 @@ from litestar_auth.totp import RedisTotpEnrollmentStore, RedisUsedTotpCodeStore
 shared_backend = RedisRateLimiter(redis=redis_client, max_attempts=5, window_seconds=60)
 rate_limit_config = AuthRateLimitConfig.from_shared_backend(
     shared_backend,
-    enabled=AUTH_RATE_LIMIT_ENDPOINT_SLOTS,
-    disabled=AUTH_RATE_LIMIT_ENDPOINT_SLOTS_BY_GROUP["verification"],
+    enabled=tuple(AuthRateLimitSlot),
+    disabled={AuthRateLimitSlot.VERIFY_TOKEN, AuthRateLimitSlot.REQUEST_VERIFY_TOKEN},
 )
 totp_used_tokens_store = RedisUsedTotpCodeStore(redis=redis_client)
 totp_enrollment_store = RedisTotpEnrollmentStore(redis=redis_client)
@@ -133,19 +125,19 @@ totp_enrollment_store = RedisTotpEnrollmentStore(redis=redis_client)
 
 The private catalog that stores these defaults remains internal, but the values below are the supported builder surface:
 
-| `AuthRateLimitEndpointSlot` value | `AuthRateLimitEndpointGroup` value | Default scope | Default namespace token |
-| --------------------------------- | ---------------------------------- | ------------- | ----------------------- |
-| `login` | `login` | `ip_email` | `login` |
-| `refresh` | `refresh` | `ip` | `refresh` |
-| `register` | `register` | `ip` | `register` |
-| `forgot_password` | `password_reset` | `ip_email` | `forgot-password` |
-| `reset_password` | `password_reset` | `ip` | `reset-password` |
-| `totp_enable` | `totp` | `ip` | `totp-enable` |
-| `totp_confirm_enable` | `totp` | `ip` | `totp-confirm-enable` |
-| `totp_verify` | `totp` | `ip` | `totp-verify` |
-| `totp_disable` | `totp` | `ip` | `totp-disable` |
-| `verify_token` | `verification` | `ip` | `verify-token` |
-| `request_verify_token` | `verification` | `ip_email` | `request-verify-token` |
+| `AuthRateLimitSlot` value | `AuthRateLimitEndpointGroup` value | Default scope | Default namespace token |
+| ------------------------- | ---------------------------------- | ------------- | ----------------------- |
+| `AuthRateLimitSlot.LOGIN` | `login` | `ip_email` | `login` |
+| `AuthRateLimitSlot.REFRESH` | `refresh` | `ip` | `refresh` |
+| `AuthRateLimitSlot.REGISTER` | `register` | `ip` | `register` |
+| `AuthRateLimitSlot.FORGOT_PASSWORD` | `password_reset` | `ip_email` | `forgot-password` |
+| `AuthRateLimitSlot.RESET_PASSWORD` | `password_reset` | `ip` | `reset-password` |
+| `AuthRateLimitSlot.TOTP_ENABLE` | `totp` | `ip` | `totp-enable` |
+| `AuthRateLimitSlot.TOTP_CONFIRM_ENABLE` | `totp` | `ip` | `totp-confirm-enable` |
+| `AuthRateLimitSlot.TOTP_VERIFY` | `totp` | `ip` | `totp-verify` |
+| `AuthRateLimitSlot.TOTP_DISABLE` | `totp` | `ip` | `totp-disable` |
+| `AuthRateLimitSlot.VERIFY_TOKEN` | `verification` | `ip` | `verify-token` |
+| `AuthRateLimitSlot.REQUEST_VERIFY_TOKEN` | `verification` | `ip_email` | `request-verify-token` |
 
 Accepted `AuthRateLimitEndpointGroup` values are exactly `login`, `refresh`, `register`, `password_reset`, `totp`, and `verification`.
 
@@ -156,9 +148,8 @@ Builder precedence is:
 3. Generated limiters start from `backend`, then `group_backends` can swap the backend for the slot's group before the builder materializes the final per-slot limiter.
 
 Generated limiters keep the package-owned scope and namespace defaults from the private endpoint
-catalog. Use `AUTH_RATE_LIMIT_VERIFICATION_SLOTS` or
-`AUTH_RATE_LIMIT_ENDPOINT_SLOTS_BY_GROUP["verification"]` to leave unused verification slots
-unset, and keep direct `EndpointRateLimit(...)` assembly only for advanced per-endpoint
+catalog. Use `{AuthRateLimitSlot.VERIFY_TOKEN, AuthRateLimitSlot.REQUEST_VERIFY_TOKEN}` to leave
+unused verification slots unset, and keep direct `EndpointRateLimit(...)` assembly only for advanced per-endpoint
 exceptions.
 
 Migration example for an older Redis recipe: this keeps login, register, and password-reset style
@@ -168,7 +159,7 @@ slot and override rules still apply.
 
 ```python
 from litestar_auth.contrib.redis import RedisAuthPreset, RedisAuthRateLimitTier
-from litestar_auth.ratelimit import AUTH_RATE_LIMIT_VERIFICATION_SLOTS
+from litestar_auth.ratelimit import AuthRateLimitSlot
 
 redis_auth = RedisAuthPreset(
     redis=redis_client,
@@ -180,7 +171,7 @@ redis_auth = RedisAuthPreset(
 )
 
 rate_limit_config = redis_auth.build_rate_limit_config(
-    disabled=AUTH_RATE_LIMIT_VERIFICATION_SLOTS,
+    disabled={AuthRateLimitSlot.VERIFY_TOKEN, AuthRateLimitSlot.REQUEST_VERIFY_TOKEN},
 )
 ```
 
@@ -222,5 +213,5 @@ server-side stores. Configure `TotpConfig.totp_enrollment_store` for pending enr
 `litestar_auth.contrib.redis` is the public Redis convenience boundary. It exposes
 `RedisAuthClientProtocol`, `RedisAuthPreset`, `RedisAuthRateLimitTier`,
 `RedisTokenStrategy`, `RedisTotpEnrollmentStore`, and `RedisUsedTotpCodeStore`.
-The high-level one-client preset lives there, while the typed slot/group aliases and low-level
+The high-level one-client preset lives there, while the typed slot enum, group alias, and low-level
 shared-backend builder surface remain on `litestar_auth.ratelimit`.

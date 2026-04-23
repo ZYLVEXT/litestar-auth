@@ -18,7 +18,7 @@ route surface still uses a schema with `roles` against a `user_model` that does 
 attribute.
 
 This section is the main ORM integration guide for bundled token bootstrap, mixin-composed
-custom model families, relational role composition, `SQLAlchemyUserDatabase`, and the supported
+custom model families, relational role composition, `SQLAlchemyUserDatabase`, and
 password-column hook.
 
 | Need | Recommended path | Notes |
@@ -29,7 +29,7 @@ password-column hook.
 | App-owned relational role tables | `from litestar_auth.models.mixins import UserRoleRelationshipMixin, RoleMixin, UserRoleAssociationMixin` | Optional role persistence path that keeps `user.roles` as the normalized flat contract. |
 | Custom token strategy tables | `DatabaseTokenModels(...)` | Only needed when `DatabaseTokenStrategy` should use custom token models at runtime. |
 | SQLAlchemy user store | `litestar_auth.db.sqlalchemy.SQLAlchemyUserDatabase` | `user_model` is required; `oauth_account_model` is optional unless OAuth methods are used. |
-| Legacy password column name | `UserModelMixin.auth_hashed_password_column_name` | Keeps the runtime attribute contract on `user.hashed_password`. |
+| Custom password column name | `UserModelMixin.auth_hashed_password_column_name` | Keeps the runtime attribute contract on `user.hashed_password` when only the SQL column name changes. |
 
 ### Bundled `AccessToken` / `RefreshToken` lifecycle
 
@@ -257,15 +257,15 @@ If the custom user also needs a non-default loader strategy for `oauth_accounts`
 
 Migration note: older setups that paired `litestar_auth.models.oauth.OAuthAccount` with a renamed user class, a non-`user` table, or a different declarative registry should switch to an `OAuthAccountMixin` subclass before upgrading. See [Custom user + OAuth](../cookbook/custom_user_oauth.md).
 
-### Legacy password column names
+### Custom password column names
 
-If your schema stores password hashes under a legacy SQL column name, keep the runtime `hashed_password` attribute and set the supported `auth_hashed_password_column_name` hook on the custom user model:
+If your schema stores password hashes under a different SQL column name, keep the runtime `hashed_password` attribute and set `auth_hashed_password_column_name` on the custom user model:
 
 ```python
-class LegacyUser(UserModelMixin, UserAuthRelationshipMixin, AppUUIDBase):
-    __tablename__ = "legacy_user"
+class CustomUser(UserModelMixin, UserAuthRelationshipMixin, AppUUIDBase):
+    __tablename__ = "custom_user"
 
     auth_hashed_password_column_name = "password_hash"
 ```
 
-`BaseUserManager`, `SQLAlchemyUserDatabase`, and JWT fingerprinting still interact with `user.hashed_password`; only the SQL column name changes. Older models that already redefine `hashed_password = mapped_column(...)` remain source-compatible, but the hook above is the supported path going forward.
+`BaseUserManager`, `SQLAlchemyUserDatabase`, and JWT fingerprinting still interact with `user.hashed_password`; only the SQL column name changes. Use the hook above when the only customization is the SQL column name. If the app needs full control over the mapped attribute, it can still declare `hashed_password = mapped_column(...)` directly on its own model.

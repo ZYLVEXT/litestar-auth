@@ -12,8 +12,8 @@ from sqlalchemy import delete, inspect, select
 from sqlalchemy.exc import IntegrityError, NoInspectionAvailable
 from sqlalchemy.orm import selectinload
 
-from litestar_auth._plugin.config import resolve_user_manager_factory
 from litestar_auth._plugin.session_binding import _ScopedUserDatabaseProxy
+from litestar_auth._plugin.user_manager_builder import resolve_user_manager_factory
 from litestar_auth._roles import normalize_role_name, normalize_roles
 from litestar_auth.exceptions import ConfigurationError
 from litestar_auth.oauth_encryption import OAuthTokenEncryption

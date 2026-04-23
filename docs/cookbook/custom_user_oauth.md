@@ -4,7 +4,7 @@ Use this when your application maps auth tables to **your own** SQLAlchemy model
 
 This page focuses on the custom user + OAuth pair and adapter wiring. For the bundled token
 bootstrap lifecycle, relational role composition, `DatabaseTokenModels(...)`, and the supported
-password-column hook, use
+password-column customization, use
 [Configuration](../configuration.md#custom-sqlalchemy-user-and-token-models).
 
 ## Supported paths
@@ -50,7 +50,7 @@ classes for your `role` and `user_role` tables. That keeps `user.roles` as the n
 API while persisting membership relationally. The full pattern lives in
 [Configuration](../configuration.md#custom-sqlalchemy-user-and-token-models).
 
-If the same custom user keeps a legacy password-hash column name, leave the runtime attribute as `hashed_password` and set the supported hook instead of redefining the field:
+If the same custom user stores password hashes in a differently named SQL column, leave the runtime attribute as `hashed_password` and set the supported hook:
 
 ```python
 class MyUser(UserModelMixin, UserAuthRelationshipMixin, AppUUIDBase):
@@ -124,7 +124,7 @@ def user_db_factory(session):
     )
 ```
 
-For direct ORM session usage that loads `MyOAuthAccount` rows without going through the adapter, call `bind_oauth_token_encryption(session, OAuthTokenEncryption(...))` first so token columns decrypt on load. In tests, `OAuthTokenEncryption(key=None)` is the explicit plaintext/testing policy.
+For direct ORM session usage that loads `MyOAuthAccount` rows without going through the adapter, call `bind_oauth_token_encryption(session, OAuthTokenEncryption(...))` first so token columns decrypt on load. In tests, `OAuthTokenEncryption(key=None, unsafe_testing=True)` is the explicit plaintext/testing policy. Policy-shaped wrappers and objects retained across development/test module reloads are not accepted; create a fresh `OAuthTokenEncryption(...)` before binding.
 
 ## Optional relationship tuning
 

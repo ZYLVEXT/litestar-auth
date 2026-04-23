@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import inspect
 import warnings
+from importlib import import_module
 from typing import TYPE_CHECKING, Any, cast
 
 from sqlalchemy import inspect as sa_inspect
@@ -18,7 +19,6 @@ from litestar_auth._plugin.config import (
 from litestar_auth._plugin.middleware import get_cookie_transports
 from litestar_auth._plugin.oauth_contract import _build_oauth_route_registration_contract
 from litestar_auth._plugin.rate_limit import iter_rate_limit_endpoints
-from litestar_auth.authentication.strategy.jwt import JWTStrategy
 from litestar_auth.config import (
     MINIMUM_SECRET_LENGTH,
     OAuthProviderConfig,
@@ -33,8 +33,15 @@ from litestar_auth.types import UserProtocol
 
 if TYPE_CHECKING:
     from litestar_auth._plugin.session_binding import _AccountStateValidator as PluginAccountStateValidator
+    from litestar_auth.authentication.strategy.jwt import JWTStrategy
 
 _SUPPORTED_TOTP_ALGORITHMS = ("SHA256", "SHA512")
+
+
+def _current_jwt_strategy_type() -> type[JWTStrategy]:
+    """Return the live JWT strategy class."""
+    jwt_module = import_module("litestar_auth.authentication.strategy.jwt")
+    return cast("type[JWTStrategy]", jwt_module.JWTStrategy)
 
 
 def validate_session_maker_or_external_db_session[UP: UserProtocol[Any], ID](
@@ -295,7 +302,11 @@ def _validate_backend_strategy_security[UP: UserProtocol[Any], ID](config: Lites
 
 def _warn_backend_name_strategy_mismatch(*, backend_name: object, strategy: object) -> None:
     """Warn when a backend name implies JWT but the configured strategy is not JWT-backed."""
-    if not isinstance(backend_name, str) or "jwt" not in backend_name.casefold() or isinstance(strategy, JWTStrategy):
+    if (
+        not isinstance(backend_name, str)
+        or "jwt" not in backend_name.casefold()
+        or isinstance(strategy, _current_jwt_strategy_type())
+    ):
         return
 
     warnings.warn(

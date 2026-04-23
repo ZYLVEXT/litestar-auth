@@ -36,9 +36,9 @@ class UserModelMixin:
     and ``totp_secret``. Superuser status is determined by role membership,
     not by a persisted column on this mixin.
 
-    Set ``auth_hashed_password_column_name`` on a subclass to keep the public
-    ``hashed_password`` attribute while mapping it to a different SQL column
-    name such as ``password_hash``.
+    Set ``auth_hashed_password_column_name`` on a subclass when the app keeps
+    the public ``hashed_password`` attribute but stores it under a different
+    SQL column name such as ``password_hash``.
     """
 
     if TYPE_CHECKING:

@@ -1,4 +1,4 @@
-"""Configuration contracts and manager-builder helpers for the plugin facade."""
+"""Configuration contracts for the plugin facade."""
 
 from __future__ import annotations
 
@@ -588,56 +588,6 @@ class LitestarAuthConfig[UP: UserProtocol[Any], ID]:
             "UserDatabaseFactory[UP, ID]",
             partial(_build_default_user_db, user_model=self.user_model),
         )
-
-
-_DATABASE_TOKEN_EXPORTS: frozenset[str] = frozenset(
-    {
-        "_backend_uses_bundled_database_token_models",
-        "_build_database_token_backend",
-        "_build_database_token_backend_template",
-        "_is_bundled_token_model",
-        "_is_database_token_strategy_instance",
-        "_uses_bundled_database_token_models",
-        "build_database_token_backend",
-        "resolve_database_token_strategy_session",
-    },
-)
-
-_USER_MANAGER_BUILDER_EXPORTS: frozenset[str] = frozenset(
-    {
-        "PasswordValidatorFactory",
-        "UserManagerFactory",
-        "_DefaultUserManagerBuilderContract",
-        "_build_default_user_manager_contract",
-        "_build_default_user_manager_validation_kwargs",
-        "build_user_manager",
-        "default_password_validator_factory",
-        "resolve_password_validator",
-        "resolve_user_manager_factory",
-    },
-)
-
-
-def __getattr__(name: str) -> Any:  # noqa: ANN401
-    """Lazy-export optional helpers so ``import litestar_auth._plugin.config`` stays lightweight.
-
-    Returns:
-        The requested symbol from :mod:`litestar_auth._plugin.database_token` or
-        :mod:`litestar_auth._plugin.user_manager_builder`.
-
-    Raises:
-        AttributeError: If ``name`` is not one of the lazy-exported helpers.
-    """
-    if name in _DATABASE_TOKEN_EXPORTS:
-        from litestar_auth._plugin import database_token as _database_token_module  # noqa: PLC0415
-
-        return getattr(_database_token_module, name)
-    if name in _USER_MANAGER_BUILDER_EXPORTS:
-        from litestar_auth._plugin import user_manager_builder as _user_manager_builder_module  # noqa: PLC0415
-
-        return getattr(_user_manager_builder_module, name)
-    msg = f"module {__name__!r} has no attribute {name!r}"
-    raise AttributeError(msg)
 
 
 def resolve_backend_inventory[UP: UserProtocol[Any], ID](

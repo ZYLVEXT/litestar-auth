@@ -10,7 +10,6 @@ import pytest
 import litestar_auth.ratelimit as ratelimit_module
 from litestar_auth.contrib.redis import RedisAuthClientProtocol, RedisAuthPreset, RedisAuthRateLimitTier
 from litestar_auth.ratelimit import (
-    AuthRateLimitEndpointSlot,
     AuthRateLimitSlot,
     EndpointRateLimit,
     InMemoryRateLimiter,
@@ -56,9 +55,9 @@ def test_redis_auth_preset_build_rate_limit_config_uses_endpoint_overrides(
         scope="ip",
         namespace="forgot_password",
     )
-    endpoint_overrides: dict[AuthRateLimitEndpointSlot, EndpointRateLimit | None] = {
-        "forgot_password": forgot_password_override,
-        "request_verify_token": None,
+    endpoint_overrides: dict[AuthRateLimitSlot, EndpointRateLimit | None] = {
+        AuthRateLimitSlot.FORGOT_PASSWORD: forgot_password_override,
+        AuthRateLimitSlot.REQUEST_VERIFY_TOKEN: None,
     }
     preset = RedisAuthPreset(
         redis=redis_client,

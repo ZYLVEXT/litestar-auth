@@ -56,9 +56,9 @@ Moved to: [User and manager](configuration/user_and_manager.md#optional-relation
 
 Moved to: [User and manager](configuration/user_and_manager.md#sqlalchemyuserdatabase-contract).
 
-### Legacy password column names
+### Custom password column names
 
-Moved to: [User and manager](configuration/user_and_manager.md#legacy-password-column-names).
+Moved to: [User and manager](configuration/user_and_manager.md#custom-password-column-names).
 
 ## Required (at runtime)
 

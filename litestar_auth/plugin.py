@@ -94,7 +94,9 @@ class LitestarAuth[UP: UserProtocol[Any], ID](InitPlugin, CLIPlugin):
         )
         validate_config(self.config)
         self._session_maker = _plugin_config.require_session_maker(self.config)
-        self._user_manager_factory = _plugin_config.resolve_user_manager_factory(self.config)
+        from litestar_auth._plugin.user_manager_builder import resolve_user_manager_factory  # noqa: PLC0415
+
+        self._user_manager_factory = resolve_user_manager_factory(self.config)
         self._provide_user_manager = _make_user_manager_dependency_provider(
             self._build_user_manager,
             self.config.db_session_dependency_key,

@@ -21,6 +21,37 @@ For direct/manual wiring, the underlying runtime objects report their own postur
 - `JWTStrategy(secret=..., allow_inmemory_denylist=True)` reports `revocation_posture.key == "in_memory"` and `revocation_is_durable == False`. `InMemoryJWTDenylistStore` fails closed when its `max_entries` cap is hit and no expired JTIs can be pruned: new revocations are skipped (logged) rather than dropping an active revocation entry. `JWTDenylistStore.deny` returns `False` in that case; `JWTStrategy.destroy_token` raises `TokenError`, and plugin HTTP logout surfaces **503** with `TOKEN_PROCESSING_FAILED`. The same capacity signal applies to TOTP pending-login JTI recording after a successful code check: verification responds with **503** instead of issuing a session when the pending-token denylist cannot store the spent JTI.
 - Direct `BaseUserManager(..., security=UserManagerSecurity(...))` reports `totp_secret_storage_posture.key == "fernet_encrypted"` for persisted TOTP secrets. Setting `user_manager_security.totp_secret_key` on `LitestarAuthConfig` (passed through to `UserManagerSecurity`) or supplying a non-`None` `totp_secret_key` on a direct `UserManagerSecurity(...)` bundle enables encrypted reads and writes; omitting the key leaves disabled TOTP (`None`) readable but makes non-null TOTP secret persistence fail closed. The TOTP controller uses that same key to encrypt pending-enrollment secret values before writing them to `totp_enrollment_store`.
 
+### Password hash policy
+
+`PasswordHelper.from_defaults()`, bare `PasswordHelper()`, `BaseUserManager(..., password_helper=None)`,
+and `config.resolve_password_helper()` now use an Argon2-only default policy. Existing bcrypt hashes
+therefore fail closed unless the application opts into a custom helper explicitly.
+
+When a deployment still needs a migration window for stored bcrypt hashes, keep that weaker
+compatibility path app-owned:
+
+```python
+from pwdlib import PasswordHash
+from pwdlib.hashers.argon2 import Argon2Hasher
+from pwdlib.hashers.bcrypt import BcryptHasher
+
+from litestar_auth.manager import UserManagerSecurity
+from litestar_auth.password import PasswordHelper
+
+legacy_password_helper = PasswordHelper(
+    password_hash=PasswordHash((Argon2Hasher(), BcryptHasher())),
+)
+
+security = UserManagerSecurity(
+    verification_token_secret="replace-with-32+-char-secret-for-verify",
+    reset_password_token_secret="replace-with-32+-char-secret-for-reset",
+    password_helper=legacy_password_helper,
+)
+```
+
+With that explicit helper, successful bcrypt verification still upgrades stored hashes to Argon2
+through `verify_and_update()`.
+
 ## Schemas and DI
 
 | Field | Default | Meaning |

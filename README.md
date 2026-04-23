@@ -71,7 +71,7 @@ async def protected(request: Request[User, Any, Any]) -> dict[str, str]:
 
 
 backend = AuthenticationBackend[User, UUID](
-    name="jwt",
+    name="bearer",
     transport=BearerTransport(),
     strategy=JWTStrategy[User, UUID](
         secret="replace-with-32+-char-jwt-secret",
@@ -128,6 +128,10 @@ Install extras only when you need those features:
 - `litestar-auth[oauth]` for OAuth flows via `httpx-oauth` and encrypted provider tokens.
 - `litestar-auth[totp]` for built-in TOTP helpers.
 - `litestar-auth[all]` for `redis`, `oauth`, and `totp` together.
+
+Password hashing defaults are now Argon2-only. If your deployment still stores bcrypt hashes,
+configure an explicit custom `PasswordHelper` through `UserManagerSecurity.password_helper` during
+your migration window; see the [Migration Guide](https://zylvext.github.io/litestar-auth/migration/).
 
 ## Read more
 

@@ -78,15 +78,18 @@ def _minimal_config(
     )
 
 
-def test_config_reexports_delegate_to_user_manager_builder_module() -> None:
-    """Public and internal symbols re-exported from config match the implementation module."""
-    assert plugin_config_module.build_user_manager is user_manager_builder_module.build_user_manager
-    assert plugin_config_module.resolve_password_validator is user_manager_builder_module.resolve_password_validator
-    assert plugin_config_module.resolve_user_manager_factory is user_manager_builder_module.resolve_user_manager_factory
-    assert (
-        plugin_config_module._build_default_user_manager_contract
-        is user_manager_builder_module._build_default_user_manager_contract
-    )
+def test_config_module_does_not_reexport_user_manager_builder_helpers() -> None:
+    """Builder helpers are owned by ``user_manager_builder``, not re-exported by config."""
+    assert user_manager_builder_module.build_user_manager.__module__ == "litestar_auth._plugin.user_manager_builder"
+    for name in (
+        "_build_default_user_manager_contract",
+        "_build_default_user_manager_validation_kwargs",
+        "build_user_manager",
+        "default_password_validator_factory",
+        "resolve_password_validator",
+        "resolve_user_manager_factory",
+    ):
+        assert not hasattr(plugin_config_module, name)
 
 
 def test_default_builder_contract_materializes_canonical_kwargs() -> None:

@@ -26,6 +26,18 @@
   `DatabaseTokenAuthConfig.token_hash_secret`, `LitestarAuthConfig.csrf_secret`, and
   `OAuthTokenEncryption.key` are now excluded from dataclass `repr`/`str` surfaces so routine debug
   logging does not leak active signing or encryption material.
+- **OAuth token encryption policy binding is now nominal** — **Breaking for development reload
+  harnesses or tests that reused stale `OAuthTokenEncryption` instances across module reloads.**
+  Session-bound policies, cached ORM-instance policies, and direct OAuth persistence checks now
+  accept only concrete `OAuthTokenEncryption` instances from the current `litestar_auth.oauth_encryption`
+  module. Structurally similar objects and policies retained from old module identities are ignored
+  or rejected instead of being normalized into fresh policies.
+- **JWT revocation posture binding is now nominal** — **Breaking for development reload harnesses
+  or tests that reused stale `JWTRevocationPosture` instances across module reloads.**
+  Plugin-managed JWT revocation notices now accept only concrete posture objects returned by
+  `JWTStrategy.revocation_posture` from the current `litestar_auth.authentication.strategy.jwt`
+  module. Structurally similar posture-shaped objects are ignored instead of being treated as the
+  strategy contract.
 - **Default insufficient-role errors are now sanitized** — **Breaking for clients that parsed
   `required_roles`, `user_roles`, or `require_all` from the bundled HTTP `403` response or default
   exception message.** `InsufficientRolesError` still stores structured role context on the
@@ -55,6 +67,13 @@
   `ConfigurationError` outside explicit `unsafe_testing=True` instead of emitting
   `SecurityWarning`. Configure one distinct high-entropy value per role; error messages identify
   the reused roles and audiences without exposing the secret value.
+- **Default password hashing is now Argon2-only** — **Breaking for deployments that still store
+  bcrypt password hashes and relied on the library default helper to verify them.**
+  `PasswordHelper.from_defaults()`, bare `PasswordHelper()`,
+  `BaseUserManager(..., password_helper=None)`, and `LitestarAuthConfig.resolve_password_helper()`
+  no longer verify bcrypt hashes. Keep any bcrypt migration window application-owned by passing an
+  explicit `PasswordHelper(password_hash=PasswordHash((Argon2Hasher(), BcryptHasher())))` through
+  `UserManagerSecurity.password_helper` or direct manager construction; see `docs/migration.md`.
 - **TOTP no longer supports SHA1 algorithms** — **Breaking for deployments with SHA1-enrolled
   authenticator clients.** `TotpAlgorithm`, `TotpConfig.totp_algorithm`,
   `create_totp_controller(..., totp_algorithm=...)`, and the low-level TOTP helpers now accept
@@ -97,11 +116,17 @@
 - **Compatibility import re-exports were removed** — **Breaking for callers importing
   `UserAuthRelationshipMixin` / `UserRoleRelationshipMixin` from
   `litestar_auth.models.user_relationships`, `import_token_orm_models` from
-  `litestar_auth.authentication.strategy`, or `_ScopedUserDatabaseProxy` /
-  `_UserManagerFactory` from `litestar_auth._plugin`.** Import relationship mixins from
-  `litestar_auth.models.mixins`, the bundled token bootstrap helper from
-  `litestar_auth.models`, and session-binding internals from
-  `litestar_auth._plugin.session_binding`.
+  `litestar_auth.authentication.strategy`, `create_provider_oauth_controller` from
+  `litestar_auth.contrib.oauth`, or `_ScopedUserDatabaseProxy` / `_UserManagerFactory` from
+  `litestar_auth._plugin`.** Import relationship mixins from `litestar_auth.models.mixins`, the
+  bundled token bootstrap helper from `litestar_auth.models`, the manual OAuth helper from
+  `litestar_auth.oauth`, and session-binding internals from `litestar_auth._plugin.session_binding`.
+- **Rate-limit slot compatibility aliases were removed** — **Breaking for callers importing
+  `AuthRateLimitEndpointSlot` or `AUTH_RATE_LIMIT_*_SLOTS` from `litestar_auth.ratelimit`.**
+  Iterate `AuthRateLimitSlot` for the full public slot inventory, pass enum members to
+  `enabled`, `disabled`, and `endpoint_overrides`, and use
+  `{AuthRateLimitSlot.VERIFY_TOKEN, AuthRateLimitSlot.REQUEST_VERIFY_TOKEN}` for the common
+  verification-route disablement case.
 
 ## 2.0.0 (2026-04-22)
 

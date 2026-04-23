@@ -19,8 +19,8 @@ import litestar_auth._plugin.middleware as middleware_module
 import litestar_auth._plugin.rate_limit as rate_limit_module
 import litestar_auth._plugin.security_policy as plugin_security_policy_module
 import litestar_auth._plugin.startup as startup_module
+import litestar_auth._plugin.user_manager_builder as user_manager_builder_module
 import litestar_auth._plugin.validation as validation_module
-import litestar_auth.authentication.strategy.jwt as jwt_strategy_module
 from litestar_auth._plugin.config import (
     DEFAULT_CSRF_COOKIE_NAME,
     DatabaseTokenAuthConfig,
@@ -68,7 +68,7 @@ from litestar_auth.manager import BaseUserManager, TotpSecretStoragePosture, Use
 from litestar_auth.models import User as OrmUser
 from litestar_auth.password import PasswordHelper
 from litestar_auth.ratelimit import AuthRateLimitConfig, EndpointRateLimit, InMemoryRateLimiter, RateLimiterBackend
-from litestar_auth.totp import InMemoryTotpEnrollmentStore, InMemoryUsedTotpCodeStore
+from litestar_auth.totp import InMemoryUsedTotpCodeStore
 from tests.integration.test_orchestrator import (
     DummySessionMaker,
     ExampleUser,
@@ -80,6 +80,7 @@ from tests.integration.test_orchestrator import (
 if TYPE_CHECKING:
     from collections.abc import Callable
 
+    from litestar_auth.authentication.strategy.jwt import JWTStrategy
     from litestar_auth.config import OAuthProviderConfig
 
 pytestmark = pytest.mark.unit
@@ -100,6 +101,36 @@ def _oauth_provider(*, name: str, client: object) -> OAuthProviderConfig:
     return oauth_provider_config_type(name=name, client=client)
 
 
+def _current_inmemory_jwt_denylist_store() -> object:
+    """Return a JWT denylist store instance from the current strategy module."""
+    jwt_module = importlib.import_module("litestar_auth.authentication.strategy.jwt")
+    store_type = cast("type[Any]", jwt_module.InMemoryJWTDenylistStore)
+    return store_type()
+
+
+def _current_jwt_strategy(*, denylist_store: object | None = None) -> JWTStrategy[Any, Any]:
+    """Return a JWT strategy instance from the current strategy module."""
+    jwt_module = importlib.import_module("litestar_auth.authentication.strategy.jwt")
+    strategy_type = cast("type[JWTStrategy[Any, Any]]", jwt_module.JWTStrategy)
+    if denylist_store is None:
+        return strategy_type(secret=JWT_SECRET, allow_inmemory_denylist=True)
+    return strategy_type(secret=JWT_SECRET, denylist_store=cast("Any", denylist_store))
+
+
+def _current_inmemory_used_totp_code_store() -> object:
+    """Return a used-code store instance from the current TOTP module."""
+    totp_module = importlib.import_module("litestar_auth.totp")
+    store_type = cast("type[Any]", totp_module.InMemoryUsedTotpCodeStore)
+    return store_type()
+
+
+def _current_inmemory_totp_enrollment_store() -> object:
+    """Return an enrollment store instance from the current TOTP module."""
+    totp_module = importlib.import_module("litestar_auth.totp")
+    store_type = cast("type[Any]", totp_module.InMemoryTotpEnrollmentStore)
+    return store_type()
+
+
 class _DurableDenylistStore:
     async def deny(self, jti: str, *, ttl_seconds: int) -> bool:
         del jti, ttl_seconds
@@ -108,6 +139,14 @@ class _DurableDenylistStore:
     async def is_denied(self, jti: str) -> bool:
         del jti
         return False
+
+
+@dataclass(slots=True, frozen=True)
+class _StructuralJWTRevocationPosture:
+    key: str = "in_memory"
+    requires_explicit_production_opt_in: bool = False
+    production_validation_error: str | None = None
+    startup_warning: str | None = "process-local in-memory denylist"
 
 
 class _DurableEnrollmentStore:
@@ -214,10 +253,9 @@ def test_plugin_security_policy_docs_snippet_matches_shared_policy_wording() -> 
         assert policy.production_requirement in snippet
 
 
-def test_describe_jwt_revocation_policy_accepts_reloaded_posture() -> None:
-    """Plugin notices reuse the direct JWT posture contract even after reloads."""
-    reloaded_jwt_module = importlib.reload(jwt_strategy_module)
-    strategy = reloaded_jwt_module.JWTStrategy(secret=JWT_SECRET, allow_inmemory_denylist=True)
+def test_describe_jwt_revocation_policy_accepts_current_posture() -> None:
+    """Plugin notices reuse the direct JWT posture contract for current strategy objects."""
+    strategy = _current_jwt_strategy()
 
     notice = plugin_security_policy_module._describe_jwt_revocation_policy(strategy.revocation_posture)
 
@@ -227,6 +265,32 @@ def test_describe_jwt_revocation_policy_accepts_reloaded_posture() -> None:
     assert notice.requires_explicit_production_opt_in is strategy.revocation_posture.requires_explicit_production_opt_in
     assert notice.production_validation_error == strategy.revocation_posture.production_validation_error
     assert notice.startup_warning == strategy.revocation_posture.startup_warning
+
+
+def test_describe_jwt_revocation_policy_rejects_structural_posture() -> None:
+    """Policy-shaped objects do not satisfy the concrete JWT posture contract."""
+    notice = plugin_security_policy_module._describe_jwt_revocation_policy(_StructuralJWTRevocationPosture())
+
+    assert notice is None
+
+
+def test_describe_jwt_revocation_policy_rejects_reload_shaped_posture() -> None:
+    """Old posture-shaped twins do not satisfy the concrete JWT posture contract."""
+    stale_posture = type(
+        "JWTRevocationPosture",
+        (),
+        {
+            "__module__": "litestar_auth.authentication.strategy.jwt",
+            "key": "in_memory",
+            "requires_explicit_production_opt_in": False,
+            "production_validation_error": None,
+            "startup_warning": "process-local in-memory denylist",
+        },
+    )()
+
+    notice = plugin_security_policy_module._describe_jwt_revocation_policy(stale_posture)
+
+    assert notice is None
 
 
 def _build_direct_manager(*, totp_secret_key: str | None = None) -> BaseUserManager[ExampleUser, UUID]:
@@ -311,9 +375,9 @@ def test_warn_insecure_plugin_startup_defaults_emits_all_expected_security_warni
         rate_limit_config=_rate_limit_config(backend=InMemoryRateLimiter(max_attempts=5, window_seconds=60)),
         totp_config=TotpConfig(
             totp_pending_secret="p" * 32,
-            totp_pending_jti_store=jwt_strategy_module.InMemoryJWTDenylistStore(),
-            totp_enrollment_store=InMemoryTotpEnrollmentStore(),
-            totp_used_tokens_store=cast("Any", InMemoryUsedTotpCodeStore()),
+            totp_pending_jti_store=cast("Any", _current_inmemory_jwt_denylist_store()),
+            totp_enrollment_store=cast("Any", _current_inmemory_totp_enrollment_store()),
+            totp_used_tokens_store=cast("Any", _current_inmemory_used_totp_code_store()),
         ),
     )
     config.enable_refresh = True
@@ -332,19 +396,18 @@ def test_warn_insecure_plugin_startup_defaults_emits_all_expected_security_warni
     assert any("refresh_max_age is not set" in message for message in messages)
 
 
-def test_warn_insecure_plugin_startup_defaults_warns_for_reloaded_jwt_strategy(
+def test_warn_insecure_plugin_startup_defaults_warns_for_current_jwt_strategy(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """JWT denylist warnings survive strategy-module reloads used in coverage tests."""
+    """JWT denylist warnings use current strategy posture objects."""
     del monkeypatch
-    reloaded_jwt_module = importlib.reload(jwt_strategy_module)
-    strategy = reloaded_jwt_module.JWTStrategy(secret=JWT_SECRET, allow_inmemory_denylist=True)
+    strategy = _current_jwt_strategy()
     config = _minimal_config(
         backends=[
             AuthenticationBackend[ExampleUser, UUID](
                 name="jwt",
                 transport=BearerTransport(),
-                strategy=strategy,
+                strategy=cast("Any", strategy),
             ),
         ],
     )
@@ -367,7 +430,7 @@ def test_warn_insecure_plugin_startup_defaults_is_silent_in_testing(
         rate_limit_config=_rate_limit_config(backend=InMemoryRateLimiter(max_attempts=5, window_seconds=60)),
         totp_config=TotpConfig(
             totp_pending_secret="p" * 32,
-            totp_pending_jti_store=jwt_strategy_module.InMemoryJWTDenylistStore(),
+            totp_pending_jti_store=cast("Any", _current_inmemory_jwt_denylist_store()),
             totp_used_tokens_store=cast("Any", InMemoryUsedTotpCodeStore()),
         ),
     )
@@ -824,13 +887,13 @@ def test_default_user_manager_contract_keeps_runtime_and_validation_surfaces_ali
     if not use_typed_security:
         config.user_manager_security = None
 
-    runtime_contract = plugin_config_module._build_default_user_manager_contract(
+    runtime_contract = user_manager_builder_module._build_default_user_manager_contract(
         config,
         password_helper=PasswordHelper(),
         password_validator=None,
         backends=("bound-backend",),
     )
-    validation_contract = plugin_config_module._build_default_user_manager_contract(
+    validation_contract = user_manager_builder_module._build_default_user_manager_contract(
         config,
         password_helper=object(),
         password_validator=None,
@@ -1931,16 +1994,7 @@ def _cookie_backend(
 
 
 def _jwt_backend(*, denylist_store: object | None = None) -> AuthenticationBackend[ExampleUser, UUID]:
-    strategy = (
-        validation_module.JWTStrategy(secret=JWT_SECRET, allow_inmemory_denylist=True)
-        if denylist_store is None
-        else validation_module.JWTStrategy(
-            # Build from the class object currently referenced by validation.py to
-            # stay stable across other test modules that reload strategy modules.
-            secret=JWT_SECRET,
-            denylist_store=cast("Any", denylist_store),
-        )
-    )
+    strategy = _current_jwt_strategy(denylist_store=denylist_store)
     return AuthenticationBackend[ExampleUser, UUID](
         name="jwt",
         transport=BearerTransport(),

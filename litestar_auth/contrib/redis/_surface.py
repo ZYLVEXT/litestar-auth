@@ -20,7 +20,7 @@ from litestar_auth.authentication.strategy.redis import RedisTokenStrategy
 from litestar_auth.ratelimit import (
     AuthRateLimitConfig,
     AuthRateLimitEndpointGroup,
-    AuthRateLimitEndpointSlot,
+    AuthRateLimitSlot,
     EndpointRateLimit,
     RateLimiterBackend,
 )
@@ -122,10 +122,10 @@ class RedisAuthPreset:
     def build_rate_limit_config(  # noqa: PLR0913
         self,
         *,
-        enabled: typing.Iterable[AuthRateLimitEndpointSlot] | None = None,
-        disabled: typing.Iterable[AuthRateLimitEndpointSlot] = (),
+        enabled: typing.Iterable[AuthRateLimitSlot] | None = None,
+        disabled: typing.Iterable[AuthRateLimitSlot] = (),
         group_backends: typing.Mapping[AuthRateLimitEndpointGroup, RateLimiterBackend] | None = None,
-        endpoint_overrides: typing.Mapping[AuthRateLimitEndpointSlot, EndpointRateLimit | None] | None = None,
+        endpoint_overrides: typing.Mapping[AuthRateLimitSlot, EndpointRateLimit | None] | None = None,
         trusted_proxy: bool = False,
         identity_fields: tuple[str, ...] | None = None,
         trusted_headers: tuple[str, ...] | None = None,
@@ -133,8 +133,8 @@ class RedisAuthPreset:
         """Build ``AuthRateLimitConfig`` from the preset's shared Redis client.
 
         Args:
-            enabled: Optional auth slot names to build.
-            disabled: Auth slot names to leave unset.
+            enabled: Optional auth slot enum values to build.
+            disabled: Auth slot enum values to leave unset.
             group_backends: Optional explicit backend overrides keyed by auth
                 slot group. These win over ``group_rate_limit_tiers``.
             endpoint_overrides: Optional full per-slot replacements or explicit

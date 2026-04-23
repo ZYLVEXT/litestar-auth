@@ -3,9 +3,13 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Literal, Protocol, TypeGuard
+from importlib import import_module
+from typing import TYPE_CHECKING, Literal, TypeGuard, cast
 
 from litestar_auth._manager.totp_secrets import TotpSecretStoragePosture
+
+if TYPE_CHECKING:
+    from litestar_auth.authentication.strategy.jwt import JWTRevocationPosture
 
 type _PluginSecurityPolicyKey = Literal["jwt_revocation", "totp_secret_storage"]
 
@@ -27,15 +31,6 @@ class _PluginSecurityNotice:
 
     policy: _PluginSecurityPolicy
     posture_key: str
-    requires_explicit_production_opt_in: bool
-    production_validation_error: str | None
-    startup_warning: str | None
-
-
-class _JWTRevocationPolicyLike(Protocol):
-    """Runtime JWT revocation policy contract used by plugin validation and startup warnings."""
-
-    key: str
     requires_explicit_production_opt_in: bool
     production_validation_error: str | None
     startup_warning: str | None
@@ -69,20 +64,15 @@ _TOTP_SECRET_STORAGE_POLICY = _PluginSecurityPolicy(
 )
 
 
-def _is_jwt_revocation_policy_like(posture: object) -> TypeGuard[_JWTRevocationPolicyLike]:
-    """Return whether ``posture`` matches the JWT revocation policy contract.
+def _current_jwt_revocation_posture_type() -> type[JWTRevocationPosture]:
+    """Return the live JWT revocation posture class."""
+    jwt_module = import_module("litestar_auth.authentication.strategy.jwt")
+    return cast("type[JWTRevocationPosture]", jwt_module.JWTRevocationPosture)
 
-    This uses attribute checks instead of ``isinstance()`` so strategy-module reloads in
-    test coverage still satisfy the shared policy contract.
-    """
-    production_validation_error = getattr(posture, "production_validation_error", None)
-    startup_warning = getattr(posture, "startup_warning", None)
-    return (
-        isinstance(getattr(posture, "key", None), str)
-        and isinstance(getattr(posture, "requires_explicit_production_opt_in", None), bool)
-        and (production_validation_error is None or isinstance(production_validation_error, str))
-        and (startup_warning is None or isinstance(startup_warning, str))
-    )
+
+def _is_current_jwt_revocation_posture(posture: object) -> TypeGuard[JWTRevocationPosture]:
+    """Return whether ``posture`` is a concrete JWT revocation posture."""
+    return isinstance(posture, _current_jwt_revocation_posture_type())
 
 
 def _describe_jwt_revocation_policy(posture: object) -> _PluginSecurityNotice | None:
@@ -92,7 +82,7 @@ def _describe_jwt_revocation_policy(posture: object) -> _PluginSecurityNotice | 
         The shared plugin notice when ``posture`` satisfies the JWT revocation
         contract, otherwise ``None``.
     """
-    if not _is_jwt_revocation_policy_like(posture):
+    if not _is_current_jwt_revocation_posture(posture):
         return None
     return _PluginSecurityNotice(
         policy=_JWT_REVOCATION_POLICY,

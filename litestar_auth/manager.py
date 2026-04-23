@@ -242,7 +242,10 @@ class BaseUserManager[UP: UserProtocol[Any], ID](
         Args:
             user_db: Persistence backend used to load and update users.
             oauth_account_store: Optional persistence backend used for linked OAuth accounts.
-            password_helper: Password hasher/verifier implementation.
+            password_helper: Password hasher/verifier implementation. When omitted,
+                :meth:`PasswordHelper.from_defaults` provides the library's Argon2-only
+                default. Pass an explicit helper when your application intentionally keeps
+                legacy hash support such as bcrypt during a migration window.
             security: Typed bundle for verification/reset secrets, optional TOTP encryption key,
                 and optional JWT ``sub`` parsing. Omitted fields default to ``None``. In
                 production, use distinct values per secret role instead of reusing one value
@@ -391,8 +394,9 @@ class BaseUserManager[UP: UserProtocol[Any], ID](
     ) -> UP | None:
         """Return the matching user when credentials are valid.
 
-        After successful verification, if the stored hash is deprecated (e.g. bcrypt),
-        the password hash is upgraded to the current algorithm (e.g. Argon2) in the DB.
+        After successful verification, if the stored hash is deprecated under the active
+        helper policy (for example, app-owned bcrypt support while new hashes use Argon2),
+        the password hash is upgraded to the current algorithm in the DB.
         If the DB update fails, login still succeeds without upgrading the hash.
 
         Args:

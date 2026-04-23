@@ -22,8 +22,6 @@ from litestar_auth._plugin.role_admin import RoleAdminRoleNotFoundError, RoleAdm
 from litestar_auth.authentication.backend import AuthenticationBackend
 from litestar_auth.authentication.strategy.redis import RedisTokenStrategy as BaseRedisTokenStrategy
 from litestar_auth.authentication.transport.bearer import BearerTransport
-from litestar_auth.contrib.oauth import __all__ as oauth_all
-from litestar_auth.contrib.oauth import create_provider_oauth_controller
 from litestar_auth.contrib.redis import (
     RedisAuthClientProtocol,
     RedisAuthPreset,
@@ -41,12 +39,8 @@ from litestar_auth.controllers.oauth import OAuthControllerUserManagerProtocol
 from litestar_auth.exceptions import ConfigurationError, ErrorCode
 from litestar_auth.guards import is_authenticated, is_superuser
 from litestar_auth.models import Role, User, UserRole
-from litestar_auth.oauth.router import create_provider_oauth_controller as base_create_provider_oauth_controller
-from litestar_auth.ratelimit import (
-    AUTH_RATE_LIMIT_ENDPOINT_SLOTS_BY_GROUP,
-    AUTH_RATE_LIMIT_VERIFICATION_SLOTS,
-    AuthRateLimitEndpointGroup,
-)
+from litestar_auth.oauth import create_provider_oauth_controller
+from litestar_auth.ratelimit import AuthRateLimitEndpointGroup, AuthRateLimitSlot
 from litestar_auth.totp import RedisTotpEnrollmentStore as BaseRedisTotpEnrollmentStore
 from litestar_auth.totp import RedisUsedTotpCodeStore as BaseRedisUsedTotpCodeStore
 from tests._helpers import ExampleUser, cast_fakeredis
@@ -73,6 +67,9 @@ TOTP_WINDOW_SECONDS = 300
 USED_TOTP_TTL_MS = 1_250
 PENDING_JTI_TTL_SECONDS = 30
 PENDING_JTI_TTL_FLOOR = PENDING_JTI_TTL_SECONDS - 1
+AUTH_RATE_LIMIT_VERIFICATION_SLOT_IDENTIFIERS = frozenset(
+    {AuthRateLimitSlot.VERIFY_TOKEN, AuthRateLimitSlot.REQUEST_VERIFY_TOKEN},
+)
 
 
 class ExampleStrategy:
@@ -129,7 +126,6 @@ def test_contrib_packages_reexport_public_symbols() -> None:
     assert RedisTokenStrategy is BaseRedisTokenStrategy
     assert RedisTotpEnrollmentStore is BaseRedisTotpEnrollmentStore
     assert RedisUsedTotpCodeStore is BaseRedisUsedTotpCodeStore
-    assert create_provider_oauth_controller is base_create_provider_oauth_controller
 
 
 def test_contrib_packages_define_all() -> None:
@@ -142,7 +138,6 @@ def test_contrib_packages_define_all() -> None:
         "RedisTotpEnrollmentStore",
         "RedisUsedTotpCodeStore",
     )
-    assert oauth_all == ("create_provider_oauth_controller",)
     assert role_admin_all == ("create_role_admin_controller",)
 
 
@@ -1165,7 +1160,7 @@ async def test_contrib_redis_preset_builds_shared_client_auth_components(
     )
 
     config = preset.build_rate_limit_config(
-        disabled=AUTH_RATE_LIMIT_VERIFICATION_SLOTS,
+        disabled=AUTH_RATE_LIMIT_VERIFICATION_SLOT_IDENTIFIERS,
         identity_fields=("username", "email"),
         trusted_headers=("X-Real-IP",),
     )
@@ -1195,7 +1190,6 @@ async def test_contrib_redis_preset_builds_shared_client_auth_components(
     assert config.totp_verify.backend.max_attempts == TOTP_MAX_ATTEMPTS
     assert config.totp_verify.backend.window_seconds == TOTP_WINDOW_SECONDS
     assert config.totp_verify.backend.key_prefix == "totp:"
-    assert AUTH_RATE_LIMIT_ENDPOINT_SLOTS_BY_GROUP["verification"] == AUTH_RATE_LIMIT_VERIFICATION_SLOTS
     assert config.verify_token is None
     assert config.request_verify_token is None
     assert store._redis is redis_client
@@ -1317,8 +1311,8 @@ def test_contrib_redis_preset_preserves_enrollment_lazy_dependency_error(
         preset.build_totp_enrollment_store()
 
 
-def test_contrib_oauth_preserves_lazy_dependency_error(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The contrib OAuth alias preserves the router's optional dependency guard."""
+def test_oauth_package_preserves_lazy_dependency_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The canonical OAuth package preserves the router's optional dependency guard."""
 
     def fail_import(module_name: str) -> None:
         message = f"No module named {module_name!r}"

@@ -57,7 +57,7 @@ rate_limit_config = AuthRateLimitConfig.disabled()
 
 Use [Configuration](../configuration.md#redis-backed-auth-surface) for the maintained
 production Redis/TOTP recipe. That shared-client snippet is the single source of truth for wiring
-`RedisAuthPreset`, `AUTH_RATE_LIMIT_VERIFICATION_SLOTS`, `TotpConfig.totp_enrollment_store`,
+`RedisAuthPreset`, `AuthRateLimitSlot`, `TotpConfig.totp_enrollment_store`,
 `TotpConfig.totp_pending_jti_store`, and `TotpConfig.totp_used_tokens_store` from one shared async Redis client.
 
 This guide deliberately does not repeat the full snippet, because the slot inventory, namespace
@@ -93,19 +93,15 @@ rate_limit_config = AuthRateLimitConfig.from_shared_backend(
 ```
 
 `enabled` and `disabled` remain the underlying builder inputs. When app code needs the supported
-slot inventory directly, import `AUTH_RATE_LIMIT_ENDPOINT_SLOTS`,
-`AUTH_RATE_LIMIT_ENDPOINT_SLOTS_BY_GROUP`, or `AUTH_RATE_LIMIT_VERIFICATION_SLOTS` from
-`litestar_auth.ratelimit` instead of repeating literal frozensets. Use
-`AUTH_RATE_LIMIT_ENDPOINT_SLOTS` for explicit `enabled=...` calls, and use either
-`AUTH_RATE_LIMIT_VERIFICATION_SLOTS` or
-`AUTH_RATE_LIMIT_ENDPOINT_SLOTS_BY_GROUP["verification"]` for `disabled=...` when the built-in
-verification routes stay off.
+slot inventory directly, iterate `AuthRateLimitSlot`. Use `tuple(AuthRateLimitSlot)` for explicit
+`enabled=...` calls, and use `{AuthRateLimitSlot.VERIFY_TOKEN, AuthRateLimitSlot.REQUEST_VERIFY_TOKEN}`
+for `disabled=...` when the built-in verification routes stay off.
 
 ## `AuthRateLimitSlot`
 
-Prefer the `AuthRateLimitSlot` enum when application code, annotations, or override mappings refer
-to supported auth rate-limit slots. The enum is the IDE-friendly public inventory for
-`endpoint_overrides` and other slot-keyed inputs.
+Use the `AuthRateLimitSlot` enum when application code, annotations, or override mappings refer
+to supported auth rate-limit slots. The enum is the IDE-friendly public inventory for `enabled`,
+`disabled`, `endpoint_overrides`, and other slot-keyed inputs.
 
 ```python
 from litestar_auth.ratelimit import AuthRateLimitSlot
@@ -114,9 +110,6 @@ AuthRateLimitSlot.LOGIN
 AuthRateLimitSlot.REQUEST_VERIFY_TOKEN
 AuthRateLimitSlot.TOTP_VERIFY
 ```
-
-`AuthRateLimitEndpointSlot` still exists as the legacy literal type alias, but new code should
-prefer `AuthRateLimitSlot`.
 
 ## Behavior
 
@@ -132,9 +125,9 @@ prefer `AuthRateLimitSlot`.
 
 Each field accepts an **`EndpointRateLimit`** (or `None` to disable that bucket). Map them to routes you expose:
 
-`AUTH_RATE_LIMIT_ENDPOINT_SLOTS` exposes this same ordered slot inventory, and
-`AUTH_RATE_LIMIT_ENDPOINT_SLOTS_BY_GROUP["verification"]` is the group-level equivalent of
-`AUTH_RATE_LIMIT_VERIFICATION_SLOTS`.
+`AuthRateLimitSlot` is the public slot inventory. Iterate it directly for ordered `enabled=...`
+inputs, and pass `{AuthRateLimitSlot.VERIFY_TOKEN, AuthRateLimitSlot.REQUEST_VERIFY_TOKEN}` when
+verification endpoints should stay disabled.
 
 | `AuthRateLimitConfig` field / `AuthRateLimitSlot` value | `AuthRateLimitEndpointGroup` value | Default scope | Default namespace token | Typical route / action |
 | -------------------------------------------------------- | ---------------------------------- | ------------- | ----------------------- | ---------------------- |

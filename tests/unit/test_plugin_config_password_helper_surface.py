@@ -67,8 +67,8 @@ def test_resolve_password_helper_memoizes_default_helper() -> None:
 
     assert first is second
     assert config.get_default_password_helper() is first
+    assert len(first.password_hash.hashers) == 1
     assert first.password_hash.hashers[0].__class__.__name__ == "Argon2Hasher"
-    assert first.password_hash.hashers[1].__class__.__name__ == "BcryptHasher"
 
 
 def test_resolve_password_helper_uses_typed_security_helper() -> None:

@@ -17,8 +17,9 @@ Custom factories must wire those inputs themselves when they still want them.
 
 When you instantiate `BaseUserManager` yourself, pass secrets and optional `id_parser` through the
 typed `security=UserManagerSecurity(...)` bundle only. Pair that with `PasswordHelper.from_defaults()`
-when you want the library's default hasher policy, or pass `PasswordHelper(password_hash=...)` when
-you intentionally diverge with custom pwdlib composition.
+when you want the library's default Argon2-only hasher policy, or pass
+`PasswordHelper(password_hash=...)` when you intentionally diverge with custom pwdlib composition
+such as an application-owned bcrypt migration helper.
 
 Across plugin-managed and direct-manager flows, the stable account-state policy surface remains
 `require_account_state(user, *, require_verified=False)`. The built-in implementation delegates to

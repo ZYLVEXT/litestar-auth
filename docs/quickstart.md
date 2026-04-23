@@ -87,7 +87,7 @@ async def protected(request: Request[User, Any, Any]) -> dict[str, str]:
 
 
 backend = AuthenticationBackend[User, UUID](
-    name="jwt",
+    name="bearer",
     transport=BearerTransport(),
     strategy=JWTStrategy[User, UUID](
         secret="replace-with-32+-char-jwt-secret",

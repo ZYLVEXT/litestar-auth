@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-import importlib
 from dataclasses import FrozenInstanceError, dataclass, field
+from pathlib import Path
 from typing import cast
 
 import pytest
@@ -23,6 +23,7 @@ from litestar_auth.oauth_encryption import (
     get_bound_oauth_token_encryption,
     require_oauth_token_encryption,
 )
+from tests.unit.test_definition_file_coverage import load_reloaded_test_alias
 
 pytestmark = pytest.mark.unit
 
@@ -59,6 +60,26 @@ class _TokenTarget:
 
 
 @dataclass(frozen=True)
+class _StructurallyCompatiblePolicy:
+    """Policy-shaped object that is intentionally not a supported runtime policy."""
+
+    key: str | bytes | None = None
+    unsafe_testing: bool = True
+
+    def require_configured(self, *, context: str = "OAuth token persistence") -> None:
+        """Pretend to satisfy the policy surface without being accepted."""
+        del context
+
+    def encrypt(self, value: str | None) -> str | None:
+        """Return a deterministic encrypted-looking value."""
+        return None if value is None else f"encrypted:{value}"
+
+    def decrypt(self, value: str | None) -> str | None:
+        """Return a deterministic decrypted-looking value."""
+        return None if value is None else value.removeprefix("encrypted:")
+
+
+@dataclass(frozen=True)
 class _History:
     """Small SQLAlchemy-history stub."""
 
@@ -92,11 +113,17 @@ class _InspectState:
         }
 
 
-def test_oauth_encryption_module_executes_under_coverage() -> None:
-    """Reload the module in-test so coverage records module-body execution."""
-    reloaded_module = importlib.reload(oauth_encryption)
+def test_oauth_encryption_module_executes_under_coverage(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Reload the module under an isolated alias so coverage records module-body execution."""
+    assert oauth_encryption.__file__ is not None
+    reloaded_module = load_reloaded_test_alias(
+        alias_name="_coverage_alias_oauth_encryption",
+        source_path=Path(oauth_encryption.__file__).resolve(),
+        monkeypatch=monkeypatch,
+    )
 
     assert reloaded_module.OAuthTokenEncryption.__name__ == OAuthTokenEncryption.__name__
+    assert reloaded_module.OAuthTokenEncryption is not OAuthTokenEncryption
     assert reloaded_module.require_oauth_token_encryption.__name__ == require_oauth_token_encryption.__name__
 
 
@@ -210,23 +237,36 @@ def test_bind_oauth_token_encryption_tracks_wrapped_session_targets() -> None:
     assert target.info["litestar_auth_oauth_token_encryption"] == policy
 
 
-def test_get_bound_oauth_token_encryption_normalizes_pre_reload_policy_instances() -> None:
-    """Reloaded helpers still recognize a policy object that was bound before reload."""
+def test_bind_oauth_token_encryption_rejects_structurally_compatible_policy() -> None:
+    """Binding accepts only the current module's concrete policy instances."""
+    with pytest.raises(TypeError, match="OAuthTokenEncryption instance from the current module"):
+        bind_oauth_token_encryption(
+            _SessionInfoTarget(),
+            cast("OAuthTokenEncryption", _StructurallyCompatiblePolicy()),
+        )
+
+
+def test_get_bound_oauth_token_encryption_ignores_reload_stale_policy_instances(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Session bindings ignore policy instances created by a different module identity."""
+    assert oauth_encryption.__file__ is not None
     target = _SessionInfoTarget()
-    key_str = _fernet_key_string()
-    stale_policy = OAuthTokenEncryption(key=key_str)
-
-    bind_oauth_token_encryption(target, stale_policy)
-    reloaded_module = importlib.reload(oauth_encryption)
-
-    assert reloaded_module.get_bound_oauth_token_encryption(target) == reloaded_module.OAuthTokenEncryption(
-        key=key_str,
+    stale_module = load_reloaded_test_alias(
+        alias_name="_coverage_alias_oauth_encryption_stale_policy",
+        source_path=Path(oauth_encryption.__file__).resolve(),
+        monkeypatch=monkeypatch,
     )
+    target.info["litestar_auth_oauth_token_encryption"] = stale_module.OAuthTokenEncryption(key=_fernet_key_string())
+
+    assert get_bound_oauth_token_encryption(target) is None
 
 
-def test_get_bound_oauth_token_encryption_returns_none_without_compatible_policy() -> None:
-    """Unbound or incompatible session info is ignored."""
-    target = _SessionInfoTarget(info={"litestar_auth_oauth_token_encryption": object()})
+def test_get_bound_oauth_token_encryption_returns_none_without_current_policy() -> None:
+    """Unbound or structurally compatible session info is ignored."""
+    target = _SessionInfoTarget(
+        info={"litestar_auth_oauth_token_encryption": _StructurallyCompatiblePolicy()},
+    )
 
     assert get_bound_oauth_token_encryption(target) is None
 
@@ -235,6 +275,15 @@ def test_require_oauth_token_encryption_rejects_missing_explicit_policy() -> Non
     """Direct OAuth persistence must now receive an explicit policy object."""
     with pytest.raises(oauth_encryption.ConfigurationError, match="explicit oauth_token_encryption policy"):
         require_oauth_token_encryption(None, context="persisting OAuth access and refresh tokens")
+
+
+def test_require_oauth_token_encryption_rejects_structurally_compatible_policy() -> None:
+    """Direct OAuth persistence rejects policy-shaped objects instead of duck-typing them."""
+    with pytest.raises(oauth_encryption.ConfigurationError, match="OAuthTokenEncryption instance from the current"):
+        require_oauth_token_encryption(
+            cast("OAuthTokenEncryption", _StructurallyCompatiblePolicy()),
+            context="persisting OAuth access and refresh tokens",
+        )
 
 
 def test_require_oauth_token_encryption_requires_key_outside_unsafe_testing() -> None:
@@ -462,21 +511,44 @@ def test_iter_session_targets_avoids_cycles() -> None:
     assert targets == (second, first)
 
 
-def test_coerce_oauth_token_encryption_rejects_incompatible_objects() -> None:
-    """Objects without the policy surface are ignored."""
-    assert oauth_encryption._coerce_oauth_token_encryption(object()) is None
-
-
 def test_resolve_instance_oauth_token_encryption_uses_cached_policy(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Cached policies on ORM instances survive reload-normalization logic."""
+    """Cached current-module policies on ORM instances are reused directly."""
     target = _TokenTarget()
     key_str = _fernet_key_string()
-    target._litestar_auth_oauth_token_encryption = OAuthTokenEncryption(key=key_str)
+    policy = OAuthTokenEncryption(key=key_str)
+    target._litestar_auth_oauth_token_encryption = policy
     monkeypatch.setattr(oauth_encryption, "object_session", lambda _target: _SessionInfoTarget())
 
     resolved = oauth_encryption._resolve_instance_oauth_token_encryption(target)
 
-    assert resolved == oauth_encryption.OAuthTokenEncryption(key=key_str)
+    assert resolved is policy
+
+
+def test_resolve_instance_oauth_token_encryption_ignores_reload_stale_cached_policy(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Cached policies from another module identity are ignored instead of normalized."""
+    assert oauth_encryption.__file__ is not None
+    target = _TokenTarget()
+    stale_module = load_reloaded_test_alias(
+        alias_name="_coverage_alias_oauth_encryption_stale_cached_policy",
+        source_path=Path(oauth_encryption.__file__).resolve(),
+        monkeypatch=monkeypatch,
+    )
+    target._litestar_auth_oauth_token_encryption = stale_module.OAuthTokenEncryption(key=_fernet_key_string())
+    monkeypatch.setattr(oauth_encryption, "object_session", lambda _target: None)
+
+    assert oauth_encryption._resolve_instance_oauth_token_encryption(target) is None
+
+
+def test_resolve_instance_oauth_token_encryption_ignores_structurally_compatible_cached_policy(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Cached policy-shaped objects are ignored instead of normalized."""
+    target = _TokenTarget(_litestar_auth_oauth_token_encryption=_StructurallyCompatiblePolicy())
+    monkeypatch.setattr(oauth_encryption, "object_session", lambda _target: None)
+
+    assert oauth_encryption._resolve_instance_oauth_token_encryption(target) is None
 
 
 def test_decrypt_loaded_oauth_tokens_returns_early_without_policy(monkeypatch: pytest.MonkeyPatch) -> None:

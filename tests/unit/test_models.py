@@ -736,78 +736,78 @@ def test_optional_model_mixins_support_custom_auth_family_contract_without_refer
     assert result.returncode == 0, (result.stdout, result.stderr)
 
 
-def test_custom_user_model_can_map_hashed_password_to_legacy_column_via_supported_hook() -> None:
+def test_custom_user_model_can_map_hashed_password_to_custom_column_via_supported_hook() -> None:
     """Custom users can map ``hashed_password`` to ``password_hash`` via the mixin hook."""
 
-    class LegacyAuthBase(DeclarativeBase):
-        """App-owned registry for the legacy password-column contract."""
+    class CustomPasswordColumnBase(DeclarativeBase):
+        """App-owned registry for a custom password-column contract."""
 
         registry = create_registry()
         metadata = registry.metadata
         __abstract__ = True
 
-    class LegacyUUIDBase(UUIDPrimaryKey, LegacyAuthBase):
-        """UUID primary-key base for the legacy password-column contract."""
+    class CustomPasswordColumnUUIDBase(UUIDPrimaryKey, CustomPasswordColumnBase):
+        """UUID primary-key base for the custom password-column contract."""
 
         __abstract__ = True
 
-    class LegacyUser(UserModelMixin, UserAuthRelationshipMixin, LegacyUUIDBase):
-        """Custom user model that keeps the ``hashed_password`` attribute on a legacy column."""
+    class CustomPasswordColumnUser(UserModelMixin, UserAuthRelationshipMixin, CustomPasswordColumnUUIDBase):
+        """Custom user model that keeps the ``hashed_password`` attribute on a custom SQL column."""
 
-        __tablename__ = "legacy_user"
+        __tablename__ = "custom_password_column_user"
 
-        auth_access_token_model = "LegacyAccessToken"
-        auth_refresh_token_model = "LegacyRefreshToken"
-        auth_oauth_account_model = "LegacyOAuthAccount"
+        auth_access_token_model = "CustomPasswordColumnAccessToken"
+        auth_refresh_token_model = "CustomPasswordColumnRefreshToken"
+        auth_oauth_account_model = "CustomPasswordColumnOAuthAccount"
         auth_hashed_password_column_name = "password_hash"
 
-    class LegacyAccessToken(AccessTokenMixin, LegacyAuthBase):
-        """Custom access-token model paired with the legacy password-column user."""
+    class CustomPasswordColumnAccessToken(AccessTokenMixin, CustomPasswordColumnBase):
+        """Custom access-token model paired with the custom password-column user."""
 
-        __tablename__ = "legacy_access_token"
+        __tablename__ = "custom_password_column_access_token"
 
-        auth_user_model = "LegacyUser"
-        auth_user_table = "legacy_user"
+        auth_user_model = "CustomPasswordColumnUser"
+        auth_user_table = "custom_password_column_user"
 
-    class LegacyRefreshToken(RefreshTokenMixin, LegacyAuthBase):
-        """Custom refresh-token model paired with the legacy password-column user."""
+    class CustomPasswordColumnRefreshToken(RefreshTokenMixin, CustomPasswordColumnBase):
+        """Custom refresh-token model paired with the custom password-column user."""
 
-        __tablename__ = "legacy_refresh_token"
+        __tablename__ = "custom_password_column_refresh_token"
 
-        auth_user_model = "LegacyUser"
-        auth_user_table = "legacy_user"
+        auth_user_model = "CustomPasswordColumnUser"
+        auth_user_table = "custom_password_column_user"
 
-    class LegacyOAuthAccount(OAuthAccountMixin, LegacyUUIDBase):
-        """Custom OAuth-account model paired with the legacy password-column user."""
+    class CustomPasswordColumnOAuthAccount(OAuthAccountMixin, CustomPasswordColumnUUIDBase):
+        """Custom OAuth-account model paired with the custom password-column user."""
 
-        __tablename__ = "legacy_oauth_account"
+        __tablename__ = "custom_password_column_oauth_account"
 
-        auth_user_model = "LegacyUser"
-        auth_user_table = "legacy_user"
+        auth_user_model = "CustomPasswordColumnUser"
+        auth_user_table = "custom_password_column_user"
 
     engine = create_test_engine()
     try:
-        LegacyUser.metadata.create_all(engine)
+        CustomPasswordColumnUser.metadata.create_all(engine)
 
         inspector = inspect(engine)
-        user_columns = {column["name"] for column in inspector.get_columns("legacy_user")}
+        user_columns = {column["name"] for column in inspector.get_columns("custom_password_column_user")}
 
         assert "password_hash" in user_columns
         assert "hashed_password" not in user_columns
-        assert LegacyUser.__mapper__.attrs["hashed_password"].columns[0].name == "password_hash"
-        legacy_relationships = inspect(LegacyUser).relationships
-        assert legacy_relationships["access_tokens"].mapper.class_ is LegacyAccessToken
-        assert legacy_relationships["refresh_tokens"].mapper.class_ is LegacyRefreshToken
-        assert legacy_relationships["oauth_accounts"].mapper.class_ is LegacyOAuthAccount
+        assert CustomPasswordColumnUser.__mapper__.attrs["hashed_password"].columns[0].name == "password_hash"
+        user_relationships = inspect(CustomPasswordColumnUser).relationships
+        assert user_relationships["access_tokens"].mapper.class_ is CustomPasswordColumnAccessToken
+        assert user_relationships["refresh_tokens"].mapper.class_ is CustomPasswordColumnRefreshToken
+        assert user_relationships["oauth_accounts"].mapper.class_ is CustomPasswordColumnOAuthAccount
 
         with Session(engine) as session:
-            user = LegacyUser(email="legacy-password-column@example.com", hashed_password="legacy-hash")
+            user = CustomPasswordColumnUser(email="custom-password-column@example.com", hashed_password="custom-hash")
             session.add(user)
             session.commit()
 
-            stored_hash = session.execute(select(LegacyUser.__table__.c.password_hash)).scalar_one()
+            stored_hash = session.execute(select(CustomPasswordColumnUser.__table__.c.password_hash)).scalar_one()
 
-        assert stored_hash == "legacy-hash"
+        assert stored_hash == "custom-hash"
     finally:
         engine.dispose()
 
@@ -888,47 +888,47 @@ def test_custom_role_mixins_round_trip_normalized_membership() -> None:
         engine.dispose()
 
 
-def test_explicit_hashed_password_column_override_remains_supported_for_compatibility() -> None:
-    """Explicit ``hashed_password = mapped_column(...)`` overrides still work for older custom models."""
+def test_custom_user_model_can_define_hashed_password_mapping_directly() -> None:
+    """Custom users can define the ``hashed_password`` mapping directly when they own the attribute contract."""
 
-    class LegacyCompatibilityBase(DeclarativeBase):
-        """App-owned registry for compatibility coverage."""
+    class DirectPasswordColumnBase(DeclarativeBase):
+        """App-owned registry for direct password-column mapping coverage."""
 
         registry = create_registry()
         metadata = registry.metadata
         __abstract__ = True
 
-    class LegacyCompatibilityUUIDBase(UUIDPrimaryKey, LegacyCompatibilityBase):
-        """UUID primary-key base for compatibility coverage."""
+    class DirectPasswordColumnUUIDBase(UUIDPrimaryKey, DirectPasswordColumnBase):
+        """UUID primary-key base for direct password-column mapping coverage."""
 
         __abstract__ = True
 
-    class LegacyCompatibilityUser(UserModelMixin, LegacyCompatibilityUUIDBase):
-        """Compatibility model that keeps the legacy explicit field override."""
+    class DirectPasswordColumnUser(UserModelMixin, DirectPasswordColumnUUIDBase):
+        """Custom user model that owns the ``hashed_password`` mapped attribute directly."""
 
-        __tablename__ = "legacy_compatibility_user"
+        __tablename__ = "direct_password_column_user"
 
         hashed_password: Mapped[str] = mapped_column("password_hash", String(length=255))
 
     engine = create_test_engine()
     try:
-        LegacyCompatibilityUser.metadata.create_all(engine)
+        DirectPasswordColumnUser.metadata.create_all(engine)
 
         inspector = inspect(engine)
-        user_columns = {column["name"] for column in inspector.get_columns("legacy_compatibility_user")}
+        user_columns = {column["name"] for column in inspector.get_columns("direct_password_column_user")}
 
         assert "password_hash" in user_columns
         assert "hashed_password" not in user_columns
-        assert LegacyCompatibilityUser.__mapper__.attrs["hashed_password"].columns[0].name == "password_hash"
+        assert DirectPasswordColumnUser.__mapper__.attrs["hashed_password"].columns[0].name == "password_hash"
 
         with Session(engine) as session:
-            user = LegacyCompatibilityUser(email="compatibility@example.com", hashed_password="compatibility-hash")
+            user = DirectPasswordColumnUser(email="direct@example.com", hashed_password="direct-hash")
             session.add(user)
             session.commit()
 
-            stored_hash = session.execute(select(LegacyCompatibilityUser.__table__.c.password_hash)).scalar_one()
+            stored_hash = session.execute(select(DirectPasswordColumnUser.__table__.c.password_hash)).scalar_one()
 
-        assert stored_hash == "compatibility-hash"
+        assert stored_hash == "direct-hash"
     finally:
         engine.dispose()
 

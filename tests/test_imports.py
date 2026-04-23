@@ -124,12 +124,8 @@ from litestar_auth.payloads import (
     VerifyToken,
 )
 from litestar_auth.ratelimit import (
-    AUTH_RATE_LIMIT_ENDPOINT_SLOTS,
-    AUTH_RATE_LIMIT_ENDPOINT_SLOTS_BY_GROUP,
-    AUTH_RATE_LIMIT_VERIFICATION_SLOTS,
     AuthRateLimitConfig,
     AuthRateLimitEndpointGroup,
-    AuthRateLimitEndpointSlot,
     AuthRateLimitSlot,
     EndpointRateLimit,
     InMemoryRateLimiter,
@@ -165,6 +161,9 @@ TOTP_WINDOW_SECONDS = 300
 ONE_MINUTE_TTL_SECONDS = 60
 ONE_MINUTE_TTL_FLOOR = ONE_MINUTE_TTL_SECONDS - 1
 ONE_MINUTE_TTL_MS = ONE_MINUTE_TTL_SECONDS * 1000
+AUTH_RATE_LIMIT_VERIFICATION_SLOT_IDENTIFIERS = frozenset(
+    {AuthRateLimitSlot.VERIFY_TOKEN, AuthRateLimitSlot.REQUEST_VERIFY_TOKEN},
+)
 REMOVED_ROOT_PAYLOAD_EXPORTS = (
     "ForgotPassword",
     "LoginCredentials",
@@ -563,6 +562,12 @@ def test_oauth_package_exposes_canonical_login_helper_and_not_advanced_controlle
     assert controllers_package.create_oauth_associate_controller is create_oauth_associate_controller
 
 
+def test_legacy_contrib_oauth_package_is_removed() -> None:
+    """The old contrib OAuth import path is not a compatibility re-export."""
+    with pytest.raises(ModuleNotFoundError, match=r"litestar_auth\.contrib\.oauth"):
+        importlib.import_module("litestar_auth.contrib.oauth")
+
+
 def test_ratelimit_module_exposes_canonical_shared_backend_builder() -> None:
     """The public ratelimit module exposes the shared-backend builder entrypoint."""
     current_config_class = ratelimit_module.AuthRateLimitConfig
@@ -576,7 +581,7 @@ def test_ratelimit_module_exposes_canonical_shared_backend_builder() -> None:
         "totp": totp_backend,
         "refresh": refresh_backend,
     }
-    disabled_slots = AUTH_RATE_LIMIT_VERIFICATION_SLOTS
+    disabled_slots = AUTH_RATE_LIMIT_VERIFICATION_SLOT_IDENTIFIERS
 
     config = current_config_class.from_shared_backend(
         credential_backend,
@@ -624,7 +629,9 @@ async def test_root_package_supports_documented_redis_migration_recipe_and_totp_
     monkeypatch.setattr(totp_module, "_load_used_totp_redis_asyncio", load_optional_redis)
     monkeypatch.setattr(totp_module, "_load_enrollment_redis_asyncio", load_optional_redis)
 
+    current_config_class = ratelimit_module.AuthRateLimitConfig
     current_endpoint_class = ratelimit_module.EndpointRateLimit
+    current_slot_enum = ratelimit_module.AuthRateLimitSlot
     rate_limit_redis_client = async_fakeredis_factory()
     rate_limit_redis = cast_fakeredis(rate_limit_redis_client, RedisAuthClientProtocol)
     totp_redis_client = async_fakeredis_factory()
@@ -632,47 +639,47 @@ async def test_root_package_supports_documented_redis_migration_recipe_and_totp_
     credential_backend = RedisRateLimiter(redis=rate_limit_redis, max_attempts=5, window_seconds=60)
     refresh_backend = RedisRateLimiter(redis=rate_limit_redis, max_attempts=10, window_seconds=300)
     totp_backend = RedisRateLimiter(redis=rate_limit_redis, max_attempts=5, window_seconds=300)
-    forgot_password_override = EndpointRateLimit(
+    forgot_password_override = current_endpoint_class(
         backend=credential_backend,
         scope="ip_email",
         namespace="forgot_password",
     )
-    reset_password_override = EndpointRateLimit(
+    reset_password_override = current_endpoint_class(
         backend=credential_backend,
         scope="ip",
         namespace="reset_password",
     )
-    totp_enable_override = EndpointRateLimit(
+    totp_enable_override = current_endpoint_class(
         backend=totp_backend,
         scope="ip",
         namespace="totp_enable",
     )
-    totp_confirm_enable_override = EndpointRateLimit(
+    totp_confirm_enable_override = current_endpoint_class(
         backend=totp_backend,
         scope="ip",
         namespace="totp_confirm_enable",
     )
-    totp_verify_override = EndpointRateLimit(
+    totp_verify_override = current_endpoint_class(
         backend=totp_backend,
         scope="ip",
         namespace="totp_verify",
     )
-    totp_disable_override = EndpointRateLimit(
+    totp_disable_override = current_endpoint_class(
         backend=totp_backend,
         scope="ip",
         namespace="totp_disable",
     )
-    rate_limit_config = AuthRateLimitConfig.from_shared_backend(
+    rate_limit_config = current_config_class.from_shared_backend(
         credential_backend,
         group_backends={"refresh": refresh_backend, "totp": totp_backend},
-        disabled=AUTH_RATE_LIMIT_VERIFICATION_SLOTS,
+        disabled=AUTH_RATE_LIMIT_VERIFICATION_SLOT_IDENTIFIERS,
         endpoint_overrides={
-            AuthRateLimitSlot.FORGOT_PASSWORD: forgot_password_override,
-            AuthRateLimitSlot.RESET_PASSWORD: reset_password_override,
-            AuthRateLimitSlot.TOTP_ENABLE: totp_enable_override,
-            AuthRateLimitSlot.TOTP_CONFIRM_ENABLE: totp_confirm_enable_override,
-            AuthRateLimitSlot.TOTP_VERIFY: totp_verify_override,
-            AuthRateLimitSlot.TOTP_DISABLE: totp_disable_override,
+            current_slot_enum.FORGOT_PASSWORD: forgot_password_override,
+            current_slot_enum.RESET_PASSWORD: reset_password_override,
+            current_slot_enum.TOTP_ENABLE: totp_enable_override,
+            current_slot_enum.TOTP_CONFIRM_ENABLE: totp_confirm_enable_override,
+            current_slot_enum.TOTP_VERIFY: totp_verify_override,
+            current_slot_enum.TOTP_DISABLE: totp_disable_override,
         },
     )
     used_tokens_store = RedisUsedTotpCodeStore(redis=totp_redis)
@@ -780,7 +787,7 @@ async def test_contrib_redis_preset_supports_documented_shared_client_recipe(
     )
 
     rate_limit_config = preset.build_rate_limit_config(
-        disabled=AUTH_RATE_LIMIT_ENDPOINT_SLOTS_BY_GROUP["verification"],
+        disabled=AUTH_RATE_LIMIT_VERIFICATION_SLOT_IDENTIFIERS,
     )
     used_tokens_store = preset.build_totp_used_tokens_store()
     pending_jti_store = preset.build_totp_pending_jti_store()
@@ -805,7 +812,6 @@ async def test_contrib_redis_preset_supports_documented_shared_client_recipe(
     assert rate_limit_config.totp_verify is not None
     assert rate_limit_config.totp_verify.backend.__class__ is ratelimit_module.RedisRateLimiter
     assert rate_limit_config.totp_verify.backend.key_prefix == "totp:"
-    assert AUTH_RATE_LIMIT_ENDPOINT_SLOTS_BY_GROUP["verification"] == AUTH_RATE_LIMIT_VERIFICATION_SLOTS
     assert rate_limit_config.verify_token is None
     assert rate_limit_config.request_verify_token is None
     assert totp_config.totp_pending_jti_store is pending_jti_store
@@ -825,24 +831,23 @@ async def test_contrib_redis_preset_supports_documented_shared_client_recipe(
 
 def test_ratelimit_identifier_contract_stays_on_the_public_ratelimit_module() -> None:
     """Rate-limit typing stays on the ratelimit module without leaking onto the package root."""
-    current_slot_alias = ratelimit_module.AuthRateLimitEndpointSlot
     current_group_alias = ratelimit_module.AuthRateLimitEndpointGroup
 
-    assert current_slot_alias.__name__ == AuthRateLimitEndpointSlot.__name__
+    assert not hasattr(ratelimit_module, "AuthRateLimitEndpointSlot")
     assert current_group_alias.__name__ == AuthRateLimitEndpointGroup.__name__
     assert get_args(ratelimit_module.RateLimitScope.__value__) == ("ip", "ip_email")
-    assert get_args(current_slot_alias.__value__) == (
-        "login",
-        "refresh",
-        "register",
-        "forgot_password",
-        "reset_password",
-        "totp_enable",
-        "totp_confirm_enable",
-        "totp_verify",
-        "totp_disable",
-        "verify_token",
-        "request_verify_token",
+    assert tuple(ratelimit_module.AuthRateLimitSlot) == (
+        AuthRateLimitSlot.LOGIN,
+        AuthRateLimitSlot.REFRESH,
+        AuthRateLimitSlot.REGISTER,
+        AuthRateLimitSlot.FORGOT_PASSWORD,
+        AuthRateLimitSlot.RESET_PASSWORD,
+        AuthRateLimitSlot.TOTP_ENABLE,
+        AuthRateLimitSlot.TOTP_CONFIRM_ENABLE,
+        AuthRateLimitSlot.TOTP_VERIFY,
+        AuthRateLimitSlot.TOTP_DISABLE,
+        AuthRateLimitSlot.VERIFY_TOKEN,
+        AuthRateLimitSlot.REQUEST_VERIFY_TOKEN,
     )
     assert get_args(current_group_alias.__value__) == (
         "login",
@@ -852,19 +857,19 @@ def test_ratelimit_identifier_contract_stays_on_the_public_ratelimit_module() ->
         "totp",
         "verification",
     )
-    assert ratelimit_module.AUTH_RATE_LIMIT_ENDPOINT_SLOTS == AUTH_RATE_LIMIT_ENDPOINT_SLOTS
-    assert ratelimit_module.AUTH_RATE_LIMIT_ENDPOINT_SLOTS_BY_GROUP == AUTH_RATE_LIMIT_ENDPOINT_SLOTS_BY_GROUP
-    assert ratelimit_module.AUTH_RATE_LIMIT_VERIFICATION_SLOTS == AUTH_RATE_LIMIT_VERIFICATION_SLOTS
-    assert AUTH_RATE_LIMIT_ENDPOINT_SLOTS_BY_GROUP["verification"] == AUTH_RATE_LIMIT_VERIFICATION_SLOTS
-    assert "AuthRateLimitEndpointSlot" in ratelimit_module.__all__
+    assert "AuthRateLimitEndpointSlot" not in ratelimit_module.__all__
     assert "AuthRateLimitEndpointGroup" in ratelimit_module.__all__
-    assert "AUTH_RATE_LIMIT_ENDPOINT_SLOTS" in ratelimit_module.__all__
-    assert "AUTH_RATE_LIMIT_ENDPOINT_SLOTS_BY_GROUP" in ratelimit_module.__all__
-    assert "AUTH_RATE_LIMIT_VERIFICATION_SLOTS" in ratelimit_module.__all__
+    assert "AuthRateLimitSlot" in ratelimit_module.__all__
+    assert "AUTH_RATE_LIMIT_ENDPOINT_SLOTS" not in ratelimit_module.__all__
+    assert "AUTH_RATE_LIMIT_ENDPOINT_SLOTS_BY_GROUP" not in ratelimit_module.__all__
+    assert "AUTH_RATE_LIMIT_VERIFICATION_SLOTS" not in ratelimit_module.__all__
     assert "RateLimitScope" in ratelimit_module.__all__
     assert not hasattr(ratelimit_module, "_AUTH_RATE_LIMIT_ENDPOINT_CATALOG")
     assert not hasattr(ratelimit_module, "_AUTH_RATE_LIMIT_ENDPOINT_RECIPES")
     assert not hasattr(ratelimit_module, "_AUTH_RATE_LIMIT_ENDPOINT_RECIPES_BY_SLOT")
+    assert not hasattr(ratelimit_module, "AUTH_RATE_LIMIT_ENDPOINT_SLOTS")
+    assert not hasattr(ratelimit_module, "AUTH_RATE_LIMIT_ENDPOINT_SLOTS_BY_GROUP")
+    assert not hasattr(ratelimit_module, "AUTH_RATE_LIMIT_VERIFICATION_SLOTS")
     assert not hasattr(litestar_auth, "_AUTH_RATE_LIMIT_ENDPOINT_CATALOG")
     assert not hasattr(litestar_auth, "RateLimitScope")
     assert not hasattr(litestar_auth, "AUTH_RATE_LIMIT_ENDPOINT_SLOTS")

@@ -157,7 +157,15 @@ class OAuthTokenEncryption:
 
 
 def bind_oauth_token_encryption(session: object, oauth_token_encryption: OAuthTokenEncryption) -> None:
-    """Bind an explicit OAuth token encryption policy to a SQLAlchemy session path."""
+    """Bind an explicit OAuth token encryption policy to a SQLAlchemy session path.
+
+    Raises:
+        TypeError: When ``oauth_token_encryption`` is not a current-module
+            ``OAuthTokenEncryption`` instance.
+    """
+    if not isinstance(oauth_token_encryption, OAuthTokenEncryption):
+        msg = "oauth_token_encryption must be an OAuthTokenEncryption instance from the current module."
+        raise TypeError(msg)
     for target in _iter_session_targets(session):
         info = getattr(target, "info", None)
         if isinstance(info, dict):
@@ -169,8 +177,8 @@ def get_bound_oauth_token_encryption(session: object) -> OAuthTokenEncryption | 
     for target in _iter_session_targets(session):
         info = getattr(target, "info", None)
         if isinstance(info, dict):
-            policy = _coerce_oauth_token_encryption(info.get(_OAUTH_TOKEN_ENCRYPTION_INFO_KEY))
-            if policy is not None:
+            policy = info.get(_OAUTH_TOKEN_ENCRYPTION_INFO_KEY)
+            if isinstance(policy, OAuthTokenEncryption):
                 return policy
     return None
 
@@ -191,6 +199,13 @@ def require_oauth_token_encryption(
             f"{context} requires an explicit oauth_token_encryption policy. "
             "Pass oauth_token_encryption=OAuthTokenEncryption(...) to SQLAlchemyUserDatabase() "
             "or call bind_oauth_token_encryption(session, OAuthTokenEncryption(...))."
+        )
+        raise ConfigurationError(msg)
+    if not isinstance(oauth_token_encryption, OAuthTokenEncryption):
+        msg = (
+            f"{context} requires an OAuthTokenEncryption instance from the current module. "
+            "Create a fresh OAuthTokenEncryption(...) policy before binding or passing it to "
+            "SQLAlchemyUserDatabase()."
         )
         raise ConfigurationError(msg)
     oauth_token_encryption.require_configured(context=context)
@@ -244,29 +259,6 @@ def _set_instance_oauth_token_encryption(target: object, oauth_token_encryption:
     setattr(target, _OAUTH_TOKEN_ENCRYPTION_INSTANCE_KEY, oauth_token_encryption)
 
 
-def _coerce_oauth_token_encryption(policy: object) -> OAuthTokenEncryption | None:
-    """Normalize structurally compatible policy objects across module reloads.
-
-    Returns:
-        The current module's ``OAuthTokenEncryption`` instance when the input is
-        compatible, otherwise ``None``.
-    """
-    if isinstance(policy, OAuthTokenEncryption):
-        return policy
-
-    key = getattr(policy, "key", None)
-    unsafe_testing = getattr(policy, "unsafe_testing", False)
-    encrypt = getattr(policy, "encrypt", None)
-    decrypt = getattr(policy, "decrypt", None)
-    require_configured = getattr(policy, "require_configured", None)
-    if callable(encrypt) and callable(decrypt) and callable(require_configured):
-        return OAuthTokenEncryption(
-            key=cast("str | bytes | None", key),
-            unsafe_testing=cast("bool", unsafe_testing),
-        )
-    return None
-
-
 def _resolve_instance_oauth_token_encryption(
     target: object,
     *,
@@ -280,8 +272,8 @@ def _resolve_instance_oauth_token_encryption(
         if session_policy is not None:
             _set_instance_oauth_token_encryption(target, session_policy)
             return session_policy
-    cached_policy = _coerce_oauth_token_encryption(getattr(target, _OAUTH_TOKEN_ENCRYPTION_INSTANCE_KEY, None))
-    if cached_policy is not None:
+    cached_policy = getattr(target, _OAUTH_TOKEN_ENCRYPTION_INSTANCE_KEY, None)
+    if isinstance(cached_policy, OAuthTokenEncryption):
         return cached_policy
     return None
 

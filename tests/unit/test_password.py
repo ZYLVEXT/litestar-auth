@@ -6,6 +6,8 @@ import importlib
 from typing import TYPE_CHECKING
 
 import pytest
+from pwdlib import PasswordHash
+from pwdlib.hashers.argon2 import Argon2Hasher
 from pwdlib.hashers.bcrypt import BcryptHasher
 
 import litestar_auth.password as password_module
@@ -14,7 +16,7 @@ if TYPE_CHECKING:
     from litestar_auth.password import PasswordHelper
 
 pytestmark = pytest.mark.unit
-DEFAULT_HASHER_COUNT = 2
+DEFAULT_HASHER_COUNT = 1
 
 
 def _password_helper_cls() -> type[PasswordHelper]:
@@ -27,6 +29,11 @@ def _password_helper_cls() -> type[PasswordHelper]:
     return module.PasswordHelper
 
 
+def _legacy_password_helper() -> PasswordHelper:
+    """Return an explicit helper that keeps bcrypt verification during migrations."""
+    return _password_helper_cls()(password_hash=PasswordHash((Argon2Hasher(), BcryptHasher())))
+
+
 def test_password_module_executes_under_coverage() -> None:
     """Reload the module in-test so coverage records class-body execution."""
     reloaded_module = importlib.reload(password_module)
@@ -35,13 +42,12 @@ def test_password_module_executes_under_coverage() -> None:
     assert reloaded_module.PasswordHelper.__name__ == _password_helper_cls().__name__
 
 
-def test_default_initialization_uses_argon2_and_bcrypt() -> None:
-    """Default initialization prefers Argon2 and keeps bcrypt as a fallback hasher."""
+def test_default_initialization_uses_argon2_only() -> None:
+    """Default initialization uses the library's Argon2-only policy."""
     helper = _password_helper_cls()()
 
     assert len(helper.password_hash.hashers) == DEFAULT_HASHER_COUNT
     assert helper.password_hash.hashers[0].__class__.__name__ == "Argon2Hasher"
-    assert helper.password_hash.hashers[1].__class__.__name__ == "BcryptHasher"
 
 
 def test_default_initialization_uses_internal_default_password_hash_builder(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -111,17 +117,25 @@ def test_verify_returns_false_for_wrong_or_unknown_hashes() -> None:
     assert helper.verify("s3cure-password", "not-a-password-hash") is False
 
 
-def test_verify_accepts_bcrypt_hashes_as_fallback() -> None:
-    """Bcrypt hashes remain valid for compatibility with older credentials."""
+def test_verify_returns_false_for_bcrypt_hash_with_default_helper() -> None:
+    """The library default helper no longer accepts bcrypt hashes."""
     helper = _password_helper_cls()()
+    bcrypt_hash = BcryptHasher().hash("legacy-password")
+
+    assert helper.verify("legacy-password", bcrypt_hash) is False
+
+
+def test_explicit_legacy_helper_verifies_bcrypt_hashes() -> None:
+    """Applications can still keep bcrypt support with an explicit helper."""
+    helper = _legacy_password_helper()
     bcrypt_hash = BcryptHasher().hash("legacy-password")
 
     assert helper.verify("legacy-password", bcrypt_hash) is True
 
 
-def test_verify_returns_false_for_overlong_password_against_bcrypt_hash() -> None:
-    """Overlong legacy bcrypt inputs fail closed instead of raising from pwdlib."""
-    helper = _password_helper_cls()()
+def test_explicit_legacy_helper_returns_false_for_overlong_password_against_bcrypt_hash() -> None:
+    """Overlong legacy bcrypt inputs still fail closed for explicit migration helpers."""
+    helper = _legacy_password_helper()
     bcrypt_hash = BcryptHasher().hash("a" * 72)
 
     assert helper.verify("a" * 80, bcrypt_hash) is False
@@ -136,9 +150,20 @@ def test_verify_and_update_returns_true_none_for_current_argon2_hash() -> None:
     assert new_hash is None
 
 
-def test_verify_and_update_returns_new_hash_for_deprecated_bcrypt() -> None:
-    """When the stored hash is bcrypt, verification succeeds and returns upgraded Argon2 hash."""
+def test_verify_and_update_returns_false_none_for_bcrypt_hash_with_default_helper() -> None:
+    """The library default helper refuses bcrypt hashes instead of upgrading them."""
     helper = _password_helper_cls()()
+    bcrypt_hash = BcryptHasher().hash("legacy-password")
+
+    verified, new_hash = helper.verify_and_update("legacy-password", bcrypt_hash)
+
+    assert verified is False
+    assert new_hash is None
+
+
+def test_explicit_legacy_helper_returns_new_hash_for_deprecated_bcrypt() -> None:
+    """Explicit migration helpers can verify bcrypt hashes and upgrade them to Argon2."""
+    helper = _legacy_password_helper()
     bcrypt_hash = BcryptHasher().hash("legacy-password")
     verified, new_hash = helper.verify_and_update("legacy-password", bcrypt_hash)
     assert verified is True
@@ -147,9 +172,9 @@ def test_verify_and_update_returns_new_hash_for_deprecated_bcrypt() -> None:
     assert new_hash != bcrypt_hash
 
 
-def test_verify_and_update_returns_false_none_for_overlong_password_against_bcrypt_hash() -> None:
-    """Legacy bcrypt verification should not leak errors for overlong passwords."""
-    helper = _password_helper_cls()()
+def test_explicit_legacy_helper_returns_false_none_for_overlong_password_against_bcrypt_hash() -> None:
+    """Explicit legacy bcrypt verification should not leak errors for overlong passwords."""
+    helper = _legacy_password_helper()
     bcrypt_hash = BcryptHasher().hash("a" * 72)
 
     verified, new_hash = helper.verify_and_update("a" * 80, bcrypt_hash)

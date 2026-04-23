@@ -117,7 +117,7 @@ def test_auth_rate_limit_from_shared_backend_uses_endpoint_overrides_for_customi
     )
     config = AuthRateLimitConfig.from_shared_backend(
         shared_backend,
-        enabled=("forgot_password", "request_verify_token"),
+        enabled=(AuthRateLimitSlot.FORGOT_PASSWORD, AuthRateLimitSlot.REQUEST_VERIFY_TOKEN),
         endpoint_overrides={
             AuthRateLimitSlot.FORGOT_PASSWORD: forgot_password_override,
             AuthRateLimitSlot.REQUEST_VERIFY_TOKEN: request_verify_override,
@@ -133,7 +133,7 @@ def test_auth_rate_limit_from_shared_backend_keeps_canonical_route_namespaces() 
     shared_backend = InMemoryRateLimiter(max_attempts=STRICT_MAX_ATTEMPTS, window_seconds=WINDOW_SECONDS)
     config = AuthRateLimitConfig.from_shared_backend(
         shared_backend,
-        enabled=("forgot_password", "request_verify_token"),
+        enabled=(AuthRateLimitSlot.FORGOT_PASSWORD, AuthRateLimitSlot.REQUEST_VERIFY_TOKEN),
     )
 
     assert config.forgot_password == EndpointRateLimit(

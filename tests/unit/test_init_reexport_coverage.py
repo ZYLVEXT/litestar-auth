@@ -20,7 +20,7 @@ import litestar_auth.models as models_module
 import litestar_auth.ratelimit as ratelimit_module
 import litestar_auth.ratelimit._config as ratelimit_config_module
 from litestar_auth.authentication.strategy.db_models import AccessToken, DatabaseTokenModels, RefreshToken
-from litestar_auth.ratelimit import AuthRateLimitEndpointGroup, AuthRateLimitEndpointSlot, AuthRateLimitSlot
+from litestar_auth.ratelimit import AuthRateLimitEndpointGroup, AuthRateLimitSlot
 from tests.conftest import project_version_from_pyproject
 
 pytestmark = [pytest.mark.unit, pytest.mark.imports]
@@ -190,8 +190,8 @@ def test_models_package_owns_token_registration_helper_and_strategy_keeps_db_tok
     assert models_module.import_token_orm_models() == (AccessToken, RefreshToken)
 
 
-def test_ratelimit_reexport_module_exposes_identifier_aliases_and_keeps_catalog_internal() -> None:
-    """The public ratelimit module exports identifier aliases and slot enum without leaking the private catalog."""
+def test_ratelimit_reexport_module_exposes_identifier_helpers_and_keeps_catalog_internal() -> None:
+    """The public ratelimit module exports identifier helpers without leaking the private catalog."""
     reloaded_module = importlib.reload(ratelimit_module)
 
     assert reloaded_module is ratelimit_module
@@ -200,7 +200,6 @@ def test_ratelimit_reexport_module_exposes_identifier_aliases_and_keeps_catalog_
         expected_names=(
             "AuthRateLimitConfig",
             "AuthRateLimitEndpointGroup",
-            "AuthRateLimitEndpointSlot",
             "AuthRateLimitSlot",
             "EndpointRateLimit",
             "InMemoryRateLimiter",
@@ -214,13 +213,11 @@ def test_ratelimit_reexport_module_exposes_identifier_aliases_and_keeps_catalog_
     assert hasattr(ratelimit_config_module, "_AUTH_RATE_LIMIT_ENDPOINT_RECIPES_BY_SLOT")
     assert hasattr(ratelimit_config_module, "_AUTH_RATE_LIMIT_ENDPOINT_SLOTS")
     assert hasattr(ratelimit_config_module, "_AUTH_RATE_LIMIT_ENDPOINT_GROUPS")
-    assert get_args(reloaded_module.AuthRateLimitEndpointSlot.__value__) == get_args(
-        AuthRateLimitEndpointSlot.__value__,
-    )
     assert get_args(reloaded_module.AuthRateLimitEndpointGroup.__value__) == get_args(
         AuthRateLimitEndpointGroup.__value__,
     )
     assert tuple(reloaded_module.AuthRateLimitSlot) == tuple(AuthRateLimitSlot)
+    assert not hasattr(reloaded_module, "AuthRateLimitEndpointSlot")
     assert not hasattr(reloaded_module, "_AUTH_RATE_LIMIT_ENDPOINT_RECIPES")
     assert not hasattr(reloaded_module, "_AUTH_RATE_LIMIT_ENDPOINT_RECIPES_BY_SLOT")
     assert not hasattr(reloaded_module, "_AUTH_RATE_LIMIT_ENDPOINT_SLOTS")

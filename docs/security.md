@@ -10,7 +10,7 @@ This page summarizes protections and **conscious trade-offs** shipped by the lib
 - **Session fingerprint** — optional claim on JWT tying tokens to current password/email state.
 - **Cookie auth** — secure defaults (`HttpOnly`, `Secure`, `SameSite`); CSRF for unsafe methods when wired (see [Guides — Security](guides/security.md)).
 - **TOTP** — pending enrollment secrets stay server-side in `totp_enrollment_store`; replay protection is enforced when `totp_used_tokens_store` is configured; production fails fast without required stores; persisted TOTP secrets require encrypted-at-rest storage through `BaseUserManager.totp_secret_storage_posture` / `totp_secret_key`.
-- **OAuth** — state in `HttpOnly` cookie; strict validation; optional encryption at rest for provider tokens (`oauth_token_encryption_key`); write-time plaintext snapshots are restored after successful writes and cleared on rollback; guarded associate-by-email rules (`oauth_trust_provider_email_verified` on plugin-owned routes, `trust_provider_email_verified` on manual controllers, and `oauth_associate_by_email`).
+- **OAuth** — state in `HttpOnly` cookie; strict validation; optional encryption at rest for provider tokens (`oauth_token_encryption_key`); OAuth token persistence accepts only current-module `OAuthTokenEncryption` policies; write-time plaintext snapshots are restored after successful writes and cleared on rollback; guarded associate-by-email rules (`oauth_trust_provider_email_verified` on plugin-owned routes, `trust_provider_email_verified` on manual controllers, and `oauth_associate_by_email`).
 - **Opaque DB tokens** — keyed digest at rest; plugin-managed DB-token wiring uses `DatabaseTokenAuthConfig` plus `LitestarAuthConfig(..., database_token_auth=...)`.
 - **Rate limiting** — optional per-endpoint limits; in-memory backend is single-process only and fails closed for new keys when its capacity cap is reached.
 - **Route-level role checks** — `is_superuser`, `has_any_role(...)`, and `has_all_roles(...)` reuse the same normalized flat-role semantics as persistence and manager writes, and they fail closed if the authenticated user does not expose the documented role-capable contract.
@@ -27,6 +27,9 @@ When you assemble `JWTStrategy` or `BaseUserManager` yourself, inspect the runti
 
 - `JWTStrategy(secret=..., denylist_store=RedisJWTDenylistStore(...))` reports the durable `shared_store` posture.
 - `JWTStrategy(secret=..., allow_inmemory_denylist=True)` reports the explicit process-local `in_memory` posture. `revocation_is_durable` stays `False` and logout / revoke remains single-process.
+- Plugin-managed JWT revocation notices consume the concrete current-module `JWTRevocationPosture`
+  returned by `JWTStrategy.revocation_posture`; posture-shaped wrappers or objects retained from
+  earlier module identities are ignored.
 - `BaseUserManager.totp_secret_storage_posture` reports the `fernet_encrypted` persisted-secret contract. Supplying `totp_secret_key` on `UserManagerSecurity(...)` lets direct/custom integrations store and read encrypted TOTP secrets.
 - With `totp_secret_key` omitted or explicitly `None`, `None` still represents disabled 2FA, but non-null TOTP secret writes and unprefixed legacy plaintext reads fail closed. Encrypt, rotate, or clear existing plaintext TOTP secret rows before upgrading.
 

@@ -755,7 +755,7 @@ def test_manager_init_wires_services_and_configuration() -> None:
 
 
 def test_manager_init_without_explicit_password_helper_uses_current_default_helper() -> None:
-    """Omitting password_helper still yields the current Argon2+bcrypt helper surface."""
+    """Omitting password_helper still yields the current Argon2-only default helper."""
     manager = BaseUserManager(
         AsyncMock(),
         security=UserManagerSecurity[UUID](
@@ -765,12 +765,12 @@ def test_manager_init_without_explicit_password_helper_uses_current_default_help
     )
 
     assert manager.password_helper is manager.policy.password_helper
+    assert len(manager.password_helper.password_hash.hashers) == 1
     assert manager.password_helper.password_hash.hashers[0].__class__.__name__ == "Argon2Hasher"
-    assert manager.password_helper.password_hash.hashers[1].__class__.__name__ == "BcryptHasher"
 
     bcrypt_hash = BcryptHasher().hash("legacy-password")
 
-    assert manager.password_helper.verify("legacy-password", bcrypt_hash) is True
+    assert manager.password_helper.verify("legacy-password", bcrypt_hash) is False
 
 
 def test_manager_init_without_explicit_password_helper_uses_named_default_factory(

@@ -10,7 +10,6 @@ import pytest
 from litestar import Litestar, Request, get
 from litestar.testing import AsyncTestClient
 
-import litestar_auth._plugin.config as plugin_config_module
 import litestar_auth._plugin.database_token as database_token_module
 from litestar_auth._plugin.config import DatabaseTokenAuthConfig
 from litestar_auth.authentication.backend import AuthenticationBackend
@@ -340,7 +339,7 @@ def _install_preset_backend_builder(
         state = states.setdefault(id(database_token_auth), _PresetStrategyState())
         strategy = _PresetSessionStrategy(
             state=state,
-            session=plugin_config_module.resolve_database_token_strategy_session(cast("Any", session)),
+            session=cast("Any", session),
             token_prefix=database_token_auth.backend_name,
         )
         return AuthenticationBackend[ExampleUser, UUID](

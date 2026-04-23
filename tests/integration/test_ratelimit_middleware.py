@@ -88,7 +88,7 @@ def build_shared_backend_rate_limit_config() -> AuthRateLimitConfig:
     return AuthRateLimitConfig.from_shared_backend(
         credential_backend,
         group_backends={"totp": totp_backend, "refresh": refresh_backend},
-        disabled={"verify_token", "request_verify_token"},
+        disabled={AuthRateLimitSlot.VERIFY_TOKEN, AuthRateLimitSlot.REQUEST_VERIFY_TOKEN},
         endpoint_overrides={
             AuthRateLimitSlot.FORGOT_PASSWORD: EndpointRateLimit(
                 backend=credential_backend,

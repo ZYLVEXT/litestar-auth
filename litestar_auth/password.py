@@ -7,20 +7,19 @@ from typing import Self
 from pwdlib import PasswordHash
 from pwdlib.exceptions import UnknownHashError
 from pwdlib.hashers.argon2 import Argon2Hasher
-from pwdlib.hashers.bcrypt import BcryptHasher
 
 
 def _build_default_password_hash() -> PasswordHash:
     """Return the library's default password-hashing pipeline."""
-    return PasswordHash((Argon2Hasher(), BcryptHasher()))
+    return PasswordHash((Argon2Hasher(),))
 
 
 class PasswordHelper:
-    """Hash and verify passwords with Argon2 and bcrypt support."""
+    """Hash and verify passwords with a configurable pwdlib pipeline."""
 
     @classmethod
     def from_defaults(cls) -> Self:
-        """Return a helper configured with the library's default hasher policy."""
+        """Return a helper configured with the library's default Argon2-only policy."""
         return cls(password_hash=_build_default_password_hash())
 
     def __init__(self, password_hash: PasswordHash | None = None) -> None:
@@ -35,10 +34,11 @@ class PasswordHelper:
         """Verify a password against a stored hash.
 
         pwdlib delegates verification to the selected hasher, which performs
-        constant-time comparison for password checks. Legacy bcrypt hashes can
-        raise ``ValueError`` for passwords longer than 72 bytes; treat those
-        cases as authentication failures instead of bubbling an exception into
-        the login flow.
+        constant-time comparison for password checks. When an application opts
+        into explicit legacy bcrypt support, that hasher can raise
+        ``ValueError`` for passwords longer than 72 bytes; treat those cases
+        as authentication failures instead of bubbling an exception into the
+        login flow.
 
         Returns:
             ``True`` when the password matches the stored hash, otherwise ``False``.
@@ -51,9 +51,10 @@ class PasswordHelper:
     def verify_and_update(self, password: str, hashed: str) -> tuple[bool, str | None]:
         """Verify a password and return an updated hash when the stored one is deprecated.
 
-        Uses pwdlib's verify_and_update: when the stored hash is deprecated (for example,
-        bcrypt while new hashes should use Argon2), pwdlib returns the new hash so the
-        caller can persist it.
+        Uses pwdlib's verify_and_update: when the stored hash is deprecated under the
+        configured pipeline (for example, an app-owned bcrypt migration helper while
+        new hashes should use Argon2), pwdlib returns the new hash so the caller can
+        persist it.
         When the hash is already current or the password is wrong, the second element is None.
 
         Returns:

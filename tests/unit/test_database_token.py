@@ -85,16 +85,6 @@ def test_build_database_token_backend_template_and_internal_builder() -> None:
     assert isinstance(cast("Any", bound.strategy), DatabaseTokenStrategy)
 
 
-def test_resolve_database_token_strategy_session() -> None:
-    """Without a session, return a placeholder that fails closed on attribute access."""
-    session = database_token_module.resolve_database_token_strategy_session(cast("Any", DummySession()))
-    assert session is not None
-
-    placeholder = database_token_module.resolve_database_token_strategy_session()
-    with pytest.raises(RuntimeError, match=_REQUEST_BACKEND_GUIDANCE):
-        _ = cast("Any", placeholder).execute
-
-
 @pytest.mark.asyncio
 async def test_startup_only_strategy_runtime_methods_fail_closed() -> None:
     """Startup-only strategies reject token operations until session binding."""

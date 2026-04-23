@@ -84,47 +84,47 @@ class CustomRefreshToken(RefreshTokenMixin, CustomTokenBase):
     auth_user_table = "custom_token_user"
 
 
-class LegacyTokenBase(DeclarativeBase):
-    """App-owned registry for the legacy password-column DB-token strategy contract."""
+class PasswordColumnTokenBase(DeclarativeBase):
+    """App-owned registry for a custom password-column DB-token strategy contract."""
 
     registry = create_registry()
     metadata = registry.metadata
     __abstract__ = True
 
 
-class LegacyTokenUUIDBase(UUIDPrimaryKey, LegacyTokenBase):
-    """UUID primary-key base bound to the legacy password-column token registry."""
+class PasswordColumnTokenUUIDBase(UUIDPrimaryKey, PasswordColumnTokenBase):
+    """UUID primary-key base bound to the custom password-column token registry."""
 
     __abstract__ = True
 
 
-class LegacyPasswordHashUser(UserModelMixin, UserAuthRelationshipMixin, LegacyTokenUUIDBase):
-    """Custom user model that keeps ``hashed_password`` on a legacy ``password_hash`` column."""
+class PasswordHashColumnUser(UserModelMixin, UserAuthRelationshipMixin, PasswordColumnTokenUUIDBase):
+    """Custom user model that keeps ``hashed_password`` on a ``password_hash`` column."""
 
-    __tablename__ = "legacy_password_hash_user"
+    __tablename__ = "custom_password_hash_user"
 
-    auth_access_token_model = "LegacyPasswordHashAccessToken"
-    auth_refresh_token_model = "LegacyPasswordHashRefreshToken"
+    auth_access_token_model = "PasswordHashColumnAccessToken"
+    auth_refresh_token_model = "PasswordHashColumnRefreshToken"
     auth_oauth_account_model = None
     auth_hashed_password_column_name = "password_hash"
 
 
-class LegacyPasswordHashAccessToken(AccessTokenMixin, LegacyTokenBase):
-    """Custom access-token model for the legacy password-column user contract."""
+class PasswordHashColumnAccessToken(AccessTokenMixin, PasswordColumnTokenBase):
+    """Custom access-token model for the custom password-column user contract."""
 
-    __tablename__ = "legacy_password_hash_access_token"
+    __tablename__ = "custom_password_hash_access_token"
 
-    auth_user_model = "LegacyPasswordHashUser"
-    auth_user_table = "legacy_password_hash_user"
+    auth_user_model = "PasswordHashColumnUser"
+    auth_user_table = "custom_password_hash_user"
 
 
-class LegacyPasswordHashRefreshToken(RefreshTokenMixin, LegacyTokenBase):
-    """Custom refresh-token model for the legacy password-column user contract."""
+class PasswordHashColumnRefreshToken(RefreshTokenMixin, PasswordColumnTokenBase):
+    """Custom refresh-token model for the custom password-column user contract."""
 
-    __tablename__ = "legacy_password_hash_refresh_token"
+    __tablename__ = "custom_password_hash_refresh_token"
 
-    auth_user_model = "LegacyPasswordHashUser"
-    auth_user_table = "legacy_password_hash_user"
+    auth_user_model = "PasswordHashColumnUser"
+    auth_user_table = "custom_password_hash_user"
 
 
 @pytest.fixture
@@ -134,7 +134,7 @@ def sqlalchemy_metadata() -> tuple[MetaData, ...]:
     Returns:
         Metadata collections created for this module's SQLite session fixture.
     """
-    return User.metadata, CustomTokenUser.metadata, LegacyPasswordHashUser.metadata
+    return User.metadata, CustomTokenUser.metadata, PasswordHashColumnUser.metadata
 
 
 class AsyncSessionAdapter:
@@ -250,11 +250,11 @@ class UnusedCustomUserManager:
         return None
 
 
-class UnusedLegacyPasswordHashUserManager:
-    """Placeholder user manager for legacy password-column strategy tests."""
+class UnusedPasswordHashColumnUserManager:
+    """Placeholder user manager for custom password-column strategy tests."""
 
     @staticmethod
-    async def get(user_id: object) -> LegacyPasswordHashUser | None:
+    async def get(user_id: object) -> PasswordHashColumnUser | None:
         """Return ``None`` because the DB strategy resolves custom users directly.
 
         Returns:
@@ -290,13 +290,13 @@ def _create_custom_token_user(session: Session, *, email: str) -> CustomTokenUse
     return user
 
 
-def _create_legacy_password_hash_user(session: Session, *, email: str) -> LegacyPasswordHashUser:
-    """Persist a custom user that maps ``hashed_password`` to a legacy ``password_hash`` column.
+def _create_password_hash_column_user(session: Session, *, email: str) -> PasswordHashColumnUser:
+    """Persist a custom user that maps ``hashed_password`` to a ``password_hash`` column.
 
     Returns:
         Stored custom user instance.
     """
-    user = LegacyPasswordHashUser(email=email, hashed_password="hashed-password")
+    user = PasswordHashColumnUser(email=email, hashed_password="hashed-password")
     session.add(user)
     session.commit()
     session.refresh(user)
@@ -414,27 +414,27 @@ async def test_database_token_strategy_supports_custom_token_model_contract(sess
 
 async def test_database_token_strategy_supports_password_column_name_hook(session: Session) -> None:
     """Custom users can keep the ``hashed_password`` attribute via the supported password-column hook."""
-    user = _create_legacy_password_hash_user(session, email="legacy-password-hash@example.com")
+    user = _create_password_hash_column_user(session, email="custom-password-hash@example.com")
     strategy = DatabaseTokenStrategy(
         session=_strategy_session(session),
         token_hash_secret=_TOKEN_HASH_SECRET,
         token_models=DatabaseTokenModels(
-            access_token_model=LegacyPasswordHashAccessToken,
-            refresh_token_model=LegacyPasswordHashRefreshToken,
+            access_token_model=PasswordHashColumnAccessToken,
+            refresh_token_model=PasswordHashColumnRefreshToken,
         ),
     )
 
     access_token = await strategy.write_token(user)
     refresh_token = await strategy.write_refresh_token(user)
-    resolved_user = await strategy.read_token(access_token, UnusedLegacyPasswordHashUserManager())
-    rotation = await strategy.rotate_refresh_token(refresh_token, UnusedLegacyPasswordHashUserManager())
-    stored_hash = session.execute(select(LegacyPasswordHashUser.__table__.c.password_hash)).scalar_one()
+    resolved_user = await strategy.read_token(access_token, UnusedPasswordHashColumnUserManager())
+    rotation = await strategy.rotate_refresh_token(refresh_token, UnusedPasswordHashColumnUserManager())
+    stored_hash = session.execute(select(PasswordHashColumnUser.__table__.c.password_hash)).scalar_one()
 
-    assert LegacyPasswordHashUser.__mapper__.attrs["hashed_password"].columns[0].name == "password_hash"
+    assert PasswordHashColumnUser.__mapper__.attrs["hashed_password"].columns[0].name == "password_hash"
     assert stored_hash == "hashed-password"
     assert (
         session.scalar(
-            select(LegacyPasswordHashAccessToken).where(LegacyPasswordHashAccessToken.user_id == user.id),
+            select(PasswordHashColumnAccessToken).where(PasswordHashColumnAccessToken.user_id == user.id),
         )
         is not None
     )

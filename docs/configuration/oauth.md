@@ -36,6 +36,11 @@ OAuthConfig(
 )
 ```
 
+Direct SQLAlchemy OAuth persistence must receive a real `OAuthTokenEncryption` instance from the
+current `litestar_auth.oauth_encryption` module. Policy-shaped wrappers and objects retained across
+development/test module reloads are not a supported compatibility surface; create a fresh policy
+before passing it to `SQLAlchemyUserDatabase(...)` or `bind_oauth_token_encryption(...)`.
+
 Route-registration contract:
 
 - `oauth_providers` is the single plugin-owned provider inventory; there is no separate associate-only provider list.

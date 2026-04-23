@@ -16,7 +16,7 @@ Names are loaded lazily (PEP 562) when accessed on the package.
 
 Use [Configuration](../configuration.md#custom-sqlalchemy-user-and-token-models) as the
 main ORM setup guide for token bootstrap lifecycle, relational role composition, custom model
-families, `SQLAlchemyUserDatabase`, and the supported password-column hook. Use the [Custom user +
+families, `SQLAlchemyUserDatabase`, and password-column customization. Use the [Custom user +
 OAuth cookbook](../cookbook/custom_user_oauth.md) when the application owns the `user` table.
 
 Avoid `from litestar_auth.models import User` (or the `user` submodule) in apps that already map table `user` to a custom model. That import registers the bundled reference mapper and conflicts with an app-owned mapping. Likewise, importing `OAuthAccount` from `litestar_auth.models.oauth` only keeps the reference `User` lazy; when the app owns a different user class, table, or registry, prefer an `OAuthAccountMixin` subclass that points back at the custom user contract.
@@ -46,15 +46,15 @@ The [import paths](#import-paths) table restates the same guidance in task-orien
 
 ## `UserModelMixin` hook
 
-`UserModelMixin` keeps the runtime attribute contract on `hashed_password`. When an app-owned user table uses a different SQL column name, set `auth_hashed_password_column_name` on the custom user class instead of redefining `hashed_password = mapped_column(...)`:
+`UserModelMixin` keeps the runtime attribute contract on `hashed_password`. When an app-owned user table only needs a different SQL column name, set `auth_hashed_password_column_name` on the custom user class:
 
 ```python
-class LegacyUser(UserModelMixin, UserAuthRelationshipMixin, AppUUIDBase):
-    __tablename__ = "legacy_user"
+class CustomUser(UserModelMixin, UserAuthRelationshipMixin, AppUUIDBase):
+    __tablename__ = "custom_user"
     auth_hashed_password_column_name = "password_hash"
 ```
 
-`BaseUserManager`, `SQLAlchemyUserDatabase`, and JWT password fingerprinting still read and write `user.hashed_password`; only the SQL column name changes. Direct field redefinition remains compatibility-only for older models that already depend on it.
+`BaseUserManager`, `SQLAlchemyUserDatabase`, and JWT password fingerprinting still read and write `user.hashed_password`; only the SQL column name changes. If an app needs more than a column-name remap, it can still own the mapped attribute directly with `hashed_password = mapped_column(...)` on the app model.
 
 ## `UserAuthRelationshipMixin` hooks
 

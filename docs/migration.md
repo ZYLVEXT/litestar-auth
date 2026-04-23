@@ -1,5 +1,47 @@
 # Migration Guide
 
+## Argon2-only default password helper
+
+The library default password-helper policy is now Argon2-only. `PasswordHelper.from_defaults()`,
+bare `PasswordHelper()`, `BaseUserManager(..., password_helper=None)`, and
+`LitestarAuthConfig.resolve_password_helper()` no longer verify bcrypt hashes.
+
+Before upgrading an application that still stores bcrypt password hashes, choose one of these paths:
+
+1. Re-hash or reset those credentials out of band before deploying the new default.
+2. Keep a temporary application-owned bcrypt migration helper and remove it after the stored hashes
+   have been upgraded to Argon2.
+
+Example explicit migration helper:
+
+```python
+from uuid import UUID
+
+from pwdlib import PasswordHash
+from pwdlib.hashers.argon2 import Argon2Hasher
+from pwdlib.hashers.bcrypt import BcryptHasher
+
+from litestar_auth import LitestarAuthConfig, UserManagerSecurity
+from litestar_auth.models import User
+from litestar_auth.password import PasswordHelper
+
+legacy_password_helper = PasswordHelper(
+    password_hash=PasswordHash((Argon2Hasher(), BcryptHasher())),
+)
+
+config = LitestarAuthConfig[User, UUID](
+    # ... your normal config ...
+    user_manager_security=UserManagerSecurity(
+        verification_token_secret="replace-with-32+-char-secret-for-verify",
+        reset_password_token_secret="replace-with-32+-char-secret-for-reset",
+        password_helper=legacy_password_helper,
+    ),
+)
+```
+
+That explicit helper keeps bcrypt verification in the application layer only. Successful logins can
+still upgrade stored bcrypt hashes to Argon2 through `verify_and_update()`.
+
 ## Superuser boolean to role membership
 
 Superuser status is now derived from role membership. The public
@@ -47,6 +89,18 @@ Code changes to make at the same time:
 - Grant or revoke superuser access by mutating the normalized `roles`
   collection through an admin path, seed script, migration, or the role-admin
   CLI/controller.
+
+## Custom password-hash column mapping
+
+Custom SQLAlchemy user models should keep `hashed_password` as the runtime
+attribute consumed by managers, stores, and token fingerprinting.
+
+When the only customization is the SQL column name, set
+`UserModelMixin.auth_hashed_password_column_name = "password_hash"` on the
+app-owned user model. Existing app models that already declare
+`hashed_password = mapped_column(...)` directly remain valid when the
+application intentionally owns that mapped attribute shape; no auth-layer
+behavior change is required either way.
 
 ## Typing: UP bound narrowing and direct config construction
 
@@ -174,7 +228,7 @@ config = LitestarAuthConfig[User, UUID](
 )
 ```
 
-### `AuthRateLimitEndpointSlot` string constants to `AuthRateLimitSlot`
+### String rate-limit slot keys to `AuthRateLimitSlot`
 
 Before:
 
