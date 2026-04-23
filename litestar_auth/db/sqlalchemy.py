@@ -359,7 +359,7 @@ class SQLAlchemyUserDatabase[UP: SQLAlchemyUserModelProtocol](BaseUserStore[UP, 
         Returns:
             Newly persisted user instance.
         """
-        user = cast("UP", self.user_model(**dict(user_dict)))
+        user = self.user_model(**dict(user_dict))
         created_user = await self._repository().add(user, auto_refresh=True)
         return await self._reload_with_relationships(created_user)
 
@@ -379,7 +379,7 @@ class SQLAlchemyUserDatabase[UP: SQLAlchemyUserModelProtocol](BaseUserStore[UP, 
         Returns:
             Updated user instance.
         """
-        persistent_user = cast("UP", await self.session.merge(user))
+        persistent_user = await self.session.merge(user)
         for field_name, value in update_dict.items():
             setattr(persistent_user, field_name, value)
 

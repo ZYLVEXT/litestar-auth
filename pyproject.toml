@@ -53,17 +53,17 @@ dev = [
     "python-dotenv>=1.2.2",
     "pytest-timeout>=2.4.0",
     "pytest-xdist>=3.8.0",
-    "ruff>=0.15.10",
-    "rust-just>=1.49.0",
-    "ty>=0.0.29",
+    "ruff>=0.15.11",
+    "rust-just>=1.50.0",
+    "ty>=0.0.32",
     "deptry>=0.25.1",
-    "prek>=0.3.8",
-    "fakeredis[lua]>=2.35.0",
+    "prek>=0.3.10",
+    "fakeredis[lua]>=2.35.1",
 ]
 docs = [
-    "mkdocstrings[python]>=1.0.3",
+    "mkdocstrings[python]>=1.0.4",
     "pymdown-extensions>=10.21.2",
-    "zensical>=0.0.32",
+    "zensical>=0.0.34",
 ]
 
 [tool.ty.environment]

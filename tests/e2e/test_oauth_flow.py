@@ -39,6 +39,8 @@ if TYPE_CHECKING:
     from litestar.types import ControllerRouterHandler
     from sqlalchemy.engine import Engine
 
+    from litestar_auth.oauth.service import OAuthAccountStoreProtocol, OAuthServiceUserStoreProtocol
+
 pytestmark = [pytest.mark.e2e]
 
 HTTP_BAD_REQUEST = 400
@@ -135,11 +137,11 @@ class OAuthManagerProxy:
         self._session_maker = session_maker
         self._password_helper = password_helper
         self._oauth_token_encryption = oauth_token_encryption
-        self.user_db = OAuthUserDatabaseProxy(
+        self.user_db: OAuthServiceUserStoreProtocol[User, UUID] = OAuthUserDatabaseProxy(
             session_maker,
             oauth_token_encryption=oauth_token_encryption,
         )
-        self.oauth_account_store = self.user_db
+        self.oauth_account_store: OAuthAccountStoreProtocol[User, UUID] | None = self.user_db
 
     def _build_manager(self, session: AsyncSession) -> OAuthUserManager:
         """Build a real user manager for one session.

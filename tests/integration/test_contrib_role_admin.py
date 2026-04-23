@@ -151,7 +151,7 @@ class _AsyncSessionAdapter:
     @property
     def bind(self) -> Engine | Connection | None:
         """Expose the wrapped session bind."""
-        return cast("Engine | Connection | None", self._session.bind)
+        return self._session.bind
 
     def expunge(self, instance: object) -> None:
         """Expunge one instance from the wrapped sync session."""
@@ -163,7 +163,7 @@ class _AsyncSessionAdapter:
         Returns:
             The bound SQLAlchemy connectable.
         """
-        return cast("Engine | Connection", self._session.get_bind())
+        return self._session.get_bind()
 
     async def close(self) -> None:
         """Close the wrapped sync session."""

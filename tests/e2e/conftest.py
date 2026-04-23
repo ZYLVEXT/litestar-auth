@@ -83,7 +83,7 @@ class AsyncSessionAdapter:
     @property
     def bind(self) -> Engine | Connection | None:
         """Expose the wrapped session bind."""
-        return cast("Engine | Connection | None", self._session.bind)
+        return self._session.bind
 
     def get_bind(self) -> Engine | Connection:
         """Expose the wrapped session bind via SQLAlchemy's API.
@@ -91,7 +91,7 @@ class AsyncSessionAdapter:
         Returns:
             The bound connectable.
         """
-        return cast("Engine | Connection", self._session.get_bind())
+        return self._session.get_bind()
 
     @property
     def no_autoflush(self) -> object:
