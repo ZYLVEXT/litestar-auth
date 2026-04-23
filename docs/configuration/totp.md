@@ -20,7 +20,8 @@ Routes: `{auth_path}/2fa/...`. See [TOTP guide](../guides/totp.md).
 
 The plugin-owned TOTP flow follows `LitestarAuthConfig.requires_verification`, which now defaults
 to `True`. Manual `create_totp_controller(...)` wiring should keep that flag aligned with the auth
-controller so unverified accounts cannot complete the second authentication step.
+controller so unverified accounts cannot complete the second authentication step. When both checks
+fail, the shared account-state policy reports inactive users before unverified users.
 
 `totp_pending_secret` signs pending-2FA JWTs for the controller flow. It is separate from
 `user_manager_security.totp_secret_key`, which encrypts the TOTP secret at rest on the user

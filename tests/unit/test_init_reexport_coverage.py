@@ -190,8 +190,8 @@ def test_models_package_owns_token_registration_helper_and_strategy_keeps_db_tok
     assert models_module.import_token_orm_models() == (AccessToken, RefreshToken)
 
 
-def test_ratelimit_reexport_module_exposes_identifier_helpers_and_keeps_catalog_internal() -> None:
-    """The public ratelimit module exports identifier helpers without leaking the private catalog."""
+def test_ratelimit_reexport_module_keeps_private_helpers_internal() -> None:
+    """The public ratelimit module keeps helper internals off the package surface."""
     reloaded_module = importlib.reload(ratelimit_module)
 
     assert reloaded_module is ratelimit_module
@@ -218,6 +218,14 @@ def test_ratelimit_reexport_module_exposes_identifier_helpers_and_keeps_catalog_
     )
     assert tuple(reloaded_module.AuthRateLimitSlot) == tuple(AuthRateLimitSlot)
     assert not hasattr(reloaded_module, "AuthRateLimitEndpointSlot")
+    assert not hasattr(reloaded_module, "_DEFAULT_TRUSTED_HEADERS")
+    assert not hasattr(reloaded_module, "_client_host")
+    assert not hasattr(reloaded_module, "_extract_email")
+    assert not hasattr(reloaded_module, "_load_redis_asyncio")
+    assert not hasattr(reloaded_module, "_safe_key_part")
+    assert not hasattr(reloaded_module, "_validate_configuration")
+    assert not hasattr(reloaded_module, "importlib")
+    assert not hasattr(reloaded_module, "logger")
     assert not hasattr(reloaded_module, "_AUTH_RATE_LIMIT_ENDPOINT_RECIPES")
     assert not hasattr(reloaded_module, "_AUTH_RATE_LIMIT_ENDPOINT_RECIPES_BY_SLOT")
     assert not hasattr(reloaded_module, "_AUTH_RATE_LIMIT_ENDPOINT_SLOTS")

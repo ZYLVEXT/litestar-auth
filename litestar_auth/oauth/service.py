@@ -359,7 +359,6 @@ def _require_account_state(
     _shared_account_state.require_account_state_with_client_error(
         user,
         require_verified=False,
-        prioritize_unverified=False,
         user_manager=user_manager,
         error_types=_ACCOUNT_STATE_ERROR_TYPES,
     )

@@ -47,7 +47,7 @@ def test_redis_auth_preset_build_rate_limit_config_uses_endpoint_overrides(
     def load_optional_redis() -> object:
         return object()
 
-    monkeypatch.setattr(ratelimit_module, "_load_redis_asyncio", load_optional_redis)
+    monkeypatch.setattr("litestar_auth.ratelimit._helpers._load_redis_asyncio", load_optional_redis)
     redis_client = cast_fakeredis(async_fakeredis, RedisAuthClientProtocol)
     refresh_backend = InMemoryRateLimiter(max_attempts=9, window_seconds=90)
     forgot_password_override = EndpointRateLimit(

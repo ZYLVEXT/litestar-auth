@@ -129,9 +129,9 @@ Install extras only when you need those features:
 - `litestar-auth[totp]` for built-in TOTP helpers.
 - `litestar-auth[all]` for `redis`, `oauth`, and `totp` together.
 
-Password hashing defaults are now Argon2-only. If your deployment still stores bcrypt hashes,
-configure an explicit custom `PasswordHelper` through `UserManagerSecurity.password_helper` during
-your migration window; see the [Migration Guide](https://zylvext.github.io/litestar-auth/migration/).
+Password hashing defaults are now Argon2-only. Unsupported stored password hashes fail closed
+under the library default, so rotate or reset those credentials before upgrading; see the
+[Migration Guide](https://zylvext.github.io/litestar-auth/migration/).
 
 ## Read more
 

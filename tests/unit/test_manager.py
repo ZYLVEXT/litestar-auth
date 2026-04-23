@@ -13,7 +13,6 @@ from uuid import UUID, uuid4
 
 import jwt
 import pytest
-from pwdlib.hashers.bcrypt import BcryptHasher
 
 import litestar_auth.manager as manager_module
 from litestar_auth._manager._coercions import _account_state_user, _as_dict, _managed_user, _require_str
@@ -767,10 +766,7 @@ def test_manager_init_without_explicit_password_helper_uses_current_default_help
     assert manager.password_helper is manager.policy.password_helper
     assert len(manager.password_helper.password_hash.hashers) == 1
     assert manager.password_helper.password_hash.hashers[0].__class__.__name__ == "Argon2Hasher"
-
-    bcrypt_hash = BcryptHasher().hash("legacy-password")
-
-    assert manager.password_helper.verify("legacy-password", bcrypt_hash) is False
+    assert manager.password_helper.verify("test-password", "not-a-password-hash") is False
 
 
 def test_manager_init_without_explicit_password_helper_uses_named_default_factory(

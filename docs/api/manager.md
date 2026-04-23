@@ -17,14 +17,16 @@ Custom factories must wire those inputs themselves when they still want them.
 
 When you instantiate `BaseUserManager` yourself, pass secrets and optional `id_parser` through the
 typed `security=UserManagerSecurity(...)` bundle only. Pair that with `PasswordHelper.from_defaults()`
-when you want the library's default Argon2-only hasher policy, or pass
-`PasswordHelper(password_hash=...)` when you intentionally diverge with custom pwdlib composition
-such as an application-owned bcrypt migration helper.
+when you want the library's default Argon2-only hasher policy. Unsupported stored password hashes
+fail closed under that default, so rotate or reset those credentials before rollout. Use
+`PasswordHelper(password_hash=...)` only for deliberate application-owned custom pwdlib
+composition.
 
 Across plugin-managed and direct-manager flows, the stable account-state policy surface remains
 `require_account_state(user, *, require_verified=False)`. The built-in implementation delegates to
 `UserPolicy.require_account_state`; custom managers or adapters should preserve the same callable
-shape and semantics when they customize account-state enforcement.
+shape and semantics when they customize account-state enforcement. The built-in ordering is
+inactive first, then unverified when `require_verified=True`.
 
 The generated register and users controllers now require strict request schemas:
 the built-in `UserCreate` / `UserUpdate` DTOs use `forbid_unknown_fields=True`,

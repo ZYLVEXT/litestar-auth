@@ -24,33 +24,13 @@ For direct/manual wiring, the underlying runtime objects report their own postur
 ### Password hash policy
 
 `PasswordHelper.from_defaults()`, bare `PasswordHelper()`, `BaseUserManager(..., password_helper=None)`,
-and `config.resolve_password_helper()` now use an Argon2-only default policy. Existing bcrypt hashes
-therefore fail closed unless the application opts into a custom helper explicitly.
+and `config.resolve_password_helper()` now use an Argon2-only default policy. Unsupported stored
+password hashes therefore fail closed: verification returns `False`, and `verify_and_update()`
+does not emit a replacement hash for an unsupported stored value.
 
-When a deployment still needs a migration window for stored bcrypt hashes, keep that weaker
-compatibility path app-owned:
-
-```python
-from pwdlib import PasswordHash
-from pwdlib.hashers.argon2 import Argon2Hasher
-from pwdlib.hashers.bcrypt import BcryptHasher
-
-from litestar_auth.manager import UserManagerSecurity
-from litestar_auth.password import PasswordHelper
-
-legacy_password_helper = PasswordHelper(
-    password_hash=PasswordHash((Argon2Hasher(), BcryptHasher())),
-)
-
-security = UserManagerSecurity(
-    verification_token_secret="replace-with-32+-char-secret-for-verify",
-    reset_password_token_secret="replace-with-32+-char-secret-for-reset",
-    password_helper=legacy_password_helper,
-)
-```
-
-With that explicit helper, successful bcrypt verification still upgrades stored hashes to Argon2
-through `verify_and_update()`.
+Before deploying that default into an environment with unsupported stored hashes, rotate or reset
+those credentials out of band. If you inject `UserManagerSecurity(password_helper=...)`, that
+password policy is fully application-owned and outside the library default described here.
 
 ## Schemas and DI
 

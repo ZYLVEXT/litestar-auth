@@ -11,9 +11,6 @@ from cryptography.fernet import Fernet
 from litestar import Litestar, Request, get
 from litestar.middleware import DefineMiddleware
 from litestar.testing import AsyncTestClient
-from pwdlib import PasswordHash
-from pwdlib.hashers.argon2 import Argon2Hasher
-from pwdlib.hashers.bcrypt import BcryptHasher
 
 from litestar_auth.authentication.authenticator import Authenticator
 from litestar_auth.authentication.backend import AuthenticationBackend
@@ -191,11 +188,6 @@ def build_app(  # noqa: PLR0913
         middleware=[middleware],
     )
     return app, strategy, user_manager
-
-
-def _legacy_password_helper() -> PasswordHelper:
-    """Return an explicit bcrypt-capable helper for migration-path integration tests."""
-    return PasswordHelper(password_hash=PasswordHash((Argon2Hasher(), BcryptHasher())))
 
 
 def build_cookie_refresh_app() -> tuple[Litestar, InMemoryRefreshTokenStrategy]:
@@ -621,13 +613,13 @@ async def test_login_hook_is_not_called_for_invalid_credentials(
 
 
 @pytest.mark.parametrize("login_identifier", ["email", "username"])
-async def test_login_with_bcrypt_hash_fails_closed_with_default_helper(
+async def test_login_with_unsupported_hash_fails_closed(
     login_identifier: Literal["email", "username"],
 ) -> None:
-    """Login with a bcrypt hash fails when the app keeps the default Argon2-only helper."""
+    """Login fails closed when the stored hash format is unsupported."""
     cred = login_identifier_credential(login_identifier)
-    bcrypt_hash = BcryptHasher().hash("correct-password")
-    app, _, user_manager = build_app(login_identifier=login_identifier, initial_hashed_password=bcrypt_hash)
+    unsupported_hash = "not-a-password-hash"
+    app, _, user_manager = build_app(login_identifier=login_identifier, initial_hashed_password=unsupported_hash)
 
     async with AsyncTestClient(app=app) as client:
         response = await client.post(
@@ -637,31 +629,7 @@ async def test_login_with_bcrypt_hash_fails_closed_with_default_helper(
     assert response.status_code == HTTP_BAD_REQUEST
     stored = await user_manager.user_db.get_by_email(_LOGIN_TEST_EMAIL)
     assert stored is not None
-    assert stored.hashed_password == bcrypt_hash
-
-
-@pytest.mark.parametrize("login_identifier", ["email", "username"])
-async def test_login_with_bcrypt_hash_upgrades_to_argon2_when_custom_helper_keeps_bcrypt(
-    login_identifier: Literal["email", "username"],
-) -> None:
-    """Explicit bcrypt-capable helpers still allow login and opportunistic Argon2 upgrades."""
-    cred = login_identifier_credential(login_identifier)
-    bcrypt_hash = BcryptHasher().hash("correct-password")
-    app, _, user_manager = build_app(
-        login_identifier=login_identifier,
-        initial_hashed_password=bcrypt_hash,
-        password_helper=_legacy_password_helper(),
-    )
-
-    async with AsyncTestClient(app=app) as client:
-        response = await client.post(
-            "/auth/login",
-            json={"identifier": cred, "password": "correct-password"},
-        )
-    assert response.status_code == HTTP_CREATED
-    stored = await user_manager.user_db.get_by_email(_LOGIN_TEST_EMAIL)
-    assert stored is not None
-    assert stored.hashed_password.startswith("$argon2")
+    assert stored.hashed_password == unsupported_hash
 
 
 @pytest.mark.parametrize("login_identifier", ["email", "username"])
@@ -688,10 +656,12 @@ async def test_login_with_current_argon2_hash_does_not_update(
 
 @pytest.mark.parametrize("login_identifier", ["email", "username"])
 async def test_failed_login_does_not_update_hash(login_identifier: Literal["email", "username"]) -> None:
-    """Failed login (wrong password) does not upgrade or change the stored hash."""
+    """Failed login with the wrong password does not rewrite the current hash."""
     cred = login_identifier_credential(login_identifier)
-    bcrypt_hash = BcryptHasher().hash("correct-password")
-    app, _, user_manager = build_app(login_identifier=login_identifier, initial_hashed_password=bcrypt_hash)
+    app, _, user_manager = build_app(login_identifier=login_identifier)
+    before = await user_manager.user_db.get_by_email(_LOGIN_TEST_EMAIL)
+    assert before is not None
+    original_hash = before.hashed_password
 
     async with AsyncTestClient(app=app) as client:
         await client.post(
@@ -700,7 +670,7 @@ async def test_failed_login_does_not_update_hash(login_identifier: Literal["emai
         )
     stored = await user_manager.user_db.get_by_email(_LOGIN_TEST_EMAIL)
     assert stored is not None
-    assert stored.hashed_password == bcrypt_hash
+    assert stored.hashed_password == original_hash
 
 
 @pytest.mark.parametrize("login_identifier", ["email", "username"])
@@ -724,6 +694,31 @@ async def test_requires_verification_true_unverified_returns_400(
     code = data.get("code") or (data.get("extra") or {}).get("code")
     assert code == ErrorCode.LOGIN_USER_NOT_VERIFIED
     assert "detail" in data
+
+
+@pytest.mark.parametrize("login_identifier", ["email", "username"])
+async def test_requires_verification_true_dual_account_state_failure_returns_inactive_error(
+    login_identifier: Literal["email", "username"],
+) -> None:
+    """Users failing both account-state checks receive the inactive login error."""
+    cred = login_identifier_credential(login_identifier)
+    app, _, _ = build_app(
+        login_identifier=login_identifier,
+        requires_verification=True,
+        initial_is_active=False,
+        initial_is_verified=False,
+    )
+    async with AsyncTestClient(app=app) as client:
+        response = await client.post(
+            "/auth/login",
+            json={"identifier": cred, "password": "correct-password"},
+        )
+
+    assert response.status_code == HTTP_BAD_REQUEST
+    data = response.json()
+    code = data.get("code") or (data.get("extra") or {}).get("code")
+    assert code == ErrorCode.LOGIN_USER_INACTIVE
+    assert data["detail"] == "The user account is inactive."
 
 
 @pytest.mark.parametrize("login_identifier", ["email", "username"])

@@ -313,7 +313,6 @@ async def _totp_handle_enable[UP: UserProtocol[Any], ID](
         require_verified=ctx.requires_verification,
         user_manager=user_manager,
         on_failure=lambda: ctx.totp_rate_limit.on_account_state_failure("enable", request),
-        prioritize_unverified=True,
     )
     totp_user = user
     if ctx.totp_enable_requires_password:
@@ -588,7 +587,6 @@ async def _totp_handle_confirm_enable[UP: UserProtocol[Any], ID](
         require_verified=ctx.requires_verification,
         user_manager=user_manager,
         on_failure=lambda: ctx.totp_rate_limit.on_account_state_failure("confirm_enable", request),
-        prioritize_unverified=True,
     )
 
     if user.totp_secret is not None:
@@ -670,7 +668,6 @@ async def _totp_handle_verify[UP: UserProtocol[Any], ID](
             user,
             require_verified=ctx.requires_verification,
             on_failure=lambda: totp_rate_limit.on_account_state_failure("verify", request),
-            prioritize_unverified=True,
         )
 
     try:
@@ -727,7 +724,6 @@ async def _totp_handle_disable[UP: UserProtocol[Any], ID](
         require_verified=ctx.requires_verification,
         user_manager=user_manager,
         on_failure=lambda: ctx.totp_rate_limit.on_account_state_failure("disable", request),
-        prioritize_unverified=True,
     )
     totp_user = user
     secret = await user_manager.read_totp_secret(totp_user.totp_secret)

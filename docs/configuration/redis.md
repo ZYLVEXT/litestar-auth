@@ -5,7 +5,7 @@ Use this page for Redis-backed auth helpers, shared rate-limit wiring, TOTP enro
 ## Redis-backed auth surface
 
 This section is the Redis integration guide for the currently implemented auth surface.
-Use it for the shared-backend rate-limit contract, migration of existing Redis key shapes, TOTP
+Use it for the shared-backend rate-limit contract, namespace-override patterns for non-default Redis key shapes, TOTP
 pending-enrollment state, replay protection, pending-login-token JTI deduplication, and the stable split between
 `litestar_auth.ratelimit` and `litestar_auth.contrib.redis`.
 
@@ -123,7 +123,7 @@ totp_used_tokens_store = RedisUsedTotpCodeStore(redis=redis_client)
 totp_enrollment_store = RedisTotpEnrollmentStore(redis=redis_client)
 ```
 
-The private catalog that stores these defaults remains internal, but the values below are the supported builder surface:
+The shared builder uses the defaults below as its supported slot contract:
 
 | `AuthRateLimitSlot` value | `AuthRateLimitEndpointGroup` value | Default scope | Default namespace token |
 | ------------------------- | ---------------------------------- | ------------- | ----------------------- |
@@ -147,14 +147,14 @@ Builder precedence is:
 2. Otherwise, only slots enabled by `enabled` (defaults to every supported slot) and not listed in `disabled` are materialized.
 3. Generated limiters start from `backend`, then `group_backends` can swap the backend for the slot's group before the builder materializes the final per-slot limiter.
 
-Generated limiters keep the package-owned scope and namespace defaults from the private endpoint
-catalog. Use `{AuthRateLimitSlot.VERIFY_TOKEN, AuthRateLimitSlot.REQUEST_VERIFY_TOKEN}` to leave
-unused verification slots unset, and keep direct `EndpointRateLimit(...)` assembly only for advanced per-endpoint
+Generated limiters start from the package default scope and namespace values listed above. Use
+`{AuthRateLimitSlot.VERIFY_TOKEN, AuthRateLimitSlot.REQUEST_VERIFY_TOKEN}` to leave unused verification slots unset,
+and keep direct `EndpointRateLimit(...)` assembly only for advanced per-endpoint
 exceptions.
 
-Migration example for an older Redis recipe: this keeps login, register, and password-reset style
-routes on one backend, splits out refresh and TOTP budgets, and leaves verification slots unset.
-The preset is just a higher-level wrapper around the current shared-builder surface, so the same
+Example: explicit underscore namespace overrides with split group budgets. This keeps login,
+register, and password-reset style routes on one backend, splits out refresh and TOTP budgets, and
+leaves verification slots unset. The preset is just a higher-level wrapper around the current shared-builder surface, so the same
 slot and override rules still apply.
 
 ```python

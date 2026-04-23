@@ -77,10 +77,10 @@ def build_rate_limit_config() -> AuthRateLimitConfig:
 
 
 def build_shared_backend_rate_limit_config() -> AuthRateLimitConfig:
-    """Create the current shared-backend auth recipe used by downstream apps.
+    """Create a shared-backend auth recipe with explicit slot overrides.
 
     Returns:
-        Shared endpoint rules matching the downstream migration recipe.
+        Shared endpoint rules with split group budgets and custom namespace tokens.
     """
     credential_backend = InMemoryRateLimiter(max_attempts=2, window_seconds=60)
     refresh_backend = InMemoryRateLimiter(max_attempts=3, window_seconds=90)
@@ -189,8 +189,8 @@ def build_app(*, rate_limit_config: AuthRateLimitConfig | None = None) -> Litest
     return litestar_app_with_user_manager(user_manager, *handlers, middleware=[middleware])
 
 
-def test_shared_backend_rate_limit_config_matches_downstream_migration_recipe() -> None:
-    """The middleware helper preserves downstream slot routing and legacy namespaces."""
+def test_shared_backend_rate_limit_config_respects_explicit_slot_overrides() -> None:
+    """The middleware helper keeps the configured slot routing and namespace tokens."""
     config = build_shared_backend_rate_limit_config()
 
     assert config.login is not None

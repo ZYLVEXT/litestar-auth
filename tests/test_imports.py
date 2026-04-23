@@ -25,6 +25,7 @@ import litestar_auth.config as config_module
 import litestar_auth.contrib.redis as redis_contrib_module
 import litestar_auth.controllers as controllers_package
 import litestar_auth.controllers.auth as auth_controller_module
+import litestar_auth.controllers.oauth as oauth_controller_module
 import litestar_auth.controllers.reset as reset_controller_module
 import litestar_auth.controllers.totp as totp_controller_module
 import litestar_auth.controllers.verify as verify_controller_module
@@ -243,6 +244,13 @@ REMOVED_ROOT_SECONDARY_EXPORTS = (
     "require_password_length",
     "verify_totp",
     "verify_totp_with_store",
+)
+REMOVED_OAUTH_CONTROLLER_ADAPTER_PASSTHROUGH_HELPERS = (
+    "_get_authorization_url",
+    "_get_access_token",
+    "_get_account_identity",
+    "_get_email_verified",
+    "_as_mapping",
 )
 
 pytestmark = [pytest.mark.unit, pytest.mark.imports]
@@ -562,6 +570,16 @@ def test_oauth_package_exposes_canonical_login_helper_and_not_advanced_controlle
     assert controllers_package.create_oauth_associate_controller is create_oauth_associate_controller
 
 
+def test_oauth_controller_module_keeps_removed_adapter_shims_off_the_import_surface() -> None:
+    """Removed controller shim names stay absent from the tested import boundary."""
+    module_members = vars(oauth_controller_module)
+
+    for helper_name in REMOVED_OAUTH_CONTROLLER_ADAPTER_PASSTHROUGH_HELPERS:
+        assert helper_name not in module_members
+        assert not hasattr(oauth_controller_module, helper_name)
+        assert not hasattr(controllers_package, helper_name)
+
+
 def test_legacy_contrib_oauth_package_is_removed() -> None:
     """The old contrib OAuth import path is not a compatibility re-export."""
     with pytest.raises(ModuleNotFoundError, match=r"litestar_auth\.contrib\.oauth"):
@@ -597,6 +615,13 @@ def test_ratelimit_module_exposes_canonical_shared_backend_builder() -> None:
     assert "EndpointRateLimit" in ratelimit_module.__all__
     assert "InMemoryRateLimiter" in ratelimit_module.__all__
     assert "RedisRateLimiter" in ratelimit_module.__all__
+    assert not hasattr(ratelimit_module, "_client_host")
+    assert not hasattr(ratelimit_module, "_extract_email")
+    assert not hasattr(ratelimit_module, "_load_redis_asyncio")
+    assert not hasattr(ratelimit_module, "_safe_key_part")
+    assert not hasattr(ratelimit_module, "_validate_configuration")
+    assert not hasattr(ratelimit_module, "importlib")
+    assert not hasattr(ratelimit_module, "logger")
     assert config.login == current_endpoint_class(backend=credential_backend, scope="ip_email", namespace="login")
     assert config.refresh == current_endpoint_class(backend=refresh_backend, scope="ip", namespace="refresh")
     assert config.forgot_password == current_endpoint_class(
@@ -625,7 +650,7 @@ async def test_root_package_supports_documented_redis_migration_recipe_and_totp_
     def load_optional_redis() -> object:
         return object()
 
-    monkeypatch.setattr(ratelimit_module, "_load_redis_asyncio", load_optional_redis)
+    monkeypatch.setattr("litestar_auth.ratelimit._helpers._load_redis_asyncio", load_optional_redis)
     monkeypatch.setattr(totp_module, "_load_used_totp_redis_asyncio", load_optional_redis)
     monkeypatch.setattr(totp_module, "_load_enrollment_redis_asyncio", load_optional_redis)
 
@@ -759,7 +784,7 @@ async def test_contrib_redis_preset_supports_documented_shared_client_recipe(
     def load_optional_redis() -> object:
         return object()
 
-    monkeypatch.setattr(ratelimit_module, "_load_redis_asyncio", load_optional_redis)
+    monkeypatch.setattr("litestar_auth.ratelimit._helpers._load_redis_asyncio", load_optional_redis)
     monkeypatch.setattr(totp_module, "_load_used_totp_redis_asyncio", load_optional_redis)
     monkeypatch.setattr(totp_module, "_load_enrollment_redis_asyncio", load_optional_redis)
     monkeypatch.setattr("litestar_auth.authentication.strategy.jwt._load_redis_asyncio", load_optional_redis)

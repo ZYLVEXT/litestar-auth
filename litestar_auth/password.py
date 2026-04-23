@@ -34,10 +34,9 @@ class PasswordHelper:
         """Verify a password against a stored hash.
 
         pwdlib delegates verification to the selected hasher, which performs
-        constant-time comparison for password checks. When an application opts
-        into explicit legacy bcrypt support, that hasher can raise
-        ``ValueError`` for passwords longer than 72 bytes; treat those cases
-        as authentication failures instead of bubbling an exception into the
+        constant-time comparison for password checks. Treat unsupported or
+        malformed hashes, along with hasher-level validation failures, as
+        authentication failures instead of bubbling an exception into the
         login flow.
 
         Returns:
@@ -51,11 +50,10 @@ class PasswordHelper:
     def verify_and_update(self, password: str, hashed: str) -> tuple[bool, str | None]:
         """Verify a password and return an updated hash when the stored one is deprecated.
 
-        Uses pwdlib's verify_and_update: when the stored hash is deprecated under the
-        configured pipeline (for example, an app-owned bcrypt migration helper while
-        new hashes should use Argon2), pwdlib returns the new hash so the caller can
-        persist it.
-        When the hash is already current or the password is wrong, the second element is None.
+        Uses pwdlib's ``verify_and_update``: when the configured pipeline marks the
+        stored hash as deprecated, pwdlib returns the new hash so the caller can
+        persist it. When the hash is already current, unsupported, malformed, or the
+        password is wrong, the second element is ``None``.
 
         Returns:
             A pair (verified, new_hash). When ``verified`` is True and ``new_hash`` is not

@@ -24,11 +24,7 @@ from litestar_auth.guards import is_authenticated
 from litestar_auth.oauth.client_adapter import (
     OAuthClientAdapter,
     OAuthClientProtocol,
-    OAuthTokenPayload,
     _build_oauth_client_adapter,
-)
-from litestar_auth.oauth.client_adapter import (
-    _as_mapping as _client_as_mapping,
 )
 from litestar_auth.oauth.service import OAuthService
 from litestar_auth.oauth.service import (
@@ -43,7 +39,7 @@ from litestar_auth.oauth.service import (
 from litestar_auth.types import UserProtocol
 
 if TYPE_CHECKING:
-    from collections.abc import Mapping, Sequence
+    from collections.abc import Sequence
 
     from litestar.openapi.spec import SecurityRequirement
     from litestar.types import Guard
@@ -786,68 +782,6 @@ def _validate_state(cookie_state: str | None, query_state: str) -> None:
     if not cookie_state or not query_state or not hmac.compare_digest(cookie_state, query_state):
         msg = "Invalid OAuth state."
         raise ClientException(status_code=400, detail=msg, extra={"code": ErrorCode.OAUTH_STATE_INVALID})
-
-
-async def _get_authorization_url(
-    *,
-    oauth_client: OAuthClientProtocol,
-    redirect_uri: str,
-    state: str,
-    scopes: list[str] | None = None,
-) -> str:
-    """Return the provider authorization URL for the given callback state.
-
-    Returns:
-        Absolute provider authorization URL.
-
-    """
-    return await _build_oauth_client_adapter(oauth_client=oauth_client).get_authorization_url(
-        redirect_uri=redirect_uri,
-        state=state,
-        scopes=scopes,
-    )
-
-
-async def _get_access_token(
-    *,
-    oauth_client: OAuthClientProtocol,
-    code: str,
-    redirect_uri: str,
-) -> OAuthTokenPayload:
-    """Exchange the provider callback code for an OAuth access token.
-
-    Returns:
-        Normalized access-token payload with `access_token`, `expires_at`, and `refresh_token`.
-
-    """
-    return await _build_oauth_client_adapter(oauth_client=oauth_client).get_access_token(
-        code=code,
-        redirect_uri=redirect_uri,
-    )
-
-
-async def _get_account_identity(oauth_client: OAuthClientProtocol, access_token: str) -> tuple[str, str]:
-    """Return the upstream account identifier and email for the access token.
-
-    Returns:
-        Tuple containing the provider account id and email address.
-
-    """
-    return await _build_oauth_client_adapter(oauth_client=oauth_client).get_account_identity(access_token)
-
-
-async def _get_email_verified(oauth_client: OAuthClientProtocol, access_token: str) -> bool | None:
-    """Return a provider asserted email-verification signal for the access token."""
-    return await _build_oauth_client_adapter(oauth_client=oauth_client).get_email_verified(access_token)
-
-
-def _as_mapping(raw_payload: object, *, message: str) -> Mapping[str, object]:
-    """Normalize an arbitrary payload object into a mapping.
-
-    Returns:
-        Mapping view over the payload.
-    """
-    return _client_as_mapping(raw_payload, message=message)
 
 
 def _require_verified_email_evidence(*, email_verified: bool | None) -> None:

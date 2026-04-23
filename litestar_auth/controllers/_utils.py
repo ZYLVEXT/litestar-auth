@@ -65,13 +65,11 @@ def _require_account_state_from_attributes(
     user: object,
     *,
     require_verified: bool,
-    prioritize_unverified: bool,
 ) -> None:
     """Apply controller account-state validation from user attributes only."""
     _shared_account_state.require_account_state(
         user,
         require_verified=require_verified,
-        prioritize_unverified=prioritize_unverified,
         user_manager=None,
         error_types=_ACCOUNT_STATE_ERROR_TYPES,
     )
@@ -429,7 +427,6 @@ async def _require_account_state[UP](
     require_verified: bool = False,
     user_manager: AccountStateValidatorProvider[UP] | None = None,
     on_failure: AccountStateFailureCallback | None = None,
-    prioritize_unverified: bool = False,
 ) -> None:
     """Validate controller account-state policy and map failures to client errors.
 
@@ -438,8 +435,6 @@ async def _require_account_state[UP](
         require_verified: When ``True``, also reject unverified users.
         user_manager: Optional manager exposing ``require_account_state()``.
         on_failure: Optional async callback invoked before raising a client error.
-        prioritize_unverified: Preserve legacy flows that reject unverified users
-            before inactive ones when both checks fail.
 
     Raises:
         ClientException: If the account is inactive or unverified.
@@ -448,7 +443,6 @@ async def _require_account_state[UP](
         _shared_account_state.require_account_state_with_client_error(
             user,
             require_verified=require_verified,
-            prioritize_unverified=prioritize_unverified,
             user_manager=user_manager,
             error_types=_ACCOUNT_STATE_ERROR_TYPES,
         )

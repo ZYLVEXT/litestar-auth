@@ -3,7 +3,7 @@
 Optional **per-endpoint** limits protect login, registration, token flows, and TOTP surfaces from
 brute force and abuse. Configure **`AuthRateLimitConfig`** on
 **`LitestarAuthConfig.rate_limit_config`**. For the current Redis-backed contract, including the
-stable slot and group inventory, migration recipe, and the paired TOTP Redis-store wiring, use
+stable slot and group inventory, override patterns, and the paired TOTP Redis-store wiring, use
 [Configuration](../configuration.md#redis-backed-auth-surface) as the maintained source
 of truth. This guide focuses on how the rate-limit surface maps onto the HTTP routes you expose.
 
@@ -143,12 +143,14 @@ verification endpoints should stay disabled.
 | `totp_verify` / `AuthRateLimitSlot.TOTP_VERIFY` | `totp` | `ip` | `totp-verify` | `POST {auth}/2fa/verify` |
 | `totp_disable` / `AuthRateLimitSlot.TOTP_DISABLE` | `totp` | `ip` | `totp-disable` | `POST {auth}/2fa/disable` |
 
-The plugin turns these `totp_*` limiters into an internal orchestrator so **`totp_verify`** can reset counters on success or account-state failures while other TOTP routes keep independent budgets (see `TotpRateLimitOrchestrator` in `litestar_auth.ratelimit`).
+The plugin wires these `totp_*` limiters through `TotpRateLimitOrchestrator` so **`totp_verify`**
+can reset counters on success or account-state failures while other TOTP routes keep independent
+budgets.
 
 !!! note "Reset password counter"
     For **`reset_password`**, failed attempts (invalid token or password) can still consume budget; success may reset the window — see implementation notes in `litestar_auth.ratelimit`.
 
-When existing deployments need underscore namespaces or other slot-specific deviations, express
+When an application needs underscore namespaces or other slot-specific deviations, express
 them directly in `endpoint_overrides` keyed by `AuthRateLimitSlot`:
 
 ```python
@@ -175,7 +177,7 @@ rate_limit_config = AuthRateLimitConfig.from_shared_backend(
 )
 ```
 
-Follow the broader Redis key-shape migration recipe in
+Follow the broader Redis override guidance in
 [Configuration](../configuration.md#redis-backed-auth-surface) when an existing
 deployment also needs group-level backend changes, disabled verification routes, or staged TOTP
 adoption.
@@ -198,4 +200,4 @@ rate_limit_config = AuthRateLimitConfig(
 - [Python API — Rate limiting](../api/ratelimit.md) — mkdocstrings for the public rate-limit entrypoints and advanced types.
 - [Security guide](security.md) — when to prefer Redis.
 - [Configuration](../configuration.md#redis-backed-auth-surface) — Redis-backed
-  auth contract, migration recipe, and replay-store guidance.
+  auth contract, override patterns, and replay-store guidance.

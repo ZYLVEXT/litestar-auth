@@ -71,6 +71,9 @@ Controller selection follows that startup inventory:
 
 **Multiple backends:** first backend → `{auth_path}`; others → `{auth_path}/{backend-name}/...`.
 
+When `requires_verification=True`, the shared account-state policy is consistent across login,
+refresh, and TOTP verification: inactive users fail first, and unverified users fail next.
+
 ## Built-in auth payload boundary
 
 The generated controllers do not use one universal credential field. `login_identifier` only changes how `LoginCredentials.identifier` is interpreted on `POST {auth_path}/login`.

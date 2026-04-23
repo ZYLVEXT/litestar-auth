@@ -4,43 +4,17 @@
 
 The library default password-helper policy is now Argon2-only. `PasswordHelper.from_defaults()`,
 bare `PasswordHelper()`, `BaseUserManager(..., password_helper=None)`, and
-`LitestarAuthConfig.resolve_password_helper()` no longer verify bcrypt hashes.
+`LitestarAuthConfig.resolve_password_helper()` all use that default.
 
-Before upgrading an application that still stores bcrypt password hashes, choose one of these paths:
+Unsupported stored password hashes now fail closed under that policy: verification returns `False`
+and `verify_and_update()` does not emit a replacement hash for an unsupported stored value.
 
-1. Re-hash or reset those credentials out of band before deploying the new default.
-2. Keep a temporary application-owned bcrypt migration helper and remove it after the stored hashes
-   have been upgraded to Argon2.
+Before upgrading a deployment that still depends on unsupported stored password hashes:
 
-Example explicit migration helper:
-
-```python
-from uuid import UUID
-
-from pwdlib import PasswordHash
-from pwdlib.hashers.argon2 import Argon2Hasher
-from pwdlib.hashers.bcrypt import BcryptHasher
-
-from litestar_auth import LitestarAuthConfig, UserManagerSecurity
-from litestar_auth.models import User
-from litestar_auth.password import PasswordHelper
-
-legacy_password_helper = PasswordHelper(
-    password_hash=PasswordHash((Argon2Hasher(), BcryptHasher())),
-)
-
-config = LitestarAuthConfig[User, UUID](
-    # ... your normal config ...
-    user_manager_security=UserManagerSecurity(
-        verification_token_secret="replace-with-32+-char-secret-for-verify",
-        reset_password_token_secret="replace-with-32+-char-secret-for-reset",
-        password_helper=legacy_password_helper,
-    ),
-)
-```
-
-That explicit helper keeps bcrypt verification in the application layer only. Successful logins can
-still upgrade stored bcrypt hashes to Argon2 through `verify_and_update()`.
+1. Re-hash or reset those credentials out of band while the previous release is still serving
+   traffic.
+2. Confirm the persisted hashes now match your intended Argon2 policy.
+3. Deploy the new release only after those credentials no longer depend on unsupported formats.
 
 ## Superuser boolean to role membership
 

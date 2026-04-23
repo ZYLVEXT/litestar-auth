@@ -449,7 +449,7 @@ def test_on_app_init_does_not_warn_for_redis_rate_limiter(
     def load_redis_asyncio() -> object:
         return object()
 
-    monkeypatch.setattr("litestar_auth.ratelimit._load_redis_asyncio", load_redis_asyncio)
+    monkeypatch.setattr("litestar_auth.ratelimit._helpers._load_redis_asyncio", load_redis_asyncio)
 
     config = _minimal_config()
     config.rate_limit_config = AuthRateLimitConfig(

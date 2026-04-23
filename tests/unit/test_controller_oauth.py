@@ -1,4 +1,4 @@
-"""Unit tests for OAuth controller helpers: state validation, authorization URL, access token, account identity."""
+"""Unit tests for OAuth controller helpers and factory wiring."""
 
 from __future__ import annotations
 
@@ -7,7 +7,7 @@ import inspect
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
-from unittest.mock import AsyncMock, MagicMock, call
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from litestar import Litestar, Router
@@ -23,10 +23,6 @@ from litestar_auth.controllers._utils import _require_account_state
 from litestar_auth.controllers.oauth import (
     STATE_COOKIE_MAX_AGE,
     _clear_state_cookie,
-    _get_access_token,
-    _get_account_identity,
-    _get_authorization_url,
-    _get_email_verified,
     _require_verified_email_evidence,
     _set_state_cookie,
     _validate_state,
@@ -43,6 +39,14 @@ from litestar_auth.oauth.service import OAuthAuthorization
 from tests.unit.test_definition_file_coverage import load_reloaded_test_alias
 
 pytestmark = pytest.mark.unit
+
+REMOVED_OAUTH_CONTROLLER_ADAPTER_PASSTHROUGH_HELPERS = (
+    "_get_authorization_url",
+    "_get_access_token",
+    "_get_account_identity",
+    "_get_email_verified",
+    "_as_mapping",
+)
 
 
 def _make_oauth_client() -> oauth_module.OAuthClientProtocol:
@@ -121,100 +125,19 @@ def test_validate_state_raises_when_mismatch() -> None:
     assert (extra.get("code") if isinstance(extra, dict) else None) == ErrorCode.OAUTH_STATE_INVALID
 
 
-# --- manual OAuth client helper shims ---
-
-
-async def test_manual_oauth_helper_shims_delegate_authorization_and_token_contracts(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Controller-level compatibility helpers resolve the shared OAuth client adapter once per helper."""
-    adapter = SimpleNamespace(
-        get_authorization_url=AsyncMock(return_value="https://provider.example/authorize"),
-        get_access_token=AsyncMock(
-            return_value={"access_token": "provider-access-token", "expires_at": None, "refresh_token": None},
-        ),
-    )
-    adapter_factory = MagicMock(return_value=adapter)
-    monkeypatch.setattr(oauth_module, "_build_oauth_client_adapter", adapter_factory)
-    oauth_client = _make_oauth_client()
-
-    authorization_url = await _get_authorization_url(
-        oauth_client=oauth_client,
-        redirect_uri="https://app.example/callback",
-        state="state",
-        scopes=["openid", "email"],
-    )
-    token_payload = await _get_access_token(
-        oauth_client=oauth_client,
-        code="provider-code",
-        redirect_uri="https://app.example/callback",
-    )
-
-    assert authorization_url == "https://provider.example/authorize"
-    assert token_payload == {
-        "access_token": "provider-access-token",
-        "expires_at": None,
-        "refresh_token": None,
-    }
-    assert adapter_factory.call_args_list == [
-        call(oauth_client=oauth_client),
-        call(oauth_client=oauth_client),
-    ]
-    adapter.get_authorization_url.assert_awaited_once_with(
-        redirect_uri="https://app.example/callback",
-        state="state",
-        scopes=["openid", "email"],
-    )
-    adapter.get_access_token.assert_awaited_once_with(
-        code="provider-code",
-        redirect_uri="https://app.example/callback",
-    )
-
-
-async def test_manual_oauth_helper_shims_delegate_identity_and_email_verification(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Controller-level identity helpers reuse the shared adapter builder."""
-    adapter = SimpleNamespace(
-        get_account_identity=AsyncMock(return_value=("provider-id", "user@example.com")),
-        get_email_verified=AsyncMock(return_value=True),
-    )
-    adapter_factory = MagicMock(return_value=adapter)
-    monkeypatch.setattr(oauth_module, "_build_oauth_client_adapter", adapter_factory)
-    oauth_client = _make_oauth_client()
-
-    identity = await _get_account_identity(oauth_client, "provider-access-token")
-    email_verified = await _get_email_verified(oauth_client, "provider-access-token")
-
-    assert identity == ("provider-id", "user@example.com")
-    assert email_verified is True
-    assert adapter_factory.call_args_list == [
-        call(oauth_client=oauth_client),
-        call(oauth_client=oauth_client),
-    ]
-    adapter.get_account_identity.assert_awaited_once_with("provider-access-token")
-    adapter.get_email_verified.assert_awaited_once_with("provider-access-token")
-
-
-def test_manual_oauth_mapping_helper_delegates_to_client_adapter_normalizer(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Controller compatibility alias reuses the adapter payload normalizer."""
-    normalize_payload = MagicMock(return_value={"access_token": "provider-access-token"})
-    monkeypatch.setattr(oauth_module, "_client_as_mapping", normalize_payload)
-    raw_payload = object()
-
-    payload = oauth_module._as_mapping(raw_payload, message="invalid")
-
-    assert payload == {"access_token": "provider-access-token"}
-    normalize_payload.assert_called_once_with(raw_payload, message="invalid")
-
-
-def test_manual_oauth_helpers_expose_typed_client_annotations() -> None:
-    """Manual controller helpers advertise the explicit OAuth client protocol."""
+def test_manual_oauth_factories_expose_typed_client_annotations() -> None:
+    """Manual controller factories advertise the explicit OAuth client protocol."""
     assert create_oauth_controller.__annotations__["oauth_client"] == "OAuthClientProtocol"
     assert create_oauth_associate_controller.__annotations__["oauth_client"] == "OAuthClientProtocol"
-    assert _get_authorization_url.__annotations__["oauth_client"] == "OAuthClientProtocol"
+
+
+def test_oauth_module_does_not_expose_removed_adapter_passthrough_helpers() -> None:
+    """Removed controller-to-adapter passthrough helpers stay absent from the module surface."""
+    module_members = vars(oauth_module)
+
+    for helper_name in REMOVED_OAUTH_CONTROLLER_ADAPTER_PASSTHROUGH_HELPERS:
+        assert helper_name not in module_members
+        assert not hasattr(oauth_module, helper_name)
 
 
 def test_create_oauth_controller_builds_the_shared_client_adapter_before_assembly(

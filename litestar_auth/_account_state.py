@@ -53,7 +53,6 @@ def resolve_account_state_attribute_failure(
     user: object,
     *,
     require_verified: bool,
-    prioritize_unverified: bool,
 ) -> AccountStateFailure | None:
     """Return the account-state failure implied by guarded user attributes.
 
@@ -65,8 +64,6 @@ def resolve_account_state_attribute_failure(
     is_active = user.is_active
     is_verified = user.is_verified
 
-    if prioritize_unverified and require_verified and not is_verified:
-        return "unverified"
     if not is_active:
         return "inactive"
     if require_verified and not is_verified:
@@ -78,7 +75,6 @@ def resolve_account_state_failure(
     user: object,
     *,
     require_verified: bool,
-    prioritize_unverified: bool,
     user_manager: object | None,
 ) -> AccountStateFailure | None:
     """Return the current account-state failure from manager seam or attribute fallback."""
@@ -90,7 +86,6 @@ def resolve_account_state_failure(
     return resolve_account_state_attribute_failure(
         user,
         require_verified=require_verified,
-        prioritize_unverified=prioritize_unverified,
     )
 
 
@@ -98,7 +93,6 @@ def require_account_state(
     user: object,
     *,
     require_verified: bool,
-    prioritize_unverified: bool,
     user_manager: object | None,
     error_types: AccountStateErrorTypes,
 ) -> None:
@@ -106,7 +100,6 @@ def require_account_state(
     failure = resolve_account_state_failure(
         user,
         require_verified=require_verified,
-        prioritize_unverified=prioritize_unverified,
         user_manager=user_manager,
     )
     if failure is not None:
@@ -148,7 +141,6 @@ def require_account_state_with_client_error(
     user: object,
     *,
     require_verified: bool,
-    prioritize_unverified: bool,
     user_manager: object | None,
     error_types: AccountStateErrorTypes,
 ) -> None:
@@ -157,7 +149,6 @@ def require_account_state_with_client_error(
         require_account_state(
             user,
             require_verified=require_verified,
-            prioritize_unverified=prioritize_unverified,
             user_manager=user_manager,
             error_types=error_types,
         )

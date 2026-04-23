@@ -1591,6 +1591,7 @@ async def test_verify_rejects_unverified_user_when_requires_verification_enabled
     [
         ({"is_active": False}, "The user account is inactive."),
         ({"is_verified": False}, "The user account is not verified."),
+        ({"is_active": False, "is_verified": False}, "The user account is inactive."),
     ],
 )
 async def test_verify_account_state_failures_reset_without_incrementing_rate_limit(

@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
-import sys
 import time
 from typing import TYPE_CHECKING
 from uuid import uuid4
 
+from . import _helpers as helpers_module
 from ._helpers import DEFAULT_KEY_PREFIX, RedisScriptResult, _validate_configuration
 
 if TYPE_CHECKING:
@@ -16,17 +16,16 @@ if TYPE_CHECKING:
 
 
 def _load_package_redis_asyncio() -> object:
-    """Resolve the package-level Redis loader at runtime.
+    """Resolve the private shared Redis loader at runtime.
 
-    Using the package module keeps monkeypatches on
-    ``litestar_auth.ratelimit._load_redis_asyncio`` visible to the backend,
-    matching the old single-module behavior.
+    Looking up the helper module attribute at call time keeps monkeypatches on
+    ``litestar_auth.ratelimit._helpers._load_redis_asyncio`` visible to the
+    backend without re-exporting that private helper from the public package.
 
     Returns:
-        The object returned by the package-level Redis loader.
+        The object returned by the private helper Redis loader.
     """
-    package_module = sys.modules["litestar_auth.ratelimit"]
-    loader = vars(package_module)["_load_redis_asyncio"]
+    loader = vars(helpers_module)["_load_redis_asyncio"]
     return loader()
 
 

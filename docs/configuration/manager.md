@@ -250,10 +250,8 @@ Compatibility and migration:
   are resolved alongside `id_parser`).
 - Existing `UserPasswordField` imports remain valid. Add `UserEmailField` only when you also want the built-in
   email regex/max-length contract on app-owned schemas.
-- Existing `PasswordHelper()` and `PasswordHelper(password_hash=...)` call sites remain source-compatible. Prefer
-  `PasswordHelper.from_defaults()` when you mean "use the library default Argon2-only hasher policy" and reserve
-  `PasswordHelper(password_hash=...)` for deliberate custom pwdlib composition, including any
-  application-owned bcrypt migration window.
+- Prefer `PasswordHelper.from_defaults()` when you mean "use the library default Argon2-only hasher policy."
+  Use `PasswordHelper(password_hash=...)` only for deliberate application-owned custom pwdlib composition.
 - Keep password-helper and password-validator overrides on `user_manager_security`. Use
   `UserManagerSecurity(password_helper=..., password_validator=...)` for direct overrides, or
   `password_validator_factory` when the validator should be derived from config at runtime.
@@ -266,10 +264,10 @@ If your application also hashes or verifies passwords outside `BaseUserManager`,
 `config.resolve_password_helper()` returns that object unchanged. Otherwise it memoizes
 `PasswordHelper.from_defaults()` on the config and the plugin will inject the same helper into
 each request-scoped manager, so the plugin and app-owned code share the same Argon2-only helper.
-To keep bcrypt verification during a migration window, inject an explicit helper through
-`UserManagerSecurity(password_helper=...)`. This helper path does not inherit anything from
-`password_validator_factory`, `user_manager_security`, or token settings; it only resolves the
-password-hash policy itself.
+Under that default helper, unsupported stored password hashes fail closed. Rotate or reset those
+credentials before upgrading a deployment that still depends on them. An explicit
+`user_manager_security.password_helper` override changes only the password-hash policy itself; it
+does not inherit validator or token settings.
 
 If app-owned code never hashes or verifies passwords directly, you can skip calling
 `config.resolve_password_helper()`: the default plugin builder still materializes and injects the

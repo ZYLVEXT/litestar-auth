@@ -6,9 +6,6 @@ import importlib
 from typing import TYPE_CHECKING
 
 import pytest
-from pwdlib import PasswordHash
-from pwdlib.hashers.argon2 import Argon2Hasher
-from pwdlib.hashers.bcrypt import BcryptHasher
 
 import litestar_auth.password as password_module
 
@@ -27,11 +24,6 @@ def _password_helper_cls() -> type[PasswordHelper]:
     """
     module = importlib.import_module("litestar_auth.password")
     return module.PasswordHelper
-
-
-def _legacy_password_helper() -> PasswordHelper:
-    """Return an explicit helper that keeps bcrypt verification during migrations."""
-    return _password_helper_cls()(password_hash=PasswordHash((Argon2Hasher(), BcryptHasher())))
 
 
 def test_password_module_executes_under_coverage() -> None:
@@ -108,37 +100,18 @@ def test_verify_returns_true_for_matching_password() -> None:
     assert helper.verify("s3cure-password", hashed_password) is True
 
 
-def test_verify_returns_false_for_wrong_or_unknown_hashes() -> None:
-    """Verification fails for invalid credentials and unknown hashes."""
+def test_verify_returns_false_for_wrong_password() -> None:
+    """Verification fails when the plaintext does not match the stored hash."""
     helper = _password_helper_cls()()
     hashed_password = helper.hash("s3cure-password")
 
     assert helper.verify("wrong-password", hashed_password) is False
-    assert helper.verify("s3cure-password", "not-a-password-hash") is False
 
 
-def test_verify_returns_false_for_bcrypt_hash_with_default_helper() -> None:
-    """The library default helper no longer accepts bcrypt hashes."""
+def test_verify_returns_false_for_unsupported_hash_format() -> None:
+    """Verification fails closed for unsupported stored hash formats."""
     helper = _password_helper_cls()()
-    bcrypt_hash = BcryptHasher().hash("legacy-password")
-
-    assert helper.verify("legacy-password", bcrypt_hash) is False
-
-
-def test_explicit_legacy_helper_verifies_bcrypt_hashes() -> None:
-    """Applications can still keep bcrypt support with an explicit helper."""
-    helper = _legacy_password_helper()
-    bcrypt_hash = BcryptHasher().hash("legacy-password")
-
-    assert helper.verify("legacy-password", bcrypt_hash) is True
-
-
-def test_explicit_legacy_helper_returns_false_for_overlong_password_against_bcrypt_hash() -> None:
-    """Overlong legacy bcrypt inputs still fail closed for explicit migration helpers."""
-    helper = _legacy_password_helper()
-    bcrypt_hash = BcryptHasher().hash("a" * 72)
-
-    assert helper.verify("a" * 80, bcrypt_hash) is False
+    assert helper.verify("s3cure-password", "not-a-password-hash") is False
 
 
 def test_verify_and_update_returns_true_none_for_current_argon2_hash() -> None:
@@ -150,34 +123,10 @@ def test_verify_and_update_returns_true_none_for_current_argon2_hash() -> None:
     assert new_hash is None
 
 
-def test_verify_and_update_returns_false_none_for_bcrypt_hash_with_default_helper() -> None:
-    """The library default helper refuses bcrypt hashes instead of upgrading them."""
+def test_verify_and_update_returns_false_none_for_unsupported_hash() -> None:
+    """Unsupported hash formats fail closed without an upgrade."""
     helper = _password_helper_cls()()
-    bcrypt_hash = BcryptHasher().hash("legacy-password")
-
-    verified, new_hash = helper.verify_and_update("legacy-password", bcrypt_hash)
-
-    assert verified is False
-    assert new_hash is None
-
-
-def test_explicit_legacy_helper_returns_new_hash_for_deprecated_bcrypt() -> None:
-    """Explicit migration helpers can verify bcrypt hashes and upgrade them to Argon2."""
-    helper = _legacy_password_helper()
-    bcrypt_hash = BcryptHasher().hash("legacy-password")
-    verified, new_hash = helper.verify_and_update("legacy-password", bcrypt_hash)
-    assert verified is True
-    assert new_hash is not None
-    assert new_hash.startswith("$argon2")
-    assert new_hash != bcrypt_hash
-
-
-def test_explicit_legacy_helper_returns_false_none_for_overlong_password_against_bcrypt_hash() -> None:
-    """Explicit legacy bcrypt verification should not leak errors for overlong passwords."""
-    helper = _legacy_password_helper()
-    bcrypt_hash = BcryptHasher().hash("a" * 72)
-
-    verified, new_hash = helper.verify_and_update("a" * 80, bcrypt_hash)
+    verified, new_hash = helper.verify_and_update("legacy-password", "not-a-password-hash")
 
     assert verified is False
     assert new_hash is None
@@ -188,13 +137,5 @@ def test_verify_and_update_returns_false_none_for_wrong_password() -> None:
     helper = _password_helper_cls()()
     hashed = helper.hash("s3cure-password")
     verified, new_hash = helper.verify_and_update("wrong-password", hashed)
-    assert verified is False
-    assert new_hash is None
-
-
-def test_verify_and_update_returns_false_none_for_unknown_hash() -> None:
-    """Unknown hash format yields (False, None)."""
-    helper = _password_helper_cls()()
-    verified, new_hash = helper.verify_and_update("any-password", "not-a-valid-hash")
     assert verified is False
     assert new_hash is None

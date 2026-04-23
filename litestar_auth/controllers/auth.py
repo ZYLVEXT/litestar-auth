@@ -163,7 +163,6 @@ async def _handle_auth_login[UP: UserProtocol[Any], ID](
         user,
         require_verified=ctx.requires_verification,
         user_manager=user_manager,
-        prioritize_unverified=True,
     )
 
     totp_login_flow = (
@@ -259,7 +258,6 @@ async def _handle_auth_refresh[UP: UserProtocol[Any], ID](
             user,
             require_verified=ctx.requires_verification,
             user_manager=user_manager,
-            prioritize_unverified=True,
         )
     except ClientException:
         if isinstance(refresh_strategy, TokenInvalidationCapable):

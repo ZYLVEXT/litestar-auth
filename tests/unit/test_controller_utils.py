@@ -163,7 +163,6 @@ def test_shared_account_state_client_error_helper_maps_inactive_users() -> None:
         account_state_module.require_account_state_with_client_error(
             _DummyUser(is_active=False),
             require_verified=False,
-            prioritize_unverified=False,
             user_manager=None,
             error_types=account_state_module.AccountStateErrorTypes(
                 inactive_error=InactiveUserError,
@@ -599,7 +598,6 @@ def test_require_account_state_from_attributes_allows_unverified_users_when_not_
     _require_account_state_from_attributes(
         _DummyUser(is_verified=False),
         require_verified=False,
-        prioritize_unverified=False,
     )
 
 
@@ -608,17 +606,15 @@ def test_require_account_state_from_attributes_accepts_valid_user() -> None:
     _require_account_state_from_attributes(
         _DummyUser(),
         require_verified=True,
-        prioritize_unverified=False,
     )
 
 
-def test_require_account_state_from_attributes_raises_inactive_first_by_default() -> None:
-    """Inactive accounts take precedence over verification failures by default."""
+def test_require_account_state_from_attributes_raises_inactive_for_dual_failure() -> None:
+    """Users that fail both account-state checks raise the inactive-user error."""
     with pytest.raises(InactiveUserError):
         _require_account_state_from_attributes(
             _DummyUser(is_active=False, is_verified=False),
             require_verified=True,
-            prioritize_unverified=False,
         )
 
 
@@ -628,17 +624,6 @@ def test_require_account_state_from_attributes_raises_unverified_when_required()
         _require_account_state_from_attributes(
             _DummyUser(is_verified=False),
             require_verified=True,
-            prioritize_unverified=False,
-        )
-
-
-def test_require_account_state_from_attributes_can_prioritize_unverified_first() -> None:
-    """Attribute-based validation can preserve unverified-first ordering."""
-    with pytest.raises(UnverifiedUserError):
-        _require_account_state_from_attributes(
-            _DummyUser(is_active=False, is_verified=False),
-            require_verified=True,
-            prioritize_unverified=True,
         )
 
 
@@ -769,8 +754,8 @@ async def test_require_account_state_invokes_failure_callback_for_unverified_err
 
 
 @pytest.mark.asyncio
-async def test_require_account_state_prioritizes_inactive_by_default() -> None:
-    """Default ordering preserves inactive-account precedence."""
+async def test_require_account_state_returns_inactive_client_error_for_dual_failure() -> None:
+    """Dual account-state failures map to the inactive client error."""
     with pytest.raises(ClientException) as exc_info:
         await _require_account_state(
             _DummyUser(is_active=False, is_verified=False),
@@ -779,17 +764,3 @@ async def test_require_account_state_prioritizes_inactive_by_default() -> None:
 
     assert exc_info.value.detail == "The user account is inactive."
     assert exc_info.value.extra == {"code": ErrorCode.LOGIN_USER_INACTIVE}
-
-
-@pytest.mark.asyncio
-async def test_require_account_state_can_prioritize_unverified_before_inactive() -> None:
-    """Legacy login and TOTP flows can preserve unverified-first ordering when both checks fail."""
-    with pytest.raises(ClientException) as exc_info:
-        await _require_account_state(
-            _DummyUser(is_active=False, is_verified=False),
-            require_verified=True,
-            prioritize_unverified=True,
-        )
-
-    assert exc_info.value.detail == "The user account is not verified."
-    assert exc_info.value.extra == {"code": ErrorCode.LOGIN_USER_NOT_VERIFIED}

@@ -21,6 +21,7 @@ from redis.exceptions import ConnectionError as RedisConnectionError
 
 import litestar_auth.ratelimit as ratelimit_module
 import litestar_auth.ratelimit._config as ratelimit_config_module
+import litestar_auth.ratelimit._helpers as ratelimit_helpers_module
 from litestar_auth.authentication.strategy.redis import RedisClientProtocol as RedisTokenClientProtocol
 from litestar_auth.authentication.strategy.redis import RedisTokenStrategy
 from litestar_auth.contrib.redis import RedisAuthClientProtocol, RedisAuthPreset, RedisAuthRateLimitTier
@@ -35,9 +36,6 @@ from litestar_auth.ratelimit import (
     RateLimiterBackend,
     RedisClientProtocol,
     RedisRateLimiter,
-)
-from litestar_auth.ratelimit import (
-    logger as ratelimit_logger,
 )
 from tests._helpers import cast_fakeredis
 
@@ -199,9 +197,11 @@ async def test_ratelimit_module_reload_preserves_public_api() -> None:
     await backend.increment("127.0.0.1")
     assert await backend.check("127.0.0.1") is True
     assert await limiter.build_key(request) == (
-        f"login:{reloaded_module._safe_key_part('127.0.0.1')}:{reloaded_module._safe_key_part('reloaded@example.com')}"
+        "login:"
+        f"{ratelimit_helpers_module._safe_key_part('127.0.0.1')}:"
+        f"{ratelimit_helpers_module._safe_key_part('reloaded@example.com')}"
     )
-    assert await reloaded_module._extract_email(request) == "Reloaded@Example.com"
+    assert await ratelimit_helpers_module._extract_email(request) == "Reloaded@Example.com"
     await orchestrator.on_success("verify", request)
 
 
@@ -212,7 +212,7 @@ def test_auth_rate_limit_config_exposes_stable_endpoint_slots() -> None:
 
 
 def test_auth_rate_limit_identifier_helpers_stay_aligned_with_public_builder_contract() -> None:
-    """Private catalog helpers stay aligned with the public enum builder contract."""
+    """Default recipe metadata stays aligned with the public enum builder contract."""
     group_identifiers = get_args(ratelimit_module.AuthRateLimitEndpointGroup.__value__)
 
     assert tuple(field.name for field in fields(AuthRateLimitConfig)) == AUTH_RATE_LIMIT_SLOT_VALUES
@@ -326,8 +326,8 @@ def test_endpoint_rate_limit_annotations_are_runtime_resolvable() -> None:
     assert build_key_hints["return"] is str
 
 
-def test_auth_rate_limit_catalog_covers_supported_slots_scopes_groups_and_namespaces() -> None:
-    """The private catalog is the single slot inventory for auth rate-limit defaults."""
+def test_auth_rate_limit_default_recipes_cover_supported_slots_scopes_groups_and_namespaces() -> None:
+    """Default auth rate-limit recipes cover the supported slot inventory."""
     recipes = ratelimit_config_module._AUTH_RATE_LIMIT_ENDPOINT_RECIPES
     catalog = ratelimit_config_module._AUTH_RATE_LIMIT_ENDPOINT_CATALOG
 
@@ -384,7 +384,7 @@ def test_auth_rate_limit_catalog_covers_supported_slots_scopes_groups_and_namesp
 
 
 def test_auth_rate_limit_catalog_query_helpers_respect_slot_order_and_disablement() -> None:
-    """The extracted catalog helper keeps builder slot selection ordered and internal."""
+    """Builder slot selection stays ordered and respects disablement."""
     catalog = ratelimit_config_module._AUTH_RATE_LIMIT_ENDPOINT_CATALOG
     enabled_slots = catalog.resolve_enabled_slots(
         (AuthRateLimitSlot.LOGIN, AuthRateLimitSlot.REFRESH, AuthRateLimitSlot.TOTP_VERIFY),
@@ -460,8 +460,8 @@ def test_auth_rate_limit_config_manual_construction_remains_plain_dataclass() ->
     assert config.request_verify_token is None
 
 
-def test_auth_rate_limit_config_from_shared_backend_uses_catalog_defaults() -> None:
-    """The shared-backend builder materializes the full private endpoint catalog by default."""
+def test_auth_rate_limit_config_from_shared_backend_uses_supported_slot_defaults() -> None:
+    """The shared-backend builder materializes every supported slot by default."""
     shared_backend = InMemoryRateLimiter(max_attempts=2, window_seconds=10)
     config = AuthRateLimitConfig.from_shared_backend(shared_backend, trusted_proxy=True)
 
@@ -699,8 +699,8 @@ def test_auth_rate_limit_config_from_shared_backend_applies_group_backends_and_e
     assert config.request_verify_token is request_verify_override
 
 
-async def test_auth_rate_limit_config_from_shared_backend_preserves_downstream_migration_recipe() -> None:
-    """The shared builder preserves the legacy Redis key recipe used by downstream apps."""
+async def test_auth_rate_limit_config_from_shared_backend_applies_explicit_slot_overrides_and_group_backends() -> None:
+    """Explicit slot overrides and group backends drive the final namespace and backend layout."""
     credential_backend = InMemoryRateLimiter(max_attempts=2, window_seconds=10)
     refresh_backend = InMemoryRateLimiter(max_attempts=3, window_seconds=15)
     totp_backend = InMemoryRateLimiter(max_attempts=4, window_seconds=20)
@@ -796,14 +796,17 @@ async def test_auth_rate_limit_config_from_shared_backend_preserves_downstream_m
         "totp_disable": ip_only_request,
     }
     expected_keys = {
-        "login": f"login:{ratelimit_module._safe_key_part('10.0.0.1')}:{ratelimit_module._safe_key_part('user@example.com')}",
-        "forgot_password": (
-            f"forgot_password:{ratelimit_module._safe_key_part('10.0.0.1')}:"
-            f"{ratelimit_module._safe_key_part('user@example.com')}"
+        "login": (
+            f"login:{ratelimit_helpers_module._safe_key_part('10.0.0.1')}:"
+            f"{ratelimit_helpers_module._safe_key_part('user@example.com')}"
         ),
-        "refresh": f"refresh:{ratelimit_module._safe_key_part('10.0.0.1')}",
-        "totp_verify": f"totp_verify:{ratelimit_module._safe_key_part('10.0.0.1')}",
-        "totp_disable": f"totp_disable:{ratelimit_module._safe_key_part('10.0.0.1')}",
+        "forgot_password": (
+            f"forgot_password:{ratelimit_helpers_module._safe_key_part('10.0.0.1')}:"
+            f"{ratelimit_helpers_module._safe_key_part('user@example.com')}"
+        ),
+        "refresh": f"refresh:{ratelimit_helpers_module._safe_key_part('10.0.0.1')}",
+        "totp_verify": f"totp_verify:{ratelimit_helpers_module._safe_key_part('10.0.0.1')}",
+        "totp_disable": f"totp_disable:{ratelimit_helpers_module._safe_key_part('10.0.0.1')}",
     }
 
     for slot, expected_key in expected_keys.items():
@@ -813,11 +816,11 @@ async def test_auth_rate_limit_config_from_shared_backend_preserves_downstream_m
         assert await limiter.build_key(key_requests[slot]) == expected_key
 
 
-def test_auth_rate_limit_config_from_shared_backend_preserves_documented_redis_migration_recipe(
+def test_auth_rate_limit_config_from_shared_backend_supports_documented_redis_override_recipe(
     async_fakeredis: AsyncFakeRedis,
     patch_redis_loader: None,
 ) -> None:
-    """The documented Redis migration recipe stays expressible through the shared builder."""
+    """The documented Redis override recipe stays expressible through the shared builder."""
     redis_client = cast_fakeredis(async_fakeredis, RedisClientProtocol)
     credential_backend = RedisRateLimiter(redis=redis_client, max_attempts=5, window_seconds=60)
     refresh_backend = RedisRateLimiter(redis=redis_client, max_attempts=10, window_seconds=300)
@@ -953,8 +956,8 @@ async def test_contrib_redis_preset_builds_rate_limit_config_with_shared_client_
     assert config.forgot_password is not None
     assert config.forgot_password.namespace == "forgot-password"
     assert await config.forgot_password.build_key(credential_request) == (
-        f"forgot-password:{ratelimit_module._safe_key_part('10.0.0.1')}:"
-        f"{ratelimit_module._safe_key_part('user@example.com')}"
+        f"forgot-password:{ratelimit_helpers_module._safe_key_part('10.0.0.1')}:"
+        f"{ratelimit_helpers_module._safe_key_part('user@example.com')}"
     )
     assert config.totp_verify is not None
     assert config.totp_verify.backend is explicit_totp_backend
@@ -976,8 +979,8 @@ async def test_contrib_redis_preset_builds_rate_limit_config_with_shared_client_
     assert PENDING_JTI_TTL_FLOOR <= await async_fakeredis.ttl("pending:pending-jti") <= PENDING_JTI_TTL_SECONDS
 
 
-def test_auth_rate_limit_config_from_shared_backend_uses_route_namespaces_by_default() -> None:
-    """The shared-backend builder keeps the canonical route-style namespace recipe."""
+def test_auth_rate_limit_config_from_shared_backend_uses_default_route_namespaces() -> None:
+    """The shared-backend builder uses the default route-style namespaces."""
     shared_backend = InMemoryRateLimiter(max_attempts=2, window_seconds=10)
     config = AuthRateLimitConfig.from_shared_backend(shared_backend, enabled=(AuthRateLimitSlot.FORGOT_PASSWORD,))
 
@@ -1003,7 +1006,7 @@ def test_auth_rate_limit_config_from_shared_backend_rejects_unknown_endpoint_ove
 
 
 def test_auth_rate_limit_config_from_shared_backend_rejects_string_endpoint_override_slot() -> None:
-    """The shared-backend builder requires enum slot keys, not legacy strings."""
+    """The shared-backend builder requires enum slot keys, not raw strings."""
     shared_backend = InMemoryRateLimiter(max_attempts=2, window_seconds=10)
 
     with pytest.raises(
@@ -1028,7 +1031,7 @@ def test_auth_rate_limit_config_from_shared_backend_rejects_unknown_enabled_slot
 
 
 def test_auth_rate_limit_config_from_shared_backend_rejects_string_disabled_slot() -> None:
-    """The shared-backend builder requires enum disabled values, not legacy strings."""
+    """The shared-backend builder requires enum disabled values, not raw strings."""
     shared_backend = InMemoryRateLimiter(max_attempts=2, window_seconds=10)
 
     with pytest.raises(TypeError, match="disabled must contain AuthRateLimitSlot values: verify_token"):
@@ -1049,8 +1052,8 @@ def test_auth_rate_limit_config_from_shared_backend_rejects_unknown_group_name()
         )
 
 
-def test_auth_rate_limit_config_from_shared_backend_builds_canonical_route_namespaces() -> None:
-    """The default shared-builder output keeps the canonical hyphenated namespace recipe."""
+def test_auth_rate_limit_config_from_shared_backend_builds_default_route_namespaces() -> None:
+    """The default shared-builder output uses the hyphenated route namespaces."""
     shared_backend = InMemoryRateLimiter(max_attempts=2, window_seconds=10)
     config = AuthRateLimitConfig.from_shared_backend(
         shared_backend,
@@ -1079,7 +1082,7 @@ def test_auth_rate_limit_config_from_shared_backend_builds_canonical_route_names
 
 
 def test_auth_rate_limit_recipe_index_rejects_duplicate_slots(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The private recipe index guard rejects accidental duplicate slot entries."""
+    """Duplicate slot definitions are rejected when building the recipe index."""
     duplicate_recipe = ratelimit_config_module._AuthRateLimitEndpointRecipe(
         slot=AuthRateLimitSlot.LOGIN,
         default_scope="ip_email",
@@ -1105,7 +1108,7 @@ def test_auth_rate_limit_recipe_index_rejects_duplicate_slots(monkeypatch: pytes
 
 
 def test_auth_rate_limit_config_import_check_rejects_slot_alignment_drift() -> None:
-    """Reloading `_config` fails fast when dataclass fields drift from the private catalog."""
+    """Reloading `_config` fails fast when dataclass fields drift from the supported slot defaults."""
     field_stub = type("FieldStub", (), {"name": "unexpected_slot"})()
     module_name = "litestar_auth.ratelimit._config_alignment_guard_test"
     source_path = Path(ratelimit_config_module.__file__).resolve()
@@ -1128,15 +1131,15 @@ def test_auth_rate_limit_config_import_check_rejects_slot_alignment_drift() -> N
     try:
         with pytest.raises(
             RuntimeError,
-            match="fields must stay aligned with the private auth rate-limit endpoint catalog",
+            match="fields must stay aligned",
         ):
             exec(compile(patched_source, str(source_path), "exec"), module.__dict__)
     finally:
         sys.modules.pop(module_name, None)
 
 
-def test_private_auth_rate_limit_catalog_does_not_leak_from_public_module() -> None:
-    """Private recipe helpers stay internal to ``litestar_auth.ratelimit._config``."""
+def test_auth_rate_limit_default_recipe_helpers_are_not_reexported_from_public_module() -> None:
+    """Default recipe helpers are not re-exported from the public module."""
     assert hasattr(ratelimit_config_module, "_AUTH_RATE_LIMIT_ENDPOINT_CATALOG")
     assert hasattr(ratelimit_config_module, "_AUTH_RATE_LIMIT_ENDPOINT_RECIPES")
     assert hasattr(ratelimit_config_module, "_AUTH_RATE_LIMIT_ENDPOINT_RECIPES_BY_SLOT")
@@ -1182,15 +1185,21 @@ async def test_endpoint_rate_limit_shared_backend_preserves_namespace_and_scope_
     assert confirm_enable_rate_limit.backend is shared_backend
     assert verify_rate_limit.backend is shared_backend
     assert await login_rate_limit.build_key(request) == (
-        f"login:{ratelimit_module._safe_key_part('10.0.0.1')}:{ratelimit_module._safe_key_part('user@example.com')}"
+        "login:"
+        f"{ratelimit_helpers_module._safe_key_part('10.0.0.1')}:"
+        f"{ratelimit_helpers_module._safe_key_part('user@example.com')}"
     )
     assert await refresh_rate_limit.build_key(request) == (
-        f"refresh:{ratelimit_module._safe_key_part('10.0.0.1')}:{ratelimit_module._safe_key_part('user@example.com')}"
+        "refresh:"
+        f"{ratelimit_helpers_module._safe_key_part('10.0.0.1')}:"
+        f"{ratelimit_helpers_module._safe_key_part('user@example.com')}"
     )
     assert await confirm_enable_rate_limit.build_key(request) == (
-        f"totp-confirm-enable:{ratelimit_module._safe_key_part('10.0.0.1')}"
+        f"totp-confirm-enable:{ratelimit_helpers_module._safe_key_part('10.0.0.1')}"
     )
-    assert await verify_rate_limit.build_key(request) == f"totp-verify:{ratelimit_module._safe_key_part('10.0.0.1')}"
+    assert await verify_rate_limit.build_key(request) == (
+        f"totp-verify:{ratelimit_helpers_module._safe_key_part('10.0.0.1')}"
+    )
 
 
 @pytest.mark.parametrize(
@@ -1243,8 +1252,6 @@ async def test_endpoint_rate_limit_shared_backend_preserves_namespace_and_scope_
                 "RateLimitScope",
                 "RedisRateLimiter",
                 "TotpRateLimitOrchestrator",
-                "_safe_key_part",
-                "logger",
             ),
             id="__init__",
         ),
@@ -1263,7 +1270,7 @@ def test_ratelimit_submodules_expose_stable_import_paths(
 
 
 def test_public_ratelimit_all_lists_only_documented_exports() -> None:
-    """The public ratelimit module keeps helper internals out of ``__all__``."""
+    """The public ratelimit module keeps non-public helpers out of ``__all__``."""
     assert all(not symbol.startswith("_") for symbol in ratelimit_module.__all__)
     for symbol in (
         "_DEFAULT_TRUSTED_HEADERS",
@@ -1276,6 +1283,7 @@ def test_public_ratelimit_all_lists_only_documented_exports() -> None:
         "logger",
     ):
         assert symbol not in ratelimit_module.__all__
+        assert not hasattr(ratelimit_module, symbol)
 
 
 async def test_ratelimit_protocol_stubs_behave_as_type_contracts() -> None:
@@ -1395,7 +1403,7 @@ def patch_redis_loader(monkeypatch: pytest.MonkeyPatch) -> None:
     def load_redis() -> object:
         return object()
 
-    monkeypatch.setattr(ratelimit_module, "_load_redis_asyncio", load_redis)
+    monkeypatch.setattr(ratelimit_helpers_module, "_load_redis_asyncio", load_redis)
 
 
 def _build_request(
@@ -1442,7 +1450,7 @@ def test_endpoint_rate_limit_trusted_proxy_defaults_to_false() -> None:
 def test_client_host_ignores_proxy_headers_by_default() -> None:
     """When trusted_proxy=False, only request.client.host is used."""
     request = _build_request(headers=[(b"x-forwarded-for", b"203.0.113.1")])
-    assert ratelimit_module._client_host(request) == "127.0.0.1"
+    assert ratelimit_helpers_module._client_host(request) == "127.0.0.1"
 
 
 def test_client_host_returns_unknown_without_client() -> None:
@@ -1465,7 +1473,7 @@ def test_client_host_returns_unknown_without_client() -> None:
     )
     request = Request(scope=scope)
 
-    assert ratelimit_module._client_host(request) == "unknown"
+    assert ratelimit_helpers_module._client_host(request) == "unknown"
 
 
 @pytest.mark.parametrize(
@@ -1479,7 +1487,7 @@ def test_client_host_returns_unknown_without_client() -> None:
 def test_client_host_uses_default_trusted_headers(headers: list[tuple[bytes, bytes]], expected: str) -> None:
     """Default trusted_headers only reads X-Forwarded-For."""
     request = _build_request(headers=headers)
-    assert ratelimit_module._client_host(request, trusted_proxy=True) == expected
+    assert ratelimit_helpers_module._client_host(request, trusted_proxy=True) == expected
 
 
 def test_client_host_rejects_non_boolean_trusted_proxy_configuration() -> None:
@@ -1487,7 +1495,7 @@ def test_client_host_rejects_non_boolean_trusted_proxy_configuration() -> None:
     request = _build_request(headers=[(b"x-forwarded-for", b"203.0.113.5")])
 
     with pytest.raises(ConfigurationError, match="trusted_proxy must be a boolean"):
-        ratelimit_module._client_host(request, trusted_proxy=cast("Any", "true"))
+        ratelimit_helpers_module._client_host(request, trusted_proxy=cast("Any", "true"))
 
 
 @pytest.mark.parametrize(
@@ -1517,7 +1525,14 @@ def test_client_host_uses_custom_trusted_headers(
 ) -> None:
     """Explicit trusted_headers opt-in reads additional proxy headers."""
     request = _build_request(headers=headers)
-    assert ratelimit_module._client_host(request, trusted_proxy=True, trusted_headers=trusted_headers) == expected
+    assert (
+        ratelimit_helpers_module._client_host(
+            request,
+            trusted_proxy=True,
+            trusted_headers=trusted_headers,
+        )
+        == expected
+    )
 
 
 def test_memory_rate_limiter_rejects_invalid_storage_configuration() -> None:
@@ -1572,7 +1587,7 @@ async def test_memory_rate_limiter_fails_closed_for_new_keys_at_capacity(
     clock.advance(0.1)
     await limiter.increment("first")
     clock.advance(0.1)
-    with caplog.at_level(logging.WARNING, logger=ratelimit_logger.name):
+    with caplog.at_level(logging.WARNING, logger=ratelimit_helpers_module.logger.name):
         assert await limiter.check("third") is False
         await limiter.increment("third")
 
@@ -1788,7 +1803,7 @@ def test_redis_rate_limiter_lazy_import_error_message(monkeypatch: pytest.Monkey
     monkeypatch.setattr(importlib, "import_module", fail_import)
 
     with pytest.raises(ImportError, match="Install litestar-auth\\[redis\\] to use RedisRateLimiter"):
-        ratelimit_module._load_redis_asyncio()
+        ratelimit_helpers_module._load_redis_asyncio()
 
 
 async def test_redis_rate_limiter_propagates_connection_error(
@@ -1880,7 +1895,9 @@ async def test_endpoint_rate_limit_build_key_ip_email_normalizes_identifier() ->
     key = await limiter.build_key(request)
 
     assert key == (
-        f"login:{ratelimit_module._safe_key_part('10.0.0.1')}:{ratelimit_module._safe_key_part('user@example.com')}"
+        "login:"
+        f"{ratelimit_helpers_module._safe_key_part('10.0.0.1')}:"
+        f"{ratelimit_helpers_module._safe_key_part('user@example.com')}"
     )
 
 
@@ -1903,7 +1920,9 @@ async def test_endpoint_rate_limit_reset_uses_key_without_email_when_body_has_no
 
     await limiter.reset(request)
 
-    backend.reset.assert_awaited_once_with(f"register:{ratelimit_module._safe_key_part('192.168.1.1')}")
+    backend.reset.assert_awaited_once_with(
+        f"register:{ratelimit_helpers_module._safe_key_part('192.168.1.1')}",
+    )
 
 
 async def test_extract_email_prefers_identity_fields_and_ignores_invalid_payloads() -> None:
@@ -1919,15 +1938,15 @@ async def test_extract_email_prefers_identity_fields_and_ignores_invalid_payload
         ),
     )
 
-    assert await ratelimit_module._extract_email(prioritized_request) == "user@example.com"
+    assert await ratelimit_helpers_module._extract_email(prioritized_request) == "user@example.com"
     assert (
-        await ratelimit_module._extract_email(
+        await ratelimit_helpers_module._extract_email(
             cast("Request[Any, Any, Any]", JsonRequestStub(payload={"email": "user@example.com"})),
         )
         == "user@example.com"
     )
     assert (
-        await ratelimit_module._extract_email(
+        await ratelimit_helpers_module._extract_email(
             cast("Request[Any, Any, Any]", JsonRequestStub(payload=["not-a-dict"])),
         )
         is None
@@ -1941,7 +1960,7 @@ async def test_extract_email_prefers_identity_fields_and_ignores_invalid_payload
         async def json(self) -> object:
             raise TypeError
 
-    assert await ratelimit_module._extract_email(cast("Request[Any, Any, Any]", BadJsonRequest())) is None
+    assert await ratelimit_helpers_module._extract_email(cast("Request[Any, Any, Any]", BadJsonRequest())) is None
 
 
 async def test_extract_email_skips_blank_identifier_username_and_email_values() -> None:
@@ -1965,9 +1984,9 @@ async def test_extract_email_skips_blank_identifier_username_and_email_values() 
         JsonRequestStub(payload={"email": ""}),
     )
 
-    assert await ratelimit_module._extract_email(identifier_request) == "id@example.com"
-    assert await ratelimit_module._extract_email(email_request) == "other@example.com"
-    assert await ratelimit_module._extract_email(blank_email_request) is None
+    assert await ratelimit_helpers_module._extract_email(identifier_request) == "id@example.com"
+    assert await ratelimit_helpers_module._extract_email(email_request) == "other@example.com"
+    assert await ratelimit_helpers_module._extract_email(blank_email_request) is None
 
 
 async def test_endpoint_rate_limit_build_key_ip_uses_namespace_and_host() -> None:
@@ -1979,7 +1998,7 @@ async def test_endpoint_rate_limit_build_key_ip_uses_namespace_and_host() -> Non
     )
     request = _build_request()
 
-    assert await limiter.build_key(request) == f"login:{ratelimit_module._safe_key_part('127.0.0.1')}"
+    assert await limiter.build_key(request) == f"login:{ratelimit_helpers_module._safe_key_part('127.0.0.1')}"
 
 
 async def test_endpoint_rate_limit_build_key_ip_email_without_email_uses_host_only() -> None:
@@ -1994,7 +2013,7 @@ async def test_endpoint_rate_limit_build_key_ip_email_without_email_uses_host_on
         JsonRequestStub(payload={}, client=ClientStub(host="192.168.1.1")),
     )
 
-    assert await limiter.build_key(request) == f"register:{ratelimit_module._safe_key_part('192.168.1.1')}"
+    assert await limiter.build_key(request) == (f"register:{ratelimit_helpers_module._safe_key_part('192.168.1.1')}")
 
 
 async def test_endpoint_rate_limit_logs_trigger(caplog: pytest.LogCaptureFixture) -> None:
@@ -2007,7 +2026,13 @@ async def test_endpoint_rate_limit_logs_trigger(caplog: pytest.LogCaptureFixture
     request = _build_request()
     await limiter.increment(request)
 
-    with caplog.at_level(logging.WARNING, logger=ratelimit_logger.name), pytest.raises(TooManyRequestsException):
+    with (
+        caplog.at_level(
+            logging.WARNING,
+            logger=ratelimit_helpers_module.logger.name,
+        ),
+        pytest.raises(TooManyRequestsException),
+    ):
         await limiter.before_request(request)
 
     events = [cast("str | None", getattr(record, "event", None)) for record in caplog.records]
