@@ -80,9 +80,11 @@ Raised when a create or update flow collides with an existing user identity.
 
 Notes:
 - Construct with `UserAlreadyExistsError(identifier=UserIdentifier(...))` or omit `identifier`.
+- The default message is generic even when `identifier` is present. Log `identifier_type` / `identifier_value`
+  from trusted operator code when you need collision diagnostics; do not echo them to clients.
 - `message`, `code`, and `identifier` are keyword-only.
 - Structured construction stores the supplied identifier context as-is.
-- The default message includes the identifier context when it is supplied.
+- The default message does not include the identifier context.
 
 Example catch/log flow:
 
@@ -126,7 +128,7 @@ If your code raises the structured form directly, the default detail changes wit
 ```json
 {
   "status_code": 400,
-  "detail": "User with email='admin@example.com' already exists",
+  "detail": "A user with the provided credentials already exists.",
   "extra": {
     "code": "REGISTER_USER_ALREADY_EXISTS"
   }

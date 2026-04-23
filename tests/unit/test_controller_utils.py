@@ -22,6 +22,7 @@ from litestar_auth.controllers._utils import (
     _create_rate_limit_handlers,
     _create_request_body_exception_handlers,
     _decode_request_body,
+    _domain_error_public_detail,
     _map_domain_exceptions,
     _require_account_state,
     _require_account_state_from_attributes,
@@ -345,8 +346,22 @@ async def test_map_domain_exceptions_maps_first_matching_error() -> None:
             _raise_user_already_exists()
 
     assert exc_info.value.status_code == STATUS_BAD_REQUEST
-    assert exc_info.value.detail == "Email already registered"
+    assert exc_info.value.detail == UserAlreadyExistsError.default_message
     assert exc_info.value.extra == {"code": ErrorCode.REGISTER_USER_ALREADY_EXISTS}
+
+
+def test_domain_error_public_detail_keeps_duplicate_user_responses_generic() -> None:
+    """Duplicate-user responses never expose caller-provided contextual text."""
+    error = UserAlreadyExistsError(message="Email already registered")
+
+    assert _domain_error_public_detail(error) == UserAlreadyExistsError.default_message
+
+
+def test_domain_error_public_detail_preserves_non_duplicate_messages() -> None:
+    """Other mapped domain errors keep their explicit public details."""
+    error = InvalidPasswordError(message="too weak")
+
+    assert _domain_error_public_detail(error) == "too weak"
 
 
 @pytest.mark.asyncio

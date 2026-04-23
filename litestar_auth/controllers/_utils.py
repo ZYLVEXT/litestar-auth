@@ -16,7 +16,13 @@ from litestar.exceptions import ClientException, ValidationException
 from litestar.response import Response
 
 import litestar_auth._account_state as _shared_account_state
-from litestar_auth.exceptions import ConfigurationError, ErrorCode, InactiveUserError, UnverifiedUserError
+from litestar_auth.exceptions import (
+    ConfigurationError,
+    ErrorCode,
+    InactiveUserError,
+    UnverifiedUserError,
+    UserAlreadyExistsError,
+)
 
 logger = logging.getLogger(__name__)
 _ACCOUNT_STATE_ERROR_TYPES = _shared_account_state.AccountStateErrorTypes(
@@ -281,7 +287,18 @@ async def _map_domain_exceptions(
         if on_error is not None:
             await on_error()
         status_code, error_code = _resolve_domain_error_response(exc, mapping)
-        raise ClientException(status_code=status_code, detail=str(exc), extra={"code": error_code}) from exc
+        raise ClientException(
+            status_code=status_code,
+            detail=_domain_error_public_detail(exc),
+            extra={"code": error_code},
+        ) from exc
+
+
+def _domain_error_public_detail(exc: Exception) -> str:
+    """Return the client-facing detail for a mapped domain exception."""
+    if isinstance(exc, UserAlreadyExistsError):
+        return UserAlreadyExistsError.default_message
+    return str(exc)
 
 
 def _require_msgspec_struct(

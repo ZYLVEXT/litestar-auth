@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import importlib
 from datetime import timedelta
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 from uuid import UUID, uuid4
 
 import pytest
@@ -44,6 +44,42 @@ class ExampleUserManager:
         """Return the configured user when the identifier matches."""
         self.seen_user_ids.append(user_id)
         return self.user if user_id == self.user.id else None
+
+
+class _RecordingRedisClient:
+    """Delegate to fakeredis while recording TTL arguments for timing-sensitive tests."""
+
+    def __init__(self, redis: AsyncFakeRedis) -> None:
+        """Store the wrapped fakeredis client."""
+        self.redis = redis
+        self.setex_calls: list[tuple[str, int, str]] = []
+        self.expire_calls: list[tuple[str, int]] = []
+
+    async def setex(self, name: str, time: int, value: str, /) -> object:
+        """Record an expiring value write and execute it against fakeredis.
+
+        Returns:
+            The wrapped fakeredis ``setex`` result.
+        """
+        self.setex_calls.append((name, time, value))
+        return await self.redis.setex(name, time, value)
+
+    async def sadd(self, name: str, *values: str) -> int:
+        """Delegate set membership writes to fakeredis.
+
+        Returns:
+            The number of added set members.
+        """
+        return await self.redis.sadd(name, *values)  # ty: ignore[invalid-await]
+
+    async def expire(self, name: str, time: int) -> bool:
+        """Record key expiry updates and execute them against fakeredis.
+
+        Returns:
+            Whether fakeredis applied the expiration.
+        """
+        self.expire_calls.append((name, time))
+        return await self.redis.expire(name, time)
 
 
 def _disable_optional_import(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -146,8 +182,9 @@ async def test_redis_strategy_write_token_enforces_minimum_ttl(
     _disable_optional_import(monkeypatch)
     monkeypatch.setattr(redis_strategy_module.secrets, "token_urlsafe", lambda _: "token-min-ttl")
     user = ExampleUser(id=uuid4())
+    recording_redis = _RecordingRedisClient(async_fakeredis)
     strategy = RedisTokenStrategy[ExampleUser, UUID](
-        redis=cast_fakeredis(async_fakeredis, RedisClientProtocol),
+        redis=cast("RedisClientProtocol", recording_redis),
         token_hash_secret=TOKEN_HASH_SECRET,
         lifetime=timedelta(seconds=0),
     )
@@ -156,10 +193,8 @@ async def test_redis_strategy_write_token_enforces_minimum_ttl(
 
     token_key = _token_key("token-min-ttl")
     index_key = f"{DEFAULT_KEY_PREFIX}user:{user.id}"
-    assert await async_fakeredis.get(token_key) == str(user.id).encode()
-    assert await async_fakeredis.smembers(index_key) == {token_key.encode()}  # ty: ignore[invalid-await]
-    assert MINIMUM_TTL_FLOOR <= await async_fakeredis.ttl(token_key) <= MINIMUM_TTL_SECONDS
-    assert MINIMUM_TTL_FLOOR <= await async_fakeredis.ttl(index_key) <= MINIMUM_TTL_SECONDS
+    assert recording_redis.setex_calls == [(token_key, MINIMUM_TTL_SECONDS, str(user.id))]
+    assert recording_redis.expire_calls == [(index_key, MINIMUM_TTL_SECONDS)]
 
 
 @pytest.mark.parametrize("response_mode", ["bytes", "str"], ids=["bytes", "str"])

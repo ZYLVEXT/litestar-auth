@@ -9,6 +9,13 @@ Use this when moving from local development to production, especially for **secr
 
 ## Secrets and keys
 
+- Store production secrets in a secrets manager or KMS-backed runtime secret
+  source. Do not commit them, bake them into images, or share one value across
+  auth roles for convenience.
+- Rotate secrets independently by role. Plan rotation for JWT signing keys,
+  verify/reset-token secrets, CSRF secrets, TOTP Fernet keys, OAuth token
+  encryption keys, and opaque-token hash secrets before the first production
+  incident.
 - For the full manager/password contract, including `PasswordHelper` sharing,
   `password_validator_factory`, and the `UserEmailField` / `UserPasswordField`
   schema helpers, see
@@ -79,12 +86,21 @@ When `rate_limit_config` is set, throttled endpoints return **429** with **`Retr
 ## Cookies
 
 - Keep **`oauth_cookie_secure=True`** (default) behind HTTPS.
+- Terminate only HTTPS in production, set HSTS at the edge, and keep
+  `CookieTransport.secure=True` for browser sessions.
 - For local HTTP dev you may relax cookie `secure` flags on transports — never in production.
+- Set `trusted_proxy=True` on rate-limit endpoints only when a trusted reverse
+  proxy overwrites the configured forwarded headers. Otherwise, leave the
+  default `False` so callers cannot spoof rate-limit keys.
 
 ## Observability
 
 - Monitor **429** rates on auth endpoints (brute force / abuse).
 - Log authentication failures without storing secrets or raw tokens.
+- Send reset/verify emails through a queue or background worker and perform
+  equivalent work for existing and non-existing accounts. Synchronous SMTP/API
+  differences in `on_after_forgot_password` or `on_after_request_verify_token`
+  can reintroduce account enumeration at the application boundary.
 
 ## Testing vs production
 

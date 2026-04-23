@@ -132,7 +132,12 @@ class ConfigurationError(LitestarAuthError):
 
 
 class UserAlreadyExistsError(AuthenticationError):
-    """Raised when creating a user that already exists."""
+    """Raised when creating a user that already exists.
+
+    Duplicate identifier context is stored on the exception instance for
+    operator logging, but the generated default message stays generic so HTTP
+    responses do not reveal the colliding email or username.
+    """
 
     default_message = "A user with the provided credentials already exists."
     default_code = ErrorCode.REGISTER_USER_ALREADY_EXISTS
@@ -148,12 +153,7 @@ class UserAlreadyExistsError(AuthenticationError):
         self.identifier = identifier
         self.identifier_type = None if identifier is None else identifier.identifier_type
         self.identifier_value = None if identifier is None else identifier.identifier_value
-        resolved_message = message or (
-            f"User with {self.identifier_type}={self.identifier_value!r} already exists"
-            if identifier is not None
-            else None
-        )
-        super().__init__(message=resolved_message, code=code)
+        super().__init__(message=message, code=code)
 
 
 class UserNotExistsError(AuthenticationError):

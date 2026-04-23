@@ -31,7 +31,7 @@ def test_oauth_account_already_linked_error_context_contract() -> None:
 
 
 def test_user_already_exists_error_context_contract() -> None:
-    """Duplicate-user errors expose identifier context and derive the default message from it."""
+    """Duplicate-user errors expose identifier context without deriving public text from it."""
     error = UserAlreadyExistsError(
         identifier=UserIdentifier(
             identifier_type="email",
@@ -42,7 +42,7 @@ def test_user_already_exists_error_context_contract() -> None:
     assert error.identifier == UserIdentifier(identifier_type="email", identifier_value="user@example.com")
     assert error.identifier_type == "email"
     assert error.identifier_value == "user@example.com"
-    assert str(error) == "User with email='user@example.com' already exists"
+    assert str(error) == UserAlreadyExistsError.default_message
     assert error.code == ErrorCode.REGISTER_USER_ALREADY_EXISTS
 
 
@@ -94,7 +94,7 @@ def test_user_already_exists_error_preserves_identifier_value_without_runtime_va
     assert error.identifier == UserIdentifier(identifier_type="email", identifier_value=" \n ")
     assert error.identifier_type == "email"
     assert error.identifier_value == " \n "
-    assert str(error) == "User with email=' \\n ' already exists"
+    assert str(error) == UserAlreadyExistsError.default_message
 
 
 def test_insufficient_roles_error_preserves_role_names_without_runtime_validation() -> None:

@@ -188,7 +188,7 @@ def test_exception_module_reload_preserves_default_message_and_code_contract(mon
     assert reloaded_module.OAuthAccountAlreadyLinkedError is not OAuthAccountAlreadyLinkedError
     assert str(reloaded_configuration_error) == ConfigurationError.default_message
     assert reloaded_configuration_error.code == ErrorCode.CONFIGURATION_INVALID
-    assert str(reloaded_user_exists_error) == "User with email='user@example.com' already exists"
+    assert str(reloaded_user_exists_error) == UserAlreadyExistsError.default_message
     assert reloaded_user_exists_error.code == ErrorCode.REGISTER_USER_ALREADY_EXISTS
     assert reloaded_user_exists_error.identifier_type == "email"
     assert reloaded_user_exists_error.identifier_value == "user@example.com"
@@ -426,7 +426,7 @@ def test_insufficient_roles_error_custom_message_and_code_override_defaults() ->
 
 
 def test_user_already_exists_error_exposes_identifier_context_and_default_message() -> None:
-    """Duplicate-user errors expose the colliding identifier details."""
+    """Duplicate-user errors expose operator context without leaking it in the default message."""
     error = UserAlreadyExistsError(
         identifier=UserIdentifier(
             identifier_type="username",
@@ -434,15 +434,15 @@ def test_user_already_exists_error_exposes_identifier_context_and_default_messag
         ),
     )
 
-    assert str(error) == "User with username='existing-user' already exists"
+    assert str(error) == UserAlreadyExistsError.default_message
     assert error.code == ErrorCode.REGISTER_USER_ALREADY_EXISTS
     assert error.identifier == UserIdentifier(identifier_type="username", identifier_value="existing-user")
     assert error.identifier_type == "username"
     assert error.identifier_value == "existing-user"
 
 
-def test_user_already_exists_error_none_message_and_none_code_use_context_message() -> None:
-    """Explicit ``message=None`` and ``code=None`` still derive the contextual defaults."""
+def test_user_already_exists_error_none_message_and_none_code_use_generic_defaults() -> None:
+    """Explicit ``message=None`` and ``code=None`` keep generic duplicate-user defaults."""
     error = UserAlreadyExistsError(
         identifier=UserIdentifier(
             identifier_type="email",
@@ -452,7 +452,7 @@ def test_user_already_exists_error_none_message_and_none_code_use_context_messag
         code=None,
     )
 
-    assert str(error) == "User with email='user@example.com' already exists"
+    assert str(error) == UserAlreadyExistsError.default_message
     assert error.code == ErrorCode.REGISTER_USER_ALREADY_EXISTS
 
 
@@ -475,7 +475,7 @@ def test_user_already_exists_error_preserves_blank_context_without_runtime_valid
     assert error.identifier == UserIdentifier(identifier_type="email", identifier_value="\n")
     assert error.identifier_type == "email"
     assert error.identifier_value == "\n"
-    assert str(error) == "User with email='\\n' already exists"
+    assert str(error) == UserAlreadyExistsError.default_message
 
 
 def test_user_already_exists_error_custom_message_and_code_override_defaults() -> None:

@@ -69,6 +69,49 @@ model family, authorization still sees only the normalized flat `roles` contract
 factories are intentionally limited to flat membership checks; they are not a full RBAC framework,
 permission matrix, or object-level policy DSL.
 
+## Object-level authorization
+
+Flat role guards answer "does this caller have a role?", not "does this caller
+own this object?". For tenant resources, account-scoped records, invoices,
+projects, or admin-on-behalf-of flows, add an application-owned ownership or
+policy check after authentication.
+
+```python
+from dataclasses import dataclass
+from uuid import UUID
+
+from litestar import Request, get
+from litestar.exceptions import PermissionDeniedException
+
+from litestar_auth.guards import is_authenticated
+from litestar_auth.types import UserProtocol
+
+
+@dataclass(frozen=True, slots=True)
+class Project:
+    id: UUID
+    owner_id: UUID
+
+
+async def load_project(project_id: UUID) -> Project:
+    ...
+
+
+@get("/projects/{project_id:uuid}", guards=[is_authenticated])
+async def get_project(
+    request: Request[UserProtocol[UUID], object, object],
+    project_id: UUID,
+) -> Project:
+    project = await load_project(project_id)
+    if project.owner_id != request.user.id:
+        raise PermissionDeniedException(detail="You are not allowed to access this resource.")
+    return project
+```
+
+Keep these checks close to the resource lookup or centralize them in your
+service layer. Do not rely on predictable IDs, hidden UI controls, or flat roles
+alone for object ownership.
+
 With the default `include_openapi_security=True`, the plugin also registers the corresponding security schemes globally, so application-defined routes can reuse the same requirements without hard-coding backend names.
 
 If you intentionally disable plugin-managed OpenAPI security, register `auth_config.resolve_openapi_security_schemes()` yourself in `OpenAPIConfig.components` before using those requirements.
