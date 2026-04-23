@@ -284,17 +284,25 @@ async def _map_domain_exceptions(
         raise ClientException(status_code=status_code, detail=str(exc), extra={"code": error_code}) from exc
 
 
-def _require_msgspec_struct(schema: type[object], *, parameter_name: str) -> None:
+def _require_msgspec_struct(
+    schema: type[object],
+    *,
+    parameter_name: str,
+    require_forbid_unknown_fields: bool = False,
+) -> None:
     """Validate that a configurable schema is a msgspec struct type.
 
     Raises:
-        TypeError: If ``schema`` is not a ``msgspec.Struct`` subclass.
+        TypeError: If ``schema`` is not a ``msgspec.Struct`` subclass or does not
+            satisfy request-body strictness requirements.
     """
-    if issubclass(schema, msgspec.Struct):
-        return
+    if not issubclass(schema, msgspec.Struct):
+        msg = f"{parameter_name} must be a msgspec.Struct subclass."
+        raise TypeError(msg)
 
-    msg = f"{parameter_name} must be a msgspec.Struct subclass."
-    raise TypeError(msg)
+    if require_forbid_unknown_fields and not schema.__struct_config__.forbid_unknown_fields:
+        msg = f"{parameter_name} must set forbid_unknown_fields=True so unknown request fields are rejected."
+        raise TypeError(msg)
 
 
 _SENSITIVE_FIELD_BLOCKLIST: frozenset[str] = frozenset(

@@ -951,6 +951,7 @@ def test_exception_hierarchy_stays_on_canonical_module() -> None:
 def test_root_package_all_excludes_private_symbols() -> None:
     """`__all__` lists only public names."""
     assert tuple(__all__) == (
+        "DEFAULT_SUPERUSER_ROLE_NAME",
         "AuthenticationBackend",
         "Authenticator",
         "BaseUserManager",
@@ -1027,9 +1028,9 @@ def test_root_package_does_not_reexport_secondary_surfaces() -> None:
     assert RedisUsedTotpCodeStore is not None
     assert BaseUserStore is not None
     assert SQLAlchemyUserDatabase is not None
-    assert UserRead.__struct_fields__ == ("id", "email", "is_active", "is_verified", "is_superuser", "roles")
+    assert UserRead.__struct_fields__ == ("id", "email", "is_active", "is_verified", "roles")
     assert UserCreate.__struct_fields__ == ("email", "password")
-    assert UserUpdate.__struct_fields__ == ("password", "email", "is_active", "is_verified", "is_superuser", "roles")
+    assert UserUpdate.__struct_fields__ == ("password", "email", "is_active", "is_verified", "roles")
     assert callable(create_provider_oauth_controller)
     assert callable(create_oauth_associate_controller)
     assert callable(load_httpx_oauth_client)

@@ -13,6 +13,7 @@ from litestar_auth._manager.construction import ManagerConstructorInputs
 from litestar_auth._plugin.config import (
     LitestarAuthConfig,
     TotpConfig,
+    _normalize_config_superuser_role_name,
     _resolve_plugin_managed_totp_secret_storage_policy,
 )
 from litestar_auth._plugin.middleware import get_cookie_transports
@@ -165,6 +166,7 @@ def validate_credential_config[UP: UserProtocol[Any], ID](config: LitestarAuthCo
         ValueError: If user-listing support is requested without ``list_users()``.
     """
     validate_user_manager_security_config(config)
+    validate_superuser_role_name_config(config)
     validate_password_validator_config(config)
     validate_default_user_manager_constructor_contract(config)
     validate_user_model_login_identifier_fields(config)
@@ -258,6 +260,11 @@ def validate_config[UP: UserProtocol[Any], ID](config: LitestarAuthConfig[UP, ID
         validate_totp_encryption_config,
     ):
         validator(config)
+
+
+def validate_superuser_role_name_config[UP: UserProtocol[Any], ID](config: LitestarAuthConfig[UP, ID]) -> None:
+    """Validate and normalize the configured superuser role name."""
+    config.superuser_role_name = _normalize_config_superuser_role_name(config.superuser_role_name)
 
 
 def _validate_totp_pending_secret_config[UP: UserProtocol[Any], ID](config: LitestarAuthConfig[UP, ID]) -> None:

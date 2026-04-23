@@ -187,17 +187,15 @@ def test_user_model_creates_schema_with_expected_columns() -> None:
         user_role_foreign_keys = inspector.get_foreign_keys("user_role")
 
         assert {"role", "user", "user_role"} <= set(inspector.get_table_names())
-        assert set(columns).issuperset(
-            {
-                "id",
-                "email",
-                "hashed_password",
-                "is_active",
-                "is_verified",
-                "is_superuser",
-                "totp_secret",
-            },
-        )
+        assert set(columns) <= {
+            "id",
+            "email",
+            "hashed_password",
+            "is_active",
+            "is_verified",
+            "sa_orm_sentinel",
+            "totp_secret",
+        }
         assert "roles" not in columns
         assert role_columns["name"]["nullable"] is False
         assert set(user_role_columns) == {"role_name", "user_id"}
@@ -223,11 +221,16 @@ def test_user_model_persists_defaults_and_generated_uuid() -> None:
         assert isinstance(user.id, UUID)
         assert user.is_active is True
         assert user.is_verified is False
-        assert user.is_superuser is False
         assert user.roles == []
         assert user.totp_secret is None
     finally:
         engine.dispose()
+
+
+def test_user_model_rejects_unexpected_constructor_keyword() -> None:
+    """The bundled user model rejects undeclared ORM constructor keywords."""
+    with pytest.raises(TypeError, match="unexpected_flag"):
+        User(email="user@example.com", hashed_password="hashed-password", unexpected_flag=False)
 
 
 def test_role_normalization_helpers_preserve_flat_membership_contract() -> None:

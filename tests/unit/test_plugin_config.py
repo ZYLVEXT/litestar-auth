@@ -15,6 +15,7 @@ import msgspec
 import pytest
 
 import litestar_auth._plugin.config as plugin_config_module
+from litestar_auth import DEFAULT_SUPERUSER_ROLE_NAME
 from litestar_auth._plugin.config import (
     DatabaseTokenAuthConfig,
     OAuthConfig,
@@ -139,6 +140,7 @@ def test_default_builder_constructor_mismatch_diagnostic_matches_security_bundle
         TypeError("boom"),
     )
     assert "security=UserManagerSecurity" in msg
+    assert "superuser_role_name=..." in msg
     assert "not a standalone id_parser=" in msg
     assert "directly instead" not in msg
 
@@ -152,6 +154,7 @@ def _minimal_config(  # noqa: PLR0913
     user_manager_class: type[Any] | None = None,
     id_parser: type[UUID] | None = None,
     login_identifier: Literal["email", "username"] = "email",
+    superuser_role_name: str = DEFAULT_SUPERUSER_ROLE_NAME,
 ) -> LitestarAuthConfig[ExampleUser, UUID]:
     """Build a minimal config for plugin tests.
 
@@ -183,6 +186,7 @@ def _minimal_config(  # noqa: PLR0913
         id_parser=id_parser,
         totp_config=totp_config,
         login_identifier=login_identifier,
+        superuser_role_name=superuser_role_name,
     )
 
 
@@ -228,11 +232,29 @@ def test_litestar_auth_config_declares_login_identifier_field() -> None:
     assert frozenset(get_args(LoginIdentifier.__value__)) == plugin_config_module._VALID_LOGIN_IDENTIFIERS
 
 
+def test_litestar_auth_config_declares_superuser_role_name_field() -> None:
+    """The plugin config exposes a normalized superuser role name."""
+    dataclass_fields = LitestarAuthConfig.__dataclass_fields__
+
+    assert "superuser_role_name" in dataclass_fields
+    assert dataclass_fields["superuser_role_name"].type == "str"
+    assert dataclass_fields["superuser_role_name"].default == DEFAULT_SUPERUSER_ROLE_NAME
+
+
 def test_litestar_auth_config_login_identifier_defaults_to_email() -> None:
     """Default login mode is email."""
     config = _minimal_config()
 
     assert config.login_identifier == "email"
+
+
+def test_litestar_auth_config_superuser_role_name_defaults_and_normalizes() -> None:
+    """Configured superuser role names are normalized once on the config instance."""
+    default_config = _minimal_config()
+    custom_config = _minimal_config(superuser_role_name=" Admin ")
+
+    assert default_config.superuser_role_name == "superuser"
+    assert custom_config.superuser_role_name == "admin"
 
 
 def test_litestar_auth_config_direct_construction_preserves_user_and_id_types() -> None:
@@ -1517,6 +1539,7 @@ def test_build_user_manager_injects_default_password_helper_without_prior_materi
             password_validator: Callable[[str], None] | None = None,
             backends: tuple[object, ...] = (),
             login_identifier: Literal["email", "username"] = "email",
+            superuser_role_name: str = DEFAULT_SUPERUSER_ROLE_NAME,
             unsafe_testing: bool = False,
         ) -> None:
             self.received_password_helper = password_helper
@@ -1527,6 +1550,7 @@ def test_build_user_manager_injects_default_password_helper_without_prior_materi
                 password_validator=password_validator,
                 backends=backends,
                 login_identifier=login_identifier,
+                superuser_role_name=superuser_role_name,
                 unsafe_testing=unsafe_testing,
             )
 
@@ -1716,6 +1740,7 @@ def test_build_user_manager_passes_canonical_kwargs_through_kwargs_wrapper() -> 
     assert "reset_password_token_secret" not in typed_manager.received_manager_kwargs
     assert "totp_secret_key" not in typed_manager.received_manager_kwargs
     assert "id_parser" not in typed_manager.received_manager_kwargs
+    assert typed_manager.received_manager_kwargs["superuser_role_name"] == "superuser"
     assert manager.id_parser is UUID
     assert manager.login_identifier == "username"
     assert manager.backends == ("bound-backend",)
@@ -1734,6 +1759,7 @@ def test_build_user_manager_passes_typed_security_to_security_only_manager() -> 
             password_validator: object | None = None,
             backends: tuple[object, ...] = (),
             login_identifier: Literal["email", "username"] = "email",
+            superuser_role_name: str = DEFAULT_SUPERUSER_ROLE_NAME,
             unsafe_testing: bool = False,
         ) -> None:
             self.received_security = security
@@ -1744,6 +1770,7 @@ def test_build_user_manager_passes_typed_security_to_security_only_manager() -> 
                 password_validator=cast("Any", password_validator),
                 backends=backends,
                 login_identifier=login_identifier,
+                superuser_role_name=superuser_role_name,
                 unsafe_testing=unsafe_testing,
             )
 
@@ -1855,6 +1882,7 @@ def test_build_user_manager_preserves_configured_unsafe_testing_flag() -> None:
             password_validator: Callable[[str], None] | None = None,
             backends: tuple[object, ...] = (),
             login_identifier: Literal["email", "username"] = "email",
+            superuser_role_name: str = DEFAULT_SUPERUSER_ROLE_NAME,
             unsafe_testing: bool = False,
         ) -> None:
             self.received_unsafe_testing = unsafe_testing
@@ -1865,6 +1893,7 @@ def test_build_user_manager_preserves_configured_unsafe_testing_flag() -> None:
                 password_validator=password_validator,
                 backends=backends,
                 login_identifier=login_identifier,
+                superuser_role_name=superuser_role_name,
                 unsafe_testing=unsafe_testing,
             )
 

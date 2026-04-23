@@ -17,6 +17,7 @@ from litestar_auth._plugin.security_policy import (
     _describe_totp_secret_storage_policy,
     _PluginSecurityNotice,
 )
+from litestar_auth._superuser_role import DEFAULT_SUPERUSER_ROLE_NAME, normalize_superuser_role_name
 from litestar_auth.db.base import BaseUserStore
 from litestar_auth.exceptions import ConfigurationError
 from litestar_auth.types import (
@@ -225,6 +226,21 @@ def _resolve_plugin_managed_totp_secret_storage_policy[UP: UserProtocol[Any], ID
 _VALID_LOGIN_IDENTIFIERS: frozenset[LoginIdentifier] = frozenset(get_args(LoginIdentifier.__value__))
 
 
+def _normalize_config_superuser_role_name(role_name: str) -> str:
+    """Normalize the config-owned superuser role name as a configuration error.
+
+    Returns:
+        The normalized role name.
+
+    Raises:
+        ConfigurationError: If the value is not a non-empty role name string.
+    """
+    try:
+        return normalize_superuser_role_name(role_name)
+    except (TypeError, ValueError) as exc:
+        raise ConfigurationError(str(exc)) from exc
+
+
 class ExceptionResponseHook(Protocol):
     """Format plugin-owned auth errors as Litestar responses."""
 
@@ -378,7 +394,7 @@ class LitestarAuthConfig[UP: UserProtocol[Any], ID]:
     Security and token policy:
         ``csrf_secret``, ``csrf_header_name``, ``unsafe_testing``,
         ``allow_legacy_plaintext_tokens``, ``allow_nondurable_jwt_revocation``,
-        ``id_parser``.
+        ``id_parser``, ``superuser_role_name``.
     API schemas and DB-session dependency injection:
         ``user_read_schema``, ``user_create_schema``, ``user_update_schema``,
         ``db_session_dependency_key``, ``db_session_dependency_provided_externally``.
@@ -431,6 +447,7 @@ class LitestarAuthConfig[UP: UserProtocol[Any], ID]:
     db_session_dependency_key: DbSessionDependencyKey = DEFAULT_DB_SESSION_DEPENDENCY_KEY
     db_session_dependency_provided_externally: bool = False
     login_identifier: LoginIdentifier = "email"
+    superuser_role_name: str = DEFAULT_SUPERUSER_ROLE_NAME
     _memoized_default_password_helper: PasswordHelper | None = field(
         default=None,
         init=False,
@@ -524,10 +541,11 @@ class LitestarAuthConfig[UP: UserProtocol[Any], ID]:
 
         Raises:
             ConfigurationError: When manager construction paths conflict or ``login_identifier`` is outside
-                :data:`LoginIdentifier`.
+                :data:`LoginIdentifier`, or when ``superuser_role_name`` is not a non-empty role name.
             ValueError: When ``db_session_dependency_key`` is not a valid Python identifier or is a
                 reserved keyword, or when ``backends`` and ``database_token_auth`` are both configured.
         """
+        self.superuser_role_name = _normalize_config_superuser_role_name(self.superuser_role_name)
         if self.user_manager_class is not None and self.user_manager_factory is not None:
             msg = (
                 "user_manager_class and user_manager_factory are mutually exclusive. "

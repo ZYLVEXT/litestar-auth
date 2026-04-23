@@ -11,7 +11,7 @@ from litestar_auth.exceptions import ErrorCode
 from litestar_auth.types import GuardedUserProtocol
 
 _ACCOUNT_STATE_PROTOCOL_DETAIL = (
-    "Account state validation requires GuardedUserProtocol (is_active, is_verified, is_superuser). "
+    "Account state validation requires GuardedUserProtocol (is_active, is_verified). "
     "The authenticated user does not expose account state required for this check."
 )
 

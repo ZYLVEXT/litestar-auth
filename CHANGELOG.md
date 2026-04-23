@@ -2,6 +2,13 @@
 
 ### Security
 
+- **Superuser status is now role-based end to end** — **Breaking for applications that read or
+  wrote `user.is_superuser` or exposed it in custom DTOs.** The bundled ORM model, user schemas,
+  manager create/update paths, user controllers, and contrib role-admin responses no longer carry
+  an `is_superuser` attribute or field. The public `is_superuser` guard remains importable, but it
+  authorizes by membership in the configured superuser role (`superuser_role_name`, default
+  `"superuser"`). Before dropping an existing database column, backfill equivalent role membership
+  for every row where `is_superuser` is true; see `docs/migration.md`.
 - **Verification is now required by default for login and built-in TOTP completion** — **Breaking
   for applications that relied on immediate login after registration.**
   `LitestarAuthConfig.requires_verification`, `create_auth_controller(..., requires_verification=...)`,

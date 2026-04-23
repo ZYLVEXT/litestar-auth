@@ -22,8 +22,8 @@ generic permission error—so align the model with [Guards](guards.md) and TOTP 
 | If you use… | Implement |
 |-------------|-----------|
 | Basic authentication only (strategies resolve `request.user` by `id`) | **`UserProtocol`** or **`UserProtocolStrict`** — `id` |
-| `is_active`, `is_verified`, `is_superuser` [guards](guards.md) | **`GuardedUserProtocol`** — `is_active`, `is_verified`, `is_superuser` |
-| `has_any_role` / `has_all_roles` [guards](guards.md) | **`RoleCapableUserProtocol`** — `roles` |
+| `is_active`, `is_verified` [guards](guards.md) | **`GuardedUserProtocol`** — `is_active`, `is_verified` |
+| `is_superuser`, `has_any_role` / `has_all_roles` [guards](guards.md) | **`RoleCapableUserProtocol`** — `roles` |
 | TOTP enrollment, verification, or 2FA flows | **`TotpUserProtocol`** — `email`, `totp_secret` |
 
 Use `UserProtocol` when code needs `isinstance(user, UserProtocol)` at runtime. Use
@@ -93,7 +93,6 @@ class StaffUser:
     id: int
     is_active: bool
     is_verified: bool
-    is_superuser: bool
     roles: Sequence[str]
 ```
 

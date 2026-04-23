@@ -78,7 +78,6 @@ class _DummyUser(msgspec.Struct):
     email: str = "user@example.com"
     is_active: bool = True
     is_verified: bool = True
-    is_superuser: bool = False
     roles: list[str] = msgspec.field(default_factory=lambda: ["member"])
     hashed_password: str = "hashed-secret"
 
@@ -401,6 +400,23 @@ def test_require_msgspec_struct_rejects_non_msgspec_types() -> None:
     """Non-msgspec types raise a clear type error."""
     with pytest.raises(TypeError, match=r"schema must be a msgspec\.Struct subclass\."):
         _require_msgspec_struct(dict, parameter_name="schema")
+
+
+def test_require_msgspec_struct_rejects_permissive_request_structs_when_strict_unknown_fields_are_required() -> None:
+    """Request schemas must opt into strict unknown-field rejection."""
+
+    class _PermissiveSchema(msgspec.Struct):
+        email: str
+
+    with pytest.raises(
+        TypeError,
+        match=r"schema must set forbid_unknown_fields=True so unknown request fields are rejected\.",
+    ):
+        _require_msgspec_struct(
+            _PermissiveSchema,
+            parameter_name="schema",
+            require_forbid_unknown_fields=True,
+        )
 
 
 def test_to_user_schema_detects_multiple_sensitive_fields_outside_testing() -> None:

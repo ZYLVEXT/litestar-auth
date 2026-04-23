@@ -18,6 +18,7 @@ from pwdlib.hashers.bcrypt import BcryptHasher
 import litestar_auth.manager as manager_module
 from litestar_auth._manager._coercions import _account_state_user, _as_dict, _managed_user, _require_str
 from litestar_auth._manager.user_lifecycle import PRIVILEGED_FIELDS
+from litestar_auth._manager.user_policy import UserPolicy
 from litestar_auth.authentication.strategy.base import TokenInvalidationCapable
 from litestar_auth.config import require_password_length
 from litestar_auth.exceptions import (
@@ -66,6 +67,11 @@ def test_manager_does_not_reexport_lifecycle_constants() -> None:
     """Lifecycle field allowlists live in the lifecycle service module."""
     assert not hasattr(manager_module, "SAFE_FIELDS")
     assert not hasattr(manager_module, "_PRIVILEGED_FIELDS")
+
+
+def test_privileged_fields_cover_only_live_privileged_state() -> None:
+    """Manager privilege checks use the current role and account-state surface."""
+    assert frozenset({"is_active", "is_verified", "roles"}) == PRIVILEGED_FIELDS
 
 
 class TrackingUserManager(BaseUserManager[ExampleUser, UUID]):
@@ -252,15 +258,15 @@ async def test_create_rejects_duplicate_email() -> None:
 
 def test_normalize_email_strips_lowercases_and_validates() -> None:
     """Email normalization strips, lowercases, and rejects invalid inputs."""
-    assert BaseUserManager._normalize_email("  User@Example.COM  ") == "user@example.com"
+    assert UserPolicy.normalize_email("  User@Example.COM  ") == "user@example.com"
 
     with pytest.raises(ValueError, match="Invalid email address"):
-        BaseUserManager._normalize_email("not-an-email")
+        UserPolicy.normalize_email("not-an-email")
 
 
 def test_normalize_username_lookup_strips_and_lowercases() -> None:
     """Username lookup normalization delegates to the canonical policy helper."""
-    assert BaseUserManager._normalize_username_lookup("  UserName  ") == "username"
+    assert UserPolicy.normalize_username_lookup("  UserName  ") == "username"
 
 
 def test_manager_init_requires_explicit_secrets_outside_testing() -> None:
@@ -316,6 +322,31 @@ def test_manager_init_accepts_typed_security_contract() -> None:
     assert manager.reset_password_token_secret.get_secret_value() == security.reset_password_token_secret
     assert manager.totp_secret_key == security.totp_secret_key
     assert manager.id_parser is UUID
+
+
+def test_manager_init_stores_normalized_superuser_role_name() -> None:
+    """The manager exposes the normalized superuser role name used by guards."""
+    user_db = AsyncMock()
+    password_helper = PasswordHelper()
+    security = UserManagerSecurity[UUID](
+        verification_token_secret="verify-secret-1234567890-1234567890",
+        reset_password_token_secret="reset-secret-1234567890-1234567890",
+    )
+
+    default_manager = BaseUserManager(
+        user_db,
+        password_helper=password_helper,
+        security=security,
+    )
+    custom_manager = BaseUserManager(
+        user_db,
+        password_helper=password_helper,
+        security=security,
+        superuser_role_name=" Admin ",
+    )
+
+    assert default_manager.superuser_role_name == "superuser"
+    assert custom_manager.superuser_role_name == "admin"
 
 
 def test_manager_init_rejects_legacy_secret_keyword_arguments() -> None:
@@ -720,6 +751,7 @@ def test_manager_init_wires_services_and_configuration() -> None:
         reset_password_token_audience=RESET_PASSWORD_TOKEN_AUDIENCE,
         token_security=token_security_service,
         logger=manager_logger,
+        policy=manager.policy,
     )
     totp_secrets.assert_called_once_with(manager, prefix=manager_module.ENCRYPTED_TOTP_SECRET_PREFIX)
 
@@ -812,7 +844,6 @@ async def test_create_defaults_to_safe_and_strips_non_safe_fields() -> None:
     payload: dict[str, object] = {
         "email": created_user.email,
         "password": "test-password",
-        "is_superuser": True,
         "is_active": False,
         "roles": ["admin"],
     }
@@ -820,7 +851,6 @@ async def test_create_defaults_to_safe_and_strips_non_safe_fields() -> None:
 
     assert result is created_user
     create_payload = user_db.create.await_args.args[0]
-    assert "is_superuser" not in create_payload
     assert "is_active" not in create_payload
     assert "roles" not in create_payload
     assert "password" not in create_payload
@@ -840,7 +870,6 @@ async def test_create_safe_false_still_strips_privilege_fields_by_default() -> N
         "email": created_user.email,
         "password": "test-password",
         "nickname": "visible",
-        "is_superuser": True,
         "is_active": False,
         "is_verified": True,
         "roles": [" Billing ", "admin", "ADMIN"],
@@ -855,8 +884,8 @@ async def test_create_safe_false_still_strips_privilege_fields_by_default() -> N
     assert create_payload["email"] == created_user.email
 
 
-async def test_create_allow_privileged_true_preserves_privilege_fields() -> None:
-    """Explicit privileged create preserves privileged fields for admin or seed flows."""
+async def test_create_allow_privileged_true_preserves_current_privilege_fields() -> None:
+    """Explicit privileged create preserves the supported role/state fields."""
     user_db = AsyncMock()
     password_helper = PasswordHelper()
     manager = TrackingUserManager(user_db, password_helper)
@@ -867,7 +896,6 @@ async def test_create_allow_privileged_true_preserves_privilege_fields() -> None
     payload: dict[str, object] = {
         "email": created_user.email,
         "password": "test-password",
-        "is_superuser": True,
         "is_active": False,
         "is_verified": True,
         "roles": [" Billing ", "admin", "ADMIN"],
@@ -876,7 +904,6 @@ async def test_create_allow_privileged_true_preserves_privilege_fields() -> None
 
     assert result is created_user
     create_payload = user_db.create.await_args.args[0]
-    assert create_payload["is_superuser"] is True
     assert create_payload["is_active"] is False
     assert create_payload["is_verified"] is True
     assert create_payload["roles"] == ["admin", "billing"]
@@ -1544,7 +1571,6 @@ async def test_update_email_change_resets_verification_and_requests_new_token() 
         hashed_password=password_helper.hash("new-password"),
         is_active=True,
         is_verified=False,
-        is_superuser=False,
     )
     user_db.get_by_email.side_effect = [existing_other_user, None]
     user_db.update.return_value = updated_user
@@ -1918,7 +1944,7 @@ def test_managed_user_and_account_state_user_accept_protocol_compatible_users() 
 
 
 def test_validate_password_propagates_invalid_password_error() -> None:
-    """_validate_password should not wrap InvalidPasswordError from a validator."""
+    """policy.validate_password should not wrap InvalidPasswordError from a validator."""
     user_db = AsyncMock()
     password_helper = PasswordHelper()
 
@@ -1928,7 +1954,7 @@ def test_validate_password_propagates_invalid_password_error() -> None:
 
     manager = TrackingUserManager(user_db, password_helper, password_validator=raise_invalid)
     with pytest.raises(InvalidPasswordError, match="nope"):
-        manager._validate_password("any-password")
+        manager.policy.validate_password("any-password")
 
 
 async def test_invalidate_all_tokens_skips_when_no_backends() -> None:

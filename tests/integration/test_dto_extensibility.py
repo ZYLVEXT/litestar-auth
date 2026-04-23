@@ -40,7 +40,7 @@ EMAIL_PATTERN = r"^[^@\s]+@[^@\s]+\.[^@\s]+$"
 EMAIL_MAX_LENGTH = 320
 
 
-class ExtendedUserCreate(msgspec.Struct):
+class ExtendedUserCreate(msgspec.Struct, forbid_unknown_fields=True):
     """Custom registration payload with an extra profile field."""
 
     email: UserEmailField
@@ -55,19 +55,17 @@ class ExtendedUserRead(msgspec.Struct):
     email: str
     is_active: bool
     is_verified: bool
-    is_superuser: bool
     roles: list[str]
     bio: str
 
 
-class ExtendedUserUpdate(msgspec.Struct, omit_defaults=True):
+class ExtendedUserUpdate(msgspec.Struct, omit_defaults=True, forbid_unknown_fields=True):
     """Custom partial-update payload with an extra profile field."""
 
     email: UserEmailField | None = None
     password: UserPasswordField | None = None
     is_active: bool | None = None
     is_verified: bool | None = None
-    is_superuser: bool | None = None
     roles: list[str] | None = None
     bio: str | None = None
 
@@ -98,7 +96,6 @@ def build_app() -> tuple[
         email="admin@example.com",
         hashed_password=password_helper.hash("admin-password"),
         bio="admin-bio",
-        is_superuser=True,
         roles=["admin"],
     )
     user_db = InMemoryUserDatabase([admin_user])
@@ -129,6 +126,7 @@ def build_app() -> tuple[
         LitestarAuthMiddleware[ExampleUser, UUID],
         get_request_session=auth_middleware_get_request_session(cast("Any", DummySessionMaker())),
         authenticator_factory=lambda _session: Authenticator([backend], user_manager),
+        superuser_role_name="admin",
     )
     app = litestar_app_with_user_manager(
         user_manager,
@@ -230,7 +228,6 @@ async def test_custom_msgspec_schemas_extend_register_and_users_responses(
         "email": "extended@example.com",
         "is_active": True,
         "is_verified": False,
-        "is_superuser": False,
         "roles": [],
         "bio": "",
     }
@@ -245,7 +242,7 @@ async def test_custom_msgspec_schemas_extend_register_and_users_responses(
     patch_me_response = await test_client.patch(
         "/users/me",
         headers=headers,
-        json={"bio": "updated-bio", "is_superuser": True, "roles": [" Support ", "ADMIN"]},
+        json={"bio": "updated-bio", "roles": [" Support ", "ADMIN"]},
     )
 
     assert get_me_response.status_code == HTTP_OK
@@ -254,13 +251,11 @@ async def test_custom_msgspec_schemas_extend_register_and_users_responses(
 
     assert patch_me_response.status_code == HTTP_OK
     assert patch_me_response.json()["bio"] == "updated-bio"
-    assert patch_me_response.json()["is_superuser"] is False
     assert patch_me_response.json()["roles"] == []
 
     stored_user = await user_db.get(created_user.id)
     assert stored_user is not None
     assert stored_user.bio == "updated-bio"
-    assert stored_user.is_superuser is False
     assert stored_user.roles == []
 
     admin_token = await strategy.write_token(admin_user)
@@ -273,10 +268,47 @@ async def test_custom_msgspec_schemas_extend_register_and_users_responses(
     assert admin_patch_response.status_code == HTTP_OK
     assert admin_patch_response.json()["roles"] == ["admin", "support"]
 
-    list_response = await test_client.get("/users", headers={"Authorization": f"Bearer {admin_token}"})
+    list_response = await test_client.get("/users", headers=admin_headers)
     assert list_response.status_code == HTTP_OK
     assert list_response.json()["items"][1]["bio"] == "updated-bio"
     assert list_response.json()["items"][1]["roles"] == ["admin", "support"]
+
+
+async def test_custom_msgspec_schemas_reject_unknown_update_fields(
+    client: tuple[
+        AsyncTestClient[Litestar],
+        InMemoryUserDatabase,
+        UsersControllerManager,
+        InMemoryTokenStrategy,
+        ExampleUser,
+    ],
+) -> None:
+    """Custom strict update schemas reject undeclared fields during request decoding."""
+    test_client, user_db, _, strategy, _admin_user = client
+
+    register_response = await test_client.post(
+        "/auth/register",
+        json={
+            "email": "strict-update@example.com",
+            "password": "plain-password",
+            "bio": "registered-bio",
+        },
+    )
+    assert register_response.status_code == HTTP_CREATED
+
+    created_user = await user_db.get_by_email("strict-update@example.com")
+    assert created_user is not None
+    token = await strategy.write_token(created_user)
+    headers = {"Authorization": f"Bearer {token}"}
+
+    response = await test_client.patch(
+        "/users/me",
+        headers=headers,
+        json={"bio": "ignored-bio", "deprecated_admin_flag": True},
+    )
+
+    assert response.status_code == HTTP_UNPROCESSABLE_ENTITY
+    assert response.json()["extra"]["code"] == ErrorCode.REQUEST_BODY_INVALID
 
 
 async def test_custom_registration_schema_reuses_builtin_email_and_password_contract(
@@ -391,3 +423,26 @@ def test_controllers_reject_non_msgspec_custom_schemas() -> None:
         create_users_controller(
             user_update_schema=cast("Any", InvalidSchema),
         )
+
+
+def test_controllers_reject_permissive_custom_request_schemas() -> None:
+    """Configurable request schemas must reject unknown fields."""
+
+    class PermissiveCreate(msgspec.Struct):
+        email: UserEmailField
+        password: UserPasswordField
+
+    class PermissiveUpdate(msgspec.Struct, omit_defaults=True):
+        email: UserEmailField | None = None
+
+    with pytest.raises(
+        TypeError,
+        match=r"user_create_schema must set forbid_unknown_fields=True so unknown request fields are rejected\.",
+    ):
+        create_register_controller(user_create_schema=PermissiveCreate)
+
+    with pytest.raises(
+        TypeError,
+        match=r"user_update_schema must set forbid_unknown_fields=True so unknown request fields are rejected\.",
+    ):
+        create_users_controller(user_update_schema=PermissiveUpdate)

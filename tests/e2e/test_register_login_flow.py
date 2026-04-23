@@ -218,7 +218,6 @@ async def test_register_verify_login_logout_flow(
         "email": email,
         "is_active": True,
         "is_verified": False,
-        "is_superuser": False,
         "roles": [],
     }
     assert email in verification_tracker.tokens_by_email
@@ -235,7 +234,6 @@ async def test_register_verify_login_logout_flow(
         "email": email,
         "is_active": True,
         "is_verified": True,
-        "is_superuser": False,
         "roles": [],
     }
 

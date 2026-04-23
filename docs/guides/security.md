@@ -7,6 +7,8 @@ litestar-auth separates **authentication** (who is the caller?) from **authoriza
 `LitestarAuthMiddleware` runs early in the stack. It tries each configured `AuthenticationBackend` in order; the first backend that yields a user wins. **Unauthenticated requests do not automatically fail**—`request.user` may be unset or anonymous depending on your Litestar setup.
 
 Use **guards** on routes that require a logged-in user, verified email, active account, superuser access, or flat role membership via `has_any_role(...)` / `has_all_roles(...)`. See [Guards API](../api/guards.md).
+`is_superuser` is also role-based: it checks the configured superuser role name
+(`"superuser"` by default) against the authenticated user's normalized `roles`.
 
 ## Protecting app-owned routes
 

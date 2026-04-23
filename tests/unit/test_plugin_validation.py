@@ -48,6 +48,7 @@ from litestar_auth._plugin.validation import (
     validate_password_validator_config,
     validate_rate_limit_config,
     validate_session_maker_or_external_db_session,
+    validate_superuser_role_name_config,
     validate_totp_config,
     validate_totp_sub_config,
     validate_totp_user_model_protocol,
@@ -725,7 +726,6 @@ def test_validate_config_rejects_role_aware_builtin_surfaces_for_roleless_user_m
         hashed_password = "hashed-password"
         is_active = True
         is_verified = False
-        is_superuser = False
 
     config = _minimal_config()
     config.user_model = cast("type[ExampleUser]", _RolelessUserModel)
@@ -743,16 +743,14 @@ def test_validate_config_allows_roleless_user_model_with_roleless_custom_schemas
         hashed_password = "hashed-password"
         is_active = True
         is_verified = False
-        is_superuser = False
 
     class _RolelessUserRead(msgspec.Struct):
         id: UUID
         email: str
         is_active: bool
         is_verified: bool
-        is_superuser: bool
 
-    class _RolelessUserUpdate(msgspec.Struct, omit_defaults=True):
+    class _RolelessUserUpdate(msgspec.Struct, omit_defaults=True, forbid_unknown_fields=True):
         email: str | None = None
 
     config = _minimal_config()
@@ -773,7 +771,6 @@ def test_validate_config_rejects_roleless_user_model_for_users_surface_with_role
         hashed_password = "hashed-password"
         is_active = True
         is_verified = False
-        is_superuser = False
 
     config = _minimal_config()
     config.user_model = cast("type[ExampleUser]", _RolelessUserModel)
@@ -857,6 +854,7 @@ def test_validate_config_accepts_default_user_manager_requiring_password_helper(
             password_validator: Callable[[str], None] | None = None,
             backends: tuple[object, ...] = (),
             login_identifier: Literal["email", "username"] = "email",
+            superuser_role_name: str = "superuser",
             unsafe_testing: bool = False,
         ) -> None:
             super().__init__(
@@ -866,6 +864,7 @@ def test_validate_config_accepts_default_user_manager_requiring_password_helper(
                 password_validator=password_validator,
                 backends=backends,
                 login_identifier=login_identifier,
+                superuser_role_name=superuser_role_name,
                 unsafe_testing=unsafe_testing,
             )
 
@@ -1031,6 +1030,7 @@ def test_validate_config_rejects_default_user_manager_missing_unsafe_testing_kwa
             password_validator: Callable[[str], None] | None = None,
             backends: tuple[object, ...] = (),
             login_identifier: Literal["email", "username"] = "email",
+            superuser_role_name: str = "superuser",
         ) -> None:
             super().__init__(
                 cast("Any", user_db),
@@ -1039,6 +1039,7 @@ def test_validate_config_rejects_default_user_manager_missing_unsafe_testing_kwa
                 password_validator=password_validator,
                 backends=backends,
                 login_identifier=login_identifier,
+                superuser_role_name=superuser_role_name,
             )
 
     config = _minimal_config()
@@ -1250,7 +1251,6 @@ def test_validate_config_rejects_totp_enabled_user_model_without_totp_fields() -
         hashed_password = "hashed-password"
         is_active = True
         is_verified = False
-        is_superuser = False
         roles = ()
 
     config = _minimal_config(
@@ -1967,6 +1967,22 @@ def test_validate_request_security_config_checks_rate_limit_before_cookie_auth(
     ]
 
 
+@pytest.mark.parametrize("role_name", ["", "   "])
+def test_validate_superuser_role_name_config_rejects_empty_values(role_name: str) -> None:
+    """Configured superuser role names must be non-empty after normalization."""
+    with pytest.raises(ConfigurationError, match="non-empty role name"):
+        _minimal_config(superuser_role_name=role_name)
+
+
+def test_validate_superuser_role_name_config_revalidates_mutated_config_value() -> None:
+    """Startup validation fails closed if callers mutate the config after construction."""
+    config = _minimal_config(superuser_role_name=" Admin ")
+    config.superuser_role_name = "   "
+
+    with pytest.raises(ConfigurationError, match="non-empty role name"):
+        validate_superuser_role_name_config(config)
+
+
 def _minimal_config(  # noqa: PLR0913
     *,
     backends: list[AuthenticationBackend[ExampleUser, UUID]] | None = None,
@@ -1975,6 +1991,7 @@ def _minimal_config(  # noqa: PLR0913
     totp_config: TotpConfig | None = None,
     user_manager_security: UserManagerSecurity[UUID] | None = None,
     id_parser: object | None = None,
+    superuser_role_name: str = "superuser",
 ) -> LitestarAuthConfig[ExampleUser, UUID]:
     """Build a minimal plugin config for validation-focused unit tests.
 
@@ -2008,6 +2025,7 @@ def _minimal_config(  # noqa: PLR0913
         oauth_config=oauth_config,
         rate_limit_config=rate_limit_config,
         totp_config=totp_config,
+        superuser_role_name=superuser_role_name,
     )
 
 

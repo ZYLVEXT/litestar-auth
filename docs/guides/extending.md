@@ -54,13 +54,13 @@ The plugin injects a request-scoped manager built with your `user_db_factory`, `
 
 ### Default builder contract
 
-Without `user_manager_factory`, the plugin calls `user_manager_class(user_db, *, password_helper=..., security=..., password_validator=..., backends=..., login_identifier=..., unsafe_testing=...)`. The default builder always passes `security=UserManagerSecurity(...)`; when `user_manager_security` is unset, `LitestarAuthConfig.id_parser` is folded into that bundle (there is no separate `id_parser=` kwarg on the default builder call).
+Without `user_manager_factory`, the plugin calls `user_manager_class(user_db, *, password_helper=..., security=..., password_validator=..., backends=..., login_identifier=..., superuser_role_name=..., unsafe_testing=...)`. The default builder always passes `security=UserManagerSecurity(...)`; when `user_manager_security` is unset, `LitestarAuthConfig.id_parser` is folded into that bundle (there is no separate `id_parser=` kwarg on the default builder call). `superuser_role_name` is additive, defaults to `"superuser"`, and is normalized with the same role-name rules as `user.roles`.
 
 If your manager narrows or renames that constructor surface, configure `user_manager_factory` instead of relying on plugin-side capability detection. `password_validator_factory` belongs to that default builder contract: the plugin only resolves and injects the validator automatically when it still owns the default manager constructor call.
 
 ### Custom factory
 
-Set `user_manager_factory` on `LitestarAuthConfig` for full control over manager construction when your manager does not follow the default builder contract (must match the `UserManagerFactory` contract). The factory receives `session`, `user_db`, `config`, and request-bound `backends`; it does not receive side-channel `password_helper`, `password_validator`, or `security` kwargs from the plugin. If your custom builder still wants password-policy enforcement, build and pass that validator explicitly inside the factory.
+Set `user_manager_factory` on `LitestarAuthConfig` for full control over manager construction when your manager does not follow the default builder contract (must match the `UserManagerFactory` contract). The factory receives `session`, `user_db`, `config`, and request-bound `backends`; it does not receive side-channel `password_helper`, `password_validator`, or `security` kwargs from the plugin. If your custom builder still wants password-policy enforcement or a custom superuser role, read those values from `config` and pass them explicitly inside the factory.
 
 Plugin-managed manager construction inherits the plugin-owned secret-role reuse baseline. If your
 custom factory instantiates `BaseUserManager` (or a subclass) with the same
@@ -192,7 +192,7 @@ import msgspec
 from litestar_auth.schemas import UserEmailField, UserPasswordField
 
 
-class ExtendedUserCreate(msgspec.Struct):
+class ExtendedUserCreate(msgspec.Struct, forbid_unknown_fields=True):
     email: UserEmailField
     password: UserPasswordField
     display_name: str
@@ -219,12 +219,11 @@ class ExtendedUserRead(msgspec.Struct):
     email: str
     is_active: bool
     is_verified: bool
-    is_superuser: bool
     roles: list[str]
     display_name: str
 
 
-class ExtendedUserUpdate(msgspec.Struct, omit_defaults=True):
+class ExtendedUserUpdate(msgspec.Struct, omit_defaults=True, forbid_unknown_fields=True):
     email: UserEmailField | None = None
     password: UserPasswordField | None = None
     roles: list[str] | None = None

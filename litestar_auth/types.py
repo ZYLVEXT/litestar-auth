@@ -7,8 +7,8 @@ Implement the narrowest protocol that matches the features you use:
 | Feature area | Required protocol |
 |--------------|-------------------|
 | Basic authentication (identity in strategies, ``User`` typing) | ``UserProtocol`` — ``id`` |
-| ``is_active``, ``is_verified``, ``is_superuser`` guards | ``GuardedUserProtocol`` — account state booleans |
-| ``has_any_role``, ``has_all_roles`` guards | ``RoleCapableUserProtocol`` — flat ``roles`` |
+| ``is_active``, ``is_verified`` guards | ``GuardedUserProtocol`` — account state booleans |
+| ``is_superuser``, ``has_any_role``, ``has_all_roles`` guards | ``RoleCapableUserProtocol`` — flat ``roles`` |
 | TOTP enrollment / verification | ``TotpUserProtocol`` — ``email``, ``totp_secret`` |
 
 ``UserProtocol`` remains ``@runtime_checkable`` so runtime guard code can use ``isinstance(...)``.
@@ -76,7 +76,6 @@ class GuardedUserProtocol(UserProtocol[ID], Protocol[ID]):
 
     is_active: bool
     is_verified: bool
-    is_superuser: bool
 
 
 @runtime_checkable

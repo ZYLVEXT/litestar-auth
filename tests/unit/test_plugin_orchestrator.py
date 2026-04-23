@@ -21,6 +21,7 @@ from litestar.middleware import DefineMiddleware
 
 import litestar_auth._plugin.startup as startup_module
 import litestar_auth.plugin as plugin_module
+from litestar_auth import DEFAULT_SUPERUSER_ROLE_NAME
 from litestar_auth._plugin import (
     DEFAULT_BACKENDS_DEPENDENCY_KEY,
     DEFAULT_CONFIG_DEPENDENCY_KEY,
@@ -131,6 +132,7 @@ def _minimal_config(
     include_users: bool = False,
     user_manager_class: type[Any] | None = None,
     login_identifier: Literal["email", "username"] = "email",
+    superuser_role_name: str = DEFAULT_SUPERUSER_ROLE_NAME,
 ) -> LitestarAuthConfig[ExampleUser, UUID]:
     """Build a minimal plugin config for orchestrator-focused tests.
 
@@ -158,6 +160,7 @@ def _minimal_config(
         ),
         include_users=include_users,
         login_identifier=login_identifier,
+        superuser_role_name=superuser_role_name,
     )
 
 
@@ -272,6 +275,7 @@ def test_on_app_init_registers_middleware_controllers_dependencies_and_exception
     assert getattr(middleware.middleware, "__name__", "") == LitestarAuthMiddleware.__name__
     assert middleware.kwargs["authenticator_factory"] == plugin._build_authenticator
     assert middleware.kwargs["auth_cookie_names"] == frozenset({b"authcookie", b"authcookie_refresh"})
+    assert middleware.kwargs["superuser_role_name"] == "superuser"
 
     session_getter = middleware.kwargs["get_request_session"]
     assert isinstance(session_getter, partial)
@@ -939,6 +943,15 @@ def test_build_user_manager_passes_login_identifier_from_config() -> None:
     assert manager.login_identifier == "username"
 
 
+def test_build_user_manager_passes_superuser_role_name_from_config() -> None:
+    """Session-bound manager construction forwards the normalized superuser role name."""
+    plugin = LitestarAuth(_minimal_config(superuser_role_name=" Admin "))
+
+    manager = plugin._build_user_manager(cast("Any", object()))
+
+    assert manager.superuser_role_name == "admin"
+
+
 def test_build_user_manager_uses_plugin_warning_owner_for_default_builder(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -989,6 +1002,7 @@ def test_build_user_manager_passes_typed_security_to_security_only_manager() -> 
             password_validator: object | None = None,
             backends: tuple[object, ...] = (),
             login_identifier: Literal["email", "username"] = "email",
+            superuser_role_name: str = DEFAULT_SUPERUSER_ROLE_NAME,
             skip_reuse_warning: bool = False,
             unsafe_testing: bool = False,
         ) -> None:
@@ -1000,6 +1014,7 @@ def test_build_user_manager_passes_typed_security_to_security_only_manager() -> 
                 password_validator=cast("Any", password_validator),
                 backends=backends,
                 login_identifier=login_identifier,
+                superuser_role_name=superuser_role_name,
                 skip_reuse_warning=skip_reuse_warning,
                 unsafe_testing=unsafe_testing,
             )
@@ -1043,6 +1058,7 @@ def test_build_user_manager_uses_explicit_password_validator_factory() -> None:
 
     manager = plugin._build_user_manager(cast("Any", object()))
 
+    assert manager.password_validator is not None
     with pytest.raises(ValueError, match="at least 10"):
         manager.password_validator("short")
 
@@ -1102,6 +1118,7 @@ def test_build_user_manager_allows_nonstandard_manager_contract_through_factory(
     assert isinstance(manager, LegacyManagerWithoutSecurity)
     assert manager.id_parser is UUID
     assert manager.login_identifier == "username"
+    assert manager.password_validator is not None
     with pytest.raises(ValueError, match="at least 10"):
         manager.password_validator("short")
 
@@ -1310,6 +1327,7 @@ def test_register_middleware_without_cookie_transports_skips_csrf_registration()
     middleware = app_config.middleware[0]
     assert isinstance(middleware, DefineMiddleware)
     assert middleware.kwargs["auth_cookie_names"] == frozenset()
+    assert middleware.kwargs["superuser_role_name"] == "superuser"
 
 
 def test_resolve_account_state_validator_delegates_to_shared_validation_helper(
@@ -1354,6 +1372,7 @@ def test_resolve_account_state_validator_returns_callable_account_state_contract
             password_validator: object | None = None,
             backends: tuple[object, ...] = (),
             login_identifier: Literal["email", "username"] = "email",
+            superuser_role_name: str = DEFAULT_SUPERUSER_ROLE_NAME,
             unsafe_testing: bool = False,
         ) -> None:
             del (
@@ -1363,6 +1382,7 @@ def test_resolve_account_state_validator_returns_callable_account_state_contract
                 password_validator,
                 backends,
                 login_identifier,
+                superuser_role_name,
                 unsafe_testing,
             )
 

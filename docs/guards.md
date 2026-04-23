@@ -3,6 +3,13 @@
 Use Litestar guards directly in `guards=[...]` route declarations. For the runtime
 contract and API reference, see [Guards API](api/guards.md).
 
+## Superuser guard
+
+`is_superuser` requires an authenticated active user and then checks normalized
+role membership. By default, the user must expose the `"superuser"` role in
+`roles`; set `LitestarAuthConfig.superuser_role_name` when your deployment uses
+another normalized role name such as `"admin"`.
+
 ## Typed role guards
 
 `has_any_role()` and `has_all_roles()` accept plain strings, but their Python 3.12

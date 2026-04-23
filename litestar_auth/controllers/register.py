@@ -15,7 +15,7 @@ from litestar_auth.controllers._utils import (
     _require_msgspec_struct,
     _to_user_schema,
 )
-from litestar_auth.exceptions import ErrorCode, InvalidPasswordError, UserAlreadyExistsError
+from litestar_auth.exceptions import AuthorizationError, ErrorCode, InvalidPasswordError, UserAlreadyExistsError
 from litestar_auth.schemas import UserCreate, UserRead
 from litestar_auth.types import RoleCapableUserProtocol
 
@@ -29,7 +29,6 @@ class RegisterControllerUserProtocol[ID](RoleCapableUserProtocol[ID], Protocol):
     email: str
     is_active: bool
     is_verified: bool
-    is_superuser: bool
 
 
 @runtime_checkable
@@ -69,7 +68,7 @@ def create_register_controller[UP: RegisterControllerUserProtocol[Any], ID](
 
     Examples:
         ```python
-        class ExtendedUserCreate(msgspec.Struct):
+        class ExtendedUserCreate(msgspec.Struct, forbid_unknown_fields=True):
             email: str
             password: str
             bio: str
@@ -79,7 +78,6 @@ def create_register_controller[UP: RegisterControllerUserProtocol[Any], ID](
             email: str
             is_active: bool
             is_verified: bool
-            is_superuser: bool
             roles: list[str]
             bio: str
 
@@ -90,7 +88,11 @@ def create_register_controller[UP: RegisterControllerUserProtocol[Any], ID](
         ```
     """
     _require_msgspec_struct(user_read_schema, parameter_name="user_read_schema")
-    _require_msgspec_struct(user_create_schema, parameter_name="user_create_schema")
+    _require_msgspec_struct(
+        user_create_schema,
+        parameter_name="user_create_schema",
+        require_forbid_unknown_fields=True,
+    )
     register_rate_limit = rate_limit_config.register if rate_limit_config else None
     user_read_schema_type = user_read_schema
     user_create_schema_type = user_create_schema
@@ -114,6 +116,7 @@ def create_register_controller[UP: RegisterControllerUserProtocol[Any], ID](
                 {
                     UserAlreadyExistsError: (400, ErrorCode.REGISTER_USER_ALREADY_EXISTS),
                     InvalidPasswordError: (400, ErrorCode.REGISTER_INVALID_PASSWORD),
+                    AuthorizationError: (400, ErrorCode.REQUEST_BODY_INVALID),
                 },
                 on_error=_increment_rate_limit,
             ):

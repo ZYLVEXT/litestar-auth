@@ -276,7 +276,6 @@ def app() -> Iterator[tuple[Litestar, Engine, PasswordHelper, dict[str, UUID]]]:
             email="admin@example.com",
             hashed_password=password_helper.hash("admin-password"),
             is_verified=True,
-            is_superuser=True,
             roles=["admin"],
         )
         regular_user = User(
@@ -325,6 +324,7 @@ def app() -> Iterator[tuple[Litestar, Engine, PasswordHelper, dict[str, UUID]]]:
             id_parser=UUID,
             password_helper=password_helper,
         ),
+        superuser_role_name="admin",
         include_users=True,
     )
     yield (
@@ -374,7 +374,6 @@ async def test_users_crud_flow_via_plugin(
             "email": "member@example.com",
             "is_active": True,
             "is_verified": True,
-            "is_superuser": False,
             "roles": ["member"],
         },
     )
@@ -385,7 +384,6 @@ async def test_users_crud_flow_via_plugin(
         json={
             "email": "member-updated@example.com",
             "password": "member-new-password",
-            "is_superuser": True,
             "roles": [" Billing ", "ADMIN"],
         },
     )
@@ -397,7 +395,6 @@ async def test_users_crud_flow_via_plugin(
             "email": "member-updated@example.com",
             "is_active": True,
             "is_verified": False,
-            "is_superuser": False,
             "roles": ["member"],
         },
     )
@@ -446,7 +443,6 @@ async def test_users_crud_flow_via_plugin(
             "email": "member-updated@example.com",
             "is_active": True,
             "is_verified": True,
-            "is_superuser": False,
             "roles": ["member"],
         },
     )
@@ -454,7 +450,7 @@ async def test_users_crud_flow_via_plugin(
     response = await test_client.patch(
         f"/users/{user_ids['member']}",
         headers=admin_headers,
-        json={"email": "vip@example.com", "is_superuser": True, "is_verified": False, "roles": [" Billing ", "ADMIN"]},
+        json={"email": "vip@example.com", "is_verified": False, "roles": [" Billing ", "ADMIN"]},
     )
     assert response.status_code == HTTP_OK
     _assert_public_user(
@@ -464,7 +460,6 @@ async def test_users_crud_flow_via_plugin(
             "email": "vip@example.com",
             "is_active": True,
             "is_verified": False,
-            "is_superuser": True,
             "roles": ["admin", "billing"],
         },
     )
@@ -484,7 +479,6 @@ async def test_users_crud_flow_via_plugin(
             "email": "extra@example.com",
             "is_active": True,
             "is_verified": True,
-            "is_superuser": False,
             "roles": ["support"],
         },
         {
@@ -492,7 +486,6 @@ async def test_users_crud_flow_via_plugin(
             "email": "admin@example.com",
             "is_active": True,
             "is_verified": True,
-            "is_superuser": True,
             "roles": ["admin"],
         },
     ]
@@ -506,7 +499,6 @@ async def test_users_crud_flow_via_plugin(
             "email": "vip@example.com",
             "is_active": False,
             "is_verified": False,
-            "is_superuser": True,
             "roles": ["admin", "billing"],
         },
     )
@@ -518,7 +510,6 @@ async def test_users_crud_flow_via_plugin(
     assert stored_member.email == "vip@example.com"
     assert stored_member.is_active is False
     assert stored_member.is_verified is False
-    assert stored_member.is_superuser is True
     assert stored_member.roles == ["admin", "billing"]
     assert password_helper.verify("member-new-password", stored_member.hashed_password)
 

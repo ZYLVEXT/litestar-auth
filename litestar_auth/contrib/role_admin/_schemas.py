@@ -32,7 +32,6 @@ class UserBrief(msgspec.Struct):
     email: str
     is_active: bool
     is_verified: bool
-    is_superuser: bool
 
 
 __all__ = ("RoleCreate", "RoleRead", "RoleUpdate", "UserBrief")

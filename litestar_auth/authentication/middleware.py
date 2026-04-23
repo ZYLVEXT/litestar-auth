@@ -10,6 +10,11 @@ from litestar.datastructures.state import State
 from litestar.middleware.authentication import AbstractAuthenticationMiddleware, AuthenticationResult
 from litestar.types import ASGIApp, Method, Scope, Scopes
 
+from litestar_auth._superuser_role import (
+    DEFAULT_SUPERUSER_ROLE_NAME,
+    normalize_superuser_role_name,
+    set_scope_superuser_role_name,
+)
 from litestar_auth.types import UserProtocol
 
 if TYPE_CHECKING:
@@ -36,6 +41,7 @@ class LitestarAuthMiddleware[UP: UserProtocol[Any], ID](AbstractAuthenticationMi
         get_request_session: RequestSessionProvider,
         authenticator_factory: AuthenticatorFactory[UP, ID],
         auth_cookie_names: frozenset[bytes] = frozenset(),
+        superuser_role_name: str = DEFAULT_SUPERUSER_ROLE_NAME,
         exclude: str | list[str] | None = None,
         exclude_from_auth_key: str = "exclude_from_auth",
         exclude_http_methods: Sequence[Method] | None = None,
@@ -49,6 +55,7 @@ class LitestarAuthMiddleware[UP: UserProtocol[Any], ID](AbstractAuthenticationMi
                 ``provide_session`` semantics); must not close the session.
             authenticator_factory: Factory that binds the request-local session into an authenticator.
             auth_cookie_names: Cookie names that should count as auth credentials when present.
+            superuser_role_name: Normalized role name used by superuser guards.
             exclude: Optional route patterns excluded from middleware processing.
             exclude_from_auth_key: Route opt key used to bypass auth.
             exclude_http_methods: Optional HTTP methods excluded from auth.
@@ -64,6 +71,7 @@ class LitestarAuthMiddleware[UP: UserProtocol[Any], ID](AbstractAuthenticationMi
         self.get_request_session = get_request_session
         self.authenticator_factory = authenticator_factory
         self.auth_cookie_names = auth_cookie_names
+        self.superuser_role_name = normalize_superuser_role_name(superuser_role_name)
 
     @override
     async def authenticate_request(
@@ -75,6 +83,7 @@ class LitestarAuthMiddleware[UP: UserProtocol[Any], ID](AbstractAuthenticationMi
         Returns:
             Authentication result containing the resolved user and backend name.
         """
+        set_scope_superuser_role_name(connection.scope, self)
         session = self.get_request_session(connection.app.state, connection.scope)
         authenticator = self.authenticator_factory(session)
         user, backend_name = await authenticator.authenticate(connection)

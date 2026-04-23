@@ -24,7 +24,7 @@ if TYPE_CHECKING:
 
 _DEFAULT_USER_MANAGER_CONSTRUCTOR_DESCRIPTION = (
     "user_manager_class(user_db, *, password_helper=..., security=..., "
-    "password_validator=..., backends=..., login_identifier=..., unsafe_testing=...)"
+    "password_validator=..., backends=..., login_identifier=..., superuser_role_name=..., unsafe_testing=...)"
 )
 _DEFAULT_USER_MANAGER_ID_PARSER_FALLBACK_DESCRIPTION = (
     "When user_manager_security is unset, the default builder still passes "
@@ -78,6 +78,7 @@ class _DefaultUserManagerBuilderContract[UP: UserProtocol[Any], ID]:
         constructor_kwargs["password_helper"] = self.password_helper
         constructor_kwargs["password_validator"] = self.password_validator
         constructor_kwargs["unsafe_testing"] = self.config.unsafe_testing
+        constructor_kwargs["superuser_role_name"] = self.config.superuser_role_name
         return constructor_kwargs
 
     @staticmethod

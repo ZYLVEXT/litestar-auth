@@ -23,7 +23,7 @@ import msgspec
 from litestar_auth.schemas import UserEmailField, UserPasswordField
 
 
-class AppUserCreate(msgspec.Struct):
+class AppUserCreate(msgspec.Struct, forbid_unknown_fields=True):
     email: UserEmailField
     password: UserPasswordField
 ```

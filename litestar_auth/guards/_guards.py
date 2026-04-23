@@ -2,12 +2,18 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, TypeVar
 
 from litestar.exceptions import NotAuthorizedException, PermissionDeniedException
 
 from litestar_auth._roles import normalize_role_name as _normalize_role_name
 from litestar_auth._roles import normalize_roles as _normalize_roles
+from litestar_auth._superuser_role import (
+    DEFAULT_SUPERUSER_ROLE_NAME,
+    SUPERUSER_ROLE_NAME_SENTINEL,
+    normalize_superuser_role_name,
+)
 from litestar_auth.exceptions import InsufficientRolesError
 from litestar_auth.types import GuardedUserProtocol, RoleCapableUserProtocol
 
@@ -26,7 +32,7 @@ def _guarded_protocol_denial_detail(guard_name: str) -> str:
         Human-readable denial message including ``guard_name`` and protocol requirements.
     """
     return (
-        f"{guard_name} guard requires GuardedUserProtocol (is_active, is_verified, is_superuser). "
+        f"{guard_name} guard requires GuardedUserProtocol (is_active, is_verified). "
         "The authenticated user does not expose account state required by this guard."
     )
 
@@ -129,6 +135,31 @@ def _normalized_user_roles(user: object, *, guard_name: str) -> frozenset[str]:
         return frozenset(_normalize_roles(role_capable_user.roles))
     except (TypeError, ValueError) as exc:
         raise PermissionDeniedException(detail=_role_capable_protocol_denial_detail(guard_name)) from exc
+
+
+def _connection_superuser_role_name(connection: ASGIConnection[Any, Any, Any, Any]) -> str:
+    """Return the normalized superuser role name from request scope state.
+
+    Plugin-managed requests store the configured value in ``scope["state"]``. Direct
+    guard usage outside the plugin falls back to the canonical default.
+
+    Raises:
+        PermissionDeniedException: When plugin state contains an invalid role name.
+    """
+    scope_state = connection.scope.get("state")
+    if not isinstance(scope_state, Mapping):
+        return DEFAULT_SUPERUSER_ROLE_NAME
+
+    raw_role_name = scope_state.get(SUPERUSER_ROLE_NAME_SENTINEL, DEFAULT_SUPERUSER_ROLE_NAME)
+    if not isinstance(raw_role_name, str):
+        msg = "The configured superuser role name is invalid."
+        raise PermissionDeniedException(detail=msg)
+
+    try:
+        return normalize_superuser_role_name(raw_role_name)
+    except ValueError as exc:
+        msg = "The configured superuser role name is invalid."
+        raise PermissionDeniedException(detail=msg) from exc
 
 
 def _require_active_guarded_user(
@@ -301,7 +332,9 @@ def is_superuser(
         present, or :exc:`PermissionDeniedException` for missing account state or inactive users.
     """
     guarded = _require_active_guarded_user(connection, guard_name="is_superuser")
-    if guarded.is_superuser:
+    user_roles = _normalized_user_roles(guarded, guard_name="is_superuser")
+    superuser_role_name = _connection_superuser_role_name(connection)
+    if superuser_role_name in user_roles:
         return
 
     msg = "The authenticated user does not have sufficient privileges."

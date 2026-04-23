@@ -4,7 +4,7 @@ Use this page for user-model requirements, bundled ORM mixins, token model compo
 
 ## Custom SQLAlchemy `User` and token models
 
-`LitestarAuthConfig.user_model` must satisfy **`UserProtocol`** (see [Types](../api/types.md)): at minimum the fields and behaviors your chosen `BaseUserManager` and strategies use (`id`, `email`, `hashed_password`, `is_active`, `is_verified`, `is_superuser`, `totp_secret` as applicable). When your app wants the library's flat role-membership contract, expose `roles: Sequence[str]` and satisfy **`RoleCapableUserProtocol`** instead of inferring role support from arbitrary attributes. The bundled `User` already provides that `roles` collection, and custom SQLAlchemy model families can add it with `UserRoleRelationshipMixin`.
+`LitestarAuthConfig.user_model` must satisfy **`UserProtocol`** (see [Types](../api/types.md)): at minimum the fields and behaviors your chosen `BaseUserManager` and strategies use (`id`, `email`, `hashed_password`, `is_active`, `is_verified`, `totp_secret` as applicable). When your app wants the library's flat role-membership contract, expose `roles: Sequence[str]` and satisfy **`RoleCapableUserProtocol`**; superuser status is derived from membership in the configured superuser role, not from a model attribute. The bundled `User` already provides that `roles` collection, and custom SQLAlchemy model families can add it with `UserRoleRelationshipMixin`.
 
 When `totp_config` is set, plugin startup also validates that `user_model` exposes the
 **`TotpUserProtocol`** fields (`email` and `totp_secret`). A model missing either field fails

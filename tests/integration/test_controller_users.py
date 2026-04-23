@@ -116,9 +116,8 @@ def build_app(
         id=uuid4(),
         email="admin@example.com",
         hashed_password=password_helper.hash("admin-password"),
-        is_superuser=True,
         is_verified=True,
-        roles=["admin"],
+        roles=["admin", "superuser"],
     )
     regular_user = ExampleUser(
         id=uuid4(),
@@ -249,7 +248,6 @@ async def test_me_endpoints_return_public_payload_and_ignore_restricted_self_upd
         json={
             "email": "updated-user@example.com",
             "password": "new-password",
-            "is_superuser": True,
             "is_verified": False,
             "roles": [" Billing ", "ADMIN"],
         },
@@ -261,7 +259,6 @@ async def test_me_endpoints_return_public_payload_and_ignore_restricted_self_upd
         "email": original_email,
         "is_active": True,
         "is_verified": True,
-        "is_superuser": False,
         "roles": ["member"],
     }
     assert "hashed_password" not in get_response.json()
@@ -273,16 +270,42 @@ async def test_me_endpoints_return_public_payload_and_ignore_restricted_self_upd
         "email": "updated-user@example.com",
         "is_active": True,
         "is_verified": False,
-        "is_superuser": False,
         "roles": ["member"],
     }
     stored_user = await user_db.get(regular_user.id)
     assert stored_user is not None
     assert stored_user.email == "updated-user@example.com"
-    assert stored_user.is_superuser is False
     assert stored_user.is_verified is False
     assert stored_user.roles == ["member"]
     assert PasswordHelper().verify("new-password", stored_user.hashed_password) is True
+
+
+async def test_me_endpoints_reject_unknown_fields_from_builtin_schema(
+    client: tuple[
+        AsyncTestClient[Litestar],
+        InMemoryUserDatabase,
+        UsersControllerManager,
+        InMemoryTokenStrategy,
+        ExampleUser,
+        ExampleUser,
+    ],
+) -> None:
+    """Built-in self-update schema rejects undeclared fields during request decoding."""
+    test_client, user_db, _, strategy, _, regular_user = client
+    token = await strategy.write_token(regular_user)
+    headers = {"Authorization": f"Bearer {token}"}
+
+    response = await test_client.patch(
+        "/users/me",
+        headers=headers,
+        json={"email": "ignored@example.com", "deprecated_admin_flag": True},
+    )
+
+    assert response.status_code == HTTP_UNPROCESSABLE_ENTITY
+    assert (response.json().get("extra") or {}).get("code") == ErrorCode.REQUEST_BODY_INVALID
+    stored_user = await user_db.get(regular_user.id)
+    assert stored_user is not None
+    assert stored_user.email == regular_user.email
 
 
 async def test_me_endpoints_require_authenticated_user(
@@ -654,7 +677,7 @@ async def test_superuser_can_read_update_and_soft_delete_users(
     patch_response = await test_client.patch(
         f"/users/{regular_user.id}",
         headers=headers,
-        json={"is_verified": False, "is_superuser": True, "roles": [" Billing ", "admin", "ADMIN"]},
+        json={"is_verified": False, "roles": [" Billing ", "admin", "ADMIN"]},
     )
     delete_response = await test_client.delete(f"/users/{regular_user.id}", headers=headers)
 
@@ -665,7 +688,6 @@ async def test_superuser_can_read_update_and_soft_delete_users(
 
     assert patch_response.status_code == HTTP_OK
     assert patch_response.json()["is_verified"] is False
-    assert patch_response.json()["is_superuser"] is True
     assert patch_response.json()["roles"] == ["admin", "billing"]
 
     assert delete_response.status_code == HTTP_OK
@@ -727,7 +749,6 @@ async def test_superuser_can_hard_delete_users(
         "email": regular_user.email,
         "is_active": True,
         "is_verified": True,
-        "is_superuser": False,
         "roles": ["member"],
     }
     assert await user_db.get(regular_user.id) is None
@@ -760,7 +781,6 @@ async def test_users_list_returns_paginated_public_payload(
                 "email": regular_user.email,
                 "is_active": True,
                 "is_verified": True,
-                "is_superuser": False,
                 "roles": ["member"],
             },
         ],

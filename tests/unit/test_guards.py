@@ -6,6 +6,7 @@ import importlib
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from enum import StrEnum
+from types import SimpleNamespace
 from typing import TYPE_CHECKING, Any, Literal, assert_type, cast
 from unittest.mock import Mock
 from uuid import UUID, uuid4
@@ -16,6 +17,7 @@ from litestar.exceptions import NotAuthorizedException, PermissionDeniedExceptio
 from litestar.handlers.base import BaseRouteHandler
 
 import litestar_auth.guards._guards as guards_module
+from litestar_auth._superuser_role import DEFAULT_SUPERUSER_ROLE_NAME, SUPERUSER_ROLE_NAME_SENTINEL
 from litestar_auth.exceptions import ErrorCode, InsufficientRolesError
 from litestar_auth.guards import (
     _guards,
@@ -27,6 +29,7 @@ from litestar_auth.guards import (
     is_verified,
 )
 from litestar_auth.guards._guards import (
+    _connection_superuser_role_name,
     _require_active_guarded_user,
     _require_guarded_user,
     _require_role_capable_user,
@@ -43,11 +46,16 @@ HTTP_403_FORBIDDEN = 403
 type Guard = Callable[[ASGIConnection[Any, Any, Any, Any], BaseRouteHandler], Awaitable[None] | None]
 
 
-def _build_connection(user: object | None) -> ASGIConnection[Any, Any, Any, Any]:
+def _build_connection(
+    user: object | None,
+    *,
+    state: object | None = None,
+) -> ASGIConnection[Any, Any, Any, Any]:
     """Create a minimal HTTP connection populated with a user.
 
     Args:
         user: User attached to the connection scope.
+        state: Optional request-scope state.
 
     Returns:
         Minimal Litestar connection object.
@@ -59,6 +67,8 @@ def _build_connection(user: object | None) -> ASGIConnection[Any, Any, Any, Any]
         "query_string": b"",
         "user": user,
     }
+    if state is not None:
+        scope["state"] = state
     return ASGIConnection(scope=cast("HTTPScope", scope))
 
 
@@ -81,7 +91,6 @@ class _GuardedUserWithoutRoles:
     id: UUID
     is_active: bool = True
     is_verified: bool = True
-    is_superuser: bool = False
 
 
 @dataclass(slots=True)
@@ -92,7 +101,34 @@ class _GuardedUserWithInvalidRoles:
     roles: tuple[object, ...]
     is_active: bool = True
     is_verified: bool = True
-    is_superuser: bool = False
+
+
+class _RoleCapableUserWithExplodingSuperuserFlag:
+    """Role-capable guarded user whose obsolete boolean flag must not be read."""
+
+    def __init__(
+        self,
+        *,
+        user_id: UUID,
+        roles: list[str],
+        is_active: bool = True,
+        is_verified: bool = True,
+    ) -> None:
+        """Store account state and roles."""
+        self.id = user_id
+        self.roles = roles
+        self.is_active = is_active
+        self.is_verified = is_verified
+
+    @property
+    def is_superuser(self) -> bool:
+        """Fail the test if the role-based guard reads the obsolete flag.
+
+        Raises:
+            AssertionError: Always, because this property must not be read.
+        """
+        msg = "is_superuser should not be read by the is_superuser guard."
+        raise AssertionError(msg)
 
 
 @dataclass(frozen=True, slots=True)
@@ -154,7 +190,7 @@ def test_guards_reject_user_without_guarded_protocol(
 
 def test_require_active_guarded_user_returns_active_guarded_instance() -> None:
     """The active-user helper returns the same user object narrowed for downstream checks."""
-    user = ExampleUser(id=uuid4(), is_active=True, is_verified=True, is_superuser=False)
+    user = ExampleUser(id=uuid4(), is_active=True, is_verified=True)
     connection = _build_connection(user)
 
     assert _require_active_guarded_user(connection) is user
@@ -162,7 +198,7 @@ def test_require_active_guarded_user_returns_active_guarded_instance() -> None:
 
 def test_require_guarded_user_returns_guarded_user_instance() -> None:
     """The internal helper returns valid guarded users unchanged."""
-    user = ExampleUser(id=uuid4(), is_active=True, is_verified=True, is_superuser=True)
+    user = ExampleUser(id=uuid4(), is_active=True, is_verified=True)
 
     assert _require_guarded_user(user) is user
 
@@ -335,7 +371,7 @@ def test_role_guards_allow_matching_normalized_roles(guard: Guard, user: Example
         pytest.param(is_authenticated, ExampleUser(id=uuid4()), id="authenticated"),
         pytest.param(is_active, ExampleUser(id=uuid4(), is_active=True), id="active"),
         pytest.param(is_verified, ExampleUser(id=uuid4(), is_verified=True), id="verified"),
-        pytest.param(is_superuser, ExampleUser(id=uuid4(), is_superuser=True), id="superuser"),
+        pytest.param(is_superuser, ExampleUser(id=uuid4(), roles=[" SUPERUSER "]), id="superuser"),
     ],
 )
 def test_guards_allow_authorized_users(
@@ -346,6 +382,89 @@ def test_guards_allow_authorized_users(
     connection = _build_connection(user)
 
     assert guard(connection, _build_handler()) is None
+
+
+def test_is_superuser_allows_default_superuser_role_without_reading_obsolete_flag() -> None:
+    """The superuser guard authorizes normalized role membership, not an obsolete bool."""
+    user = _RoleCapableUserWithExplodingSuperuserFlag(user_id=uuid4(), roles=[" SuperUser "])
+    connection = _build_connection(user)
+
+    assert is_superuser(connection, _build_handler()) is None
+
+
+def test_is_superuser_honors_configured_scope_role_name() -> None:
+    """Plugin-managed scope state controls which normalized role grants superuser access."""
+    user = ExampleUser(id=uuid4(), roles=[" Admin "])
+    connection = _build_connection(user, state={SUPERUSER_ROLE_NAME_SENTINEL: " ADMIN "})
+
+    assert is_superuser(connection, _build_handler()) is None
+
+
+def test_is_superuser_falls_back_to_default_when_scope_state_is_not_mapping() -> None:
+    """Non-plugin scope state does not override the canonical default role."""
+    connection = cast(
+        "ASGIConnection[Any, Any, Any, Any]",
+        SimpleNamespace(scope={"state": object()}),
+    )
+
+    assert _connection_superuser_role_name(connection) == DEFAULT_SUPERUSER_ROLE_NAME
+
+
+@pytest.mark.parametrize(
+    "configured_role",
+    [
+        pytest.param(object(), id="non-string"),
+        pytest.param("   ", id="blank-string"),
+    ],
+)
+def test_is_superuser_rejects_invalid_configured_scope_role_name(configured_role: object) -> None:
+    """Invalid plugin-provided superuser role names fail closed."""
+    user = ExampleUser(id=uuid4(), roles=["superuser"])
+    connection = _build_connection(user, state={SUPERUSER_ROLE_NAME_SENTINEL: configured_role})
+
+    with pytest.raises(PermissionDeniedException) as exc_info:
+        is_superuser(connection, _build_handler())
+
+    assert exc_info.value.status_code == HTTP_403_FORBIDDEN
+    assert exc_info.value.detail == "The configured superuser role name is invalid."
+
+
+def test_is_superuser_denies_user_without_configured_role() -> None:
+    """A role-capable active user without the configured superuser role is denied."""
+    user = ExampleUser(id=uuid4(), roles=["member"])
+    connection = _build_connection(user)
+
+    with pytest.raises(PermissionDeniedException) as exc_info:
+        is_superuser(connection, _build_handler())
+
+    assert exc_info.value.status_code == HTTP_403_FORBIDDEN
+    assert "sufficient privileges" in (exc_info.value.detail or "").lower()
+
+
+def test_is_superuser_rejects_user_without_role_capable_protocol() -> None:
+    """The superuser guard fails closed when role membership is unavailable."""
+    connection = _build_connection(_GuardedUserWithoutRoles(id=uuid4()))
+
+    with pytest.raises(PermissionDeniedException) as exc_info:
+        is_superuser(connection, _build_handler())
+
+    detail = (exc_info.value.detail or "").lower()
+    assert exc_info.value.status_code == HTTP_403_FORBIDDEN
+    assert "rolecapableuserprotocol" in detail
+    assert "is_superuser" in detail
+
+
+def test_is_superuser_rejects_invalid_user_roles() -> None:
+    """The superuser guard fails closed when runtime role data cannot be normalized."""
+    connection = _build_connection(_GuardedUserWithInvalidRoles(id=uuid4(), roles=(object(),)))
+
+    with pytest.raises(PermissionDeniedException) as exc_info:
+        is_superuser(connection, _build_handler())
+
+    detail = (exc_info.value.detail or "").lower()
+    assert exc_info.value.status_code == HTTP_403_FORBIDDEN
+    assert "rolecapableuserprotocol" in detail
+    assert "is_superuser" in detail
 
 
 def test_is_authenticated_rejects_missing_user() -> None:
@@ -389,10 +508,10 @@ def test_dependent_guards_reject_missing_user(guard: Guard) -> None:
             ExampleUser(id=uuid4(), is_active=False, is_verified=True),
             id="inactive-verified",
         ),
-        pytest.param(is_superuser, ExampleUser(id=uuid4(), is_superuser=False), id="not-superuser"),
+        pytest.param(is_superuser, ExampleUser(id=uuid4(), roles=["member"]), id="not-superuser"),
         pytest.param(
             is_superuser,
-            ExampleUser(id=uuid4(), is_active=False, is_superuser=True),
+            ExampleUser(id=uuid4(), is_active=False, roles=["superuser"]),
             id="inactive-superuser",
         ),
     ],
@@ -401,7 +520,7 @@ def test_authorization_guards_reject_invalid_users(
     guard: Guard,
     user: ExampleUser,
 ) -> None:
-    """Authorization guards raise 403 when the required flag is missing."""
+    """Authorization guards raise 403 when the required state or role predicate is missing."""
     connection = _build_connection(user)
 
     with pytest.raises(PermissionDeniedException) as exc_info:

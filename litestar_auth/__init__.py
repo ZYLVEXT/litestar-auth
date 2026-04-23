@@ -32,6 +32,7 @@ Examples:
 
 import logging
 
+from litestar_auth._superuser_role import DEFAULT_SUPERUSER_ROLE_NAME
 from litestar_auth.authentication import AuthenticationBackend, Authenticator
 from litestar_auth.authentication.transport import BearerTransport, CookieTransport
 from litestar_auth.exceptions import ErrorCode, LitestarAuthError
@@ -58,6 +59,7 @@ logging.getLogger(__name__).addHandler(logging.NullHandler())  # noqa: RUF067
 __version__ = "2.0.0"
 
 __all__ = (
+    "DEFAULT_SUPERUSER_ROLE_NAME",
     "AuthenticationBackend",
     "Authenticator",
     "BaseUserManager",

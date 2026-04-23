@@ -241,7 +241,6 @@ def test_contrib_role_admin_package_rejects_unknown_public_attributes() -> None:
                 "email": "member@example.com",
                 "is_active": True,
                 "is_verified": False,
-                "is_superuser": False,
             },
         ),
     ],
@@ -264,7 +263,7 @@ def test_contrib_role_admin_user_brief_exposes_only_non_sensitive_fields() -> No
         hashed_password="hash",
         is_active=True,
         is_verified=False,
-        is_superuser=True,
+        roles=["admin"],
     )
     user.totp_secret = "totp-secret"
     payload = UserBrief(
@@ -272,17 +271,13 @@ def test_contrib_role_admin_user_brief_exposes_only_non_sensitive_fields() -> No
         email=user.email,
         is_active=user.is_active,
         is_verified=user.is_verified,
-        is_superuser=user.is_superuser,
     )
 
     assert payload.id == str(user.id)
     assert payload.email == user.email
     assert payload.is_active is True
     assert payload.is_verified is False
-    assert payload.is_superuser is True
-    assert "hashed_password" not in UserBrief.__struct_fields__
-    assert "password" not in UserBrief.__struct_fields__
-    assert "totp_secret" not in UserBrief.__struct_fields__
+    assert UserBrief.__struct_fields__ == ("id", "email", "is_active", "is_verified")
 
 
 def test_contrib_role_admin_error_codes_keep_strenum_name_value_invariant() -> None:
@@ -357,14 +352,12 @@ async def test_contrib_role_admin_internal_request_session_helpers_cover_request
             email="member@example.com",
             is_active=True,
             is_verified=False,
-            is_superuser=False,
         ),
     ) == UserBrief(
         id="user-1",
         email="member@example.com",
         is_active=True,
         is_verified=False,
-        is_superuser=False,
     )
 
     async def _rename_body() -> bytes:
@@ -513,14 +506,12 @@ async def test_contrib_role_admin_assignment_helpers_cover_success_and_paging(  
                     email="auditor@example.com",
                     is_active=True,
                     is_verified=True,
-                    is_superuser=False,
                 ),
                 SimpleNamespace(
                     id="user-2",
                     email="member@example.com",
                     is_active=True,
                     is_verified=False,
-                    is_superuser=False,
                 ),
             ]
 
@@ -570,7 +561,6 @@ async def test_contrib_role_admin_assignment_helpers_cover_success_and_paging(  
                 "email": "member@example.com",
                 "is_active": True,
                 "is_verified": False,
-                "is_superuser": False,
             },
         ],
         "total": 2,
@@ -822,7 +812,6 @@ async def test_contrib_role_admin_controller_handlers_cover_config_and_request_b
                     email="auditor@example.com",
                     is_active=True,
                     is_verified=True,
-                    is_superuser=False,
                 ),
             ]
 
@@ -1027,7 +1016,6 @@ async def test_contrib_role_admin_controller_handlers_cover_config_and_request_b
                 "email": "auditor@example.com",
                 "is_active": True,
                 "is_verified": True,
-                "is_superuser": False,
             },
         ],
         "total": 1,

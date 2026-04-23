@@ -144,6 +144,7 @@ def test_root_reexport_module_executes_under_coverage(monkeypatch: pytest.Monkey
             "BearerTransport",
             "CookieTransport",
             "DatabaseTokenAuthConfig",
+            "DEFAULT_SUPERUSER_ROLE_NAME",
             "ErrorCode",
             "LitestarAuth",
             "LitestarAuthConfig",

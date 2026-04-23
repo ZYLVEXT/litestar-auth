@@ -24,17 +24,6 @@ class UserDatabaseManagerProtocol[UP](Protocol):
     user_db: Any
 
 
-class PasswordManagedUserManagerProtocol[UP](UserDatabaseManagerProtocol[UP], Protocol):
-    """Manager surface shared by services that normalize and hash passwords."""
-
-    password_helper: Any
-
-    @staticmethod
-    def _normalize_email(email: str) -> str: ...  # pragma: no cover
-
-    def _validate_password(self, password: str) -> None: ...  # pragma: no cover
-
-
 class UserManagerHooksProtocol[UP](Protocol):
     """Lifecycle-hook surface exposed by manager implementations."""
 

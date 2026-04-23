@@ -61,7 +61,7 @@ async def test_create_normalizes_email_hashes_password_and_runs_register_hook() 
     user_db = AsyncMock()
     password_helper = PasswordHelper()
     manager = TrackingUserManager(user_db, password_helper)
-    service = UserLifecycleService(manager)
+    service = UserLifecycleService(manager, policy=manager.policy)
     created_user = _build_user(password_helper, email="user@example.com")
     user_db.get_by_email.return_value = None
     user_db.create.return_value = created_user
@@ -85,7 +85,7 @@ async def test_create_rejects_duplicate_email_after_normalization() -> None:
     user_db = AsyncMock()
     password_helper = PasswordHelper()
     manager = TrackingUserManager(user_db, password_helper)
-    service = UserLifecycleService(manager)
+    service = UserLifecycleService(manager, policy=manager.policy)
     user_db.get_by_email.return_value = _build_user(password_helper, email="duplicate@example.com")
 
     with pytest.raises(UserAlreadyExistsError) as exc_info:
@@ -103,7 +103,7 @@ async def test_create_normalizes_roles_when_privileged_payload_allows_them() -> 
     user_db = AsyncMock()
     password_helper = PasswordHelper()
     manager = TrackingUserManager(user_db, password_helper)
-    service = UserLifecycleService(manager)
+    service = UserLifecycleService(manager, policy=manager.policy)
     created_user = _build_user(password_helper, email="roles@example.com")
     user_db.get_by_email.return_value = None
     user_db.create.return_value = created_user
@@ -123,22 +123,25 @@ async def test_create_normalizes_roles_when_privileged_payload_allows_them() -> 
     assert create_payload["roles"] == ["admin", "billing"]
 
 
-async def test_create_with_policy_uses_policy_helpers_instead_of_manager_privates() -> None:
-    """create() should use the injected policy helpers when provided."""
+async def test_create_uses_injected_policy_for_normalization_and_hashing() -> None:
+    """create() routes normalization and hashing through the injected policy."""
     user_db = AsyncMock()
     password_helper = PasswordHelper()
     manager = TrackingUserManager(user_db, password_helper)
-    service = UserLifecycleService(manager, policy=UserPolicy(password_helper=password_helper))
+    policy = UserPolicy(password_helper=password_helper)
+    service = UserLifecycleService(manager, policy=policy)
     created_user = _build_user(password_helper, email="policy@example.com")
     user_db.get_by_email.return_value = None
     user_db.create.return_value = created_user
 
     with (
-        patch.object(manager, "_normalize_email", side_effect=AssertionError("manager normalize should not run")),
-        patch.object(manager, "_validate_password", side_effect=AssertionError("manager validate should not run")),
+        patch.object(policy, "normalize_email", wraps=policy.normalize_email) as normalize_email,
+        patch.object(policy, "validate_password", wraps=policy.validate_password) as validate_password,
     ):
         result = await service.create(UserCreate(email="policy@example.com", password="test-password"))
 
+    normalize_email.assert_called_once_with("policy@example.com")
+    validate_password.assert_called_once_with("test-password")
     assert result is created_user
     create_payload = user_db.create.await_args.args[0]
     assert password_helper.verify("test-password", create_payload["hashed_password"]) is True
@@ -149,7 +152,7 @@ async def test_list_users_delegates_to_user_db() -> None:
     user_db = AsyncMock()
     password_helper = PasswordHelper()
     manager = TrackingUserManager(user_db, password_helper)
-    service = UserLifecycleService(manager)
+    service = UserLifecycleService(manager, policy=manager.policy)
     users = [_build_user(password_helper)]
     user_db.list_users.return_value = (users, 1)
 
@@ -164,7 +167,7 @@ async def test_get_delegates_to_user_db() -> None:
     user_db = AsyncMock()
     password_helper = PasswordHelper()
     manager = TrackingUserManager(user_db, password_helper)
-    service = UserLifecycleService(manager)
+    service = UserLifecycleService(manager, policy=manager.policy)
     user = _build_user(password_helper)
     user_db.get.return_value = user
 
@@ -179,7 +182,7 @@ async def test_authenticate_username_mode_returns_none_for_blank_lookup() -> Non
     user_db = AsyncMock()
     password_helper = PasswordHelper()
     manager = TrackingUserManager(user_db, password_helper)
-    service = UserLifecycleService(manager)
+    service = UserLifecycleService(manager, policy=manager.policy)
 
     result = await service.authenticate(
         "   ",
@@ -198,7 +201,7 @@ async def test_authenticate_logs_password_upgrade_failure_and_preserves_login() 
     user_db = AsyncMock()
     password_helper = PasswordHelper()
     manager = TrackingUserManager(user_db, password_helper)
-    service = UserLifecycleService(manager)
+    service = UserLifecycleService(manager, policy=manager.policy)
     user = _build_user(password_helper, username="user-name")
     logger = Mock(spec=logging.Logger)
     user_db.get_by_field.return_value = user
@@ -232,7 +235,7 @@ async def test_update_email_change_resets_verification_invalidates_tokens_and_re
         password_helper,
         backends=(_Backend(strategy=type("InvalidateStrategy", (), {"invalidate_all_tokens": invalidator})()),),
     )
-    service = UserLifecycleService(manager)
+    service = UserLifecycleService(manager, policy=manager.policy)
     user = replace(_build_user(password_helper), is_verified=True)
     updated_user = replace(user, email="updated@example.com", is_verified=False)
     user_db.get_by_email.return_value = None
@@ -263,7 +266,7 @@ async def test_update_password_change_hashes_password_invalidates_tokens_and_run
         password_helper,
         backends=(_Backend(strategy=type("InvalidateStrategy", (), {"invalidate_all_tokens": invalidator})()),),
     )
-    service = UserLifecycleService(manager)
+    service = UserLifecycleService(manager, policy=manager.policy)
     user = _build_user(password_helper)
     updated_user = replace(user)
     user_db.update.return_value = updated_user
@@ -284,7 +287,7 @@ async def test_update_rejects_duplicate_email_for_another_user() -> None:
     user_db = AsyncMock()
     password_helper = PasswordHelper()
     manager = TrackingUserManager(user_db, password_helper)
-    service = UserLifecycleService(manager)
+    service = UserLifecycleService(manager, policy=manager.policy)
     user = _build_user(password_helper, email="user@example.com")
     duplicate_user = _build_user(password_helper, email="taken@example.com")
     user_db.get_by_email.return_value = duplicate_user
@@ -304,7 +307,7 @@ async def test_update_normalizes_roles_from_mapping_payload() -> None:
     user_db = AsyncMock()
     password_helper = PasswordHelper()
     manager = TrackingUserManager(user_db, password_helper)
-    service = UserLifecycleService(manager)
+    service = UserLifecycleService(manager, policy=manager.policy)
     user = _build_user(password_helper, email="user@example.com")
     updated_user = replace(user)
     user_db.update.return_value = updated_user
@@ -325,7 +328,7 @@ async def test_update_rejects_privileged_fields_without_explicit_opt_in() -> Non
     user_db = AsyncMock()
     password_helper = PasswordHelper()
     manager = TrackingUserManager(user_db, password_helper)
-    service = UserLifecycleService(manager)
+    service = UserLifecycleService(manager, policy=manager.policy)
     user = _build_user(password_helper, email="user@example.com")
 
     with pytest.raises(AuthorizationError, match="allow_privileged=True"):
@@ -345,7 +348,7 @@ async def test_update_allows_same_normalized_email_without_side_effects() -> Non
         password_helper,
         backends=(_Backend(strategy=type("InvalidateStrategy", (), {"invalidate_all_tokens": invalidator})()),),
     )
-    service = UserLifecycleService(manager)
+    service = UserLifecycleService(manager, policy=manager.policy)
     user = _build_user(password_helper, email="user@example.com")
     duplicate_self = replace(user)
     updated_user = replace(user)
@@ -366,7 +369,7 @@ async def test_update_returns_original_user_when_no_non_null_changes_exist() -> 
     user_db = AsyncMock()
     password_helper = PasswordHelper()
     manager = TrackingUserManager(user_db, password_helper)
-    service = UserLifecycleService(manager)
+    service = UserLifecycleService(manager, policy=manager.policy)
     user = _build_user(password_helper)
 
     result = await service.update({"email": None, "password": None}, user)
@@ -387,7 +390,7 @@ def test_apply_password_update_returns_false_when_password_missing() -> None:
     user_db = AsyncMock()
     password_helper = PasswordHelper()
     manager = TrackingUserManager(user_db, password_helper)
-    service = UserLifecycleService(manager)
+    service = UserLifecycleService(manager, policy=manager.policy)
     update_dict = {"email": "user@example.com"}
 
     changed = service._apply_password_update(update_dict)
@@ -412,7 +415,7 @@ async def test_delete_calls_hooks_and_rejects_missing_users() -> None:
     user_db = AsyncMock()
     password_helper = PasswordHelper()
     manager = TrackingUserManager(user_db, password_helper)
-    service = UserLifecycleService(manager)
+    service = UserLifecycleService(manager, policy=manager.policy)
     user = _build_user(password_helper)
     missing_user_id = uuid4()
     user_db.get.side_effect = [user, None]
@@ -426,35 +429,8 @@ async def test_delete_calls_hooks_and_rejects_missing_users() -> None:
         await service.delete(missing_user_id)
 
 
-def test_helper_methods_fall_back_to_manager_when_policy_missing() -> None:
-    """Helper methods should delegate to manager-private compatibility shims without a policy."""
-    user_db = AsyncMock()
-    password_helper = PasswordHelper()
-    manager = TrackingUserManager(user_db, password_helper)
-    service = UserLifecycleService(manager)
-
-    with (
-        patch.object(manager, "_normalize_email", return_value="normalized@example.com") as normalize_email,
-        patch.object(manager, "_normalize_username_lookup", return_value="normalized-user") as normalize_username,
-        patch.object(manager, "_validate_password") as validate_password,
-        patch.object(manager.password_helper, "hash", return_value="hashed-value") as hash_password,
-        patch.object(manager.password_helper, "verify_and_update", return_value=(True, "new-hash")) as verify_update,
-    ):
-        assert service._normalize_email(" raw@example.com ") == "normalized@example.com"
-        assert service._normalize_username_lookup(" RawUser ") == "normalized-user"
-        service._validate_password("secret-password")
-        assert service._hash_password("secret-password") == "hashed-value"
-        assert service._verify_and_update_password("secret-password", "stored-hash") == (True, "new-hash")
-
-    normalize_email.assert_called_once_with(" raw@example.com ")
-    normalize_username.assert_called_once_with(" RawUser ")
-    validate_password.assert_called_once_with("secret-password")
-    hash_password.assert_called_once_with("secret-password")
-    verify_update.assert_called_once_with("secret-password", "stored-hash")
-
-
-def test_policy_helper_methods_are_used_for_validation_and_hashing() -> None:
-    """Helper methods should delegate to the injected policy object when present."""
+def test_helper_methods_route_through_injected_policy() -> None:
+    """Helper methods should delegate exclusively to the injected policy object."""
     user_db = AsyncMock()
     password_helper = PasswordHelper()
     manager = TrackingUserManager(user_db, password_helper)
@@ -479,7 +455,7 @@ def test_apply_password_update_propagates_validation_errors() -> None:
     user_db = AsyncMock()
     password_helper = PasswordHelper()
     manager = TrackingUserManager(user_db, password_helper)
-    service = UserLifecycleService(manager)
+    service = UserLifecycleService(manager, policy=manager.policy)
     update_dict = {"password": "short"}
 
     with pytest.raises(InvalidPasswordError):

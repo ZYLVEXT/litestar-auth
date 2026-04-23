@@ -164,7 +164,6 @@ class _MinimalUser:
         self.email = "u@example.com"
         self.is_active = True
         self.is_verified = True
-        self.is_superuser = False
 
 
 def _make_minimal_strategy() -> Strategy[_MinimalUser, UUID]:

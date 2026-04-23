@@ -32,7 +32,6 @@ class ResetPasswordControllerUserProtocol[ID](RoleCapableUserProtocol[ID], Proto
     email: str
     is_active: bool
     is_verified: bool
-    is_superuser: bool
 
 
 @runtime_checkable

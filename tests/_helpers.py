@@ -355,7 +355,6 @@ class ExampleUser:
     hashed_password: str = "hashed"
     is_active: bool = True
     is_verified: bool = False
-    is_superuser: bool = False
     roles: list[str] = field(default_factory=list)
     totp_secret: str | None = None
     login_hint: str = ""

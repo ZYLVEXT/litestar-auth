@@ -91,12 +91,19 @@ class ExampleStrategy:
         del user
 
 
+class AccountStateOnlyUser:
+    """Object exposing the guarded-user account-state contract."""
+
+    id = uuid4()
+    is_active = True
+    is_verified = False
+
+
 class IncompleteGuardedUser:
     """Object missing one required account-state attribute."""
 
     id = uuid4()
     is_active = True
-    is_verified = False
 
 
 class RoleCapableExampleUser:
@@ -187,7 +194,11 @@ def test_user_protocol_runtime_and_strict_variants() -> None:
 
 def test_guarded_user_protocol_runtime_check() -> None:
     """Guarded users support runtime protocol checks for account-state fields."""
+    guarded_user_members = vars(GuardedUserProtocol)["__protocol_attrs__"]
+
+    assert guarded_user_members == {"id", "is_active", "is_verified"}
     assert isinstance(ExampleUser(id=uuid4()), GuardedUserProtocol)
+    assert isinstance(AccountStateOnlyUser(), GuardedUserProtocol)
     assert not isinstance(IncompleteGuardedUser(), GuardedUserProtocol)
 
 
@@ -199,7 +210,6 @@ def test_guarded_user_protocol_orm_user_model() -> None:
         hashed_password="hashed",
         is_active=True,
         is_verified=False,
-        is_superuser=False,
     )
     user.id = uid
     assert isinstance(user, GuardedUserProtocol)

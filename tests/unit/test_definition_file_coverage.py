@@ -197,7 +197,6 @@ def test_schemas_module_reload_preserves_struct_definitions() -> None:
         "email",
         "is_active",
         "is_verified",
-        "is_superuser",
         "roles",
     )
     assert reloaded_module.UserCreate.__struct_fields__ == ("email", "password")
@@ -206,7 +205,6 @@ def test_schemas_module_reload_preserves_struct_definitions() -> None:
         "email",
         "is_active",
         "is_verified",
-        "is_superuser",
         "roles",
     )
     assert user_read_hints["roles"] == list[str]
@@ -286,9 +284,6 @@ def test_manager_protocols_module_reload_preserves_internal_protocols() -> None:
     assert reloaded_module.ManagedUserProtocol.__annotations__ == {"email": "str", "hashed_password": "str"}
     assert reloaded_module.AccountStateUserProtocol.__name__ == "AccountStateUserProtocol"
     assert reloaded_module.UserDatabaseManagerProtocol.__annotations__ == {"user_db": "Any"}
-    assert reloaded_module.PasswordManagedUserManagerProtocol.__annotations__ == {"password_helper": "Any"}
-    assert "_normalize_email" in reloaded_module.PasswordManagedUserManagerProtocol.__dict__
-    assert "_validate_password" in reloaded_module.PasswordManagedUserManagerProtocol.__dict__
 
 
 def test_models_oauth_module_reload_executes_under_coverage(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -399,7 +394,6 @@ def test_internal_auth_model_mixins_module_reload_preserves_contract_exports(
         "email",
         "hashed_password",
         "is_active",
-        "is_superuser",
         "is_verified",
         "totp_secret",
     ]
@@ -640,15 +634,20 @@ def test_models_user_module_columns_and_relationships() -> None:
     assert issubclass(ModelsAccessToken, AccessTokenMixin)
     assert issubclass(ModelsRefreshToken, RefreshTokenMixin)
     assert ModelsUser.__tablename__ == "user"
-    assert set(ModelsUser.__table__.c.keys()).issuperset(
-        {"email", "hashed_password", "id", "is_active", "is_superuser", "is_verified", "totp_secret"},
-    )
+    assert set(ModelsUser.__table__.c.keys()) <= {
+        "email",
+        "hashed_password",
+        "id",
+        "is_active",
+        "is_verified",
+        "sa_orm_sentinel",
+        "totp_secret",
+    }
     assert "roles" not in ModelsUser.__table__.c
     assert sorted(UserModelMixin.__annotations__) == [
         "email",
         "hashed_password",
         "is_active",
-        "is_superuser",
         "is_verified",
         "totp_secret",
     ]

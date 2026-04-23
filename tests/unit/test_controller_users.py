@@ -5,6 +5,7 @@ from __future__ import annotations
 import importlib
 from collections.abc import Mapping
 from typing import Any, cast
+from unittest.mock import AsyncMock
 from uuid import UUID, uuid4
 
 import msgspec
@@ -23,7 +24,7 @@ from litestar_auth.controllers.users import (
     _UsersControllerContext,
     create_users_controller,
 )
-from litestar_auth.exceptions import ErrorCode, UnverifiedUserError
+from litestar_auth.exceptions import AuthorizationError, ErrorCode, UnverifiedUserError
 from litestar_auth.schemas import UserRead, UserUpdate
 
 pytestmark = pytest.mark.unit
@@ -38,6 +39,11 @@ def test_users_module_executes_under_coverage() -> None:
     assert reloaded_module._UsersControllerContext.__name__ == _UsersControllerContext.__name__
 
 
+def test_self_update_forbidden_fields_cover_only_live_privileged_state() -> None:
+    """Self-update privilege stripping is role-based and limited to live privileged fields."""
+    assert frozenset({"is_active", "is_verified", "roles"}) == users_module.SELF_UPDATE_FORBIDDEN_FIELDS
+
+
 class DummyUser(msgspec.Struct):
     """Minimal user struct for account-state helper tests."""
 
@@ -45,7 +51,6 @@ class DummyUser(msgspec.Struct):
     email: str
     is_active: bool = True
     is_verified: bool = False
-    is_superuser: bool = False
     roles: list[str] = msgspec.field(default_factory=list)
 
 
@@ -112,7 +117,6 @@ class RecordingUserManager:
             email=str(payload.get("email", user.email)),
             is_active=bool(payload.get("is_active", user.is_active)),
             is_verified=bool(payload.get("is_verified", user.is_verified)),
-            is_superuser=bool(payload.get("is_superuser", user.is_superuser)),
             roles=list(cast("list[str]", payload.get("roles", user.roles))),
         )
 
@@ -141,7 +145,6 @@ class ExtendedSelfUpdate(msgspec.Struct, omit_defaults=True):
     password: str | None = None
     is_active: bool | None = None
     is_verified: bool | None = None
-    is_superuser: bool | None = None
     roles: list[str] | None = None
     hashed_password: str | None = None
     bio: str | None = None
@@ -239,7 +242,6 @@ async def test_users_handle_get_me_validates_account_state_and_serializes_user()
         email=user.email,
         is_active=True,
         is_verified=True,
-        is_superuser=False,
         roles=["member"],
     )
     assert manager.require_account_state_calls == [(user, False)]
@@ -257,7 +259,6 @@ async def test_users_handle_update_me_strips_privileged_fields() -> None:
             password="new-password",
             is_active=False,
             is_verified=False,
-            is_superuser=True,
             roles=[" Billing ", "ADMIN"],
         ),
         ctx=build_context(),
@@ -269,16 +270,36 @@ async def test_users_handle_update_me_strips_privileged_fields() -> None:
         email="updated@example.com",
         is_active=True,
         is_verified=True,
-        is_superuser=False,
         roles=["member"],
     )
     assert manager.require_account_state_calls == [(user, False)]
     assert manager.update_calls == [({"email": "updated@example.com", "password": "new-password"}, user, False)]
 
 
+async def test_users_handle_update_me_maps_authorization_errors_to_400() -> None:
+    """The handler turns manager ``AuthorizationError`` failures into 400 responses."""
+    user = DummyUser(id=uuid4(), email="user@example.com", is_verified=True, roles=["member"])
+    manager = RecordingUserManager(user_to_get=user)
+    manager.update = cast(
+        "Any",
+        AsyncMock(side_effect=AuthorizationError("Custom policy rejected this self-update.")),
+    )
+
+    with pytest.raises(ClientException) as exc_info:
+        await _users_handle_update_me(
+            cast("Any", DummyRequest(user=user)),
+            ExtendedSelfUpdate(email="updated@example.com"),
+            ctx=build_context(),
+            user_manager=cast("Any", manager),
+        )
+
+    assert exc_info.value.status_code == HTTP_400_BAD_REQUEST
+    assert exc_info.value.extra == {"code": ErrorCode.REQUEST_BODY_INVALID}
+
+
 async def test_users_handle_delete_user_rejects_superuser_self_delete() -> None:
     """Superusers receive the dedicated 403 error when deleting themselves."""
-    user = DummyUser(id=uuid4(), email="admin@example.com", is_superuser=True, is_verified=True)
+    user = DummyUser(id=uuid4(), email="admin@example.com", is_verified=True, roles=["superuser"])
     manager = RecordingUserManager(user_to_get=user)
 
     with pytest.raises(ClientException) as exc_info:
@@ -311,7 +332,6 @@ async def test_users_handle_delete_user_soft_deletes_by_disabling_user() -> None
         email=user.email,
         is_active=False,
         is_verified=True,
-        is_superuser=False,
         roles=["member"],
     )
     assert len(manager.update_calls) == 1
@@ -340,7 +360,6 @@ async def test_users_handle_delete_user_hard_deletes_when_enabled() -> None:
         email=user.email,
         is_active=True,
         is_verified=True,
-        is_superuser=False,
         roles=["member"],
     )
     assert manager.delete_calls == [user.id]
@@ -355,7 +374,6 @@ def test_build_safe_self_update_strips_privileged_fields_and_preserves_custom_sa
             password="new-password",
             is_active=False,
             is_verified=False,
-            is_superuser=True,
             roles=[" Billing ", "ADMIN"],
             hashed_password="forbidden",
             bio="still-allowed",

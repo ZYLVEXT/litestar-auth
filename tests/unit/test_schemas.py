@@ -24,7 +24,7 @@ from litestar_auth.schemas import UserCreate, UserEmailField, UserPasswordField,
 pytestmark = pytest.mark.unit
 
 
-class CustomRegistrationSchema(msgspec.Struct):
+class CustomRegistrationSchema(msgspec.Struct, forbid_unknown_fields=True):
     """Custom registration payload reusing the canonical public user schema helpers."""
 
     email: UserEmailField
@@ -66,7 +66,6 @@ def test_user_read_round_trips_without_sensitive_fields() -> None:
         email="reader@example.com",
         is_active=True,
         is_verified=False,
-        is_superuser=False,
         roles=["member"],
     )
 
@@ -79,6 +78,16 @@ def test_user_read_round_trips_without_sensitive_fields() -> None:
     assert b'"roles":["member"]' in encoded
 
 
+def test_user_read_field_order_uses_roles_as_authorization_surface() -> None:
+    """UserRead keeps the public positional field order for the role-based API surface."""
+    assert UserRead.__struct_fields__ == ("id", "email", "is_active", "is_verified", "roles")
+
+
+def test_user_update_field_order_uses_roles_as_authorization_surface() -> None:
+    """UserUpdate keeps the public update fields for the role-based API surface."""
+    assert UserUpdate.__struct_fields__ == ("password", "email", "is_active", "is_verified", "roles")
+
+
 def test_user_create_decodes_plain_text_password_payload() -> None:
     """UserCreate accepts the expected registration fields."""
     payload = msgspec.json.decode(
@@ -87,6 +96,24 @@ def test_user_create_decodes_plain_text_password_payload() -> None:
     )
 
     assert payload == UserCreate(email="creator@example.com", password="plain-text-password")
+
+
+def test_user_create_rejects_unknown_fields() -> None:
+    """Built-in registration schema rejects undeclared fields."""
+    with pytest.raises(msgspec.ValidationError):
+        msgspec.json.decode(
+            b'{"email":"creator@example.com","password":"plain-text-password","deprecated_admin_flag":true}',
+            type=UserCreate,
+        )
+
+
+def test_user_update_rejects_unknown_fields() -> None:
+    """Built-in update schema rejects undeclared fields."""
+    with pytest.raises(msgspec.ValidationError):
+        msgspec.json.decode(
+            b'{"email":"updated@example.com","deprecated_admin_flag":true}',
+            type=UserUpdate,
+        )
 
 
 def test_user_create_accepts_password_at_configured_maximum() -> None:

@@ -131,7 +131,7 @@ class _RequestSessionContextManager:
 
 
 class _RequestSessionMaker:
-    """Session-maker shim that reuses the active request-scoped session."""
+    """Session-maker adapter that exposes an existing request session as a ``session_maker()`` callable."""
 
     def __init__(self, session: AsyncSession) -> None:
         """Store the existing request-scoped session."""
@@ -300,7 +300,6 @@ def _to_user_brief(user: object) -> UserBrief:
         email=cast("str", cast("Any", user).email),
         is_active=cast("bool", cast("Any", user).is_active),
         is_verified=cast("bool", cast("Any", user).is_verified),
-        is_superuser=cast("bool", cast("Any", user).is_superuser),
     )
 
 

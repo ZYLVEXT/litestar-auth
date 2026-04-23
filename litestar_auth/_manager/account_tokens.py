@@ -12,11 +12,12 @@ from typing import TYPE_CHECKING, Any, Protocol, cast
 import jwt
 
 from litestar_auth._manager._coercions import _managed_user
-from litestar_auth._manager._protocols import PasswordManagedUserManagerProtocol, UserManagerHooksProtocol
+from litestar_auth._manager._protocols import UserDatabaseManagerProtocol, UserManagerHooksProtocol
 from litestar_auth.exceptions import InvalidResetPasswordTokenError, InvalidVerifyTokenError, UserNotExistsError
 
 if TYPE_CHECKING:
     from litestar_auth._manager.construction import AccountTokenSecrets
+    from litestar_auth._manager.user_policy import UserPolicy
 
 type _InvalidTokenError = type[InvalidVerifyTokenError | InvalidResetPasswordTokenError]
 
@@ -29,7 +30,7 @@ class _AccountTokenSecurityManagerProtocol[ID](Protocol):
 
 
 class _AccountTokensManagerProtocol[UP, ID](
-    PasswordManagedUserManagerProtocol[UP],
+    UserDatabaseManagerProtocol[UP],
     _AccountTokenSecurityManagerProtocol[ID],
     UserManagerHooksProtocol[UP],
     Protocol,
@@ -216,7 +217,7 @@ class AccountTokenSecurityService[UP, ID]:
 class AccountTokensService[UP, ID]:
     """Handle verify and reset token flows for the manager facade."""
 
-    def __init__(
+    def __init__(  # noqa: PLR0913
         self,
         manager: _AccountTokensManagerProtocol[UP, ID],
         *,
@@ -224,6 +225,7 @@ class AccountTokensService[UP, ID]:
         reset_password_token_audience: str,
         token_security: AccountTokenSecurityService[UP, ID],
         logger: Any,
+        policy: UserPolicy,
     ) -> None:
         """Bind service dependencies."""
         self._manager = manager
@@ -231,6 +233,7 @@ class AccountTokensService[UP, ID]:
         self._reset_password_token_audience = reset_password_token_audience
         self._token_security = token_security
         self._logger = logger
+        self._policy = policy
 
     @property
     def security(self) -> AccountTokenSecurityService[UP, ID]:
@@ -257,7 +260,7 @@ class AccountTokensService[UP, ID]:
 
     async def request_verify_token(self, email: str) -> None:
         """Generate a verification token without exposing account state."""
-        normalized_email = self._manager._normalize_email(email)
+        normalized_email = self._policy.normalize_email(email)
         user = await self._manager.user_db.get_by_email(normalized_email)
         deliverable = user is not None and not _managed_user(user).is_verified
         token = (
@@ -278,7 +281,7 @@ class AccountTokensService[UP, ID]:
 
     async def forgot_password(self, email: str, *, dummy_hash: str) -> None:
         """Generate a reset token without exposing user existence."""
-        email = self._manager._normalize_email(email)
+        email = self._policy.normalize_email(email)
         user = await self._manager.user_db.get_by_email(email)
         token = self.write_reset_password_token(user, dummy_hash=dummy_hash)
 
@@ -316,8 +319,8 @@ class AccountTokensService[UP, ID]:
             )
             raise InvalidResetPasswordTokenError
 
-        self._manager._validate_password(password)
-        update_dict = {"hashed_password": self._manager.password_helper.hash(password)}
+        self._policy.validate_password(password)
+        update_dict = {"hashed_password": self._policy.password_helper.hash(password)}
         updated_user = await self._manager.user_db.update(user, update_dict)
         await self._manager._invalidate_all_tokens(updated_user)
         await self._manager.on_after_reset_password(updated_user)

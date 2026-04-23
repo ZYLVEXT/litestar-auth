@@ -263,7 +263,6 @@ async def test_require_account_state_calls_optional_validator() -> None:
         email = "user@example.com"
         is_active = True
         is_verified = True
-        is_superuser = False
 
     class _Manager:
         def __init__(self) -> None:
@@ -288,7 +287,6 @@ async def test_require_account_state_ignores_non_callable_validator() -> None:
         email = "user@example.com"
         is_active = True
         is_verified = True
-        is_superuser = False
 
     class _Manager:
         require_account_state = "not-callable"

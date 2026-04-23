@@ -31,6 +31,8 @@ AccessToken, RefreshToken = import_token_orm_models()
 Call that helper explicitly during metadata bootstrap or Alembic-style autogenerate when your app uses the bundled token tables. For plugin-managed runtime, `LitestarAuth.on_app_init()` bootstraps the same bundled token mappers lazily when bundled DB-token models are active. The strategy-layer `import_token_orm_models()` re-export remains compatibility-only for existing imports, and the helper is intentionally not re-exported from `litestar_auth`.
 
 The DB-token preset entrypoint is exported from both the root package and `litestar_auth.plugin` as `DatabaseTokenAuthConfig`.
+The root package also exports `DEFAULT_SUPERUSER_ROLE_NAME` for applications that want to reference
+the built-in `"superuser"` role while configuring `LitestarAuthConfig.superuser_role_name`.
 
 For OAuth, plugin-managed apps should configure `OAuthConfig` on `LitestarAuthConfig` with `oauth_providers` as a sequence of `OAuthProviderConfig(name=..., client=...)`. `litestar_auth.oauth.create_provider_oauth_controller` plus `litestar_auth.controllers.create_oauth_controller` / `create_oauth_associate_controller` remain the manual route-table path for custom layouts.
 
@@ -84,7 +86,7 @@ operations. The library still does not ship permission matrices.
 
 | Area | Types / functions |
 | ---- | ----------------- |
-| Plugin | `LitestarAuth`, `LitestarAuthConfig`, `DatabaseTokenAuthConfig`, `OAuthConfig`, `OAuthProviderConfig`, `TotpConfig` |
+| Plugin | `LitestarAuth`, `LitestarAuthConfig`, `DatabaseTokenAuthConfig`, `OAuthConfig`, `OAuthProviderConfig`, `TotpConfig`, `DEFAULT_SUPERUSER_ROLE_NAME` |
 | Backends | `AuthenticationBackend`, `Authenticator`, `BearerTransport`, `CookieTransport`; strategies from `litestar_auth.authentication.strategy` |
 | Manager | `BaseUserManager`, `UserManagerSecurity`; `PasswordHelper` and password policy helpers from their submodules |
 | Payloads / schemas | Auth lifecycle DTOs from `litestar_auth.payloads`; user CRUD schemas from `litestar_auth.schemas` |

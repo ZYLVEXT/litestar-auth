@@ -37,7 +37,6 @@ class ExtendedUserRead(msgspec.Struct):
     email: str
     is_active: bool
     is_verified: bool
-    is_superuser: bool
     login_hint: str
 
 
@@ -173,7 +172,6 @@ async def test_reset_password_updates_hash_for_valid_token(
         "email": user.email,
         "is_active": True,
         "is_verified": True,
-        "is_superuser": False,
         "roles": ["member"],
     }
     stored_user = await user_db.get(user.id)
@@ -206,7 +204,6 @@ async def test_reset_password_token_invalid_after_password_change(
         hashed_password=password_helper.hash("other-password"),
         is_active=user.is_active,
         is_verified=user.is_verified,
-        is_superuser=user.is_superuser,
     )
     await user_db.update(user, {"hashed_password": updated_user.hashed_password})
 
@@ -358,7 +355,6 @@ async def test_reset_password_supports_custom_user_read_schema() -> None:
         "email": user.email,
         "is_active": True,
         "is_verified": False,
-        "is_superuser": False,
         "login_hint": "custom-reset",
     }
 

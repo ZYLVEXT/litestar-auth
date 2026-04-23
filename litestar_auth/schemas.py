@@ -32,25 +32,23 @@ class UserRead(msgspec.Struct):
     email: str
     is_active: bool
     is_verified: bool
-    is_superuser: bool
     roles: list[str]
 
 
-class UserCreate(msgspec.Struct):
+class UserCreate(msgspec.Struct, forbid_unknown_fields=True):
     """Payload used to create a new user."""
 
     email: UserEmailField
     password: UserPasswordField
 
 
-class UserUpdate(msgspec.Struct, omit_defaults=True):
+class UserUpdate(msgspec.Struct, omit_defaults=True, forbid_unknown_fields=True):
     """Partial user update payload."""
 
     password: UserPasswordField | None = None
     email: UserEmailField | None = None
     is_active: bool | None = None
     is_verified: bool | None = None
-    is_superuser: bool | None = None
     roles: list[str] | None = None
 
 

@@ -62,18 +62,17 @@ class TrackingUserManager(BaseUserManager[ExampleUser, UUID]):
         self.registration_tokens[user.email] = token
 
 
-class PrivilegedRegistrationCreate(msgspec.Struct):
-    """Custom registration schema that exposes privileged-looking fields."""
+class PrivilegedRegistrationCreate(msgspec.Struct, forbid_unknown_fields=True):
+    """Custom registration schema that exposes privileged account-state fields."""
 
     email: str
     password: str
-    is_superuser: bool = False
     is_active: bool = True
     is_verified: bool = False
     roles: list[str] | None = None
 
 
-class ExtendedRegistrationCreate(msgspec.Struct):
+class ExtendedRegistrationCreate(msgspec.Struct, forbid_unknown_fields=True):
     """Custom registration schema with a non-privileged extra field."""
 
     email: str
@@ -81,7 +80,7 @@ class ExtendedRegistrationCreate(msgspec.Struct):
     bio: str
 
 
-class WeakPasswordRegistrationCreate(msgspec.Struct):
+class WeakPasswordRegistrationCreate(msgspec.Struct, forbid_unknown_fields=True):
     """Custom registration schema that defers password validation to the manager."""
 
     email: str
@@ -147,7 +146,6 @@ async def test_register_creates_user_returns_public_payload_and_calls_hook(
     assert payload["email"] == "new@example.com"
     assert payload["is_active"] is True
     assert payload["is_verified"] is False
-    assert payload["is_superuser"] is False
     assert payload["roles"] == []
     assert "hashed_password" not in payload
 
@@ -312,7 +310,6 @@ async def test_register_ignores_privileged_fields_from_custom_schema(
             json={
                 "email": "privileged@example.com",
                 "password": "plain-password",
-                "is_superuser": True,
                 "is_active": False,
                 "is_verified": True,
                 "roles": [" Billing ", "ADMIN"],
@@ -321,17 +318,39 @@ async def test_register_ignores_privileged_fields_from_custom_schema(
 
     assert response.status_code == HTTP_CREATED
     payload = response.json()
-    assert payload["is_superuser"] is False
+    assert set(payload) == {"email", "id", "is_active", "is_verified", "roles"}
     assert payload["is_active"] is True
     assert payload["is_verified"] is False
     assert payload["roles"] == []
 
     created_user = await user_db.get_by_email("privileged@example.com")
     assert created_user is not None
-    assert created_user.is_superuser is False
     assert created_user.is_active is True
     assert created_user.is_verified is False
     assert created_user.roles == []
+
+
+async def test_register_rejects_unknown_fields_from_builtin_schema(
+    app: tuple[Litestar, InMemoryUserDatabase, TrackingUserManager],
+) -> None:
+    """Built-in registration schema rejects undeclared request fields during decoding."""
+    register_app, user_db, user_manager = app
+
+    async with AsyncTestClient(app=register_app) as test_client:
+        response = await test_client.post(
+            "/auth/register",
+            json={
+                "email": "unknown-field@example.com",
+                "password": "plain-password",
+                "deprecated_admin_flag": True,
+            },
+        )
+
+    assert response.status_code == HTTP_UNPROCESSABLE_ENTITY
+    body = response.json()
+    assert (body.get("extra") or {}).get("code") == ErrorCode.REQUEST_BODY_INVALID
+    assert await user_db.get_by_email("unknown-field@example.com") is None
+    assert user_manager.registered_users == []
 
 
 async def test_register_ignores_non_safe_fields_from_custom_schema(

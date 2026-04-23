@@ -106,7 +106,6 @@ class UserBrief(Struct):
     id: str
     email: str | None = None
     is_active: bool = True
-    is_superuser: bool = False
 
 
 # ============================================================================
@@ -188,7 +187,6 @@ def create_role_admin_controller(
             id=str(user.id),
             email=getattr(user, "email", None),
             is_active=getattr(user, "is_active", True),
-            is_superuser=getattr(user, "is_superuser", False),
         )
 
     def _parse_user_id(raw: str) -> UUID | str:
@@ -468,7 +466,8 @@ automatically — no extra dependency needed.
 
 The controller expects:
 
-- **User model**: Has `id` (UUID or int) and `is_superuser` field (for the guard).
+- **User model**: Has `id` (UUID or int) and exposes role membership compatible with the
+  configured `is_superuser` guard.
 - **Role model**: Has `name` as primary key.
   The bundled `Role` model already includes an optional `description` column.
 - **UserRole model**: Has `user_id` and `role_name` foreign keys.
@@ -554,8 +553,8 @@ curl -X GET http://localhost:8000/roles/editor/users \
 
 # Response (200):
 [
-  {"id": "123e4567-…-426614174000", "email": "alice@example.com", "is_active": true, "is_superuser": false},
-  {"id": "223e4567-…-426614174001", "email": "bob@example.com",   "is_active": true, "is_superuser": false}
+  {"id": "123e4567-…-426614174000", "email": "alice@example.com", "is_active": true},
+  {"id": "223e4567-…-426614174001", "email": "bob@example.com",   "is_active": true}
 ]
 ```
 

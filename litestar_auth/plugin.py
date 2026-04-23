@@ -242,6 +242,7 @@ class LitestarAuth[UP: UserProtocol[Any], ID](InitPlugin, CLIPlugin):
             get_request_session=partial(get_or_create_scoped_session, session_maker=self._session_maker),
             authenticator_factory=self._build_authenticator,
             auth_cookie_names=auth_cookie_names,
+            superuser_role_name=self.config.superuser_role_name,
         )
         if self.config.middleware_hook is not None:
             middleware = self.config.middleware_hook(middleware)

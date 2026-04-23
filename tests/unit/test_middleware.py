@@ -16,6 +16,7 @@ from litestar.datastructures.state import State
 
 import litestar_auth.authentication.middleware as middleware_module
 from litestar_auth._plugin.scoped_session import get_or_create_scoped_session
+from litestar_auth._superuser_role import SUPERUSER_ROLE_NAME_SENTINEL
 from litestar_auth.authentication.middleware import (
     LitestarAuthMiddleware,
     _cookie_header_contains_any_cookie_name,
@@ -172,6 +173,7 @@ async def test_middleware_sets_authenticated_user_in_scope() -> None:
 
     assert scope["user"] == user
     assert scope["auth"] == "bearer-jwt"
+    assert scope["state"][SUPERUSER_ROLE_NAME_SENTINEL] == "superuser"
     assert session_maker.call_count == 1
     authenticator_factory.assert_called_once_with(session)
     authenticator.authenticate.assert_awaited_once()
@@ -201,6 +203,7 @@ async def test_authenticate_request_reuses_scoped_session_and_returns_resolved_u
 
     assert result.user == user
     assert result.auth == "bearer-jwt"
+    assert scope["state"][SUPERUSER_ROLE_NAME_SENTINEL] == "superuser"
     assert session_maker.call_count == 0
     authenticator_factory.assert_called_once_with(bound_session)
     authenticator.authenticate.assert_awaited_once()
@@ -217,12 +220,14 @@ async def test_middleware_leaves_unauthenticated_requests_as_none() -> None:
         app=_app,
         get_request_session=partial(get_or_create_scoped_session, session_maker=cast("Any", session_maker)),
         authenticator_factory=Mock(return_value=authenticator),
+        superuser_role_name=" Admin ",
     )
 
     await middleware(scope, cast("Receive", _receive), cast("Send", _send))
 
     assert scope["user"] is None
     assert scope["auth"] is None
+    assert scope["state"][SUPERUSER_ROLE_NAME_SENTINEL] == "admin"
     assert session_maker.call_count == 1
     authenticator.authenticate.assert_awaited_once()
 

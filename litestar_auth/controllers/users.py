@@ -19,7 +19,7 @@ from litestar_auth.controllers._utils import (
     _require_msgspec_struct,
     _to_user_schema,
 )
-from litestar_auth.exceptions import ErrorCode, InvalidPasswordError, UserAlreadyExistsError
+from litestar_auth.exceptions import AuthorizationError, ErrorCode, InvalidPasswordError, UserAlreadyExistsError
 from litestar_auth.guards import is_authenticated, is_superuser
 from litestar_auth.schemas import UserRead, UserUpdate
 from litestar_auth.types import RoleCapableUserProtocol
@@ -29,8 +29,8 @@ if TYPE_CHECKING:
 
     from litestar.openapi.spec import SecurityRequirement
 
-SELF_UPDATE_FORBIDDEN_FIELDS = frozenset({"is_active", "is_verified", "is_superuser", "roles"})
-_PRIVILEGED_FIELDS = SELF_UPDATE_FORBIDDEN_FIELDS | frozenset({"hashed_password"})
+SELF_UPDATE_FORBIDDEN_FIELDS = frozenset({"is_active", "is_verified", "roles"})
+_SELF_UPDATE_BLOCKED_FIELDS = SELF_UPDATE_FORBIDDEN_FIELDS | frozenset({"hashed_password"})
 
 
 class UsersControllerUserProtocol[ID](RoleCapableUserProtocol[ID], Protocol):
@@ -39,7 +39,6 @@ class UsersControllerUserProtocol[ID](RoleCapableUserProtocol[ID], Protocol):
     email: str
     is_active: bool
     is_verified: bool
-    is_superuser: bool
 
 
 @runtime_checkable
@@ -146,6 +145,7 @@ async def _users_handle_update_me[UP: UsersControllerUserProtocol[Any], ID](
         {
             UserAlreadyExistsError: (400, ErrorCode.UPDATE_USER_EMAIL_ALREADY_EXISTS),
             InvalidPasswordError: (400, ErrorCode.UPDATE_USER_INVALID_PASSWORD),
+            AuthorizationError: (400, ErrorCode.REQUEST_BODY_INVALID),
         },
     ):
         updated_user = await user_manager.update(_build_safe_self_update(data), user)
@@ -250,6 +250,7 @@ def _define_users_controller_class_di[UP: UsersControllerUserProtocol[Any], ID](
                 {
                     UserAlreadyExistsError: (400, ErrorCode.UPDATE_USER_EMAIL_ALREADY_EXISTS),
                     InvalidPasswordError: (400, ErrorCode.UPDATE_USER_INVALID_PASSWORD),
+                    AuthorizationError: (400, ErrorCode.REQUEST_BODY_INVALID),
                 },
             ):
                 updated_user = await litestar_auth_user_manager.update(data, user, allow_privileged=True)
@@ -333,11 +334,10 @@ def create_users_controller[UP: UsersControllerUserProtocol[Any], ID](  # noqa: 
             email: str
             is_active: bool
             is_verified: bool
-            is_superuser: bool
             roles: list[str]
             bio: str
 
-        class ExtendedUserUpdate(msgspec.Struct, omit_defaults=True):
+        class ExtendedUserUpdate(msgspec.Struct, omit_defaults=True, forbid_unknown_fields=True):
             email: str | None = None
             password: str | None = None
             roles: list[str] | None = None
@@ -350,7 +350,11 @@ def create_users_controller[UP: UsersControllerUserProtocol[Any], ID](  # noqa: 
         ```
     """
     _require_msgspec_struct(user_read_schema, parameter_name="user_read_schema")
-    _require_msgspec_struct(user_update_schema, parameter_name="user_update_schema")
+    _require_msgspec_struct(
+        user_update_schema,
+        parameter_name="user_update_schema",
+        require_forbid_unknown_fields=True,
+    )
     users_page_schema_type = msgspec.defstruct(
         "UsersPageSchema",
         [
@@ -382,8 +386,14 @@ def _build_safe_self_update(data: msgspec.Struct) -> dict[str, Any]:
 
     Uses a deny-list of privileged fields rather than an allow-list so
     that custom ``UserUpdate`` schemas with extra safe fields work
-    out-of-the-box.  The deny-list is intentionally broad to cover
-    any field that could grant elevated privileges, including ``roles``.
+    out-of-the-box. The deny-list covers fields that could grant elevated
+    privileges (``is_active``, ``is_verified``, ``roles``) plus the
+    sensitive ``hashed_password`` shadow.
+
+    Generated request schemas use ``forbid_unknown_fields=True``, so undeclared
+    fields fail request decoding before this helper runs. This helper therefore
+    only needs to strip live privileged fields plus the sensitive
+    ``hashed_password`` shadow.
 
     Returns:
         A plain update mapping with privileged fields removed.
@@ -396,4 +406,4 @@ def _build_safe_self_update(data: msgspec.Struct) -> dict[str, Any]:
         msg = "Expected a mapping from msgspec.to_builtins."
         raise TypeError(msg)
     payload: dict[str, Any] = {str(k): v for k, v in builtins_payload.items()}
-    return {field_name: value for field_name, value in payload.items() if field_name not in _PRIVILEGED_FIELDS}
+    return {field_name: value for field_name, value in payload.items() if field_name not in _SELF_UPDATE_BLOCKED_FIELDS}

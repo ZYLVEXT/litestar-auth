@@ -46,6 +46,7 @@ def _minimal_config(
     user_manager_security: UserManagerSecurity[UUID] | None = None,
     id_parser: type[UUID] | None = None,
     login_identifier: Literal["email", "username"] = "email",
+    superuser_role_name: str = "superuser",
 ) -> LitestarAuthConfig[ExampleUser, UUID]:
     """Build a minimal current-shape config for user-manager-builder tests.
 
@@ -73,6 +74,7 @@ def _minimal_config(
         ),
         id_parser=id_parser,
         login_identifier=login_identifier,
+        superuser_role_name=superuser_role_name,
     )
 
 
@@ -118,12 +120,14 @@ def test_default_builder_contract_materializes_canonical_kwargs() -> None:
         "password_helper",
         "password_validator",
         "security",
+        "superuser_role_name",
         "unsafe_testing",
     }
     assert kwargs["password_helper"] is password_helper
     assert kwargs["password_validator"] is password_validator
     assert kwargs["backends"] == ("bound-backend",)
     assert kwargs["login_identifier"] == "username"
+    assert kwargs["superuser_role_name"] == "superuser"
     assert kwargs["unsafe_testing"] is False
     assert kwargs["security"].verification_token_secret == "v" * 32
     assert kwargs["security"].reset_password_token_secret == "r" * 32
@@ -143,6 +147,7 @@ def test_validation_kwargs_keep_password_validator_slot_without_runtime_factory(
     assert kwargs["password_validator"] is None
     assert kwargs["backends"] == ("bound-backend",)
     assert kwargs["login_identifier"] == "email"
+    assert kwargs["superuser_role_name"] == "superuser"
     assert kwargs["unsafe_testing"] is False
     assert kwargs["security"].id_parser is UUID
 
@@ -188,6 +193,7 @@ def test_build_user_manager_passes_only_canonical_kwargs() -> None:
         ),
         id_parser=UUID,
         login_identifier="username",
+        superuser_role_name=" Admin ",
     )
 
     manager = user_manager_builder_module.build_user_manager(
@@ -204,6 +210,7 @@ def test_build_user_manager_passes_only_canonical_kwargs() -> None:
         "password_helper",
         "password_validator",
         "security",
+        "superuser_role_name",
         "unsafe_testing",
     }
     assert isinstance(
@@ -213,6 +220,7 @@ def test_build_user_manager_passes_only_canonical_kwargs() -> None:
     assert typed_manager.received_manager_kwargs["password_validator"] is not None
     assert typed_manager.received_manager_kwargs["backends"] == ("bound-backend",)
     assert typed_manager.received_manager_kwargs["login_identifier"] == "username"
+    assert typed_manager.received_manager_kwargs["superuser_role_name"] == "admin"
     assert typed_manager.received_manager_kwargs["unsafe_testing"] is False
     assert typed_manager.received_security.id_parser is UUID
     assert typed_manager.received_security.totp_secret_key == "t" * 32

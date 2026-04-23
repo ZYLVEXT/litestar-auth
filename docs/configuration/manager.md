@@ -55,6 +55,7 @@ On the `LitestarAuthConfig` dataclass, `session_maker` is typed as optional for 
 | `password_validator_factory` | `None` | Build custom password policy; otherwise the default builder injects the shared minimum-length validator. |
 | `user_manager_factory` | `None` | Full control over request-scoped manager construction (`UserManagerFactory`). Set it directly on `LitestarAuthConfig(...)` when you need caller-owned manager wiring. When set, the factory owns any custom constructor wiring, including password-validator injection and manager-specific secret handling. |
 | `rate_limit_config` | `None` | `AuthRateLimitConfig` for auth endpoint throttling. For the common one-client Redis recipe, build it through `litestar_auth.contrib.redis.RedisAuthPreset`; keep `AuthRateLimitConfig.from_shared_backend()` for lower-level shared-backend wiring. |
+| `superuser_role_name` | `"superuser"` | Role name treated as superuser membership by plugin-managed managers and guards. Values are normalized with the same trim/lowercase rules as `user.roles` and must not be empty. |
 
 ### User manager customization
 
@@ -79,6 +80,7 @@ Compatibility and migration:
 - `exception_response_hook` replaces the plugin's default auth-error adapter for plugin-owned routes only. Route-local request-body validation/decode handlers keep their current payload contract unless you mount custom controllers.
 - `middleware_hook` wraps the already-built auth middleware; it should not rebuild CSRF configuration manually.
 - `controller_hook` can intentionally remove plugin routes. Filtering the list also removes the corresponding exception-handler wiring for those controllers.
+- `superuser_role_name` is additive and defaults to `"superuser"`. Existing apps keep the same default behavior; set it only when your deployment uses another normalized role such as `"admin"`.
 
 ## Manager password surface
 
@@ -110,7 +112,7 @@ from litestar_auth.models import User
 from litestar_auth.schemas import UserEmailField, UserPasswordField
 
 
-class AppUserCreate(msgspec.Struct):
+class AppUserCreate(msgspec.Struct, forbid_unknown_fields=True):
     email: UserEmailField
     password: UserPasswordField
     display_name: str
@@ -239,7 +241,7 @@ Compatibility and migration:
 - If you intentionally need factory-owned security wiring, set `user_manager_factory` directly and pass explicit
   dependencies through your factory closure or another typed app-owned dependency surface.
 - The default plugin builder calls the `BaseUserManager`-style constructor surface:
-  `user_manager_class(user_db, *, password_helper=..., security=..., password_validator=..., backends=..., login_identifier=..., unsafe_testing=...)`.
+  `user_manager_class(user_db, *, password_helper=..., security=..., password_validator=..., backends=..., login_identifier=..., superuser_role_name=..., unsafe_testing=...)`.
   It always passes `security=UserManagerSecurity(...)`. When `user_manager_security` is unset, the effective parser
   from `LitestarAuthConfig.id_parser` is folded into that bundle (not as a standalone `id_parser=` kwarg on the
   builder call). If your manager narrows or renames that surface, configure it with
@@ -257,6 +259,8 @@ Compatibility and migration:
 - Keep password-helper and password-validator overrides on `user_manager_security`. Use
   `UserManagerSecurity(password_helper=..., password_validator=...)` for direct overrides, or
   `password_validator_factory` when the validator should be derived from config at runtime.
+- Custom manager classes on the default builder path must accept `superuser_role_name`; subclassing
+  `BaseUserManager` without narrowing its constructor already satisfies this.
 
 If your application also hashes or verifies passwords outside `BaseUserManager`, call
 `config.resolve_password_helper()` once after constructing `LitestarAuthConfig(...)`. When

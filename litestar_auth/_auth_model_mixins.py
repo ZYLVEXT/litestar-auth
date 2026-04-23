@@ -32,6 +32,10 @@ _ROLE_NAME_LENGTH = 255
 class UserModelMixin:
     """Shared non-primary-key columns used by the bundled ``User`` model.
 
+    Provides ``email``, ``hashed_password``, ``is_active``, ``is_verified``,
+    and ``totp_secret``. Superuser status is determined by role membership,
+    not by a persisted column on this mixin.
+
     Set ``auth_hashed_password_column_name`` on a subclass to keep the public
     ``hashed_password`` attribute while mapping it to a different SQL column
     name such as ``password_hash``.
@@ -46,7 +50,6 @@ class UserModelMixin:
     hashed_password: Mapped[str]
     is_active: Mapped[bool] = mapped_column(default=True, nullable=False)
     is_verified: Mapped[bool] = mapped_column(default=False, nullable=False)
-    is_superuser: Mapped[bool] = mapped_column(default=False, nullable=False)
     totp_secret: Mapped[str | None] = mapped_column(String(length=255), default=None, nullable=True)
 
     @declared_attr

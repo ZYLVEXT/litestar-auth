@@ -43,7 +43,6 @@ class DummyUser(msgspec.Struct):
     email: str
     is_active: bool = True
     is_verified: bool = False
-    is_superuser: bool = False
     roles: list[str] = msgspec.field(default_factory=lambda: ["member"])
 
 

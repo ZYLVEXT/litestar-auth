@@ -29,6 +29,7 @@ from litestar_auth._manager.user_lifecycle import (
     _UserLifecycleManagerProtocol,
 )
 from litestar_auth._manager.user_policy import UserPolicy
+from litestar_auth._superuser_role import DEFAULT_SUPERUSER_ROLE_NAME, normalize_superuser_role_name
 from litestar_auth.config import RESET_PASSWORD_TOKEN_AUDIENCE, VERIFY_TOKEN_AUDIENCE
 from litestar_auth.db.base import BaseOAuthAccountStore
 from litestar_auth.password import PasswordHelper
@@ -221,24 +222,6 @@ class BaseUserManager[UP: UserProtocol[Any], ID](
     decomposed internal services directly.
     """
 
-    @staticmethod
-    def _normalize_email(email: str) -> str:
-        """Normalize and validate an email address.
-
-        Returns:
-            A normalized email address (stripped and lowercased).
-        """
-        return UserPolicy.normalize_email(email)
-
-    @staticmethod
-    def _normalize_username_lookup(username: str) -> str:
-        """Normalize a username for database lookup (strip + lowercase).
-
-        Returns:
-            Stripped, lowercased username string (may be empty).
-        """
-        return UserPolicy.normalize_username_lookup(username)
-
     def __init__(  # noqa: PLR0913
         self: BaseUserManager[UP, ID],
         user_db: BaseUserStore[UP, ID],
@@ -252,6 +235,7 @@ class BaseUserManager[UP: UserProtocol[Any], ID](
         reset_verification_on_email_change: bool = True,
         backends: tuple[object, ...] = (),
         login_identifier: LoginIdentifier = "email",
+        superuser_role_name: str = DEFAULT_SUPERUSER_ROLE_NAME,
         skip_reuse_warning: bool = False,
         unsafe_testing: bool = False,
     ) -> None:
@@ -274,6 +258,8 @@ class BaseUserManager[UP: UserProtocol[Any], ID](
                 keeps credential updates aligned with the same backends used for request auth.
             login_identifier: Which field ``authenticate`` uses for credential lookup by default
                 when ``login_identifier`` is not passed explicitly to ``authenticate``.
+            superuser_role_name: Normalized role name that represents superuser privileges
+                for plugin-managed guards.
             skip_reuse_warning: When ``True``, suppress the reused-secret warning because an
                 upstream plugin-managed validation path has already emitted it for the same
                 effective secret surface.
@@ -311,6 +297,7 @@ class BaseUserManager[UP: UserProtocol[Any], ID](
         self.totp_secret_key = resolved_security.totp_secret_key
         self.backends: tuple[object, ...] = backends
         self.login_identifier: LoginIdentifier = login_identifier
+        self.superuser_role_name = normalize_superuser_role_name(superuser_role_name)
         self.unsafe_testing = unsafe_testing
         resolved_password_helper = password_helper or PasswordHelper.from_defaults()
         self.policy = UserPolicy(
@@ -332,6 +319,7 @@ class BaseUserManager[UP: UserProtocol[Any], ID](
             reset_password_token_audience=RESET_PASSWORD_TOKEN_AUDIENCE,
             token_security=self._account_token_security,
             logger=logger,
+            policy=self.policy,
         )
         self._totp_secrets = TotpSecretsService(self, prefix=ENCRYPTED_TOTP_SECRET_PREFIX)
 
@@ -383,6 +371,11 @@ class BaseUserManager[UP: UserProtocol[Any], ID](
         allow_privileged: bool = False,
     ) -> UP:
         """Create a new user, hashing the provided password before persistence.
+
+        Privileged fields (``is_active``, ``is_verified``, ``roles``) are
+        silently dropped unless ``allow_privileged=True``. With ``safe=True``
+        (default), any field outside ``{"email", "password"}`` is also
+        dropped.
 
         Returns:
             The newly created user.
@@ -515,8 +508,8 @@ class BaseUserManager[UP: UserProtocol[Any], ID](
         will **not** overwrite existing data.  To explicitly clear a nullable
         field, use a dedicated method (e.g. ``set_totp_secret(user, None)``).
 
-        Privileged fields such as ``is_active``, ``is_verified``,
-        ``is_superuser``, and ``roles`` are rejected unless
+        Privileged fields such as ``is_active``, ``is_verified``, and ``roles``
+        are rejected unless
         ``allow_privileged=True`` is passed explicitly.
 
         Returns:
@@ -557,10 +550,6 @@ class BaseUserManager[UP: UserProtocol[Any], ID](
             lifetime=lifetime,
             extra_claims=extra_claims,
         )
-
-    def _validate_password(self, password: str) -> None:
-        """Validate a plain-text password and normalize errors."""
-        self.policy.validate_password(password)
 
     async def _invalidate_all_tokens(self, user: UP) -> None:
         """Invalidate all authentication tokens for a user when supported.

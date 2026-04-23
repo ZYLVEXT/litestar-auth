@@ -37,11 +37,11 @@ password-validator, and shared-helper contract.
 
 Built-in user-returning responses from `POST {auth}/register`, `POST {auth}/verify`, and
 `POST {auth}/reset-password` use `UserRead`, which now serializes `id`, `email`, `is_active`,
-`is_verified`, `is_superuser`, and normalized `roles`.
+`is_verified`, and normalized `roles`.
 
-That response contract is intentionally unchanged by the relational-role migration. The HTTP API
-still exposes one flat `roles` array, not raw `role` / `user_role` rows, permission matrices, or
-role-catalog or user-assignment endpoints on the core plugin-owned auth routes. For operational
+That response contract is intentionally role-centric after the superuser migration. The HTTP API
+exposes one flat `roles` array, not a legacy superuser boolean, raw `role` / `user_role` rows,
+permission matrices, or role-catalog or user-assignment endpoints on the core plugin-owned auth routes. For operational
 catalog and user-role administration, use the plugin-owned
 [`litestar roles`](guides/roles_cli.md) CLI surface or mount the opt-in contrib controller from
 [HTTP role administration](guides/role_admin_http.md).

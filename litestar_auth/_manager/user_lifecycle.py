@@ -1,12 +1,12 @@
 """Internal user-lifecycle service for ``BaseUserManager``."""
-# ruff: noqa: ANN401, DOC201, DOC501, SLF001
+# ruff: noqa: ANN401, DOC201, DOC501
 
 from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any, Literal, Protocol, cast, runtime_checkable
 
 from litestar_auth._manager._coercions import _as_dict, _managed_user, _require_str
-from litestar_auth._manager._protocols import PasswordManagedUserManagerProtocol, UserManagerHooksProtocol
+from litestar_auth._manager._protocols import UserDatabaseManagerProtocol, UserManagerHooksProtocol
 from litestar_auth._manager.user_policy import UserPolicy
 from litestar_auth.authentication.strategy.base import TokenInvalidationCapable
 from litestar_auth.exceptions import AuthorizationError, UserAlreadyExistsError, UserIdentifier, UserNotExistsError
@@ -18,18 +18,14 @@ if TYPE_CHECKING:
 
 
 class _UserLifecycleManagerProtocol[UP, ID](
-    PasswordManagedUserManagerProtocol[UP],
+    UserDatabaseManagerProtocol[UP],
     UserManagerHooksProtocol[UP],
     Protocol,
 ):
     """Manager surface required by the user-lifecycle service."""
 
-    password_validator: Any
     reset_verification_on_email_change: bool
     backends: tuple[object, ...] | list[object]
-
-    @staticmethod
-    def _normalize_username_lookup(username: str) -> str: ...  # pragma: no cover
 
     def write_verify_token(self, user: UP) -> str: ...  # pragma: no cover
 
@@ -42,7 +38,7 @@ class _StrategyBackendProtocol[UP](Protocol):
 
 
 SAFE_FIELDS = frozenset({"email", "password"})
-PRIVILEGED_FIELDS = frozenset({"is_superuser", "is_active", "is_verified", "roles"})
+PRIVILEGED_FIELDS = frozenset({"is_active", "is_verified", "roles"})
 
 
 class UserLifecycleService[UP, ID]:
@@ -52,14 +48,16 @@ class UserLifecycleService[UP, ID]:
         self,
         manager: _UserLifecycleManagerProtocol[UP, ID],
         *,
-        policy: UserPolicy | None = None,
+        policy: UserPolicy,
     ) -> None:
         """Bind the service to its facade manager.
 
         Args:
             manager: The owning manager facade.
-            policy: Account-policy object; when ``None`` the service falls back to
-                calling private methods on the manager for backward compatibility.
+            policy: Account-policy object providing email normalization,
+                username lookup normalization, password validation, and password
+                hashing. Required so every code path goes through the single
+                policy boundary without any fallback into manager privates.
         """
         self._manager = manager
         self._policy = policy
@@ -252,35 +250,22 @@ class UserLifecycleService[UP, ID]:
         await self._manager.on_after_delete(user)
 
     def _normalize_email(self, email: str) -> str:
-        if self._policy is not None:
-            return self._policy.normalize_email(email)
-        return self._manager._normalize_email(email)
+        return self._policy.normalize_email(email)
 
     def _normalize_username_lookup(self, username: str) -> str:
-        if self._policy is not None:
-            return self._policy.normalize_username_lookup(username)
-        return self._manager._normalize_username_lookup(username)
+        return self._policy.normalize_username_lookup(username)
 
     def _normalize_roles(self, roles: object) -> list[str]:
-        if self._policy is not None:
-            return self._policy.normalize_roles(roles)
-        return UserPolicy.normalize_roles(roles)
+        return self._policy.normalize_roles(roles)
 
     def _validate_password(self, password: str) -> None:
-        if self._policy is not None:
-            self._policy.validate_password(password)
-        else:
-            self._manager._validate_password(password)
+        self._policy.validate_password(password)
 
     def _hash_password(self, password: str) -> str:
-        if self._policy is not None:
-            return self._policy.password_helper.hash(password)
-        return self._manager.password_helper.hash(password)
+        return self._policy.password_helper.hash(password)
 
     def _verify_and_update_password(self, password: str, hashed_password: str) -> tuple[bool, str | None]:
-        if self._policy is not None:
-            return self._policy.password_helper.verify_and_update(password, hashed_password)
-        return self._manager.password_helper.verify_and_update(password, hashed_password)
+        return self._policy.password_helper.verify_and_update(password, hashed_password)
 
     async def invalidate_all_tokens(self, user: UP) -> None:
         """Invalidate backend-managed tokens when the strategy supports it."""

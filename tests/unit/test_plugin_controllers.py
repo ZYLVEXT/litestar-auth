@@ -56,12 +56,12 @@ class _ReadSchema(msgspec.Struct):
     email: str
 
 
-class _CreateSchema(msgspec.Struct):
+class _CreateSchema(msgspec.Struct, forbid_unknown_fields=True):
     email: str
     password: str
 
 
-class _UpdateSchema(msgspec.Struct):
+class _UpdateSchema(msgspec.Struct, forbid_unknown_fields=True):
     username: str
 
 

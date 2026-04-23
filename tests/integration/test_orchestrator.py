@@ -271,8 +271,8 @@ def build_app() -> tuple[
         id=uuid4(),
         email="admin@example.com",
         hashed_password=password_helper.hash("admin-password"),
-        is_superuser=True,
         is_verified=True,
+        roles=["admin"],
     )
     regular_user = ExampleUser(
         id=uuid4(),
@@ -309,6 +309,7 @@ def build_app() -> tuple[
             id_parser=UUID,
             password_helper=password_helper,
         ),
+        superuser_role_name="admin",
         include_users=True,
     )
     plugin = LitestarAuth(config)
@@ -329,8 +330,8 @@ def build_app_with_security_overrides(
         id=uuid4(),
         email="admin@example.com",
         hashed_password=password_helper.hash("admin-password"),
-        is_superuser=True,
         is_verified=True,
+        roles=["admin"],
     )
     regular_user = ExampleUser(
         id=uuid4(),
@@ -368,6 +369,7 @@ def build_app_with_security_overrides(
             password_helper=password_helper,
             **extra_security_overrides,
         ),
+        superuser_role_name="admin",
         include_users=True,
     )
     plugin = LitestarAuth(config)
@@ -375,7 +377,7 @@ def build_app_with_security_overrides(
     return app, user_db, primary_strategy, secondary_strategy
 
 
-class PluginUserCreate(msgspec.Struct):
+class PluginUserCreate(msgspec.Struct, forbid_unknown_fields=True):
     """Custom registration schema used to verify plugin DTO passthrough."""
 
     email: str
@@ -390,11 +392,10 @@ class PluginUserRead(msgspec.Struct):
     email: str
     is_active: bool
     is_verified: bool
-    is_superuser: bool
     bio: str
 
 
-class PluginUserUpdate(msgspec.Struct, omit_defaults=True):
+class PluginUserUpdate(msgspec.Struct, omit_defaults=True, forbid_unknown_fields=True):
     """Custom update schema used to verify plugin DTO passthrough."""
 
     email: str | None = None
@@ -418,8 +419,8 @@ def build_advanced_app() -> tuple[
         id=uuid4(),
         email="admin@example.com",
         hashed_password=password_helper.hash("admin-password"),
-        is_superuser=True,
         is_verified=True,
+        roles=["admin"],
     )
     user_with_totp = ExampleUser(
         id=uuid4(),
@@ -448,6 +449,7 @@ def build_advanced_app() -> tuple[
             id_parser=UUID,
             password_helper=password_helper,
         ),
+        superuser_role_name="admin",
         include_users=True,
         totp_config=TotpConfig(
             totp_pending_secret="plugin-totp-pending-secret-thirty-two!",

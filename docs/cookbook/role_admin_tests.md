@@ -219,7 +219,7 @@ async def test_delete_blocked_by_assignment(app, session_factory):
     async with session_factory() as session:
         role = Role(name="viewer")
         session.add(role)
-        user = User(email="t@t.com", hashed_password="x", is_superuser=True)
+        user = User(email="t@t.com", hashed_password="x", roles=["superuser"])
         session.add(user)
         await session.flush()
         session.add(UserRole(user_id=user.id, role_name="viewer"))

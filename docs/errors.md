@@ -41,13 +41,13 @@ Exact JSON layout follows your Litestar exception handler configuration.
 | `VERIFY_USER_ALREADY_VERIFIED` | 400 | Already verified. |
 | `UPDATE_USER_EMAIL_ALREADY_EXISTS` | 400 | Email collision on update. |
 | `UPDATE_USER_INVALID_PASSWORD` | 400 | Current password wrong / policy. |
-| `SUPERUSER_CANNOT_DELETE_SELF` | 400 | Self-delete forbidden. |
+| `SUPERUSER_CANNOT_DELETE_SELF` | 403 | Self-delete forbidden. |
 | `OAUTH_NOT_AVAILABLE_EMAIL` | 400 | Provider did not supply email. |
 | `OAUTH_STATE_INVALID` | 400 | OAuth state cookie missing/invalid. |
 | `OAUTH_EMAIL_NOT_VERIFIED` | 400 | Associate-by-email requires verified provider email. |
 | `OAUTH_USER_ALREADY_EXISTS` | 400 | OAuth would create duplicate against policy. |
 | `OAUTH_ACCOUNT_ALREADY_LINKED` | 400 | Provider identity bound to another user. |
-| `REQUEST_BODY_INVALID` | 422 | Body failed validation. |
+| `REQUEST_BODY_INVALID` | 400 / 422 | Body failed validation or request decoding rejected undeclared fields. |
 | `LOGIN_PAYLOAD_INVALID` | 422 | Login body shape invalid. |
 | `REFRESH_TOKEN_INVALID` | 401 | Refresh rejected. |
 | `TOTP_PENDING_BAD_TOKEN` | 400 | Pending login token invalid. |

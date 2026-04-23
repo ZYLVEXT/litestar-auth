@@ -85,7 +85,6 @@ def test_user_relationship_mixin_can_pair_custom_user_with_library_oauth_account
         "    hashed_password: Mapped[str] = mapped_column(String(length=255))\n"
         "    is_active: Mapped[bool] = mapped_column(default=True, nullable=False)\n"
         "    is_verified: Mapped[bool] = mapped_column(default=False, nullable=False)\n"
-        "    is_superuser: Mapped[bool] = mapped_column(default=False, nullable=False)\n"
         "    totp_secret: Mapped[str | None] = mapped_column(String(length=255), default=None, nullable=True)\n"
         "database = SQLAlchemyUserDatabase(\n"
         "    session=MagicMock(),\n"

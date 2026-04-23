@@ -1,5 +1,53 @@
 # Migration Guide
 
+## Superuser boolean to role membership
+
+Superuser status is now derived from role membership. The public
+`is_superuser` guard still exists, but it checks whether `user.roles` contains
+the configured `superuser_role_name` (default `"superuser"`) instead of reading
+`user.is_superuser`.
+
+Before upgrading a database that still has an `is_superuser` column, preserve
+the data by backfilling role membership for every true row:
+
+1. Ensure the role catalog contains the configured superuser role.
+2. Insert missing `user_role` association rows for users where
+   `user.is_superuser = true`.
+3. Deploy code that no longer reads, writes, or serializes `user.is_superuser`.
+4. Drop the old `is_superuser` column after verifying those users authenticate
+   with the expected role membership.
+
+Example SQL shape for the default role name:
+
+```sql
+INSERT INTO role (name, description)
+VALUES ('superuser', 'Superuser access')
+ON CONFLICT (name) DO NOTHING;
+
+INSERT INTO user_role (user_id, role_name)
+SELECT id, 'superuser'
+FROM "user"
+WHERE is_superuser = true
+ON CONFLICT DO NOTHING;
+```
+
+Adjust table names, quoting, and conflict handling for your database dialect
+and custom model family. Applications using a custom
+`LitestarAuthConfig.superuser_role_name` should backfill that normalized role
+name instead of `"superuser"`.
+
+Code changes to make at the same time:
+
+- Remove `is_superuser` from custom SQLAlchemy user models and DTOs.
+- Stop passing `is_superuser` to `BaseUserManager.create(...)`,
+  `BaseUserManager.update(...)`, `/auth/register`, and `/users/*` payloads.
+  The generated register and users request schemas now reject undeclared keys
+  during request decoding with `ErrorCode.REQUEST_BODY_INVALID`, so stale
+  clients surface immediately instead of being silently accepted.
+- Grant or revoke superuser access by mutating the normalized `roles`
+  collection through an admin path, seed script, migration, or the role-admin
+  CLI/controller.
+
 ## Typing: UP bound narrowing and direct config construction
 
 The typing-only API was tightened so downstream annotations describe the same

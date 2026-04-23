@@ -13,7 +13,7 @@ This page summarizes protections and **conscious trade-offs** shipped by the lib
 - **OAuth** — state in `HttpOnly` cookie; strict validation; optional encryption at rest for provider tokens (`oauth_token_encryption_key`); write-time plaintext snapshots are restored after successful writes and cleared on rollback; guarded associate-by-email rules (`oauth_trust_provider_email_verified` on plugin-owned routes, `trust_provider_email_verified` on manual controllers, and `oauth_associate_by_email`).
 - **Opaque DB tokens** — keyed digest at rest; plugin-managed DB-token wiring uses `DatabaseTokenAuthConfig` plus `LitestarAuthConfig(..., database_token_auth=...)`, and legacy plaintext acceptance is migration-only and unsafe for production.
 - **Rate limiting** — optional per-endpoint limits; in-memory backend is single-process only and fails closed for new keys when its capacity cap is reached.
-- **Route-level role checks** — `has_any_role(...)` and `has_all_roles(...)` reuse the same normalized flat-role semantics as persistence and manager writes, and they fail closed if the authenticated user does not expose the documented role-capable contract.
+- **Route-level role checks** — `is_superuser`, `has_any_role(...)`, and `has_all_roles(...)` reuse the same normalized flat-role semantics as persistence and manager writes, and they fail closed if the authenticated user does not expose the documented role-capable contract.
 
 ## Plugin-managed downgrade paths
 

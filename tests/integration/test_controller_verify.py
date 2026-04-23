@@ -36,7 +36,6 @@ class ExtendedUserRead(msgspec.Struct):
     email: str
     is_active: bool
     is_verified: bool
-    is_superuser: bool
     login_hint: str
 
 
@@ -322,7 +321,6 @@ async def test_verify_supports_custom_user_read_schema() -> None:
         "email": user.email,
         "is_active": True,
         "is_verified": True,
-        "is_superuser": False,
         "login_hint": "custom-verify",
     }
 

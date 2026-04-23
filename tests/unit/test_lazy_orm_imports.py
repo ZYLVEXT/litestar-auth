@@ -221,6 +221,19 @@ def test_models_package_token_registration_helper_stays_lazy_until_reference_map
     assert proc.returncode == 0, proc.stdout + proc.stderr
 
 
+def test_accessing_user_model_maps_slim_auth_column_inventory() -> None:
+    """The reference ``User`` mapper exposes the expected slim auth column inventory."""
+    proc = _run_isolated(
+        "from sqlalchemy import inspect\n"
+        "import litestar_auth.models as models\n"
+        "User = models.User\n"
+        "assert set(User.__table__.c.keys()) <= {'email', 'hashed_password', 'id', 'is_active', 'is_verified', 'sa_orm_sentinel', 'totp_secret'}\n"
+        "user = User(email='user@example.com', hashed_password='hashed-password')\n"
+        "assert user.roles == []\n",
+    )
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+
+
 def test_import_strategy_package_keeps_models_namespace_unloaded() -> None:
     """Importing ``litestar_auth.authentication.strategy`` keeps the compatibility path model-lazy."""
     proc = _run_isolated(
