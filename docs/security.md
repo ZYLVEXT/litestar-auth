@@ -35,7 +35,9 @@ Additional explicit opt-ins to weaker behavior:
 | Surface | Risk |
 | ---- | ---- |
 | `totp_enable_requires_password=False` | Weakens step-up for TOTP enrollment. |
-| `csrf_secret` unset with cookie auth | CSRF middleware may not protect unsafe methods — see validation warnings at startup. |
+| `csrf_secret` unset with plugin-owned cookie auth | Plugin validation fails closed unless cookie auth explicitly opts out. |
+| `csrf_protection_managed_externally=True` on manual cookie auth | You are asserting that app-owned CSRF middleware or an equivalent framework-level control protects the manual route table. |
+| `CookieTransport(allow_insecure_cookie_auth=True)` | Allows cookie auth without CSRF for controlled non-browser scenarios only. |
 
 ## Limitations (by design)
 

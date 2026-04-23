@@ -17,6 +17,7 @@ from litestar.params import Parameter
 from litestar.response import Response
 from litestar.response.redirect import Redirect
 
+from litestar_auth.config import validate_oauth_provider_name
 from litestar_auth.controllers._utils import _build_controller_name, _mark_litestar_auth_route_handler
 from litestar_auth.exceptions import ConfigurationError, ErrorCode
 from litestar_auth.guards import is_authenticated
@@ -204,6 +205,7 @@ def _build_oauth_controller_assembly[UP: UserProtocol[Any], ID](  # noqa: PLR091
     if oauth_client_adapter is None:
         oauth_client_adapter = _build_oauth_client_adapter(oauth_client=oauth_client)
 
+    validate_oauth_provider_name(provider_name)
     if validate_redirect_base_url:
         _validate_manual_oauth_redirect_base_url(redirect_base_url)
     controller_path = _build_cookie_path(path=path, provider_name=provider_name)

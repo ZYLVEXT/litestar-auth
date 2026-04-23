@@ -74,6 +74,17 @@
   single-process development, test, or consciously single-process app wiring. The plugin-level
   `allow_nondurable_jwt_revocation` flag was removed because the strategy constructor now owns that
   opt-in.
+- **Manual cookie auth controllers must declare their CSRF posture** — **Breaking for callers using
+  `create_auth_controller(...)` directly with `CookieTransport`.** Pass
+  `csrf_protection_managed_externally=True` only when the mounted routes are protected by app-owned
+  CSRF middleware or an equivalent framework-level CSRF mechanism. For controlled non-browser cookie
+  flows, set `CookieTransport(allow_insecure_cookie_auth=True)` explicitly. Plugin-owned route tables
+  continue to validate cookie CSRF through `LitestarAuthConfig.csrf_secret`.
+- **OAuth provider names are now route-safe slugs** — **Breaking for provider inventories or manual
+  OAuth factories using names outside `[A-Za-z0-9_-]`.** `OAuthProviderConfig(name=...)` and manual
+  `create_provider_oauth_controller(provider_name=...)` now require 1-64 ASCII letters, digits,
+  underscores, or hyphens, with an alphanumeric first and last character, so provider names remain
+  safe for route paths, cookie names, and callback URL construction.
 
 ### Internal
 

@@ -10,6 +10,7 @@ from __future__ import annotations
 import secrets
 import warnings
 from dataclasses import dataclass
+from re import fullmatch
 
 from litestar_auth.exceptions import ConfigurationError
 
@@ -25,6 +26,27 @@ RESET_PASSWORD_TOKEN_AUDIENCE = "litestar-auth:reset-password"
 JWT_ACCESS_TOKEN_AUDIENCE = "litestar-auth:access"
 TOTP_PENDING_AUDIENCE = "litestar-auth:2fa-pending"
 TOTP_ENROLL_AUDIENCE = "litestar-auth:2fa-enroll"
+OAUTH_PROVIDER_NAME_PATTERN = r"[A-Za-z0-9](?:[A-Za-z0-9_-]{0,62}[A-Za-z0-9])?"
+
+
+def validate_oauth_provider_name(name: str, *, label: str = "OAuth provider name") -> str:
+    """Validate and return a route/cookie/callback-safe OAuth provider name.
+
+    Returns:
+        The validated provider name.
+
+    Raises:
+        ConfigurationError: If ``name`` is empty or contains path, cookie, or
+            callback-URL unsafe characters.
+    """
+    if fullmatch(OAUTH_PROVIDER_NAME_PATTERN, name):
+        return name
+
+    msg = (
+        f"{label} must match {OAUTH_PROVIDER_NAME_PATTERN!r}: use 1-64 ASCII letters, "
+        "digits, underscores, or hyphens, and start/end with an alphanumeric character."
+    )
+    raise ConfigurationError(msg)
 
 
 @dataclass(frozen=True, slots=True)
@@ -45,6 +67,10 @@ class OAuthProviderConfig:
 
     name: str
     client: object
+
+    def __post_init__(self) -> None:
+        """Validate provider names before they are used in routes, cookies, and callback URLs."""
+        validate_oauth_provider_name(self.name)
 
     @classmethod
     def coerce(cls, value: object) -> OAuthProviderConfig:

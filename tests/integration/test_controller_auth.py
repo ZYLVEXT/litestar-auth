@@ -220,6 +220,7 @@ def build_cookie_refresh_app() -> tuple[Litestar, InMemoryRefreshTokenStrategy]:
     controller = create_auth_controller(
         backend=backend,
         enable_refresh=True,
+        csrf_protection_managed_externally=True,
     )
     middleware = DefineMiddleware(
         LitestarAuthMiddleware[ExampleUser, UUID],

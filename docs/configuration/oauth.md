@@ -15,6 +15,11 @@ Use this page for `OAuthConfig`, OAuth provider inventory, redirect validation, 
 | `oauth_redirect_base_url` | `""` | Required public HTTPS redirect base for plugin-owned OAuth callbacks. The plugin derives `{oauth_redirect_base_url}/oauth/{provider}/callback` and, when associate routes are enabled, `{oauth_redirect_base_url}/associate/{provider}/callback`. |
 | `oauth_token_encryption_key` | `None` | **Required** for any declared provider inventory in production — encrypts OAuth tokens at rest. |
 
+Provider names are security-sensitive because they are embedded in route paths,
+OAuth state cookie names, and callback URLs. Use stable slugs only: 1-64 ASCII
+letters, digits, underscores, or hyphens, starting and ending with an
+alphanumeric character. Examples: `github`, `github-enterprise`, `github_enterprise`.
+
 For manual custom controllers, `create_provider_oauth_controller(...)` / `create_oauth_controller(...)` still take **`trust_provider_email_verified`** and optional **`oauth_scopes`** directly (see [OAuth guide](../guides/oauth.md)). Their `redirect_base_url` also now fails closed unless it uses a non-loopback `https://...` origin; unlike the plugin-owned route table, the manual factories do not have an `AppConfig(debug=True)` or `unsafe_testing=True` override. The plugin-owned route table maps `OAuthConfig.oauth_trust_provider_email_verified` and `OAuthConfig.oauth_provider_scopes` onto the same runtime behavior.
 
 Preferred construction (import from ``litestar_auth`` or ``litestar_auth.config``):
@@ -35,6 +40,7 @@ Route-registration contract:
 
 - `oauth_providers` is the single plugin-owned provider inventory; there is no separate associate-only provider list.
 - `oauth_redirect_base_url` is required whenever `oauth_providers` is configured. The plugin appends `/oauth` and `/associate` per route family instead of guessing a localhost fallback.
+- Provider names must be route-safe slugs because they become `{provider}` path segments, OAuth state cookie names, and callback URL components.
 - In production app init, plugin-owned OAuth routes now fail closed unless `oauth_redirect_base_url` uses a non-loopback `https://...` origin. Keep localhost or plain-HTTP redirect bases behind `AppConfig(debug=True)` or `unsafe_testing=True` only.
 - Manual/custom OAuth controller factories use the same non-loopback `https://...` redirect-origin baseline, but they enforce it immediately at controller construction time with no debug/testing override.
 - Both plugin-owned and manual OAuth redirect bases must remain clean callback bases without embedded userinfo, query strings, or fragments.

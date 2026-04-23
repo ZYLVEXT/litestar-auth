@@ -34,7 +34,7 @@ from litestar_auth.authentication.strategy.db_models import AccessToken, Refresh
 from litestar_auth.authentication.transport.bearer import BearerTransport
 from litestar_auth.authentication.transport.cookie import CookieTransport
 from litestar_auth.config import DEFAULT_MINIMUM_PASSWORD_LENGTH, require_password_length
-from litestar_auth.exceptions import InvalidPasswordError
+from litestar_auth.exceptions import ConfigurationError, InvalidPasswordError
 from litestar_auth.manager import BaseUserManager, UserManagerSecurity
 from litestar_auth.password import PasswordHelper
 from litestar_auth.plugin import LitestarAuth, LitestarAuthConfig
@@ -834,6 +834,24 @@ def test_oauth_provider_config_constructed_with_keywords() -> None:
     entry = oauth_provider_config_type(name="github", client=client)
     assert entry.name == "github"
     assert entry.client is client
+
+
+@pytest.mark.parametrize("provider_name", ["github", "github-enterprise", "github_enterprise", "g1"])
+def test_oauth_provider_config_accepts_slug_names(provider_name: str) -> None:
+    """Provider names are restricted to route/cookie/callback-safe slugs."""
+    oauth_provider_config_type = _current_oauth_provider_config_type()
+    entry = oauth_provider_config_type(name=provider_name, client=object())
+
+    assert entry.name == provider_name
+
+
+@pytest.mark.parametrize("provider_name", ["", "-github", "github-", "../github", "git hub", "github.example"])
+def test_oauth_provider_config_rejects_route_unsafe_names(provider_name: str) -> None:
+    """Provider names reject path, cookie, and callback-URL unsafe characters."""
+    oauth_provider_config_type = _current_oauth_provider_config_type()
+
+    with pytest.raises(ConfigurationError, match="OAuth provider name must match"):
+        oauth_provider_config_type(name=provider_name, client=object())
 
 
 def test_oauth_provider_config_coerce_is_idempotent() -> None:

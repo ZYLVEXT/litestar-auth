@@ -362,6 +362,33 @@ def _define_refresh_auth_controller_class_di[UP: UserProtocol[Any], ID](
     return refresh_cls
 
 
+def _validate_manual_cookie_auth_contract(
+    backend: AuthenticationBackend[Any, Any],
+    *,
+    csrf_protection_managed_externally: bool,
+    unsafe_testing: bool,
+) -> None:
+    """Fail closed when manual cookie auth is assembled without an explicit CSRF posture.
+
+    Raises:
+        ConfigurationError: If a manual cookie-auth controller lacks an explicit
+            external-CSRF or controlled non-browser opt-in.
+    """
+    transport = backend.transport
+    if not isinstance(transport, CookieTransport):
+        return
+    if csrf_protection_managed_externally or transport.allow_insecure_cookie_auth or unsafe_testing:
+        return
+
+    msg = (
+        "Manual create_auth_controller(...) with CookieTransport requires "
+        "csrf_protection_managed_externally=True, or CookieTransport(allow_insecure_cookie_auth=True) "
+        "for controlled non-browser scenarios. Prefer the LitestarAuth plugin with csrf_secret for "
+        "browser cookie sessions."
+    )
+    raise ConfigurationError(msg)
+
+
 def create_auth_controller[UP: UserProtocol[Any], ID](  # noqa: PLR0913
     *,
     backend: AuthenticationBackend[UP, ID],
@@ -373,6 +400,7 @@ def create_auth_controller[UP: UserProtocol[Any], ID](  # noqa: PLR0913
     totp_pending_lifetime: timedelta = _DEFAULT_PENDING_TOKEN_LIFETIME,
     path: str = "/auth",
     unsafe_testing: bool = False,
+    csrf_protection_managed_externally: bool = False,
     security: Sequence[SecurityRequirement] | None = None,
 ) -> type[Controller]:
     """Return a controller subclass bound to the provided backend (DI user manager).
@@ -394,6 +422,10 @@ def create_auth_controller[UP: UserProtocol[Any], ID](  # noqa: PLR0913
         path: Base route prefix for the generated controller.
         unsafe_testing: Explicit test-only override that skips production
             validation for short-lived single-process fixtures.
+        csrf_protection_managed_externally: Required acknowledgement for manual
+            ``CookieTransport`` route tables protected by app-owned CSRF middleware
+            or an equivalent framework-level CSRF mechanism. The plugin-owned
+            route table validates this through ``LitestarAuthConfig.csrf_secret``.
         security: Optional OpenAPI security requirements to annotate
             guarded routes on the generated controller.
 
@@ -410,6 +442,11 @@ def create_auth_controller[UP: UserProtocol[Any], ID](  # noqa: PLR0913
         )
         ```
     """
+    _validate_manual_cookie_auth_contract(
+        backend,
+        csrf_protection_managed_externally=csrf_protection_managed_externally,
+        unsafe_testing=unsafe_testing,
+    )
     if totp_pending_secret is not None and not unsafe_testing:
         validate_secret_length(totp_pending_secret, label="totp_pending_secret")
     ctx = _make_auth_controller_context(

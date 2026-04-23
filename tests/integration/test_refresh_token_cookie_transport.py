@@ -174,6 +174,7 @@ def build_app(
     controller = create_auth_controller(
         backend=backend,
         enable_refresh=True,
+        csrf_protection_managed_externally=True,
     )
     app = litestar_app_with_user_manager(user_manager, controller)
     return app, controller, user

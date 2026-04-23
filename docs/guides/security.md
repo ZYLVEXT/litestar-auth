@@ -92,6 +92,13 @@ revocation is required.
 
 When any cookie transport is present, the plugin configures Litestar **CSRF** if `csrf_secret` is set. State-changing methods must include the expected CSRF header (`csrf_header_name`, default `X-CSRF-Token`). **Set `csrf_secret` in production** whenever you use cookie-based sessions.
 
+If you bypass the plugin and mount `create_auth_controller(...)` manually with
+`CookieTransport`, declare the CSRF posture at construction time. Pass
+`csrf_protection_managed_externally=True` only when your Litestar app already
+protects those routes with CSRF middleware or an equivalent framework-level
+mechanism. For controlled non-browser cookie flows that intentionally do not use
+CSRF, set `CookieTransport(allow_insecure_cookie_auth=True)` explicitly.
+
 ## JWT
 
 JWTs include standard time claims (`iat`, `exp`, `nbf`). Access-token validation accepts a small built-in leeway for normal clock skew, so minor NTP drift does not force unnecessary re-authentication at the edge of token lifetime. Revocation uses a **denylist** store; pass a shared store (e.g. Redis) in multi-worker production, or set `allow_inmemory_denylist=True` only for explicit single-process development/test wiring. The in-memory denylist rejects new revocations under capacity pressure (after pruning expired entries) rather than evicting an existing revoked JTI; size `max_entries` or use Redis if you issue many concurrent revocations. When a new revocation cannot be stored, `destroy_token` raises `TokenError` (HTTP **503** / `TOKEN_PROCESSING_FAILED` on bundled routes); pending-login TOTP verification uses the same fail-closed pattern for recording the spent pending JTI.

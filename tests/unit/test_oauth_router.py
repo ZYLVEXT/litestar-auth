@@ -147,6 +147,21 @@ def test_create_provider_oauth_controller_rejects_insecure_redirect_base_url(
         )
 
 
+def test_create_provider_oauth_controller_rejects_route_unsafe_provider_name() -> None:
+    """Manual provider names must be safe for routes, cookies, and callback URLs."""
+    backend = _make_backend()
+    user_manager = _make_user_manager()
+
+    with pytest.raises(router_module.ConfigurationError, match="OAuth provider name must match"):
+        router_module.create_provider_oauth_controller(
+            provider_name="../github",
+            backend=backend,
+            user_manager=user_manager,
+            oauth_client=_make_oauth_client(),
+            redirect_base_url="https://example.test",
+        )
+
+
 def test_load_httpx_oauth_client_invalid_class_path_raises_configuration_error() -> None:
     """Unresolvable client class path raises `ConfigurationError`."""
     invalid_path = "litestar_auth.oauth.router.NonExistentClient"

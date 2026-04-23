@@ -235,6 +235,7 @@ async def test_logout_clears_cookie_auth_and_refresh_cookies() -> None:
     controller_class = create_auth_controller(
         backend=backend,
         enable_refresh=True,
+        csrf_protection_managed_externally=True,
     )
     controller = cast("Any", controller_class(owner=MagicMock()))
 
@@ -263,6 +264,47 @@ def _make_closure_cell(value: object) -> CellType:
     closure = _cell_factory.__closure__
     assert closure is not None
     return closure[0]
+
+
+def test_create_auth_controller_rejects_manual_cookie_auth_without_csrf_contract() -> None:
+    """Manual cookie route tables fail closed unless CSRF posture is explicit."""
+    backend = AuthenticationBackend(
+        name="cookie",
+        transport=CookieTransport(),
+        strategy=cast("Any", _make_minimal_strategy()),
+    )
+
+    with pytest.raises(ConfigurationError, match="csrf_protection_managed_externally=True"):
+        create_auth_controller(backend=backend)
+
+
+def test_create_auth_controller_accepts_manual_cookie_auth_with_external_csrf_contract() -> None:
+    """Manual cookie route tables can acknowledge app-owned CSRF protection."""
+    backend = AuthenticationBackend(
+        name="cookie",
+        transport=CookieTransport(),
+        strategy=cast("Any", _make_minimal_strategy()),
+    )
+
+    controller_class = create_auth_controller(
+        backend=backend,
+        csrf_protection_managed_externally=True,
+    )
+
+    assert controller_class.path == "/auth"
+
+
+def test_create_auth_controller_accepts_explicit_insecure_cookie_auth_override() -> None:
+    """Controlled non-browser cookie scenarios use the transport-level unsafe override."""
+    backend = AuthenticationBackend(
+        name="cookie",
+        transport=CookieTransport(allow_insecure_cookie_auth=True),
+        strategy=cast("Any", _make_minimal_strategy()),
+    )
+
+    controller_class = create_auth_controller(backend=backend)
+
+    assert controller_class.path == "/auth"
 
 
 async def test_login_rate_limit_before_request_is_a_noop_when_rate_limit_cell_is_none() -> None:
