@@ -32,6 +32,7 @@ if TYPE_CHECKING:
     from litestar.testing import AsyncTestClient
 
 pytestmark = pytest.mark.integration
+HTTP_BAD_REQUEST = 400
 HTTP_CREATED = 201
 HTTP_OK = 200
 HTTP_UNPROCESSABLE_ENTITY = 422
@@ -121,6 +122,7 @@ def build_app() -> tuple[
         id_parser=UUID,
         user_read_schema=ExtendedUserRead,
         user_update_schema=ExtendedUserUpdate,
+        admin_user_update_schema=ExtendedUserUpdate,
     )
     middleware = DefineMiddleware(
         LitestarAuthMiddleware[ExampleUser, UUID],
@@ -242,7 +244,7 @@ async def test_custom_msgspec_schemas_extend_register_and_users_responses(
     patch_me_response = await test_client.patch(
         "/users/me",
         headers=headers,
-        json={"bio": "updated-bio", "roles": [" Support ", "ADMIN"]},
+        json={"bio": "updated-bio"},
     )
 
     assert get_me_response.status_code == HTTP_OK
@@ -365,7 +367,7 @@ async def test_custom_registration_schema_reuses_builtin_email_and_password_cont
     assert await user_db.get_by_email("long@example.com") is None
 
 
-async def test_custom_update_schema_reuses_builtin_email_and_password_contract(
+async def test_custom_update_schema_password_field_is_blocked_for_self_service(
     client: tuple[
         AsyncTestClient[Litestar],
         InMemoryUserDatabase,
@@ -374,7 +376,7 @@ async def test_custom_update_schema_reuses_builtin_email_and_password_contract(
         ExampleUser,
     ],
 ) -> None:
-    """Custom update schemas can reuse the built-in email/password contract."""
+    """Custom self-update schemas still fail closed when they declare a password field."""
     test_client, _, _, strategy, admin_user = client
     token = await strategy.write_token(admin_user)
     headers = {"Authorization": f"Bearer {token}"}
@@ -399,10 +401,12 @@ async def test_custom_update_schema_reuses_builtin_email_and_password_contract(
         json={"password": "p" * (MAX_PASSWORD_LENGTH + 1)},
     )
 
-    assert minimum_response.status_code == HTTP_OK
+    assert minimum_response.status_code == HTTP_BAD_REQUEST
     assert invalid_email_response.status_code == HTTP_UNPROCESSABLE_ENTITY
-    assert short_response.status_code == HTTP_UNPROCESSABLE_ENTITY
-    assert long_response.status_code == HTTP_UNPROCESSABLE_ENTITY
+    assert short_response.status_code == HTTP_BAD_REQUEST
+    assert long_response.status_code == HTTP_BAD_REQUEST
+    assert minimum_response.json()["detail"] == "Self-service updates cannot set the following fields: password."
+    assert minimum_response.json()["extra"]["code"] == ErrorCode.REQUEST_BODY_INVALID
     assert invalid_email_response.json()["extra"]["code"] == ErrorCode.REQUEST_BODY_INVALID
     assert short_response.json()["extra"]["code"] == ErrorCode.REQUEST_BODY_INVALID
     assert long_response.json()["extra"]["code"] == ErrorCode.REQUEST_BODY_INVALID

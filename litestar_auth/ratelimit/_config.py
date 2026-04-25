@@ -28,6 +28,8 @@ class AuthRateLimitSlot(StrEnum):
     """IDE-friendly enum of supported auth rate-limit endpoint slots."""
 
     LOGIN = "login"
+    # Dedicated credential-rotation slot so operators can tune stolen-session re-verification separately from login.
+    CHANGE_PASSWORD = "change_password"  # noqa: S105
     REFRESH = "refresh"
     REGISTER = "register"
     FORGOT_PASSWORD = "forgot_password"  # noqa: S105
@@ -36,6 +38,7 @@ class AuthRateLimitSlot(StrEnum):
     TOTP_CONFIRM_ENABLE = "totp_confirm_enable"
     TOTP_VERIFY = "totp_verify"
     TOTP_DISABLE = "totp_disable"
+    TOTP_REGENERATE_RECOVERY_CODES = "totp_regenerate_recovery_codes"
     VERIFY_TOKEN = "verify_token"  # noqa: S105
     REQUEST_VERIFY_TOKEN = "request_verify_token"  # noqa: S105
 
@@ -55,6 +58,12 @@ _AUTH_RATE_LIMIT_ENDPOINT_RECIPES: tuple[_AuthRateLimitEndpointRecipe, ...] = (
         slot=AuthRateLimitSlot.LOGIN,
         default_scope="ip_email",
         default_namespace="login",
+        group="login",
+    ),
+    _AuthRateLimitEndpointRecipe(
+        slot=AuthRateLimitSlot.CHANGE_PASSWORD,
+        default_scope="ip_email",
+        default_namespace="change-password",
         group="login",
     ),
     _AuthRateLimitEndpointRecipe(
@@ -103,6 +112,12 @@ _AUTH_RATE_LIMIT_ENDPOINT_RECIPES: tuple[_AuthRateLimitEndpointRecipe, ...] = (
         slot=AuthRateLimitSlot.TOTP_DISABLE,
         default_scope="ip",
         default_namespace="totp-disable",
+        group="totp",
+    ),
+    _AuthRateLimitEndpointRecipe(
+        slot=AuthRateLimitSlot.TOTP_REGENERATE_RECOVERY_CODES,
+        default_scope="ip",
+        default_namespace="totp-regenerate-recovery-codes",
         group="totp",
     ),
     _AuthRateLimitEndpointRecipe(
@@ -221,10 +236,21 @@ _AUTH_RATE_LIMIT_ENDPOINT_SLOTS_BY_GROUP: MappingProxyType[
 ] = _AUTH_RATE_LIMIT_ENDPOINT_CATALOG.slots_by_group
 _AUTH_RATE_LIMIT_ENDPOINT_GROUPS: frozenset[AuthRateLimitEndpointGroup] = _AUTH_RATE_LIMIT_ENDPOINT_CATALOG.groups
 _STRICT_AUTH_RATE_LIMIT_PRESET_SLOTS: frozenset[AuthRateLimitSlot] = frozenset(
-    {AuthRateLimitSlot.LOGIN, AuthRateLimitSlot.REGISTER, AuthRateLimitSlot.TOTP_VERIFY},
+    {
+        AuthRateLimitSlot.LOGIN,
+        AuthRateLimitSlot.CHANGE_PASSWORD,
+        AuthRateLimitSlot.REGISTER,
+        AuthRateLimitSlot.TOTP_VERIFY,
+        AuthRateLimitSlot.TOTP_REGENERATE_RECOVERY_CODES,
+    },
 )
 _LENIENT_AUTH_RATE_LIMIT_SHARED_SLOTS: frozenset[AuthRateLimitSlot] = frozenset(
-    {AuthRateLimitSlot.LOGIN, AuthRateLimitSlot.REFRESH, AuthRateLimitSlot.REGISTER},
+    {
+        AuthRateLimitSlot.LOGIN,
+        AuthRateLimitSlot.CHANGE_PASSWORD,
+        AuthRateLimitSlot.REFRESH,
+        AuthRateLimitSlot.REGISTER,
+    },
 )
 _LENIENT_AUTH_RATE_LIMIT_STRICT_SLOTS: frozenset[AuthRateLimitSlot] = frozenset(
     slot for slot in _AUTH_RATE_LIMIT_ENDPOINT_SLOTS if slot not in _LENIENT_AUTH_RATE_LIMIT_SHARED_SLOTS
@@ -258,7 +284,19 @@ def _validate_auth_rate_limit_slots(names: Iterable[object], *, parameter_name: 
     Raises:
         TypeError: If any provided slot value is not an ``AuthRateLimitSlot``.
     """
-    invalid_names = sorted({str(name) for name in names if not isinstance(name, AuthRateLimitSlot)})
+    supported_slot_values = {slot.value for slot in AuthRateLimitSlot}
+    invalid_names = sorted(
+        {
+            str(name)
+            for name in names
+            if not isinstance(name, AuthRateLimitSlot)
+            and not (
+                isinstance(name, StrEnum)
+                and name.__class__.__name__ == AuthRateLimitSlot.__name__
+                and str(name) in supported_slot_values
+            )
+        },
+    )
     if not invalid_names:
         return
 
@@ -448,6 +486,7 @@ class AuthRateLimitConfig:
     """Optional rate-limit rules for auth-related endpoints."""
 
     login: EndpointRateLimit | None = None
+    change_password: EndpointRateLimit | None = None
     refresh: EndpointRateLimit | None = None
     register: EndpointRateLimit | None = None
     forgot_password: EndpointRateLimit | None = None
@@ -456,6 +495,7 @@ class AuthRateLimitConfig:
     totp_confirm_enable: EndpointRateLimit | None = None
     totp_verify: EndpointRateLimit | None = None
     totp_disable: EndpointRateLimit | None = None
+    totp_regenerate_recovery_codes: EndpointRateLimit | None = None
     verify_token: EndpointRateLimit | None = None
     request_verify_token: EndpointRateLimit | None = None
 
@@ -474,7 +514,8 @@ class AuthRateLimitConfig:
 
         The provided backend should already be configured with the lower attempt
         budget you want to enforce. This preset wires that shared backend to the
-        highest-risk public entry points: login, register, and TOTP verify.
+        highest-risk credential entry points: login, change-password, register,
+        and TOTP verify.
 
         Args:
             backend: Shared backend instance for the strict preset slots.
@@ -498,7 +539,7 @@ class AuthRateLimitConfig:
         """Build a lenient preset for internal or low-risk deployments.
 
         The supplied backend sets the broader budget used for the lower-risk
-        login, refresh, and registration surfaces. Token- and secret-bearing
+        login, change-password, refresh, and registration surfaces. Token- and secret-bearing
         flows still receive a stricter built-in limiter clone capped at five
         attempts per window so reset, verification, and TOTP endpoints do not
         inherit an overly permissive budget.

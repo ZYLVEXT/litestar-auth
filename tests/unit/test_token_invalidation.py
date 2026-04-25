@@ -14,7 +14,7 @@ from litestar_auth.authentication.strategy.redis import RedisClientProtocol, Red
 from litestar_auth.manager import BaseUserManager, UserManagerSecurity
 from litestar_auth.models import User
 from litestar_auth.password import PasswordHelper
-from litestar_auth.schemas import UserUpdate
+from litestar_auth.schemas import AdminUserUpdate, UserUpdate
 from tests._helpers import cast_fakeredis
 
 if TYPE_CHECKING:
@@ -113,7 +113,7 @@ async def test_manager_update_invalidates_tokens_only_on_email_or_password_chang
     # Password change invalidates once.
     updated_password_user = replace(user, hashed_password=password_helper.hash("new-password"))
     user_db.update.return_value = updated_password_user
-    await manager.update(UserUpdate(password="new-password"), user)
+    await manager.update(AdminUserUpdate(password="new-password"), user)
     invalidate.assert_awaited_once_with(updated_password_user)
 
 

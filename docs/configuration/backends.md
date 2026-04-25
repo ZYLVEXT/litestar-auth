@@ -87,4 +87,10 @@ The generated controllers do not use one universal credential field. `login_iden
 | `POST {auth_path}/forgot-password` | `ForgotPassword` | `email` |
 | `POST {auth_path}/reset-password` | `ResetPassword` | `token`, `password` |
 
-By default, built-in TOTP routes publish `TotpEnableRequest`, `TotpConfirmEnableRequest`, `TotpVerifyRequest`, and `TotpDisableRequest`. The built-in TOTP flow still uses `user.email` for the otpauth URI and password step-up, even when `login_identifier="username"`.
+Verify and reset token values are signed JWTs issued by the manager security service. Library-issued
+tokens include JOSE `typ=JWT`, and decode rejects tokens with a missing or unexpected `typ` header
+before the normal signed audience, required-claim, and password-fingerprint validation. Custom test
+fixtures or advanced integrations that mint these tokens directly must set the same header; the
+header check is not a replacement for the existing signed JWT validation.
+
+By default, built-in TOTP routes publish `TotpEnableRequest`, `TotpConfirmEnableRequest`, `TotpVerifyRequest`, and `TotpDisableRequest`. `TotpVerifyRequest.code` and `TotpDisableRequest.code` accept either a current TOTP code or an unused recovery code where documented. The built-in TOTP flow still uses `user.email` for the otpauth URI and password step-up, even when `login_identifier="username"`.

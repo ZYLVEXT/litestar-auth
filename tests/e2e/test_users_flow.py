@@ -8,6 +8,7 @@ from uuid import UUID
 
 import pytest
 from litestar import Litestar, Request, get
+from litestar.testing import AsyncTestClient
 from sqlalchemy import create_engine, event, select
 from sqlalchemy.orm import Session as SASession
 from sqlalchemy.pool import StaticPool
@@ -18,15 +19,14 @@ from litestar_auth.authentication.transport.bearer import BearerTransport
 from litestar_auth.exceptions import ErrorCode
 from litestar_auth.guards import has_all_roles, has_any_role
 from litestar_auth.manager import BaseUserManager, UserManagerSecurity
-from litestar_auth.models import User
+from litestar_auth.models import User, import_token_orm_models
 from litestar_auth.password import PasswordHelper
-from litestar_auth.plugin import LitestarAuth, LitestarAuthConfig
+from litestar_auth.plugin import DatabaseTokenAuthConfig, LitestarAuth, LitestarAuthConfig
 
 if TYPE_CHECKING:
     from collections.abc import Iterable, Iterator, Mapping, Sequence
     from types import TracebackType
 
-    from litestar.testing import AsyncTestClient
     from sqlalchemy.engine import Connection, Engine
     from sqlalchemy.ext.asyncio import AsyncSession
     from sqlalchemy.orm.session import ForUpdateParameter
@@ -37,6 +37,7 @@ pytestmark = [pytest.mark.e2e]
 HTTP_BAD_REQUEST = 400
 HTTP_CREATED = 201
 HTTP_FORBIDDEN = 403
+HTTP_NO_CONTENT = 204
 HTTP_OK = 200
 HTTP_UNAUTHORIZED = 401
 PAGINATION_LIMIT = 2
@@ -213,6 +214,22 @@ async def _login_headers(
     return {"Authorization": f"Bearer {response.json()['access_token']}"}
 
 
+async def _login_payload(
+    client: AsyncTestClient[Litestar],
+    *,
+    email: str,
+    password: str,
+) -> dict[str, object]:
+    """Authenticate a user and return the full login payload.
+
+    Returns:
+        Full login response payload including issued token fields.
+    """
+    response = await client.post("/auth/login", json={"identifier": email, "password": password})
+    assert response.status_code == HTTP_CREATED
+    return cast("dict[str, object]", response.json())
+
+
 async def _verify_then_login_headers(
     client: AsyncTestClient[Litestar],
     *,
@@ -341,6 +358,92 @@ def app() -> Iterator[tuple[Litestar, Engine, PasswordHelper, dict[str, UUID]]]:
 
 
 @pytest.fixture
+def refreshable_app() -> Iterator[tuple[Litestar, Engine, PasswordHelper, dict[str, UUID]]]:
+    """Create a Litestar app wired with DB-backed access and refresh tokens plus users routes.
+
+    Yields:
+        App under test, backing engine, password helper, and seeded user ids.
+    """
+    UsersFlowManager.verification_tokens.clear()
+    import_token_orm_models()
+    engine = create_engine(
+        "sqlite+pysqlite:///:memory:",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
+
+    @event.listens_for(engine, "connect")
+    def _enable_sqlite_foreign_keys(dbapi_connection: sqlite3.Connection, _: object) -> None:
+        if not isinstance(dbapi_connection, sqlite3.Connection):
+            return
+
+        cursor = dbapi_connection.cursor()
+        try:
+            cursor.execute("PRAGMA foreign_keys=ON")
+        finally:
+            cursor.close()
+
+    User.metadata.create_all(engine)
+    password_helper = PasswordHelper()
+
+    with SASession(engine) as session:
+        admin_user = User(
+            email="admin@example.com",
+            hashed_password=password_helper.hash("admin-password"),
+            is_verified=True,
+            roles=["admin"],
+        )
+        regular_user = User(
+            email="member@example.com",
+            hashed_password=password_helper.hash("member-password"),
+            is_verified=True,
+            roles=["member"],
+        )
+        extra_user = User(
+            email="extra@example.com",
+            hashed_password=password_helper.hash("extra-password"),
+            is_verified=True,
+            roles=["support"],
+        )
+        session.add_all([admin_user, regular_user, extra_user])
+        session.commit()
+        session.refresh(admin_user)
+        session.refresh(regular_user)
+        session.refresh(extra_user)
+        user_ids = {
+            "admin": admin_user.id,
+            "member": regular_user.id,
+            "extra": extra_user.id,
+        }
+
+    config = LitestarAuthConfig[User, UUID](
+        database_token_auth=DatabaseTokenAuthConfig(
+            token_hash_secret="database-token-secret-12345678901234567890",
+        ),
+        session_maker=cast("Any", SessionMaker(engine)),
+        user_model=User,
+        user_manager_class=UsersFlowManager,
+        user_manager_security=UserManagerSecurity[UUID](
+            verification_token_secret="verify-secret-1234567890-1234567890",
+            reset_password_token_secret="reset-secret-1234567890-1234567890",
+            id_parser=UUID,
+            password_helper=password_helper,
+        ),
+        superuser_role_name="admin",
+        include_users=True,
+        enable_refresh=True,
+    )
+    yield (
+        Litestar(plugins=[LitestarAuth(config)]),
+        engine,
+        password_helper,
+        user_ids,
+    )
+    UsersFlowManager.verification_tokens.clear()
+    engine.dispose()
+
+
+@pytest.fixture
 def test_client_base_url() -> str:
     """Use HTTPS so cookie and redirect behavior matches production wiring.
 
@@ -381,11 +484,7 @@ async def test_users_crud_flow_via_plugin(
     response = await test_client.patch(
         "/users/me",
         headers=regular_headers,
-        json={
-            "email": "member-updated@example.com",
-            "password": "member-new-password",
-            "roles": [" Billing ", "ADMIN"],
-        },
+        json={"email": "member-updated@example.com"},
     )
     assert response.status_code == HTTP_OK
     _assert_public_user(
@@ -399,8 +498,8 @@ async def test_users_crud_flow_via_plugin(
         },
     )
 
-    # Updating email/password changes the JWT session fingerprint. Previously minted access tokens
-    # should no longer authenticate.
+    # Updating email changes the JWT session fingerprint. Previously minted access tokens should
+    # no longer authenticate.
     response = await test_client.get(f"/users/{user_ids['admin']}", headers=regular_headers)
     assert response.status_code == HTTP_UNAUTHORIZED
     response = await test_client.get("/users", headers=regular_headers)
@@ -409,7 +508,7 @@ async def test_users_crud_flow_via_plugin(
     regular_headers = await _verify_then_login_headers(
         test_client,
         email="member-updated@example.com",
-        password="member-new-password",
+        password="member-password",
     )
 
     response = await test_client.get(f"/users/{user_ids['admin']}", headers=regular_headers)
@@ -420,11 +519,6 @@ async def test_users_crud_flow_via_plugin(
     response = await test_client.post(
         "/auth/login",
         json={"identifier": "member-updated@example.com", "password": "member-password"},
-    )
-    assert response.status_code == HTTP_BAD_REQUEST
-    response = await test_client.post(
-        "/auth/login",
-        json={"identifier": "member-updated@example.com", "password": "member-new-password"},
     )
     assert response.status_code == HTTP_CREATED
 
@@ -511,7 +605,71 @@ async def test_users_crud_flow_via_plugin(
     assert stored_member.is_active is False
     assert stored_member.is_verified is False
     assert stored_member.roles == ["admin", "billing"]
-    assert password_helper.verify("member-new-password", stored_member.hashed_password)
+    assert password_helper.verify("member-password", stored_member.hashed_password)
+
+
+async def test_change_password_endpoint_invalidates_prior_access_and_refresh_tokens(
+    refreshable_app: tuple[Litestar, Engine, PasswordHelper, dict[str, UUID]],
+) -> None:
+    """Credential rotation revokes prior session artifacts and permits login with the new password."""
+    app, engine, password_helper, user_ids = refreshable_app
+
+    async with AsyncTestClient(app=app) as test_client:
+        login_payload = await _login_payload(
+            test_client,
+            email="member@example.com",
+            password="member-password",
+        )
+        access_token = cast("str", login_payload["access_token"])
+        refresh_token = cast("str", login_payload["refresh_token"])
+        old_headers = {"Authorization": f"Bearer {access_token}"}
+
+        change_password_response = await test_client.post(
+            "/users/me/change-password",
+            headers=old_headers,
+            json={
+                "current_password": "member-password",
+                "new_password": "member-rotated-password",
+            },
+        )
+        old_access_response = await test_client.get("/users/me", headers=old_headers)
+        old_refresh_response = await test_client.post(
+            "/auth/refresh",
+            json={"refresh_token": refresh_token},
+        )
+        old_password_login_response = await test_client.post(
+            "/auth/login",
+            json={"identifier": "member@example.com", "password": "member-password"},
+        )
+        new_login_response = await test_client.post(
+            "/auth/login",
+            json={"identifier": "member@example.com", "password": "member-rotated-password"},
+        )
+
+    assert change_password_response.status_code == HTTP_NO_CONTENT
+    assert not change_password_response.content
+    assert old_access_response.status_code == HTTP_UNAUTHORIZED
+    assert old_refresh_response.status_code == HTTP_BAD_REQUEST
+    assert old_refresh_response.json()["detail"] == "The refresh token is invalid."
+    old_refresh_code = old_refresh_response.json().get("code") or (old_refresh_response.json().get("extra") or {}).get(
+        "code",
+    )
+    assert old_refresh_code == ErrorCode.REFRESH_TOKEN_INVALID
+    assert old_password_login_response.status_code == HTTP_BAD_REQUEST
+    old_login_code = old_password_login_response.json().get("code") or (
+        old_password_login_response.json().get("extra") or {}
+    ).get("code")
+    assert old_login_code == ErrorCode.LOGIN_BAD_CREDENTIALS
+    assert new_login_response.status_code == HTTP_CREATED
+    assert isinstance(new_login_response.json()["access_token"], str)
+    assert isinstance(new_login_response.json()["refresh_token"], str)
+
+    with SASession(engine) as session:
+        stored_member = session.scalar(select(User).where(User.id == user_ids["member"]))
+
+    assert stored_member is not None
+    assert password_helper.verify("member-rotated-password", stored_member.hashed_password)
+    assert not password_helper.verify("member-password", stored_member.hashed_password)
 
 
 async def test_users_me_rejects_deactivated_user_with_existing_session(

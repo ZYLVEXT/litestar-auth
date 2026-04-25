@@ -22,7 +22,7 @@ from litestar_auth.exceptions import (
     UserNotExistsError,
 )
 from litestar_auth.password import PasswordHelper
-from litestar_auth.schemas import UserCreate, UserUpdate
+from litestar_auth.schemas import AdminUserUpdate, UserCreate
 from tests._helpers import ExampleUser
 from tests.unit.test_manager import TrackingUserManager
 
@@ -86,7 +86,8 @@ async def test_create_rejects_duplicate_email_after_normalization() -> None:
     password_helper = PasswordHelper()
     manager = TrackingUserManager(user_db, password_helper)
     service = UserLifecycleService(manager, policy=manager.policy)
-    user_db.get_by_email.return_value = _build_user(password_helper, email="duplicate@example.com")
+    existing_user = _build_user(password_helper, email="duplicate@example.com")
+    user_db.get_by_email.return_value = existing_user
 
     with pytest.raises(UserAlreadyExistsError) as exc_info:
         await service.create({"email": " DUPLICATE@example.com ", "password": "test-password"})
@@ -96,6 +97,7 @@ async def test_create_rejects_duplicate_email_after_normalization() -> None:
     assert str(exc_info.value) == UserAlreadyExistsError.default_message
     user_db.create.assert_not_awaited()
     assert manager.registration_events == []
+    assert manager.duplicate_registration_users == [existing_user]
 
 
 async def test_create_normalizes_roles_when_privileged_payload_allows_them() -> None:
@@ -271,7 +273,7 @@ async def test_update_password_change_hashes_password_invalidates_tokens_and_run
     updated_user = replace(user)
     user_db.update.return_value = updated_user
 
-    result = await service.update(UserUpdate(password="new-password"), user)
+    result = await service.update(AdminUserUpdate(password="new-password"), user)
 
     assert result is updated_user
     update_payload = user_db.update.await_args.args[1]

@@ -35,7 +35,11 @@ from litestar_auth.exceptions import ConfigurationError, ErrorCode
 from litestar_auth.guards import is_authenticated
 from litestar_auth.payloads import LoginCredentials, RefreshTokenRequest  # noqa: TC001
 from litestar_auth.totp_flow import TOTP_PENDING_AUDIENCE as _TOTP_PENDING_AUDIENCE
-from litestar_auth.totp_flow import TotpFlowUserManagerProtocol, TotpLoginFlowService
+from litestar_auth.totp_flow import (
+    TotpFlowUserManagerProtocol,
+    TotpLoginFlowService,
+    build_pending_totp_client_binding,
+)
 from litestar_auth.types import LoginIdentifier, TotpUserProtocol, UserProtocol
 
 if TYPE_CHECKING:
@@ -95,6 +99,9 @@ class _AuthControllerContext[UP: UserProtocol[Any], ID]:
     refresh_reset: RequestHandler
     totp_pending_secret: str | None
     totp_pending_lifetime: timedelta
+    totp_pending_require_client_binding: bool
+    totp_pending_client_binding_trusted_proxy: bool
+    totp_pending_client_binding_trusted_headers: tuple[str, ...]
 
 
 def _make_auth_controller_context[UP: UserProtocol[Any], ID](  # noqa: PLR0913
@@ -106,6 +113,7 @@ def _make_auth_controller_context[UP: UserProtocol[Any], ID](  # noqa: PLR0913
     login_identifier: LoginIdentifier,
     totp_pending_secret: str | None,
     totp_pending_lifetime: timedelta,
+    totp_pending_require_client_binding: bool = True,
 ) -> _AuthControllerContext[UP, ID]:
     """Assemble rate-limit handlers, optional refresh strategy, and TOTP settings.
 
@@ -115,6 +123,7 @@ def _make_auth_controller_context[UP: UserProtocol[Any], ID](  # noqa: PLR0913
     refresh_strategy = _get_refresh_strategy(backend.strategy) if enable_refresh else None
     login_rate_limit = rate_limit_config.login if rate_limit_config else None
     refresh_rate_limit = rate_limit_config.refresh if rate_limit_config else None
+    totp_verify_rate_limit = rate_limit_config.totp_verify if rate_limit_config else None
     login_inc, login_reset = _create_rate_limit_handlers(login_rate_limit)
     refresh_inc, refresh_reset = _create_rate_limit_handlers(refresh_rate_limit)
     return _AuthControllerContext(
@@ -130,6 +139,13 @@ def _make_auth_controller_context[UP: UserProtocol[Any], ID](  # noqa: PLR0913
         refresh_reset=refresh_reset,
         totp_pending_secret=totp_pending_secret,
         totp_pending_lifetime=totp_pending_lifetime,
+        totp_pending_require_client_binding=totp_pending_require_client_binding,
+        totp_pending_client_binding_trusted_proxy=(
+            False if totp_verify_rate_limit is None else totp_verify_rate_limit.trusted_proxy
+        ),
+        totp_pending_client_binding_trusted_headers=(
+            ("X-Forwarded-For",) if totp_verify_rate_limit is None else totp_verify_rate_limit.trusted_headers
+        ),
     )
 
 
@@ -173,13 +189,23 @@ async def _handle_auth_login[UP: UserProtocol[Any], ID](
             ),
             totp_pending_secret=ctx.totp_pending_secret,
             totp_pending_lifetime=ctx.totp_pending_lifetime,
+            require_client_binding=ctx.totp_pending_require_client_binding,
         )
         if ctx.totp_pending_secret is not None
         else None
     )
     if totp_login_flow is not None:
         totp_user = cast("TotpUserProtocol[Any]", user)
-        pending_token = await totp_login_flow.issue_pending_token(totp_user)
+        client_binding = (
+            build_pending_totp_client_binding(
+                request,
+                trusted_proxy=ctx.totp_pending_client_binding_trusted_proxy,
+                trusted_headers=ctx.totp_pending_client_binding_trusted_headers,
+            )
+            if ctx.totp_pending_require_client_binding
+            else None
+        )
+        pending_token = await totp_login_flow.issue_pending_token(totp_user, client_binding=client_binding)
         if pending_token is not None:
             await ctx.login_reset(request)
             return Response(
@@ -396,6 +422,7 @@ def create_auth_controller[UP: UserProtocol[Any], ID](  # noqa: PLR0913
     login_identifier: LoginIdentifier = "email",
     totp_pending_secret: str | None = None,
     totp_pending_lifetime: timedelta = _DEFAULT_PENDING_TOKEN_LIFETIME,
+    totp_pending_require_client_binding: bool = True,
     path: str = "/auth",
     unsafe_testing: bool = False,
     csrf_protection_managed_externally: bool = False,
@@ -417,6 +444,9 @@ def create_auth_controller[UP: UserProtocol[Any], ID](  # noqa: PLR0913
             intermediate pending token when the user has TOTP configured.
             Must match the value passed to ``create_totp_controller``.
         totp_pending_lifetime: Maximum age of the intermediate pending token.
+        totp_pending_require_client_binding: Bind pending-token issuance to the
+            issuing client IP and User-Agent fingerprints. Keep enabled unless
+            your proxy topology cannot provide stable client metadata.
         path: Base route prefix for the generated controller.
         unsafe_testing: Explicit test-only override that skips production
             validation for short-lived single-process fixtures.
@@ -455,6 +485,7 @@ def create_auth_controller[UP: UserProtocol[Any], ID](  # noqa: PLR0913
         login_identifier=login_identifier,
         totp_pending_secret=totp_pending_secret,
         totp_pending_lifetime=totp_pending_lifetime,
+        totp_pending_require_client_binding=totp_pending_require_client_binding,
     )
     base_cls = _define_auth_controller_class_di(ctx, security=security)
     generated_controller: type[Controller] = (

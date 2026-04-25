@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hmac
 from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, TypeVar
 
@@ -137,6 +138,28 @@ def _normalized_user_roles(user: object, *, guard_name: str) -> frozenset[str]:
         raise PermissionDeniedException(detail=_role_capable_protocol_denial_detail(guard_name)) from exc
 
 
+def _roles_intersect_fixed_work(user_roles: frozenset[str], required_roles: tuple[str, ...]) -> bool:
+    """Return whether any normalized user role matches a required role without early exit."""
+    roles_intersect = False
+    for required_role in required_roles:
+        for user_role in user_roles:
+            role_matches = hmac.compare_digest(user_role, required_role)
+            roles_intersect = bool(int(roles_intersect) + int(role_matches))
+    return roles_intersect
+
+
+def _roles_include_all_fixed_work(user_roles: frozenset[str], required_roles: tuple[str, ...]) -> bool:
+    """Return whether every required role is present in normalized user roles without early exit."""
+    includes_all_roles = True
+    for required_role in required_roles:
+        role_is_present = False
+        for user_role in user_roles:
+            role_matches = hmac.compare_digest(user_role, required_role)
+            role_is_present = bool(int(role_is_present) + int(role_matches))
+        includes_all_roles = bool(int(includes_all_roles) * int(role_is_present))
+    return includes_all_roles
+
+
 def _connection_superuser_role_name(connection: ASGIConnection[Any, Any, Any, Any]) -> str:
     """Return the normalized superuser role name from request scope state.
 
@@ -234,7 +257,7 @@ def _build_role_guard(
         guarded = _require_active_guarded_user(connection, guard_name=guard_name)
         user_roles = _normalized_user_roles(guarded, guard_name=guard_name)
         if require_all:
-            if required_role_set.issubset(user_roles):
+            if _roles_include_all_fixed_work(user_roles, required_roles):
                 return
             raise InsufficientRolesError(
                 required_roles=required_role_set,
@@ -242,7 +265,7 @@ def _build_role_guard(
                 require_all=True,
             )
 
-        if user_roles & required_role_set:
+        if _roles_intersect_fixed_work(user_roles, required_roles):
             return
         raise InsufficientRolesError(
             required_roles=required_role_set,
@@ -334,7 +357,7 @@ def is_superuser(
     guarded = _require_active_guarded_user(connection, guard_name="is_superuser")
     user_roles = _normalized_user_roles(guarded, guard_name="is_superuser")
     superuser_role_name = _connection_superuser_role_name(connection)
-    if superuser_role_name in user_roles:
+    if _roles_intersect_fixed_work(user_roles, (superuser_role_name,)):
         return
 
     msg = "The authenticated user does not have sufficient privileges."

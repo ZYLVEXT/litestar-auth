@@ -6,7 +6,7 @@ import uuid  # noqa: TC003 - SQLAlchemy resolves mapped annotations at runtime.
 from datetime import datetime  # noqa: TC003 - SQLAlchemy resolves mapped annotations at runtime.
 from typing import TYPE_CHECKING, Any, ClassVar, cast
 
-from sqlalchemy import DateTime, ForeignKey, String, event, func, insert, inspect, select
+from sqlalchemy import JSON, DateTime, ForeignKey, String, event, func, insert, inspect, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Mapped, declared_attr, mapped_column, relationship, validates
 from sqlalchemy.orm import Session as ORMSession
@@ -33,8 +33,8 @@ class UserModelMixin:
     """Shared non-primary-key columns used by the bundled ``User`` model.
 
     Provides ``email``, ``hashed_password``, ``is_active``, ``is_verified``,
-    and ``totp_secret``. Superuser status is determined by role membership,
-    not by a persisted column on this mixin.
+    ``totp_secret``, and hashed TOTP recovery codes. Superuser status is
+    determined by role membership, not by a persisted column on this mixin.
 
     Set ``auth_hashed_password_column_name`` on a subclass when the app keeps
     the public ``hashed_password`` attribute but stores it under a different
@@ -51,6 +51,8 @@ class UserModelMixin:
     is_active: Mapped[bool] = mapped_column(default=True, nullable=False)
     is_verified: Mapped[bool] = mapped_column(default=False, nullable=False)
     totp_secret: Mapped[str | None] = mapped_column(String(length=255), default=None, nullable=True)
+    # JSON keeps custom user-model composition simple; verification still walks every hash.
+    recovery_codes_hashes: Mapped[list[str] | None] = mapped_column(JSON, default=None, nullable=True)
 
     @declared_attr
     def hashed_password(cls) -> Mapped[str]:  # noqa: N805

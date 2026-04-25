@@ -132,7 +132,7 @@ The library table (bundled `OAuthAccount`) includes at least:
 - `refresh_token` — optional, same encryption type as access token
 - Unique constraint **`uq_oauth_account_provider_identity`** on `(oauth_name, account_id)`
 
-Token encryption uses `litestar_auth.oauth_encryption` and `OAuthConfig.oauth_token_encryption_key` (see [OAuth guide](../guides/oauth.md)).
+Token encryption uses `litestar_auth.oauth_encryption` and `OAuthConfig.oauth_token_encryption_keyring` or the one-key `oauth_token_encryption_key` shortcut (see [OAuth guide](../guides/oauth.md)).
 
 For audit columns (`created_at` / `updated_at`), use one mapped class per table; see [OAuth guide — audit columns](../guides/oauth.md#audit-columns-on-oauth_account).
 

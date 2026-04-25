@@ -7,6 +7,7 @@ from typing import Any, cast
 from unittest.mock import AsyncMock
 
 import pytest
+from cryptography.fernet import Fernet
 from litestar import Litestar
 from litestar.openapi.config import OpenAPIConfig
 
@@ -18,6 +19,7 @@ from litestar_auth.controllers.totp import (
     create_totp_controller,
 )
 from litestar_auth.exceptions import ConfigurationError
+from litestar_auth.manager import FernetKeyringConfig
 from litestar_auth.plugin import LitestarAuthConfig
 
 pytestmark = pytest.mark.unit
@@ -98,7 +100,7 @@ def test_create_totp_controller_requires_totp_secret_key_outside_testing() -> No
     """Production mode must reject plaintext pending-enrollment secret storage."""
     backend = AsyncMock()
 
-    with pytest.raises(ConfigurationError, match="totp_secret_key is required"):
+    with pytest.raises(ConfigurationError, match="totp_secret_keyring or totp_secret_key is required"):
         create_totp_controller(
             backend=backend,
             user_manager_dependency_key="litestar_auth_user_manager",
@@ -106,6 +108,42 @@ def test_create_totp_controller_requires_totp_secret_key_outside_testing() -> No
             pending_jti_store=AsyncMock(),
             enrollment_store=AsyncMock(),
             totp_pending_secret="test-totp-pending-secret-thirty-two!",
+        )
+
+
+@pytest.mark.unit
+def test_create_totp_controller_accepts_totp_secret_keyring_outside_testing() -> None:
+    """Production TOTP controllers can encrypt enrollment state with a versioned keyring."""
+    keyring = FernetKeyringConfig(active_key_id="current", keys={"current": Fernet.generate_key().decode()})
+
+    controller = create_totp_controller(
+        backend=AsyncMock(),
+        user_manager_dependency_key="litestar_auth_user_manager",
+        used_tokens_store=AsyncMock(),
+        pending_jti_store=AsyncMock(),
+        enrollment_store=AsyncMock(),
+        totp_pending_secret="test-totp-pending-secret-thirty-two!",
+        totp_secret_keyring=keyring,
+    )
+
+    assert controller is not None
+
+
+@pytest.mark.unit
+def test_create_totp_controller_rejects_ambiguous_totp_secret_key_inputs() -> None:
+    """Manual TOTP controller configuration accepts either a single key or keyring."""
+    keyring = FernetKeyringConfig(active_key_id="current", keys={"current": Fernet.generate_key().decode()})
+
+    with pytest.raises(ConfigurationError, match="totp_secret_key or totp_secret_keyring"):
+        create_totp_controller(
+            backend=AsyncMock(),
+            user_manager_dependency_key="litestar_auth_user_manager",
+            used_tokens_store=AsyncMock(),
+            pending_jti_store=AsyncMock(),
+            enrollment_store=AsyncMock(),
+            totp_pending_secret="test-totp-pending-secret-thirty-two!",
+            totp_secret_key=Fernet.generate_key().decode(),
+            totp_secret_keyring=keyring,
         )
 
 
@@ -128,7 +166,7 @@ def test_create_totp_controller_requires_enrollment_store_outside_testing() -> N
 @pytest.mark.unit
 def test_totp_controller_endpoint_contract_is_explicit() -> None:
     """Controller-level endpoint coverage and verify-only limiter scope stay explicit."""
-    assert TOTP_SENSITIVE_ENDPOINTS == ("enable", "confirm_enable", "verify", "disable")
+    assert TOTP_SENSITIVE_ENDPOINTS == ("enable", "confirm_enable", "verify", "disable", "regenerate_recovery_codes")
     assert TOTP_RATE_LIMITED_ENDPOINTS == ("verify", "confirm_enable")
 
 
@@ -139,6 +177,7 @@ def test_totp_defaults_use_sha256() -> None:
     assert LitestarAuthConfig.__dataclass_fields__["totp_config"].default is None
     signature = inspect.signature(create_totp_controller)
     assert signature.parameters["totp_algorithm"].default == "SHA256"
+    assert signature.parameters["totp_secret_keyring"].default is None
 
 
 @pytest.mark.unit

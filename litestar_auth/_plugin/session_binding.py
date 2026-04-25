@@ -37,6 +37,16 @@ class _OAuthTokenEncryptionBindable(Protocol):
     ) -> object: ...  # pragma: no cover
 
 
+class _TotpRecoveryCodeStore[UP](Protocol):
+    """Store contract for hashed TOTP recovery-code persistence."""
+
+    async def set_recovery_code_hashes(self, user: UP, hashes: tuple[str, ...]) -> UP: ...  # pragma: no cover
+
+    async def read_recovery_code_hashes(self, user: UP) -> tuple[str, ...]: ...  # pragma: no cover
+
+    async def consume_recovery_code_hash(self, user: UP, matched_hash: str) -> bool: ...  # pragma: no cover
+
+
 class _ScopedUserDatabaseProxy[UP: UserProtocol[Any], ID](BaseUserStore[UP, ID]):
     """Wrap a store and bind any explicit plugin-owned OAuth token policy once.
 
@@ -100,6 +110,29 @@ class _ScopedUserDatabaseProxy[UP: UserProtocol[Any], ID](BaseUserStore[UP, ID])
     async def delete(self, user_id: ID) -> None:
         """Delete the user identified by ``user_id`` from storage."""
         await self._user_db.delete(user_id)
+
+    async def set_recovery_code_hashes(self, user: UP, hashes: tuple[str, ...]) -> UP:
+        """Replace active TOTP recovery-code hashes through the wrapped store.
+
+        Returns:
+            The updated user instance.
+        """
+        recovery_store = cast("_TotpRecoveryCodeStore[UP]", self._user_db)
+        return await recovery_store.set_recovery_code_hashes(user, hashes)
+
+    async def read_recovery_code_hashes(self, user: UP) -> tuple[str, ...]:
+        """Return active TOTP recovery-code hashes through the wrapped store."""
+        recovery_store = cast("_TotpRecoveryCodeStore[UP]", self._user_db)
+        return await recovery_store.read_recovery_code_hashes(user)
+
+    async def consume_recovery_code_hash(self, user: UP, matched_hash: str) -> bool:
+        """Consume an active TOTP recovery-code hash through the wrapped store.
+
+        Returns:
+            ``True`` when the hash was active and consumed.
+        """
+        recovery_store = cast("_TotpRecoveryCodeStore[UP]", self._user_db)
+        return await recovery_store.consume_recovery_code_hash(user, matched_hash)
 
     async def get_by_oauth_account(self, oauth_name: str, account_id: str) -> UP | None:
         """Load a linked OAuth account through the wrapped store.

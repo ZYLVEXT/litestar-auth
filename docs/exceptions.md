@@ -13,7 +13,7 @@ Bundled handlers typically send only the exception message and machine-readable 
   "status_code": 400,
   "detail": "Human-readable message",
   "extra": {
-    "code": "REGISTER_USER_ALREADY_EXISTS"
+    "code": "USER_ALREADY_EXISTS"
   }
 }
 ```
@@ -111,26 +111,26 @@ except UserAlreadyExistsError as exc:
     raise
 ```
 
-Typical bundled-controller response shape:
+Direct domain-error response shape when no endpoint-specific mapper overrides the code:
 
 ```json
 {
   "status_code": 400,
   "detail": "A user with the provided credentials already exists.",
   "extra": {
-    "code": "REGISTER_USER_ALREADY_EXISTS"
+    "code": "USER_ALREADY_EXISTS"
   }
 }
 ```
 
-If your code raises the structured form directly, the default detail changes with the stored context:
+If your code raises the structured form directly, the default detail remains generic:
 
 ```json
 {
   "status_code": 400,
   "detail": "A user with the provided credentials already exists.",
   "extra": {
-    "code": "REGISTER_USER_ALREADY_EXISTS"
+    "code": "USER_ALREADY_EXISTS"
   }
 }
 ```

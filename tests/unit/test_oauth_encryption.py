@@ -2,20 +2,19 @@
 
 from __future__ import annotations
 
+import base64
 from dataclasses import FrozenInstanceError, dataclass, field
 from pathlib import Path
-from typing import cast
+from typing import Any, cast
 
 import pytest
 from advanced_alchemy.base import UUIDPrimaryKey, create_registry
 from sqlalchemy import event
 from sqlalchemy.orm import DeclarativeBase
 
+import litestar_auth._secrets_at_rest as secrets_at_rest
 from litestar_auth import oauth_encryption
 from litestar_auth.models import OAuthAccountMixin, UserAuthRelationshipMixin, UserModelMixin
-from litestar_auth.oauth_encryption import (
-    Fernet as _FernetImport,
-)
 from litestar_auth.oauth_encryption import (
     OAuthTokenEncryption,
     _RawFernetBackend,
@@ -28,11 +27,10 @@ from tests.unit.test_definition_file_coverage import load_reloaded_test_alias
 pytestmark = pytest.mark.unit
 
 
-def _fernet_key_string() -> str:
-    """Return a valid Fernet key string, or skip when cryptography is unavailable."""
-    if _FernetImport is None:
-        pytest.skip("cryptography is not installed in this environment")
-    return _FernetImport.generate_key().decode()
+def _fernet_key_string(seed: bytes = b"0") -> str:
+    """Return a deterministic valid Fernet key string."""
+    pytest.importorskip("cryptography.fernet")
+    return base64.urlsafe_b64encode(seed * 32).decode()
 
 
 @dataclass
@@ -129,7 +127,7 @@ def test_oauth_encryption_module_executes_under_coverage(monkeypatch: pytest.Mon
 
 def test_oauth_token_encryption_plaintext_policy_round_trips() -> None:
     """An explicit keyless policy preserves plaintext values in testing scenarios."""
-    policy = OAuthTokenEncryption(key=None)
+    policy = OAuthTokenEncryption(key=None, unsafe_testing=True)
 
     assert policy.encrypt("plain-token") == "plain-token"
     assert policy.decrypt("plain-token") == "plain-token"
@@ -137,25 +135,94 @@ def test_oauth_token_encryption_plaintext_policy_round_trips() -> None:
     assert policy.decrypt(None) is None
 
 
+@pytest.mark.parametrize(
+    ("method_name", "argument"),
+    [
+        ("encrypt", "plain-token"),
+        ("decrypt", "plain-token"),
+        ("requires_reencrypt", "plain-token"),
+        ("reencrypt", "plain-token"),
+        ("encrypt", None),
+        ("decrypt", None),
+        ("requires_reencrypt", None),
+        ("reencrypt", None),
+    ],
+)
+def test_oauth_token_encryption_keyless_policy_public_methods_fail_closed(
+    method_name: str,
+    argument: str | None,
+) -> None:
+    """Keyless OAuth token policies are unusable unless explicitly marked unsafe for tests."""
+    policy = OAuthTokenEncryption(key=None)
+    method = getattr(policy, method_name)
+
+    with pytest.raises(oauth_encryption.ConfigurationError, match="oauth_token_encryption_key is required"):
+        method(argument)
+
+
 def test_oauth_token_encryption_with_fernet_key_round_trips() -> None:
     """A configured policy encrypts at rest and decrypts back to the original token."""
-    if _FernetImport is None:
-        pytest.skip("cryptography is not installed in this environment")
-    policy = OAuthTokenEncryption(key=_FernetImport.generate_key())
+    policy = OAuthTokenEncryption(key=_fernet_key_string(), active_key_id="oauth")
 
     encrypted = policy.encrypt("secret-token")
 
     assert encrypted is not None
+    assert encrypted.startswith("fernet:v1:oauth:")
     assert encrypted != "secret-token"
     assert policy.decrypt(encrypted) == "secret-token"
+
+
+def test_oauth_token_encryption_decrypts_non_active_key_and_reencrypts() -> None:
+    """Configured non-active key ids remain readable and can be rewritten with the active key."""
+    keys = {
+        "current": _fernet_key_string(b"1"),
+        "old": _fernet_key_string(b"2"),
+    }
+    old_policy = OAuthTokenEncryption(active_key_id="old", keys=keys)
+    current_policy = OAuthTokenEncryption(active_key_id="current", keys=keys)
+
+    old_stored = old_policy.encrypt("legacy-token")
+    current_stored = current_policy.encrypt("current-token")
+
+    assert old_stored is not None
+    assert current_stored is not None
+    assert old_stored.startswith("fernet:v1:old:")
+    assert current_stored.startswith("fernet:v1:current:")
+    assert current_policy.decrypt(old_stored) == "legacy-token"
+    assert current_policy.requires_reencrypt(old_stored) is True
+    assert current_policy.requires_reencrypt(current_stored) is False
+
+    rewritten = current_policy.reencrypt(old_stored)
+
+    assert rewritten is not None
+    assert rewritten.startswith("fernet:v1:current:")
+    assert current_policy.decrypt(rewritten) == "legacy-token"
+    assert current_policy.requires_reencrypt(rewritten) is False
+
+
+def test_oauth_token_encryption_rotation_helpers_preserve_none_and_plaintext_mode() -> None:
+    """Rotation helpers are no-ops for disabled values and explicit plaintext testing mode."""
+    policy = OAuthTokenEncryption(key=None, unsafe_testing=True)
+
+    assert policy.requires_reencrypt(None) is False
+    assert policy.reencrypt(None) is None
+    assert policy.requires_reencrypt("plain-token") is False
+    assert policy.reencrypt("plain-token") == "plain-token"
+
+
+def test_oauth_token_encryption_rejects_ambiguous_key_configuration() -> None:
+    """A policy must not accept both the one-key and keyring configuration paths."""
+    with pytest.raises(oauth_encryption.ConfigurationError, match="either key or keys"):
+        OAuthTokenEncryption(
+            key=_fernet_key_string(b"1"),
+            keys={"current": _fernet_key_string(b"2")},
+        )
 
 
 def test_oauth_token_encryption_reuses_single_raw_backend_instance(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """``OAuthTokenEncryption`` mounts Fernet once; repeated encrypt/decrypt does not recreate it."""
-    if _FernetImport is None:
-        pytest.skip("cryptography is not installed in this environment")
     init_calls: list[None] = []
 
     class TrackingRawFernetBackend(_RawFernetBackend):
@@ -166,7 +233,7 @@ def test_oauth_token_encryption_reuses_single_raw_backend_instance(
             super().__init__()
 
     monkeypatch.setattr(oauth_encryption, "_RawFernetBackend", TrackingRawFernetBackend)
-    policy = OAuthTokenEncryption(key=_FernetImport.generate_key())
+    policy = OAuthTokenEncryption(key=_fernet_key_string())
     first = policy.encrypt("a")
     second = policy.encrypt("b")
     assert policy.decrypt(first) == "a"
@@ -188,7 +255,7 @@ def test_oauth_token_encryption_keyless_mounts_backend_once(
             super().__init__()
 
     monkeypatch.setattr(oauth_encryption, "_RawFernetBackend", TrackingRawFernetBackend)
-    policy = OAuthTokenEncryption(key=None)
+    policy = OAuthTokenEncryption(key=None, unsafe_testing=True)
     assert policy.encrypt("x") == "x"
     assert policy.decrypt("y") == "y"
     assert len(init_calls) == 1
@@ -206,11 +273,14 @@ def test_oauth_token_encryption_repr_and_hash_exclude_backend() -> None:
 def test_oauth_token_encryption_repr_hides_configured_key() -> None:
     """Configured encryption keys stay out of repr/str surfaces."""
     key = _fernet_key_string()
-    policy = OAuthTokenEncryption(key=key)
+    old_key = _fernet_key_string(b"1")
+    policy = OAuthTokenEncryption(active_key_id="current", keys={"current": key, "old": old_key})
 
     rendered = repr(policy)
 
     assert key not in rendered
+    assert old_key not in rendered
+    assert "active_key_id='current'" in rendered
     assert "unsafe_testing=False" in rendered
 
 
@@ -302,12 +372,23 @@ def test_require_oauth_token_encryption_allows_keyless_policy_in_unsafe_testing(
     assert require_oauth_token_encryption(policy, context="persisting OAuth access and refresh tokens") is policy
 
 
+def test_require_oauth_token_encryption_allows_keyring_policy() -> None:
+    """A configured keyring policy satisfies production persistence requirements."""
+    policy = OAuthTokenEncryption(
+        active_key_id="current",
+        keys={"current": _fernet_key_string(b"1"), "old": _fernet_key_string(b"2")},
+    )
+
+    assert require_oauth_token_encryption(policy, context="persisting OAuth access and refresh tokens") is policy
+
+
 def test_mount_vault_none_sets_fernet_none() -> None:
     """``mount_vault(None)`` disables encryption without error."""
     backend = _RawFernetBackend()
     backend.mount_vault(None)
 
-    assert backend._fernet is None
+    assert backend._keyring is None
+    assert backend.needs_rotation(None) is False
 
 
 def test_init_engine_is_a_no_op() -> None:
@@ -320,22 +401,27 @@ def test_init_engine_is_a_no_op() -> None:
 def test_mount_vault_fernet_missing_raises_install_hint(monkeypatch: pytest.MonkeyPatch) -> None:
     """Missing ``cryptography`` raises ``ImportError`` with the install hint."""
     backend = _RawFernetBackend()
-    monkeypatch.setattr(oauth_encryption, "Fernet", None)
 
-    with pytest.raises(ImportError, match=r"litestar-auth\[oauth\]"):
-        backend.mount_vault("anykey")
+    def import_module(_name: str) -> object:
+        msg = "missing cryptography"
+        raise ImportError(msg)
+
+    monkeypatch.setattr(secrets_at_rest.importlib, "import_module", import_module)
+
+    with pytest.raises(ImportError, match=r"litestar-auth\[oauth,totp\]"):
+        backend.mount_vault(base64.urlsafe_b64encode(b"0" * 32).decode())
 
 
 def test_raw_fernet_backend_round_trips_encrypted_values() -> None:
     """The raw backend continues to encrypt and decrypt token strings."""
-    if _FernetImport is None:
-        pytest.skip("cryptography is not installed in this environment")
     backend = _RawFernetBackend()
-    backend.mount_vault(_FernetImport.generate_key())
+    backend.mount_vault(_fernet_key_string())
     token = backend.encrypt("secret")
 
     assert token != "secret"
+    assert token.startswith("fernet:v1:default:")
     assert backend.decrypt(token) == "secret"
+    assert backend.needs_rotation(token) is False
 
 
 def test_raw_fernet_backend_encrypt_plaintext_mode_handles_bytes_and_rejects_other_types() -> None:
@@ -352,10 +438,8 @@ def test_raw_fernet_backend_encrypt_plaintext_mode_handles_bytes_and_rejects_oth
 
 def test_raw_fernet_backend_encrypt_rejects_non_strings_when_encrypted() -> None:
     """Encrypted mode only accepts string inputs."""
-    if _FernetImport is None:
-        pytest.skip("cryptography is not installed in this environment")
     backend = _RawFernetBackend()
-    backend.mount_vault(_FernetImport.generate_key())
+    backend.mount_vault(_fernet_key_string())
 
     with pytest.raises(TypeError, match="OAuth token values must be strings"):
         backend.encrypt(42)
@@ -376,14 +460,14 @@ def test_raw_fernet_backend_decrypt_plaintext_mode_handles_none_bytes_and_invali
 def test_raw_fernet_backend_decrypt_accepts_bytes_and_rejects_invalid_values_when_encrypted() -> None:
     """Encrypted decrypt accepts byte payloads and rejects unsupported types."""
 
-    class _FakeFernet:
-        def decrypt(self, token: bytes) -> bytes:
+    class _FakeKeyring:
+        def decrypt(self, token: str) -> str:
             """Return a deterministic plaintext token."""
-            assert token == b"ciphertext"
-            return b"plain-token"
+            assert token == "ciphertext"
+            return "plain-token"
 
     backend = _RawFernetBackend()
-    backend._fernet = _FakeFernet()
+    backend._keyring = cast("Any", _FakeKeyring())
 
     assert backend.decrypt(b"ciphertext") == "plain-token"
 
@@ -570,7 +654,7 @@ def test_decrypt_loaded_oauth_tokens_skips_changed_fields(monkeypatch: pytest.Mo
     """Load-time decryption leaves locally changed fields untouched."""
     target = _TokenTarget(access_token="changed-access", refresh_token="stored-refresh")
     session = _SessionInfoTarget()
-    bind_oauth_token_encryption(session, OAuthTokenEncryption(key=None))
+    bind_oauth_token_encryption(session, OAuthTokenEncryption(key=None, unsafe_testing=True))
     committed_values: list[tuple[str, str | None]] = []
     monkeypatch.setattr(
         oauth_encryption,

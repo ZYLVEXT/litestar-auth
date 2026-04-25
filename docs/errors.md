@@ -23,8 +23,8 @@ Exact JSON layout follows your Litestar exception handler configuration.
 | `TOKEN_PROCESSING_FAILED` | 401 / 400 / 503 | Invalid or unusable token in ordinary validation paths (**401** / **400**); **503** when a bundled route cannot persist a required JWT revocation or TOTP pending-login JTI because the denylist is at capacity (fail-closed; see [Security](security.md) and [Guides — Security](guides/security.md)). |
 | `CONFIGURATION_INVALID` | 500 / startup | Misconfiguration. |
 | `USER_NOT_FOUND` | 404 | User id does not exist. |
-| `REGISTER_USER_ALREADY_EXISTS` | 400 | Duplicate registration. |
-| `REGISTER_INVALID_PASSWORD` | 400 | Password policy rejected. |
+| `USER_ALREADY_EXISTS` | 400 | Duplicate user in a non-endpoint-specific default exception context. |
+| `REGISTER_FAILED` | 400 | Generic registration failure. |
 | `LOGIN_BAD_CREDENTIALS` | 400 | Wrong password or unknown user (login). |
 | `LOGIN_USER_INACTIVE` | 403 | Account disabled. |
 | `LOGIN_USER_NOT_VERIFIED` | 403 | Verification required (`requires_verification` / flow). |
@@ -55,10 +55,14 @@ Exact JSON layout follows your Litestar exception handler configuration.
 | `TOTP_ALREADY_ENABLED` | 400 | TOTP already active. |
 | `TOTP_ENROLL_BAD_TOKEN` | 400 | Enrollment token invalid. |
 
-`REGISTER_USER_ALREADY_EXISTS`, `REGISTER_INVALID_PASSWORD`, and `UPDATE_USER_INVALID_PASSWORD` keep the same HTTP mappings even though the corresponding Python exceptions now use keyword-only structured context.
+`USER_ALREADY_EXISTS`, `REGISTER_FAILED`, and `UPDATE_USER_INVALID_PASSWORD` keep stable HTTP mappings even though the corresponding Python exceptions now use keyword-only structured context.
 
 Source of truth in code: `litestar_auth.exceptions.ErrorCode` and controller `ClientException` sites. Full exception hierarchy: [Python API — Exceptions](api/exceptions.md).
 
 ## Enumeration safety
 
-`POST .../forgot-password` is intentionally **enumeration-resistant** (see [Registration guide](guides/registration.md)): successful response does not reveal whether the email exists.
+`POST .../register` is intentionally **enumeration-resistant** for domain failures:
+duplicate identifiers, password-policy failures, and manager authorization rejections all
+use the same 400 / `REGISTER_FAILED` response. `POST .../forgot-password` is also
+enumeration-resistant: successful response does not reveal whether the email exists.
+See [Registration guide](guides/registration.md).

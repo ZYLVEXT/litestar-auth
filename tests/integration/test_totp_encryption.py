@@ -196,7 +196,7 @@ async def test_set_totp_secret_encrypts_and_read_totp_secret_decrypts(monkeypatc
     await manager.set_totp_secret(user, "JBSWY3DPEHPK3PXP")
 
     stored_secret = user_db.update.await_args.args[1]["totp_secret"]
-    assert stored_secret.startswith(ENCRYPTED_TOTP_SECRET_PREFIX)
+    assert stored_secret.startswith(f"{ENCRYPTED_TOTP_SECRET_PREFIX}v1:default:")
     assert stored_secret != "JBSWY3DPEHPK3PXP"
     assert await manager.read_totp_secret(stored_secret) == "JBSWY3DPEHPK3PXP"
 
@@ -250,13 +250,16 @@ async def test_read_totp_secret_raises_runtime_error_on_decrypt_failure(
     manager = _build_manager(user_db, totp_secret_key=TOTP_SECRET_KEY)
     # Token that decodes to something that does not match FakeFernet's prefix for this key
     bad_token = base64.urlsafe_b64encode(b"wrong:prefix:data")
-    encrypted_secret = f"{ENCRYPTED_TOTP_SECRET_PREFIX}{bad_token.decode()}"
+    encrypted_secret = f"{ENCRYPTED_TOTP_SECRET_PREFIX}v1:default:{bad_token.decode()}"
 
     with pytest.raises(RuntimeError, match="TOTP secret decryption failed") as exc_info:
         await manager.read_totp_secret(encrypted_secret)
 
-    assert exc_info.value.__cause__ is not None
-    assert type(exc_info.value.__cause__).__name__ == "FakeInvalidTokenError"
+    cause = exc_info.value.__cause__
+    assert cause is not None
+    root_cause = cause.__cause__
+    assert root_cause is not None
+    assert type(root_cause).__name__ == "FakeInvalidTokenError"
 
 
 async def test_set_totp_secret_raises_readable_error_when_cryptography_missing(
@@ -310,7 +313,7 @@ async def test_totp_controllers_use_decrypted_secret(monkeypatch: pytest.MonkeyP
 
         stored_user = next(iter(user_db.users_by_id.values()))
         assert stored_user.totp_secret is not None
-        assert stored_user.totp_secret.startswith(ENCRYPTED_TOTP_SECRET_PREFIX)
+        assert stored_user.totp_secret.startswith(f"{ENCRYPTED_TOTP_SECRET_PREFIX}v1:default:")
         assert stored_user.totp_secret != secret
 
         pending_response = await client.post(

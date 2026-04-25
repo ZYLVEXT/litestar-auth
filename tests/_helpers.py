@@ -357,5 +357,6 @@ class ExampleUser:
     is_verified: bool = False
     roles: list[str] = field(default_factory=list)
     totp_secret: str | None = None
+    recovery_codes_hashes: list[str] | None = None
     login_hint: str = ""
     bio: str = ""

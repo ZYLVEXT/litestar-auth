@@ -33,6 +33,7 @@ def create_provider_oauth_controller[UP: UserProtocol[Any], ID](  # noqa: PLR091
     oauth_client_class: str | None = None,
     oauth_client_kwargs: Mapping[str, object] | None = None,
     redirect_base_url: str,
+    oauth_flow_cookie_secret: str,
     auth_path: str = "/auth",
     path: str | None = None,
     cookie_secure: bool = True,
@@ -45,7 +46,11 @@ def create_provider_oauth_controller[UP: UserProtocol[Any], ID](  # noqa: PLR091
     The authorize endpoint uses only server-configured ``oauth_scopes``. Runtime
     scope-query overrides are rejected. ``redirect_base_url`` must use a
     non-loopback ``https://`` origin; the manual controller API does not expose
-    a debug or testing override for insecure callback origins.
+    a debug or testing override for insecure callback origins. The generated
+    flow encrypts transient state + PKCE verifier material with
+    ``oauth_flow_cookie_secret`` and enforces RFC 7636 PKCE S256, so manual
+    clients must accept ``code_challenge`` / ``code_challenge_method`` on
+    authorization and ``code_verifier`` on token exchange.
 
     Returns:
         Generated controller class mounted under the provider-specific path.
@@ -66,6 +71,7 @@ def create_provider_oauth_controller[UP: UserProtocol[Any], ID](  # noqa: PLR091
         user_manager=user_manager,
         oauth_client_adapter=oauth_client_adapter,
         redirect_base_url=redirect_base_url,
+        oauth_flow_cookie_secret=oauth_flow_cookie_secret,
         path=resolved_path,
         cookie_secure=cookie_secure,
         oauth_scopes=oauth_scopes,

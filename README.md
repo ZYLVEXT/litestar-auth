@@ -108,6 +108,51 @@ app = Litestar(route_handlers=[protected], plugins=[LitestarAuth(config)])
 - Optional Redis denylist, rate limiting, OAuth login/account linking, and built-in TOTP support.
 - Typed public APIs and docs aimed at application developers rather than framework internals.
 
+## Payload examples
+
+Authenticated password rotation uses the dedicated change-password route instead of profile updates:
+
+<!-- litestar-auth:change-password-request -->
+```json
+{
+  "current_password": "current-password-123",
+  "new_password": "new-password-12345"
+}
+```
+
+TOTP recovery codes are returned once, stored only as hashes, and can be used through the same
+client-bound pending-token verification flow as ordinary TOTP codes:
+
+<!-- litestar-auth:totp-confirm-enable-response -->
+```json
+{
+  "enabled": true,
+  "recovery_codes": ["0123456789abcdef0123456789ab"]
+}
+```
+
+<!-- litestar-auth:totp-regenerate-recovery-codes-request -->
+```json
+{
+  "current_password": "current-password-123"
+}
+```
+
+<!-- litestar-auth:totp-recovery-codes-response -->
+```json
+{
+  "recovery_codes": ["abcdef0123456789abcdef012345"]
+}
+```
+
+<!-- litestar-auth:totp-verify-request-recovery-code -->
+```json
+{
+  "pending_token": "pending-token",
+  "code": "abcdef0123456789abcdef012345"
+}
+```
+
 ## Install
 
 ```bash

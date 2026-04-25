@@ -14,12 +14,13 @@ import msgspec
 import pytest
 
 import litestar_auth.config as config_module
+from litestar_auth._jwt_headers import jwt_encode_headers
 from litestar_auth.config import MAX_PASSWORD_LENGTH, require_password_length
 from litestar_auth.exceptions import InvalidResetPasswordTokenError, InvalidVerifyTokenError
 from litestar_auth.manager import RESET_PASSWORD_TOKEN_AUDIENCE
 from litestar_auth.manager import logger as manager_logger
 from litestar_auth.password import PasswordHelper
-from litestar_auth.schemas import UserCreate, UserPasswordField, UserUpdate
+from litestar_auth.schemas import AdminUserUpdate, UserCreate, UserPasswordField
 from litestar_auth.totp import verify_totp
 from tests.unit.test_manager import TrackingUserManager, _build_user
 
@@ -99,6 +100,7 @@ async def test_manager_verify_validates_audience(
         _full_claims(sub=str(user.id), aud=audience),
         manager.verification_token_secret.get_secret_value(),
         algorithm="HS256",
+        headers=jwt_encode_headers(),
     )
     if should_pass:
         result = await manager.verify(token)
@@ -157,7 +159,7 @@ def test_password_length_exports_share_config_implementation() -> None:
     assert require_password_length.__kwdefaults__ == config_module.require_password_length.__kwdefaults__
 
 
-@pytest.mark.parametrize("schema_type", [UserCreate, UserUpdate, CustomRegistrationSchema])
+@pytest.mark.parametrize("schema_type", [UserCreate, AdminUserUpdate, CustomRegistrationSchema])
 def test_default_password_validator_matches_registration_schema_bounds(
     schema_type: type[msgspec.Struct],
 ) -> None:
@@ -198,6 +200,7 @@ async def test_reset_password_rejects_missing_or_invalid_fingerprint_claim(
         _full_claims(sub=str(user.id), aud=RESET_PASSWORD_TOKEN_AUDIENCE, **payload),
         manager.reset_password_token_secret.get_secret_value(),
         algorithm="HS256",
+        headers=jwt_encode_headers(),
     )
 
     with (
@@ -228,6 +231,7 @@ async def test_reset_password_rejects_mismatched_fingerprint(caplog: pytest.LogC
         ),
         manager.reset_password_token_secret.get_secret_value(),
         algorithm="HS256",
+        headers=jwt_encode_headers(),
     )
 
     with (
@@ -259,6 +263,7 @@ async def test_reset_password_accepts_matching_fingerprint() -> None:
         ),
         manager.reset_password_token_secret.get_secret_value(),
         algorithm="HS256",
+        headers=jwt_encode_headers(),
     )
 
     result = await manager.reset_password(token, "new-password")

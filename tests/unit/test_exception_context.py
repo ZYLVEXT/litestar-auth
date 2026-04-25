@@ -43,7 +43,7 @@ def test_user_already_exists_error_context_contract() -> None:
     assert error.identifier_type == "email"
     assert error.identifier_value == "user@example.com"
     assert str(error) == UserAlreadyExistsError.default_message
-    assert error.code == ErrorCode.REGISTER_USER_ALREADY_EXISTS
+    assert error.code == ErrorCode.USER_ALREADY_EXISTS
 
 
 @pytest.mark.parametrize(

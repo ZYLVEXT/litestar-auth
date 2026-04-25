@@ -68,11 +68,34 @@ class TotpEnableRequest(msgspec.Struct):
     password: schema_fields.PasswordField
 
 
+class TotpRegenerateRecoveryCodesRequest(msgspec.Struct):
+    """Step-up payload for rotating TOTP recovery codes.
+
+    Required only when ``totp_enable_requires_password=True``. When that
+    policy is disabled, the regenerate route accepts no request body.
+    """
+
+    current_password: schema_fields.PasswordField
+
+
+class TotpRecoveryCodesResponse(msgspec.Struct):
+    """Response containing one-time plaintext TOTP recovery codes.
+
+    The values are returned only from confirm-enable or regenerate responses.
+    Storage keeps only hashed values in the user model.
+    """
+
+    recovery_codes: tuple[str, ...]
+
+
 class TotpVerifyRequest(msgspec.Struct):
-    """Payload for completing 2FA login verification."""
+    """Payload for completing 2FA login verification.
+
+    ``code`` accepts either a current TOTP code or an unused recovery code.
+    """
 
     pending_token: schema_fields.LongLivedTokenField
-    code: schema_fields.TotpCodeField
+    code: schema_fields.TotpVerificationCodeField
 
 
 class TotpConfirmEnableRequest(msgspec.Struct):
@@ -83,15 +106,23 @@ class TotpConfirmEnableRequest(msgspec.Struct):
 
 
 class TotpConfirmEnableResponse(msgspec.Struct):
-    """Response returned when 2FA is successfully confirmed and persisted."""
+    """Response returned when 2FA is successfully confirmed and persisted.
+
+    Recovery codes are returned only in this response and should be shown once.
+    The library persists only hashed recovery-code values.
+    """
 
     enabled: bool
+    recovery_codes: tuple[str, ...]
 
 
 class TotpDisableRequest(msgspec.Struct):
-    """Payload for disabling 2FA."""
+    """Payload for disabling 2FA.
 
-    code: schema_fields.TotpCodeField
+    ``code`` accepts either a current TOTP code or an unused recovery code.
+    """
+
+    code: schema_fields.TotpVerificationCodeField
 
 
 __all__ = (
@@ -105,6 +136,8 @@ __all__ = (
     "TotpDisableRequest",
     "TotpEnableRequest",
     "TotpEnableResponse",
+    "TotpRecoveryCodesResponse",
+    "TotpRegenerateRecoveryCodesRequest",
     "TotpVerifyRequest",
     "VerifyToken",
 )

@@ -76,6 +76,12 @@ Role guards normalize configured role names with trim, lowercase, deduplicate, a
 sort semantics before matching against the authenticated user's normalized flat role
 membership.
 
+Internally, `has_any_role()` and `has_all_roles()` compare normalized role strings
+with fixed-work loops rather than set-intersection or subset short-circuit
+predicates. This preserves the same flat-role behavior while documenting the
+library's defense-in-depth posture; it is not a cryptographic constant-time
+guarantee for the full Python runtime or request path.
+
 Invalid guard definitions fail fast during application setup instead of waiting for
 the first request:
 

@@ -23,6 +23,7 @@ from tests.integration.test_orchestrator import (
 )
 
 pytestmark = pytest.mark.unit
+OAUTH_FLOW_COOKIE_SECRET = "oauth-flow-cookie-secret-1234567890"
 
 if TYPE_CHECKING:
     from litestar_auth.config import OAuthProviderConfig
@@ -61,6 +62,7 @@ def test_oauth_redirect_localhost_fails_closed_in_production() -> None:
     config.oauth_config = OAuthConfig(
         oauth_providers=[_oauth_provider(name="example", client=object())],
         oauth_token_encryption_key="YWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWE=",
+        oauth_flow_cookie_secret=OAUTH_FLOW_COOKIE_SECRET,
         oauth_redirect_base_url="http://localhost/auth",
     )
     plugin = LitestarAuth(config)
@@ -75,6 +77,7 @@ def test_oauth_redirect_localhost_is_allowed_in_debug() -> None:
     config.oauth_config = OAuthConfig(
         oauth_providers=[_oauth_provider(name="example", client=object())],
         oauth_token_encryption_key="YWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWE=",
+        oauth_flow_cookie_secret=OAUTH_FLOW_COOKIE_SECRET,
         oauth_redirect_base_url="http://localhost/auth",
     )
     plugin = LitestarAuth(config)

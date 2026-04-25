@@ -45,6 +45,7 @@ from litestar_auth import (
     CookieTransport,
     DatabaseTokenAuthConfig,
     ErrorCode,
+    FernetKeyringConfig,
     GuardedUserProtocol,
     LitestarAuth,
     LitestarAuthConfig,
@@ -132,7 +133,7 @@ from litestar_auth.ratelimit import (
     InMemoryRateLimiter,
     RedisRateLimiter,
 )
-from litestar_auth.schemas import UserCreate, UserRead, UserUpdate
+from litestar_auth.schemas import AdminUserUpdate, ChangePasswordRequest, UserCreate, UserRead, UserUpdate
 from litestar_auth.totp import (
     InMemoryTotpEnrollmentStore,
     InMemoryUsedTotpCodeStore,
@@ -166,6 +167,8 @@ AUTH_RATE_LIMIT_VERIFICATION_SLOT_IDENTIFIERS = frozenset(
     {AuthRateLimitSlot.VERIFY_TOKEN, AuthRateLimitSlot.REQUEST_VERIFY_TOKEN},
 )
 REMOVED_ROOT_PAYLOAD_EXPORTS = (
+    "AdminUserUpdate",
+    "ChangePasswordRequest",
     "ForgotPassword",
     "LoginCredentials",
     "RefreshTokenRequest",
@@ -194,7 +197,7 @@ REMOVED_CONTROLLERS_PAYLOAD_EXPORTS = (
     "TotpVerifyRequest",
     "VerifyToken",
 )
-REMOVED_PAYLOAD_SCHEMA_EXPORTS = ("UserCreate", "UserRead", "UserUpdate")
+REMOVED_PAYLOAD_SCHEMA_EXPORTS = ("AdminUserUpdate", "ChangePasswordRequest", "UserCreate", "UserRead", "UserUpdate")
 REMOVED_ROOT_SECONDARY_EXPORTS = (
     "AccessToken",
     "AuthRateLimitConfig",
@@ -324,6 +327,7 @@ def test_root_package_reexports_public_api() -> None:
     assert BearerTransport is not None
     assert CookieTransport is not None
     assert DatabaseTokenAuthConfig is not None
+    assert FernetKeyringConfig is not None
     assert OAuthConfig is not None
     assert OAuthProviderConfig is not None
     assert TotpConfig is not None
@@ -379,21 +383,32 @@ def test_public_user_schema_reuse_surface_stays_importable() -> None:
     user_create_email_meta = _field_meta(UserCreate, "email")
     user_update_email_meta = _field_meta(UserUpdate, "email")
     user_create_meta = _field_meta(UserCreate, "password")
-    user_update_meta = _field_meta(UserUpdate, "password")
     user_read_roles_annotation = get_type_hints(UserRead, include_extras=True)["roles"]
     user_update_roles_annotation = get_type_hints(UserUpdate, include_extras=True)["roles"]
     user_create_email_annotation = get_type_hints(UserCreate, include_extras=True)["email"]
     user_update_email_annotation = get_type_hints(UserUpdate, include_extras=True)["email"]
     user_create_annotation = get_type_hints(UserCreate, include_extras=True)["password"]
-    user_update_annotation = get_type_hints(UserUpdate, include_extras=True)["password"]
+    user_update_hints = get_type_hints(UserUpdate, include_extras=True)
     email_field_value = getattr(schemas_module.UserEmailField, "__value__", schemas_module.UserEmailField)
     password_field_value = getattr(schemas_module.UserPasswordField, "__value__", schemas_module.UserPasswordField)
 
-    assert schemas_module.__all__ == ("UserCreate", "UserEmailField", "UserPasswordField", "UserRead", "UserUpdate")
+    assert schemas_module.__all__ == (
+        "AdminUserUpdate",
+        "ChangePasswordRequest",
+        "UserCreate",
+        "UserEmailField",
+        "UserPasswordField",
+        "UserRead",
+        "UserUpdate",
+    )
+    assert schemas_module.AdminUserUpdate is AdminUserUpdate
+    assert schemas_module.ChangePasswordRequest is ChangePasswordRequest
     assert schemas_module.UserEmailField is not None
     assert schemas_module.UserEmailField.__module__ == "litestar_auth.schemas"
     assert schemas_module.UserPasswordField is not None
     assert schemas_module.UserPasswordField.__module__ == "litestar_auth.schemas"
+    assert not hasattr(litestar_auth, "AdminUserUpdate")
+    assert not hasattr(litestar_auth, "ChangePasswordRequest")
     assert not hasattr(litestar_auth, "UserEmailField")
     assert not hasattr(litestar_auth, "UserPasswordField")
     assert getattr(user_create_email_annotation, "__value__", user_create_email_annotation) == email_field_value
@@ -403,11 +418,7 @@ def test_public_user_schema_reuse_surface_stays_importable() -> None:
     )
     assert get_args(user_update_email_annotation)[1] is type(None)
     assert getattr(user_create_annotation, "__value__", user_create_annotation) == password_field_value
-    assert (
-        getattr(get_args(user_update_annotation)[0], "__value__", get_args(user_update_annotation)[0])
-        == password_field_value
-    )
-    assert get_args(user_update_annotation)[1] is type(None)
+    assert "password" not in user_update_hints
     assert user_read_roles_annotation == list[str]
     assert get_args(user_update_roles_annotation)[0] == list[str]
     assert get_args(user_update_roles_annotation)[1] is type(None)
@@ -416,10 +427,59 @@ def test_public_user_schema_reuse_surface_stays_importable() -> None:
     assert user_create_email_meta.pattern == EMAIL_PATTERN
     assert user_update_email_meta.pattern == EMAIL_PATTERN
     assert user_create_meta.min_length == config_module.DEFAULT_MINIMUM_PASSWORD_LENGTH
-    assert user_update_meta.min_length == config_module.DEFAULT_MINIMUM_PASSWORD_LENGTH
     assert user_create_meta.max_length == config_module.MAX_PASSWORD_LENGTH
-    assert user_update_meta.max_length == config_module.MAX_PASSWORD_LENGTH
-    assert require_password_length is config_module.require_password_length
+    assert (
+        importlib.import_module("litestar_auth.config").require_password_length is config_module.require_password_length
+    )
+
+
+def test_admin_user_update_schema_reuse_surface_stays_importable() -> None:
+    """AdminUserUpdate mirrors the current public update helper contracts."""
+    admin_user_update_email_meta = _field_meta(AdminUserUpdate, "email")
+    admin_user_update_meta = _field_meta(AdminUserUpdate, "password")
+    admin_user_update_roles_annotation = get_type_hints(AdminUserUpdate, include_extras=True)["roles"]
+    admin_user_update_email_annotation = get_type_hints(AdminUserUpdate, include_extras=True)["email"]
+    admin_user_update_annotation = get_type_hints(AdminUserUpdate, include_extras=True)["password"]
+    email_field_value = getattr(schemas_module.UserEmailField, "__value__", schemas_module.UserEmailField)
+    password_field_value = getattr(schemas_module.UserPasswordField, "__value__", schemas_module.UserPasswordField)
+
+    assert (
+        getattr(
+            get_args(admin_user_update_email_annotation)[0],
+            "__value__",
+            get_args(admin_user_update_email_annotation)[0],
+        )
+        == email_field_value
+    )
+    assert get_args(admin_user_update_email_annotation)[1] is type(None)
+    assert getattr(
+        get_args(admin_user_update_annotation)[0],
+        "__value__",
+        get_args(admin_user_update_annotation)[0],
+    ) == (password_field_value)
+    assert get_args(admin_user_update_annotation)[1] is type(None)
+    assert get_args(admin_user_update_roles_annotation)[0] == list[str]
+    assert get_args(admin_user_update_roles_annotation)[1] is type(None)
+    assert admin_user_update_email_meta.max_length == EMAIL_MAX_LENGTH
+    assert admin_user_update_email_meta.pattern == EMAIL_PATTERN
+    assert admin_user_update_meta.min_length == config_module.DEFAULT_MINIMUM_PASSWORD_LENGTH
+    assert admin_user_update_meta.max_length == config_module.MAX_PASSWORD_LENGTH
+
+
+def test_change_password_request_reuse_surface_stays_importable() -> None:
+    """ChangePasswordRequest reuses the shared password metadata on both fields."""
+    current_password_meta = _field_meta(ChangePasswordRequest, "current_password")
+    new_password_meta = _field_meta(ChangePasswordRequest, "new_password")
+    current_password_annotation = get_type_hints(ChangePasswordRequest, include_extras=True)["current_password"]
+    new_password_annotation = get_type_hints(ChangePasswordRequest, include_extras=True)["new_password"]
+    password_field_value = getattr(schemas_module.UserPasswordField, "__value__", schemas_module.UserPasswordField)
+
+    assert getattr(current_password_annotation, "__value__", current_password_annotation) == password_field_value
+    assert getattr(new_password_annotation, "__value__", new_password_annotation) == password_field_value
+    assert current_password_meta.min_length == config_module.DEFAULT_MINIMUM_PASSWORD_LENGTH
+    assert current_password_meta.max_length == config_module.MAX_PASSWORD_LENGTH
+    assert new_password_meta.min_length == config_module.DEFAULT_MINIMUM_PASSWORD_LENGTH
+    assert new_password_meta.max_length == config_module.MAX_PASSWORD_LENGTH
 
 
 def test_models_and_strategy_modules_expose_documented_orm_setup_surface() -> None:
@@ -513,7 +573,7 @@ def test_controller_factories_and_payloads_stay_canonical() -> None:
     assert VerifyToken.__struct_fields__ == ("token",)
     assert RequestVerifyToken.__struct_fields__ == ("email",)
     assert TotpConfirmEnableRequest.__struct_fields__ == ("enrollment_token", "code")
-    assert TotpConfirmEnableResponse.__struct_fields__ == ("enabled",)
+    assert TotpConfirmEnableResponse.__struct_fields__ == ("enabled", "recovery_codes")
     assert TotpEnableResponse.__struct_fields__ == ("secret", "uri", "enrollment_token")
     assert TotpVerifyRequest.__struct_fields__ == ("pending_token", "code")
     assert TotpDisableRequest.__struct_fields__ == ("code",)
@@ -544,6 +604,7 @@ def test_root_package_does_not_reexport_payload_or_schema_structs() -> None:
     assert payloads_module.TotpEnableResponse is TotpEnableResponse
     assert payloads_module.TotpVerifyRequest is TotpVerifyRequest
     assert payloads_module.TotpDisableRequest is TotpDisableRequest
+    assert schemas_module.AdminUserUpdate is AdminUserUpdate
     assert schemas_module.UserCreate is UserCreate
     assert schemas_module.UserRead is UserRead
     assert schemas_module.UserUpdate is UserUpdate
@@ -637,9 +698,14 @@ def test_ratelimit_module_exposes_canonical_shared_backend_builder() -> None:
         scope="ip",
         namespace="totp-disable",
     )
+    assert config.totp_regenerate_recovery_codes == current_endpoint_class(
+        backend=totp_backend,
+        scope="ip",
+        namespace="totp-regenerate-recovery-codes",
+    )
 
 
-async def test_root_package_supports_documented_redis_migration_recipe_and_totp_replay_store(
+async def test_root_package_supports_documented_redis_migration_recipe_and_totp_replay_store(  # noqa: PLR0915
     monkeypatch: pytest.MonkeyPatch,
     async_fakeredis_factory: AsyncFakeRedisFactory,
 ) -> None:
@@ -694,6 +760,11 @@ async def test_root_package_supports_documented_redis_migration_recipe_and_totp_
         scope="ip",
         namespace="totp_disable",
     )
+    totp_regenerate_override = current_endpoint_class(
+        backend=totp_backend,
+        scope="ip",
+        namespace="totp_regenerate_recovery_codes",
+    )
     rate_limit_config = current_config_class.from_shared_backend(
         credential_backend,
         group_backends={"refresh": refresh_backend, "totp": totp_backend},
@@ -705,6 +776,7 @@ async def test_root_package_supports_documented_redis_migration_recipe_and_totp_
             current_slot_enum.TOTP_CONFIRM_ENABLE: totp_confirm_enable_override,
             current_slot_enum.TOTP_VERIFY: totp_verify_override,
             current_slot_enum.TOTP_DISABLE: totp_disable_override,
+            current_slot_enum.TOTP_REGENERATE_RECOVERY_CODES: totp_regenerate_override,
         },
     )
     used_tokens_store = RedisUsedTotpCodeStore(redis=totp_redis)
@@ -730,6 +802,7 @@ async def test_root_package_supports_documented_redis_migration_recipe_and_totp_
     assert rate_limit_config.forgot_password is forgot_password_override
     assert rate_limit_config.totp_verify is totp_verify_override
     assert rate_limit_config.totp_disable is totp_disable_override
+    assert rate_limit_config.totp_regenerate_recovery_codes is totp_regenerate_override
     assert rate_limit_config.verify_token is None
     assert rate_limit_config.request_verify_token is None
     assert totp_config.totp_pending_jti_store is pending_jti_store
@@ -863,6 +936,7 @@ def test_ratelimit_identifier_contract_stays_on_the_public_ratelimit_module() ->
     assert get_args(ratelimit_module.RateLimitScope.__value__) == ("ip", "ip_email")
     assert tuple(ratelimit_module.AuthRateLimitSlot) == (
         AuthRateLimitSlot.LOGIN,
+        AuthRateLimitSlot.CHANGE_PASSWORD,
         AuthRateLimitSlot.REFRESH,
         AuthRateLimitSlot.REGISTER,
         AuthRateLimitSlot.FORGOT_PASSWORD,
@@ -871,6 +945,7 @@ def test_ratelimit_identifier_contract_stays_on_the_public_ratelimit_module() ->
         AuthRateLimitSlot.TOTP_CONFIRM_ENABLE,
         AuthRateLimitSlot.TOTP_VERIFY,
         AuthRateLimitSlot.TOTP_DISABLE,
+        AuthRateLimitSlot.TOTP_REGENERATE_RECOVERY_CODES,
         AuthRateLimitSlot.VERIFY_TOKEN,
         AuthRateLimitSlot.REQUEST_VERIFY_TOKEN,
     )
@@ -933,6 +1008,8 @@ def test_payload_module_is_authoritative_boundary_without_controllers_package_re
         "TotpDisableRequest",
         "TotpEnableRequest",
         "TotpEnableResponse",
+        "TotpRecoveryCodesResponse",
+        "TotpRegenerateRecoveryCodesRequest",
         "TotpVerifyRequest",
         "VerifyToken",
     )
@@ -955,6 +1032,8 @@ def test_payload_module_is_authoritative_boundary_without_controllers_package_re
     for symbol in REMOVED_PAYLOAD_SCHEMA_EXPORTS:
         assert symbol not in payloads_module.__all__
         assert not hasattr(payloads_module, symbol)
+    assert schemas_module.AdminUserUpdate is AdminUserUpdate
+    assert schemas_module.ChangePasswordRequest is ChangePasswordRequest
     assert schemas_module.UserCreate is UserCreate
     assert schemas_module.UserRead is UserRead
     assert schemas_module.UserUpdate is UserUpdate
@@ -988,6 +1067,7 @@ def test_root_package_all_excludes_private_symbols() -> None:
         "CookieTransport",
         "DatabaseTokenAuthConfig",
         "ErrorCode",
+        "FernetKeyringConfig",
         "GuardedUserProtocol",
         "LitestarAuth",
         "LitestarAuthConfig",
@@ -1059,7 +1139,9 @@ def test_root_package_does_not_reexport_secondary_surfaces() -> None:
     assert SQLAlchemyUserDatabase is not None
     assert UserRead.__struct_fields__ == ("id", "email", "is_active", "is_verified", "roles")
     assert UserCreate.__struct_fields__ == ("email", "password")
-    assert UserUpdate.__struct_fields__ == ("password", "email", "is_active", "is_verified", "roles")
+    assert AdminUserUpdate.__struct_fields__ == ("password", "email", "is_active", "is_verified", "roles")
+    assert ChangePasswordRequest.__struct_fields__ == ("current_password", "new_password")
+    assert UserUpdate.__struct_fields__ == ("email", "is_active", "is_verified", "roles")
     assert callable(create_provider_oauth_controller)
     assert callable(create_oauth_associate_controller)
     assert callable(load_httpx_oauth_client)
@@ -1093,6 +1175,7 @@ def test_plugin_module_public_exports_no_compat_shims() -> None:
 
     assert plugin_module.__all__ == (
         "DatabaseTokenAuthConfig",
+        "FernetKeyringConfig",
         "LitestarAuth",
         "LitestarAuthConfig",
         "OAuthConfig",
@@ -1101,6 +1184,7 @@ def test_plugin_module_public_exports_no_compat_shims() -> None:
         "TotpConfig",
     )
     assert current_plugin_module.DatabaseTokenAuthConfig is current_root_module.DatabaseTokenAuthConfig
+    assert current_plugin_module.FernetKeyringConfig is current_root_module.FernetKeyringConfig
     assert current_plugin_module.LitestarAuthConfig is current_plugin_internals.LitestarAuthConfig
     assert current_plugin_module.StartupBackendTemplate.__module__ == "litestar_auth._plugin.config"
     assert not hasattr(current_root_module, "StartupBackendTemplate")

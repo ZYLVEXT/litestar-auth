@@ -18,6 +18,7 @@ from litestar_auth.authentication.strategy.redis import (
     RedisTokenStrategy,
 )
 from litestar_auth.exceptions import ConfigurationError
+from litestar_auth.ratelimit._helpers import _safe_key_part
 from tests._helpers import ExampleUser, cast_fakeredis
 
 pytestmark = pytest.mark.unit
@@ -142,9 +143,26 @@ def test_redis_strategy_initializes_custom_configuration(
         token_hash_secret=TOKEN_HASH_SECRET.encode(),
         token="token-custom",
     )
-    assert strategy._user_index_key("user-123") == "custom-prefix:user:user-123"
+    assert strategy._user_index_key("user-123") == f"custom-prefix:user:{_safe_key_part('user-123')}"
     assert strategy._decode_user_id(b"user-123") == "user-123"
     assert strategy._decode_user_id("user-123") == "user-123"
+
+
+def test_redis_strategy_user_index_key_hashes_subject_text(
+    monkeypatch: pytest.MonkeyPatch,
+    async_fakeredis: AsyncFakeRedis,
+) -> None:
+    """Per-user index keys hash raw subjects so delimiters cannot shape Redis keys."""
+    _disable_optional_import(monkeypatch)
+    strategy = RedisTokenStrategy[ExampleUser, UUID](
+        redis=cast_fakeredis(async_fakeredis, RedisClientProtocol),
+        token_hash_secret=TOKEN_HASH_SECRET,
+    )
+
+    index_key = strategy._user_index_key("tenant:admin")
+
+    assert index_key == f"{DEFAULT_KEY_PREFIX}user:{_safe_key_part('tenant:admin')}"
+    assert "tenant:admin" not in index_key
 
 
 async def test_redis_strategy_write_token_persists_token_and_updates_user_index(
@@ -165,7 +183,7 @@ async def test_redis_strategy_write_token_persists_token_and_updates_user_index(
     token = await strategy.write_token(user)
 
     token_key = _token_key(token)
-    index_key = f"{DEFAULT_KEY_PREFIX}user:{user.id}"
+    index_key = strategy._user_index_key(str(user.id))
     assert token == "token-write"
     assert await async_fakeredis.get(token_key) == str(user.id).encode()
     assert await async_fakeredis.smembers(index_key) == {token_key.encode()}  # ty: ignore[invalid-await]
@@ -192,7 +210,7 @@ async def test_redis_strategy_write_token_enforces_minimum_ttl(
     await strategy.write_token(user)
 
     token_key = _token_key("token-min-ttl")
-    index_key = f"{DEFAULT_KEY_PREFIX}user:{user.id}"
+    index_key = strategy._user_index_key(str(user.id))
     assert recording_redis.setex_calls == [(token_key, MINIMUM_TTL_SECONDS, str(user.id))]
     assert recording_redis.expire_calls == [(index_key, MINIMUM_TTL_SECONDS)]
 
@@ -275,13 +293,13 @@ async def test_redis_strategy_destroy_token_removes_token_key_and_user_index_ent
     user = ExampleUser(id=uuid4())
     token = "token-destroy"
     token_key = _token_key(token)
-    index_key = f"{DEFAULT_KEY_PREFIX}user:{user.id}"
-    assert await async_fakeredis.set(token_key, str(user.id)) is True
-    assert await async_fakeredis.sadd(index_key, token_key) == 1  # ty: ignore[invalid-await]
     strategy = RedisTokenStrategy[ExampleUser, UUID](
         redis=cast_fakeredis(async_fakeredis, RedisClientProtocol),
         token_hash_secret=TOKEN_HASH_SECRET,
     )
+    index_key = strategy._user_index_key(str(user.id))
+    assert await async_fakeredis.set(token_key, str(user.id)) is True
+    assert await async_fakeredis.sadd(index_key, token_key) == 1  # ty: ignore[invalid-await]
 
     await strategy.destroy_token(token, user)
 
@@ -296,16 +314,16 @@ async def test_redis_strategy_invalidate_all_tokens_returns_after_index_delete(
     """invalidate_all_tokens() should delete only keys present in the user index."""
     _disable_optional_import(monkeypatch)
     user = ExampleUser(id=uuid4())
-    index_key = f"{DEFAULT_KEY_PREFIX}user:{user.id}"
     token_key = _token_key("token-index-only")
     extra_key = _token_key("token-outside-index")
-    assert await async_fakeredis.set(token_key, str(user.id)) is True
-    assert await async_fakeredis.set(extra_key, str(user.id)) is True
-    assert await async_fakeredis.sadd(index_key, token_key) == 1  # ty: ignore[invalid-await]
     strategy = RedisTokenStrategy[ExampleUser, UUID](
         redis=cast_fakeredis(async_fakeredis, RedisClientProtocol),
         token_hash_secret=TOKEN_HASH_SECRET,
     )
+    index_key = strategy._user_index_key(str(user.id))
+    assert await async_fakeredis.set(token_key, str(user.id)) is True
+    assert await async_fakeredis.set(extra_key, str(user.id)) is True
+    assert await async_fakeredis.sadd(index_key, token_key) == 1  # ty: ignore[invalid-await]
 
     await strategy.invalidate_all_tokens(user)
 

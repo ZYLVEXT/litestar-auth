@@ -1,9 +1,11 @@
 """Public msgspec schemas and schema helpers for litestar-auth user payloads.
 
 Import ``UserEmailField`` and ``UserPasswordField`` from this module when
-app-owned ``msgspec.Struct`` user create/update schemas should share the same
-email and password metadata as the built-in ``UserCreate`` and ``UserUpdate``
-payloads.
+app-owned ``msgspec.Struct`` user create, admin update, or change-password
+schemas should share the same email and password metadata as the built-in
+payloads. Self-service ``UserUpdate`` does not accept password fields; use the
+dedicated ``ChangePasswordRequest`` contract for authenticated password
+rotation.
 """
 
 from __future__ import annotations
@@ -43,7 +45,27 @@ class UserCreate(msgspec.Struct, forbid_unknown_fields=True):
 
 
 class UserUpdate(msgspec.Struct, omit_defaults=True, forbid_unknown_fields=True):
-    """Partial user update payload."""
+    """Self-service profile update payload.
+
+    The built-in ``PATCH /users/me`` schema excludes ``password``. Authenticated
+    users rotate credentials through ``ChangePasswordRequest`` on
+    ``POST /users/me/change-password`` so the current password can be
+    re-verified first.
+    """
+
+    email: UserEmailField | None = None
+    is_active: bool | None = None
+    is_verified: bool | None = None
+    roles: list[str] | None = None
+
+
+class AdminUserUpdate(msgspec.Struct, omit_defaults=True, forbid_unknown_fields=True):
+    """Privileged admin update payload.
+
+    Admin writes may include ``password`` for operator-initiated credential
+    rotation. This schema is used for ``PATCH /users/{user_id}``, not for
+    self-service ``PATCH /users/me`` requests.
+    """
 
     password: UserPasswordField | None = None
     email: UserEmailField | None = None
@@ -52,4 +74,24 @@ class UserUpdate(msgspec.Struct, omit_defaults=True, forbid_unknown_fields=True)
     roles: list[str] | None = None
 
 
-__all__ = ("UserCreate", "UserEmailField", "UserPasswordField", "UserRead", "UserUpdate")
+class ChangePasswordRequest(msgspec.Struct, forbid_unknown_fields=True):
+    """Self-service password-rotation payload.
+
+    ``POST /users/me/change-password`` requires the current password plus the
+    replacement password. The controller re-verifies the current credential
+    before delegating the new password to the manager update lifecycle.
+    """
+
+    current_password: UserPasswordField
+    new_password: UserPasswordField
+
+
+__all__ = (
+    "AdminUserUpdate",
+    "ChangePasswordRequest",
+    "UserCreate",
+    "UserEmailField",
+    "UserPasswordField",
+    "UserRead",
+    "UserUpdate",
+)

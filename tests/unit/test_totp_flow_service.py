@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import importlib
 import logging
 from datetime import UTC, datetime, timedelta, tzinfo
@@ -14,17 +15,24 @@ import pytest
 
 import litestar_auth.totp_flow as totp_flow_module
 from litestar_auth.exceptions import TokenError
+from litestar_auth.password import PasswordHelper
 from litestar_auth.totp import SecurityWarning
 from litestar_auth.totp_flow import (
     TOTP_PENDING_AUDIENCE,
+    PendingTotpClientBinding,
     PendingTotpLogin,
     TotpLoginFlowService,
+    _fingerprint_client_binding_value,
 )
 from tests._helpers import ExampleUser
 
 pytestmark = pytest.mark.unit
 
 TOTP_PENDING_SECRET = "test-totp-pending-secret-thirty-two!"
+CLIENT_BINDING = PendingTotpClientBinding(
+    client_ip_fingerprint="client-ip-fingerprint",
+    user_agent_fingerprint="user-agent-fingerprint",
+)
 
 
 def test_totp_flow_module_executes_under_coverage() -> None:
@@ -35,12 +43,32 @@ def test_totp_flow_module_executes_under_coverage() -> None:
     assert reloaded_module.PendingTotpLogin.__name__ == PendingTotpLogin.__name__
 
 
-def _build_manager(*, user: ExampleUser | None = None, read_secret: str | None = "plain-secret") -> AsyncMock:
+def _build_manager(
+    *,
+    user: ExampleUser | None = None,
+    read_secret: str | None = "plain-secret",
+    recovery_code_hashes: tuple[str, ...] = (),
+) -> AsyncMock:
     """Return an async mock manager with the TOTP-flow contract attached."""
     manager = AsyncMock()
     manager.get.return_value = user
     manager.read_totp_secret.return_value = read_secret
+    manager.read_recovery_code_hashes.return_value = recovery_code_hashes
+    manager.consume_recovery_code_hash.return_value = True
     return manager
+
+
+class _RecordingPasswordHelper(PasswordHelper):
+    """Password-helper stub that records every recovery-code hash verification."""
+
+    def __init__(self, *, matching_hash: str | None) -> None:
+        self.matching_hash = matching_hash
+        self.seen_hashes: list[str] = []
+
+    def verify(self, password: str, hashed: str) -> bool:
+        del password
+        self.seen_hashes.append(hashed)
+        return hashed == self.matching_hash
 
 
 def _pending_payload(
@@ -63,7 +91,18 @@ def _pending_payload(
         "nbf": issued_at,
         "exp": exp if exp is not None else issued_at + timedelta(minutes=5),
         "jti": jti,
+        "cip": CLIENT_BINDING.client_ip_fingerprint,
+        "uaf": CLIENT_BINDING.user_agent_fingerprint,
     }
+
+
+async def _issue_pending_token(service: TotpLoginFlowService[ExampleUser, UUID], user: ExampleUser) -> str | None:
+    """Issue a pending token with the unit-test client binding.
+
+    Returns:
+        The encoded pending token, or ``None`` when TOTP is not enabled.
+    """
+    return await service.issue_pending_token(user, client_binding=CLIENT_BINDING)
 
 
 async def test_issue_pending_token_returns_none_when_totp_is_not_enabled() -> None:
@@ -75,7 +114,7 @@ async def test_issue_pending_token_returns_none_when_totp_is_not_enabled() -> No
         totp_pending_secret=TOTP_PENDING_SECRET,
     )
 
-    pending_token = await service.issue_pending_token(user)
+    pending_token = await _issue_pending_token(service, user)
 
     assert pending_token is None
 
@@ -89,12 +128,93 @@ async def test_issue_pending_token_mints_expected_jwt_claims() -> None:
         totp_pending_secret=TOTP_PENDING_SECRET,
     )
 
-    pending_token = await service.issue_pending_token(user)
+    pending_token = await _issue_pending_token(service, user)
 
     assert isinstance(pending_token, str)
     payload = jwt.decode(pending_token, TOTP_PENDING_SECRET, algorithms=["HS256"], audience=TOTP_PENDING_AUDIENCE)
     assert payload["sub"] == str(user.id)
     assert isinstance(payload["jti"], str)
+    assert payload["cip"] == CLIENT_BINDING.client_ip_fingerprint
+    assert payload["uaf"] == CLIENT_BINDING.user_agent_fingerprint
+
+
+def test_fingerprint_client_binding_value_returns_sha256_hex_digest() -> None:
+    """Client-binding values are hashed before being written to pending tokens."""
+    assert _fingerprint_client_binding_value("203.0.113.10") == hashlib.sha256(b"203.0.113.10").hexdigest()
+
+
+async def test_issue_pending_token_omits_binding_claims_when_disabled() -> None:
+    """The opt-out mode does not write empty binding claims into pending tokens."""
+    user = ExampleUser(id=uuid4(), email="user@example.com")
+    manager = _build_manager(user=user)
+    service = TotpLoginFlowService[ExampleUser, UUID](
+        user_manager=manager,
+        totp_pending_secret=TOTP_PENDING_SECRET,
+        require_client_binding=False,
+    )
+
+    pending_token = await service.issue_pending_token(user)
+
+    assert isinstance(pending_token, str)
+    payload = jwt.decode(pending_token, TOTP_PENDING_SECRET, algorithms=["HS256"], audience=TOTP_PENDING_AUDIENCE)
+    assert "cip" not in payload
+    assert "uaf" not in payload
+
+
+async def test_issue_pending_token_requires_client_binding_by_default() -> None:
+    """The service fails closed if the caller omits required client-binding evidence."""
+    user = ExampleUser(id=uuid4(), email="user@example.com")
+    manager = _build_manager(user=user)
+    service = TotpLoginFlowService[ExampleUser, UUID](
+        user_manager=manager,
+        totp_pending_secret=TOTP_PENDING_SECRET,
+    )
+
+    with pytest.raises(totp_flow_module.InvalidTotpPendingTokenError):
+        await service.issue_pending_token(user)
+
+
+async def test_authenticate_pending_login_rejects_mismatched_client_binding() -> None:
+    """Pending-token client-binding mismatches use the invalid pending-token signal."""
+    user = ExampleUser(id=uuid4(), email="user@example.com")
+    manager = _build_manager(user=user)
+    service = TotpLoginFlowService[ExampleUser, UUID](
+        user_manager=manager,
+        totp_pending_secret=TOTP_PENDING_SECRET,
+        id_parser=UUID,
+    )
+    pending_token = await _issue_pending_token(service, user)
+    assert pending_token is not None
+
+    with pytest.raises(totp_flow_module.InvalidTotpPendingTokenError):
+        await service.authenticate_pending_login(
+            client_binding=PendingTotpClientBinding(
+                client_ip_fingerprint="other-client-ip",
+                user_agent_fingerprint=CLIENT_BINDING.user_agent_fingerprint,
+            ),
+            pending_token=pending_token,
+            code="123456",
+        )
+
+    manager.get.assert_not_awaited()
+
+
+async def test_resolve_pending_login_rejects_missing_current_client_binding() -> None:
+    """A bound pending token cannot be resolved without current client-binding evidence."""
+    user = ExampleUser(id=uuid4(), email="user@example.com")
+    manager = _build_manager(user=user)
+    service = TotpLoginFlowService[ExampleUser, UUID](
+        user_manager=manager,
+        totp_pending_secret=TOTP_PENDING_SECRET,
+        id_parser=UUID,
+    )
+    pending_token = await _issue_pending_token(service, user)
+    assert pending_token is not None
+
+    with pytest.raises(totp_flow_module.InvalidTotpPendingTokenError):
+        await service._resolve_pending_login(pending_token)
+
+    manager.get.assert_not_awaited()
 
 
 async def test_authenticate_pending_login_returns_user_and_denies_verified_jti() -> None:
@@ -112,7 +232,7 @@ async def test_authenticate_pending_login_returns_user_and_denies_verified_jti()
         pending_jti_store=pending_jti_store,
         id_parser=UUID,
     )
-    pending_token = await service.issue_pending_token(user)
+    pending_token = await _issue_pending_token(service, user)
     assert pending_token is not None
 
     async def validate_user(current_user: ExampleUser) -> None:
@@ -123,6 +243,7 @@ async def test_authenticate_pending_login_returns_user_and_denies_verified_jti()
     with pytest.MonkeyPatch.context() as monkeypatch:
         monkeypatch.setattr("litestar_auth.totp_flow.verify_totp_with_store", verify_totp_with_store)
         verified_user = await service.authenticate_pending_login(
+            client_binding=CLIENT_BINDING,
             pending_token=pending_token,
             code="123456",
             validate_user=validate_user,
@@ -156,11 +277,15 @@ async def test_authenticate_pending_login_rejects_replayed_jti() -> None:
         pending_jti_store=pending_jti_store,
         id_parser=UUID,
     )
-    pending_token = await service.issue_pending_token(user)
+    pending_token = await _issue_pending_token(service, user)
     assert pending_token is not None
 
     with pytest.raises(totp_flow_module.InvalidTotpPendingTokenError):
-        await service.authenticate_pending_login(pending_token=pending_token, code="123456")
+        await service.authenticate_pending_login(
+            client_binding=CLIENT_BINDING,
+            pending_token=pending_token,
+            code="123456",
+        )
 
 
 async def test_authenticate_pending_login_rejects_invalid_totp_code() -> None:
@@ -172,13 +297,102 @@ async def test_authenticate_pending_login_rejects_invalid_totp_code() -> None:
         totp_pending_secret=TOTP_PENDING_SECRET,
         id_parser=UUID,
     )
-    pending_token = await service.issue_pending_token(user)
+    pending_token = await _issue_pending_token(service, user)
     assert pending_token is not None
 
     with pytest.MonkeyPatch.context() as monkeypatch:
         monkeypatch.setattr("litestar_auth.totp_flow.verify_totp_with_store", AsyncMock(return_value=False))
         with pytest.raises(totp_flow_module.InvalidTotpCodeError):
-            await service.authenticate_pending_login(pending_token=pending_token, code="000000")
+            await service.authenticate_pending_login(
+                client_binding=CLIENT_BINDING,
+                pending_token=pending_token,
+                code="000000",
+            )
+
+
+async def test_authenticate_pending_login_accepts_matching_recovery_code_after_totp_failure() -> None:
+    """A valid unused recovery code completes the pending login after TOTP rejects the code."""
+    user = ExampleUser(id=uuid4(), email="user@example.com")
+    manager = _build_manager(user=user, recovery_code_hashes=("hash-1", "hash-2", "hash-3"))
+    pending_jti_store = AsyncMock()
+    pending_jti_store.is_denied.return_value = False
+    pending_jti_store.deny.return_value = True
+    service = TotpLoginFlowService[ExampleUser, UUID](
+        user_manager=manager,
+        totp_pending_secret=TOTP_PENDING_SECRET,
+        pending_jti_store=pending_jti_store,
+        id_parser=UUID,
+    )
+    password_helper = _RecordingPasswordHelper(matching_hash="hash-2")
+    service._password_helper = password_helper
+    pending_token = await _issue_pending_token(service, user)
+    assert pending_token is not None
+
+    with pytest.MonkeyPatch.context() as monkeypatch:
+        monkeypatch.setattr("litestar_auth.totp_flow.verify_totp_with_store", AsyncMock(return_value=False))
+        verified_user = await service.authenticate_pending_login(
+            client_binding=CLIENT_BINDING,
+            pending_token=pending_token,
+            code="recovery-code",
+        )
+
+    assert verified_user is user
+    assert password_helper.seen_hashes == ["hash-1", "hash-2", "hash-3"]
+    manager.consume_recovery_code_hash.assert_awaited_once_with(user, "hash-2")
+    pending_jti_store.deny.assert_awaited_once()
+
+
+async def test_authenticate_pending_login_rejects_consumed_matching_recovery_code() -> None:
+    """Atomic consume failure keeps the same invalid-code signal as a wrong TOTP."""
+    user = ExampleUser(id=uuid4(), email="user@example.com")
+    manager = _build_manager(user=user, recovery_code_hashes=("hash-1",))
+    manager.consume_recovery_code_hash.return_value = False
+    service = TotpLoginFlowService[ExampleUser, UUID](
+        user_manager=manager,
+        totp_pending_secret=TOTP_PENDING_SECRET,
+        id_parser=UUID,
+    )
+    service._password_helper = _RecordingPasswordHelper(matching_hash="hash-1")
+    pending_token = await _issue_pending_token(service, user)
+    assert pending_token is not None
+
+    with pytest.MonkeyPatch.context() as monkeypatch:
+        monkeypatch.setattr("litestar_auth.totp_flow.verify_totp_with_store", AsyncMock(return_value=False))
+        with pytest.raises(totp_flow_module.InvalidTotpCodeError):
+            await service.authenticate_pending_login(
+                client_binding=CLIENT_BINDING,
+                pending_token=pending_token,
+                code="recovery-code",
+            )
+
+    manager.consume_recovery_code_hash.assert_awaited_once_with(user, "hash-1")
+
+
+async def test_authenticate_pending_login_traverses_every_recovery_hash_before_consuming() -> None:
+    """Recovery-code lookup does not short-circuit when an earlier hash matches."""
+    user = ExampleUser(id=uuid4(), email="user@example.com")
+    manager = _build_manager(user=user, recovery_code_hashes=("hash-1", "hash-2", "hash-3", "hash-4"))
+    service = TotpLoginFlowService[ExampleUser, UUID](
+        user_manager=manager,
+        totp_pending_secret=TOTP_PENDING_SECRET,
+        id_parser=UUID,
+        unsafe_testing=True,
+    )
+    password_helper = _RecordingPasswordHelper(matching_hash="hash-1")
+    service._password_helper = password_helper
+    pending_token = await _issue_pending_token(service, user)
+    assert pending_token is not None
+
+    with pytest.MonkeyPatch.context() as monkeypatch:
+        monkeypatch.setattr("litestar_auth.totp_flow.verify_totp_with_store", AsyncMock(return_value=False))
+        with pytest.warns(SecurityWarning, match="unsafe_testing=True"):
+            await service.authenticate_pending_login(
+                client_binding=CLIENT_BINDING,
+                pending_token=pending_token,
+                code="recovery-code",
+            )
+
+    assert password_helper.seen_hashes == ["hash-1", "hash-2", "hash-3", "hash-4"]
 
 
 async def test_authenticate_pending_login_rejects_missing_secret_after_pending_token_issue() -> None:
@@ -191,11 +405,15 @@ async def test_authenticate_pending_login_rejects_missing_secret_after_pending_t
         totp_pending_secret=TOTP_PENDING_SECRET,
         id_parser=UUID,
     )
-    pending_token = await service.issue_pending_token(user)
+    pending_token = await _issue_pending_token(service, user)
     assert pending_token is not None
 
     with pytest.raises(totp_flow_module.InvalidTotpCodeError):
-        await service.authenticate_pending_login(pending_token=pending_token, code="123456")
+        await service.authenticate_pending_login(
+            client_binding=CLIENT_BINDING,
+            pending_token=pending_token,
+            code="123456",
+        )
 
 
 @pytest.mark.parametrize(
@@ -224,7 +442,7 @@ async def test_resolve_pending_login_wraps_jwt_decode_errors(
     monkeypatch.setattr("litestar_auth.totp_flow.jwt.decode", _raise_decode_error)
 
     with pytest.raises(totp_flow_module.InvalidTotpPendingTokenError) as exc_info:
-        await service._resolve_pending_login("ignored")
+        await service._resolve_pending_login("ignored", client_binding=CLIENT_BINDING)
 
     assert isinstance(exc_info.value.__cause__, expected_cause)
 
@@ -257,7 +475,7 @@ async def test_resolve_pending_login_rejects_invalid_payload_shapes(
     )
 
     with pytest.raises(totp_flow_module.InvalidTotpPendingTokenError):
-        await service._resolve_pending_login("ignored")
+        await service._resolve_pending_login("ignored", client_binding=CLIENT_BINDING)
 
     manager.get.assert_not_awaited()
 
@@ -274,7 +492,7 @@ async def test_resolve_pending_login_rejects_missing_user() -> None:
     pending_token = jwt.encode(_pending_payload(user), TOTP_PENDING_SECRET, algorithm="HS256")
 
     with pytest.raises(totp_flow_module.InvalidTotpPendingTokenError):
-        await service._resolve_pending_login(pending_token)
+        await service._resolve_pending_login(pending_token, client_binding=CLIENT_BINDING)
 
 
 async def test_authenticate_pending_login_rejects_unparseable_expiration(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -299,7 +517,7 @@ async def test_authenticate_pending_login_rejects_unparseable_expiration(monkeyp
     )
 
     with pytest.raises(totp_flow_module.InvalidTotpPendingTokenError):
-        await service.authenticate_pending_login(pending_token="ignored", code="123456")
+        await service.authenticate_pending_login(client_binding=CLIENT_BINDING, pending_token="ignored", code="123456")
 
 
 async def test_deny_pending_login_records_pending_jti_with_remaining_ttl(monkeypatch: pytest.MonkeyPatch) -> None:

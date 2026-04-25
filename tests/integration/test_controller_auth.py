@@ -12,6 +12,7 @@ from litestar import Litestar, Request, get
 from litestar.middleware import DefineMiddleware
 from litestar.testing import AsyncTestClient
 
+from litestar_auth._secrets_at_rest import encode_versioned_fernet_value
 from litestar_auth.authentication.authenticator import Authenticator
 from litestar_auth.authentication.backend import AuthenticationBackend
 from litestar_auth.authentication.middleware import LitestarAuthMiddleware
@@ -23,7 +24,7 @@ from litestar_auth.exceptions import ErrorCode
 if TYPE_CHECKING:
     from litestar_auth.db.base import BaseUserStore
 from litestar_auth.guards import is_active
-from litestar_auth.manager import ENCRYPTED_TOTP_SECRET_PREFIX, BaseUserManager, UserManagerSecurity
+from litestar_auth.manager import BaseUserManager, UserManagerSecurity
 from litestar_auth.password import PasswordHelper
 from litestar_auth.plugin import LitestarAuth, LitestarAuthConfig
 from tests._helpers import auth_middleware_get_request_session, litestar_app_with_user_manager
@@ -49,7 +50,7 @@ TOTP_SECRET_KEY = Fernet.generate_key().decode()
 def _encrypt_test_totp_secret(secret: str) -> str:
     """Return an encrypted persisted TOTP secret for auth-controller tests."""
     encrypted_value = Fernet(TOTP_SECRET_KEY.encode()).encrypt(secret.encode()).decode()
-    return f"{ENCRYPTED_TOTP_SECRET_PREFIX}{encrypted_value}"
+    return encode_versioned_fernet_value(key_id="default", ciphertext=encrypted_value)
 
 
 def login_identifier_credential(login_identifier: Literal["email", "username"]) -> str:

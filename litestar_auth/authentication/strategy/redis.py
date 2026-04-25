@@ -20,6 +20,7 @@ from litestar_auth.authentication.strategy._opaque_tokens import build_opaque_to
 from litestar_auth.authentication.strategy.base import Strategy, UserManagerProtocol
 from litestar_auth.config import validate_secret_length
 from litestar_auth.exceptions import ConfigurationError
+from litestar_auth.ratelimit._helpers import _safe_key_part
 from litestar_auth.types import ID, UP
 
 if TYPE_CHECKING:
@@ -93,7 +94,7 @@ class RedisTokenStrategy(Strategy[UP, ID]):
 
     def _user_index_key(self, user_id: str) -> str:
         """Return the Redis key for the per-user token index."""
-        return f"{self.key_prefix}user:{user_id}"
+        return f"{self.key_prefix}user:{_safe_key_part(user_id)}"
 
     @staticmethod
     def _decode_user_id(value: RedisStoredValue) -> str:

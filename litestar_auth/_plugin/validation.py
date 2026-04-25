@@ -24,9 +24,9 @@ from litestar_auth.config import (
     OAuthProviderConfig,
     resolve_trusted_proxy_setting,
     validate_secret_length,
-    validate_secret_roles_are_distinct,
 )
 from litestar_auth.exceptions import ConfigurationError
+from litestar_auth.manager import validate_user_manager_security_secret_roles_are_distinct
 from litestar_auth.schemas import UserRead, UserUpdate
 from litestar_auth.totp import SecurityWarning
 from litestar_auth.types import UserProtocol
@@ -194,6 +194,7 @@ def validate_oauth_route_registration_config[UP: UserProtocol[Any], ID](config: 
     """Validate the deterministic plugin OAuth route-registration contract.
 
     Raises:
+        ConfigurationError: If plugin-owned OAuth routes are missing required secret material.
         ValueError: If plugin-owned OAuth routes are declared with incomplete config.
     """
     oauth_config = config.oauth_config
@@ -231,6 +232,20 @@ def validate_oauth_route_registration_config[UP: UserProtocol[Any], ID](config: 
             "via oauth_providers."
         )
         raise ValueError(msg)
+
+    if oauth_config.oauth_flow_cookie_secret is not None:
+        validate_secret_length(
+            oauth_config.oauth_flow_cookie_secret,
+            label="oauth_flow_cookie_secret",
+            minimum_length=MINIMUM_SECRET_LENGTH,
+        )
+
+    if contract.providers and not oauth_config.oauth_flow_cookie_secret:
+        msg = (
+            "oauth_flow_cookie_secret is required when oauth_providers are configured. "
+            'Generate one with `python -c "from secrets import token_urlsafe; print(token_urlsafe(32))"`.'
+        )
+        raise ConfigurationError(msg)
 
 
 def validate_totp_secret_config[UP: UserProtocol[Any], ID](config: LitestarAuthConfig[UP, ID]) -> None:
@@ -322,8 +337,8 @@ def _validate_totp_encryption_key[UP: UserProtocol[Any], ID](config: LitestarAut
     """Require TOTP secret encryption key in production when TOTP is enabled.
 
     Raises:
-        ConfigurationError: If TOTP is configured but ``totp_secret_key`` is missing
-            while ``config.unsafe_testing`` is false.
+        ConfigurationError: If TOTP is configured but both ``totp_secret_keyring``
+            and ``totp_secret_key`` are missing while ``config.unsafe_testing`` is false.
     """
     if config.totp_config is None or config.unsafe_testing:
         return
@@ -390,11 +405,18 @@ def validate_user_manager_security_config[UP: UserProtocol[Any], ID](config: Lit
         return
 
     effective_security = manager_inputs.effective_security
-    validate_secret_roles_are_distinct(
-        verification_token_secret=effective_security.verification_token_secret,
-        reset_password_token_secret=effective_security.reset_password_token_secret,
-        totp_secret_key=effective_security.totp_secret_key,
+    if effective_security.login_identifier_telemetry_secret is not None:
+        validate_secret_length(
+            effective_security.login_identifier_telemetry_secret,
+            label="login_identifier_telemetry_secret",
+            minimum_length=MINIMUM_SECRET_LENGTH,
+        )
+    validate_user_manager_security_secret_roles_are_distinct(
+        effective_security,
         totp_pending_secret=config.totp_config.totp_pending_secret if config.totp_config is not None else None,
+        oauth_flow_cookie_secret=(
+            config.oauth_config.oauth_flow_cookie_secret if config.oauth_config is not None else None
+        ),
     )
 
 

@@ -1,11 +1,17 @@
-"""Adapter for normalizing third-party OAuth client contracts."""
+"""Adapter for normalizing third-party OAuth client contracts.
+
+OAuth authorization-code clients must support PKCE S256 per RFC 7636: authorization URLs receive
+``code_challenge`` and ``code_challenge_method="S256"``, and callback token exchanges receive the matching
+``code_verifier``. The adapter validates that manual clients expose those keyword arguments instead of silently
+downgrading the flow.
+"""
 
 from __future__ import annotations
 
 import asyncio
 import inspect
 from collections.abc import Callable, Mapping
-from typing import Protocol, TypedDict, TypeGuard, runtime_checkable
+from typing import Literal, Protocol, TypedDict, TypeGuard, runtime_checkable
 
 from litestar.exceptions import ClientException
 
@@ -24,23 +30,31 @@ type OAuthPayloadSource = Mapping[str, object] | OAuthPayloadObjectProtocol
 
 
 class OAuthAuthorizationURLClientProtocol(Protocol):
-    """Manual OAuth client contract for authorization URL resolution."""
+    """Manual OAuth client contract for RFC 7636 authorization URL resolution."""
 
     async def get_authorization_url(
         self,
         redirect_uri: str,
         state: str,
         *,
-        scope: str | None = None,
+        scope: str | list[str] | None = None,
+        code_challenge: str | None = None,
+        code_challenge_method: Literal["S256"] | None = None,
     ) -> str:
-        """Return the upstream provider authorization URL."""
+        """Return the upstream provider authorization URL with optional PKCE S256 challenge material."""
 
 
 class OAuthAccessTokenClientProtocol(Protocol):
-    """Manual OAuth client contract for callback token exchange."""
+    """Manual OAuth client contract for RFC 7636 callback token exchange."""
 
-    async def get_access_token(self, code: str, redirect_uri: str) -> OAuthPayloadSource:
-        """Exchange a callback code for a token payload."""
+    async def get_access_token(
+        self,
+        code: str,
+        redirect_uri: str,
+        *,
+        code_verifier: str | None = None,
+    ) -> OAuthPayloadSource:
+        """Exchange a callback code and optional PKCE verifier for a token payload."""
 
 
 class OAuthClientBaseProtocol(
@@ -210,6 +224,11 @@ def _supports_access_token(oauth_client: object) -> TypeGuard[OAuthAccessTokenCl
     return callable(getattr(oauth_client, "get_access_token", None))
 
 
+def _is_httpx_oauth_client(oauth_client: object) -> bool:
+    """Return whether the client comes from the optional httpx-oauth package."""
+    return type(oauth_client).__module__.startswith("httpx_oauth.")
+
+
 def _supports_direct_identity(oauth_client: object) -> TypeGuard[OAuthDirectIdentityClientProtocol]:
     """Return whether the client exposes ``get_id_email()``."""
     return callable(getattr(oauth_client, "get_id_email", None))
@@ -239,6 +258,61 @@ def _validate_oauth_client_adapter_fields(oauth_client: object) -> None:
             "make_async_email_verification_client()."
         )
         raise ConfigurationError(msg)
+
+    authorization_url_method = getattr(oauth_client, "get_authorization_url", None)
+    if authorization_url_method is not None:
+        _validate_oauth_method_accepts_keywords(
+            authorization_url_method,
+            method_name="get_authorization_url",
+            keyword_names=("code_challenge", "code_challenge_method"),
+        )
+
+    access_token_method = getattr(oauth_client, "get_access_token", None)
+    if access_token_method is not None:
+        _validate_oauth_method_accepts_keywords(
+            access_token_method,
+            method_name="get_access_token",
+            keyword_names=("code_verifier",),
+        )
+
+
+def _validate_oauth_method_accepts_keywords(
+    method: object,
+    *,
+    method_name: str,
+    keyword_names: tuple[str, ...],
+) -> None:
+    """Validate that an OAuth client method can receive required PKCE kwargs.
+
+    Raises:
+        ConfigurationError: If the method is not callable or omits required PKCE kwargs.
+    """
+    if not callable(method):
+        msg = f"OAuth client {method_name} must be callable when provided."
+        raise ConfigurationError(msg)
+
+    signature = inspect.signature(method)
+    if any(parameter.kind is inspect.Parameter.VAR_KEYWORD for parameter in signature.parameters.values()):
+        return
+
+    missing_keywords = [
+        keyword_name for keyword_name in keyword_names if not _signature_accepts_keyword(signature, keyword_name)
+    ]
+    if not missing_keywords:
+        return
+
+    missing = ", ".join(missing_keywords)
+    msg = f"OAuth client {method_name} must support PKCE keyword argument(s): {missing}."
+    raise ConfigurationError(msg)
+
+
+def _signature_accepts_keyword(signature: inspect.Signature, keyword_name: str) -> bool:
+    """Return whether a signature accepts the named keyword argument."""
+    parameter = signature.parameters.get(keyword_name)
+    return parameter is not None and parameter.kind in {
+        inspect.Parameter.POSITIONAL_OR_KEYWORD,
+        inspect.Parameter.KEYWORD_ONLY,
+    }
 
 
 def _validate_email_verified_result(result: object) -> bool:
@@ -270,7 +344,11 @@ def _supports_email_verified(
 
 
 class OAuthClientAdapter:
-    """Wrap a provider client behind a normalized async interface."""
+    """Wrap a provider client behind a normalized async interface.
+
+    The adapter preserves the RFC 7636 PKCE S256 contract by forwarding authorization
+    ``code_challenge`` values and token-exchange ``code_verifier`` values to the wrapped client.
+    """
 
     def __init__(self, oauth_client: OAuthClientProtocol) -> None:
         """Bind the raw OAuth client implementation."""
@@ -283,11 +361,13 @@ class OAuthClientAdapter:
         redirect_uri: str,
         state: str,
         scopes: list[str] | None = None,
+        code_challenge: str | None = None,
+        code_challenge_method: Literal["S256"] | None = None,
     ) -> str:
-        """Return the provider authorization URL for the given callback state.
+        """Return the provider authorization URL for the given callback state and PKCE challenge.
 
         Returns:
-            Absolute provider authorization URL.
+            Absolute provider authorization URL containing the provider-specific RFC 7636 challenge parameters.
 
         Raises:
             ConfigurationError: If the client does not expose a valid authorization-url contract.
@@ -296,22 +376,29 @@ class OAuthClientAdapter:
             msg = "OAuth client must define get_authorization_url()."
             raise ConfigurationError(msg)
 
+        scope: str | list[str] | None = None
         if scopes:
-            scope_str = " ".join(scopes)
-            authorization_url = await self._oauth_client.get_authorization_url(
-                redirect_uri,
-                state,
-                scope=scope_str,
-            )
-        else:
-            authorization_url = await self._oauth_client.get_authorization_url(redirect_uri, state)
+            scope = scopes if _is_httpx_oauth_client(self._oauth_client) else " ".join(scopes)
+        authorization_url = await self._oauth_client.get_authorization_url(
+            redirect_uri,
+            state,
+            scope=scope,
+            code_challenge=code_challenge,
+            code_challenge_method=code_challenge_method,
+        )
         if not isinstance(authorization_url, str) or not authorization_url:
             msg = "OAuth client returned an invalid authorization URL."
             raise ConfigurationError(msg)
         return authorization_url
 
-    async def get_access_token(self, *, code: str, redirect_uri: str) -> OAuthTokenPayload:
-        """Exchange the provider callback code for an OAuth access token.
+    async def get_access_token(
+        self,
+        *,
+        code: str,
+        redirect_uri: str,
+        code_verifier: str | None = None,
+    ) -> OAuthTokenPayload:
+        """Exchange the provider callback code and PKCE verifier for an OAuth access token.
 
         Returns:
             Normalized access-token payload with `access_token`, `expires_at`, and `refresh_token`.
@@ -323,7 +410,7 @@ class OAuthClientAdapter:
             msg = "OAuth client must define get_access_token()."
             raise ConfigurationError(msg)
 
-        raw_payload = await self._oauth_client.get_access_token(code, redirect_uri)
+        raw_payload = await self._oauth_client.get_access_token(code, redirect_uri, code_verifier=code_verifier)
         payload = _as_mapping(raw_payload, message="OAuth client returned an invalid access-token payload.")
         access_token = payload.get("access_token")
         expires_at = payload.get("expires_at")

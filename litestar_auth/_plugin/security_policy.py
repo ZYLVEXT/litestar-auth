@@ -51,15 +51,17 @@ _JWT_REVOCATION_POLICY = _PluginSecurityPolicy(
 )
 _TOTP_SECRET_STORAGE_POLICY = _PluginSecurityPolicy(
     key="totp_secret_storage",
-    plugin_surface="user_manager_security.totp_secret_key",
+    plugin_surface="user_manager_security.totp_secret_keyring",
     contract_reference="BaseUserManager.totp_secret_storage_posture",
     docs_summary=(
         "`BaseUserManager.totp_secret_storage_posture` is the Fernet-encrypted at-rest contract; "
-        "omitting `totp_secret_key` means non-null persisted TOTP secrets cannot be stored or read."
+        "omitting both `totp_secret_keyring` and `totp_secret_key` means non-null persisted TOTP secrets "
+        "cannot be stored or read."
     ),
     production_requirement=(
-        "With `totp_config` enabled, plugin-managed production requires `user_manager_security.totp_secret_key` "
-        "unless `unsafe_testing=True` or a custom `user_manager_factory` explicitly owns that wiring."
+        "With `totp_config` enabled, plugin-managed production requires `user_manager_security.totp_secret_keyring` "
+        "or the one-key `totp_secret_key` shortcut unless `unsafe_testing=True` or a custom "
+        "`user_manager_factory` explicitly owns that wiring."
     ),
 )
 
@@ -93,13 +95,20 @@ def _describe_jwt_revocation_policy(posture: object) -> _PluginSecurityNotice | 
     )
 
 
-def _describe_totp_secret_storage_policy(totp_secret_key: str | None) -> _PluginSecurityNotice:
+def _describe_totp_secret_storage_policy(
+    *,
+    totp_secret_key: str | None,
+    keyring_configured: bool = False,
+) -> _PluginSecurityNotice:
     """Resolve the shared plugin notice for TOTP secret storage policy.
 
     Returns:
         The shared plugin notice for the resolved TOTP storage posture.
     """
-    posture = TotpSecretStoragePosture.from_secret_key(totp_secret_key)
+    posture = TotpSecretStoragePosture.from_keyring_inputs(
+        totp_secret_key=totp_secret_key,
+        keyring_configured=keyring_configured,
+    )
     return _PluginSecurityNotice(
         policy=_TOTP_SECRET_STORAGE_POLICY,
         posture_key=posture.key,

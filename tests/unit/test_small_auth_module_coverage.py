@@ -146,6 +146,8 @@ def test_payloads_module_executes_under_coverage() -> None:
         "TotpDisableRequest",
         "TotpEnableRequest",
         "TotpEnableResponse",
+        "TotpRecoveryCodesResponse",
+        "TotpRegenerateRecoveryCodesRequest",
         "TotpVerifyRequest",
         "VerifyToken",
     )

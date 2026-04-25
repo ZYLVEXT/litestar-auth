@@ -643,6 +643,8 @@ async def test_login_returns_pending_token_when_totp_enabled() -> None:
         totp_pending_lifetime=timedelta(minutes=5),
     )
     request = MagicMock()
+    request.client.host = "testclient"
+    request.headers = {}
     data = LoginCredentials(identifier="user@example.com", password="correct-password")
     user = _TotpUser()
     user_manager = MagicMock()
@@ -690,6 +692,8 @@ async def test_login_falls_back_to_full_login_when_totp_pending_token_is_not_iss
         totp_pending_lifetime=timedelta(minutes=5),
     )
     request = MagicMock()
+    request.client.host = "testclient"
+    request.headers = {}
     data = LoginCredentials(identifier="user@example.com", password="correct-password")
     user = _TotpUser()
     user_manager = MagicMock()

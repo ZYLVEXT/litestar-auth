@@ -34,7 +34,7 @@ from litestar_auth.models import (
     UserRoleAssociationMixin,
     UserRoleRelationshipMixin,
 )
-from litestar_auth.plugin import LitestarAuthConfig, OAuthConfig
+from litestar_auth.plugin import FernetKeyringConfig, LitestarAuthConfig, OAuthConfig
 from tests.integration.test_orchestrator import PluginUserManager
 
 if TYPE_CHECKING:
@@ -755,13 +755,35 @@ def test_manager_lifecycle_role_updater_builds_manager_from_plugin_config() -> N
 def test_manager_lifecycle_role_updater_builds_oauth_token_policy_when_configured() -> None:
     """CLI role lifecycle updates preserve the plugin's explicit OAuth token policy wiring."""
     config = _minimal_config(user_model=User, session_maker=TrackingSessionMaker())
-    config.oauth_config = OAuthConfig()
+    keyring = FernetKeyringConfig(
+        active_key_id="current",
+        keys={
+            "current": "YWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWE=",
+            "old": "YmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmI=",
+        },
+    )
+    config.oauth_config = OAuthConfig(oauth_token_encryption_keyring=keyring)
 
     updater = _ManagerLifecycleRoleUpdater.from_config(config)
 
     assert updater._oauth_token_encryption is not None
     assert updater._oauth_token_encryption.key is None
+    assert updater._oauth_token_encryption.active_key_id == "current"
+    assert dict(updater._oauth_token_encryption.keys or {}) == dict(keyring.keys)
     assert updater._oauth_token_encryption.unsafe_testing is config.unsafe_testing
+
+
+def test_manager_lifecycle_role_updater_builds_single_key_oauth_token_policy() -> None:
+    """CLI role lifecycle updates preserve the one-key OAuth token policy path."""
+    config = _minimal_config(user_model=User, session_maker=TrackingSessionMaker())
+    key = "YWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWE="
+    config.oauth_config = OAuthConfig(oauth_token_encryption_key=key)
+
+    updater = _ManagerLifecycleRoleUpdater.from_config(config)
+
+    assert updater._oauth_token_encryption is not None
+    assert updater._oauth_token_encryption.key == key
+    assert updater._oauth_token_encryption.keys is None
 
 
 async def test_sqlalchemy_role_admin_update_user_roles_uses_manager_lifecycle_payload() -> None:
