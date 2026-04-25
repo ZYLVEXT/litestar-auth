@@ -57,7 +57,7 @@ from litestar_auth.types import (
 
 logging.getLogger(__name__).addHandler(logging.NullHandler())  # noqa: RUF067
 
-__version__ = "2.1.0"
+__version__ = "2.2.0"
 
 __all__ = (
     "DEFAULT_SUPERUSER_ROLE_NAME",
