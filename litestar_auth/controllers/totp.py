@@ -16,6 +16,7 @@ from jwt import ExpiredSignatureError, InvalidTokenError
 from litestar import Controller, Request, post
 from litestar.exceptions import ClientException, NotAuthorizedException
 
+from litestar_auth._secrets_at_rest import FernetKeyring, SecretAtRestError
 from litestar_auth.config import TOTP_ENROLL_AUDIENCE, validate_secret_length
 from litestar_auth.controllers._utils import (
     AccountStateValidatorProvider,
@@ -27,12 +28,15 @@ from litestar_auth.controllers._utils import (
 from litestar_auth.controllers.auth import INVALID_CREDENTIALS_DETAIL
 from litestar_auth.exceptions import ConfigurationError, ErrorCode, TokenError
 from litestar_auth.guards import is_authenticated
+from litestar_auth.password import PasswordHelper
 from litestar_auth.payloads import (
     TotpConfirmEnableRequest,
     TotpConfirmEnableResponse,
     TotpDisableRequest,
     TotpEnableRequest,
     TotpEnableResponse,
+    TotpRecoveryCodesResponse,
+    TotpRegenerateRecoveryCodesRequest,
     TotpVerifyRequest,
 )
 from litestar_auth.totp import (
@@ -40,22 +44,31 @@ from litestar_auth.totp import (
     TotpAlgorithm,
     TotpEnrollmentStore,
     UsedTotpCodeStore,
+    generate_totp_recovery_codes,
     generate_totp_secret,
     generate_totp_uri,
+    hash_totp_recovery_codes,
     verify_totp,
     verify_totp_with_store,
 )
-from litestar_auth.totp_flow import InvalidTotpCodeError, InvalidTotpPendingTokenError, TotpLoginFlowService
+from litestar_auth.totp_flow import (
+    InvalidTotpCodeError,
+    InvalidTotpPendingTokenError,
+    TotpLoginFlowService,
+    build_pending_totp_client_binding,
+)
 from litestar_auth.types import LoginIdentifier, TotpUserProtocol, UserProtocol
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Sequence
+    from collections.abc import Callable, Mapping, Sequence
     from types import ModuleType
 
     from litestar.openapi.spec import SecurityRequirement
 
+    from litestar_auth._secrets_at_rest import FernetKey
     from litestar_auth.authentication.backend import AuthenticationBackend
     from litestar_auth.authentication.strategy.jwt import JWTDenylistStore
+    from litestar_auth.manager import FernetKeyringConfig
     from litestar_auth.ratelimit import AuthRateLimitConfig
 
 from litestar_auth.ratelimit import TotpRateLimitOrchestrator, TotpSensitiveEndpoint
@@ -67,9 +80,35 @@ _TOTP_ENROLL_TOKEN_LIFETIME_SECONDS = 300  # 5 minutes
 _ENROLLMENT_ENCODING_CLAIM = "enc"
 _ENROLLMENT_ENCODING_FERNET = "fernet"
 _ENROLLMENT_ENCODING_PLAIN = "plain"
-TOTP_SENSITIVE_ENDPOINTS: tuple[TotpSensitiveEndpoint, ...] = ("enable", "confirm_enable", "verify", "disable")
+TOTP_SENSITIVE_ENDPOINTS: tuple[TotpSensitiveEndpoint, ...] = (
+    "enable",
+    "confirm_enable",
+    "verify",
+    "disable",
+    "regenerate_recovery_codes",
+)
 TOTP_RATE_LIMITED_ENDPOINTS: tuple[TotpSensitiveEndpoint, ...] = ("verify", "confirm_enable")
 logger = logging.getLogger(__name__)
+
+
+async def _consume_matching_recovery_code[UP: UserProtocol[Any], ID](
+    user_manager: TotpUserManagerProtocol[UP, ID],
+    user: UP,
+    submitted_code: str,
+) -> bool:
+    """Consume ``submitted_code`` when it matches one active TOTP recovery-code hash.
+
+    Returns:
+        ``True`` when one active hash matched and was consumed.
+    """
+    password_helper = PasswordHelper.from_defaults()
+    recovery_code_hashes = await user_manager.read_recovery_code_hashes(user)
+    matched_hash: str | None = None
+    for recovery_code_hash in recovery_code_hashes:
+        if password_helper.verify(submitted_code, recovery_code_hash):
+            matched_hash = recovery_code_hash
+
+    return matched_hash is not None and await user_manager.consume_recovery_code_hash(user, matched_hash)
 
 
 def _load_cryptography_fernet() -> ModuleType:
@@ -92,8 +131,9 @@ def _load_cryptography_fernet() -> ModuleType:
 class _EnrollmentTokenCipher:
     """Fernet cipher dedicated to server-side TOTP enrollment secret values."""
 
-    _fernet_module: Any
-    _fernet: Any
+    _fernet_module: Any | None
+    _fernet: Any | None
+    _keyring: FernetKeyring | None = None
 
     @classmethod
     def from_key(cls, totp_secret_key: str) -> Self:
@@ -105,12 +145,33 @@ class _EnrollmentTokenCipher:
         fernet_module = _load_cryptography_fernet()
         return cls(_fernet_module=fernet_module, _fernet=fernet_module.Fernet(totp_secret_key.encode()))
 
+    @classmethod
+    def from_keyring(cls, *, active_key_id: str, keys: Mapping[str, FernetKey]) -> Self:
+        """Build a cipher from a versioned Fernet keyring.
+
+        Returns:
+            A cipher bound to the provided keyring for enrollment-token claims.
+        """
+        return cls(
+            _fernet_module=None,
+            _fernet=None,
+            _keyring=FernetKeyring(active_key_id=active_key_id, keys=keys),
+        )
+
     def encrypt(self, plaintext: str) -> str:
         """Return a Fernet token string for the provided plaintext secret.
 
         Returns:
             Fernet-encrypted ciphertext decoded as a UTF-8 string.
+
+        Raises:
+            RuntimeError: If the cipher was constructed without a usable key path.
         """
+        if self._keyring is not None:
+            return self._keyring.encrypt(plaintext)
+        if self._fernet is None:  # pragma: no cover - factory construction guarantees one cipher path
+            msg = "Enrollment token cipher is not configured."
+            raise RuntimeError(msg)
         return cast("str", self._fernet.encrypt(plaintext.encode()).decode())
 
     def decrypt(self, ciphertext: str) -> str | None:
@@ -118,7 +179,18 @@ class _EnrollmentTokenCipher:
 
         Returns:
             The plaintext secret, or ``None`` when the ciphertext is invalid.
+
+        Raises:
+            RuntimeError: If the cipher was constructed without a usable key path.
         """
+        if self._keyring is not None:
+            try:
+                return self._keyring.decrypt(ciphertext)
+            except SecretAtRestError:
+                return None
+        if self._fernet is None or self._fernet_module is None:  # pragma: no cover - factory construction guarantees
+            msg = "Enrollment token cipher is not configured."
+            raise RuntimeError(msg)
         try:
             return cast("str", self._fernet.decrypt(ciphertext.encode()).decode())
         except self._fernet_module.InvalidToken:
@@ -128,25 +200,34 @@ class _EnrollmentTokenCipher:
 def _resolve_enrollment_token_cipher(
     *,
     totp_secret_key: str | None,
+    totp_secret_keyring: FernetKeyringConfig | None = None,
     unsafe_testing: bool,
 ) -> _EnrollmentTokenCipher | None:
     """Build the enrollment secret-value cipher, enforcing production posture.
 
     Returns:
-        A cipher when ``totp_secret_key`` is configured, otherwise ``None``
-        (only allowed in explicit ``unsafe_testing`` mode).
+        A cipher when ``totp_secret_keyring`` or ``totp_secret_key`` is configured,
+        otherwise ``None`` (only allowed in explicit ``unsafe_testing`` mode).
 
     Raises:
-        ConfigurationError: If ``totp_secret_key`` is missing outside explicit
+        ConfigurationError: If key inputs are ambiguous or missing outside explicit
             ``unsafe_testing`` mode.
     """
+    if totp_secret_key is not None and totp_secret_keyring is not None:
+        msg = "Configure TOTP enrollment encryption with totp_secret_key or totp_secret_keyring, not both."
+        raise ConfigurationError(msg)
+    if totp_secret_keyring is not None:
+        return _EnrollmentTokenCipher.from_keyring(
+            active_key_id=totp_secret_keyring.active_key_id,
+            keys=totp_secret_keyring.keys,
+        )
     if totp_secret_key is not None:
         return _EnrollmentTokenCipher.from_key(totp_secret_key)
     if unsafe_testing:
         return None
 
     msg = (
-        "totp_secret_key is required when unsafe_testing=False. "
+        "totp_secret_keyring or totp_secret_key is required when unsafe_testing=False. "
         "TOTP enrollment secrets must be encrypted before they are written to the enrollment store."
     )
     raise ConfigurationError(msg)
@@ -177,6 +258,15 @@ class TotpUserManagerProtocol[UP: UserProtocol[Any], ID](AccountStateValidatorPr
     async def read_totp_secret(self, secret: str | None) -> str | None:
         """Return a plain-text TOTP secret from storage."""
 
+    async def set_recovery_code_hashes(self, user: UP, hashes: tuple[str, ...]) -> UP:
+        """Replace the active TOTP recovery-code hashes for a user."""
+
+    async def read_recovery_code_hashes(self, user: UP) -> tuple[str, ...]:
+        """Return active TOTP recovery-code hashes for a user."""
+
+    async def consume_recovery_code_hash(self, user: UP, matched_hash: str) -> bool:
+        """Atomically consume a matched recovery-code hash."""
+
     async def authenticate(
         self,
         identifier: str,
@@ -200,6 +290,9 @@ class _TotpControllerContext[UP: UserProtocol[Any], ID]:
     totp_algorithm: TotpAlgorithm
     totp_rate_limit: TotpRateLimitOrchestrator
     totp_pending_secret: str
+    totp_pending_require_client_binding: bool
+    totp_pending_client_binding_trusted_proxy: bool
+    totp_pending_client_binding_trusted_headers: tuple[str, ...]
     effective_pending_jti_store: JWTDenylistStore | None
     id_parser: Callable[[str], ID] | None
     unsafe_testing: bool
@@ -284,6 +377,14 @@ def _totp_resolve_enrollment_store(
         "Configure a TotpEnrollmentStore so enrollment tokens are single-use and latest-only."
     )
     raise ConfigurationError(msg)
+
+
+def _warn_totp_pending_client_binding_disabled() -> None:
+    """Log the weaker posture when pending-token client binding is explicitly disabled."""
+    logger.warning(
+        "TOTP pending-token client binding is disabled; leaked pending tokens can be replayed from another client.",
+        extra={"event": "totp_pending_client_binding_disabled"},
+    )
 
 
 async def _totp_handle_enable[UP: UserProtocol[Any], ID](
@@ -568,9 +669,12 @@ async def _totp_handle_confirm_enable[UP: UserProtocol[Any], ID](
     """Confirm TOTP enrollment by validating the enrollment token and a TOTP code.
 
     Only persists the secret after the user proves they can generate valid codes.
+    A successful confirmation also creates one-time recovery codes, stores only
+    their hashes, and returns the plaintext codes once.
 
     Returns:
-        Confirmation response indicating 2FA was successfully enabled.
+        Confirmation response indicating 2FA was enabled plus the one-time
+        plaintext recovery codes.
 
     Raises:
         ClientException: On invalid enrollment token, TOTP code, or duplicate enrollment.
@@ -630,10 +734,18 @@ async def _totp_handle_confirm_enable[UP: UserProtocol[Any], ID](
             extra={"code": ErrorCode.TOTP_CODE_INVALID},
         )
 
-    await user_manager.set_totp_secret(user, secret)
+    recovery_codes = generate_totp_recovery_codes()
+    recovery_code_hashes = hash_totp_recovery_codes(recovery_codes)
+    try:
+        updated_user = await user_manager.set_totp_secret(user, secret)
+        await user_manager.set_recovery_code_hashes(updated_user, recovery_code_hashes)
+    except Exception:
+        await user_manager.set_totp_secret(user, None)
+        raise
     await ctx.enrollment_store.clear(user_id=str(user.id))
+    logger.info("Issued %d TOTP recovery codes for user_id=%s.", len(recovery_codes), user.id)
     await ctx.totp_rate_limit.on_success("confirm_enable", request)
-    return TotpConfirmEnableResponse(enabled=True)
+    return TotpConfirmEnableResponse(enabled=True, recovery_codes=recovery_codes)
 
 
 async def _totp_handle_verify[UP: UserProtocol[Any], ID](
@@ -644,6 +756,9 @@ async def _totp_handle_verify[UP: UserProtocol[Any], ID](
     user_manager: TotpUserManagerProtocol[UP, ID],
 ) -> object:
     """Validate TOTP and exchange a pending login token for a full session.
+
+    The submitted ``code`` may be a current TOTP code or an unused recovery code.
+    Pending-token client binding is checked before any code fallback runs.
 
     Returns:
         Backend login response for the verified user.
@@ -660,6 +775,7 @@ async def _totp_handle_verify[UP: UserProtocol[Any], ID](
         used_tokens_store=ctx.used_tokens_store,
         pending_jti_store=ctx.effective_pending_jti_store,
         id_parser=ctx.id_parser,
+        require_client_binding=ctx.totp_pending_require_client_binding,
         unsafe_testing=ctx.unsafe_testing,
     )
 
@@ -674,6 +790,15 @@ async def _totp_handle_verify[UP: UserProtocol[Any], ID](
         user = await totp_login_flow.authenticate_pending_login(
             pending_token=data.pending_token,
             code=data.code,
+            client_binding=(
+                build_pending_totp_client_binding(
+                    request,
+                    trusted_proxy=ctx.totp_pending_client_binding_trusted_proxy,
+                    trusted_headers=ctx.totp_pending_client_binding_trusted_headers,
+                )
+                if ctx.totp_pending_require_client_binding
+                else None
+            ),
             validate_user=validate_pending_user,
         )
     except InvalidTotpPendingTokenError:
@@ -727,24 +852,107 @@ async def _totp_handle_disable[UP: UserProtocol[Any], ID](
     )
     totp_user = user
     secret = await user_manager.read_totp_secret(totp_user.totp_secret)
-    if not secret or not await verify_totp_with_store(
-        secret,
-        data.code,
-        user_id=user.id,
-        used_tokens_store=ctx.used_tokens_store,
-        algorithm=ctx.totp_algorithm,
-        require_replay_protection=ctx.require_replay_protection,
-        unsafe_testing=ctx.unsafe_testing,
-    ):
+    totp_verified = bool(
+        secret
+        and await verify_totp_with_store(
+            secret,
+            data.code,
+            user_id=user.id,
+            used_tokens_store=ctx.used_tokens_store,
+            algorithm=ctx.totp_algorithm,
+            require_replay_protection=ctx.require_replay_protection,
+            unsafe_testing=ctx.unsafe_testing,
+        ),
+    )
+    recovery_code_verified = (
+        False if totp_verified else await _consume_matching_recovery_code(user_manager, user, data.code)
+    )
+    if not totp_verified and not recovery_code_verified:
         await ctx.totp_rate_limit.on_invalid_attempt("disable", request)
         msg = INVALID_TOTP_CODE_DETAIL
         raise ClientException(status_code=400, detail=msg, extra={"code": ErrorCode.TOTP_CODE_INVALID})
     await user_manager.set_totp_secret(user, None)
+    await user_manager.set_recovery_code_hashes(user, ())
     await ctx.enrollment_store.clear(user_id=str(user.id))
     await ctx.totp_rate_limit.on_success("disable", request)
 
 
-def _define_totp_controller_class_di[UP: UserProtocol[Any], ID](
+async def _totp_handle_regenerate_recovery_codes[UP: UserProtocol[Any], ID](
+    request: Request[Any, Any, Any],
+    *,
+    ctx: _TotpControllerContext[UP, ID],
+    data: TotpRegenerateRecoveryCodesRequest | None = None,
+    user_manager: TotpUserManagerProtocol[UP, ID],
+) -> TotpRecoveryCodesResponse:
+    """Rotate the authenticated user's active TOTP recovery-code set.
+
+    The old hash set is replaced with hashes for newly generated codes. When
+    ``totp_enable_requires_password=True``, the current password is reverified
+    before rotation.
+
+    Returns:
+        The new plaintext recovery codes. They are not stored and cannot be
+        retrieved again.
+
+    Raises:
+        ClientException: On invalid password step-up.
+        NotAuthorizedException: When the request lacks an authenticated user.
+    """
+    await ctx.totp_rate_limit.before_request("regenerate_recovery_codes", request)
+    user = request.user
+    if not isinstance(user, TotpUserProtocol):
+        msg = "Authentication credentials were not provided."
+        raise NotAuthorizedException(detail=msg)
+
+    await _require_account_state(
+        user,
+        require_verified=ctx.requires_verification,
+        user_manager=user_manager,
+        on_failure=lambda: ctx.totp_rate_limit.on_account_state_failure("regenerate_recovery_codes", request),
+    )
+
+    if ctx.totp_enable_requires_password:
+        if data is None:
+            decoded = await _decode_request_body(
+                request,
+                schema=TotpRegenerateRecoveryCodesRequest,
+                on_error=lambda current_request: ctx.totp_rate_limit.on_invalid_attempt(
+                    "regenerate_recovery_codes",
+                    current_request,
+                ),
+                validation_code=ErrorCode.LOGIN_PAYLOAD_INVALID,
+            )
+            if not isinstance(decoded, TotpRegenerateRecoveryCodesRequest):
+                msg = "Invalid request payload."
+                raise ClientException(status_code=422, detail=msg, extra={"code": ErrorCode.LOGIN_PAYLOAD_INVALID})
+            payload = decoded
+        elif not isinstance(data, TotpRegenerateRecoveryCodesRequest):
+            msg = "Invalid request payload."
+            raise ClientException(status_code=422, detail=msg, extra={"code": ErrorCode.LOGIN_PAYLOAD_INVALID})
+        else:
+            payload = data
+        authenticated = await user_manager.authenticate(
+            user.email,
+            payload.current_password,
+            login_identifier="email",
+        )
+        if authenticated is None or getattr(authenticated, "id", None) != getattr(user, "id", None):
+            await ctx.totp_rate_limit.on_invalid_attempt("regenerate_recovery_codes", request)
+            raise ClientException(
+                status_code=400,
+                detail=INVALID_CREDENTIALS_DETAIL,
+                extra={"code": ErrorCode.LOGIN_BAD_CREDENTIALS},
+            )
+
+    recovery_codes = generate_totp_recovery_codes()
+    recovery_code_hashes = hash_totp_recovery_codes(recovery_codes)
+    await user_manager.set_recovery_code_hashes(user, recovery_code_hashes)
+    logger.info("Regenerated %d TOTP recovery codes for user_id=%s.", len(recovery_codes), user.id)
+    await ctx.totp_rate_limit.on_success("regenerate_recovery_codes", request)
+    return TotpRecoveryCodesResponse(recovery_codes=recovery_codes)
+
+
+def _define_totp_controller_class_di[UP: UserProtocol[Any], ID](  # noqa: C901
     ctx: _TotpControllerContext[UP, ID],
     *,
     totp_verify_before_request: Callable[[Request[Any, Any, Any]], Any] | None,
@@ -810,6 +1018,9 @@ def _define_totp_controller_class_di[UP: UserProtocol[Any], ID](
         async def _on_enable_request_body_error(request: Request[Any, Any, Any]) -> None:
             await ctx.totp_rate_limit.on_invalid_attempt("enable", request)
 
+        async def _on_regenerate_request_body_error(request: Request[Any, Any, Any]) -> None:
+            await ctx.totp_rate_limit.on_invalid_attempt("regenerate_recovery_codes", request)
+
         class TotpController(_TotpControllerBase):
             """TOTP 2FA management endpoints."""
 
@@ -828,12 +1039,34 @@ def _define_totp_controller_class_di[UP: UserProtocol[Any], ID](
                     user_manager=litestar_auth_user_manager,
                 )
 
+            @post("/recovery-codes/regenerate", guards=[is_authenticated], security=security)
+            async def regenerate_recovery_codes(
+                self,
+                request: Request[Any, Any, Any],
+                litestar_auth_user_manager: TotpUserManagerProtocol[Any, Any],
+                data: msgspec.Struct | None = None,
+            ) -> TotpRecoveryCodesResponse:
+                del self
+                return await _totp_handle_regenerate_recovery_codes(
+                    request,
+                    ctx=ctx,
+                    data=cast("TotpRegenerateRecoveryCodesRequest | None", data),
+                    user_manager=litestar_auth_user_manager,
+                )
+
         _configure_request_body_handler(
             TotpController.enable,
             schema=TotpEnableRequest,
             validation_code=ErrorCode.LOGIN_PAYLOAD_INVALID,
             on_validation_error=_on_enable_request_body_error,
             on_decode_error=_on_enable_request_body_error,
+        )
+        _configure_request_body_handler(
+            TotpController.regenerate_recovery_codes,
+            schema=TotpRegenerateRecoveryCodesRequest,
+            validation_code=ErrorCode.LOGIN_PAYLOAD_INVALID,
+            on_validation_error=_on_regenerate_request_body_error,
+            on_decode_error=_on_regenerate_request_body_error,
         )
     else:
 
@@ -848,6 +1081,19 @@ def _define_totp_controller_class_di[UP: UserProtocol[Any], ID](
             ) -> TotpEnableResponse:
                 del self
                 return await _totp_handle_enable(request, ctx=ctx, user_manager=litestar_auth_user_manager)
+
+            @post("/recovery-codes/regenerate", guards=[is_authenticated], security=security)
+            async def regenerate_recovery_codes(
+                self,
+                request: Request[Any, Any, Any],
+                litestar_auth_user_manager: TotpUserManagerProtocol[Any, Any],
+            ) -> TotpRecoveryCodesResponse:
+                del self
+                return await _totp_handle_regenerate_recovery_codes(
+                    request,
+                    ctx=ctx,
+                    user_manager=litestar_auth_user_manager,
+                )
 
     TotpController.__module__ = __name__
     TotpController.__qualname__ = TotpController.__name__
@@ -866,16 +1112,22 @@ def create_totp_controller[UP: UserProtocol[Any], ID](  # noqa: PLR0913
     requires_verification: bool = True,
     totp_pending_secret: str,
     totp_secret_key: str | None = None,
+    totp_secret_keyring: FernetKeyringConfig | None = None,
     totp_enable_requires_password: bool = True,
     totp_issuer: str = "litestar-auth",
     totp_algorithm: TotpAlgorithm = "SHA256",
     totp_pending_lifetime: timedelta | None = None,
+    totp_pending_require_client_binding: bool = True,
     id_parser: Callable[[str], ID] | None = None,
     path: str = "/auth/2fa",
     unsafe_testing: bool = False,
     security: Sequence[SecurityRequirement] | None = None,
 ) -> type[Controller]:
-    """Return a controller with TOTP enable/verify/disable endpoints.
+    """Return a controller with TOTP management and login-completion endpoints.
+
+    The generated controller exposes two-phase enrollment, one-time recovery-code
+    issuance and regeneration, pending-login verification with TOTP or recovery
+    codes, default client binding for pending tokens, and TOTP disablement.
 
     Args:
         backend: Auth backend used to issue tokens after successful TOTP verification.
@@ -898,19 +1150,26 @@ def create_totp_controller[UP: UserProtocol[Any], ID](  # noqa: PLR0913
             and users with `is_verified=False`.
         totp_pending_secret: Shared secret for signing and verifying pending-2FA JWTs.
             Must match the value passed to ``create_auth_controller``.
-        totp_secret_key: Fernet-compatible key used to encrypt the TOTP secret
-            before writing it to ``enrollment_store``. Required unless
-            ``unsafe_testing=True``; should be the same key configured on
-            ``UserManagerSecurity`` so pending enrollment secrets and persisted
-            user TOTP secrets use the same encryption posture.
-        totp_enable_requires_password: When ``True`` (default), `/enable` requires a JSON body
-            with the user's current password and re-authenticates before storing
-            a new TOTP secret. Set to ``False`` only if you accept the session-hijack
-            escalation risk (not recommended).
+        totp_secret_key: Single Fernet-compatible key used to encrypt the TOTP
+            secret before writing it to ``enrollment_store``. Required unless
+            ``unsafe_testing=True`` or ``totp_secret_keyring`` is configured.
+        totp_secret_keyring: Versioned Fernet keyring used to encrypt pending
+            enrollment secrets. Prefer this for plugin-managed apps so pending
+            enrollment secrets and persisted user TOTP secrets use the same
+            active-key rotation posture.
+        totp_enable_requires_password: When ``True`` (default), `/enable` and
+            `/recovery-codes/regenerate` require a JSON body with the user's
+            current password and re-authenticate before changing TOTP state. Set
+            to ``False`` only if you accept the session-hijack escalation risk
+            (not recommended).
         totp_issuer: Issuer label shown inside authenticator-app QR codes.
         totp_algorithm: Hash algorithm used for TOTP generation and verification.
         totp_pending_lifetime: Unused; kept for API symmetry with
             ``create_auth_controller``.
+        totp_pending_require_client_binding: When ``True`` (default), `/verify`
+            requires pending-token client IP and User-Agent fingerprints to
+            match the issuing `/login` request. Disabling this weakens replay
+            resistance and logs a warning at controller-factory time.
         id_parser: Optional callable that converts the JWT ``sub`` string into the
             application's user ID type (e.g. ``UUID`` for UUID-keyed users).
         path: Base route prefix for the generated controller.
@@ -930,7 +1189,7 @@ def create_totp_controller[UP: UserProtocol[Any], ID](  # noqa: PLR0913
             backend=backend,
             user_manager_dependency_key="litestar_auth_user_manager",
             totp_pending_secret=settings.totp_pending_secret,
-            totp_secret_key=settings.totp_secret_key,
+            totp_secret_keyring=settings.totp_secret_keyring,
             enrollment_store=totp_enrollment_store,
         )
         ```
@@ -939,6 +1198,8 @@ def create_totp_controller[UP: UserProtocol[Any], ID](  # noqa: PLR0913
     del totp_pending_lifetime  # symmetry param; lifetime is set on the issuer side
     if not unsafe_testing:
         validate_secret_length(totp_pending_secret, label="totp_pending_secret")
+    if not totp_pending_require_client_binding:
+        _warn_totp_pending_client_binding_disabled()
     _totp_validate_replay_and_password(
         used_tokens_store=used_tokens_store,
         require_replay_protection=require_replay_protection,
@@ -956,6 +1217,7 @@ def create_totp_controller[UP: UserProtocol[Any], ID](  # noqa: PLR0913
     )
     enrollment_token_cipher = _resolve_enrollment_token_cipher(
         totp_secret_key=totp_secret_key,
+        totp_secret_keyring=totp_secret_keyring,
         unsafe_testing=unsafe_testing,
     )
 
@@ -964,7 +1226,9 @@ def create_totp_controller[UP: UserProtocol[Any], ID](  # noqa: PLR0913
         confirm_enable=rate_limit_config.totp_confirm_enable if rate_limit_config else None,
         verify=rate_limit_config.totp_verify if rate_limit_config else None,
         disable=rate_limit_config.totp_disable if rate_limit_config else None,
+        regenerate_recovery_codes=rate_limit_config.totp_regenerate_recovery_codes if rate_limit_config else None,
     )
+    totp_verify_rate_limit = rate_limit_config.totp_verify if rate_limit_config else None
     ctx = _TotpControllerContext(
         backend=backend,
         used_tokens_store=used_tokens_store,
@@ -975,6 +1239,13 @@ def create_totp_controller[UP: UserProtocol[Any], ID](  # noqa: PLR0913
         totp_algorithm=totp_algorithm,
         totp_rate_limit=totp_rate_limit,
         totp_pending_secret=totp_pending_secret,
+        totp_pending_require_client_binding=totp_pending_require_client_binding,
+        totp_pending_client_binding_trusted_proxy=(
+            False if totp_verify_rate_limit is None else totp_verify_rate_limit.trusted_proxy
+        ),
+        totp_pending_client_binding_trusted_headers=(
+            ("X-Forwarded-For",) if totp_verify_rate_limit is None else totp_verify_rate_limit.trusted_headers
+        ),
         effective_pending_jti_store=effective_pending_jti_store,
         id_parser=id_parser,
         unsafe_testing=unsafe_testing,

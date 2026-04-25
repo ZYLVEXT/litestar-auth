@@ -10,52 +10,54 @@ after loads/refreshes.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, cast, override
+from types import MappingProxyType
+from typing import TYPE_CHECKING, Any, cast, override
 
+from advanced_alchemy.types.encrypted_string import EncryptionBackend
 from sqlalchemy import event
 from sqlalchemy import inspect as sa_inspect
 from sqlalchemy.orm import Session, attributes, object_session
 from sqlalchemy.orm.exc import UnmappedInstanceError
 
+from litestar_auth._secrets_at_rest import FernetKey, FernetKeyring
 from litestar_auth.exceptions import ConfigurationError
 
-try:
-    from cryptography.fernet import Fernet
-except ImportError:
-    Fernet = None  # ty: ignore[invalid-assignment]
-
-from advanced_alchemy.types.encrypted_string import EncryptionBackend
+if TYPE_CHECKING:
+    from collections.abc import Mapping
 
 _OAUTH_TOKEN_ENCRYPTION_INFO_KEY = "litestar_auth_oauth_token_encryption"  # noqa: S105
 _OAUTH_TOKEN_ENCRYPTION_INSTANCE_KEY = "_litestar_auth_oauth_token_encryption"  # noqa: S105
 _OAUTH_TOKEN_ENCRYPTION_SNAPSHOT_KEY = "_litestar_auth_oauth_token_snapshot"  # noqa: S105
 _OAUTH_TOKEN_ENCRYPTION_TRACKED_TARGETS_KEY = "_litestar_auth_oauth_snapshot_targets"  # noqa: S105
 _OAUTH_TOKEN_FIELDS: tuple[str, str] = ("access_token", "refresh_token")
+_DEFAULT_OAUTH_FERNET_KEY_ID = "default"
 
 
 class _RawFernetBackend(EncryptionBackend):
-    """Encryption backend that uses the configured key directly as a Fernet key (no hashing).
+    """Encryption backend that uses the configured Fernet keyring directly.
 
     When key is ``None``, values are stored and returned as plain text (no encryption).
     """
 
     def __init__(self) -> None:
-        self._fernet: Any = None
+        self._keyring: FernetKeyring | None = None
 
-    def mount_vault(self, key: str | bytes | None) -> None:
-        """Use the given key as the Fernet key, or ``None`` to disable encryption.
-
-        Raises:
-            ImportError: If cryptography is not installed and a non-``None`` key is passed.
-        """
-        if key is None:
-            self._fernet = None
-            return
-        if Fernet is None:
-            msg = "Install litestar-auth[oauth] to use OAuth token encryption."
-            raise ImportError(msg)
-        key_bytes = key.encode() if isinstance(key, str) else key
-        self._fernet = Fernet(key_bytes)
+    def mount_vault(
+        self,
+        key: FernetKey | None,
+        *,
+        active_key_id: str = _DEFAULT_OAUTH_FERNET_KEY_ID,
+        keys: Mapping[str, FernetKey] | None = None,
+    ) -> None:
+        """Use the given key or keyring, or ``None`` to disable encryption."""
+        if keys is None:
+            if key is None:
+                self._keyring = None
+                return
+            resolved_keys: Mapping[str, FernetKey] = {active_key_id: key}
+        else:
+            resolved_keys = keys
+        self._keyring = FernetKeyring(active_key_id=active_key_id, keys=resolved_keys)
 
     @override
     def init_engine(self, key: bytes | str) -> None:
@@ -71,7 +73,7 @@ class _RawFernetBackend(EncryptionBackend):
         Raises:
             TypeError: If the value cannot be represented as a token string.
         """
-        if self._fernet is None:
+        if self._keyring is None:
             if value is None:
                 return ""
             if isinstance(value, str):
@@ -83,7 +85,7 @@ class _RawFernetBackend(EncryptionBackend):
         if not isinstance(value, str):
             msg = "OAuth token values must be strings."
             raise TypeError(msg)
-        return self._fernet.encrypt(value.encode()).decode("utf-8")
+        return self._keyring.encrypt(value)
 
     def decrypt(self, value: object) -> str:
         """Decrypt the value, or return it as plaintext if encryption is disabled.
@@ -94,7 +96,7 @@ class _RawFernetBackend(EncryptionBackend):
         Raises:
             TypeError: If the value is not a string or bytes.
         """
-        if self._fernet is None or value is None:
+        if self._keyring is None or value is None:
             if value is None:
                 return ""
             if isinstance(value, str):
@@ -103,14 +105,13 @@ class _RawFernetBackend(EncryptionBackend):
                 return value.decode("utf-8")
             msg = "OAuth token values must be strings when encryption is disabled."
             raise TypeError(msg)
-        if isinstance(value, str):
-            decrypted: str | bytes = self._fernet.decrypt(value.encode("utf-8"))
-        elif isinstance(value, bytes):
-            decrypted = self._fernet.decrypt(value)
-        else:
-            msg = "OAuth token values must be strings or bytes."
-            raise TypeError(msg)
-        return decrypted.decode("utf-8") if isinstance(decrypted, bytes) else decrypted
+        return self._keyring.decrypt(_coerce_oauth_token_storage_value(value))
+
+    def needs_rotation(self, value: object) -> bool:
+        """Return whether the stored value should be rewritten with the active key id."""
+        if value is None or self._keyring is None:
+            return False
+        return self._keyring.needs_rotation(_coerce_oauth_token_storage_value(value))
 
 
 @dataclass(frozen=True, slots=True)
@@ -118,14 +119,25 @@ class OAuthTokenEncryption:
     """Explicit OAuth token encryption policy for one session-bound persistence path."""
 
     # Security: never expose the encryption key in repr/str output.
-    key: str | bytes | None = field(default=None, repr=False)
+    key: FernetKey | None = field(default=None, repr=False)
     unsafe_testing: bool = False
+    active_key_id: str = _DEFAULT_OAUTH_FERNET_KEY_ID
+    keys: Mapping[str, FernetKey] | None = field(default=None, repr=False, compare=False, hash=False)
     _backend: _RawFernetBackend = field(init=False, repr=False, compare=False, hash=False)
 
     def __post_init__(self) -> None:
-        """Initialize the cached Fernet backend for this policy's key."""
+        """Initialize the cached Fernet backend for this policy's key.
+
+        Raises:
+            ConfigurationError: If both one-key and keyring inputs are configured.
+        """
+        if self.key is not None and self.keys is not None:
+            msg = "OAuth token encryption accepts either key or keys, not both."
+            raise ConfigurationError(msg)
+        if self.keys is not None:
+            object.__setattr__(self, "keys", MappingProxyType(dict(self.keys)))
         backend = _RawFernetBackend()
-        backend.mount_vault(self.key)
+        backend.mount_vault(self.key, active_key_id=self.active_key_id, keys=self.keys)
         object.__setattr__(self, "_backend", backend)
 
     def require_configured(self, *, context: str = "OAuth token persistence") -> None:
@@ -134,7 +146,7 @@ class OAuthTokenEncryption:
         Raises:
             ConfigurationError: When ``unsafe_testing=False`` and no encryption key is configured.
         """
-        if self.unsafe_testing or self.key is not None:
+        if self.unsafe_testing or self.key is not None or self.keys is not None:
             return
         msg = (
             f"oauth_token_encryption_key is required when {context}. "
@@ -144,16 +156,47 @@ class OAuthTokenEncryption:
         raise ConfigurationError(msg)
 
     def encrypt(self, value: str | None) -> str | None:
-        """Return the value encrypted with this policy, or plaintext when disabled."""
+        """Return the value encrypted with this policy, or plaintext in explicit unsafe tests."""
+        self.require_configured(context="encrypting OAuth tokens")
         if value is None:
             return None
         return self._backend.encrypt(value)
 
     def decrypt(self, value: str | None) -> str | None:
-        """Return the value decrypted with this policy, or plaintext when disabled."""
+        """Return the value decrypted with this policy, or plaintext in explicit unsafe tests."""
+        self.require_configured(context="decrypting OAuth tokens")
         if value is None:
             return None
         return self._backend.decrypt(value)
+
+    def requires_reencrypt(self, value: str | None) -> bool:
+        """Return whether a stored OAuth token should be rewritten with the active key."""
+        self.require_configured(context="checking OAuth token rotation")
+        if value is None:
+            return False
+        return self._backend.needs_rotation(value)
+
+    def reencrypt(self, value: str | None) -> str | None:
+        """Return a stored OAuth token rewritten with the active key."""
+        self.require_configured(context="re-encrypting OAuth tokens")
+        if value is None:
+            return None
+        plaintext = self.decrypt(value)
+        return self.encrypt(plaintext)
+
+
+def _coerce_oauth_token_storage_value(value: object) -> str:
+    """Return ``value`` as a storage string for keyring operations.
+
+    Raises:
+        TypeError: If the value is not a string or bytes.
+    """
+    if isinstance(value, str):
+        return value
+    if isinstance(value, bytes):
+        return value.decode("utf-8")
+    msg = "OAuth token values must be strings or bytes."
+    raise TypeError(msg)
 
 
 def bind_oauth_token_encryption(session: object, oauth_token_encryption: OAuthTokenEncryption) -> None:

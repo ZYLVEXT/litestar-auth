@@ -34,6 +34,9 @@ class _DummyUserStore:
         self.list_users_mock = AsyncMock()
         self.update_mock = AsyncMock()
         self.delete_mock = AsyncMock()
+        self.set_recovery_code_hashes_mock = AsyncMock()
+        self.read_recovery_code_hashes_mock = AsyncMock()
+        self.consume_recovery_code_hash_mock = AsyncMock()
         self.get_by_oauth_account_mock = AsyncMock()
         self.upsert_oauth_account_mock = AsyncMock()
 
@@ -88,6 +91,30 @@ class _DummyUserStore:
     async def delete(self, user_id: UUID) -> None:
         """Delegate ``delete`` calls to the tracked async mock."""
         await self.delete_mock(user_id)
+
+    async def set_recovery_code_hashes(self, user: ExampleUser, hashes: tuple[str, ...]) -> ExampleUser:
+        """Delegate recovery-code hash replacement to the tracked async mock.
+
+        Returns:
+            Result produced by ``set_recovery_code_hashes_mock``.
+        """
+        return await self.set_recovery_code_hashes_mock(user, hashes)
+
+    async def read_recovery_code_hashes(self, user: ExampleUser) -> tuple[str, ...]:
+        """Delegate recovery-code hash reads to the tracked async mock.
+
+        Returns:
+            Result produced by ``read_recovery_code_hashes_mock``.
+        """
+        return await self.read_recovery_code_hashes_mock(user)
+
+    async def consume_recovery_code_hash(self, user: ExampleUser, matched_hash: str) -> bool:
+        """Delegate recovery-code hash consumption to the tracked async mock.
+
+        Returns:
+            Result produced by ``consume_recovery_code_hash_mock``.
+        """
+        return await self.consume_recovery_code_hash_mock(user, matched_hash)
 
     async def get_by_oauth_account(self, oauth_name: str, account_id: str) -> ExampleUser | None:
         """Delegate OAuth-account lookup to the tracked async mock.
@@ -190,6 +217,27 @@ def test_session_binding_module_executes_under_coverage() -> None:
             _build_user(email="updated@example.com"),
         ),
         ("delete", "delete_mock", (uuid4(),), {}, None),
+        (
+            "set_recovery_code_hashes",
+            "set_recovery_code_hashes_mock",
+            (_build_user(), ("hash-1", "hash-2")),
+            {},
+            _build_user(),
+        ),
+        (
+            "read_recovery_code_hashes",
+            "read_recovery_code_hashes_mock",
+            (_build_user(),),
+            {},
+            ("hash-1", "hash-2"),
+        ),
+        (
+            "consume_recovery_code_hash",
+            "consume_recovery_code_hash_mock",
+            (_build_user(), "hash-1"),
+            {},
+            True,
+        ),
     ],
 )
 async def test_scoped_user_database_proxy_delegates_crud_methods(

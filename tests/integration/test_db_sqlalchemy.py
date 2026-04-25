@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import importlib
 from typing import TYPE_CHECKING, Any, cast
@@ -11,6 +12,7 @@ import pytest
 from advanced_alchemy.base import UUIDBase, UUIDPrimaryKey, create_registry
 from advanced_alchemy.exceptions import NotFoundError
 from sqlalchemy import String, inspect, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 from sqlalchemy.orm import Session as SASession
 
@@ -259,6 +261,19 @@ def create_database(
     )
 
 
+def assert_versioned_oauth_token(
+    stored: str | None,
+    *,
+    plaintext: str,
+    policy: OAuthTokenEncryption,
+) -> None:
+    """Assert an OAuth token is stored with the versioned Fernet prefix and decrypts."""
+    assert stored is not None
+    assert stored.startswith("fernet:v1:default:")
+    assert stored != plaintext
+    assert policy.decrypt(stored) == plaintext
+
+
 def test_sqlalchemy_user_database_reuses_repository_type_per_model(session: SASession) -> None:
     """Dynamic user repository classes are cached per model — avoid repeated allocations."""
     db_a = create_database(session)
@@ -375,6 +390,80 @@ async def test_sqlalchemy_user_database_crud(session: SASession) -> None:
     await database.delete(updated_user.id)
 
     assert await database.get(updated_user.id) is None
+
+
+async def test_sqlalchemy_user_database_round_trips_recovery_code_hashes(session: SASession) -> None:
+    """The SQLAlchemy adapter stores only caller-provided recovery-code hashes."""
+    database = create_database(session)
+    user = await database.create(
+        {
+            "email": "recovery-round-trip@example.com",
+            "hashed_password": "hashed-password",
+        },
+    )
+
+    updated_user = await database.set_recovery_code_hashes(user, ("hash-1", "hash-2", "hash-3"))
+
+    assert await database.read_recovery_code_hashes(updated_user) == ("hash-1", "hash-2", "hash-3")
+    assert updated_user.recovery_codes_hashes == ["hash-1", "hash-2", "hash-3"]
+
+
+async def test_sqlalchemy_user_database_consumes_recovery_code_hash_once(session: SASession) -> None:
+    """Recovery-code consumption removes only the matched active hash."""
+    database = create_database(session)
+    user = await database.create(
+        {
+            "email": "recovery-consume@example.com",
+            "hashed_password": "hashed-password",
+        },
+    )
+    updated_user = await database.set_recovery_code_hashes(user, ("hash-1", "hash-2", "hash-3"))
+
+    assert await database.consume_recovery_code_hash(updated_user, "hash-2") is True
+    assert await database.consume_recovery_code_hash(updated_user, "hash-2") is False
+
+    reloaded_user = await database.get(updated_user.id)
+    assert reloaded_user is not None
+    assert await database.read_recovery_code_hashes(reloaded_user) == ("hash-1", "hash-3")
+
+
+async def test_sqlalchemy_user_database_recovery_code_missing_paths(session: SASession) -> None:
+    """Recovery-code helpers return empty/false for users without active hashes."""
+    database = create_database(session)
+    user = await database.create(
+        {
+            "email": "recovery-missing@example.com",
+            "hashed_password": "hashed-password",
+        },
+    )
+    transient_user = User(id=uuid4(), email="transient@example.com", hashed_password="hashed-password")
+
+    assert await database.read_recovery_code_hashes(user) == ()
+    assert await database.read_recovery_code_hashes(cast("Any", object())) == ()
+    assert await database.consume_recovery_code_hash(user, "missing-hash") is False
+    assert await database.consume_recovery_code_hash(transient_user, "missing-hash") is False
+
+
+async def test_sqlalchemy_user_database_concurrent_recovery_code_consume_returns_single_success(
+    session: SASession,
+) -> None:
+    """Concurrent consumption attempts succeed for exactly one caller."""
+    database = create_database(session)
+    user = await database.create(
+        {
+            "email": "recovery-concurrent@example.com",
+            "hashed_password": "hashed-password",
+        },
+    )
+    updated_user = await database.set_recovery_code_hashes(user, ("hash-1", "hash-2"))
+
+    results = await asyncio.gather(
+        database.consume_recovery_code_hash(updated_user, "hash-1"),
+        database.consume_recovery_code_hash(updated_user, "hash-1"),
+    )
+
+    assert results.count(True) == 1
+    assert results.count(False) == 1
 
 
 async def test_sqlalchemy_user_database_crud_missing_paths(session: SASession) -> None:
@@ -682,8 +771,36 @@ async def test_sqlalchemy_user_database_upsert_oauth_account_create(session: SAS
             OAuthAccount.__table__.c.refresh_token,
         ).where(OAuthAccount.__table__.c.user_id == user.id),
     ).one()
-    assert stored_access_token != "at-1"
-    assert stored_refresh_token != "rt-1"
+    assert_versioned_oauth_token(stored_access_token, plaintext="at-1", policy=oauth_token_encryption)
+    assert_versioned_oauth_token(stored_refresh_token, plaintext="rt-1", policy=oauth_token_encryption)
+
+    oauth_account = session.execute(select(OAuthAccount).where(OAuthAccount.user_id == user.id)).scalar_one()
+    assert oauth_account.access_token == "at-1"
+    assert oauth_account.refresh_token == "rt-1"
+
+
+def test_sqlalchemy_oauth_token_failed_flush_rollback_restores_plaintext(session: SASession) -> None:
+    """A failed OAuth token write must not leave encrypted values on the application-visible instance."""
+    oauth_token_encryption = OAuthTokenEncryption(base64.urlsafe_b64encode(b"0" * 32).decode())
+    bind_oauth_token_encryption(session, oauth_token_encryption)
+    oauth_account = OAuthAccount(
+        user_id=uuid4(),
+        oauth_name="github",
+        account_id="rollback-provider-id",
+        account_email="rollback@example.com",
+        access_token="rollback-access",
+        expires_at=3600,
+        refresh_token="rollback-refresh",
+    )
+    session.add(oauth_account)
+
+    with pytest.raises(IntegrityError):
+        session.flush()
+    session.rollback()
+
+    assert oauth_account.access_token == "rollback-access"
+    assert oauth_account.refresh_token == "rollback-refresh"
+    assert not hasattr(oauth_account, "_litestar_auth_oauth_token_snapshot")
 
 
 async def test_sqlalchemy_user_database_upsert_oauth_account_requires_explicit_encryption_policy(
@@ -707,9 +824,10 @@ async def test_sqlalchemy_user_database_upsert_oauth_account_requires_explicit_e
 
 async def test_sqlalchemy_user_database_upsert_oauth_account_update(session: SASession) -> None:
     """upsert_oauth_account updates existing OAuthAccount (email, tokens) without duplicating."""
+    oauth_token_encryption = OAuthTokenEncryption(base64.urlsafe_b64encode(b"0" * 32).decode())
     database = create_database(
         session,
-        oauth_token_encryption=OAuthTokenEncryption(base64.urlsafe_b64encode(b"0" * 32).decode()),
+        oauth_token_encryption=oauth_token_encryption,
     )
     user = await database.create(
         {"email": "upsert-update@example.com", "hashed_password": "hashed"},
@@ -745,6 +863,19 @@ async def test_sqlalchemy_user_database_upsert_oauth_account_update(session: SAS
     assert oauth_account.account_email == "updated@example.com"
     assert oauth_account.access_token == "at-new"
     assert oauth_account.expires_at == expected_expires_at
+    assert oauth_account.refresh_token == "rt-new"
+
+    stored_access_token, stored_refresh_token = session.execute(
+        select(
+            OAuthAccount.__table__.c.access_token,
+            OAuthAccount.__table__.c.refresh_token,
+        ).where(OAuthAccount.__table__.c.user_id == user.id),
+    ).one()
+    assert_versioned_oauth_token(stored_access_token, plaintext="at-new", policy=oauth_token_encryption)
+    assert_versioned_oauth_token(stored_refresh_token, plaintext="rt-new", policy=oauth_token_encryption)
+
+    session.refresh(oauth_account, attribute_names=["access_token", "refresh_token"])
+    assert oauth_account.access_token == "at-new"
     assert oauth_account.refresh_token == "rt-new"
 
 

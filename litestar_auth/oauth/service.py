@@ -1,15 +1,23 @@
-"""OAuth flow orchestration services."""
+"""OAuth flow orchestration services.
+
+Authorization-code flows generate and require PKCE S256 material per RFC 7636. Each authorize call creates a
+fresh ``code_verifier`` and ``code_challenge``; each callback must present the matching verifier before the
+provider token exchange proceeds.
+"""
 
 from __future__ import annotations
 
+import base64
+import hashlib
 import secrets
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Any, Literal, Protocol, runtime_checkable
 
 from litestar.exceptions import ClientException
 
 import litestar_auth._account_state as _shared_account_state
 from litestar_auth.exceptions import (
+    AuthenticationError,
     ConfigurationError,
     ErrorCode,
     InactiveUserError,
@@ -29,6 +37,9 @@ _ACCOUNT_STATE_ERROR_TYPES = _shared_account_state.AccountStateErrorTypes(
     unverified_error=UnverifiedUserError,
 )
 _resolve_account_state_validator = _shared_account_state.resolve_account_state_validator
+_PKCE_CODE_VERIFIER_LENGTH = 64
+_PKCE_CODE_CHALLENGE_METHOD: Literal["S256"] = "S256"
+_PKCE_UNRESERVED_ALPHABET = frozenset("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~")
 
 
 class OAuthServiceUserStoreProtocol[UP: UserProtocol[Any], ID](Protocol):
@@ -92,14 +103,64 @@ class OAuthServiceUserManagerProtocol[UP: UserProtocol[Any], ID](Protocol):
 
 @dataclass(frozen=True, slots=True)
 class OAuthAuthorization:
-    """Authorization URL plus the state value that must be persisted by transport."""
+    """Authorization URL plus state and PKCE verifier material persisted by transport."""
 
     authorization_url: str
     state: str
+    code_verifier: str
+
+
+@dataclass(frozen=True, slots=True)
+class PkceMaterial:
+    """PKCE S256 material generated for one OAuth authorization-code flow."""
+
+    code_verifier: str
+    code_challenge: str
+    code_challenge_method: Literal["S256"]
+
+
+def _generate_pkce_material() -> PkceMaterial:
+    """Generate PKCE S256 material for one authorization-code flow.
+
+    Returns:
+        Verifier, challenge, and S256 method marker for provider authorization.
+    """
+    code_verifier = _generate_pkce_code_verifier()
+    return PkceMaterial(
+        code_verifier=code_verifier,
+        code_challenge=_build_pkce_code_challenge(code_verifier),
+        code_challenge_method=_PKCE_CODE_CHALLENGE_METHOD,
+    )
+
+
+def _generate_pkce_code_verifier() -> str:
+    """Generate an RFC 7636 code verifier from the unreserved URI alphabet.
+
+    Returns:
+        A 64-character verifier suitable for S256 PKCE.
+
+    Raises:
+        RuntimeError: If the generated verifier violates the PKCE alphabet or length contract.
+    """
+    code_verifier = secrets.token_urlsafe(64)[:_PKCE_CODE_VERIFIER_LENGTH]
+    if len(code_verifier) != _PKCE_CODE_VERIFIER_LENGTH or not set(code_verifier) <= _PKCE_UNRESERVED_ALPHABET:
+        msg = "Generated PKCE code verifier is invalid."
+        raise RuntimeError(msg)
+    return code_verifier
+
+
+def _build_pkce_code_challenge(code_verifier: str) -> str:
+    """Return the unpadded base64url SHA-256 challenge for a PKCE verifier.
+
+    Returns:
+        RFC 7636 S256 code challenge.
+    """
+    digest = hashlib.sha256(code_verifier.encode("ascii")).digest()
+    return base64.urlsafe_b64encode(digest).rstrip(b"=").decode("ascii")
 
 
 class OAuthService[UP: UserProtocol[Any], ID]:
-    """Coordinate provider callback, user bootstrap, and account linking."""
+    """Coordinate PKCE-bound provider callbacks, user bootstrap, and account linking."""
 
     def __init__(
         self,
@@ -116,32 +177,48 @@ class OAuthService[UP: UserProtocol[Any], ID]:
         self._trust_provider_email_verified = trust_provider_email_verified
 
     async def authorize(self, *, redirect_uri: str, scopes: list[str] | None = None) -> OAuthAuthorization:
-        """Generate a callback state and provider authorization URL.
+        """Generate callback state, RFC 7636 PKCE S256 material, and provider authorization URL.
 
         Returns:
-            Authorization payload containing the generated state and provider URL.
+            Authorization payload containing the generated state, provider URL, and PKCE verifier to persist.
         """
         state = secrets.token_urlsafe(32)
+        pkce = _generate_pkce_material()
         authorization_url = await self._client.get_authorization_url(
             redirect_uri=redirect_uri,
             state=state,
             scopes=scopes,
+            code_challenge=pkce.code_challenge,
+            code_challenge_method=pkce.code_challenge_method,
         )
-        return OAuthAuthorization(authorization_url=authorization_url, state=state)
+        return OAuthAuthorization(
+            authorization_url=authorization_url,
+            state=state,
+            code_verifier=pkce.code_verifier,
+        )
 
     async def complete_login(
         self,
         *,
         code: str,
         redirect_uri: str,
+        code_verifier: str,
         user_manager: OAuthServiceUserManagerProtocol[UP, ID],
     ) -> UP:
-        """Resolve the callback into a local user and linked OAuth account.
+        """Resolve a PKCE-bound callback into a local user and linked OAuth account.
+
+        The ``code_verifier`` is required and forwarded to the provider token endpoint, matching the
+        RFC 7636 challenge generated during authorization.
 
         Returns:
             The resolved or newly created local user.
         """
-        token_payload = await self._client.get_access_token(code=code, redirect_uri=redirect_uri)
+        _require_code_verifier(code_verifier)
+        token_payload = await self._client.get_access_token(
+            code=code,
+            redirect_uri=redirect_uri,
+            code_verifier=code_verifier,
+        )
         (account_id, account_email), email_verified = await self._client.get_account_identity_and_email_verified(
             token_payload["access_token"],
         )
@@ -290,10 +367,16 @@ class OAuthService[UP: UserProtocol[Any], ID]:
         user: UP,
         code: str,
         redirect_uri: str,
+        code_verifier: str,
         user_manager: OAuthServiceUserManagerProtocol[UP, ID],
     ) -> None:
-        """Link a provider account to an already authenticated user."""
-        token_payload = await self._client.get_access_token(code=code, redirect_uri=redirect_uri)
+        """Link a provider account to an authenticated user after PKCE-bound token exchange."""
+        _require_code_verifier(code_verifier)
+        token_payload = await self._client.get_access_token(
+            code=code,
+            redirect_uri=redirect_uri,
+            code_verifier=code_verifier,
+        )
         account_id, account_email = await self._client.get_account_identity(token_payload["access_token"])
         oauth_account_store = _require_oauth_account_store(user_manager)
         existing_owner = await oauth_account_store.get_by_oauth_account(self._provider_name, account_id)
@@ -348,6 +431,19 @@ def _require_oauth_account_store[UP: UserProtocol[Any], ID](
 
     msg = "OAuth flows require a manager configured with an explicit oauth_account_store."
     raise TypeError(msg)
+
+
+def _require_code_verifier(code_verifier: str) -> None:
+    """Require recoverable PKCE verifier material before token exchange.
+
+    Raises:
+        AuthenticationError: If the callback cannot provide a non-empty verifier.
+    """
+    if code_verifier.strip():
+        return
+
+    msg = "OAuth callback is missing PKCE code verifier."
+    raise AuthenticationError(msg)
 
 
 def _require_account_state(

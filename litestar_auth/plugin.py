@@ -32,6 +32,7 @@ from litestar_auth._plugin.startup import (
     bootstrap_bundled_token_orm_models,
     require_oauth_token_encryption_for_configured_providers,
     require_secure_oauth_redirect_in_production,
+    require_shared_rate_limit_backends_for_multiworker,
     warn_insecure_plugin_startup_defaults,
 )
 from litestar_auth._plugin.validation import (
@@ -67,6 +68,7 @@ if TYPE_CHECKING:
     _ScopedUserDatabaseProxy = ScopedUserDatabaseProxyImpl
 
 DatabaseTokenAuthConfig = _plugin_config.DatabaseTokenAuthConfig
+FernetKeyringConfig = _plugin_config.FernetKeyringConfig
 LitestarAuthConfig = _plugin_config.LitestarAuthConfig
 OAuthConfig = _plugin_config.OAuthConfig
 StartupBackendTemplate = _plugin_config.StartupBackendTemplate
@@ -84,14 +86,7 @@ class LitestarAuth[UP: UserProtocol[Any], ID](InitPlugin, CLIPlugin):
                 user manager factory, optional OAuth/TOTP settings).
         """
         self.config = config
-        self._oauth_token_encryption = (
-            None
-            if self.config.oauth_config is None
-            else OAuthTokenEncryption(
-                self.config.oauth_config.oauth_token_encryption_key,
-                unsafe_testing=self.config.unsafe_testing,
-            )
-        )
+        self._oauth_token_encryption = _build_oauth_token_encryption(self.config)
         validate_config(self.config)
         self._session_maker = _plugin_config.require_session_maker(self.config)
         from litestar_auth._plugin.user_manager_builder import resolve_user_manager_factory  # noqa: PLC0415
@@ -117,6 +112,7 @@ class LitestarAuth[UP: UserProtocol[Any], ID](InitPlugin, CLIPlugin):
         Returns:
             The updated application config.
         """
+        require_shared_rate_limit_backends_for_multiworker(self.config)
         warn_insecure_plugin_startup_defaults(self.config)
         require_oauth_token_encryption_for_configured_providers(
             config=self.config,
@@ -263,6 +259,7 @@ class LitestarAuth[UP: UserProtocol[Any], ID](InitPlugin, CLIPlugin):
 
 __all__ = (
     "DatabaseTokenAuthConfig",
+    "FernetKeyringConfig",
     "LitestarAuth",
     "LitestarAuthConfig",
     "OAuthConfig",
@@ -270,3 +267,23 @@ __all__ = (
     "StartupBackendTemplate",
     "TotpConfig",
 )
+
+
+def _build_oauth_token_encryption[UP: UserProtocol[Any], ID](
+    config: LitestarAuthConfig[UP, ID],
+) -> OAuthTokenEncryption | None:
+    """Return the plugin-scoped OAuth token encryption policy for a config."""
+    oauth_config = config.oauth_config
+    if oauth_config is None:
+        return None
+    keyring = oauth_config.oauth_token_encryption_keyring
+    if keyring is not None:
+        return OAuthTokenEncryption(
+            unsafe_testing=config.unsafe_testing,
+            active_key_id=keyring.active_key_id,
+            keys=keyring.keys,
+        )
+    return OAuthTokenEncryption(
+        oauth_config.oauth_token_encryption_key,
+        unsafe_testing=config.unsafe_testing,
+    )

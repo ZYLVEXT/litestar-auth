@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING, Any, Protocol, cast
 
 import jwt
 
+from litestar_auth._jwt_headers import jwt_encode_headers, validate_jwt_type_header
 from litestar_auth._manager._coercions import _managed_user
 from litestar_auth._manager._protocols import UserDatabaseManagerProtocol, UserManagerHooksProtocol
 from litestar_auth.exceptions import InvalidResetPasswordTokenError, InvalidVerifyTokenError, UserNotExistsError
@@ -105,7 +106,7 @@ class AccountTokenSecurityService[UP, ID]:
         }
         if extra_claims:
             payload.update(extra_claims)
-        return jwt.encode(payload, secret, algorithm="HS256")
+        return jwt.encode(payload, secret, algorithm="HS256", headers=jwt_encode_headers())
 
     def decode_token(
         self,
@@ -117,6 +118,7 @@ class AccountTokenSecurityService[UP, ID]:
     ) -> dict[str, Any]:
         """Decode and validate a manager token payload."""
         try:
+            validate_jwt_type_header(token)
             payload = jwt.decode(
                 token,
                 secret,

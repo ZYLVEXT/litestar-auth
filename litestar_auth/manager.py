@@ -8,7 +8,10 @@ import importlib
 import logging
 import re
 import secrets
+from collections.abc import Mapping as MappingABC
+from collections.abc import Sequence as SequenceABC
 from datetime import timedelta
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, cast
 
 from litestar_auth import config as _config
@@ -29,9 +32,11 @@ from litestar_auth._manager.user_lifecycle import (
     _UserLifecycleManagerProtocol,
 )
 from litestar_auth._manager.user_policy import UserPolicy
+from litestar_auth._secrets_at_rest import FernetKey, FernetKeyring, SecretAtRestError, validate_fernet_key_id
 from litestar_auth._superuser_role import DEFAULT_SUPERUSER_ROLE_NAME, normalize_superuser_role_name
 from litestar_auth.config import RESET_PASSWORD_TOKEN_AUDIENCE, VERIFY_TOKEN_AUDIENCE
 from litestar_auth.db.base import BaseOAuthAccountStore
+from litestar_auth.exceptions import ConfigurationError
 from litestar_auth.password import PasswordHelper
 from litestar_auth.types import LoginIdentifier, UserProtocol
 
@@ -48,6 +53,38 @@ DEFAULT_RESET_PASSWORD_TOKEN_LIFETIME = timedelta(hours=1)
 ENCRYPTED_TOTP_SECRET_PREFIX = "fernet:"  # noqa: S105
 _MASKED = "**********"
 _LOGIN_IDENTIFIER_DIGEST_SIZE = 16
+_FERNET_KEYRING_PAIR_SIZE = 2
+
+type FernetKeyringConfigKeys = MappingABC[str, FernetKey]
+
+
+@dataclasses.dataclass(frozen=True, slots=True)
+class FernetKeyringConfig:
+    """Public configuration contract for versioned Fernet keyrings."""
+
+    active_key_id: str
+    keys: FernetKeyringConfigKeys = dataclasses.field(repr=False)
+
+    def __post_init__(self) -> None:
+        """Validate the keyring shape and configured Fernet key material.
+
+        Raises:
+            ConfigurationError: If the keyring shape or key material is invalid.
+        """
+        normalized_keys = _normalize_fernet_keyring_config_keys(self.keys)
+        try:
+            keyring = FernetKeyring(active_key_id=self.active_key_id, keys=normalized_keys)
+        except SecretAtRestError as exc:
+            raise ConfigurationError(str(exc)) from exc
+        object.__setattr__(self, "active_key_id", keyring.active_key_id)
+        object.__setattr__(self, "keys", MappingProxyType(dict(keyring.keys)))
+
+    def __repr__(self) -> str:
+        """Return a representation that masks every configured Fernet key."""
+        masked_keys = dict.fromkeys(self.keys, "***")
+        return f"{type(self).__name__}(active_key_id={self.active_key_id!r}, keys={masked_keys!r})"
+
+    __str__ = __repr__
 
 
 @dataclasses.dataclass(frozen=True, slots=True)
@@ -63,9 +100,21 @@ class UserManagerSecurity[ID]:
     verification_token_secret: str | None = dataclasses.field(default=None, repr=False)
     reset_password_token_secret: str | None = dataclasses.field(default=None, repr=False)
     totp_secret_key: str | None = dataclasses.field(default=None, repr=False)
+    totp_secret_keyring: FernetKeyringConfig | None = dataclasses.field(default=None, repr=False)
     id_parser: Callable[[str], ID] | None = dataclasses.field(default=None, repr=False)
     password_helper: PasswordHelper | None = dataclasses.field(default=None, repr=False)
     password_validator: Callable[[str], None] | None = dataclasses.field(default=None, repr=False)
+
+    def __post_init__(self) -> None:
+        """Reject ambiguous TOTP secret-at-rest key inputs.
+
+        Raises:
+            ConfigurationError: If both one-key and keyring inputs are configured.
+        """
+        if self.totp_secret_key is None or self.totp_secret_keyring is None:
+            return
+        msg = "Configure TOTP secret encryption with totp_secret_key or totp_secret_keyring, not both."
+        raise ConfigurationError(msg)
 
     def __repr__(self) -> str:
         """Return a repr that masks configured secret material."""
@@ -74,6 +123,7 @@ class UserManagerSecurity[ID]:
             f"verification_token_secret={_mask_optional_secret(self.verification_token_secret)!r}, "
             f"reset_password_token_secret={_mask_optional_secret(self.reset_password_token_secret)!r}, "
             f"totp_secret_key={_mask_optional_secret(self.totp_secret_key)!r}, "
+            f"totp_secret_keyring={self.totp_secret_keyring!r}, "
             f"id_parser={self.id_parser!r}, "
             f"password_helper={self.password_helper!r}, "
             f"password_validator={self.password_validator!r})"
@@ -102,6 +152,91 @@ _EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 logger = logging.getLogger(__name__)
 UserManagerUserProtocol = _manager_protocols.ManagedUserProtocol
 AccountStateUserProtocol = _manager_protocols.AccountStateUserProtocol
+
+
+def _normalize_fernet_keyring_config_keys(keys: object) -> dict[str, FernetKey]:
+    """Return a validated key-id mapping for public keyring configuration.
+
+    Raises:
+        ConfigurationError: If key ids are malformed, duplicated, or not provided as pairs.
+    """
+    if isinstance(keys, MappingABC):
+        items = tuple(keys.items())
+    elif isinstance(keys, SequenceABC) and not isinstance(keys, (str, bytes, bytearray)):
+        items = tuple(keys)
+    else:
+        msg = "FernetKeyringConfig keys must be a mapping or a sequence of key-id/key pairs."
+        raise ConfigurationError(msg)
+
+    normalized: dict[str, FernetKey] = {}
+    for item in items:
+        if (
+            not isinstance(item, SequenceABC)
+            or isinstance(item, (str, bytes, bytearray))
+            or len(item) != _FERNET_KEYRING_PAIR_SIZE
+        ):
+            msg = "FernetKeyringConfig keys must contain key-id/key pairs."
+            raise ConfigurationError(msg)
+        key_id = item[0]
+        key = item[1]
+        if not isinstance(key_id, str):
+            msg = "Fernet key ids must be strings."
+            raise ConfigurationError(msg)
+        try:
+            validated_key_id = validate_fernet_key_id(key_id)
+        except SecretAtRestError as exc:
+            raise ConfigurationError(str(exc)) from exc
+        if validated_key_id in normalized:
+            msg = "Fernet keyring key ids must be unique."
+            raise ConfigurationError(msg)
+        if not isinstance(key, (str, bytes)):
+            msg = "Configured Fernet key material is invalid."
+            raise ConfigurationError(msg)
+        normalized[validated_key_id] = key
+    return normalized
+
+
+def validate_user_manager_security_secret_roles_are_distinct(
+    security: UserManagerSecurity[Any],
+    *,
+    totp_pending_secret: str | None = None,
+    oauth_flow_cookie_secret: str | None = None,
+) -> None:
+    """Validate that manager-owned secret roles do not reuse unrelated key material."""
+    totp_secret_values = _iter_totp_secret_role_values(security)
+    if not totp_secret_values:
+        _config.validate_secret_roles_are_distinct(
+            verification_token_secret=security.verification_token_secret,
+            reset_password_token_secret=security.reset_password_token_secret,
+            totp_secret_key=None,
+            totp_pending_secret=totp_pending_secret,
+            oauth_flow_cookie_secret=oauth_flow_cookie_secret,
+        )
+        return
+
+    for totp_secret_value in totp_secret_values:
+        _config.validate_secret_roles_are_distinct(
+            verification_token_secret=security.verification_token_secret,
+            reset_password_token_secret=security.reset_password_token_secret,
+            totp_secret_key=totp_secret_value,
+            totp_pending_secret=totp_pending_secret,
+            oauth_flow_cookie_secret=oauth_flow_cookie_secret,
+        )
+
+
+def _iter_totp_secret_role_values(security: UserManagerSecurity[Any]) -> tuple[str, ...]:
+    """Return configured raw TOTP at-rest key material for distinct-role validation."""
+    values: list[str] = []
+    if security.totp_secret_key:
+        values.append(security.totp_secret_key)
+    if security.totp_secret_keyring is not None:
+        values.extend(_coerce_fernet_key_secret_role_value(key) for key in security.totp_secret_keyring.keys.values())
+    return tuple(values)
+
+
+def _coerce_fernet_key_secret_role_value(key: FernetKey) -> str:
+    """Return Fernet key material as text for existing distinct-secret validation."""
+    return key.decode("utf-8") if isinstance(key, bytes) else key
 
 
 def _get_dummy_hash(password_helper: PasswordHelper) -> str:
@@ -148,6 +283,18 @@ class UserManagerHooks[UP]:
         del self
         del user
         del token
+
+    async def on_after_register_duplicate(self, user: UP) -> None:
+        """Hook invoked after a duplicate registration attempt is detected.
+
+        SECURITY: This hook receives the existing account so your application can
+        enqueue an out-of-band notification to the real owner. Keep external I/O
+        off the request path (e.g. use a queue or background task). Blocking here
+        can reintroduce a timing oracle even though the HTTP response shape stays
+        enumeration-resistant.
+        """
+        del self
+        del user
 
     async def on_after_login(self, user: UP) -> None:
         """Hook invoked after a user authenticates successfully."""
@@ -208,7 +355,7 @@ class UserManagerHooks[UP]:
         del user
 
 
-class BaseUserManager[UP: UserProtocol[Any], ID](
+class BaseUserManager[UP: UserProtocol[Any], ID](  # noqa: PLR0904
     UserManagerHooks[UP],
     _UserLifecycleManagerProtocol[UP, ID],
     _AccountTokensManagerProtocol[UP, ID],
@@ -276,10 +423,12 @@ class BaseUserManager[UP: UserProtocol[Any], ID](
         resolved_verification_token_secret = account_token_secrets.verification_token_secret.get_secret_value()
         resolved_reset_password_token_secret = account_token_secrets.reset_password_token_secret.get_secret_value()
         if not unsafe_testing:
-            _config.validate_secret_roles_are_distinct(
-                verification_token_secret=resolved_verification_token_secret,
-                reset_password_token_secret=resolved_reset_password_token_secret,
-                totp_secret_key=resolved_security.totp_secret_key,
+            validate_user_manager_security_secret_roles_are_distinct(
+                dataclasses.replace(
+                    resolved_security,
+                    verification_token_secret=resolved_verification_token_secret,
+                    reset_password_token_secret=resolved_reset_password_token_secret,
+                ),
             )
         self.user_db = user_db
         self.oauth_account_store = oauth_account_store or _resolve_oauth_account_store(user_db)
@@ -296,6 +445,7 @@ class BaseUserManager[UP: UserProtocol[Any], ID](
         self.login_identifier: LoginIdentifier = login_identifier
         self.superuser_role_name = normalize_superuser_role_name(superuser_role_name)
         self.unsafe_testing = unsafe_testing
+        self.totp_secret_keyring = resolved_security.totp_secret_keyring
         resolved_password_helper = password_helper or PasswordHelper.from_defaults()
         self.policy = UserPolicy(
             password_helper=resolved_password_helper,
@@ -318,7 +468,21 @@ class BaseUserManager[UP: UserProtocol[Any], ID](
             logger=logger,
             policy=self.policy,
         )
-        self._totp_secrets = TotpSecretsService(self, prefix=ENCRYPTED_TOTP_SECRET_PREFIX)
+        if self.totp_secret_keyring is None:
+            self._totp_secrets = cast(
+                "TotpSecretsService[UP]",
+                TotpSecretsService(self, prefix=ENCRYPTED_TOTP_SECRET_PREFIX),
+            )
+        else:
+            self._totp_secrets = cast(
+                "TotpSecretsService[UP]",
+                TotpSecretsService(
+                    self,
+                    prefix=ENCRYPTED_TOTP_SECRET_PREFIX,
+                    active_key_id=self.totp_secret_keyring.active_key_id,
+                    keys=self.totp_secret_keyring.keys,
+                ),
+            )
 
     @property
     def account_token_secrets(self) -> AccountTokenSecrets:
@@ -484,6 +648,40 @@ class BaseUserManager[UP: UserProtocol[Any], ID](
             Plain-text secret, or ``None`` when 2FA is disabled.
         """
         return await self._totp_secrets.read_secret(secret, load_cryptography_fernet=_load_cryptography_fernet)
+
+    def totp_secret_requires_reencrypt(self, secret: str | None) -> bool:
+        """Return whether a stored TOTP secret should be rewritten with the active key."""
+        return self._totp_secrets.requires_reencrypt(
+            secret,
+            load_cryptography_fernet=_load_cryptography_fernet,
+        )
+
+    def reencrypt_totp_secret_for_storage(self, secret: str | None) -> str | None:
+        """Return a stored TOTP secret rewritten with the active key."""
+        return self._totp_secrets.reencrypt_secret_for_storage(
+            secret,
+            load_cryptography_fernet=_load_cryptography_fernet,
+        )
+
+    async def set_recovery_code_hashes(self, user: UP, hashes: tuple[str, ...]) -> UP:
+        """Replace the active TOTP recovery-code hashes for a user.
+
+        Returns:
+            The updated user instance.
+        """
+        return cast("UP", await self.user_db.set_recovery_code_hashes(user, hashes))
+
+    async def read_recovery_code_hashes(self, user: UP) -> tuple[str, ...]:
+        """Return active TOTP recovery-code hashes for a user."""
+        return cast("tuple[str, ...]", await self.user_db.read_recovery_code_hashes(user))
+
+    async def consume_recovery_code_hash(self, user: UP, matched_hash: str) -> bool:
+        """Atomically consume an active TOTP recovery-code hash.
+
+        Returns:
+            ``True`` when the hash was consumed, otherwise ``False``.
+        """
+        return cast("bool", await self.user_db.consume_recovery_code_hash(user, matched_hash))
 
     def _prepare_totp_secret_for_storage(self, secret: str | None) -> str | None:
         """Return the database representation for a TOTP secret."""

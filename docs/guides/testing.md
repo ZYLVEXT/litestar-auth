@@ -80,7 +80,7 @@ If your app provides `db_session` externally with `db_session_dependency_provide
 | TOTP replay protection | omit `totp_used_tokens_store` under `unsafe_testing=True` or use `InMemoryUsedTotpCodeStore` | isolate the store per test; use Redis-backed stores when validating multi-worker behavior |
 | TOTP pending-token JTI dedupe | plugin-built controller allows `pending_jti_store=None` under `unsafe_testing=True` | isolate the app instance per test; use a shared denylist store for production-like flows |
 | TOTP pending enrollment | plugin-built controller creates an `InMemoryTotpEnrollmentStore` under `unsafe_testing=True` when `totp_enrollment_store` is omitted | isolate the app/store per test; use `RedisTotpEnrollmentStore` or equivalent for production-like multi-worker flows |
-| TOTP enrollment secret encryption | plugin-built controller allows `totp_secret_key=None` under `unsafe_testing=True`, storing pending enrollment secrets in plaintext process-local memory | configure a real Fernet key in production — missing `totp_secret_key` fails closed with `ConfigurationError` when `unsafe_testing=False` |
+| TOTP enrollment secret encryption | plugin-built controller allows both `totp_secret_keyring=None` and `totp_secret_key=None` under `unsafe_testing=True`, storing pending enrollment secrets in plaintext process-local memory | configure a real Fernet keyring in production — missing `totp_secret_keyring` and `totp_secret_key` fails closed with `ConfigurationError` when `unsafe_testing=False` |
 | In-memory or fake user stores | app-owned fakes and stubs | create new instances per test and avoid module-global auth state |
 
 ## Single-process conveniences vs production-safe stores

@@ -13,6 +13,7 @@ from uuid import UUID, uuid4
 
 import jwt
 import pytest
+from cryptography.fernet import Fernet
 
 import litestar_auth.manager as manager_module
 from litestar_auth._manager._coercions import _account_state_user, _as_dict, _managed_user, _require_str
@@ -34,12 +35,13 @@ from litestar_auth.exceptions import (
 from litestar_auth.manager import (
     RESET_PASSWORD_TOKEN_AUDIENCE,
     BaseUserManager,
+    FernetKeyringConfig,
     UserManagerSecurity,
     _SecretValue,
 )
 from litestar_auth.manager import logger as manager_logger
 from litestar_auth.password import PasswordHelper
-from litestar_auth.schemas import UserCreate, UserUpdate
+from litestar_auth.schemas import AdminUserUpdate, UserCreate, UserUpdate
 from litestar_auth.totp import SecurityWarning
 from tests._helpers import ExampleUser
 
@@ -53,6 +55,11 @@ EXPECTED_SECRET_FALLBACK_WARNINGS = 2
 EXPECTED_SHARED_HELPER_DUMMY_HASH_CALLS = 2
 
 pytestmark = pytest.mark.unit
+
+
+def _fernet_key() -> str:
+    """Return a valid Fernet key for manager keyring tests."""
+    return Fernet.generate_key().decode()
 
 
 def test_manager_module_executes_under_coverage() -> None:
@@ -103,6 +110,7 @@ class TrackingUserManager(BaseUserManager[ExampleUser, UUID]):
         )
         self.registered_users: list[ExampleUser] = []
         self.registration_events: list[tuple[ExampleUser, str]] = []
+        self.duplicate_registration_users: list[ExampleUser] = []
         self.logged_in_users: list[ExampleUser] = []
         self.verified_users: list[ExampleUser] = []
         self.request_verify_events: list[tuple[ExampleUser | None, str | None]] = []
@@ -116,6 +124,10 @@ class TrackingUserManager(BaseUserManager[ExampleUser, UUID]):
         """Record a successful registration."""
         self.registered_users.append(user)
         self.registration_events.append((user, token))
+
+    async def on_after_register_duplicate(self, user: ExampleUser) -> None:
+        """Record a duplicate registration attempt."""
+        self.duplicate_registration_users.append(user)
 
     async def on_after_login(self, user: ExampleUser) -> None:
         """Record a successful login."""
@@ -301,6 +313,25 @@ def test_user_manager_security_masks_secret_repr() -> None:
     assert str(security) == rendered
 
 
+def test_user_manager_security_masks_totp_keyring_repr() -> None:
+    """TOTP keyring material stays out of the manager security repr surface."""
+    current_key = _fernet_key()
+    old_key = _fernet_key()
+    security = UserManagerSecurity[UUID](
+        verification_token_secret="verify-secret-1234567890-1234567890",
+        reset_password_token_secret="reset-secret-1234567890-1234567890",
+        totp_secret_keyring=FernetKeyringConfig(active_key_id="current", keys={"current": current_key, "old": old_key}),
+        id_parser=UUID,
+    )
+
+    rendered = repr(security)
+
+    assert current_key not in rendered
+    assert old_key not in rendered
+    assert "totp_secret_keyring=FernetKeyringConfig" in rendered
+    assert "'current': '***'" in rendered
+
+
 def test_manager_init_accepts_typed_security_contract() -> None:
     """The public security dataclass wires manager secrets and id parsing in one bundle."""
     user_db = AsyncMock()
@@ -322,6 +353,42 @@ def test_manager_init_accepts_typed_security_contract() -> None:
     assert manager.reset_password_token_secret.get_secret_value() == security.reset_password_token_secret
     assert manager.totp_secret_key == security.totp_secret_key
     assert manager.id_parser is UUID
+
+
+def test_user_manager_security_rejects_ambiguous_totp_key_inputs() -> None:
+    """TOTP encryption config accepts either a single key or a keyring, not both."""
+    keyring = FernetKeyringConfig(active_key_id="current", keys={"current": _fernet_key()})
+
+    with pytest.raises(ConfigurationError, match="totp_secret_key or totp_secret_keyring"):
+        UserManagerSecurity[UUID](
+            verification_token_secret="verify-secret-1234567890-1234567890",
+            reset_password_token_secret="reset-secret-1234567890-1234567890",
+            totp_secret_key=_fernet_key(),
+            totp_secret_keyring=keyring,
+        )
+
+
+def test_manager_init_accepts_totp_keyring_contract() -> None:
+    """Direct manager construction can wire a versioned Fernet keyring for TOTP storage."""
+    user_db = AsyncMock()
+    password_helper = PasswordHelper()
+    keyring = FernetKeyringConfig(active_key_id="current", keys={"current": _fernet_key(), "old": _fernet_key()})
+    manager = BaseUserManager(
+        user_db,
+        password_helper=password_helper,
+        security=UserManagerSecurity[UUID](
+            verification_token_secret="verify-secret-1234567890-1234567890",
+            reset_password_token_secret="reset-secret-1234567890-1234567890",
+            totp_secret_keyring=keyring,
+            id_parser=UUID,
+        ),
+    )
+
+    assert manager.totp_secret_key is None
+    assert manager.totp_secret_keyring is keyring
+    stored = manager._prepare_totp_secret_for_storage("plain-secret")
+    assert stored is not None
+    assert stored.startswith("fernet:v1:current:")
 
 
 def test_manager_init_stores_normalized_superuser_role_name() -> None:
@@ -426,6 +493,29 @@ def test_manager_init_rejects_reused_typed_secret_roles_in_production() -> None:
     assert manager_module.VERIFY_TOKEN_AUDIENCE in message
     assert RESET_PASSWORD_TOKEN_AUDIENCE in message
     assert "no JWT audience" in message
+    assert shared_secret not in message
+
+
+def test_manager_init_rejects_reused_totp_keyring_secret_roles_in_production() -> None:
+    """Direct manager distinct-role validation checks every configured TOTP keyring value."""
+    user_db = AsyncMock()
+    password_helper = PasswordHelper()
+    shared_secret = _fernet_key()
+
+    with pytest.raises(ConfigurationError, match="Distinct secrets/keys") as exc_info:
+        BaseUserManager(
+            user_db,
+            password_helper=password_helper,
+            security=UserManagerSecurity[UUID](
+                verification_token_secret=shared_secret,
+                reset_password_token_secret="reset-secret-1234567890-1234567890",
+                totp_secret_keyring=FernetKeyringConfig(active_key_id="current", keys={"current": shared_secret}),
+            ),
+        )
+
+    message = str(exc_info.value)
+    assert "verification_token_secret" in message
+    assert "totp_secret_key" in message
     assert shared_secret not in message
 
 
@@ -651,6 +741,7 @@ def test_manager_init_wires_services_and_configuration() -> None:
     reset_lifetime = manager_module.DEFAULT_RESET_PASSWORD_TOKEN_LIFETIME * 3
     password_validator = require_password_length
     backends = (object(),)
+    totp_keyring = FernetKeyringConfig(active_key_id="current", keys={"current": _fernet_key(), "old": _fernet_key()})
     lifecycle_service = object()
     token_security_service = object()
     account_tokens_service = type("AccountTokensServiceStub", (), {"security": token_security_service})()
@@ -700,7 +791,7 @@ def test_manager_init_wires_services_and_configuration() -> None:
             security=UserManagerSecurity[UUID](
                 verification_token_secret=verification_secret,
                 reset_password_token_secret=reset_secret,
-                totp_secret_key="a" * 32,
+                totp_secret_keyring=totp_keyring,
                 id_parser=UUID,
             ),
             verification_token_lifetime=verification_lifetime,
@@ -723,7 +814,8 @@ def test_manager_init_wires_services_and_configuration() -> None:
     assert manager.id_parser is UUID
     assert manager.password_validator is password_validator
     assert manager.reset_verification_on_email_change is False
-    assert manager.totp_secret_key == "a" * 32
+    assert manager.totp_secret_key is None
+    assert manager.totp_secret_keyring is totp_keyring
     assert manager.backends == backends
     assert manager.login_identifier == "username"
     assert manager.policy.password_helper is password_helper
@@ -750,7 +842,12 @@ def test_manager_init_wires_services_and_configuration() -> None:
         logger=manager_logger,
         policy=manager.policy,
     )
-    totp_secrets.assert_called_once_with(manager, prefix=manager_module.ENCRYPTED_TOTP_SECRET_PREFIX)
+    totp_secrets.assert_called_once_with(
+        manager,
+        prefix=manager_module.ENCRYPTED_TOTP_SECRET_PREFIX,
+        active_key_id="current",
+        keys=totp_keyring.keys,
+    )
 
 
 def test_manager_init_without_explicit_password_helper_uses_current_default_helper() -> None:
@@ -1522,6 +1619,14 @@ def test_on_after_forgot_password_docstring_mentions_background_tasks() -> None:
     assert "background task" in docstring.lower()
 
 
+def test_on_after_register_duplicate_docstring_mentions_timing_oracle() -> None:
+    """Duplicate-register hook docs warn against request-path external I/O."""
+    docstring = BaseUserManager.on_after_register_duplicate.__doc__
+
+    assert docstring is not None
+    assert "timing oracle" in docstring.lower()
+
+
 def test_require_password_length_allows_minimum_length() -> None:
     """The built-in validator accepts passwords that meet the minimum length."""
     require_password_length("123456789012")
@@ -1573,7 +1678,7 @@ async def test_update_email_change_resets_verification_and_requests_new_token() 
         await manager.update(UserUpdate(email="taken@example.com"), user)
 
     result = await manager.update(
-        UserUpdate(email="updated@example.com", password="new-password"),
+        AdminUserUpdate(email="updated@example.com", password="new-password"),
         user,
     )
 
@@ -1692,7 +1797,7 @@ async def test_update_rejects_weak_password_before_hashing() -> None:
     user = _build_user(password_helper)
 
     with pytest.raises(InvalidPasswordError, match="at least 12 characters"):
-        await manager.update(UserUpdate(password="short"), user)
+        await manager.update(AdminUserUpdate(password="short"), user)
 
     user_db.update.assert_not_awaited()
     assert manager.after_update_events == []
@@ -2020,9 +2125,13 @@ async def test_totp_secret_helpers_delegate_to_totp_service() -> None:
     with (
         patch.object(manager.totp, "set_secret", new=AsyncMock(return_value=updated_user)) as set_secret,
         patch.object(manager.totp, "read_secret", new=AsyncMock(return_value="plain-secret")) as read_secret,
+        patch.object(manager.totp, "requires_reencrypt", return_value=True) as requires_reencrypt,
+        patch.object(manager.totp, "reencrypt_secret_for_storage", return_value="rewritten-secret") as reencrypt_secret,
     ):
         assert await manager.set_totp_secret(user, None) is updated_user
         assert await manager.read_totp_secret("encrypted-value") == "plain-secret"
+        assert manager.totp_secret_requires_reencrypt("encrypted-value") is True
+        assert manager.reencrypt_totp_secret_for_storage("encrypted-value") == "rewritten-secret"
 
     set_secret.assert_awaited_once_with(
         user,
@@ -2033,6 +2142,34 @@ async def test_totp_secret_helpers_delegate_to_totp_service() -> None:
         "encrypted-value",
         load_cryptography_fernet=manager_module._load_cryptography_fernet,
     )
+    requires_reencrypt.assert_called_once_with(
+        "encrypted-value",
+        load_cryptography_fernet=manager_module._load_cryptography_fernet,
+    )
+    reencrypt_secret.assert_called_once_with(
+        "encrypted-value",
+        load_cryptography_fernet=manager_module._load_cryptography_fernet,
+    )
+
+
+async def test_recovery_code_hash_helpers_delegate_to_user_store() -> None:
+    """TOTP recovery-code helper methods delegate to the persistence store."""
+    user_db = AsyncMock()
+    password_helper = PasswordHelper()
+    manager = TrackingUserManager(user_db, password_helper)
+    user = _build_user(password_helper)
+    updated_user = replace(user, recovery_codes_hashes=["hash-1", "hash-2"])
+    user_db.set_recovery_code_hashes.return_value = updated_user
+    user_db.read_recovery_code_hashes.return_value = ("hash-1", "hash-2")
+    user_db.consume_recovery_code_hash.return_value = True
+
+    assert await manager.set_recovery_code_hashes(user, ("hash-1", "hash-2")) is updated_user
+    assert await manager.read_recovery_code_hashes(user) == ("hash-1", "hash-2")
+    assert await manager.consume_recovery_code_hash(user, "hash-1") is True
+
+    user_db.set_recovery_code_hashes.assert_awaited_once_with(user, ("hash-1", "hash-2"))
+    user_db.read_recovery_code_hashes.assert_awaited_once_with(user)
+    user_db.consume_recovery_code_hash.assert_awaited_once_with(user, "hash-1")
 
 
 async def test_read_totp_secret_requires_key_when_encrypted() -> None:
@@ -2086,7 +2223,7 @@ async def test_read_totp_secret_raises_when_decryption_fails(monkeypatch: pytest
     monkeypatch.setattr(manager_module, "_load_cryptography_fernet", lambda: fake_module)
 
     with pytest.raises(RuntimeError, match="TOTP secret decryption failed"):
-        await manager.read_totp_secret(f"{manager_module.ENCRYPTED_TOTP_SECRET_PREFIX}encrypted")
+        await manager.read_totp_secret(f"{manager_module.ENCRYPTED_TOTP_SECRET_PREFIX}v1:default:encrypted")
 
 
 def test_prepare_totp_secret_encrypts_and_prefixes_when_key_set(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -2103,17 +2240,17 @@ def test_prepare_totp_secret_encrypts_and_prefixes_when_key_set(monkeypatch: pyt
         def encrypt(self, _: bytes) -> bytes:
             return b"encrypted-value"
 
-    fake_module = type("FakeFernetModule", (), {"Fernet": FakeFernet})()
+    fake_module = type("FakeFernetModule", (), {"Fernet": FakeFernet, "InvalidToken": Exception})()
     monkeypatch.setattr(manager_module, "_load_cryptography_fernet", lambda: fake_module)
 
     stored = manager._prepare_totp_secret_for_storage("secret")
-    assert stored == f"{manager_module.ENCRYPTED_TOTP_SECRET_PREFIX}encrypted-value"
+    assert stored == f"{manager_module.ENCRYPTED_TOTP_SECRET_PREFIX}v1:default:encrypted-value"
 
     stored_via_service = manager.totp.prepare_secret_for_storage(
         "secret",
         load_cryptography_fernet=manager_module._load_cryptography_fernet,
     )
-    assert stored_via_service == f"{manager_module.ENCRYPTED_TOTP_SECRET_PREFIX}encrypted-value"
+    assert stored_via_service == f"{manager_module.ENCRYPTED_TOTP_SECRET_PREFIX}v1:default:encrypted-value"
 
 
 def test_load_cryptography_fernet_raises_with_install_hint(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -2143,6 +2280,7 @@ async def test_base_hooks_are_noops() -> None:
     user = _build_user(password_helper)
 
     assert await manager.on_after_register(user, "token") is None
+    assert await manager.on_after_register_duplicate(user) is None
     assert await manager.on_after_login(user) is None
     assert await manager.on_after_verify(user) is None
     assert await manager.on_after_request_verify_token(user, "token") is None

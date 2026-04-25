@@ -4,15 +4,21 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Literal, Protocol, Self
+from types import MappingProxyType
+from typing import TYPE_CHECKING, Any, Literal, Protocol, Self
 
 from litestar_auth._manager._protocols import UserDatabaseManagerProtocol
+from litestar_auth._secrets_at_rest import FernetKey, FernetKeyring, SecretAtRestError
+
+if TYPE_CHECKING:
+    from collections.abc import Mapping
 
 _TOTP_STORAGE_VALIDATION_ERROR = (
-    "totp_secret_key is required in production when TOTP is enabled. "
+    "totp_secret_keyring or totp_secret_key is required in production when TOTP is enabled. "
     "TOTP secrets must be encrypted at rest. Generate a Fernet key with: "
     'python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"'
 )
+_DEFAULT_TOTP_FERNET_KEY_ID = "default"
 
 type TotpSecretStoragePostureKey = Literal["fernet_encrypted"]
 
@@ -43,6 +49,15 @@ class TotpSecretStoragePosture:
         """
         return _resolve_totp_secret_storage_posture(cls, totp_secret_key)
 
+    @classmethod
+    def from_keyring_inputs(cls, *, totp_secret_key: str | None, keyring_configured: bool) -> Self:
+        """Build the storage posture for the configured TOTP key or keyring inputs.
+
+        Returns:
+            The explicit TOTP secret storage posture for configured TOTP encryption inputs.
+        """
+        return cls.fernet_encrypted(key_configured=bool(totp_secret_key) or keyring_configured)
+
     @property
     def production_validation_error(self) -> str | None:
         """Return the plugin validation error for this posture, if any."""
@@ -65,28 +80,27 @@ def _resolve_totp_secret_storage_posture[T: TotpSecretStoragePosture](
     return posture_cls.fernet_encrypted(key_configured=bool(totp_secret_key))
 
 
-def _load_fernet_for_totp_secret(
-    *,
-    load_cryptography_fernet: Any,
-    totp_secret_key: str,
-) -> tuple[Any, Any]:
-    """Return the cryptography module and Fernet instance for ``totp_secret_key``."""
-    fernet_module = load_cryptography_fernet()
-    return fernet_module, fernet_module.Fernet(totp_secret_key.encode())
-
-
 class TotpSecretsService[UP]:
     """Handle stored TOTP secret encryption and decryption."""
 
-    def __init__(self, manager: _TotpSecretsManagerProtocol[UP], *, prefix: str) -> None:
+    def __init__(
+        self,
+        manager: _TotpSecretsManagerProtocol[UP],
+        *,
+        prefix: str,
+        active_key_id: str = _DEFAULT_TOTP_FERNET_KEY_ID,
+        keys: Mapping[str, FernetKey] | None = None,
+    ) -> None:
         """Bind the facade manager and encrypted-secret prefix."""
         self._manager = manager
         self._prefix = prefix
+        self._active_key_id = active_key_id
+        self._keys = None if keys is None else MappingProxyType(dict(keys))
 
     @property
     def storage_posture(self) -> TotpSecretStoragePosture:
         """Return the explicit storage posture for the manager's current key."""
-        return _resolve_totp_secret_storage_posture(TotpSecretStoragePosture, self._manager.totp_secret_key)
+        return TotpSecretStoragePosture.fernet_encrypted(key_configured=self._has_configured_keyring())
 
     async def set_secret(
         self,
@@ -110,25 +124,7 @@ class TotpSecretsService[UP]:
         """Return a plain-text TOTP secret from storage."""
         if secret is None:
             return None
-        if not secret.startswith(self._prefix):
-            msg = "Persisted TOTP secrets must be encrypted at rest."
-            raise RuntimeError(msg)
-
-        totp_secret_key = self._manager.totp_secret_key
-        if not totp_secret_key:
-            msg = "Encrypted TOTP secrets require totp_secret_key."
-            raise RuntimeError(msg)
-
-        fernet_module, fernet = _load_fernet_for_totp_secret(
-            load_cryptography_fernet=load_cryptography_fernet,
-            totp_secret_key=totp_secret_key,
-        )
-        encrypted_value = secret.removeprefix(self._prefix).encode()
-        try:
-            return fernet.decrypt(encrypted_value).decode()
-        except fernet_module.InvalidToken as exc:
-            msg = "TOTP secret decryption failed; key may be wrong or data corrupted."
-            raise RuntimeError(msg) from exc
+        return self._read_secret_from_storage(secret, load_cryptography_fernet=load_cryptography_fernet)
 
     def prepare_secret_for_storage(
         self,
@@ -140,14 +136,83 @@ class TotpSecretsService[UP]:
         if secret is None:
             return secret
 
+        return self._build_keyring(load_cryptography_fernet=load_cryptography_fernet).encrypt(secret)
+
+    def requires_reencrypt(
+        self,
+        stored: str | None,
+        *,
+        load_cryptography_fernet: Any,
+    ) -> bool:
+        """Return whether a stored TOTP secret should be rewritten with the active key."""
+        if stored is None:
+            return False
+        self._require_encrypted_storage_value(stored)
+        try:
+            return self._build_keyring(load_cryptography_fernet=load_cryptography_fernet).needs_rotation(stored)
+        except SecretAtRestError as exc:
+            raise _totp_secret_runtime_error(exc) from exc
+
+    def reencrypt_secret_for_storage(
+        self,
+        stored: str | None,
+        *,
+        load_cryptography_fernet: Any,
+    ) -> str | None:
+        """Rewrite a stored TOTP secret with the active Fernet key id."""
+        if stored is None:
+            return None
+        plaintext = self._read_secret_from_storage(stored, load_cryptography_fernet=load_cryptography_fernet)
+        return self.prepare_secret_for_storage(plaintext, load_cryptography_fernet=load_cryptography_fernet)
+
+    def _read_secret_from_storage(
+        self,
+        secret: str,
+        *,
+        load_cryptography_fernet: Any,
+    ) -> str:
+        """Return a plain-text TOTP secret from a non-null storage value."""
+        self._require_encrypted_storage_value(secret)
+        try:
+            return self._build_keyring(load_cryptography_fernet=load_cryptography_fernet).decrypt(secret)
+        except SecretAtRestError as exc:
+            raise _totp_secret_runtime_error(exc) from exc
+
+    def _build_keyring(self, *, load_cryptography_fernet: Any) -> FernetKeyring:
+        """Return the Fernet keyring configured for persisted TOTP secrets."""
+        if self._keys is not None:
+            return FernetKeyring(
+                active_key_id=self._active_key_id,
+                keys=self._keys,
+                _load_cryptography_fernet=load_cryptography_fernet,
+            )
+
         totp_secret_key = self._manager.totp_secret_key
         if not totp_secret_key:
-            msg = "totp_secret_key is required to store TOTP secrets encrypted at rest."
+            msg = "totp_secret_key is required to store or read TOTP secrets encrypted at rest."
+            raise RuntimeError(msg)
+        return FernetKeyring(
+            active_key_id=_DEFAULT_TOTP_FERNET_KEY_ID,
+            keys={_DEFAULT_TOTP_FERNET_KEY_ID: totp_secret_key},
+            _load_cryptography_fernet=load_cryptography_fernet,
+        )
+
+    def _has_configured_keyring(self) -> bool:
+        """Return whether this service has enough key input for encrypted non-null values."""
+        if self._keys is not None:
+            return bool(self._keys)
+        return bool(self._manager.totp_secret_key)
+
+    def _require_encrypted_storage_value(self, secret: str) -> None:
+        """Fail closed for plaintext TOTP secret values."""
+        if not secret.startswith(self._prefix):
+            msg = "Persisted TOTP secrets must be encrypted at rest."
             raise RuntimeError(msg)
 
-        _, fernet = _load_fernet_for_totp_secret(
-            load_cryptography_fernet=load_cryptography_fernet,
-            totp_secret_key=totp_secret_key,
-        )
-        encrypted_secret = fernet.encrypt(secret.encode()).decode()
-        return f"{self._prefix}{encrypted_secret}"
+
+def _totp_secret_runtime_error(exc: SecretAtRestError) -> RuntimeError:
+    """Return a stable TOTP runtime error without adding secret material."""
+    if "decryption failed" in str(exc):
+        msg = "TOTP secret decryption failed; key may be wrong or data corrupted."
+        return RuntimeError(msg)
+    return RuntimeError(str(exc))

@@ -4,12 +4,14 @@ from __future__ import annotations
 
 import asyncio
 import importlib
+import logging
 import time
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from itertools import starmap
 from types import SimpleNamespace
 from typing import TYPE_CHECKING, Any, Literal, cast
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, Mock
 from urllib.parse import unquote
 from uuid import UUID, uuid4
 
@@ -24,13 +26,14 @@ from litestar.testing import AsyncTestClient
 import litestar_auth.controllers.totp as totp_controller_module
 import litestar_auth.totp as _totp_mod
 from litestar_auth._plugin.config import DEFAULT_USER_MANAGER_DEPENDENCY_KEY, TotpConfig
+from litestar_auth._secrets_at_rest import decode_versioned_fernet_value
 from litestar_auth.authentication.authenticator import Authenticator
 from litestar_auth.authentication.backend import AuthenticationBackend
 from litestar_auth.authentication.middleware import LitestarAuthMiddleware
 from litestar_auth.authentication.strategy.jwt import InMemoryJWTDenylistStore
 from litestar_auth.authentication.transport.bearer import BearerTransport
 from litestar_auth.controllers import create_auth_controller, create_totp_controller
-from litestar_auth.controllers.auth import TOTP_PENDING_AUDIENCE
+from litestar_auth.controllers.auth import INVALID_CREDENTIALS_DETAIL, TOTP_PENDING_AUDIENCE
 from litestar_auth.controllers.totp import (
     INVALID_ENROLL_TOKEN_DETAIL,
     INVALID_TOTP_CODE_DETAIL,
@@ -44,6 +47,7 @@ from litestar_auth.controllers.totp import (
     _totp_handle_confirm_enable,
     _totp_handle_disable,
     _totp_handle_enable,
+    _totp_handle_regenerate_recovery_codes,
     _totp_resolve_enrollment_store,
     _totp_resolve_pending_jti_store,
     _totp_validate_replay_and_password,
@@ -75,12 +79,14 @@ HTTP_BAD_REQUEST = 400
 HTTP_UNPROCESSABLE_ENTITY = 422
 HTTP_UNAUTHORIZED = 401
 HTTP_SERVICE_UNAVAILABLE = 503
+HTTP_TOO_MANY_REQUESTS = 429
 TWO_CALLS = 2
 
 TOTP_PENDING_SECRET = "test-totp-pending-secret-thirty-two!"  # ≥ 32 bytes
 TOTP_SECRET_KEY = Fernet.generate_key().decode()
 _TEST_ENROLLMENT_CIPHER = _EnrollmentTokenCipher.from_key(TOTP_SECRET_KEY)
 PENDING_JTI_HEX_LENGTH = 32
+SHA256_HEX_LENGTH = 64
 _DEFAULT_USED_TOKENS_STORE = object()
 _DEFAULT_PENDING_JTI_STORE = object()
 _DEFAULT_ENROLLMENT_STORE = object()
@@ -88,9 +94,10 @@ _DEFAULT_ENROLLMENT_STORE = object()
 
 def _decrypt_test_totp_secret(stored_secret: str) -> str:
     """Return the plaintext value for a test encrypted TOTP secret."""
-    assert stored_secret.startswith(ENCRYPTED_TOTP_SECRET_PREFIX)
-    encrypted_value = stored_secret.removeprefix(ENCRYPTED_TOTP_SECRET_PREFIX).encode()
-    return Fernet(TOTP_SECRET_KEY.encode()).decrypt(encrypted_value).decode()
+    assert stored_secret.startswith(f"{ENCRYPTED_TOTP_SECRET_PREFIX}v1:default:")
+    parsed = decode_versioned_fernet_value(stored_secret)
+    assert parsed.key_id == "default"
+    return Fernet(TOTP_SECRET_KEY.encode()).decrypt(parsed.ciphertext.encode()).decode()
 
 
 def _assert_encrypted_totp_secret_matches(stored_secret: str | None, plaintext_secret: str) -> None:
@@ -168,6 +175,7 @@ def build_app(  # noqa: PLR0913
     totp_enable_requires_password: bool = True,
     account_state: AccountState | None = None,
     login_identifier: Literal["email", "username"] = "email",
+    totp_pending_require_client_binding: bool = True,
     unsafe_testing: bool = False,
 ) -> tuple[Litestar, InMemoryUserDatabase, InMemoryTokenStrategy, TrackingUserManager]:
     """Create a test application with optional 2FA support.
@@ -208,6 +216,7 @@ def build_app(  # noqa: PLR0913
         totp_pending_secret=pending_secret,
         requires_verification=requires_verification,
         login_identifier=login_identifier,
+        totp_pending_require_client_binding=totp_pending_require_client_binding,
         unsafe_testing=unsafe_testing,
     )
     totp_controller = create_totp_controller(
@@ -223,6 +232,7 @@ def build_app(  # noqa: PLR0913
         totp_issuer="Test App",
         id_parser=UUID,
         requires_verification=requires_verification,
+        totp_pending_require_client_binding=totp_pending_require_client_binding,
         unsafe_testing=unsafe_testing,
     )
     middleware = DefineMiddleware(
@@ -269,6 +279,9 @@ def _build_direct_totp_context(
         totp_algorithm="SHA256",
         totp_rate_limit=cast("Any", rate_limit),
         totp_pending_secret=TOTP_PENDING_SECRET,
+        totp_pending_require_client_binding=True,
+        totp_pending_client_binding_trusted_proxy=False,
+        totp_pending_client_binding_trusted_headers=("X-Forwarded-For",),
         effective_pending_jti_store=cast("Any", effective_pending_jti_store),
         id_parser=UUID,
         unsafe_testing=False,
@@ -336,15 +349,23 @@ def test_enable_route_publishes_request_body_in_openapi_when_step_up_is_enabled(
     app, *_ = build_app(totp_enable_requires_password=True)
 
     enable_post = cast("Any", app.openapi_schema.paths)["/auth/2fa/enable"].post
+    regenerate_post = cast("Any", app.openapi_schema.paths)["/auth/2fa/recovery-codes/regenerate"].post
     verify_post = cast("Any", app.openapi_schema.paths)["/auth/2fa/verify"].post
     confirm_post = cast("Any", app.openapi_schema.paths)["/auth/2fa/enable/confirm"].post
     disable_post = cast("Any", app.openapi_schema.paths)["/auth/2fa/disable"].post
     request_body = enable_post.request_body
     enable_schema = cast("Any", app.openapi_schema.components.schemas)["TotpEnableRequest"]
+    regenerate_schema = cast("Any", app.openapi_schema.components.schemas)["TotpRegenerateRecoveryCodesRequest"]
 
     assert request_body is not None
     assert next(iter(request_body.content.values())).schema.ref == "#/components/schemas/TotpEnableRequest"
     assert "password" in (enable_schema.properties or {})
+    assert regenerate_post.request_body is not None
+    assert (
+        next(iter(regenerate_post.request_body.content.values())).schema.ref
+        == "#/components/schemas/TotpRegenerateRecoveryCodesRequest"
+    )
+    assert "current_password" in (regenerate_schema.properties or {})
     assert verify_post.request_body is not None
     assert confirm_post.request_body is not None
     assert disable_post.request_body is not None
@@ -355,14 +376,16 @@ def test_enable_route_omits_request_body_in_openapi_when_step_up_is_disabled() -
     app, *_ = build_app(totp_enable_requires_password=False)
 
     enable_post = cast("Any", app.openapi_schema.paths)["/auth/2fa/enable"].post
+    regenerate_post = cast("Any", app.openapi_schema.paths)["/auth/2fa/recovery-codes/regenerate"].post
 
     assert enable_post.request_body is None
+    assert regenerate_post.request_body is None
 
 
-async def test_enable_2fa_returns_secret_and_uri(
+async def test_confirm_enable_returns_plaintext_recovery_codes_once_and_stores_only_hashes(
     client_and_db: tuple[AsyncTestClient[Litestar], InMemoryUserDatabase],
 ) -> None:
-    """Enabling 2FA while authenticated returns the TOTP secret and otpauth URI."""
+    """Confirm-enable returns plaintext recovery codes while persisting only hashes."""
     client, user_db = client_and_db
 
     login_resp = await client.post(
@@ -383,6 +406,7 @@ async def test_enable_2fa_returns_secret_and_uri(
     assert body["uri"].startswith("otpauth://totp/")
     assert "Test%20App" in body["uri"] or "Test+App" in body["uri"] or "Test" in body["uri"]
     assert "enrollment_token" in body
+    assert "recovery_codes" not in body
 
     # secret NOT persisted until confirmation
     stored_user = next(iter(user_db.users_by_id.values()))
@@ -396,11 +420,22 @@ async def test_enable_2fa_returns_secret_and_uri(
         headers={"Authorization": f"Bearer {token}"},
     )
     assert confirm_resp.status_code == HTTP_CREATED
-    assert confirm_resp.json()["enabled"] is True
+    confirm_body = confirm_resp.json()
+    recovery_codes = tuple(confirm_body["recovery_codes"])
+    assert confirm_body["enabled"] is True
+    assert len(recovery_codes) == _totp_mod.DEFAULT_TOTP_RECOVERY_CODE_COUNT
+    assert len(set(recovery_codes)) == _totp_mod.DEFAULT_TOTP_RECOVERY_CODE_COUNT
 
     # secret persisted after confirmation
     stored_user = next(iter(user_db.users_by_id.values()))
     _assert_encrypted_totp_secret_matches(stored_user.totp_secret, body["secret"])
+    stored_hashes = tuple(stored_user.recovery_codes_hashes or ())
+    assert len(stored_hashes) == _totp_mod.DEFAULT_TOTP_RECOVERY_CODE_COUNT
+    assert all(
+        stored_hash != recovery_code for stored_hash, recovery_code in zip(stored_hashes, recovery_codes, strict=True)
+    )
+    password_helper = PasswordHelper.from_defaults()
+    assert all(starmap(password_helper.verify, zip(recovery_codes, stored_hashes, strict=True)))
 
 
 async def test_enable_2fa_keeps_email_in_the_otpauth_uri_under_username_login_mode(
@@ -631,6 +666,22 @@ async def test_consume_enrollment_token_rejects_wrong_cipher_key() -> None:
         )
 
 
+def test_enrollment_keyring_cipher_reads_non_active_key_values() -> None:
+    """Pending-enrollment state can be decrypted after active-key rotation."""
+    keys = {
+        "current": Fernet.generate_key().decode(),
+        "old": Fernet.generate_key().decode(),
+    }
+    old_cipher = _EnrollmentTokenCipher.from_keyring(active_key_id="old", keys=keys)
+    current_cipher = _EnrollmentTokenCipher.from_keyring(active_key_id="current", keys=keys)
+
+    stored = old_cipher.encrypt("totp-secret")
+
+    assert stored.startswith("fernet:v1:old:")
+    assert current_cipher.decrypt(stored) == "totp-secret"
+    assert current_cipher.decrypt("fernet:v1:missing:ciphertext") is None
+
+
 def test_decode_enrollment_token_rejects_invalid_jti() -> None:
     """Enrollment tokens with a malformed JTI are rejected."""
     token = jwt.encode(
@@ -830,6 +881,98 @@ async def test_handle_enable_rejects_invalid_explicit_data_payload() -> None:
 
     assert exc_info.value.status_code == HTTP_UNPROCESSABLE_ENTITY
     assert exc_info.value.detail == "Invalid request payload."
+    assert exc_info.value.extra == {"code": ErrorCode.LOGIN_PAYLOAD_INVALID}
+    user_manager.authenticate.assert_not_awaited()
+
+
+async def test_handle_regenerate_recovery_codes_requires_authenticated_totp_user() -> None:
+    """Direct regenerate handler calls reject missing authenticated users."""
+    ctx, _rate_limit, _backend = _build_direct_totp_context()
+    request = cast("Any", SimpleNamespace(user=None))
+
+    with pytest.raises(NotAuthorizedException, match="Authentication credentials were not provided"):
+        await _totp_handle_regenerate_recovery_codes(
+            request,
+            ctx=ctx,
+            user_manager=cast("Any", SimpleNamespace()),
+        )
+
+
+async def test_handle_regenerate_recovery_codes_rejects_unexpected_decoded_payload(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Unexpected decoded regenerate payloads map to the payload-invalid response."""
+    _app, user_db, _strategy, _user_manager = build_app()
+    user = next(iter(user_db.users_by_id.values()))
+    ctx, _rate_limit, _backend = _build_direct_totp_context()
+
+    async def return_unexpected_payload(*_args: object, **_kwargs: object) -> object:
+        await asyncio.sleep(0)
+        return object()
+
+    monkeypatch.setattr(totp_controller_module, "_decode_request_body", return_unexpected_payload)
+
+    with pytest.raises(ClientException) as exc_info:
+        await _totp_handle_regenerate_recovery_codes(
+            cast("Any", SimpleNamespace(user=user)),
+            ctx=ctx,
+            user_manager=cast("Any", SimpleNamespace(authenticate=AsyncMock(return_value=user))),
+        )
+
+    assert exc_info.value.status_code == HTTP_UNPROCESSABLE_ENTITY
+    assert exc_info.value.extra == {"code": ErrorCode.LOGIN_PAYLOAD_INVALID}
+
+
+async def test_handle_regenerate_recovery_codes_accepts_valid_decoded_payload(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Direct regenerate helper calls still support the decode path when data is omitted."""
+    _app, user_db, _strategy, _user_manager = build_app()
+    user = next(iter(user_db.users_by_id.values()))
+    ctx, rate_limit, _backend = _build_direct_totp_context()
+    user_manager = SimpleNamespace(
+        authenticate=AsyncMock(return_value=user),
+        set_recovery_code_hashes=AsyncMock(return_value=user),
+    )
+
+    async def return_valid_payload(*_args: object, **_kwargs: object) -> object:
+        await asyncio.sleep(0)
+        return totp_controller_module.TotpRegenerateRecoveryCodesRequest(current_password="correct-password")
+
+    monkeypatch.setattr(totp_controller_module, "_decode_request_body", return_valid_payload)
+
+    response = await _totp_handle_regenerate_recovery_codes(
+        cast("Any", SimpleNamespace(user=user)),
+        ctx=ctx,
+        user_manager=cast("Any", user_manager),
+    )
+
+    assert len(response.recovery_codes) == _totp_mod.DEFAULT_TOTP_RECOVERY_CODE_COUNT
+    user_manager.authenticate.assert_awaited_once_with(
+        user.email,
+        "correct-password",
+        login_identifier="email",
+    )
+    user_manager.set_recovery_code_hashes.assert_awaited_once()
+    rate_limit.on_success.assert_awaited_once()
+
+
+async def test_handle_regenerate_recovery_codes_rejects_invalid_explicit_data_payload() -> None:
+    """Direct regenerate helper calls reject explicit non-regenerate payloads."""
+    _app, user_db, _strategy, _user_manager = build_app()
+    user = next(iter(user_db.users_by_id.values()))
+    ctx, _rate_limit, _backend = _build_direct_totp_context()
+    user_manager = SimpleNamespace(authenticate=AsyncMock(return_value=user))
+
+    with pytest.raises(ClientException) as exc_info:
+        await _totp_handle_regenerate_recovery_codes(
+            cast("Any", SimpleNamespace(user=user)),
+            ctx=ctx,
+            data=cast("Any", object()),
+            user_manager=cast("Any", user_manager),
+        )
+
+    assert exc_info.value.status_code == HTTP_UNPROCESSABLE_ENTITY
     assert exc_info.value.extra == {"code": ErrorCode.LOGIN_PAYLOAD_INVALID}
     user_manager.authenticate.assert_not_awaited()
 
@@ -1054,6 +1197,94 @@ async def test_login_with_2fa_enabled_returns_pending_token(
     assert isinstance(payload["iat"], int)
     assert isinstance(payload["jti"], str)
     assert len(payload["jti"]) == PENDING_JTI_HEX_LENGTH
+    assert isinstance(payload["cip"], str)
+    assert isinstance(payload["uaf"], str)
+    assert len(payload["cip"]) == SHA256_HEX_LENGTH
+    assert len(payload["uaf"]) == SHA256_HEX_LENGTH
+    assert payload["cip"] != "127.0.0.1"
+
+
+@pytest.mark.filterwarnings("ignore::litestar_auth.totp.SecurityWarning")
+async def test_pending_token_binding_rejects_cross_client_verify_with_bad_token_shape(
+    client_and_db: tuple[AsyncTestClient[Litestar], InMemoryUserDatabase],
+) -> None:
+    """A pending token issued to one client fingerprint cannot be redeemed by another."""
+    client, _ = client_and_db
+    login_resp = await client.post(
+        "/auth/login",
+        json={"identifier": "user@example.com", "password": "correct-password"},
+        headers={"User-Agent": "AgentA"},
+    )
+    token = login_resp.json()["access_token"]
+    enable_resp = await client.post(
+        "/auth/2fa/enable",
+        json={"password": "correct-password"},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    enable_body = enable_resp.json()
+    secret = enable_body["secret"]
+    await _confirm_enrollment(client, token=token, enable_body=enable_body)
+    pending_resp = await client.post(
+        "/auth/login",
+        json={"identifier": "user@example.com", "password": "correct-password"},
+        headers={"User-Agent": "AgentA"},
+    )
+    valid_code = _generate_totp_code(secret, _current_counter())
+
+    verify_resp = await client.post(
+        "/auth/2fa/verify",
+        json={"pending_token": pending_resp.json()["pending_token"], "code": valid_code},
+        headers={"User-Agent": "AgentB"},
+    )
+
+    assert verify_resp.status_code == HTTP_BAD_REQUEST
+    assert verify_resp.json() == {
+        "status_code": HTTP_BAD_REQUEST,
+        "detail": INVALID_TOTP_TOKEN_DETAIL,
+        "extra": {"code": ErrorCode.TOTP_PENDING_BAD_TOKEN},
+    }
+
+
+@pytest.mark.filterwarnings("ignore::litestar_auth.totp.SecurityWarning")
+async def test_pending_token_client_binding_opt_out_omits_claims_warns_and_allows_replay(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """The explicit opt-out omits binding claims and logs the weaker replay posture."""
+    with caplog.at_level(logging.WARNING, logger=totp_controller_module.logger.name):
+        app, _, _, _ = build_app(totp_pending_require_client_binding=False)
+
+    async with AsyncTestClient(app=app) as client:
+        login_resp = await client.post(
+            "/auth/login",
+            json={"identifier": "user@example.com", "password": "correct-password"},
+            headers={"User-Agent": "AgentA"},
+        )
+        token = login_resp.json()["access_token"]
+        enable_resp = await client.post(
+            "/auth/2fa/enable",
+            json={"password": "correct-password"},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        enable_body = enable_resp.json()
+        secret = enable_body["secret"]
+        await _confirm_enrollment(client, token=token, enable_body=enable_body)
+        pending_resp = await client.post(
+            "/auth/login",
+            json={"identifier": "user@example.com", "password": "correct-password"},
+            headers={"User-Agent": "AgentA"},
+        )
+        pending_token = pending_resp.json()["pending_token"]
+        payload = jwt.decode(pending_token, TOTP_PENDING_SECRET, algorithms=["HS256"], audience=TOTP_PENDING_AUDIENCE)
+        assert "cip" not in payload
+        assert "uaf" not in payload
+        verify_resp = await client.post(
+            "/auth/2fa/verify",
+            json={"pending_token": pending_token, "code": _generate_totp_code(secret, _current_counter())},
+            headers={"User-Agent": "AgentB"},
+        )
+
+    assert verify_resp.status_code == HTTP_CREATED
+    assert any(getattr(record, "event", None) == "totp_pending_client_binding_disabled" for record in caplog.records)
 
 
 @pytest.mark.filterwarnings("ignore::litestar_auth.totp.SecurityWarning")
@@ -1090,6 +1321,335 @@ async def test_verify_with_valid_code_issues_full_token(
     )
     assert verify_resp.status_code == HTTP_CREATED
     assert "access_token" in verify_resp.json()
+
+
+@pytest.mark.filterwarnings("ignore::litestar_auth.totp.SecurityWarning")
+async def test_verify_with_recovery_code_logs_in_once_and_reuse_matches_wrong_totp_shape(
+    client_and_db: tuple[AsyncTestClient[Litestar], InMemoryUserDatabase],
+) -> None:
+    """Providing an issued recovery code via /verify completes login once."""
+    client, user_db = client_and_db
+
+    login_resp = await client.post(
+        "/auth/login",
+        json={"identifier": "user@example.com", "password": "correct-password"},
+    )
+    token = login_resp.json()["access_token"]
+    enable_resp = await client.post(
+        "/auth/2fa/enable",
+        json={"password": "correct-password"},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    enable_body = enable_resp.json()
+    secret = enable_body["secret"]
+    confirm_code = _generate_totp_code(secret, _current_counter())
+    confirm_resp = await client.post(
+        "/auth/2fa/enable/confirm",
+        json={"enrollment_token": enable_body["enrollment_token"], "code": confirm_code},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert confirm_resp.status_code == HTTP_CREATED
+    recovery_code = confirm_resp.json()["recovery_codes"][0]
+
+    pending_resp = await client.post(
+        "/auth/login",
+        json={"identifier": "user@example.com", "password": "correct-password"},
+    )
+    first_verify = await client.post(
+        "/auth/2fa/verify",
+        json={"pending_token": pending_resp.json()["pending_token"], "code": recovery_code},
+    )
+    assert first_verify.status_code == HTTP_CREATED
+    assert "access_token" in first_verify.json()
+    stored_user = next(iter(user_db.users_by_id.values()))
+    assert len(stored_user.recovery_codes_hashes or ()) == _totp_mod.DEFAULT_TOTP_RECOVERY_CODE_COUNT - 1
+
+    second_pending_resp = await client.post(
+        "/auth/login",
+        json={"identifier": "user@example.com", "password": "correct-password"},
+    )
+    second_verify = await client.post(
+        "/auth/2fa/verify",
+        json={"pending_token": second_pending_resp.json()["pending_token"], "code": recovery_code},
+    )
+    wrong_code_verify = await client.post(
+        "/auth/2fa/verify",
+        json={"pending_token": second_pending_resp.json()["pending_token"], "code": "000000"},
+    )
+    assert second_verify.status_code == HTTP_BAD_REQUEST
+    assert wrong_code_verify.status_code == HTTP_BAD_REQUEST
+    assert second_verify.json() == wrong_code_verify.json()
+
+
+@pytest.mark.filterwarnings("ignore::litestar_auth.totp.SecurityWarning")
+async def test_verify_concurrent_recovery_code_consumption_has_exactly_one_winner(
+    async_test_client_factory: Any,  # noqa: ANN401
+) -> None:
+    """Concurrent submits of the same recovery code cannot both complete login."""
+    app_value = build_app()
+    async with async_test_client_factory(app_value) as client_and_db:
+        client, _user_db, _strategy, _user_manager = client_and_db
+        login_resp = await client.post(
+            "/auth/login",
+            json={"identifier": "user@example.com", "password": "correct-password"},
+        )
+        token = login_resp.json()["access_token"]
+        enable_resp = await client.post(
+            "/auth/2fa/enable",
+            json={"password": "correct-password"},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        enable_body = enable_resp.json()
+        secret = enable_body["secret"]
+        confirm_code = _generate_totp_code(secret, _current_counter())
+        confirm_resp = await client.post(
+            "/auth/2fa/enable/confirm",
+            json={"enrollment_token": enable_body["enrollment_token"], "code": confirm_code},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        recovery_code = confirm_resp.json()["recovery_codes"][0]
+        first_pending_token = (
+            await client.post("/auth/login", json={"identifier": "user@example.com", "password": "correct-password"})
+        ).json()["pending_token"]
+        second_pending_token = (
+            await client.post("/auth/login", json={"identifier": "user@example.com", "password": "correct-password"})
+        ).json()["pending_token"]
+
+        first_verify, second_verify = await asyncio.gather(
+            client.post("/auth/2fa/verify", json={"pending_token": first_pending_token, "code": recovery_code}),
+            client.post("/auth/2fa/verify", json={"pending_token": second_pending_token, "code": recovery_code}),
+        )
+
+    assert sorted((first_verify.status_code, second_verify.status_code)) == [HTTP_CREATED, HTTP_BAD_REQUEST]
+
+
+@pytest.mark.filterwarnings("ignore::litestar_auth.totp.SecurityWarning")
+async def test_disable_accepts_recovery_code_and_clears_totp_state(
+    client_and_db: tuple[AsyncTestClient[Litestar], InMemoryUserDatabase],
+) -> None:
+    """A user who lost the authenticator can spend one recovery code to disable TOTP."""
+    client, user_db = client_and_db
+
+    login_resp = await client.post(
+        "/auth/login",
+        json={"identifier": "user@example.com", "password": "correct-password"},
+    )
+    token = login_resp.json()["access_token"]
+    enable_resp = await client.post(
+        "/auth/2fa/enable",
+        json={"password": "correct-password"},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    enable_body = enable_resp.json()
+    confirm_code = _generate_totp_code(enable_body["secret"], _current_counter())
+    confirm_resp = await client.post(
+        "/auth/2fa/enable/confirm",
+        json={"enrollment_token": enable_body["enrollment_token"], "code": confirm_code},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    recovery_code = confirm_resp.json()["recovery_codes"][0]
+
+    disable_resp = await client.post(
+        "/auth/2fa/disable",
+        json={"code": recovery_code},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    login_after_disable_resp = await client.post(
+        "/auth/login",
+        json={"identifier": "user@example.com", "password": "correct-password"},
+    )
+
+    assert disable_resp.status_code == HTTP_CREATED
+    stored_user = next(iter(user_db.users_by_id.values()))
+    assert stored_user.totp_secret is None
+    assert stored_user.recovery_codes_hashes is None
+    assert login_after_disable_resp.status_code == HTTP_CREATED
+    assert "access_token" in login_after_disable_resp.json()
+    assert "pending_token" not in login_after_disable_resp.json()
+
+
+async def test_regenerate_recovery_codes_without_password_requirement_returns_new_codes() -> None:
+    """Authenticated users can rotate recovery codes when password step-up is disabled."""
+    app, user_db, _, _ = build_app(totp_enable_requires_password=False)
+
+    async with AsyncTestClient(app=app) as client:
+        login_resp = await client.post(
+            "/auth/login",
+            json={"identifier": "user@example.com", "password": "correct-password"},
+        )
+        token = login_resp.json()["access_token"]
+        enable_resp = await client.post("/auth/2fa/enable", headers={"Authorization": f"Bearer {token}"})
+        enable_body = enable_resp.json()
+        await _confirm_enrollment(client, token=token, enable_body=enable_body)
+
+        response = await client.post(
+            "/auth/2fa/recovery-codes/regenerate",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+
+    assert response.status_code == HTTP_CREATED
+    recovery_codes = tuple(response.json()["recovery_codes"])
+    assert len(recovery_codes) == _totp_mod.DEFAULT_TOTP_RECOVERY_CODE_COUNT
+    assert len(set(recovery_codes)) == _totp_mod.DEFAULT_TOTP_RECOVERY_CODE_COUNT
+    stored_user = next(iter(user_db.users_by_id.values()))
+    stored_hashes = tuple(stored_user.recovery_codes_hashes or ())
+    assert len(stored_hashes) == _totp_mod.DEFAULT_TOTP_RECOVERY_CODE_COUNT
+    password_helper = PasswordHelper.from_defaults()
+    assert all(starmap(password_helper.verify, zip(recovery_codes, stored_hashes, strict=True)))
+
+
+@pytest.mark.filterwarnings("ignore::litestar_auth.totp.SecurityWarning")
+async def test_regenerate_recovery_codes_returns_new_set_and_old_codes_stop_working() -> None:
+    """Password step-up rotation replaces the previous recovery-code set."""
+    app, user_db, _, _ = build_app(totp_enable_requires_password=True)
+
+    async with AsyncTestClient(app=app) as client:
+        login_resp = await client.post(
+            "/auth/login",
+            json={"identifier": "user@example.com", "password": "correct-password"},
+        )
+        token = login_resp.json()["access_token"]
+        enable_resp = await client.post(
+            "/auth/2fa/enable",
+            json={"password": "correct-password"},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        enable_body = enable_resp.json()
+        confirm_code = _generate_totp_code(enable_body["secret"], _current_counter())
+        confirm_resp = await client.post(
+            "/auth/2fa/enable/confirm",
+            json={"enrollment_token": enable_body["enrollment_token"], "code": confirm_code},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        old_recovery_code = confirm_resp.json()["recovery_codes"][0]
+
+        response = await client.post(
+            "/auth/2fa/recovery-codes/regenerate",
+            json={"current_password": "correct-password"},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+
+        pending_resp = await client.post(
+            "/auth/login",
+            json={"identifier": "user@example.com", "password": "correct-password"},
+        )
+        old_code_verify = await client.post(
+            "/auth/2fa/verify",
+            json={"pending_token": pending_resp.json()["pending_token"], "code": old_recovery_code},
+        )
+
+    assert response.status_code == HTTP_CREATED
+    new_recovery_codes = tuple(response.json()["recovery_codes"])
+    assert len(new_recovery_codes) == _totp_mod.DEFAULT_TOTP_RECOVERY_CODE_COUNT
+    assert old_code_verify.status_code == HTTP_BAD_REQUEST
+    assert old_code_verify.json()["detail"] == INVALID_TOTP_CODE_DETAIL
+    stored_user = next(iter(user_db.users_by_id.values()))
+    stored_hashes = tuple(stored_user.recovery_codes_hashes or ())
+    password_helper = PasswordHelper.from_defaults()
+    assert all(not password_helper.verify(old_recovery_code, stored_hash) for stored_hash in stored_hashes)
+    assert all(starmap(password_helper.verify, zip(new_recovery_codes, stored_hashes, strict=True)))
+
+
+async def test_regenerate_recovery_codes_with_wrong_password_returns_login_failure_shape() -> None:
+    """Wrong password step-up uses the same public error contract as login."""
+    app, user_db, _, _ = build_app(totp_enable_requires_password=True)
+
+    async with AsyncTestClient(app=app) as client:
+        login_resp = await client.post(
+            "/auth/login",
+            json={"identifier": "user@example.com", "password": "correct-password"},
+        )
+        token = login_resp.json()["access_token"]
+        await _enable_totp_and_get_secret(client)
+        before_hashes = tuple(next(iter(user_db.users_by_id.values())).recovery_codes_hashes or ())
+
+        response = await client.post(
+            "/auth/2fa/recovery-codes/regenerate",
+            json={"current_password": "wrong-password"},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+
+    body = response.json()
+    code = body.get("code") or (body.get("extra") or {}).get("code")
+    assert response.status_code == HTTP_BAD_REQUEST
+    assert body["detail"] == INVALID_CREDENTIALS_DETAIL
+    assert code == ErrorCode.LOGIN_BAD_CREDENTIALS
+    assert tuple(next(iter(user_db.users_by_id.values())).recovery_codes_hashes or ()) == before_hashes
+
+
+async def test_regenerate_recovery_codes_invalid_payload_increments_rate_limit() -> None:
+    """Invalid regenerate request bodies use the endpoint's dedicated counter."""
+    backend = AsyncMock()
+    backend.check.return_value = True
+    backend.retry_after.return_value = 0
+    app, *_ = build_app(
+        rate_limit_config=AuthRateLimitConfig(
+            totp_regenerate_recovery_codes=EndpointRateLimit(
+                backend=backend,
+                scope="ip",
+                namespace="totp-regenerate-recovery-codes",
+            ),
+        ),
+        totp_enable_requires_password=True,
+    )
+
+    async with AsyncTestClient(app=app) as client:
+        login_resp = await client.post(
+            "/auth/login",
+            json={"identifier": "user@example.com", "password": "correct-password"},
+        )
+        token = login_resp.json()["access_token"]
+        response = await client.post(
+            "/auth/2fa/recovery-codes/regenerate",
+            json={"current_password": ""},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+
+    assert response.status_code == HTTP_UNPROCESSABLE_ENTITY
+    backend.increment.assert_awaited_once()
+
+
+async def test_regenerate_recovery_codes_requires_authentication() -> None:
+    """Recovery-code rotation is guarded by is_authenticated."""
+    app, *_ = build_app(totp_enable_requires_password=False)
+
+    async with AsyncTestClient(app=app) as client:
+        response = await client.post("/auth/2fa/recovery-codes/regenerate")
+
+    assert response.status_code == HTTP_UNAUTHORIZED
+
+
+async def test_regenerate_recovery_codes_rate_limit_returns_429() -> None:
+    """The regenerate endpoint uses its dedicated TOTP rate-limit slot."""
+    backend = AsyncMock()
+    backend.check.return_value = False
+    backend.retry_after.return_value = 60
+    app, *_ = build_app(
+        rate_limit_config=AuthRateLimitConfig(
+            totp_regenerate_recovery_codes=EndpointRateLimit(
+                backend=backend,
+                scope="ip",
+                namespace="totp-regenerate-recovery-codes",
+            ),
+        ),
+        totp_enable_requires_password=False,
+    )
+
+    async with AsyncTestClient(app=app) as client:
+        login_resp = await client.post(
+            "/auth/login",
+            json={"identifier": "user@example.com", "password": "correct-password"},
+        )
+        token = login_resp.json()["access_token"]
+        response = await client.post(
+            "/auth/2fa/recovery-codes/regenerate",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+
+    assert response.status_code == HTTP_TOO_MANY_REQUESTS
+    assert response.json()["detail"] == "Too many requests."
+    backend.check.assert_awaited_once()
+    backend.increment.assert_not_awaited()
 
 
 async def test_confirm_enable_rejects_expired_enrollment_token(
@@ -1221,6 +1781,119 @@ async def test_handle_confirm_enable_rejects_invalid_code_directly() -> None:
     assert exc_info.value.status_code == HTTP_BAD_REQUEST
     assert exc_info.value.extra == {"code": ErrorCode.TOTP_CODE_INVALID}
     assert rate_limit.on_invalid_attempt.await_count == 1
+
+
+async def test_handle_confirm_enable_rolls_back_totp_secret_when_recovery_code_persistence_fails() -> None:
+    """Confirm-enable does not leave TOTP enabled when recovery-code persistence fails."""
+    _app, user_db, _strategy, _user_manager = build_app()
+    user = next(iter(user_db.users_by_id.values()))
+    ctx, _rate_limit, _backend = _build_direct_totp_context()
+    secret = _totp_mod.generate_totp_secret()
+    enrollment_token = await _issue_enrollment_token(
+        user_id=str(user.id),
+        secret=secret,
+        signing_key=TOTP_PENDING_SECRET,
+        cipher=_TEST_ENROLLMENT_CIPHER,
+        enrollment_store=ctx.enrollment_store,
+    )
+
+    class FailingRecoveryCodeManager:
+        """Manager that persists the TOTP secret but refuses recovery-code storage."""
+
+        async def set_totp_secret(self, managed_user: ExampleUser, managed_secret: str | None) -> ExampleUser:
+            """Store or clear the TOTP secret on the in-memory user.
+
+            Returns:
+                The updated user.
+            """
+            del self
+            managed_user.totp_secret = managed_secret
+            return managed_user
+
+        async def set_recovery_code_hashes(self, managed_user: ExampleUser, hashes: tuple[str, ...]) -> ExampleUser:
+            """Simulate a storage failure after the TOTP secret has been written.
+
+            Raises:
+                RuntimeError: Always, to simulate recovery-code storage failure.
+            """
+            del self, managed_user, hashes
+            msg = "recovery-code persistence failed"
+            raise RuntimeError(msg)
+
+    with pytest.raises(RuntimeError, match="recovery-code persistence failed"):
+        await _totp_handle_confirm_enable(
+            cast("Any", SimpleNamespace(user=user)),
+            ctx=ctx,
+            data=totp_controller_module.TotpConfirmEnableRequest(
+                enrollment_token=enrollment_token,
+                code=_generate_totp_code(secret, _current_counter()),
+            ),
+            user_manager=cast("Any", FailingRecoveryCodeManager()),
+        )
+
+    assert user.totp_secret is None
+    assert user.recovery_codes_hashes is None
+
+
+async def test_handle_confirm_enable_logs_recovery_code_count_without_plaintext(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Confirm-enable logs issuance metadata but not one-time recovery-code values."""
+    _app, user_db, _strategy, _user_manager = build_app()
+    user = next(iter(user_db.users_by_id.values()))
+    ctx, _rate_limit, _backend = _build_direct_totp_context()
+    secret = _totp_mod.generate_totp_secret()
+    enrollment_token = await _issue_enrollment_token(
+        user_id=str(user.id),
+        secret=secret,
+        signing_key=TOTP_PENDING_SECRET,
+        cipher=_TEST_ENROLLMENT_CIPHER,
+        enrollment_store=ctx.enrollment_store,
+    )
+
+    class RecoveryCodeManager:
+        """Manager that records TOTP and recovery-code persistence calls."""
+
+        async def set_totp_secret(self, managed_user: ExampleUser, managed_secret: str | None) -> ExampleUser:
+            """Store or clear the TOTP secret on the in-memory user.
+
+            Returns:
+                The updated user.
+            """
+            del self
+            managed_user.totp_secret = managed_secret
+            return managed_user
+
+        async def set_recovery_code_hashes(self, managed_user: ExampleUser, hashes: tuple[str, ...]) -> ExampleUser:
+            """Store recovery-code hashes on the in-memory user.
+
+            Returns:
+                The updated user.
+            """
+            del self
+            managed_user.recovery_codes_hashes = list(hashes) or None
+            return managed_user
+
+    logger_info = Mock()
+    monkeypatch.setattr(totp_controller_module.logger, "info", logger_info)
+
+    response = await _totp_handle_confirm_enable(
+        cast("Any", SimpleNamespace(user=user)),
+        ctx=ctx,
+        data=totp_controller_module.TotpConfirmEnableRequest(
+            enrollment_token=enrollment_token,
+            code=_generate_totp_code(secret, _current_counter()),
+        ),
+        user_manager=cast("Any", RecoveryCodeManager()),
+    )
+
+    assert len(response.recovery_codes) == _totp_mod.DEFAULT_TOTP_RECOVERY_CODE_COUNT
+    logger_info.assert_called_once()
+    log_template, issued_count, logged_user_id = logger_info.call_args.args
+    assert log_template == "Issued %d TOTP recovery codes for user_id=%s."
+    assert issued_count == _totp_mod.DEFAULT_TOTP_RECOVERY_CODE_COUNT
+    assert logged_user_id == user.id
+    assert all(code not in logger_info.call_args.args for code in response.recovery_codes)
 
 
 async def test_confirm_enable_rejects_replayed_enrollment_token(
@@ -2316,7 +2989,11 @@ async def test_verify_accepts_datetime_expiration_payload(
     rate_limit_config, rate_limiter_backend = _build_totp_verify_rate_limiter()
     deny_store = AsyncMock()
     deny_store.is_denied = AsyncMock(return_value=False)
-    app, user_db, _, _ = build_app(rate_limit_config=rate_limit_config, pending_jti_store=cast("Any", deny_store))
+    app, user_db, _, _ = build_app(
+        rate_limit_config=rate_limit_config,
+        pending_jti_store=cast("Any", deny_store),
+        totp_pending_require_client_binding=False,
+    )
     user = next(iter(user_db.users_by_id.values()))
 
     monkeypatch.setattr("litestar_auth.totp._current_counter", lambda: fixed_counter)

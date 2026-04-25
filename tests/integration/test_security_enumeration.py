@@ -283,9 +283,14 @@ async def test_forgot_password_timing_does_not_depend_on_email_existence(monkeyp
     """Forgot-password performs the same token work for missing and existing emails."""
     original_encode = account_tokens_module.jwt.encode
 
-    def delayed_encode(payload: dict[str, Any], key: str, algorithm: str) -> str:
+    def delayed_encode(
+        payload: dict[str, Any],
+        key: str,
+        algorithm: str,
+        headers: dict[str, str] | None = None,
+    ) -> str:
         time.sleep(SLOW_OPERATION_SECONDS)
-        return original_encode(payload, key, algorithm=algorithm)
+        return original_encode(payload, key, algorithm=algorithm, headers=headers)
 
     monkeypatch.setattr(account_tokens_module.jwt, "encode", delayed_encode)
     app, _, _ = build_app()

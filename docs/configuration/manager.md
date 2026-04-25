@@ -193,7 +193,8 @@ The detailed contracts for each surface are:
 | ------- | ---------------- | ----- |
 | `user_manager_security.verification_token_secret` | Signs email-verification tokens. | Required in production unless the owning manager/config explicitly sets `unsafe_testing=True`. |
 | `user_manager_security.reset_password_token_secret` | Signs reset-password tokens and password fingerprints. | Required in production unless the owning manager/config explicitly sets `unsafe_testing=True`. |
-| `user_manager_security.totp_secret_key` | Encrypts persisted TOTP secrets and pending-enrollment secret values at rest. | Required in production when `totp_config` is enabled. |
+| `user_manager_security.totp_secret_keyring` | Versioned Fernet keyring for persisted TOTP secrets and pending-enrollment secret values at rest. | Required in production when `totp_config` is enabled; prefer `FernetKeyringConfig(active_key_id=..., keys=...)` for rotation. |
+| `user_manager_security.totp_secret_key` | One-key TOTP Fernet shortcut encoded under the `default` key id. | Mutually exclusive with `totp_secret_keyring`; useful when a single active key is enough. |
 | `totp_config.totp_pending_secret` | Signs pending/enrollment TOTP JWTs. | Required when `totp_config` is enabled; configured on `TotpConfig`, not `UserManagerSecurity`. |
 | `user_manager_security.id_parser` | Supplies the manager/controller JWT subject parser once. | When set, `LitestarAuthConfig.id_parser` defaults to the same callable. Do not configure both with different values. |
 | `user_manager_security.password_helper` | Injects the `PasswordHelper` instance used by `BaseUserManager`. | Prefer `config.resolve_password_helper()` to memoize the default helper when app-owned code also needs one. |
@@ -205,17 +206,18 @@ The detailed contracts for each surface are:
 The default plugin builder now treats `user_manager_security` as an end-to-end constructor contract. When that
 typed bundle is present, the plugin always passes `security=UserManagerSecurity(...)`, folds the effective
 `id_parser` into that bundle first, and does not also send `verification_token_secret` /
-`reset_password_token_secret` / `totp_secret_key` / `id_parser` kwargs in the same call. Managers that do not
+`reset_password_token_secret` / `totp_secret_key` / `totp_secret_keyring` / `id_parser` kwargs in the same call. Managers that do not
 follow the default `BaseUserManager` constructor surface must be configured with
 `user_manager_factory=...`.
 
 The supported production posture is one distinct high-entropy value per secret role. Outside
 explicit `unsafe_testing`, `LitestarAuth(config)` validation raises `ConfigurationError` when one
-configured value is reused across verification, reset-password, and TOTP roles, including
-`totp_config.totp_pending_secret` when that controller flow is enabled. Direct
+configured value is reused across verification, reset-password, and TOTP roles, including every
+configured key in `user_manager_security.totp_secret_keyring` and `totp_config.totp_pending_secret`
+when that controller flow is enabled. Direct
 `BaseUserManager(..., security=UserManagerSecurity(...))` construction applies the same
 fail-closed validation for the manager-owned secret roles supplied on that bundle
-(`verification_token_secret`, `reset_password_token_secret`, and `totp_secret_key`). Custom
+(`verification_token_secret`, `reset_password_token_secret`, and TOTP Fernet keys). Custom
 `user_manager_factory` implementations should keep their manager-owned secret wiring aligned with
 `user_manager_security`; if they construct a manager with reused secret material, that manager
 constructor raises for the roles it actually receives.
@@ -225,7 +227,7 @@ constructor raises for the roles it actually receives.
 | `user_manager_security.verification_token_secret` | `litestar-auth:verify` | Dedicated secret used only for email-verification JWTs. |
 | `user_manager_security.reset_password_token_secret` | `litestar-auth:reset-password` | Dedicated secret used only for reset-password JWTs and password fingerprints. |
 | `totp_config.totp_pending_secret` | `litestar-auth:2fa-pending`, `litestar-auth:2fa-enroll` | Dedicated secret used only for pending/enrollment TOTP JWTs. |
-| `user_manager_security.totp_secret_key` | Stored TOTP secret encryption at rest; no JWT audience | Dedicated Fernet key kept separate from all JWT signing secrets. |
+| `user_manager_security.totp_secret_keyring` / `totp_secret_key` | Stored TOTP secret encryption at rest; no JWT audience | Dedicated Fernet key material kept separate from all JWT signing secrets. |
 
 Distinct audiences already prevent token cross-use between verification, reset-password, and TOTP
 JWTs. Separate secrets still matter because they reduce blast radius if one secret leaks and avoid
@@ -233,7 +235,7 @@ coupling unrelated rotation events.
 
 Compatibility and migration:
 
-- Configure plugin-managed `verification_token_secret`, `reset_password_token_secret`, `totp_secret_key`, and
+- Configure plugin-managed `verification_token_secret`, `reset_password_token_secret`, `totp_secret_keyring`, and
   `id_parser` through `user_manager_security`.
 - If you intentionally need factory-owned security wiring, set `user_manager_factory` directly and pass explicit
   dependencies through your factory closure or another typed app-owned dependency surface.
@@ -286,10 +288,10 @@ Plugin-managed account-state checks also rely on one stable callable surface res
 preserve the same user argument plus keyword-only verification flag when they customize that
 policy.
 
-For app-owned `user_create_schema` / `user_update_schema` structs, import `UserEmailField` and
-`UserPasswordField` from `litestar_auth.schemas` instead of copying the built-in email regex or raw
-`12` / `128` bounds. If you already import `UserPasswordField`, keep it and replace `email: str`
-with `UserEmailField` when you also want the built-in email contract. Those aliases keep schema
-metadata aligned with the built-in `UserCreate` and `UserUpdate` structs; runtime password
-validation still happens in the manager through `password_validator_factory` or the manager's
-default validator.
+For app-owned registration, admin-update, or password-rotation structs, import `UserEmailField`
+and `UserPasswordField` from `litestar_auth.schemas` instead of copying the built-in email regex
+or raw `12` / `128` bounds. `UserPasswordField` is not for self-service profile update DTOs:
+`UserUpdate` intentionally excludes `password`, and authenticated users rotate their own password
+through `ChangePasswordRequest`. Those aliases keep schema metadata aligned with the built-in
+credential-bearing structs; runtime password validation still happens in the manager through
+`password_validator_factory` or the manager's default validator.

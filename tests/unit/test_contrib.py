@@ -1336,4 +1336,5 @@ def test_oauth_package_preserves_lazy_dependency_error(monkeypatch: pytest.Monke
             user_manager=user_manager,
             oauth_client_class="httpx_oauth.clients.github.GitHubOAuth2",
             redirect_base_url="https://app.example/auth/oauth",
+            oauth_flow_cookie_secret="oauth-flow-cookie-secret-1234567890",
         )

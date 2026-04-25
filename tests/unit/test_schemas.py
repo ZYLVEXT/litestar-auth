@@ -19,7 +19,7 @@ from litestar_auth.controllers.totp import (
     TotpVerifyRequest,
 )
 from litestar_auth.controllers.verify import RequestVerifyToken, VerifyToken
-from litestar_auth.schemas import UserCreate, UserEmailField, UserPasswordField, UserRead, UserUpdate
+from litestar_auth.schemas import AdminUserUpdate, UserCreate, UserEmailField, UserPasswordField, UserRead, UserUpdate
 
 pytestmark = pytest.mark.unit
 
@@ -85,7 +85,12 @@ def test_user_read_field_order_uses_roles_as_authorization_surface() -> None:
 
 def test_user_update_field_order_uses_roles_as_authorization_surface() -> None:
     """UserUpdate keeps the public update fields for the role-based API surface."""
-    assert UserUpdate.__struct_fields__ == ("password", "email", "is_active", "is_verified", "roles")
+    assert UserUpdate.__struct_fields__ == ("email", "is_active", "is_verified", "roles")
+
+
+def test_admin_user_update_field_order_matches_user_update_surface() -> None:
+    """AdminUserUpdate preserves the current privileged update surface."""
+    assert AdminUserUpdate.__struct_fields__ == ("password", "email", "is_active", "is_verified", "roles")
 
 
 def test_user_create_decodes_plain_text_password_payload() -> None:
@@ -113,6 +118,33 @@ def test_user_update_rejects_unknown_fields() -> None:
         msgspec.json.decode(
             b'{"email":"updated@example.com","deprecated_admin_flag":true}',
             type=UserUpdate,
+        )
+
+
+def test_user_update_rejects_password_field() -> None:
+    """Built-in self-update schema no longer accepts password rotation."""
+    with pytest.raises(msgspec.ValidationError):
+        msgspec.json.decode(
+            b'{"password":"plain-text-password"}',
+            type=UserUpdate,
+        )
+
+
+def test_admin_user_update_round_trips_with_all_none_defaults() -> None:
+    """AdminUserUpdate can be instantiated empty and converted back from builtins."""
+    payload = AdminUserUpdate()
+    builtins = msgspec.to_builtins(payload)
+
+    assert builtins == {}
+    assert msgspec.convert(builtins, type=AdminUserUpdate) == payload
+
+
+def test_admin_user_update_rejects_unknown_fields() -> None:
+    """AdminUserUpdate keeps strict request decoding for privileged writes."""
+    with pytest.raises(msgspec.ValidationError):
+        msgspec.json.decode(
+            b'{"email":"updated@example.com","deprecated_admin_flag":true}',
+            type=AdminUserUpdate,
         )
 
 
@@ -217,24 +249,33 @@ def test_custom_registration_schema_reuses_public_email_and_password_contract() 
 
 def test_builtin_and_custom_password_fields_reuse_public_alias() -> None:
     """Built-in and app-owned schemas reuse the same public password field alias."""
+    admin_update_annotation = get_type_hints(AdminUserUpdate, include_extras=True)["password"]
     create_annotation = get_type_hints(UserCreate, include_extras=True)["password"]
-    update_annotation = get_type_hints(UserUpdate, include_extras=True)["password"]
     custom_annotation = get_type_hints(CustomRegistrationSchema, include_extras=True)["password"]
     password_field_value = getattr(UserPasswordField, "__value__", UserPasswordField)
 
+    assert (
+        getattr(get_args(admin_update_annotation)[0], "__value__", get_args(admin_update_annotation)[0])
+        == password_field_value
+    )
+    assert get_args(admin_update_annotation)[1] is type(None)
     assert getattr(create_annotation, "__value__", create_annotation) == password_field_value
     assert getattr(custom_annotation, "__value__", custom_annotation) == password_field_value
-    assert getattr(get_args(update_annotation)[0], "__value__", get_args(update_annotation)[0]) == password_field_value
-    assert get_args(update_annotation)[1] is type(None)
 
 
 def test_builtin_and_custom_email_fields_reuse_public_alias() -> None:
     """Built-in and app-owned schemas reuse the same public email field alias."""
+    admin_update_annotation = get_type_hints(AdminUserUpdate, include_extras=True)["email"]
     create_annotation = get_type_hints(UserCreate, include_extras=True)["email"]
     update_annotation = get_type_hints(UserUpdate, include_extras=True)["email"]
     custom_annotation = get_type_hints(CustomRegistrationSchema, include_extras=True)["email"]
     email_field_value = getattr(UserEmailField, "__value__", UserEmailField)
 
+    assert (
+        getattr(get_args(admin_update_annotation)[0], "__value__", get_args(admin_update_annotation)[0])
+        == email_field_value
+    )
+    assert get_args(admin_update_annotation)[1] is type(None)
     assert getattr(create_annotation, "__value__", create_annotation) == email_field_value
     assert getattr(custom_annotation, "__value__", custom_annotation) == email_field_value
     assert getattr(get_args(update_annotation)[0], "__value__", get_args(update_annotation)[0]) == email_field_value
@@ -314,8 +355,8 @@ def test_login_credentials_preserve_identifier_length_limits() -> None:
 @pytest.mark.parametrize(
     ("schema_type", "field_name", "expected_min_length"),
     [
+        (AdminUserUpdate, "password", DEFAULT_MINIMUM_PASSWORD_LENGTH),
         (UserCreate, "password", DEFAULT_MINIMUM_PASSWORD_LENGTH),
-        (UserUpdate, "password", DEFAULT_MINIMUM_PASSWORD_LENGTH),
         (CustomRegistrationSchema, "password", DEFAULT_MINIMUM_PASSWORD_LENGTH),
         (LoginCredentials, "password", 1),
         (ResetPassword, "password", 1),
@@ -406,16 +447,14 @@ def test_non_empty_password_payloads_preserve_shared_limits(
 @pytest.mark.parametrize(
     ("schema_type", "other_fields"),
     [
-        (TotpVerifyRequest, {"pending_token": "pending-token"}),
         (TotpConfirmEnableRequest, {"enrollment_token": "enrollment-token"}),
-        (TotpDisableRequest, {}),
     ],
 )
-def test_totp_code_payloads_preserve_exact_length(
+def test_totp_enrollment_code_payload_preserves_exact_length(
     schema_type: type[msgspec.Struct],
     other_fields: dict[str, str],
 ) -> None:
-    """TOTP request payloads keep the six-character code contract."""
+    """TOTP enrollment payloads keep the six-character code contract."""
     payload = cast(
         "Any",
         msgspec.json.decode(
@@ -436,4 +475,46 @@ def test_totp_code_payloads_preserve_exact_length(
         msgspec.json.decode(
             msgspec.json.encode({"code": "1234567", **other_fields}),
             type=schema_type,
+        )
+
+
+def test_totp_disable_payload_accepts_totp_or_recovery_code_lengths() -> None:
+    """TOTP disable accepts six-digit TOTP codes and sixteen-character recovery codes."""
+    totp_payload = msgspec.json.decode(msgspec.json.encode({"code": "123456"}), type=TotpDisableRequest)
+    recovery_payload = msgspec.json.decode(msgspec.json.encode({"code": "0" * 16}), type=TotpDisableRequest)
+
+    assert totp_payload.code == "123456"
+    assert recovery_payload.code == "0" * 16
+
+    with pytest.raises(msgspec.ValidationError):
+        msgspec.json.decode(msgspec.json.encode({"code": "12345"}), type=TotpDisableRequest)
+
+    with pytest.raises(msgspec.ValidationError):
+        msgspec.json.decode(msgspec.json.encode({"code": "0" * 17}), type=TotpDisableRequest)
+
+
+def test_totp_verify_payload_accepts_totp_or_recovery_code_lengths() -> None:
+    """TOTP verify accepts six-digit TOTP codes and sixteen-character recovery codes."""
+    totp_payload = msgspec.json.decode(
+        msgspec.json.encode({"pending_token": "pending-token", "code": "123456"}),
+        type=TotpVerifyRequest,
+    )
+    recovery_payload = msgspec.json.decode(
+        msgspec.json.encode({"pending_token": "pending-token", "code": "0" * 16}),
+        type=TotpVerifyRequest,
+    )
+
+    assert totp_payload.code == "123456"
+    assert recovery_payload.code == "0" * 16
+
+    with pytest.raises(msgspec.ValidationError):
+        msgspec.json.decode(
+            msgspec.json.encode({"pending_token": "pending-token", "code": "12345"}),
+            type=TotpVerifyRequest,
+        )
+
+    with pytest.raises(msgspec.ValidationError):
+        msgspec.json.decode(
+            msgspec.json.encode({"pending_token": "pending-token", "code": "0" * 17}),
+            type=TotpVerifyRequest,
         )

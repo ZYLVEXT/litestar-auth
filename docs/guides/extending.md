@@ -198,8 +198,10 @@ class ExtendedUserCreate(msgspec.Struct, forbid_unknown_fields=True):
 
 If you already use `UserPasswordField`, keep that import and switch only the `email` annotation from `str` to
 `UserEmailField` when you want the built-in email validation contract. Those aliases only keep schema metadata aligned
-with the built-in `UserCreate` and `UserUpdate` structs. Runtime password policy still lives on the manager side
-through `password_validator_factory` or the default `require_password_length` validator.
+with built-in credential-bearing structs such as `UserCreate`, `AdminUserUpdate`, and
+`ChangePasswordRequest`. Runtime password policy still lives on the manager side through
+`password_validator_factory` or the default `require_password_length` validator; self-service
+profile updates should not include `password`.
 
 When you want custom DTOs to stay aligned with the built-in role-aware user contract, add `roles` to
 your read/update structs and keep registration schemas non-privileged:

@@ -221,7 +221,7 @@ def test_accessing_user_model_maps_slim_auth_column_inventory() -> None:
         "from sqlalchemy import inspect\n"
         "import litestar_auth.models as models\n"
         "User = models.User\n"
-        "assert set(User.__table__.c.keys()) <= {'email', 'hashed_password', 'id', 'is_active', 'is_verified', 'sa_orm_sentinel', 'totp_secret'}\n"
+        "assert set(User.__table__.c.keys()) <= {'email', 'hashed_password', 'id', 'is_active', 'is_verified', 'recovery_codes_hashes', 'sa_orm_sentinel', 'totp_secret'}\n"
         "user = User(email='user@example.com', hashed_password='hashed-password')\n"
         "assert user.roles == []\n",
     )

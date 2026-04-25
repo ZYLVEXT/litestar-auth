@@ -60,9 +60,15 @@ Mounted under `{auth}/2fa/...` when `totp_config` is set.
 | Method | Path | Request body | Notes |
 | ------ | ---- | ------------ | ----- |
 | POST | `{auth}/2fa/enable` | `TotpEnableRequest` (`password`) by default; no body when `totp_enable_requires_password=False` | Authenticated; starts enrollment. |
-| POST | `{auth}/2fa/enable/confirm` | `TotpConfirmEnableRequest` (`enrollment_token`, `code`) | Authenticated; confirms enrollment. |
-| POST | `{auth}/2fa/verify` | `TotpVerifyRequest` (`pending_token`, `code`) | Completes login when TOTP is enabled (pending token). |
-| POST | `{auth}/2fa/disable` | `TotpDisableRequest` (`code`) | Authenticated; disables TOTP. |
+| POST | `{auth}/2fa/enable/confirm` | `TotpConfirmEnableRequest` (`enrollment_token`, `code`) | Authenticated; confirms enrollment and returns one-time recovery codes. |
+| POST | `{auth}/2fa/verify` | `TotpVerifyRequest` (`pending_token`, `code`) | Completes login when TOTP is enabled; `code` accepts either a current TOTP code or an unused recovery code. |
+| POST | `{auth}/2fa/disable` | `TotpDisableRequest` (`code`) | Authenticated; disables TOTP. `code` accepts either a current TOTP code or an unused recovery code. |
+| POST | `{auth}/2fa/recovery-codes/regenerate` | `TotpRegenerateRecoveryCodesRequest` (`current_password`) by default; no body when `totp_enable_requires_password=False` | Authenticated; replaces the stored recovery-code set and returns the new plaintext codes once. |
+
+`TotpConfirmEnableResponse` and `TotpRecoveryCodesResponse` carry `recovery_codes`; those plaintext
+values are returned once and only their hashes are stored. Pending-login JWTs are client-bound by
+default with `cip` / `uaf` fingerprints, so a `/2fa/verify` request from a different client receives
+the same `TOTP_PENDING_BAD_TOKEN` response as an invalid pending token.
 
 The built-in TOTP flow remains email-oriented internally: the otpauth URI and default password step-up for `POST {auth}/2fa/enable` use `request.user.email`, not `login_identifier`.
 
@@ -94,6 +100,7 @@ When `include_users=True`, routes are under `{users}`.
 | ------ | ---- | ----- |
 | GET | `{users}/me` | Authenticated |
 | PATCH | `{users}/me` | Authenticated |
+| POST | `{users}/me/change-password` | Authenticated |
 | GET | `{users}/{id}` | Superuser |
 | PATCH | `{users}/{id}` | Superuser |
 | DELETE | `{users}/{id}` | Superuser |
@@ -101,8 +108,15 @@ When `include_users=True`, routes are under `{users}`.
 
 The built-in users surface also serializes `UserRead`, so all `/users` reads include normalized
 `roles`. `PATCH {users}/me` strips `roles` and the other privileged fields from self-service
-payloads even when a custom `user_update_schema` includes them, while superuser
-`PATCH {users}/{id}` can persist validated `roles` through the same schema.
+payloads even when a custom `user_update_schema` includes them. It does not rotate passwords.
+Authenticated password rotation uses `POST {users}/me/change-password` with `ChangePasswordRequest`
+(`current_password`, `new_password`); the controller re-verifies the current password before
+delegating the replacement password through the manager update lifecycle. Wrong current-password
+submissions return `400` with `LOGIN_BAD_CREDENTIALS`, invalid replacement passwords return `400`
+with `UPDATE_USER_INVALID_PASSWORD`, malformed request payloads use `REQUEST_BODY_INVALID`,
+unauthenticated requests return `401`, and configured rate limits return `429` with `Retry-After`.
+Superuser `PATCH {users}/{id}` uses `AdminUserUpdate`, can persist validated `roles`, and remains
+the admin-initiated password rotation path.
 
 The storage redesign does not add separate CRUD endpoints for the relational role tables. Built-in
 users routes continue to manage only the normalized flat `roles` contract on the user boundary.

@@ -143,6 +143,7 @@ def test_root_reexport_module_executes_under_coverage(monkeypatch: pytest.Monkey
             "DatabaseTokenAuthConfig",
             "DEFAULT_SUPERUSER_ROLE_NAME",
             "ErrorCode",
+            "FernetKeyringConfig",
             "LitestarAuth",
             "LitestarAuthConfig",
             "LitestarAuthError",

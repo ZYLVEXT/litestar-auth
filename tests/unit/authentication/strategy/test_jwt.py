@@ -13,6 +13,8 @@ from uuid import UUID, uuid4
 import jwt
 import pytest
 
+from litestar_auth import _jwt_headers as jwt_headers_module
+from litestar_auth._jwt_headers import jwt_encode_headers
 from litestar_auth._redis_protocols import RedisExpiringValueStoreClient
 from litestar_auth.authentication.strategy import jwt as jwt_strategy_module
 from litestar_auth.authentication.strategy.jwt import (
@@ -99,19 +101,22 @@ def _make_token(
     secret: str = DEFAULT_SECRET,
     payload: Mapping[str, object],
     algorithm: str = "HS256",
+    headers: Mapping[str, object] | None = None,
 ) -> str:
     """Encode a JWT payload for strategy tests.
 
     Returns:
         Signed JWT string.
     """
-    return jwt.encode(dict(payload), secret, algorithm=algorithm)
+    return jwt.encode(dict(payload), secret, algorithm=algorithm, headers=dict(headers or jwt_encode_headers()))
 
 
 def test_jwt_module_executes_under_coverage() -> None:
     """Reload the JWT strategy module in-test so coverage records class-body execution."""
+    reloaded_headers_module = importlib.reload(jwt_headers_module)
     reloaded_module = importlib.reload(jwt_strategy_module)
 
+    assert reloaded_headers_module.jwt_encode_headers() == jwt_encode_headers()
     assert reloaded_module.JWTStrategy is _jwt_module().JWTStrategy
     assert reloaded_module.InMemoryJWTDenylistStore is not None
     assert reloaded_module.RedisJWTDenylistStore is not None
@@ -403,6 +408,27 @@ def test_jwt_strategy_decodes_verified_tokens_with_and_without_issuer() -> None:
     assert strategy_with_issuer._decode_verified_access_token(_make_token(payload=base_payload)) is None
 
 
+@pytest.mark.parametrize("issuer", [None, "litestar-auth"])
+def test_jwt_strategy_rejects_verified_access_token_with_unexpected_type_header(issuer: str | None) -> None:
+    """Verified access-token decoding rejects signed JWTs with the wrong JOSE type."""
+    user = ExampleUser(id=uuid4())
+    now = datetime.now(tz=UTC)
+    payload = {
+        "sub": str(user.id),
+        "aud": JWT_ACCESS_TOKEN_AUDIENCE,
+        "iat": now,
+        "nbf": now,
+        "exp": now + timedelta(minutes=5),
+        "jti": "wrong-typ-jti",
+    }
+    if issuer is not None:
+        payload["iss"] = issuer
+    strategy = JWTStrategy(secret=DEFAULT_SECRET, issuer=issuer, allow_inmemory_denylist=True)
+    token = _make_token(payload=payload, headers={"typ": "not-jwt"})
+
+    assert strategy._decode_verified_access_token(token) is None
+
+
 def test_jwt_strategy_applies_bounded_clock_skew_leeway() -> None:
     """Verified token decoding tolerates small skew while still rejecting stale/future tokens."""
     user = ExampleUser(id=uuid4())
@@ -661,6 +687,29 @@ async def test_jwt_strategy_destroy_token_ignores_invalid_and_missing_jti_tokens
 
     await strategy.destroy_token("not-a-jwt", user)
     await strategy.destroy_token(token_without_jti, user)
+
+    assert store.calls == []
+
+
+async def test_jwt_strategy_destroy_token_ignores_unexpected_type_header() -> None:
+    """Destroying a signed token with the wrong JOSE type does not write a revocation."""
+    user = ExampleUser(id=uuid4())
+    store = _RecordingDenylistStore()
+    strategy = JWTStrategy(secret=DEFAULT_SECRET, denylist_store=store)
+    now = datetime.now(tz=UTC)
+    token = _make_token(
+        payload={
+            "sub": str(user.id),
+            "aud": JWT_ACCESS_TOKEN_AUDIENCE,
+            "iat": now,
+            "nbf": now,
+            "exp": now + timedelta(minutes=5),
+            "jti": "wrong-typ-destroy-jti",
+        },
+        headers={"typ": "not-jwt"},
+    )
+
+    await strategy.destroy_token(token, user)
 
     assert store.calls == []
 

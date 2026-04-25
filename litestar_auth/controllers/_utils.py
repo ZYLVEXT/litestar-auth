@@ -273,6 +273,7 @@ async def _map_domain_exceptions(
     mapping: DomainErrorMap,
     *,
     on_error: AccountStateFailureCallback | None = None,
+    detail: str | None = None,
 ) -> AsyncIterator[None]:
     """Map configured domain exceptions into ``ClientException`` responses.
 
@@ -287,7 +288,7 @@ async def _map_domain_exceptions(
         status_code, error_code = _resolve_domain_error_response(exc, mapping)
         raise ClientException(
             status_code=status_code,
-            detail=_domain_error_public_detail(exc),
+            detail=detail if detail is not None else _domain_error_public_detail(exc),
             extra={"code": error_code},
         ) from exc
 

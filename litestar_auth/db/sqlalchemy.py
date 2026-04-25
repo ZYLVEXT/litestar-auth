@@ -389,6 +389,50 @@ class SQLAlchemyUserDatabase[UP: SQLAlchemyUserModelProtocol](BaseUserStore[UP, 
             load=self._user_load or None,
         )
 
+    async def set_recovery_code_hashes(self, user: UP, hashes: tuple[str, ...]) -> UP:
+        """Replace the user's active TOTP recovery-code hashes.
+
+        Returns:
+            Updated user instance.
+        """
+        return await self.update(user, {"recovery_codes_hashes": list(hashes) or None})
+
+    async def read_recovery_code_hashes(self, user: UP) -> tuple[str, ...]:
+        """Return the user's active TOTP recovery-code hashes."""
+        if not isinstance(user, self.user_model):
+            return ()
+        if stored_hashes := getattr(user, "recovery_codes_hashes", None):
+            return tuple(stored_hashes)
+        return ()
+
+    async def consume_recovery_code_hash(self, user: UP, matched_hash: str) -> bool:
+        """Atomically mark ``matched_hash`` consumed for the user.
+
+        Returns:
+            ``True`` when the hash was active and is now consumed; ``False`` when
+            it was already consumed or never existed.
+        """
+        primary_key_column = inspect(self.user_model).primary_key[0]
+        result = await self.session.execute(
+            select(self.user_model).where(primary_key_column == user.id).with_for_update(),
+        )
+        persistent_user = cast("Any", result).scalar_one_or_none()
+        if persistent_user is None:
+            return False
+
+        active_hashes = list(getattr(persistent_user, "recovery_codes_hashes", None) or ())
+        if matched_hash not in active_hashes:
+            return False
+
+        active_hashes.remove(matched_hash)
+        persistent_user.recovery_codes_hashes = active_hashes or None
+        await self._repository().update(
+            persistent_user,
+            auto_refresh=True,
+            load=self._user_load or None,
+        )
+        return True
+
     @override
     async def delete(self, user_id: UUID) -> None:
         """Delete the provided user from storage."""

@@ -11,7 +11,7 @@ from urllib.parse import urlsplit
 
 from litestar_auth._plugin.middleware import get_cookie_transports
 from litestar_auth._plugin.oauth_contract import _build_oauth_route_registration_contract
-from litestar_auth._plugin.rate_limit import iter_rate_limit_endpoints
+from litestar_auth._plugin.rate_limit import iter_rate_limit_endpoint_items
 from litestar_auth._plugin.security_policy import _describe_jwt_revocation_policy
 from litestar_auth.exceptions import ConfigurationError
 from litestar_auth.totp import SecurityWarning
@@ -57,11 +57,11 @@ def warn_insecure_plugin_startup_defaults(config: LitestarAuthConfig[Any, Any]) 
         oauth_config=config.oauth_config,
     )
     oauth_config = config.oauth_config
-    if oauth_config is not None and contract.has_configured_providers and not oauth_config.oauth_token_encryption_key:
+    if oauth_config is not None and contract.has_configured_providers and not oauth_config.has_oauth_token_encryption:
         warnings.warn(
-            "OAuth providers are configured but oauth_token_encryption_key is not set; "
+            "OAuth providers are configured but OAuth token encryption key material is not set; "
             "OAuth access and refresh tokens may be stored in plaintext at rest. "
-            "Configure a Fernet key via oauth_token_encryption_key for production.",
+            "Configure a Fernet keyring via oauth_token_encryption_keyring for production.",
             SecurityWarning,
             stacklevel=2,
         )
@@ -136,6 +136,29 @@ def require_oauth_token_encryption_for_configured_providers(
     if not contract.has_configured_providers:
         return
     cast("Any", require_key)(context="OAuth providers are configured")
+
+
+def require_shared_rate_limit_backends_for_multiworker(config: LitestarAuthConfig[Any, Any]) -> None:
+    """Fail closed when declared multi-worker deployments use process-local rate limiting.
+
+    Raises:
+        ConfigurationError: If a known multi-worker deployment has any configured
+            auth rate-limit endpoint backed by process-local state.
+    """
+    if config.unsafe_testing or config.deployment_worker_count is None or config.deployment_worker_count <= 1:
+        return
+
+    process_local_endpoint_names = _collect_process_local_rate_limit_endpoint_names(config)
+    if not process_local_endpoint_names:
+        return
+
+    formatted_endpoint_names = ", ".join(process_local_endpoint_names)
+    msg = (
+        "Auth rate limiting cannot use process-local backends when deployment_worker_count is greater than 1. "
+        f"The following endpoint slots are not shared across workers: {formatted_endpoint_names}. "
+        "Use RedisRateLimiter or RedisAuthPreset for multi-worker deployments."
+    )
+    raise ConfigurationError(msg)
 
 
 def has_configured_oauth_providers(config: LitestarAuthConfig[Any, Any]) -> bool:
@@ -219,15 +242,22 @@ def _is_loopback_host(host: str) -> bool:
 
 def _has_inmemory_rate_limit_backend(config: LitestarAuthConfig[Any, Any]) -> bool:
     """Return whether any endpoint uses a process-local rate-limit backend."""
+    return bool(_collect_process_local_rate_limit_endpoint_names(config))
+
+
+def _collect_process_local_rate_limit_endpoint_names(config: LitestarAuthConfig[Any, Any]) -> tuple[str, ...]:
+    """Return configured rate-limit endpoint slots backed by process-local state."""
     rate_limit_config = config.rate_limit_config
     if rate_limit_config is None:
-        return False
-    for endpoint_limit in iter_rate_limit_endpoints(cast("Any", rate_limit_config)):
+        return ()
+
+    process_local_endpoint_names: list[str] = []
+    for endpoint_name, endpoint_limit in iter_rate_limit_endpoint_items(cast("Any", rate_limit_config)):
         if endpoint_limit is None:
             continue
         if not endpoint_limit.backend.is_shared_across_workers:
-            return True
-    return False
+            process_local_endpoint_names.append(endpoint_name)
+    return tuple(process_local_endpoint_names)
 
 
 def _warn_refresh_cookie_max_age_mismatch(config: LitestarAuthConfig[Any, Any]) -> None:

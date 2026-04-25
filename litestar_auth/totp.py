@@ -25,6 +25,7 @@ from litestar_auth._redis_protocols import (
     RedisNullableScriptEvalClient,
 )
 from litestar_auth.exceptions import ConfigurationError
+from litestar_auth.password import PasswordHelper
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Hashable
@@ -43,6 +44,10 @@ _SECRET_BYTES_BY_ALGORITHM: dict[TotpAlgorithm, int] = {
 USED_TOTP_CODE_TTL_SECONDS = TIME_STEP_SECONDS * (2 * TOTP_DRIFT_STEPS + 1)
 TOTP_DIGITS = 6
 TOTP_ALGORITHM = "SHA256"
+DEFAULT_TOTP_RECOVERY_CODE_COUNT = 10
+# DECISION: 16 hex chars gives 64 bits per single-use recovery code, above
+# the RFC 6238 6-digit TOTP online-code shape and aligned with common backup-code practice.
+TOTP_RECOVERY_CODE_HEX_BYTES = 8
 
 type TotpAlgorithm = Literal["SHA256", "SHA512"]
 
@@ -84,6 +89,39 @@ def _validate_totp_algorithm(algorithm: TotpAlgorithm) -> TotpAlgorithm:
     supported_algorithms = ", ".join(_TOTP_HASH_MAP)
     msg = f"Unsupported TOTP algorithm {algorithm!r}. Supported algorithms: {supported_algorithms}."
     raise ValueError(msg)
+
+
+def generate_totp_recovery_codes(*, count: int = DEFAULT_TOTP_RECOVERY_CODE_COUNT) -> tuple[str, ...]:
+    """Return distinct plaintext recovery codes for a TOTP enrollment.
+
+    Returns:
+        A tuple of unique 64-bit hex recovery codes.
+
+    Raises:
+        ValueError: If ``count`` is negative.
+    """
+    if count < 0:
+        msg = "Recovery-code count cannot be negative."
+        raise ValueError(msg)
+
+    codes: set[str] = set()
+    while len(codes) < count:
+        codes.add(secrets.token_hex(TOTP_RECOVERY_CODE_HEX_BYTES))
+    return tuple(codes)
+
+
+def hash_totp_recovery_codes(
+    codes: tuple[str, ...],
+    *,
+    password_helper: PasswordHelper | None = None,
+) -> tuple[str, ...]:
+    """Hash TOTP recovery codes using the library's Argon2 password policy.
+
+    Returns:
+        Hashes suitable for persistence in ``recovery_codes_hashes``.
+    """
+    helper = password_helper or PasswordHelper.from_defaults()
+    return tuple(helper.hash(code) for code in codes)
 
 
 @dataclass(frozen=True, slots=True)

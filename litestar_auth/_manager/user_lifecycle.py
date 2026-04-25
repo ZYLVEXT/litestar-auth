@@ -88,6 +88,7 @@ class UserLifecycleService[UP, ID]:
         hashed_password = self._hash_password(password)
         existing_user = await self._manager.user_db.get_by_email(email)
         if existing_user is not None:
+            await self._manager.on_after_register_duplicate(existing_user)
             raise UserAlreadyExistsError(
                 identifier=UserIdentifier(identifier_type="email", identifier_value=email),
                 message=UserAlreadyExistsError.default_message,

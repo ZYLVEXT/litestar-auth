@@ -8,6 +8,7 @@ from typing import cast
 from uuid import UUID
 
 import pytest
+from cryptography.fernet import Fernet
 
 import litestar_auth._manager.construction as construction_module
 from litestar_auth._manager.construction import (
@@ -15,9 +16,14 @@ from litestar_auth._manager.construction import (
     SecretFactory,
     resolve_account_token_secrets,
 )
-from litestar_auth.manager import UserManagerSecurity
+from litestar_auth.manager import FernetKeyringConfig, UserManagerSecurity
 
 pytestmark = pytest.mark.unit
+
+
+def _fernet_key() -> str:
+    """Return a valid Fernet key for construction tests."""
+    return Fernet.generate_key().decode()
 
 
 @dataclass(frozen=True, slots=True)
@@ -123,10 +129,11 @@ def test_manager_constructor_inputs_inject_top_level_password_validator_and_id_p
 
 def test_manager_constructor_inputs_reuse_typed_dataclass_security_when_parser_matches() -> None:
     """Typed manager-security dataclasses pass through unchanged when parser wiring already matches."""
+    totp_keyring = FernetKeyringConfig(active_key_id="current", keys={"current": _fernet_key()})
     security = UserManagerSecurity[UUID](
         verification_token_secret="v" * 32,
         reset_password_token_secret="r" * 32,
-        totp_secret_key="t" * 32,
+        totp_secret_keyring=totp_keyring,
         id_parser=UUID,
     )
     inputs = ManagerConstructorInputs[UUID](manager_security=security, id_parser=UUID)
@@ -137,10 +144,11 @@ def test_manager_constructor_inputs_reuse_typed_dataclass_security_when_parser_m
 
 def test_manager_constructor_inputs_fill_missing_parser_on_typed_dataclass_security() -> None:
     """Typed security dataclasses inherit the top-level parser before `security=` injection."""
+    totp_keyring = FernetKeyringConfig(active_key_id="current", keys={"current": _fernet_key()})
     security = UserManagerSecurity[UUID](
         verification_token_secret="v" * 32,
         reset_password_token_secret="r" * 32,
-        totp_secret_key="t" * 32,
+        totp_secret_keyring=totp_keyring,
     )
 
     def generated_password_validator(_password: str) -> None:
@@ -158,7 +166,7 @@ def test_manager_constructor_inputs_fill_missing_parser_on_typed_dataclass_secur
     assert built_security == UserManagerSecurity[UUID](
         verification_token_secret="v" * 32,
         reset_password_token_secret="r" * 32,
-        totp_secret_key="t" * 32,
+        totp_secret_keyring=totp_keyring,
         id_parser=UUID,
     )
     assert inputs.effective_security == built_security

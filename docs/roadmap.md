@@ -18,7 +18,7 @@ Registration, login/logout, email verification and password reset, Bearer and Co
 
 ## Product evolution
 
-Planned directions include: production-first durable JWT denylist defaults, encryption key rotation workflows, audit trails, WebAuthn, RBAC, session management APIs, and multi-tenant authorization semantics. Timelines are not committed here.
+Planned directions include: production-first durable JWT denylist defaults, operator tooling around the documented Fernet keyring rotation helpers, audit trails, WebAuthn, RBAC, session management APIs, and multi-tenant authorization semantics. Timelines are not committed here.
 
 ## Definition of done (feature-level)
 

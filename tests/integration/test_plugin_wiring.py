@@ -36,7 +36,7 @@ from litestar_auth.guards import is_authenticated
 from litestar_auth.manager import UserManagerSecurity
 from litestar_auth.password import PasswordHelper
 from litestar_auth.plugin import LitestarAuth, LitestarAuthConfig
-from litestar_auth.totp import InMemoryTotpEnrollmentStore
+from litestar_auth.totp import InMemoryTotpEnrollmentStore, InMemoryUsedTotpCodeStore
 from tests.e2e.conftest import SessionMaker as E2ESessionMaker
 from tests.e2e.conftest import assert_structural_session_factory
 
@@ -54,21 +54,36 @@ if TYPE_CHECKING:
 
     from litestar_auth.manager import BaseUserManager
 
-pytestmark = [pytest.mark.integration]
+pytestmark = [pytest.mark.integration, pytest.mark.filterwarnings("ignore::pytest.PytestUnraisableExceptionWarning")]
 HTTP_OK = 200
 HTTP_CREATED = 201
 HTTP_NOT_FOUND = 404
+OAUTH_FLOW_COOKIE_SECRET = "oauth-flow-cookie-secret-1234567890"
 
 
 class _OpenAPIOAuthClient:
     """Minimal OAuth client contract for schema-only plugin tests."""
 
-    async def get_authorization_url(self, redirect_uri: str, state: str, *, scope: str | None = None) -> str:
-        del redirect_uri, state, scope
+    async def get_authorization_url(
+        self,
+        redirect_uri: str,
+        state: str,
+        *,
+        scope: str | list[str] | None = None,
+        code_challenge: str | None = None,
+        code_challenge_method: str | None = None,
+    ) -> str:
+        del redirect_uri, state, scope, code_challenge, code_challenge_method
         return "https://provider.example/authorize"
 
-    async def get_access_token(self, code: str, redirect_uri: str) -> dict[str, str]:
-        del code, redirect_uri
+    async def get_access_token(
+        self,
+        code: str,
+        redirect_uri: str,
+        *,
+        code_verifier: str | None = None,
+    ) -> dict[str, str]:
+        del code, redirect_uri, code_verifier
         return {"access_token": "provider-access-token"}
 
     async def get_id_email(self, access_token: str) -> tuple[str, str]:
@@ -248,6 +263,7 @@ def test_oauth_associate_dependency_registered_when_enabled() -> None:
         include_oauth_associate=True,
         oauth_redirect_base_url="https://app.example.com/auth",
         oauth_token_encryption_key="YWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWE=",
+        oauth_flow_cookie_secret=OAUTH_FLOW_COOKIE_SECRET,
     )
     plugin = LitestarAuth(config)
     app_config = AppConfig()
@@ -264,6 +280,7 @@ def test_oauth_login_inventory_does_not_register_associate_dependency() -> None:
         oauth_providers=[OAuthProviderConfig(name="example", client=object())],
         oauth_redirect_base_url="https://app.example.com/auth",
         oauth_token_encryption_key="YWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWE=",
+        oauth_flow_cookie_secret=OAUTH_FLOW_COOKIE_SECRET,
     )
     plugin = LitestarAuth(config)
 
@@ -279,6 +296,7 @@ def test_oauth_plugin_routes_require_encryption_key_at_startup() -> None:
         oauth_providers=[OAuthProviderConfig(name="example", client=object())],
         include_oauth_associate=True,
         oauth_redirect_base_url="https://app.example.com/auth",
+        oauth_flow_cookie_secret=OAUTH_FLOW_COOKIE_SECRET,
     )
     plugin = LitestarAuth(config)
 
@@ -311,6 +329,7 @@ def test_oauth_plugin_routes_require_secure_public_redirect_origins_at_startup(
         oauth_providers=[OAuthProviderConfig(name="example", client=object())],
         oauth_redirect_base_url=redirect_base_url,
         oauth_token_encryption_key="YWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWE=",
+        oauth_flow_cookie_secret=OAUTH_FLOW_COOKIE_SECRET,
     )
     plugin = LitestarAuth(config)
 
@@ -325,6 +344,7 @@ def test_oauth_plugin_routes_allow_localhost_redirects_in_debug_mode() -> None:
         oauth_providers=[OAuthProviderConfig(name="example", client=object())],
         oauth_redirect_base_url="http://localhost/auth",
         oauth_token_encryption_key="YWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWE=",
+        oauth_flow_cookie_secret=OAUTH_FLOW_COOKIE_SECRET,
     )
     plugin = LitestarAuth(config)
 
@@ -341,6 +361,7 @@ def test_oauth_plugin_routes_allow_localhost_redirects_in_unsafe_testing_mode() 
         oauth_providers=[OAuthProviderConfig(name="example", client=object())],
         oauth_redirect_base_url="http://localhost/auth",
         oauth_token_encryption_key="YWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWE=",
+        oauth_flow_cookie_secret=OAUTH_FLOW_COOKIE_SECRET,
     )
     plugin = LitestarAuth(config)
 
@@ -364,6 +385,7 @@ def test_oauth_plugin_routes_allow_localhost_redirects_in_unsafe_testing_mode() 
             OAuthConfig(
                 oauth_providers=[OAuthProviderConfig(name="github", client=object())],
                 oauth_token_encryption_key="YWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWE=",
+                oauth_flow_cookie_secret=OAUTH_FLOW_COOKIE_SECRET,
             ),
             "oauth_redirect_base_url is required when oauth_providers are configured",
             id="providers-without-redirect-base",
@@ -398,6 +420,7 @@ def test_plugin_rejects_ambiguous_oauth_route_registration_contracts(
                 oauth_providers=[OAuthProviderConfig(name="github", client=object())],
                 oauth_redirect_base_url="https://app.example.com/auth",
                 oauth_token_encryption_key="YWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWE=",
+                oauth_flow_cookie_secret=OAUTH_FLOW_COOKIE_SECRET,
             ),
             None,
             id="login-only",
@@ -408,6 +431,7 @@ def test_plugin_rejects_ambiguous_oauth_route_registration_contracts(
                 include_oauth_associate=True,
                 oauth_redirect_base_url="https://app.example.com/auth",
                 oauth_token_encryption_key="YWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWE=",
+                oauth_flow_cookie_secret=OAUTH_FLOW_COOKIE_SECRET,
             ),
             "/auth/associate/github",
             id="login-and-associate",
@@ -470,6 +494,7 @@ def test_plugin_oauth_associate_callback_is_marked_protected_in_openapi() -> Non
         include_oauth_associate=True,
         oauth_redirect_base_url="https://app.example.com/auth",
         oauth_token_encryption_key="YWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWE=",
+        oauth_flow_cookie_secret=OAUTH_FLOW_COOKIE_SECRET,
     )
     app = Litestar(
         plugins=[LitestarAuth(config)],
@@ -778,6 +803,28 @@ def test_refresh_enabled_bearer_backends_mount_refresh_routes_in_backend_order()
         "/auth/secondary/logout",
         "/auth/secondary/refresh",
     ]
+
+
+def test_plugin_totp_routes_include_recovery_code_regeneration() -> None:
+    """Plugin-owned TOTP routing exposes the same recovery-code regeneration endpoint as manual wiring."""
+    config = _minimal_litestar_auth_config()
+    config.totp_config = TotpConfig(
+        totp_pending_secret="pending-secret-for-totp-pending-jwt-secret-123",
+        totp_pending_jti_store=InMemoryJWTDenylistStore(),
+        totp_used_tokens_store=InMemoryUsedTotpCodeStore(),
+        totp_enrollment_store=InMemoryTotpEnrollmentStore(),
+    )
+    config.user_manager_security = UserManagerSecurity[UUID](
+        verification_token_secret="verify-secret-12345678901234567890",
+        reset_password_token_secret="reset-secret-123456789012345678901",
+        totp_secret_key=Fernet.generate_key().decode(),
+        id_parser=UUID,
+    )
+
+    app = Litestar(plugins=[LitestarAuth(config)])
+    auth_route_paths = [route.path_format for route in app.routes if route.path_format.startswith("/auth/2fa")]
+
+    assert "/auth/2fa/recovery-codes/regenerate" in auth_route_paths
 
 
 def test_database_token_preset_mounts_primary_auth_routes_without_startup_session() -> None:

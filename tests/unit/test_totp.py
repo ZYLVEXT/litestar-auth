@@ -13,6 +13,7 @@ import pytest
 
 from litestar_auth import totp
 from litestar_auth.contrib.redis import RedisAuthClientProtocol, RedisAuthPreset
+from litestar_auth.password import PasswordHelper
 from tests._helpers import cast_fakeredis
 
 if TYPE_CHECKING:
@@ -68,6 +69,35 @@ def test_generate_totp_secret_rejects_unsupported_algorithm() -> None:
     """Unsupported legacy TOTP algorithms fail with an explicit error."""
     with pytest.raises(ValueError, match="Unsupported TOTP algorithm 'SHA1'"):
         totp.generate_totp_secret(algorithm=cast("totp.TotpAlgorithm", "SHA1"))
+
+
+def test_generate_totp_recovery_codes_returns_distinct_default_codes() -> None:
+    """Recovery-code generation returns the configured number of 64-bit hex codes."""
+    codes = totp.generate_totp_recovery_codes()
+
+    assert len(codes) == totp.DEFAULT_TOTP_RECOVERY_CODE_COUNT
+    assert len(set(codes)) == totp.DEFAULT_TOTP_RECOVERY_CODE_COUNT
+    assert all(len(code) == totp.TOTP_RECOVERY_CODE_HEX_BYTES * 2 for code in codes)
+    assert all(set(code) <= set("0123456789abcdef") for code in codes)
+
+
+def test_generate_totp_recovery_codes_rejects_negative_count() -> None:
+    """Invalid recovery-code counts fail explicitly."""
+    with pytest.raises(ValueError, match="cannot be negative"):
+        totp.generate_totp_recovery_codes(count=-1)
+
+
+def test_hash_totp_recovery_codes_uses_password_helper_verification() -> None:
+    """Recovery codes are stored in the same hash format as password secrets."""
+    password_helper = PasswordHelper.from_defaults()
+    codes = ("0123456789abcdef", "fedcba9876543210")
+
+    hashes = totp.hash_totp_recovery_codes(codes, password_helper=password_helper)
+
+    assert len(hashes) == len(codes)
+    assert hashes[0] != codes[0]
+    assert password_helper.verify(codes[0], hashes[0]) is True
+    assert password_helper.verify("wrong-code", hashes[0]) is False
 
 
 def test_totp_default_algorithm_is_sha256() -> None:

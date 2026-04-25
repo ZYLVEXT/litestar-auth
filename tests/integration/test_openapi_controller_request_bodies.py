@@ -26,6 +26,8 @@ from tests.integration.test_orchestrator import InMemoryRefreshTokenStrategy, Pl
 
 pytestmark = [pytest.mark.integration]
 EMAIL_PATTERN = r"^[^@\s]+@[^@\s]+\.[^@\s]+$"
+ARRAY_TYPE = "array"
+BOOLEAN_TYPE = "boolean"
 STRING_TYPE = "string"
 
 
@@ -47,6 +49,13 @@ class ComponentContract:
 
 
 COMPONENT_CONTRACTS = {
+    "ChangePasswordRequest": ComponentContract(
+        required=frozenset({"current_password", "new_password"}),
+        properties={
+            "current_password": PropertyContract(min_length=12, max_length=128),
+            "new_password": PropertyContract(min_length=12, max_length=128),
+        },
+    ),
     "ForgotPassword": ComponentContract(
         required=frozenset({"email"}),
         properties={"email": PropertyContract(max_length=320, pattern=EMAIL_PATTERN)},
@@ -82,16 +91,20 @@ COMPONENT_CONTRACTS = {
     ),
     "TotpDisableRequest": ComponentContract(
         required=frozenset({"code"}),
-        properties={"code": PropertyContract(min_length=6, max_length=6)},
+        properties={"code": PropertyContract(min_length=6, max_length=16)},
     ),
     "TotpEnableRequest": ComponentContract(
         required=frozenset({"password"}),
         properties={"password": PropertyContract(min_length=1, max_length=128)},
     ),
+    "TotpRegenerateRecoveryCodesRequest": ComponentContract(
+        required=frozenset({"current_password"}),
+        properties={"current_password": PropertyContract(min_length=1, max_length=128)},
+    ),
     "TotpVerifyRequest": ComponentContract(
         required=frozenset({"code", "pending_token"}),
         properties={
-            "code": PropertyContract(min_length=6, max_length=6),
+            "code": PropertyContract(min_length=6, max_length=16),
             "pending_token": PropertyContract(min_length=1, max_length=2048),
         },
     ),
@@ -151,6 +164,16 @@ def _request_body_ref(app: Litestar, *, path: str, method_name: str) -> str | No
     return media_type.schema.ref
 
 
+def _response_body_ref(app: Litestar, *, path: str, method_name: str, status_code: str) -> str | None:
+    """Return the OpenAPI response-body schema ref for an operation, if any."""
+    operation = getattr(cast("Any", app.openapi_schema.paths)[path], method_name)
+    response = operation.responses[status_code]
+    if response.content is None:
+        return None
+    media_type = next(iter(response.content.values()))
+    return media_type.schema.ref
+
+
 def _assert_request_body_component_ref(
     app: Litestar,
     *,
@@ -186,6 +209,16 @@ def _assert_component_contract(
         assert property_schema.min_length == expected.min_length
         assert property_schema.max_length == expected.max_length
         assert property_schema.pattern == expected.pattern
+
+
+def _assert_recovery_codes_property(schema: object) -> None:
+    """Assert an OpenAPI schema exposes the documented recovery-code array."""
+    properties = cast("Any", schema).properties or {}
+    recovery_codes = properties["recovery_codes"]
+
+    assert getattr(recovery_codes.type, "value", recovery_codes.type) == ARRAY_TYPE
+    assert recovery_codes.items is not None
+    assert getattr(recovery_codes.items.type, "value", recovery_codes.items.type) == STRING_TYPE
 
 
 def _assert_request_body_component_contract(
@@ -303,8 +336,14 @@ def test_direct_verify_routes_publish_expected_request_bodies_and_component_shap
     _assert_request_body_component_contract(app, path=path, method_name="post", schema_ref=schema_ref)
 
 
-@pytest.mark.parametrize("path", ["/users/me", "/users/{user_id}"])
-def test_direct_users_patch_routes_publish_expected_request_bodies(path: str) -> None:
+@pytest.mark.parametrize(
+    ("path", "schema_ref"),
+    [
+        ("/users/me", "#/components/schemas/UserUpdate"),
+        ("/users/{user_id}", "#/components/schemas/AdminUserUpdate"),
+    ],
+)
+def test_direct_users_patch_routes_publish_expected_request_bodies(path: str, schema_ref: str) -> None:
     """Direct users-controller patch routes retain their request-body contract."""
     app, *_ = build_users_app()
 
@@ -312,7 +351,19 @@ def test_direct_users_patch_routes_publish_expected_request_bodies(path: str) ->
         app,
         path=path,
         method_name="patch",
-        schema_ref="#/components/schemas/UserUpdate",
+        schema_ref=schema_ref,
+    )
+
+
+def test_direct_users_change_password_route_publishes_expected_request_body_component_shape() -> None:
+    """Direct users-controller password rotation publishes the documented request contract."""
+    app, *_ = build_users_app()
+
+    _assert_request_body_component_contract(
+        app,
+        path="/users/me/change-password",
+        method_name="post",
+        schema_ref="#/components/schemas/ChangePasswordRequest",
     )
 
 
@@ -344,6 +395,35 @@ def test_direct_totp_routes_publish_expected_request_bodies_when_step_up_is_enab
         method_name="post",
         schema_ref="#/components/schemas/TotpDisableRequest",
     )
+    _assert_request_body_component_contract(
+        app,
+        path="/auth/2fa/recovery-codes/regenerate",
+        method_name="post",
+        schema_ref="#/components/schemas/TotpRegenerateRecoveryCodesRequest",
+    )
+
+
+def test_direct_totp_routes_publish_recovery_code_response_components() -> None:
+    """Direct TOTP routes document the recovery-code response shapes in OpenAPI."""
+    app, *_ = build_totp_app(totp_enable_requires_password=True)
+    schemas = cast("Any", app.openapi_schema.components.schemas)
+    confirm_response_schema = schemas["TotpConfirmEnableResponse"]
+    recovery_codes_response_schema = schemas["TotpRecoveryCodesResponse"]
+    confirm_properties = confirm_response_schema.properties or {}
+
+    assert (
+        _response_body_ref(app, path="/auth/2fa/enable/confirm", method_name="post", status_code="201")
+        == "#/components/schemas/TotpConfirmEnableResponse"
+    )
+    assert (
+        _response_body_ref(app, path="/auth/2fa/recovery-codes/regenerate", method_name="post", status_code="201")
+        == "#/components/schemas/TotpRecoveryCodesResponse"
+    )
+    assert set(confirm_response_schema.required or []) == {"enabled", "recovery_codes"}
+    assert getattr(confirm_properties["enabled"].type, "value", confirm_properties["enabled"].type) == BOOLEAN_TYPE
+    _assert_recovery_codes_property(confirm_response_schema)
+    assert set(recovery_codes_response_schema.required or []) == {"recovery_codes"}
+    _assert_recovery_codes_property(recovery_codes_response_schema)
 
 
 def test_direct_totp_enable_omits_request_body_when_step_up_is_disabled() -> None:
@@ -368,4 +448,10 @@ def test_direct_totp_enable_omits_request_body_when_step_up_is_disabled() -> Non
         path="/auth/2fa/disable",
         method_name="post",
         schema_ref="#/components/schemas/TotpDisableRequest",
+    )
+    _assert_request_body_component_ref(
+        app,
+        path="/auth/2fa/recovery-codes/regenerate",
+        method_name="post",
+        schema_ref=None,
     )

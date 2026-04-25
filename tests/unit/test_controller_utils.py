@@ -131,7 +131,7 @@ async def _raise_runtime_error_in_mapped_context() -> None:
     Raises:
         RuntimeError: Always.
     """
-    async with _map_domain_exceptions({UserAlreadyExistsError: (400, ErrorCode.REGISTER_USER_ALREADY_EXISTS)}):
+    async with _map_domain_exceptions({UserAlreadyExistsError: (400, ErrorCode.USER_ALREADY_EXISTS)}):
         msg = "boom"
         raise RuntimeError(msg)
 
@@ -338,15 +338,15 @@ async def test_map_domain_exceptions_maps_first_matching_error() -> None:
     with pytest.raises(ClientException) as exc_info:
         async with _map_domain_exceptions(
             {
-                UserAlreadyExistsError: (400, ErrorCode.REGISTER_USER_ALREADY_EXISTS),
-                InvalidPasswordError: (400, ErrorCode.REGISTER_INVALID_PASSWORD),
+                UserAlreadyExistsError: (400, ErrorCode.USER_ALREADY_EXISTS),
+                InvalidPasswordError: (400, ErrorCode.UPDATE_USER_INVALID_PASSWORD),
             },
         ):
             _raise_user_already_exists()
 
     assert exc_info.value.status_code == STATUS_BAD_REQUEST
     assert exc_info.value.detail == UserAlreadyExistsError.default_message
-    assert exc_info.value.extra == {"code": ErrorCode.REGISTER_USER_ALREADY_EXISTS}
+    assert exc_info.value.extra == {"code": ErrorCode.USER_ALREADY_EXISTS}
 
 
 def test_domain_error_public_detail_keeps_duplicate_user_responses_generic() -> None:
@@ -382,12 +382,29 @@ async def test_map_domain_exceptions_invokes_failure_callback_before_raising() -
 
 
 @pytest.mark.asyncio
+async def test_map_domain_exceptions_uses_public_detail_override() -> None:
+    """A caller can collapse multiple domain errors to one public detail."""
+    with pytest.raises(ClientException) as exc_info:
+        async with _map_domain_exceptions(
+            {
+                InvalidPasswordError: (400, ErrorCode.REGISTER_FAILED),
+            },
+            detail="Registration could not be completed.",
+        ):
+            _raise_invalid_password()
+
+    assert exc_info.value.status_code == STATUS_BAD_REQUEST
+    assert exc_info.value.detail == "Registration could not be completed."
+    assert exc_info.value.extra == {"code": ErrorCode.REGISTER_FAILED}
+
+
+@pytest.mark.asyncio
 async def test_map_domain_exceptions_maps_later_matching_error() -> None:
     """Later mapping entries still resolve when earlier ones do not match."""
     with pytest.raises(ClientException) as exc_info:
         async with _map_domain_exceptions(
             {
-                UserAlreadyExistsError: (400, ErrorCode.REGISTER_USER_ALREADY_EXISTS),
+                UserAlreadyExistsError: (400, ErrorCode.USER_ALREADY_EXISTS),
                 InvalidPasswordError: (400, ErrorCode.RESET_PASSWORD_INVALID_PASSWORD),
             },
         ):
@@ -500,7 +517,7 @@ def test_resolve_domain_error_response_prefers_first_matching_mapping() -> None:
         "dict[type[Exception], tuple[int, str]]",
         {
             Exception: (409, "GENERIC"),
-            UserAlreadyExistsError: (400, ErrorCode.REGISTER_USER_ALREADY_EXISTS),
+            UserAlreadyExistsError: (400, ErrorCode.USER_ALREADY_EXISTS),
         },
     )
 

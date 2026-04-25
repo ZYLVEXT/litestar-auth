@@ -7,13 +7,14 @@ from typing import TYPE_CHECKING, Any, Literal, cast
 from uuid import UUID
 
 import pytest
+from cryptography.fernet import Fernet
 
 import litestar_auth._plugin.config as plugin_config_module
 import litestar_auth._plugin.user_manager_builder as user_manager_builder_module
 from litestar_auth.authentication.backend import AuthenticationBackend
 from litestar_auth.authentication.transport.bearer import BearerTransport
 from litestar_auth.config import DEFAULT_MINIMUM_PASSWORD_LENGTH, require_password_length
-from litestar_auth.manager import UserManagerSecurity
+from litestar_auth.manager import FernetKeyringConfig, UserManagerSecurity
 from litestar_auth.plugin import LitestarAuthConfig
 from tests.e2e.conftest import assert_structural_session_factory
 from tests.integration.test_orchestrator import (
@@ -29,6 +30,11 @@ if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 pytestmark = pytest.mark.unit
+
+
+def _fernet_key() -> str:
+    """Return a valid Fernet key for builder tests."""
+    return Fernet.generate_key().decode()
 
 
 def _current_password_helper_type() -> type[Any]:
@@ -99,11 +105,12 @@ def test_default_builder_contract_materializes_canonical_kwargs() -> None:
         require_password_length(password, DEFAULT_MINIMUM_PASSWORD_LENGTH + 4)
 
     password_helper = object()
+    totp_keyring = FernetKeyringConfig(active_key_id="current", keys={"current": _fernet_key()})
     config = _minimal_config(
         user_manager_security=UserManagerSecurity[UUID](
             verification_token_secret="v" * 32,
             reset_password_token_secret="r" * 32,
-            totp_secret_key="t" * 32,
+            totp_secret_keyring=totp_keyring,
         ),
         id_parser=UUID,
         login_identifier="username",
@@ -134,7 +141,7 @@ def test_default_builder_contract_materializes_canonical_kwargs() -> None:
     assert kwargs["unsafe_testing"] is False
     assert kwargs["security"].verification_token_secret == "v" * 32
     assert kwargs["security"].reset_password_token_secret == "r" * 32
-    assert kwargs["security"].totp_secret_key == "t" * 32
+    assert kwargs["security"].totp_secret_keyring is totp_keyring
     assert kwargs["security"].id_parser is UUID
 
 
@@ -187,12 +194,13 @@ def test_build_user_manager_passes_only_canonical_kwargs() -> None:
             self.received_security = cast("UserManagerSecurity[UUID]", kwargs["security"])
             super().__init__(cast("Any", user_db), **cast("Any", self.received_manager_kwargs))
 
+    totp_keyring = FernetKeyringConfig(active_key_id="current", keys={"current": _fernet_key()})
     config = _minimal_config(
         user_manager_class=_KwargsWrapperManager,
         user_manager_security=UserManagerSecurity[UUID](
             verification_token_secret="v" * 32,
             reset_password_token_secret="r" * 32,
-            totp_secret_key="t" * 32,
+            totp_secret_keyring=totp_keyring,
         ),
         id_parser=UUID,
         login_identifier="username",
@@ -226,7 +234,7 @@ def test_build_user_manager_passes_only_canonical_kwargs() -> None:
     assert typed_manager.received_manager_kwargs["superuser_role_name"] == "admin"
     assert typed_manager.received_manager_kwargs["unsafe_testing"] is False
     assert typed_manager.received_security.id_parser is UUID
-    assert typed_manager.received_security.totp_secret_key == "t" * 32
+    assert typed_manager.received_security.totp_secret_keyring is totp_keyring
 
 
 def test_build_user_manager_rejects_missing_manager_class_without_custom_factory() -> None:

@@ -23,6 +23,7 @@ from litestar_auth.controllers import (
     create_register_controller,
     create_reset_password_controller,
     create_totp_controller,
+    create_users_controller,
 )
 from litestar_auth.manager import BaseUserManager, UserManagerSecurity
 from litestar_auth.password import PasswordHelper
@@ -52,11 +53,17 @@ def build_rate_limit_config() -> AuthRateLimitConfig:
     Returns:
         Shared endpoint rules for the protected auth routes.
     """
+    credential_rate_limiter = InMemoryRateLimiter(max_attempts=2, window_seconds=60)
     return AuthRateLimitConfig(
         login=EndpointRateLimit(
-            backend=InMemoryRateLimiter(max_attempts=2, window_seconds=60),
+            backend=credential_rate_limiter,
             scope="ip_email",
             namespace="login",
+        ),
+        change_password=EndpointRateLimit(
+            backend=credential_rate_limiter,
+            scope="ip_email",
+            namespace="change-password",
         ),
         register=EndpointRateLimit(
             backend=InMemoryRateLimiter(max_attempts=2, window_seconds=60),
@@ -120,6 +127,11 @@ def build_shared_backend_rate_limit_config() -> AuthRateLimitConfig:
                 scope="ip",
                 namespace="totp_disable",
             ),
+            AuthRateLimitSlot.TOTP_REGENERATE_RECOVERY_CODES: EndpointRateLimit(
+                backend=totp_backend,
+                scope="ip",
+                namespace="totp_regenerate_recovery_codes",
+            ),
         },
     )
 
@@ -180,6 +192,10 @@ def build_app(*, rate_limit_config: AuthRateLimitConfig | None = None) -> Litest
             id_parser=UUID,
             unsafe_testing=True,
         ),
+        create_users_controller(
+            id_parser=UUID,
+            rate_limit_config=rate_limit_config,
+        ),
     ]
     middleware = DefineMiddleware(
         LitestarAuthMiddleware[ExampleUser, UUID],
@@ -194,6 +210,7 @@ def test_shared_backend_rate_limit_config_respects_explicit_slot_overrides() -> 
     config = build_shared_backend_rate_limit_config()
 
     assert config.login is not None
+    assert config.change_password is not None
     assert config.refresh is not None
     assert config.register is not None
     assert config.forgot_password is not None
@@ -202,21 +219,25 @@ def test_shared_backend_rate_limit_config_respects_explicit_slot_overrides() -> 
     assert config.totp_confirm_enable is not None
     assert config.totp_verify is not None
     assert config.totp_disable is not None
+    assert config.totp_regenerate_recovery_codes is not None
     assert config.verify_token is None
     assert config.request_verify_token is None
     assert config.login.backend is config.register.backend
+    assert config.login.backend is config.change_password.backend
     assert config.login.backend is config.forgot_password.backend
     assert config.login.backend is config.reset_password.backend
     assert config.refresh.backend is not config.login.backend
     assert config.totp_enable.backend is config.totp_verify.backend
     assert config.totp_confirm_enable.backend is config.totp_verify.backend
     assert config.totp_disable.backend is config.totp_verify.backend
+    assert config.totp_regenerate_recovery_codes.backend is config.totp_verify.backend
     assert config.forgot_password.namespace == "forgot_password"
     assert config.reset_password.namespace == "reset_password"
     assert config.totp_enable.namespace == "totp_enable"
     assert config.totp_confirm_enable.namespace == "totp_confirm_enable"
     assert config.totp_verify.namespace == "totp_verify"
     assert config.totp_disable.namespace == "totp_disable"
+    assert config.totp_regenerate_recovery_codes.namespace == "totp_regenerate_recovery_codes"
 
 
 @pytest.fixture
@@ -259,6 +280,78 @@ async def test_login_rate_limit_uses_ip_and_email_key(client: AsyncTestClient[Li
     assert second_response.status_code == HTTP_BAD_REQUEST
     assert_rate_limited(blocked_response)
     assert other_email_response.status_code == HTTP_BAD_REQUEST
+
+
+async def test_login_budget_exhaustion_does_not_block_change_password(
+    client: AsyncTestClient[Litestar],
+) -> None:
+    """Login and change-password counters stay independent for the same user and client IP."""
+    login_response = await client.post(
+        "/auth/login",
+        json={"identifier": "user@example.com", "password": "correct-password"},
+    )
+    assert login_response.status_code == HTTP_CREATED
+    headers = {"Authorization": f"Bearer {login_response.json()['access_token']}"}
+
+    first_login_failure = await client.post(
+        "/auth/login",
+        json={"identifier": "user@example.com", "password": "wrong-password"},
+    )
+    second_login_failure = await client.post(
+        "/auth/login",
+        json={"identifier": "user@example.com", "password": "wrong-password"},
+    )
+    blocked_login = await client.post(
+        "/auth/login",
+        json={"identifier": "user@example.com", "password": "wrong-password"},
+    )
+    change_password_failure = await client.post(
+        "/users/me/change-password",
+        headers=headers,
+        json={"current_password": "wrong-password", "new_password": "rotated-password"},
+    )
+
+    assert first_login_failure.status_code == HTTP_BAD_REQUEST
+    assert second_login_failure.status_code == HTTP_BAD_REQUEST
+    assert_rate_limited(blocked_login)
+    assert change_password_failure.status_code == HTTP_BAD_REQUEST
+
+
+async def test_change_password_budget_exhaustion_does_not_block_login(
+    client: AsyncTestClient[Litestar],
+) -> None:
+    """The change-password slot does not consume the login slot budget."""
+    login_response = await client.post(
+        "/auth/login",
+        json={"identifier": "user@example.com", "password": "correct-password"},
+    )
+    assert login_response.status_code == HTTP_CREATED
+    headers = {"Authorization": f"Bearer {login_response.json()['access_token']}"}
+
+    first_change_password_failure = await client.post(
+        "/users/me/change-password",
+        headers=headers,
+        json={"current_password": "wrong-password", "new_password": "rotated-password"},
+    )
+    second_change_password_failure = await client.post(
+        "/users/me/change-password",
+        headers=headers,
+        json={"current_password": "wrong-password", "new_password": "rotated-password"},
+    )
+    blocked_change_password = await client.post(
+        "/users/me/change-password",
+        headers=headers,
+        json={"current_password": "wrong-password", "new_password": "rotated-password"},
+    )
+    login_failure = await client.post(
+        "/auth/login",
+        json={"identifier": "user@example.com", "password": "wrong-password"},
+    )
+
+    assert first_change_password_failure.status_code == HTTP_BAD_REQUEST
+    assert second_change_password_failure.status_code == HTTP_BAD_REQUEST
+    assert_rate_limited(blocked_change_password)
+    assert login_failure.status_code == HTTP_BAD_REQUEST
 
 
 async def test_register_rate_limit_uses_ip_key(client: AsyncTestClient[Litestar]) -> None:

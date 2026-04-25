@@ -12,6 +12,7 @@ from uuid import UUID, uuid4
 import jwt
 import pytest
 
+from litestar_auth._jwt_headers import jwt_encode_headers
 from litestar_auth.authentication.strategy import base as strategy_base_module
 from litestar_auth.authentication.strategy.base import Strategy
 from litestar_auth.authentication.strategy.db import DatabaseTokenStrategy
@@ -87,6 +88,15 @@ def _invalid_token(_: str) -> str:
     return "not-a-jwt"
 
 
+def _make_jwt(payload: dict[str, object], secret: str = DEFAULT_SECRET, *, algorithm: str = "HS256") -> str:
+    """Encode an access-token JWT fixture with the library's expected JOSE type.
+
+    Returns:
+        Signed JWT string.
+    """
+    return jwt.encode(payload, secret, algorithm=algorithm, headers=jwt_encode_headers())
+
+
 def test_strategy_base_keeps_single_token_invalidation_protocol() -> None:
     """Strategy base exposes only the canonical runtime-checkable invalidation protocol."""
     assert hasattr(strategy_base_module, "TokenInvalidationCapable")
@@ -101,8 +111,10 @@ async def test_jwt_strategy_writes_token_with_subject_and_expiry() -> None:
     assert isinstance(strategy, Strategy)
 
     token = await strategy.write_token(user)
+    header = jwt.get_unverified_header(token)
     payload = jwt.decode(token, DEFAULT_SECRET, algorithms=["HS256"], audience=JWT_ACCESS_TOKEN_AUDIENCE)
 
+    assert header["typ"] == "JWT"
     assert payload["sub"] == str(user.id)
     assert datetime.fromtimestamp(payload["exp"], tz=UTC) > datetime.now(tz=UTC)
     assert payload["aud"] == JWT_ACCESS_TOKEN_AUDIENCE
@@ -131,7 +143,7 @@ async def test_jwt_strategy_reads_valid_token_via_user_manager() -> None:
     ("token_factory", "subject_decoder"),
     [
         pytest.param(
-            lambda secret: jwt.encode(
+            lambda secret: _make_jwt(
                 {"sub": "user-1", "exp": datetime.now(tz=UTC) - timedelta(seconds=1)},
                 secret,
                 algorithm="HS256",
@@ -140,7 +152,7 @@ async def test_jwt_strategy_reads_valid_token_via_user_manager() -> None:
             id="expired",
         ),
         pytest.param(
-            lambda secret: jwt.encode(
+            lambda secret: _make_jwt(
                 {"sub": "user-1", "exp": datetime.now(tz=UTC) + timedelta(minutes=5)},
                 secret,
                 algorithm="HS256",
@@ -154,7 +166,7 @@ async def test_jwt_strategy_reads_valid_token_via_user_manager() -> None:
             id="malformed",
         ),
         pytest.param(
-            lambda secret: jwt.encode({"sub": "user-1"}, secret, algorithm="HS256"),
+            lambda secret: _make_jwt({"sub": "user-1"}, secret, algorithm="HS256"),
             None,
             id="missing-exp",
         ),
@@ -182,7 +194,7 @@ async def test_jwt_strategy_returns_none_for_wrong_issuer_when_issuer_configured
     user_manager = ExampleUserManager(user)
 
     # Token signed with same secret but different issuer.
-    token = jwt.encode(
+    token = _make_jwt(
         {
             "sub": str(user.id),
             "aud": JWT_ACCESS_TOKEN_AUDIENCE,
@@ -224,7 +236,7 @@ async def test_jwt_strategy_read_token_returns_none_when_subject_decoder_raises(
     )
     user_manager = ExampleUserManager(user)
 
-    token = jwt.encode(
+    token = _make_jwt(
         _make_valid_jwt_payload(sub="123", jti=str(uuid4())),
         DEFAULT_SECRET,
         algorithm="HS256",
@@ -256,7 +268,7 @@ async def test_jwt_strategy_read_token_returns_none_when_sub_missing() -> None:
     strategy = JWTStrategy(secret=DEFAULT_SECRET, allow_inmemory_denylist=True)
     user_manager = ExampleUserManager(ExampleUser(id=uuid4()))
 
-    token = jwt.encode(
+    token = _make_jwt(
         _make_valid_jwt_payload(),
         DEFAULT_SECRET,
         algorithm="HS256",
@@ -270,7 +282,7 @@ async def test_jwt_strategy_read_token_returns_none_when_sub_empty() -> None:
     strategy = JWTStrategy(secret=DEFAULT_SECRET, allow_inmemory_denylist=True)
     user_manager = ExampleUserManager(ExampleUser(id=uuid4()))
 
-    token = jwt.encode(
+    token = _make_jwt(
         _make_valid_jwt_payload(sub=""),
         DEFAULT_SECRET,
         algorithm="HS256",
@@ -284,7 +296,7 @@ async def test_jwt_strategy_read_token_returns_none_when_sub_not_string() -> Non
     strategy = JWTStrategy(secret=DEFAULT_SECRET, allow_inmemory_denylist=True)
     user_manager = ExampleUserManager(ExampleUser(id=uuid4()))
 
-    token = jwt.encode(
+    token = _make_jwt(
         _make_valid_jwt_payload(sub=123),
         DEFAULT_SECRET,
         algorithm="HS256",
@@ -461,7 +473,7 @@ async def test_jwt_strategy_returns_none_when_audience_claim_missing() -> None:
     strategy = JWTStrategy(secret=DEFAULT_SECRET, subject_decoder=UUID, allow_inmemory_denylist=True)
     user_manager = ExampleUserManager(user)
 
-    token = jwt.encode(
+    token = _make_jwt(
         {
             "sub": str(user.id),
             "iat": datetime.now(tz=UTC),
@@ -481,7 +493,7 @@ async def test_jwt_strategy_returns_none_when_iat_claim_missing() -> None:
     strategy = JWTStrategy(secret=DEFAULT_SECRET, subject_decoder=UUID, allow_inmemory_denylist=True)
     user_manager = ExampleUserManager(user)
 
-    token = jwt.encode(
+    token = _make_jwt(
         {"sub": str(user.id), "aud": JWT_ACCESS_TOKEN_AUDIENCE, "exp": datetime.now(tz=UTC) + timedelta(minutes=5)},
         DEFAULT_SECRET,
         algorithm="HS256",
@@ -496,7 +508,7 @@ async def test_jwt_strategy_returns_none_when_nbf_claim_missing() -> None:
     strategy = JWTStrategy(secret=DEFAULT_SECRET, subject_decoder=UUID, allow_inmemory_denylist=True)
     user_manager = ExampleUserManager(user)
 
-    token = jwt.encode(
+    token = _make_jwt(
         {
             "sub": str(user.id),
             "aud": JWT_ACCESS_TOKEN_AUDIENCE,
@@ -516,7 +528,7 @@ async def test_jwt_strategy_returns_none_when_nbf_claim_is_in_future() -> None:
     strategy = JWTStrategy(secret=DEFAULT_SECRET, subject_decoder=UUID, allow_inmemory_denylist=True)
     user_manager = ExampleUserManager(user)
 
-    token = jwt.encode(
+    token = _make_jwt(
         {
             "sub": str(user.id),
             "aud": JWT_ACCESS_TOKEN_AUDIENCE,

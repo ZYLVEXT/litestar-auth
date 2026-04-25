@@ -66,7 +66,7 @@ EXCEPTION_CASES: tuple[ExceptionCase, ...] = (
     (
         UserAlreadyExistsError,
         "A user with the provided credentials already exists.",
-        ErrorCode.REGISTER_USER_ALREADY_EXISTS,
+        ErrorCode.USER_ALREADY_EXISTS,
         AuthenticationError,
     ),
     (
@@ -113,8 +113,8 @@ EXPECTED_ERROR_CODES = {
     "TOKEN_PROCESSING_FAILED": "TOKEN_PROCESSING_FAILED",
     "CONFIGURATION_INVALID": "CONFIGURATION_INVALID",
     "USER_NOT_FOUND": "USER_NOT_FOUND",
-    "REGISTER_USER_ALREADY_EXISTS": "REGISTER_USER_ALREADY_EXISTS",
-    "REGISTER_INVALID_PASSWORD": "REGISTER_INVALID_PASSWORD",
+    "USER_ALREADY_EXISTS": "USER_ALREADY_EXISTS",
+    "REGISTER_FAILED": "REGISTER_FAILED",
     "LOGIN_BAD_CREDENTIALS": "LOGIN_BAD_CREDENTIALS",
     "LOGIN_USER_INACTIVE": "LOGIN_USER_INACTIVE",
     "LOGIN_USER_NOT_VERIFIED": "LOGIN_USER_NOT_VERIFIED",
@@ -189,7 +189,7 @@ def test_exception_module_reload_preserves_default_message_and_code_contract(mon
     assert str(reloaded_configuration_error) == ConfigurationError.default_message
     assert reloaded_configuration_error.code == ErrorCode.CONFIGURATION_INVALID
     assert str(reloaded_user_exists_error) == UserAlreadyExistsError.default_message
-    assert reloaded_user_exists_error.code == ErrorCode.REGISTER_USER_ALREADY_EXISTS
+    assert reloaded_user_exists_error.code == ErrorCode.USER_ALREADY_EXISTS
     assert reloaded_user_exists_error.identifier_type == "email"
     assert reloaded_user_exists_error.identifier_value == "user@example.com"
     assert str(reloaded_invalid_password_error) == InvalidPasswordError.default_message
@@ -435,7 +435,7 @@ def test_user_already_exists_error_exposes_identifier_context_and_default_messag
     )
 
     assert str(error) == UserAlreadyExistsError.default_message
-    assert error.code == ErrorCode.REGISTER_USER_ALREADY_EXISTS
+    assert error.code == ErrorCode.USER_ALREADY_EXISTS
     assert error.identifier == UserIdentifier(identifier_type="username", identifier_value="existing-user")
     assert error.identifier_type == "username"
     assert error.identifier_value == "existing-user"
@@ -453,7 +453,7 @@ def test_user_already_exists_error_none_message_and_none_code_use_generic_defaul
     )
 
     assert str(error) == UserAlreadyExistsError.default_message
-    assert error.code == ErrorCode.REGISTER_USER_ALREADY_EXISTS
+    assert error.code == ErrorCode.USER_ALREADY_EXISTS
 
 
 def test_user_already_exists_error_rejects_positional_message_argument() -> None:
@@ -486,11 +486,11 @@ def test_user_already_exists_error_custom_message_and_code_override_defaults() -
             identifier_value="user@example.com",
         ),
         message="custom user exists message",
-        code="CUSTOM_REGISTER_USER_ALREADY_EXISTS",
+        code="CUSTOM_USER_ALREADY_EXISTS",
     )
 
     assert str(error) == "custom user exists message"
-    assert error.code == "CUSTOM_REGISTER_USER_ALREADY_EXISTS"
+    assert error.code == "CUSTOM_USER_ALREADY_EXISTS"
     assert error.identifier == UserIdentifier(identifier_type="email", identifier_value="user@example.com")
     assert error.identifier_type == "email"
     assert error.identifier_value == "user@example.com"
@@ -546,6 +546,23 @@ def test_exception_inheritance_hierarchy() -> None:
 def test_error_code_constants_match_string_values() -> None:
     """Every ``ErrorCode`` constant matches its machine-readable string value."""
     assert _error_code_members() == EXPECTED_ERROR_CODES
+
+
+def test_register_failed_error_code_is_available_for_register_response_collapse() -> None:
+    """``REGISTER_FAILED`` remains available for the register response collapse."""
+    assert ErrorCode.REGISTER_FAILED.value == "REGISTER_FAILED"
+
+
+def test_obsolete_register_error_codes_are_removed() -> None:
+    """Register-specific duplicate and password policy codes are no longer public enum members."""
+    removed_member_names = (
+        "REGISTER_" + "USER_ALREADY_EXISTS",
+        "REGISTER_" + "INVALID_PASSWORD",
+    )
+
+    for removed_member_name in removed_member_names:
+        with pytest.raises(AttributeError):
+            getattr(ErrorCode, removed_member_name)
 
 
 def test_error_code_is_strenum_with_stable_public_surface() -> None:

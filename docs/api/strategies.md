@@ -2,7 +2,7 @@
 
 Token **strategies** validate or issue credentials and pair with transports inside an `AuthenticationBackend` (see [Backends: transports and strategies](../concepts/backends.md)). Three concrete implementations ship with litestar-auth:
 
-- **`JWTStrategy`** issues and verifies stateless signed JWTs with your configured signing keys. Use it when you want bearer or cookie flows without storing each access token in a database or Redis—scaling and rotation are typically driven by expiry and refresh semantics rather than per-token rows.
+- **`JWTStrategy`** issues and verifies stateless signed JWTs with your configured signing keys. Library-issued access tokens include JOSE `typ=JWT`; decode rejects tokens with a missing or unexpected `typ` header before the normal signed validation. This header check is defense-in-depth against token-class confusion and does not replace signature, algorithm allowlist, audience, issuer, or required-claim validation. Use this strategy when you want bearer or cookie flows without storing each access token in a database or Redis—scaling and rotation are typically driven by expiry and refresh semantics rather than per-token rows.
 
 - **`DatabaseTokenStrategy`** stores opaque tokens in your application database (hashed at rest). Use it when you need durable revocation, per-token metadata, or audit trails aligned with your ORM models.
 

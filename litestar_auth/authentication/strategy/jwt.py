@@ -15,6 +15,7 @@ from typing import TYPE_CHECKING, Literal, Protocol, Self, cast, override
 import jwt
 from jwt import ExpiredSignatureError, InvalidTokenError
 
+from litestar_auth._jwt_headers import jwt_encode_headers, validate_jwt_type_header
 from litestar_auth._optional_deps import _require_redis_asyncio
 from litestar_auth.authentication.strategy.base import Strategy, UserManagerProtocol
 from litestar_auth.config import JWT_ACCESS_TOKEN_AUDIENCE, JWT_TIME_CLAIM_LEEWAY_SECONDS, validate_secret_length
@@ -421,6 +422,7 @@ class JWTStrategy(Strategy[UP, ID]):
             Verified JWT claims, or ``None`` when decoding fails.
         """
         try:
+            validate_jwt_type_header(token)
             if self.issuer is None:
                 raw = jwt.decode(
                     token,
@@ -516,7 +518,7 @@ class JWTStrategy(Strategy[UP, ID]):
         fingerprint = self.session_fingerprint_getter(user)
         if fingerprint is not None:
             payload[self.session_fingerprint_claim] = fingerprint
-        return jwt.encode(payload, self.secret, algorithm=self.algorithm)
+        return jwt.encode(payload, self.secret, algorithm=self.algorithm, headers=jwt_encode_headers())
 
     @override
     async def destroy_token(self, token: str, user: UP) -> None:
@@ -531,6 +533,7 @@ class JWTStrategy(Strategy[UP, ID]):
         del user
 
         try:
+            validate_jwt_type_header(token)
             payload = jwt.decode(
                 token,
                 self.verify_key,

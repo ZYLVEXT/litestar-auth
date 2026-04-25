@@ -12,6 +12,7 @@ from uuid import UUID
 
 import msgspec
 import pytest
+from cryptography.fernet import Fernet
 from litestar.config.app import AppConfig
 
 import litestar_auth._plugin.config as plugin_config_module
@@ -67,6 +68,7 @@ from litestar_auth.exceptions import ConfigurationError
 from litestar_auth.manager import BaseUserManager, TotpSecretStoragePosture, UserManagerSecurity
 from litestar_auth.models import User as OrmUser
 from litestar_auth.password import PasswordHelper
+from litestar_auth.plugin import FernetKeyringConfig
 from litestar_auth.ratelimit import AuthRateLimitConfig, EndpointRateLimit, InMemoryRateLimiter, RateLimiterBackend
 from litestar_auth.totp import InMemoryUsedTotpCodeStore
 from tests.integration.test_orchestrator import (
@@ -84,10 +86,16 @@ if TYPE_CHECKING:
     from litestar_auth.config import OAuthProviderConfig
 
 pytestmark = pytest.mark.unit
+OAUTH_FLOW_COOKIE_SECRET = "oauth-flow-cookie-secret-1234567890"
 
 JWT_SECRET = "s" * 32
 TOKEN_HASH_SECRET = "t" * 32
 TOTP_SECRET_KEY = "u" * 32
+
+
+def _fernet_key() -> str:
+    """Return a valid Fernet key for keyring validation tests."""
+    return Fernet.generate_key().decode()
 
 
 def _oauth_provider(*, name: str, client: object) -> OAuthProviderConfig:
@@ -195,6 +203,27 @@ class _SharedRateLimitBackend:
     @property
     def is_shared_across_workers(self) -> bool:
         return True
+
+    async def check(self, key: str) -> bool:
+        del key
+        return True
+
+    async def increment(self, key: str) -> None:
+        del key
+
+    async def reset(self, key: str) -> None:
+        del key
+
+    async def retry_after(self, key: str) -> int:
+        del key
+        return 0
+
+
+@dataclass(slots=True, frozen=True)
+class _ProcessLocalRateLimitBackend:
+    @property
+    def is_shared_across_workers(self) -> bool:
+        return False
 
     async def check(self, key: str) -> bool:
         del key
@@ -360,6 +389,9 @@ def test_plugin_startup_module_executes_under_coverage() -> None:
     assert reloaded_module.require_secure_oauth_redirect_in_production.__name__ == (
         require_secure_oauth_redirect_in_production.__name__
     )
+    assert reloaded_module.require_shared_rate_limit_backends_for_multiworker.__name__ == (
+        startup_module.require_shared_rate_limit_backends_for_multiworker.__name__
+    )
 
 
 def test_warn_insecure_plugin_startup_defaults_emits_all_expected_security_warnings(
@@ -371,7 +403,10 @@ def test_warn_insecure_plugin_startup_defaults_emits_all_expected_security_warni
             _cookie_backend(),
             _jwt_backend(),
         ],
-        oauth_config=OAuthConfig(oauth_providers=[_oauth_provider(name="github", client=object())]),
+        oauth_config=OAuthConfig(
+            oauth_providers=[_oauth_provider(name="github", client=object())],
+            oauth_flow_cookie_secret=OAUTH_FLOW_COOKIE_SECRET,
+        ),
         rate_limit_config=_rate_limit_config(backend=InMemoryRateLimiter(max_attempts=5, window_seconds=60)),
         totp_config=TotpConfig(
             totp_pending_secret="p" * 32,
@@ -387,7 +422,7 @@ def test_warn_insecure_plugin_startup_defaults_emits_all_expected_security_warni
         warn_insecure_plugin_startup_defaults(config)
 
     messages = [str(record.message) for record in records]
-    assert any("oauth_token_encryption_key is not set" in message for message in messages)
+    assert any("OAuth token encryption key material is not set" in message for message in messages)
     assert any("process-local in-memory denylist" in message for message in messages)
     assert any("process-local in-memory backend" in message for message in messages)
     assert any("InMemoryUsedTotpCodeStore" in message for message in messages)
@@ -426,7 +461,10 @@ def test_warn_insecure_plugin_startup_defaults_is_silent_in_testing(
     """Testing mode suppresses the insecure-default warnings."""
     config = _minimal_config(
         backends=[_cookie_backend(), _jwt_backend()],
-        oauth_config=OAuthConfig(oauth_providers=[_oauth_provider(name="github", client=object())]),
+        oauth_config=OAuthConfig(
+            oauth_providers=[_oauth_provider(name="github", client=object())],
+            oauth_flow_cookie_secret=OAUTH_FLOW_COOKIE_SECRET,
+        ),
         rate_limit_config=_rate_limit_config(backend=InMemoryRateLimiter(max_attempts=5, window_seconds=60)),
         totp_config=TotpConfig(
             totp_pending_secret="p" * 32,
@@ -456,6 +494,7 @@ def test_warn_insecure_plugin_startup_defaults_is_silent_for_safe_production_con
         oauth_config=OAuthConfig(
             oauth_providers=[_oauth_provider(name="github", client=object())],
             oauth_token_encryption_key="a2tra2tra2tra2tra2tra2tra2tra2tra2tra2tra2s=",
+            oauth_flow_cookie_secret=OAUTH_FLOW_COOKIE_SECRET,
         ),
         rate_limit_config=_rate_limit_config(backend=_SharedRateLimitBackend()),
         totp_config=_configured_totp_config(
@@ -1025,6 +1064,20 @@ def test_validate_rate_limit_config_accepts_none() -> None:
     validate_rate_limit_config(None)
 
 
+@pytest.mark.parametrize("unsafe_testing", [False, True])
+def test_validate_config_does_not_consume_deployment_worker_count_for_rate_limit_yet(
+    unsafe_testing: object,
+) -> None:
+    """REFAC-002 only records topology; startup fail-closed validation is introduced later."""
+    config = _minimal_config(
+        deployment_worker_count=2,
+        rate_limit_config=_rate_limit_config(backend=InMemoryRateLimiter(max_attempts=5, window_seconds=60)),
+    )
+    config.unsafe_testing = cast("bool", unsafe_testing)
+
+    validate_config(config)
+
+
 def test_iter_rate_limit_endpoints_includes_request_verify_token() -> None:
     """The shared iterator covers the late-bound verify-token request endpoint."""
     rate_limit = EndpointRateLimit(
@@ -1038,6 +1091,19 @@ def test_iter_rate_limit_endpoints_includes_request_verify_token() -> None:
     assert endpoints[-1] is rate_limit
 
 
+def test_iter_rate_limit_endpoints_includes_change_password() -> None:
+    """The shared iterator covers the users-controller password-rotation endpoint."""
+    rate_limit = EndpointRateLimit(
+        backend=InMemoryRateLimiter(max_attempts=5, window_seconds=60),
+        scope="ip_email",
+        namespace="change-password",
+    )
+
+    endpoints = iter_rate_limit_endpoints(AuthRateLimitConfig(change_password=rate_limit))
+
+    assert rate_limit in endpoints
+
+
 def test_iter_rate_limit_endpoints_includes_totp_confirm_enable() -> None:
     """The shared iterator covers the TOTP confirm-enrollment endpoint."""
     rate_limit = EndpointRateLimit(
@@ -1049,6 +1115,152 @@ def test_iter_rate_limit_endpoints_includes_totp_confirm_enable() -> None:
     endpoints = iter_rate_limit_endpoints(AuthRateLimitConfig(totp_confirm_enable=rate_limit))
 
     assert rate_limit in endpoints
+
+
+def test_iter_rate_limit_endpoint_items_include_supported_slot_names() -> None:
+    """The shared iterator exposes endpoint slot names for startup diagnostics."""
+    rate_limit = EndpointRateLimit(
+        backend=InMemoryRateLimiter(max_attempts=5, window_seconds=60),
+        scope="ip",
+        namespace="totp-regenerate-recovery-codes",
+    )
+
+    items = rate_limit_module.iter_rate_limit_endpoint_items(
+        AuthRateLimitConfig(totp_regenerate_recovery_codes=rate_limit),
+    )
+
+    assert items[-3:] == (
+        ("totp_regenerate_recovery_codes", rate_limit),
+        ("verify_token", None),
+        ("request_verify_token", None),
+    )
+
+
+def test_collect_process_local_rate_limit_endpoint_names_accepts_no_rate_limit_config() -> None:
+    """Omitting rate limits leaves no process-local endpoint posture."""
+    config = _minimal_config(rate_limit_config=None)
+
+    assert startup_module._collect_process_local_rate_limit_endpoint_names(config) == ()
+
+
+def test_collect_process_local_rate_limit_endpoint_names_ignores_disabled_slots() -> None:
+    """Disabled endpoint slots are ignored by the startup posture collector."""
+    config = _minimal_config(rate_limit_config=AuthRateLimitConfig.disabled())
+
+    assert startup_module._collect_process_local_rate_limit_endpoint_names(config) == ()
+
+
+def test_collect_process_local_rate_limit_endpoint_names_returns_one_process_local_slot() -> None:
+    """The collector names a configured endpoint that uses process-local state."""
+    config = _minimal_config(
+        rate_limit_config=AuthRateLimitConfig(
+            request_verify_token=EndpointRateLimit(
+                backend=InMemoryRateLimiter(max_attempts=5, window_seconds=60),
+                scope="ip",
+                namespace="request-verify-token",
+            ),
+        ),
+    )
+
+    assert startup_module._collect_process_local_rate_limit_endpoint_names(config) == ("request_verify_token",)
+
+
+def test_collect_process_local_rate_limit_endpoint_names_returns_multiple_process_local_slots() -> None:
+    """The collector preserves configured slot order when multiple endpoints are process-local."""
+    process_local_backend = _ProcessLocalRateLimitBackend()
+    config = _minimal_config(
+        rate_limit_config=AuthRateLimitConfig(
+            login=EndpointRateLimit(
+                backend=InMemoryRateLimiter(max_attempts=5, window_seconds=60),
+                scope="ip_email",
+                namespace="login",
+            ),
+            totp_confirm_enable=EndpointRateLimit(
+                backend=process_local_backend,
+                scope="ip",
+                namespace="totp-confirm-enable",
+            ),
+            request_verify_token=EndpointRateLimit(
+                backend=process_local_backend,
+                scope="ip_email",
+                namespace="request-verify-token",
+            ),
+        ),
+    )
+
+    assert startup_module._collect_process_local_rate_limit_endpoint_names(config) == (
+        "login",
+        "totp_confirm_enable",
+        "request_verify_token",
+    )
+
+
+def test_collect_process_local_rate_limit_endpoint_names_accepts_shared_custom_backend() -> None:
+    """Shared custom backends do not produce process-local startup posture."""
+    config = _minimal_config(
+        rate_limit_config=AuthRateLimitConfig(
+            login=EndpointRateLimit(
+                backend=_SharedRateLimitBackend(),
+                scope="ip_email",
+                namespace="login",
+            ),
+        ),
+    )
+
+    assert startup_module._collect_process_local_rate_limit_endpoint_names(config) == ()
+
+
+def test_collect_process_local_rate_limit_endpoint_names_uses_backend_protocol() -> None:
+    """The collector follows the backend contract instead of checking concrete classes."""
+    config = _minimal_config(
+        rate_limit_config=AuthRateLimitConfig(
+            forgot_password=EndpointRateLimit(
+                backend=_ProcessLocalRateLimitBackend(),
+                scope="ip_email",
+                namespace="forgot-password",
+            ),
+        ),
+    )
+
+    assert startup_module._collect_process_local_rate_limit_endpoint_names(config) == ("forgot_password",)
+
+
+def test_require_shared_rate_limit_backends_for_multiworker_rejects_process_local_backend() -> None:
+    """Declared multi-worker deployments require auth rate-limit state shared across workers."""
+    config = _minimal_config(
+        deployment_worker_count=2,
+        rate_limit_config=AuthRateLimitConfig(
+            request_verify_token=EndpointRateLimit(
+                backend=_ProcessLocalRateLimitBackend(),
+                scope="ip",
+                namespace="request-verify-token",
+            ),
+        ),
+    )
+
+    with pytest.raises(ConfigurationError) as exc_info:
+        startup_module.require_shared_rate_limit_backends_for_multiworker(config)
+
+    message = str(exc_info.value)
+    assert "request_verify_token" in message
+    assert "RedisRateLimiter" in message
+    assert "RedisAuthPreset" in message
+
+
+def test_require_shared_rate_limit_backends_for_multiworker_accepts_shared_backend() -> None:
+    """Shared rate-limit backends satisfy the declared multi-worker startup guard."""
+    config = _minimal_config(
+        deployment_worker_count=2,
+        rate_limit_config=AuthRateLimitConfig(
+            request_verify_token=EndpointRateLimit(
+                backend=_SharedRateLimitBackend(),
+                scope="ip",
+                namespace="request-verify-token",
+            ),
+        ),
+    )
+
+    startup_module.require_shared_rate_limit_backends_for_multiworker(config)
 
 
 def test_warn_insecure_plugin_startup_defaults_warns_for_request_verify_token_inmemory_backend(
@@ -1216,7 +1428,7 @@ def test_validate_totp_encryption_key_requires_secret_in_production(
 
     with pytest.raises(
         validation_module.ConfigurationError,
-        match="totp_secret_key is required in production",
+        match="totp_secret_keyring or totp_secret_key is required in production",
     ) as exc_info:
         _validate_totp_encryption_key(config)
     assert (
@@ -1237,6 +1449,21 @@ def test_validate_totp_encryption_key_allows_configured_secret_in_production(
             verification_token_secret="v" * 32,
             reset_password_token_secret="r" * 32,
             totp_secret_key=TOTP_SECRET_KEY,
+        ),
+    )
+
+    _validate_totp_encryption_key(config)
+
+
+def test_validate_totp_encryption_key_allows_configured_keyring_in_production() -> None:
+    """Providing a TOTP Fernet keyring satisfies the production encryption requirement."""
+    keyring = FernetKeyringConfig(active_key_id="current", keys={"current": _fernet_key(), "old": _fernet_key()})
+    config = _minimal_config(
+        totp_config=TotpConfig(totp_pending_secret="p" * 32),
+        user_manager_security=UserManagerSecurity[UUID](
+            verification_token_secret="v" * 32,
+            reset_password_token_secret="r" * 32,
+            totp_secret_keyring=keyring,
         ),
     )
 
@@ -1285,7 +1512,7 @@ def test_validate_totp_encryption_key_rejects_empty_secret_in_production(
 
     with pytest.raises(
         validation_module.ConfigurationError,
-        match="totp_secret_key is required in production",
+        match="totp_secret_keyring or totp_secret_key is required in production",
     ) as exc_info:
         _validate_totp_encryption_key(config)
     assert (
@@ -1363,6 +1590,26 @@ def test_validate_user_manager_security_config_rejects_when_secret_roles_share_o
     assert RESET_PASSWORD_TOKEN_AUDIENCE in message
     assert TOTP_PENDING_AUDIENCE in message
     assert TOTP_ENROLL_AUDIENCE in message
+    assert shared_secret not in message
+
+
+def test_validate_user_manager_security_config_rejects_keyring_secret_role_reuse() -> None:
+    """Distinct-role validation checks every configured TOTP keyring value."""
+    shared_secret = _fernet_key()
+    config = _minimal_config(
+        user_manager_security=UserManagerSecurity[UUID](
+            verification_token_secret=shared_secret,
+            reset_password_token_secret="r" * 32,
+            totp_secret_keyring=FernetKeyringConfig(active_key_id="current", keys={"current": shared_secret}),
+        ),
+    )
+
+    with pytest.raises(ConfigurationError, match="Distinct secrets/keys") as exc_info:
+        validate_user_manager_security_config(config)
+
+    message = str(exc_info.value)
+    assert "verification_token_secret" in message
+    assert "totp_secret_key" in message
     assert shared_secret not in message
 
 
@@ -1558,6 +1805,7 @@ def test_require_oauth_token_encryption_for_configured_providers_calls_require_k
     oauth_config = OAuthConfig(
         oauth_providers=[_oauth_provider(name="github", client=object())],
         include_oauth_associate=route_variant == "login-and-associate",
+        oauth_flow_cookie_secret=OAUTH_FLOW_COOKIE_SECRET,
     )
     config = _minimal_config(oauth_config=oauth_config)
     seen: list[str] = []
@@ -1585,10 +1833,14 @@ def test_require_oauth_token_encryption_for_configured_providers_skips_unconfigu
 def test_has_configured_oauth_provider_helpers_report_expected_state() -> None:
     """Both provider helper variants agree on configured and unconfigured OAuth state."""
     empty_config = OAuthConfig()
-    login_only_config = OAuthConfig(oauth_providers=[_oauth_provider(name="github", client=object())])
+    login_only_config = OAuthConfig(
+        oauth_providers=[_oauth_provider(name="github", client=object())],
+        oauth_flow_cookie_secret=OAUTH_FLOW_COOKIE_SECRET,
+    )
     login_and_associate_config = OAuthConfig(
         include_oauth_associate=True,
         oauth_providers=[_oauth_provider(name="github", client=object())],
+        oauth_flow_cookie_secret=OAUTH_FLOW_COOKIE_SECRET,
     )
 
     assert has_configured_oauth_providers(_minimal_config(oauth_config=None)) is False
@@ -1605,6 +1857,7 @@ def test_require_secure_oauth_redirect_in_production_accepts_public_https_origin
         oauth_config=OAuthConfig(
             oauth_providers=[_oauth_provider(name="github", client=object())],
             oauth_redirect_base_url="https://app.example.com/auth",
+            oauth_flow_cookie_secret=OAUTH_FLOW_COOKIE_SECRET,
         ),
     )
 
@@ -1635,6 +1888,7 @@ def test_require_secure_oauth_redirect_in_production_rejects_insecure_origins(
         oauth_config=OAuthConfig(
             oauth_providers=[_oauth_provider(name="github", client=object())],
             oauth_redirect_base_url=redirect_base_url,
+            oauth_flow_cookie_secret=OAUTH_FLOW_COOKIE_SECRET,
         ),
     )
 
@@ -1648,6 +1902,7 @@ def test_require_secure_oauth_redirect_in_production_skips_debug_mode() -> None:
         oauth_config=OAuthConfig(
             oauth_providers=[_oauth_provider(name="github", client=object())],
             oauth_redirect_base_url="http://localhost/auth",
+            oauth_flow_cookie_secret=OAUTH_FLOW_COOKIE_SECRET,
         ),
     )
 
@@ -1660,6 +1915,7 @@ def test_require_secure_oauth_redirect_in_production_skips_unsafe_testing() -> N
         oauth_config=OAuthConfig(
             oauth_providers=[_oauth_provider(name="github", client=object())],
             oauth_redirect_base_url="http://localhost/auth",
+            oauth_flow_cookie_secret=OAUTH_FLOW_COOKIE_SECRET,
         ),
     )
     config.unsafe_testing = True
@@ -1686,10 +1942,36 @@ def test_validate_config_rejects_missing_redirect_base_url_for_plugin_owned_oaut
         oauth_config=OAuthConfig(
             oauth_providers=[_oauth_provider(name="github", client=object())],
             oauth_token_encryption_key="YWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWE=",
+            oauth_flow_cookie_secret=OAUTH_FLOW_COOKIE_SECRET,
         ),
     )
 
     with pytest.raises(ValueError, match="oauth_redirect_base_url is required when oauth_providers are configured"):
+        validate_config(config)
+
+
+@pytest.mark.parametrize(
+    ("oauth_flow_cookie_secret", "expected_message"),
+    [
+        pytest.param(None, "oauth_flow_cookie_secret is required", id="missing"),
+        pytest.param("too-short", "oauth_flow_cookie_secret must be at least", id="too-short"),
+    ],
+)
+def test_validate_config_rejects_missing_or_short_oauth_flow_cookie_secret(
+    oauth_flow_cookie_secret: str | None,
+    expected_message: str,
+) -> None:
+    """Plugin-owned OAuth routes require a dedicated secret for encrypted flow cookies."""
+    config = _minimal_config(
+        oauth_config=OAuthConfig(
+            oauth_providers=[_oauth_provider(name="github", client=object())],
+            oauth_redirect_base_url="https://app.example.com/auth",
+            oauth_token_encryption_key="YWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWE=",
+            oauth_flow_cookie_secret=oauth_flow_cookie_secret,
+        ),
+    )
+
+    with pytest.raises(ConfigurationError, match=expected_message):
         validate_config(config)
 
 
@@ -1699,6 +1981,7 @@ def test_validate_config_rejects_orphan_redirect_base_url() -> None:
         oauth_config=OAuthConfig(
             oauth_redirect_base_url="https://app.example.com/auth",
             oauth_token_encryption_key="YWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWE=",
+            oauth_flow_cookie_secret=OAUTH_FLOW_COOKIE_SECRET,
         ),
     )
 
@@ -1716,6 +1999,7 @@ def test_validate_config_rejects_duplicate_login_provider_names() -> None:
             ],
             oauth_redirect_base_url="https://app.example.com/auth",
             oauth_token_encryption_key="YWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWE=",
+            oauth_flow_cookie_secret=OAUTH_FLOW_COOKIE_SECRET,
         ),
     )
 
@@ -1933,6 +2217,7 @@ def test_validate_superuser_role_name_config_revalidates_mutated_config_value() 
 def _minimal_config(  # noqa: PLR0913
     *,
     backends: list[AuthenticationBackend[ExampleUser, UUID]] | None = None,
+    deployment_worker_count: int | None = None,
     oauth_config: OAuthConfig | None = None,
     rate_limit_config: AuthRateLimitConfig | None = None,
     totp_config: TotpConfig | None = None,
@@ -1968,6 +2253,7 @@ def _minimal_config(  # noqa: PLR0913
         user_manager_class=PluginUserManager,
         user_db_factory=lambda _session: user_db,
         user_manager_security=resolved_manager_security,
+        deployment_worker_count=deployment_worker_count,
         id_parser=cast("Any", id_parser),
         oauth_config=oauth_config,
         rate_limit_config=rate_limit_config,
