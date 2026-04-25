@@ -57,6 +57,7 @@ if TYPE_CHECKING:
     from litestar_auth.config import OAuthProviderConfig
 
 pytestmark = pytest.mark.unit
+OAUTH_FLOW_COOKIE_SECRET = "oauth-flow-cookie-secret-1234567890"
 
 
 def _oauth_provider(*, name: str, client: object) -> OAuthProviderConfig:
@@ -476,6 +477,7 @@ def test_register_dependencies_adds_oauth_associate_provider_only_when_configure
         include_oauth_associate=True,
         oauth_redirect_base_url="https://app.example.com/auth",
         oauth_token_encryption_key="YWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWE=",
+        oauth_flow_cookie_secret=OAUTH_FLOW_COOKIE_SECRET,
     )
 
     register_dependencies(present_app_config, present_config, providers=_providers())

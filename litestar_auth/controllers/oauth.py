@@ -1,23 +1,32 @@
-"""OAuth controller factory for provider-specific authorize/callback flows."""
+"""OAuth controller factory for provider-specific authorize/callback flows.
+
+Generated controllers enforce RFC 7636 PKCE S256 for OAuth authorization-code flows. The authorize endpoint stores
+the generated ``state`` and ``code_verifier`` in an encrypted, authenticated, httpOnly flow cookie; callbacks decrypt
+that envelope, validate ``state`` in constant time, and pass the verifier into the provider token exchange.
+"""
 
 from __future__ import annotations
 
 import hmac
 import inspect
 import keyword
+from base64 import urlsafe_b64encode
 from dataclasses import dataclass
 from ipaddress import ip_address
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any, NoReturn, cast
 from urllib.parse import urlsplit
 
+import msgspec
 from litestar import Controller, Request, get
 from litestar.enums import MediaType
 from litestar.exceptions import ClientException
+from litestar.openapi.datastructures import ResponseSpec
+from litestar.openapi.spec import Example
 from litestar.params import Parameter
 from litestar.response import Response
 from litestar.response.redirect import Redirect
 
-from litestar_auth.config import validate_oauth_provider_name
+from litestar_auth.config import validate_oauth_provider_name, validate_secret_length
 from litestar_auth.controllers._utils import _build_controller_name, _mark_litestar_auth_route_handler
 from litestar_auth.exceptions import ConfigurationError, ErrorCode
 from litestar_auth.guards import is_authenticated
@@ -49,6 +58,32 @@ if TYPE_CHECKING:
 STATE_COOKIE_PREFIX = "__oauth_state_"
 ASSOCIATE_STATE_COOKIE_PREFIX = "__oauth_associate_state_"
 STATE_COOKIE_MAX_AGE = 300
+_OAUTH_FLOW_COOKIE_VERSION = "v2"
+_OAUTH_FLOW_COOKIE_SEPARATOR = "."
+_OAUTH_FLOW_COOKIE_FERNET_KEY_BYTES = 32
+_OAUTH_FLOW_COOKIE_HKDF_SALT = b"litestar-auth:oauth-flow-cookie:v2"
+_OAUTH_FLOW_COOKIE_HKDF_INFO = b"litestar-auth OAuth flow-cookie Fernet key"
+_OAUTH_OPENAPI_RESPONSES = {
+    400: ResponseSpec(
+        data_container=dict[str, object],
+        generate_examples=False,
+        description=(
+            "Invalid OAuth callback state or missing/tampered PKCE flow-cookie evidence uses "
+            "`OAUTH_STATE_INVALID`. Runtime scope overrides on authorize are also rejected."
+        ),
+        examples=[
+            Example(
+                id="oauth_state_invalid",
+                summary="Invalid OAuth state or PKCE evidence",
+                value={
+                    "status_code": 400,
+                    "detail": "Invalid OAuth state.",
+                    "extra": {"code": ErrorCode.OAUTH_STATE_INVALID.value},
+                },
+            ),
+        ],
+    ),
+}
 
 
 @dataclass(frozen=True, slots=True)
@@ -70,8 +105,109 @@ class _OAuthControllerAssembly[UP: UserProtocol[Any], ID]:
     cookie_path: str
     cookie_secure: bool
     oauth_scopes: tuple[str, ...] | None
+    flow_cookie_cipher: _OAuthFlowCookieCipher
     oauth_service: OAuthService[UP, ID]
     user_manager_binding: _OAuthUserManagerBinding[UP, ID]
+
+
+@dataclass(frozen=True, slots=True)
+class _OAuthFlowCookie:
+    """OAuth flow material persisted between authorize and callback.
+
+    The serialized form is encrypted by :class:`_OAuthFlowCookieCipher`; the
+    dataclass itself never crosses the browser boundary in plaintext.
+    """
+
+    state: str
+    code_verifier: str
+
+
+@dataclass(frozen=True, slots=True)
+class _OAuthFlowCookieCrypto:
+    """Lazy-loaded cryptography primitives for OAuth flow cookies."""
+
+    fernet_type: type[Any]
+    invalid_token_type: type[Exception]
+    hkdf_type: type[Any]
+    hashes_module: Any
+
+
+@dataclass(frozen=True, slots=True)
+class _OAuthFlowCookieCipher:
+    """Encrypt and authenticate transient OAuth state + PKCE verifier material."""
+
+    _fernet: Any
+
+    @classmethod
+    def from_secret(cls, secret: str) -> _OAuthFlowCookieCipher:
+        """Return a Fernet-backed cipher derived from the configured server secret.
+
+        Args:
+            secret: High-entropy secret used only for transient OAuth flow-cookie encryption.
+
+        Returns:
+            Cipher instance that hides the raw secret from repr output.
+        """
+        validate_secret_length(secret, label="oauth_flow_cookie_secret")
+        crypto = _require_oauth_flow_cookie_crypto()
+        key_material = crypto.hkdf_type(
+            algorithm=crypto.hashes_module.SHA256(),
+            length=_OAUTH_FLOW_COOKIE_FERNET_KEY_BYTES,
+            salt=_OAUTH_FLOW_COOKIE_HKDF_SALT,
+            info=_OAUTH_FLOW_COOKIE_HKDF_INFO,
+        ).derive(secret.encode("utf-8"))
+        return cls(_fernet=crypto.fernet_type(urlsafe_b64encode(key_material)))
+
+    def encrypt(self, flow_cookie: _OAuthFlowCookie) -> str:
+        """Return a versioned encrypted cookie value."""
+        payload = msgspec.json.encode(flow_cookie)
+        token = self._fernet.encrypt(payload).decode("ascii").rstrip("=")
+        return f"{_OAUTH_FLOW_COOKIE_VERSION}{_OAUTH_FLOW_COOKIE_SEPARATOR}{token}"
+
+    def decrypt(self, cookie_value: str | None) -> _OAuthFlowCookie:
+        """Decrypt and validate a cookie value, mapping every failure to invalid state.
+
+        Returns:
+            Decrypted OAuth flow material.
+        """
+        if not cookie_value:
+            _raise_invalid_oauth_state()
+        version, separator, token = cookie_value.partition(_OAUTH_FLOW_COOKIE_SEPARATOR)
+        if version != _OAUTH_FLOW_COOKIE_VERSION or separator != _OAUTH_FLOW_COOKIE_SEPARATOR or not token:
+            _raise_invalid_oauth_state()
+
+        crypto = _require_oauth_flow_cookie_crypto()
+        try:
+            padding = "=" * (-len(token) % 4)
+            payload = self._fernet.decrypt(f"{token}{padding}".encode("ascii"))
+            flow_cookie = msgspec.json.decode(payload, type=_OAuthFlowCookie)
+        except (UnicodeEncodeError, ValueError, crypto.invalid_token_type, msgspec.DecodeError):
+            _raise_invalid_oauth_state()
+
+        if not flow_cookie.state or not flow_cookie.code_verifier:
+            _raise_invalid_oauth_state()
+        return flow_cookie
+
+
+def _require_oauth_flow_cookie_crypto() -> _OAuthFlowCookieCrypto:
+    """Return Fernet primitives for encrypted OAuth flow cookies.
+
+    Raises:
+        ImportError: If the optional OAuth crypto dependency is not installed.
+    """
+    try:
+        from cryptography.fernet import Fernet, InvalidToken  # noqa: PLC0415
+        from cryptography.hazmat.primitives import hashes  # noqa: PLC0415
+        from cryptography.hazmat.primitives.kdf.hkdf import HKDF  # noqa: PLC0415
+    except ImportError as exc:
+        msg = "Install litestar-auth[oauth] to use encrypted OAuth flow cookies."
+        raise ImportError(msg) from exc
+    return _OAuthFlowCookieCrypto(
+        fernet_type=Fernet,
+        invalid_token_type=InvalidToken,
+        hkdf_type=HKDF,
+        hashes_module=hashes,
+    )
 
 
 def _build_callback_url_from_base(redirect_base_url: str, provider_name: str) -> str:
@@ -175,6 +311,7 @@ def _build_oauth_controller_assembly[UP: UserProtocol[Any], ID](  # noqa: PLR091
     redirect_base_url: str,
     path: str,
     cookie_secure: bool,
+    oauth_flow_cookie_secret: str,
     state_cookie_prefix: str,
     controller_name_suffix: str,
     user_manager_binding: _OAuthUserManagerBinding[UP, ID],
@@ -213,6 +350,7 @@ def _build_oauth_controller_assembly[UP: UserProtocol[Any], ID](  # noqa: PLR091
         cookie_path=controller_path,
         cookie_secure=cookie_secure,
         oauth_scopes=_normalize_oauth_scopes(oauth_scopes),
+        flow_cookie_cipher=_OAuthFlowCookieCipher.from_secret(oauth_flow_cookie_secret),
         oauth_service=OAuthService(
             provider_name=provider_name,
             client=oauth_client_adapter,
@@ -328,7 +466,7 @@ def _create_authorize_handler[UP: UserProtocol[Any], ID](
         Decorated Litestar route handler for the provider authorize endpoint.
     """
 
-    @get("/authorize", guards=guards, security=security)
+    @get("/authorize", guards=guards, security=security, responses=_OAUTH_OPENAPI_RESPONSES)
     async def authorize(
         self: object,
         request: Request[Any, Any, Any],
@@ -343,7 +481,11 @@ def _create_authorize_handler[UP: UserProtocol[Any], ID](
         _set_state_cookie(
             response,
             cookie_name=assembly.cookie_name,
-            state=authorization.state,
+            flow_cookie=_OAuthFlowCookie(
+                state=authorization.state,
+                code_verifier=authorization.code_verifier,
+            ),
+            flow_cookie_cipher=assembly.flow_cookie_cipher,
             cookie_path=assembly.cookie_path,
             cookie_secure=assembly.cookie_secure,
         )
@@ -361,15 +503,20 @@ async def _complete_login_callback[UP: UserProtocol[Any], ID](  # noqa: PLR0913
     user_manager: OAuthControllerUserManagerProtocol[UP, ID],
     backend: AuthenticationBackend[UP, ID],
 ) -> Response[Any]:
-    """Complete the OAuth login callback using the shared assembly state.
+    """Complete the PKCE-bound OAuth login callback using the shared assembly state.
 
     Returns:
         Login response produced by the configured local authentication backend.
     """
-    _validate_state(request.cookies.get(assembly.cookie_name), oauth_state)
+    flow_cookie = _decode_oauth_flow_cookie(
+        request.cookies.get(assembly.cookie_name),
+        flow_cookie_cipher=assembly.flow_cookie_cipher,
+    )
+    _validate_state(flow_cookie.state, oauth_state)
     user = await assembly.oauth_service.complete_login(
         code=code,
         redirect_uri=assembly.callback_url,
+        code_verifier=flow_cookie.code_verifier,
         user_manager=user_manager,
     )
     response = await backend.login(user)
@@ -398,7 +545,7 @@ def _create_login_callback_handler[UP: UserProtocol[Any], ID](
         assembly.user_manager_binding.user_manager,
     )
 
-    @get("/callback")
+    @get("/callback", responses=_OAUTH_OPENAPI_RESPONSES)
     async def callback(
         self: object,
         request: Request[Any, Any, Any],
@@ -426,12 +573,16 @@ async def _complete_associate_callback[UP: UserProtocol[Any], ID](
     oauth_state: str,
     user_manager: OAuthControllerUserManagerProtocol[UP, ID],
 ) -> Response[Any]:
-    """Complete the OAuth associate callback using the shared assembly state.
+    """Complete the PKCE-bound OAuth associate callback using the shared assembly state.
 
     Returns:
         JSON response confirming the authenticated account link completed.
     """
-    _validate_state(request.cookies.get(assembly.cookie_name), oauth_state)
+    flow_cookie = _decode_oauth_flow_cookie(
+        request.cookies.get(assembly.cookie_name),
+        flow_cookie_cipher=assembly.flow_cookie_cipher,
+    )
+    _validate_state(flow_cookie.state, oauth_state)
     # Litestar does not narrow ``Request.user`` to ``UP``; associate routes use ``is_authenticated``.
     user = cast("UP", request.user)
     _require_service_account_state(user, user_manager=user_manager)
@@ -439,6 +590,7 @@ async def _complete_associate_callback[UP: UserProtocol[Any], ID](
         user=user,
         code=code,
         redirect_uri=assembly.callback_url,
+        code_verifier=flow_cookie.code_verifier,
         user_manager=user_manager,
     )
     response = Response(
@@ -492,14 +644,19 @@ def _create_associate_callback_handler[UP: UserProtocol[Any], ID](
             "oauth_state": str,
             "return": Response[Any],
         }
-        return get("/callback", guards=[is_authenticated], security=security)(callback)
+        return get(
+            "/callback",
+            guards=[is_authenticated],
+            security=security,
+            responses=_OAUTH_OPENAPI_RESPONSES,
+        )(callback)
 
     user_manager = cast(
         "OAuthControllerUserManagerProtocol[UP, ID]",
         assembly.user_manager_binding.user_manager,
     )
 
-    @get("/callback", guards=[is_authenticated], security=security)
+    @get("/callback", guards=[is_authenticated], security=security, responses=_OAUTH_OPENAPI_RESPONSES)
     async def callback(
         self: object,
         request: Request[Any, Any, Any],
@@ -525,6 +682,7 @@ def _create_login_oauth_controller[UP: UserProtocol[Any], ID](  # noqa: PLR0913
     user_manager: OAuthControllerUserManagerProtocol[UP, ID],
     oauth_client_adapter: OAuthClientAdapter,
     redirect_base_url: str,
+    oauth_flow_cookie_secret: str,
     path: str = "/auth/oauth",
     cookie_secure: bool = True,
     oauth_scopes: Sequence[str] | None = None,
@@ -539,6 +697,7 @@ def _create_login_oauth_controller[UP: UserProtocol[Any], ID](  # noqa: PLR0913
         redirect_base_url=redirect_base_url,
         path=path,
         cookie_secure=cookie_secure,
+        oauth_flow_cookie_secret=oauth_flow_cookie_secret,
         state_cookie_prefix=STATE_COOKIE_PREFIX,
         controller_name_suffix="OAuthController",
         user_manager_binding=_build_direct_user_manager_binding(user_manager),
@@ -567,6 +726,7 @@ def create_oauth_controller[UP: UserProtocol[Any], ID](  # noqa: PLR0913
     user_manager: OAuthControllerUserManagerProtocol[UP, ID],
     oauth_client: OAuthClientProtocol,
     redirect_base_url: str,
+    oauth_flow_cookie_secret: str,
     path: str = "/auth/oauth",
     cookie_secure: bool = True,
     oauth_scopes: Sequence[str] | None = None,
@@ -578,7 +738,10 @@ def create_oauth_controller[UP: UserProtocol[Any], ID](  # noqa: PLR0913
     The authorize endpoint uses only server-configured ``oauth_scopes``. Runtime
     scope-query overrides are rejected. ``redirect_base_url`` must use a
     non-loopback ``https://`` origin; the manual controller API does not expose
-    a debug or testing override for insecure callback origins.
+    a debug or testing override for insecure callback origins. The generated
+    flow enforces RFC 7636 PKCE S256: manual clients must accept
+    ``code_challenge`` / ``code_challenge_method`` on authorization and
+    ``code_verifier`` on token exchange.
 
     Returns:
         Generated controller class mounted under the provider-specific path.
@@ -589,6 +752,7 @@ def create_oauth_controller[UP: UserProtocol[Any], ID](  # noqa: PLR0913
         user_manager=user_manager,
         oauth_client_adapter=_build_oauth_client_adapter(oauth_client=oauth_client),
         redirect_base_url=redirect_base_url,
+        oauth_flow_cookie_secret=oauth_flow_cookie_secret,
         path=path,
         cookie_secure=cookie_secure,
         oauth_scopes=oauth_scopes,
@@ -604,6 +768,7 @@ def _create_oauth_associate_controller[UP: UserProtocol[Any], ID](  # noqa: PLR0
     user_manager_dependency_key: str | None = None,
     oauth_client: OAuthClientProtocol,
     redirect_base_url: str,
+    oauth_flow_cookie_secret: str,
     path: str = "/auth/associate",
     cookie_secure: bool = True,
     validate_redirect_base_url: bool = True,
@@ -620,6 +785,7 @@ def _create_oauth_associate_controller[UP: UserProtocol[Any], ID](  # noqa: PLR0
         redirect_base_url=redirect_base_url,
         path=path,
         cookie_secure=cookie_secure,
+        oauth_flow_cookie_secret=oauth_flow_cookie_secret,
         state_cookie_prefix=ASSOCIATE_STATE_COOKIE_PREFIX,
         controller_name_suffix="OAuthAssociateController",
         user_manager_binding=_build_associate_user_manager_binding(
@@ -647,6 +813,7 @@ def create_oauth_associate_controller[UP: UserProtocol[Any], ID](  # noqa: PLR09
     user_manager_dependency_key: str | None = None,
     oauth_client: OAuthClientProtocol,
     redirect_base_url: str,
+    oauth_flow_cookie_secret: str,
     path: str = "/auth/associate",
     cookie_secure: bool = True,
     security: Sequence[SecurityRequirement] | None = None,
@@ -655,7 +822,9 @@ def create_oauth_associate_controller[UP: UserProtocol[Any], ID](  # noqa: PLR09
 
     Both /authorize and /callback are protected by is_authenticated. Callback
     validates account state, then upserts the OAuth account for request.user and
-    does not create new users.
+    does not create new users. The generated flow enforces RFC 7636 PKCE S256:
+    manual clients must accept ``code_challenge`` / ``code_challenge_method`` on
+    authorization and ``code_verifier`` on token exchange.
 
     Provide either user_manager (for direct use) or user_manager_dependency_key
     (for plugin use with a request-scoped dependency). ``user_manager_dependency_key``
@@ -674,6 +843,7 @@ def create_oauth_associate_controller[UP: UserProtocol[Any], ID](  # noqa: PLR09
         user_manager_dependency_key=user_manager_dependency_key,
         oauth_client=oauth_client,
         redirect_base_url=redirect_base_url,
+        oauth_flow_cookie_secret=oauth_flow_cookie_secret,
         path=path,
         cookie_secure=cookie_secure,
         security=security,
@@ -732,18 +902,19 @@ def _build_cookie_path(*, path: str, provider_name: str) -> str:
     return f"{path.rstrip('/')}/{provider_name}"
 
 
-def _set_state_cookie(
+def _set_state_cookie(  # noqa: PLR0913
     response: Response[Any],
     *,
     cookie_name: str,
-    state: str,
+    flow_cookie: _OAuthFlowCookie,
+    flow_cookie_cipher: _OAuthFlowCookieCipher,
     cookie_path: str,
     cookie_secure: bool,
 ) -> None:
-    """Store the OAuth state value in the provider-scoped cookie."""
+    """Store encrypted OAuth state and PKCE verifier material in the provider-scoped cookie."""
     response.set_cookie(
         key=cookie_name,
-        value=state,
+        value=_encode_oauth_flow_cookie(flow_cookie, flow_cookie_cipher=flow_cookie_cipher),
         max_age=STATE_COOKIE_MAX_AGE,
         path=cookie_path,
         secure=cookie_secure,
@@ -771,17 +942,44 @@ def _clear_state_cookie(
     )
 
 
-def _validate_state(cookie_state: str | None, query_state: str) -> None:
-    """Validate the callback ``state`` against the secure cookie value.
+def _encode_oauth_flow_cookie(
+    flow_cookie: _OAuthFlowCookie,
+    *,
+    flow_cookie_cipher: _OAuthFlowCookieCipher,
+) -> str:
+    """Return a versioned encrypted envelope for OAuth flow material."""
+    return flow_cookie_cipher.encrypt(flow_cookie)
 
-    Raises:
-        ClientException: If the OAuth callback state is missing or does not match the cookie.
+
+def _decode_oauth_flow_cookie(
+    cookie_value: str | None,
+    *,
+    flow_cookie_cipher: _OAuthFlowCookieCipher,
+) -> _OAuthFlowCookie:
+    """Decrypt OAuth flow material from the state cookie.
+
+    Returns:
+        Decoded OAuth state and PKCE verifier.
     """
+    return flow_cookie_cipher.decrypt(cookie_value)
+
+
+def _validate_state(cookie_state: str | None, query_state: str) -> None:
+    """Validate the callback ``state`` against the secure cookie value."""
     # Security: reject empty values before constant-time comparison to prevent
     # trivial empty-string matching (hmac.compare_digest("", "") == True).
     if not cookie_state or not query_state or not hmac.compare_digest(cookie_state, query_state):
-        msg = "Invalid OAuth state."
-        raise ClientException(status_code=400, detail=msg, extra={"code": ErrorCode.OAUTH_STATE_INVALID})
+        _raise_invalid_oauth_state()
+
+
+def _raise_invalid_oauth_state() -> NoReturn:
+    """Raise the stable invalid OAuth state response.
+
+    Raises:
+        ClientException: Always raised with the public invalid-state response shape.
+    """
+    msg = "Invalid OAuth state."
+    raise ClientException(status_code=400, detail=msg, extra={"code": ErrorCode.OAUTH_STATE_INVALID})
 
 
 def _require_verified_email_evidence(*, email_verified: bool | None) -> None:

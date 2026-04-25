@@ -39,6 +39,19 @@ def test_oauth_client_adapter_exposes_typed_client_contract_annotation() -> None
     assert client_adapter_module.OAuthClientAdapter.__init__.__annotations__["oauth_client"] == "OAuthClientProtocol"
 
 
+def test_oauth_client_protocols_expose_pkce_keyword_contract() -> None:
+    """Manual OAuth protocols advertise the PKCE keyword arguments required by the adapter."""
+    authorization_signature = inspect.signature(
+        client_adapter_module.OAuthAuthorizationURLClientProtocol.get_authorization_url,
+    )
+    access_token_signature = inspect.signature(client_adapter_module.OAuthAccessTokenClientProtocol.get_access_token)
+
+    assert authorization_signature.parameters["code_challenge"].kind is inspect.Parameter.KEYWORD_ONLY
+    assert authorization_signature.parameters["code_challenge_method"].annotation == "Literal['S256'] | None"
+    assert access_token_signature.parameters["code_verifier"].kind is inspect.Parameter.KEYWORD_ONLY
+    assert access_token_signature.parameters["code_verifier"].annotation == "str | None"
+
+
 def test_async_email_verification_protocol_exposes_async_bool_contract() -> None:
     """The new verification protocol is explicitly async and bool-returning."""
     method = client_adapter_module.OAuthEmailVerificationAsyncClientProtocol.get_email_verified
@@ -235,6 +248,42 @@ def test_oauth_adapter_validation_error_rejects_sync_email_verification() -> Non
         _build_adapter(oauth_client)
 
 
+def test_oauth_adapter_validation_error_rejects_non_callable_authorization_url() -> None:
+    """Advertised authorization URL hooks must be callable for PKCE validation."""
+    oauth_client = _make_oauth_client(get_authorization_url="https://provider.example/authorize")
+
+    with pytest.raises(client_adapter_module.ConfigurationError, match="get_authorization_url must be callable"):
+        _build_adapter(oauth_client)
+
+
+def test_oauth_adapter_validation_error_rejects_authorization_url_without_pkce_kwargs() -> None:
+    """Legacy authorization URL clients fail closed instead of silently dropping PKCE challenges."""
+
+    async def get_authorization_url(redirect_uri: str, state: str, *, scope: str | None = None) -> str:
+        await asyncio.sleep(0)
+        del redirect_uri, state, scope
+        return "https://provider.example/authorize"
+
+    oauth_client = _make_oauth_client(get_authorization_url=get_authorization_url)
+
+    with pytest.raises(client_adapter_module.ConfigurationError, match=r"PKCE.*code_challenge.*code_challenge_method"):
+        _build_adapter(oauth_client)
+
+
+def test_oauth_adapter_validation_error_rejects_access_token_without_pkce_kwargs() -> None:
+    """Legacy token-exchange clients fail closed instead of silently dropping PKCE verifiers."""
+
+    async def get_access_token(code: str, redirect_uri: str) -> dict[str, str]:
+        await asyncio.sleep(0)
+        del code, redirect_uri
+        return {"access_token": "provider-access-token"}
+
+    oauth_client = _make_oauth_client(get_access_token=get_access_token)
+
+    with pytest.raises(client_adapter_module.ConfigurationError, match=r"PKCE.*code_verifier"):
+        _build_adapter(oauth_client)
+
+
 def test_oauth_adapter_validation_error_rejects_factory_client_with_non_callable_profile() -> None:
     """Resolved factory clients receive the same construction-time field validation."""
     oauth_client = _make_oauth_client(get_profile={"id": "provider-id"})
@@ -285,7 +334,83 @@ async def test_get_authorization_url_joins_server_owned_scopes() -> None:
         "https://app.example/callback",
         "state",
         scope="openid email",
+        code_challenge=None,
+        code_challenge_method=None,
     )
+
+
+async def test_get_authorization_url_forwards_pkce_material() -> None:
+    """PKCE challenge material is forwarded to clients implementing the new contract."""
+    oauth_client = _make_oauth_client(
+        get_authorization_url=AsyncMock(return_value="https://provider.example/authorize"),
+    )
+
+    authorization_url = await _build_adapter(oauth_client).get_authorization_url(
+        redirect_uri="https://app.example/callback",
+        state="state",
+        code_challenge="challenge",
+        code_challenge_method="S256",
+    )
+
+    assert authorization_url == "https://provider.example/authorize"
+    oauth_client.get_authorization_url.assert_awaited_once_with(
+        "https://app.example/callback",
+        "state",
+        scope=None,
+        code_challenge="challenge",
+        code_challenge_method="S256",
+    )
+
+
+async def test_get_authorization_url_forwards_httpx_oauth_scope_as_list() -> None:
+    """httpx-oauth clients receive the upstream list-shaped scope contract."""
+
+    class _HttpxOAuthClient:
+        __module__ = "httpx_oauth.clients.github"
+
+        def __init__(self) -> None:
+            self.calls: list[dict[str, object]] = []
+
+        async def get_authorization_url(
+            self,
+            redirect_uri: str,
+            state: str,
+            *,
+            scope: list[str] | None = None,
+            code_challenge: str | None = None,
+            code_challenge_method: str | None = None,
+        ) -> str:
+            self.calls.append(
+                {
+                    "redirect_uri": redirect_uri,
+                    "state": state,
+                    "scope": scope,
+                    "code_challenge": code_challenge,
+                    "code_challenge_method": code_challenge_method,
+                },
+            )
+            return "https://provider.example/authorize"
+
+    oauth_client = _HttpxOAuthClient()
+
+    authorization_url = await _build_adapter(oauth_client).get_authorization_url(
+        redirect_uri="https://app.example/callback",
+        state="state",
+        scopes=["openid", "email"],
+        code_challenge="challenge",
+        code_challenge_method="S256",
+    )
+
+    assert authorization_url == "https://provider.example/authorize"
+    assert oauth_client.calls == [
+        {
+            "redirect_uri": "https://app.example/callback",
+            "state": "state",
+            "scope": ["openid", "email"],
+            "code_challenge": "challenge",
+            "code_challenge_method": "S256",
+        },
+    ]
 
 
 @pytest.mark.parametrize("authorization_url", [123, ""])
@@ -333,6 +458,35 @@ async def test_get_access_token_accepts_mapping_payload() -> None:
         "expires_at": 1_234_567_890,
         "refresh_token": "provider-refresh-token",
     }
+    oauth_client.get_access_token.assert_awaited_once_with(
+        "provider-code",
+        "https://app.example/callback",
+        code_verifier=None,
+    )
+
+
+async def test_get_access_token_forwards_pkce_verifier() -> None:
+    """PKCE verifiers are forwarded to clients implementing the new contract."""
+    oauth_client = _make_oauth_client(
+        get_access_token=AsyncMock(return_value={"access_token": "provider-access-token"}),
+    )
+
+    payload = await _build_adapter(oauth_client).get_access_token(
+        code="provider-code",
+        redirect_uri="https://app.example/callback",
+        code_verifier="code-verifier",
+    )
+
+    assert payload == {
+        "access_token": "provider-access-token",
+        "expires_at": None,
+        "refresh_token": None,
+    }
+    oauth_client.get_access_token.assert_awaited_once_with(
+        "provider-code",
+        "https://app.example/callback",
+        code_verifier="code-verifier",
+    )
 
 
 async def test_get_access_token_accepts_object_payload() -> None:

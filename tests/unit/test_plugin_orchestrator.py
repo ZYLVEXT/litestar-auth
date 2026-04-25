@@ -48,6 +48,7 @@ from litestar_auth.manager import UserManagerSecurity
 from litestar_auth.password import PasswordHelper
 from litestar_auth.plugin import (
     DatabaseTokenAuthConfig,
+    FernetKeyringConfig,
     LitestarAuth,
     LitestarAuthConfig,
     OAuthConfig,
@@ -78,6 +79,7 @@ if TYPE_CHECKING:
     from tests._helpers import AsyncFakeRedis
 
 pytestmark = pytest.mark.unit
+OAUTH_FLOW_COOKIE_SECRET = "oauth-flow-cookie-secret-1234567890"
 
 
 def _current_startup_backend_template_type() -> type[Any]:
@@ -142,10 +144,12 @@ def test_plugin_module_executes_under_coverage() -> None:
     reloaded_module = importlib.reload(plugin_module)
 
     assert reloaded_module.DatabaseTokenAuthConfig.__name__ == DatabaseTokenAuthConfig.__name__
+    assert reloaded_module.FernetKeyringConfig.__name__ == FernetKeyringConfig.__name__
     assert reloaded_module.LitestarAuth.__name__ == LitestarAuth.__name__
     assert reloaded_module.LitestarAuthConfig.__name__ == LitestarAuthConfig.__name__
     assert reloaded_module.__all__ == (
         "DatabaseTokenAuthConfig",
+        "FernetKeyringConfig",
         "LitestarAuth",
         "LitestarAuthConfig",
         "OAuthConfig",
@@ -210,6 +214,10 @@ def test_on_app_init_runs_lifecycle_steps_in_order(monkeypatch: pytest.MonkeyPat
     calls: list[str] = []
 
     monkeypatch.setattr(
+        "litestar_auth.plugin.require_shared_rate_limit_backends_for_multiworker",
+        lambda _config: calls.append("require-shared-rate-limit"),
+    )
+    monkeypatch.setattr(
         "litestar_auth.plugin.warn_insecure_plugin_startup_defaults",
         lambda _config: calls.append("warn"),
     )
@@ -243,6 +251,7 @@ def test_on_app_init_runs_lifecycle_steps_in_order(monkeypatch: pytest.MonkeyPat
 
     assert result is app_config
     assert calls == [
+        "require-shared-rate-limit",
         "warn",
         "require-oauth-key",
         "require-oauth-redirect",
@@ -440,11 +449,73 @@ def test_on_app_init_warns_security_warning_for_inmemory_rate_limiter_in_product
         plugin.on_app_init(AppConfig())
 
 
+def test_on_app_init_rejects_multiworker_inmemory_rate_limiter() -> None:
+    """Known multi-worker app init fails closed when rate-limit state is process-local."""
+    config = _minimal_config()
+    config.deployment_worker_count = 2
+    config.rate_limit_config = AuthRateLimitConfig(
+        login=EndpointRateLimit(
+            backend=InMemoryRateLimiter(max_attempts=3, window_seconds=60),
+            scope="ip",
+            namespace="login",
+        ),
+    )
+    plugin = LitestarAuth(config)
+
+    with pytest.raises(ConfigurationError, match="login"):
+        plugin.on_app_init(AppConfig())
+
+
+def test_on_app_init_multiworker_rate_limit_error_names_unsafe_endpoint_slots() -> None:
+    """Multi-worker rate-limit startup errors list all unsafe endpoint slots."""
+    config = _minimal_config()
+    config.deployment_worker_count = 2
+    config.rate_limit_config = AuthRateLimitConfig(
+        request_verify_token=EndpointRateLimit(
+            backend=InMemoryRateLimiter(max_attempts=3, window_seconds=60),
+            scope="ip",
+            namespace="request-verify-token",
+        ),
+        totp_confirm_enable=EndpointRateLimit(
+            backend=InMemoryRateLimiter(max_attempts=3, window_seconds=60),
+            scope="ip",
+            namespace="totp-confirm-enable",
+        ),
+    )
+    plugin = LitestarAuth(config)
+
+    with pytest.raises(ConfigurationError) as exc_info:
+        plugin.on_app_init(AppConfig())
+
+    message = str(exc_info.value)
+    assert "request_verify_token" in message
+    assert "totp_confirm_enable" in message
+    assert "RedisRateLimiter" in message
+    assert "RedisAuthPreset" in message
+
+
+def test_on_app_init_warns_for_known_single_worker_inmemory_rate_limiter() -> None:
+    """Known single-worker production preserves the existing warning-only behavior."""
+    config = _minimal_config()
+    config.deployment_worker_count = 1
+    config.rate_limit_config = AuthRateLimitConfig(
+        login=EndpointRateLimit(
+            backend=InMemoryRateLimiter(max_attempts=3, window_seconds=60),
+            scope="ip",
+            namespace="login",
+        ),
+    )
+    plugin = LitestarAuth(config)
+
+    with pytest.warns(SecurityWarning, match="process-local in-memory backend"):
+        plugin.on_app_init(AppConfig())
+
+
 def test_on_app_init_does_not_warn_for_redis_rate_limiter(
     monkeypatch: pytest.MonkeyPatch,
     async_fakeredis: AsyncFakeRedis,
 ) -> None:
-    """Shared Redis-backed rate limiting stays silent during app init."""
+    """Shared Redis-backed rate limiting is accepted for known multi-worker app init."""
 
     def load_redis_asyncio() -> object:
         return object()
@@ -452,6 +523,7 @@ def test_on_app_init_does_not_warn_for_redis_rate_limiter(
     monkeypatch.setattr("litestar_auth.ratelimit._helpers._load_redis_asyncio", load_redis_asyncio)
 
     config = _minimal_config()
+    config.deployment_worker_count = 2
     config.rate_limit_config = AuthRateLimitConfig(
         login=EndpointRateLimit(
             backend=RedisRateLimiter(
@@ -478,6 +550,7 @@ def test_on_app_init_does_not_warn_for_inmemory_rate_limiter_in_testing(
     """Testing-mode lifecycle suppresses the in-memory rate-limit startup warning."""
     config = _minimal_config()
     config.unsafe_testing = True
+    config.deployment_worker_count = 2
     config.rate_limit_config = AuthRateLimitConfig(
         login=EndpointRateLimit(
             backend=InMemoryRateLimiter(max_attempts=3, window_seconds=60),
@@ -541,11 +614,12 @@ def test_on_app_init_requires_oauth_token_encryption_key_for_oauth_providers() -
     config.oauth_config = OAuthConfig(
         oauth_providers=[_oauth_provider(name="github", client=object())],
         oauth_redirect_base_url="https://app.example.com/auth",
+        oauth_flow_cookie_secret=OAUTH_FLOW_COOKIE_SECRET,
     )
     plugin = LitestarAuth(config)
 
     with (
-        pytest.warns(SecurityWarning, match="oauth_token_encryption_key is not set"),
+        pytest.warns(SecurityWarning, match="OAuth token encryption key material is not set"),
         pytest.raises(Exception, match=r"Fernet\.generate_key\(\)") as exc_info,
     ):
         plugin.on_app_init(AppConfig())
@@ -560,6 +634,7 @@ def test_on_app_init_allows_oauth_providers_when_encryption_key_is_configured() 
         oauth_providers=[_oauth_provider(name="github", client=object())],
         oauth_redirect_base_url="https://app.example.com/auth",
         oauth_token_encryption_key="YWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWE=",
+        oauth_flow_cookie_secret=OAUTH_FLOW_COOKIE_SECRET,
     )
     plugin = LitestarAuth(config)
 
@@ -611,6 +686,7 @@ def test_on_app_init_rejects_insecure_oauth_redirect_origins_in_production(
         oauth_providers=[_oauth_provider(name="github", client=object())],
         oauth_redirect_base_url=redirect_base_url,
         oauth_token_encryption_key="YWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWE=",
+        oauth_flow_cookie_secret=OAUTH_FLOW_COOKIE_SECRET,
     )
     plugin = LitestarAuth(config)
 
@@ -625,6 +701,7 @@ def test_on_app_init_allows_loopback_oauth_redirect_origin_in_debug_mode() -> No
         oauth_providers=[_oauth_provider(name="github", client=object())],
         oauth_redirect_base_url="http://localhost/auth",
         oauth_token_encryption_key="YWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWE=",
+        oauth_flow_cookie_secret=OAUTH_FLOW_COOKIE_SECRET,
     )
     plugin = LitestarAuth(config)
 
@@ -697,6 +774,7 @@ def test_on_app_init_allows_missing_oauth_token_encryption_key_in_testing(
     config.oauth_config = OAuthConfig(
         oauth_providers=[_oauth_provider(name="github", client=object())],
         oauth_redirect_base_url="https://app.example.com/auth",
+        oauth_flow_cookie_secret=OAUTH_FLOW_COOKIE_SECRET,
     )
     plugin = LitestarAuth(config)
 
@@ -731,6 +809,7 @@ def test_on_app_init_testing_recipe_suppresses_single_process_security_warnings(
     config.oauth_config = OAuthConfig(
         oauth_providers=[_oauth_provider(name="github", client=object())],
         oauth_redirect_base_url="https://app.example.com/auth",
+        oauth_flow_cookie_secret=OAUTH_FLOW_COOKIE_SECRET,
     )
     config.rate_limit_config = AuthRateLimitConfig(
         login=EndpointRateLimit(
@@ -1654,6 +1733,7 @@ def test_totp_backend_returns_configured_named_backend() -> None:
 
 def test_public_aliases_reexport_nested_config_types() -> None:
     """Plugin module re-exports nested config dataclasses for public callers."""
+    assert FernetKeyringConfig.__name__ == "FernetKeyringConfig"
     assert OAuthConfig.__name__ == "OAuthConfig"
     assert TotpConfig.__name__ == "TotpConfig"
 
@@ -1662,16 +1742,22 @@ def test_plugins_hold_distinct_explicit_oauth_token_policies() -> None:
     """Separate plugin instances keep independent explicit OAuth token policies."""
     first_config = _minimal_config()
     second_config = _minimal_config()
-    first_config.oauth_config = OAuthConfig(oauth_token_encryption_key="YWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWE=")
-    second_config.oauth_config = OAuthConfig(oauth_token_encryption_key="YmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmI=")
+    first_keyring = FernetKeyringConfig(active_key_id="first", keys={"first": Fernet.generate_key().decode()})
+    second_keyring = FernetKeyringConfig(active_key_id="second", keys={"second": Fernet.generate_key().decode()})
+    first_config.oauth_config = OAuthConfig(oauth_token_encryption_keyring=first_keyring)
+    second_config.oauth_config = OAuthConfig(oauth_token_encryption_keyring=second_keyring)
 
     first_plugin = LitestarAuth(first_config)
     second_plugin = LitestarAuth(second_config)
 
     assert first_plugin._oauth_token_encryption is not None
-    assert first_plugin._oauth_token_encryption.key == "YWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWE="
+    assert first_plugin._oauth_token_encryption.key is None
+    assert first_plugin._oauth_token_encryption.active_key_id == "first"
+    assert dict(first_plugin._oauth_token_encryption.keys or {}) == dict(first_keyring.keys)
     assert first_plugin._oauth_token_encryption.unsafe_testing is False
     assert second_plugin._oauth_token_encryption is not None
-    assert second_plugin._oauth_token_encryption.key == "YmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmI="
+    assert second_plugin._oauth_token_encryption.key is None
+    assert second_plugin._oauth_token_encryption.active_key_id == "second"
+    assert dict(second_plugin._oauth_token_encryption.keys or {}) == dict(second_keyring.keys)
     assert second_plugin._oauth_token_encryption.unsafe_testing is False
     assert first_plugin._oauth_token_encryption is not second_plugin._oauth_token_encryption

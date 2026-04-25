@@ -10,7 +10,7 @@ if TYPE_CHECKING:
 
     from ._config import EndpointRateLimit
 
-type TotpSensitiveEndpoint = Literal["enable", "confirm_enable", "verify", "disable"]
+type TotpSensitiveEndpoint = Literal["enable", "confirm_enable", "verify", "disable", "regenerate_recovery_codes"]
 
 
 @dataclass(slots=True, frozen=True)
@@ -30,6 +30,7 @@ class TotpRateLimitOrchestrator:
     confirm_enable: EndpointRateLimit | None = None
     verify: EndpointRateLimit | None = None
     disable: EndpointRateLimit | None = None
+    regenerate_recovery_codes: EndpointRateLimit | None = None
 
     _ACCOUNT_STATE_RESET_ENDPOINTS: frozenset[TotpSensitiveEndpoint] = frozenset({"verify"})
 
@@ -42,6 +43,7 @@ class TotpRateLimitOrchestrator:
                 ("confirm_enable", self.confirm_enable),
                 ("verify", self.verify),
                 ("disable", self.disable),
+                ("regenerate_recovery_codes", self.regenerate_recovery_codes),
             )
             if limiter is not None
         }

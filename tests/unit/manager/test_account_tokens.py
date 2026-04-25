@@ -13,6 +13,7 @@ import jwt
 import pytest
 
 import litestar_auth._manager.account_tokens as account_tokens_module
+from litestar_auth._jwt_headers import EXPECTED_JWT_TYPE
 from litestar_auth.exceptions import InvalidResetPasswordTokenError, InvalidVerifyTokenError, UserNotExistsError
 from litestar_auth.manager import RESET_PASSWORD_TOKEN_AUDIENCE, VERIFY_TOKEN_AUDIENCE
 from litestar_auth.manager import logger as manager_logger
@@ -80,6 +81,22 @@ async def test_forgot_password_existing_user_calls_hook_with_valid_reset_token()
     )
     assert payload["sub"] == str(user.id)
     assert payload["password_fingerprint"] == manager.tokens.password_fingerprint(user.hashed_password)
+
+
+def test_write_token_subject_includes_expected_typ_header() -> None:
+    """Manager-issued account tokens advertise the expected JWT type."""
+    user_db = AsyncMock()
+    password_helper = PasswordHelper()
+    manager = TrackingUserManager(user_db, password_helper)
+
+    token = account_tokens_module.AccountTokenSecurityService.write_token_subject(
+        subject="user-123",
+        secret=manager.verification_token_secret.get_secret_value(),
+        audience=VERIFY_TOKEN_AUDIENCE,
+        lifetime=manager.verification_token_lifetime,
+    )
+
+    assert jwt.get_unverified_header(token)["typ"] == EXPECTED_JWT_TYPE
 
 
 @pytest.mark.parametrize("verified_state", ["unverified", "verified"])
@@ -285,6 +302,56 @@ def test_decode_token_rejects_malformed_or_wrong_audience_tokens(
             invalid_token_error=InvalidVerifyTokenError,
         )
 
+    assert [getattr(record, "event", None) for record in caplog.records] == ["token_validation_failed"]
+
+
+@pytest.mark.parametrize(
+    ("audience", "secret_attr", "expected_error"),
+    [
+        pytest.param(VERIFY_TOKEN_AUDIENCE, "verification_token_secret", InvalidVerifyTokenError, id="verify-token"),
+        pytest.param(
+            RESET_PASSWORD_TOKEN_AUDIENCE,
+            "reset_password_token_secret",
+            InvalidResetPasswordTokenError,
+            id="reset-token",
+        ),
+    ],
+)
+def test_decode_token_rejects_unexpected_typ_header(
+    audience: str,
+    secret_attr: str,
+    expected_error: type[InvalidVerifyTokenError | InvalidResetPasswordTokenError],
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Signed account tokens for another JWT type are rejected through the generic failure path."""
+    user_db = AsyncMock()
+    password_helper = PasswordHelper()
+    manager = TrackingUserManager(user_db, password_helper)
+    user = _build_user(password_helper)
+    secret = getattr(manager, secret_attr).get_secret_value()
+    token = jwt.encode(
+        {
+            "sub": str(user.id),
+            "aud": audience,
+            "iat": account_tokens_module.datetime.now(tz=account_tokens_module.UTC),
+            "nbf": account_tokens_module.datetime.now(tz=account_tokens_module.UTC),
+            "exp": account_tokens_module.datetime.now(tz=account_tokens_module.UTC) + timedelta(minutes=5),
+            "jti": "unexpected-typ-jti",
+        },
+        secret,
+        algorithm="HS256",
+        headers={"typ": "not-jwt"},
+    )
+
+    with caplog.at_level(logging.WARNING, logger=manager_logger.name), pytest.raises(expected_error):
+        manager._account_token_security.decode_token(
+            token,
+            secret=secret,
+            audience=audience,
+            invalid_token_error=expected_error,
+        )
+
+    assert [record.message for record in caplog.records] == ["Manager token validation failed"]
     assert [getattr(record, "event", None) for record in caplog.records] == ["token_validation_failed"]
 
 

@@ -13,17 +13,16 @@ if TYPE_CHECKING:
     from litestar_auth.password import PasswordHelper
 
 pytestmark = pytest.mark.unit
-DEFAULT_HASHER_COUNT = 1
+EXPECTED_ARGON2_ONLY_HASHER_COUNT = 1
 
 
 def _password_helper_cls() -> type[PasswordHelper]:
-    """Import the password helper lazily so coverage includes module definitions.
+    """Return the runtime ``PasswordHelper`` class from the imported module.
 
     Returns:
         The runtime ``PasswordHelper`` class from ``litestar_auth.password``.
     """
-    module = importlib.import_module("litestar_auth.password")
-    return module.PasswordHelper
+    return password_module.PasswordHelper
 
 
 def test_password_module_executes_under_coverage() -> None:
@@ -38,7 +37,7 @@ def test_default_initialization_uses_argon2_only() -> None:
     """Default initialization uses the library's Argon2-only policy."""
     helper = _password_helper_cls()()
 
-    assert len(helper.password_hash.hashers) == DEFAULT_HASHER_COUNT
+    assert len(helper.password_hash.hashers) == EXPECTED_ARGON2_ONLY_HASHER_COUNT
     assert helper.password_hash.hashers[0].__class__.__name__ == "Argon2Hasher"
 
 

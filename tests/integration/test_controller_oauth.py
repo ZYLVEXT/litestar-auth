@@ -11,6 +11,7 @@ from uuid import UUID, uuid4
 import pytest
 from litestar import Litestar
 from litestar.di import Provide
+from litestar.exceptions import ClientException
 from litestar.middleware import DefineMiddleware
 from litestar.testing import AsyncTestClient
 
@@ -22,6 +23,12 @@ from litestar_auth.controllers import (
     create_oauth_associate_controller,
     create_oauth_controller,
 )
+from litestar_auth.controllers.oauth import (
+    _decode_oauth_flow_cookie,
+    _encode_oauth_flow_cookie,
+    _OAuthFlowCookie,
+    _OAuthFlowCookieCipher,
+)
 from litestar_auth.db.base import BaseUserStore
 from litestar_auth.exceptions import (
     ConfigurationError,
@@ -31,6 +38,7 @@ from litestar_auth.exceptions import (
 )
 from litestar_auth.manager import BaseUserManager, UserManagerSecurity
 from litestar_auth.oauth import create_provider_oauth_controller
+from litestar_auth.oauth.service import _build_pkce_code_challenge
 from litestar_auth.password import PasswordHelper
 from tests._helpers import ExampleUser, auth_middleware_get_request_session
 
@@ -50,6 +58,22 @@ HTTP_INTERNAL_SERVER_ERROR = 500
 MANUAL_LOGIN_REDIRECT_BASE_URL = "https://app.example/auth/oauth"
 MANUAL_ASSOCIATE_REDIRECT_BASE_URL = "https://app.example/auth/associate"
 MANUAL_IDENTITY_REDIRECT_BASE_URL = "https://app.example/identity/oauth"
+OAUTH_FLOW_COOKIE_SECRET = "oauth-flow-cookie-secret-1234567890"
+
+
+def _flow_cookie_cipher() -> _OAuthFlowCookieCipher:
+    """Return the test cipher for OAuth flow-cookie envelopes."""
+    return _OAuthFlowCookieCipher.from_secret(OAUTH_FLOW_COOKIE_SECRET)
+
+
+def _oauth_state_from_cookie(cookie_value: str) -> str:
+    """Return the provider state carried inside the OAuth flow cookie."""
+    return _decode_oauth_flow_cookie(cookie_value, flow_cookie_cipher=_flow_cookie_cipher()).state
+
+
+def _oauth_code_verifier_from_cookie(cookie_value: str) -> str:
+    """Return the PKCE verifier carried inside the OAuth flow cookie."""
+    return _decode_oauth_flow_cookie(cookie_value, flow_cookie_cipher=_flow_cookie_cipher()).code_verifier
 
 
 @dataclass(slots=True)
@@ -211,8 +235,10 @@ class FakeOAuthClient:
         self.account_id = account_id
         self.email = email
         self.email_verified = email_verified
-        self.authorization_calls: list[tuple[str, str, str | None]] = []
-        self.access_token_calls: list[tuple[str, str]] = []
+        self.authorization_calls: list[tuple[str, str, str | list[str] | None]] = []
+        self.access_token_calls: list[tuple[str, str, str | None]] = []
+        self.latest_code_challenge: str | None = None
+        self.latest_code_challenge_method: str | None = None
         self.id_email_calls: list[str] = []
         self.profile_calls: list[str] = []
 
@@ -221,18 +247,37 @@ class FakeOAuthClient:
         redirect_uri: str,
         state: str,
         *,
-        scope: str | None = None,
+        scope: str | list[str] | None = None,
+        code_challenge: str | None = None,
+        code_challenge_method: str | None = None,
     ) -> str:
         """Return a deterministic provider authorization URL."""
+        if code_challenge is not None:
+            self.latest_code_challenge = code_challenge
+        self.latest_code_challenge_method = code_challenge_method
         self.authorization_calls.append((redirect_uri, state, scope))
         base = f"https://provider.example/authorize?state={state}"
         if scope:
             return f"{base}&scope={scope}"
         return base
 
-    async def get_access_token(self, code: str, redirect_uri: str) -> dict[str, object]:
-        """Return a deterministic token payload."""
-        self.access_token_calls.append((code, redirect_uri))
+    async def get_access_token(
+        self,
+        code: str,
+        redirect_uri: str,
+        *,
+        code_verifier: str | None = None,
+    ) -> dict[str, object]:
+        """Return a deterministic token payload.
+
+        Raises:
+            ClientException: If the callback verifier does not match the last authorization challenge.
+        """
+        self.access_token_calls.append((code, redirect_uri, code_verifier))
+        if self.latest_code_challenge is not None and (
+            code_verifier is None or _build_pkce_code_challenge(code_verifier) != self.latest_code_challenge
+        ):
+            raise ClientException(status_code=400, detail="Provider rejected PKCE verifier.")
         return {
             "access_token": "provider-access-token",
             "expires_at": 1_234_567_890,
@@ -267,8 +312,10 @@ class FakeOAuthProfileClient:
         self.account_id = account_id
         self.email = email
         self.email_verified = email_verified
-        self.authorization_calls: list[tuple[str, str, str | None]] = []
-        self.access_token_calls: list[tuple[str, str]] = []
+        self.authorization_calls: list[tuple[str, str, str | list[str] | None]] = []
+        self.access_token_calls: list[tuple[str, str, str | None]] = []
+        self.latest_code_challenge: str | None = None
+        self.latest_code_challenge_method: str | None = None
         self.profile_calls: list[str] = []
 
     async def get_authorization_url(
@@ -276,18 +323,37 @@ class FakeOAuthProfileClient:
         redirect_uri: str,
         state: str,
         *,
-        scope: str | None = None,
+        scope: str | list[str] | None = None,
+        code_challenge: str | None = None,
+        code_challenge_method: str | None = None,
     ) -> str:
         """Return a deterministic provider authorization URL."""
+        if code_challenge is not None:
+            self.latest_code_challenge = code_challenge
+        self.latest_code_challenge_method = code_challenge_method
         self.authorization_calls.append((redirect_uri, state, scope))
         base = f"https://provider.example/authorize?state={state}"
         if scope:
             return f"{base}&scope={scope}"
         return base
 
-    async def get_access_token(self, code: str, redirect_uri: str) -> dict[str, object]:
-        """Return a deterministic token payload."""
-        self.access_token_calls.append((code, redirect_uri))
+    async def get_access_token(
+        self,
+        code: str,
+        redirect_uri: str,
+        *,
+        code_verifier: str | None = None,
+    ) -> dict[str, object]:
+        """Return a deterministic token payload.
+
+        Raises:
+            ClientException: If the callback verifier does not match the last authorization challenge.
+        """
+        self.access_token_calls.append((code, redirect_uri, code_verifier))
+        if self.latest_code_challenge is not None and (
+            code_verifier is None or _build_pkce_code_challenge(code_verifier) != self.latest_code_challenge
+        ):
+            raise ClientException(status_code=400, detail="Provider rejected PKCE verifier.")
         return {
             "access_token": "provider-access-token",
             "expires_at": 1_234_567_890,
@@ -402,6 +468,7 @@ def build_app(  # noqa: PLR0913
             user_manager=cast("Any", user_manager),
             oauth_client=client,
             redirect_base_url=MANUAL_LOGIN_REDIRECT_BASE_URL,
+            oauth_flow_cookie_secret=OAUTH_FLOW_COOKIE_SECRET,
             cookie_secure=cookie_secure,
             oauth_scopes=oauth_scopes,
             associate_by_email=associate_by_email,
@@ -414,6 +481,7 @@ def build_app(  # noqa: PLR0913
             user_manager=cast("Any", user_manager),
             oauth_client=client,
             redirect_base_url=MANUAL_LOGIN_REDIRECT_BASE_URL,
+            oauth_flow_cookie_secret=OAUTH_FLOW_COOKIE_SECRET,
             cookie_secure=cookie_secure,
             oauth_scopes=oauth_scopes,
             associate_by_email=associate_by_email,
@@ -450,6 +518,7 @@ def build_app_with_associate(
         user_manager=cast("Any", user_manager),
         oauth_client=client,
         redirect_base_url=MANUAL_LOGIN_REDIRECT_BASE_URL,
+        oauth_flow_cookie_secret=OAUTH_FLOW_COOKIE_SECRET,
         path="/auth/oauth",
         cookie_secure=cookie_secure,
     )
@@ -458,6 +527,7 @@ def build_app_with_associate(
         user_manager=cast("Any", user_manager),
         oauth_client=client,
         redirect_base_url=MANUAL_ASSOCIATE_REDIRECT_BASE_URL,
+        oauth_flow_cookie_secret=OAUTH_FLOW_COOKIE_SECRET,
         path="/auth/associate",
         cookie_secure=cookie_secure,
     )
@@ -500,6 +570,7 @@ def build_app_with_dependency_key_associate(
         user_manager_dependency_key=user_manager_dependency_key,
         oauth_client=client,
         redirect_base_url=MANUAL_ASSOCIATE_REDIRECT_BASE_URL,
+        oauth_flow_cookie_secret=OAUTH_FLOW_COOKIE_SECRET,
         path="/auth/associate",
         cookie_secure=cookie_secure,
     )
@@ -550,8 +621,13 @@ async def test_authorize_redirects_and_sets_secure_state_cookie(
     assert response.headers["location"].startswith("https://provider.example/authorize?state=")
     state_cookie = response.cookies.get("__oauth_state_github")
     assert state_cookie
+    flow_cookie = _decode_oauth_flow_cookie(state_cookie, flow_cookie_cipher=_flow_cookie_cipher())
+    state = flow_cookie.state
+    assert flow_cookie.code_verifier
+    assert oauth_client.latest_code_challenge
+    assert oauth_client.latest_code_challenge_method == "S256"
     assert oauth_client.authorization_calls == [
-        ("https://app.example/auth/oauth/github/callback", state_cookie, None),
+        ("https://app.example/auth/oauth/github/callback", state, None),
     ]
     set_cookie = response.headers["set-cookie"].lower()
     assert "__oauth_state_github=" in set_cookie
@@ -632,8 +708,10 @@ async def test_callback_does_not_auto_verify_new_user_by_default(
     """Callback creates a new user without is_verified when trust_provider_email_verified is False."""
     test_client, user_db, user_manager, strategy, oauth_client = client
     authorize_response = await test_client.get("/auth/oauth/github/authorize", follow_redirects=False)
-    state = authorize_response.cookies["__oauth_state_github"]
-    test_client.cookies.set("__oauth_state_github", state, domain="testserver.local", path="/auth/oauth/github")
+    state_cookie = authorize_response.cookies["__oauth_state_github"]
+    state = _oauth_state_from_cookie(state_cookie)
+    code_verifier = _oauth_code_verifier_from_cookie(state_cookie)
+    test_client.cookies.set("__oauth_state_github", state_cookie, domain="testserver.local", path="/auth/oauth/github")
 
     callback_response = await test_client.get(
         "/auth/oauth/github/callback",
@@ -652,7 +730,9 @@ async def test_callback_does_not_auto_verify_new_user_by_default(
     assert oauth_account.user_id == created_user.id
     assert oauth_account.account_email == "oauth@example.com"
     assert oauth_account.access_token == "provider-access-token"
-    assert oauth_client.access_token_calls == [("provider-code", "https://app.example/auth/oauth/github/callback")]
+    assert oauth_client.access_token_calls == [
+        ("provider-code", "https://app.example/auth/oauth/github/callback", code_verifier),
+    ]
     assert oauth_client.id_email_calls == ["provider-access-token"]
     assert not callback_response.cookies.get("__oauth_state_github")
     set_cookie = callback_response.headers["set-cookie"].lower()
@@ -670,8 +750,9 @@ async def test_callback_auto_verifies_new_user_when_opted_in() -> None:
 
     async with AsyncTestClient(app=app) as client:
         authorize_response = await client.get("/auth/oauth/github/authorize", follow_redirects=False)
-        state = authorize_response.cookies["__oauth_state_github"]
-        client.cookies.set("__oauth_state_github", state, domain="testserver.local", path="/auth/oauth/github")
+        state_cookie = authorize_response.cookies["__oauth_state_github"]
+        state = _oauth_state_from_cookie(state_cookie)
+        client.cookies.set("__oauth_state_github", state_cookie, domain="testserver.local", path="/auth/oauth/github")
         callback_response = await client.get(
             "/auth/oauth/github/callback",
             params={"code": "provider-code", "state": state},
@@ -703,8 +784,9 @@ async def test_callback_links_existing_user_by_email_without_creating_duplicate(
 
     async with AsyncTestClient(app=app) as client:
         authorize_response = await client.get("/auth/oauth/github/authorize", follow_redirects=False)
-        state = authorize_response.cookies["__oauth_state_github"]
-        client.cookies.set("__oauth_state_github", state, domain="testserver.local", path="/auth/oauth/github")
+        state_cookie = authorize_response.cookies["__oauth_state_github"]
+        state = _oauth_state_from_cookie(state_cookie)
+        client.cookies.set("__oauth_state_github", state_cookie, domain="testserver.local", path="/auth/oauth/github")
         callback_response = await client.get(
             "/auth/oauth/github/callback",
             params={"code": "provider-code", "state": state},
@@ -742,8 +824,9 @@ async def test_callback_link_by_email_requires_runtime_verified_email() -> None:
 
     async with AsyncTestClient(app=app) as client:
         authorize_response = await client.get("/auth/oauth/github/authorize", follow_redirects=False)
-        state = authorize_response.cookies["__oauth_state_github"]
-        client.cookies.set("__oauth_state_github", state, domain="testserver.local", path="/auth/oauth/github")
+        state_cookie = authorize_response.cookies["__oauth_state_github"]
+        state = _oauth_state_from_cookie(state_cookie)
+        client.cookies.set("__oauth_state_github", state_cookie, domain="testserver.local", path="/auth/oauth/github")
         callback_response = await client.get(
             "/auth/oauth/github/callback",
             params={"code": "provider-code", "state": state},
@@ -776,8 +859,9 @@ async def test_callback_link_by_email_requires_trusted_provider_email_verificati
 
     async with AsyncTestClient(app=app) as client:
         authorize_response = await client.get("/auth/oauth/github/authorize", follow_redirects=False)
-        state = authorize_response.cookies["__oauth_state_github"]
-        client.cookies.set("__oauth_state_github", state, domain="testserver.local", path="/auth/oauth/github")
+        state_cookie = authorize_response.cookies["__oauth_state_github"]
+        state = _oauth_state_from_cookie(state_cookie)
+        client.cookies.set("__oauth_state_github", state_cookie, domain="testserver.local", path="/auth/oauth/github")
         callback_response = await client.get(
             "/auth/oauth/github/callback",
             params={"code": "provider-code", "state": state},
@@ -813,8 +897,9 @@ async def test_callback_trusted_provider_requires_runtime_email_verified_signal(
 
     async with AsyncTestClient(app=app) as client:
         authorize_response = await client.get("/auth/oauth/github/authorize", follow_redirects=False)
-        state = authorize_response.cookies["__oauth_state_github"]
-        client.cookies.set("__oauth_state_github", state, domain="testserver.local", path="/auth/oauth/github")
+        state_cookie = authorize_response.cookies["__oauth_state_github"]
+        state = _oauth_state_from_cookie(state_cookie)
+        client.cookies.set("__oauth_state_github", state_cookie, domain="testserver.local", path="/auth/oauth/github")
         callback_response = await client.get(
             "/auth/oauth/github/callback",
             params={"code": "provider-code", "state": state},
@@ -842,8 +927,9 @@ async def test_callback_associate_by_email_false_returns_400_when_email_exists()
 
     async with AsyncTestClient(app=app) as client:
         authorize_response = await client.get("/auth/oauth/github/authorize", follow_redirects=False)
-        state = authorize_response.cookies["__oauth_state_github"]
-        client.cookies.set("__oauth_state_github", state, domain="testserver.local", path="/auth/oauth/github")
+        state_cookie = authorize_response.cookies["__oauth_state_github"]
+        state = _oauth_state_from_cookie(state_cookie)
+        client.cookies.set("__oauth_state_github", state_cookie, domain="testserver.local", path="/auth/oauth/github")
         callback_response = await client.get(
             "/auth/oauth/github/callback",
             params={"code": "provider-code", "state": state},
@@ -888,8 +974,9 @@ async def test_callback_returns_existing_user_when_provider_identity_already_lin
 
     async with AsyncTestClient(app=app) as client:
         authorize_response = await client.get("/auth/oauth/github/authorize", follow_redirects=False)
-        state = authorize_response.cookies["__oauth_state_github"]
-        client.cookies.set("__oauth_state_github", state, domain="testserver.local", path="/auth/oauth/github")
+        state_cookie = authorize_response.cookies["__oauth_state_github"]
+        state = _oauth_state_from_cookie(state_cookie)
+        client.cookies.set("__oauth_state_github", state_cookie, domain="testserver.local", path="/auth/oauth/github")
         callback_response = await client.get(
             "/auth/oauth/github/callback",
             params={"code": "provider-code", "state": state},
@@ -922,8 +1009,9 @@ async def test_callback_rejects_inactive_existing_user() -> None:
 
     async with AsyncTestClient(app=app) as client:
         authorize_response = await client.get("/auth/oauth/github/authorize", follow_redirects=False)
-        state = authorize_response.cookies["__oauth_state_github"]
-        client.cookies.set("__oauth_state_github", state, domain="testserver.local", path="/auth/oauth/github")
+        state_cookie = authorize_response.cookies["__oauth_state_github"]
+        state = _oauth_state_from_cookie(state_cookie)
+        client.cookies.set("__oauth_state_github", state_cookie, domain="testserver.local", path="/auth/oauth/github")
         callback_response = await client.get(
             "/auth/oauth/github/callback",
             params={"code": "provider-code", "state": state},
@@ -961,8 +1049,9 @@ async def test_callback_maps_unverified_account_state_error_to_client_error() ->
 
     async with AsyncTestClient(app=app) as client:
         authorize_response = await client.get("/auth/oauth/github/authorize", follow_redirects=False)
-        state = authorize_response.cookies["__oauth_state_github"]
-        client.cookies.set("__oauth_state_github", state, domain="testserver.local", path="/auth/oauth/github")
+        state_cookie = authorize_response.cookies["__oauth_state_github"]
+        state = _oauth_state_from_cookie(state_cookie)
+        client.cookies.set("__oauth_state_github", state_cookie, domain="testserver.local", path="/auth/oauth/github")
         callback_response = await client.get(
             "/auth/oauth/github/callback",
             params={"code": "provider-code", "state": state},
@@ -1013,8 +1102,9 @@ async def test_callback_maps_oauth_account_already_linked_error_on_upsert() -> N
 
     async with AsyncTestClient(app=app) as client:
         authorize_response = await client.get("/auth/oauth/github/authorize", follow_redirects=False)
-        state = authorize_response.cookies["__oauth_state_github"]
-        client.cookies.set("__oauth_state_github", state, domain="testserver.local", path="/auth/oauth/github")
+        state_cookie = authorize_response.cookies["__oauth_state_github"]
+        state = _oauth_state_from_cookie(state_cookie)
+        client.cookies.set("__oauth_state_github", state_cookie, domain="testserver.local", path="/auth/oauth/github")
         callback_response = await client.get(
             "/auth/oauth/github/callback",
             params={"code": "provider-code", "state": state},
@@ -1036,8 +1126,9 @@ async def test_callback_creates_new_user_when_email_not_found_with_associate_by_
 
     async with AsyncTestClient(app=app) as client:
         authorize_response = await client.get("/auth/oauth/github/authorize", follow_redirects=False)
-        state = authorize_response.cookies["__oauth_state_github"]
-        client.cookies.set("__oauth_state_github", state, domain="testserver.local", path="/auth/oauth/github")
+        state_cookie = authorize_response.cookies["__oauth_state_github"]
+        state = _oauth_state_from_cookie(state_cookie)
+        client.cookies.set("__oauth_state_github", state_cookie, domain="testserver.local", path="/auth/oauth/github")
         callback_response = await client.get(
             "/auth/oauth/github/callback",
             params={"code": "provider-code", "state": state},
@@ -1058,8 +1149,9 @@ async def test_callback_rejects_new_user_when_provider_email_is_unverified() -> 
 
     async with AsyncTestClient(app=app) as client:
         authorize_response = await client.get("/auth/oauth/github/authorize", follow_redirects=False)
-        state = authorize_response.cookies["__oauth_state_github"]
-        client.cookies.set("__oauth_state_github", state, domain="testserver.local", path="/auth/oauth/github")
+        state_cookie = authorize_response.cookies["__oauth_state_github"]
+        state = _oauth_state_from_cookie(state_cookie)
+        client.cookies.set("__oauth_state_github", state_cookie, domain="testserver.local", path="/auth/oauth/github")
         callback_response = await client.get(
             "/auth/oauth/github/callback",
             params={"code": "provider-code", "state": state},
@@ -1092,8 +1184,9 @@ async def test_callback_accepts_profile_only_client_when_trusted_verification_cl
 
     async with AsyncTestClient(app=app) as client:
         authorize_response = await client.get("/auth/oauth/github/authorize", follow_redirects=False)
-        state = authorize_response.cookies["__oauth_state_github"]
-        client.cookies.set("__oauth_state_github", state, domain="testserver.local", path="/auth/oauth/github")
+        state_cookie = authorize_response.cookies["__oauth_state_github"]
+        state = _oauth_state_from_cookie(state_cookie)
+        client.cookies.set("__oauth_state_github", state_cookie, domain="testserver.local", path="/auth/oauth/github")
         callback_response = await client.get(
             "/auth/oauth/github/callback",
             params={"code": "provider-code", "state": state},
@@ -1117,8 +1210,9 @@ async def test_callback_rejects_new_user_when_provider_verification_claim_missin
 
     async with AsyncTestClient(app=app) as client:
         authorize_response = await client.get("/auth/oauth/github/authorize", follow_redirects=False)
-        state = authorize_response.cookies["__oauth_state_github"]
-        client.cookies.set("__oauth_state_github", state, domain="testserver.local", path="/auth/oauth/github")
+        state_cookie = authorize_response.cookies["__oauth_state_github"]
+        state = _oauth_state_from_cookie(state_cookie)
+        client.cookies.set("__oauth_state_github", state_cookie, domain="testserver.local", path="/auth/oauth/github")
         callback_response = await client.get(
             "/auth/oauth/github/callback",
             params={"code": "provider-code", "state": state},
@@ -1144,11 +1238,14 @@ async def test_callback_rejects_invalid_state(
         FakeOAuthClient,
     ],
 ) -> None:
-    """Callback fails with HTTP 400 when the state cookie does not match."""
+    """Callback fails with OAUTH_STATE_INVALID when decoded cookie state mismatches the query state."""
     test_client, user_db, user_manager, strategy, _ = client
     test_client.cookies.set(
         "__oauth_state_github",
-        "cookie-state",
+        _encode_oauth_flow_cookie(
+            _OAuthFlowCookie(state="cookie-state", code_verifier="forged-code-verifier"),
+            flow_cookie_cipher=_flow_cookie_cipher(),
+        ),
         domain="testserver.local",
         path="/auth/oauth/github",
     )
@@ -1159,7 +1256,124 @@ async def test_callback_rejects_invalid_state(
     )
 
     assert response.status_code == HTTP_BAD_REQUEST
+    body = response.json()
+    code = body.get("code") or (body.get("extra") or {}).get("code")
+    assert body["detail"] == "Invalid OAuth state."
+    assert code == ErrorCode.OAUTH_STATE_INVALID
+    assert user_db.users_by_id == {}
+    assert user_manager.created_users == []
+    assert user_manager.logged_in_users == []
+    assert strategy.tokens == {}
+
+
+async def test_callback_rejects_tampered_state_cookie(
+    client: tuple[
+        AsyncTestClient[Litestar],
+        InMemoryOAuthUserDatabase,
+        TrackingUserManager,
+        InMemoryTokenStrategy,
+        FakeOAuthClient,
+    ],
+) -> None:
+    """Callback maps a tampered flow-cookie envelope to the same invalid-state response."""
+    test_client, user_db, user_manager, strategy, _ = client
+    authorize_response = await test_client.get("/auth/oauth/github/authorize", follow_redirects=False)
+    state_cookie = authorize_response.cookies["__oauth_state_github"]
+    oauth_state = _oauth_state_from_cookie(state_cookie)
+    tampered_cookie = f"{state_cookie[:-1]}{'A' if state_cookie[-1] != 'A' else 'B'}"
+    test_client.cookies.set(
+        "__oauth_state_github",
+        tampered_cookie,
+        domain="testserver.local",
+        path="/auth/oauth/github",
+    )
+
+    response = await test_client.get(
+        "/auth/oauth/github/callback",
+        params={"code": "provider-code", "state": oauth_state},
+    )
+
+    assert response.status_code == HTTP_BAD_REQUEST
+    body = response.json()
+    code = body.get("code") or (body.get("extra") or {}).get("code")
+    assert body["detail"] == "Invalid OAuth state."
+    assert code == ErrorCode.OAUTH_STATE_INVALID
+    assert user_db.users_by_id == {}
+    assert user_manager.created_users == []
+    assert user_manager.logged_in_users == []
+    assert strategy.tokens == {}
+
+
+async def test_callback_rejects_flow_cookie_missing_code_verifier(
+    client: tuple[
+        AsyncTestClient[Litestar],
+        InMemoryOAuthUserDatabase,
+        TrackingUserManager,
+        InMemoryTokenStrategy,
+        FakeOAuthClient,
+    ],
+) -> None:
+    """Callback fails closed when the flow cookie lacks recoverable PKCE material."""
+    test_client, user_db, user_manager, strategy, _ = client
+    forged_cookie = _encode_oauth_flow_cookie(
+        _OAuthFlowCookie(state="forged-state", code_verifier=""),
+        flow_cookie_cipher=_flow_cookie_cipher(),
+    )
+    test_client.cookies.set(
+        "__oauth_state_github",
+        forged_cookie,
+        domain="testserver.local",
+        path="/auth/oauth/github",
+    )
+
+    response = await test_client.get(
+        "/auth/oauth/github/callback",
+        params={"code": "provider-code", "state": "forged-state"},
+    )
+
+    assert response.status_code == HTTP_BAD_REQUEST
     assert response.json()["detail"] == "Invalid OAuth state."
+    assert user_db.users_by_id == {}
+    assert user_manager.created_users == []
+    assert user_manager.logged_in_users == []
+    assert strategy.tokens == {}
+
+
+async def test_callback_rejects_flow_cookie_with_mismatched_code_verifier(
+    client: tuple[
+        AsyncTestClient[Litestar],
+        InMemoryOAuthUserDatabase,
+        TrackingUserManager,
+        InMemoryTokenStrategy,
+        FakeOAuthClient,
+    ],
+) -> None:
+    """Callback reaches token exchange but provider rejects a mismatched PKCE verifier."""
+    test_client, user_db, user_manager, strategy, oauth_client = client
+    authorize_response = await test_client.get("/auth/oauth/github/authorize", follow_redirects=False)
+    state_cookie = authorize_response.cookies["__oauth_state_github"]
+    oauth_state = _oauth_state_from_cookie(state_cookie)
+    forged_cookie = _encode_oauth_flow_cookie(
+        _OAuthFlowCookie(state=oauth_state, code_verifier="mismatched-code-verifier"),
+        flow_cookie_cipher=_flow_cookie_cipher(),
+    )
+    test_client.cookies.set(
+        "__oauth_state_github",
+        forged_cookie,
+        domain="testserver.local",
+        path="/auth/oauth/github",
+    )
+
+    response = await test_client.get(
+        "/auth/oauth/github/callback",
+        params={"code": "provider-code", "state": oauth_state},
+    )
+
+    assert response.status_code == HTTP_BAD_REQUEST
+    assert response.json()["detail"] == "Provider rejected PKCE verifier."
+    assert oauth_client.access_token_calls == [
+        ("provider-code", "https://app.example/auth/oauth/github/callback", "mismatched-code-verifier"),
+    ]
     assert user_db.users_by_id == {}
     assert user_manager.created_users == []
     assert user_manager.logged_in_users == []
@@ -1174,8 +1388,9 @@ async def test_callback_returns_400_when_provider_profile_has_no_email() -> None
 
     async with AsyncTestClient(app=app) as client:
         authorize_response = await client.get("/auth/oauth/github/authorize", follow_redirects=False)
-        state = authorize_response.cookies["__oauth_state_github"]
-        client.cookies.set("__oauth_state_github", state, domain="testserver.local", path="/auth/oauth/github")
+        state_cookie = authorize_response.cookies["__oauth_state_github"]
+        state = _oauth_state_from_cookie(state_cookie)
+        client.cookies.set("__oauth_state_github", state_cookie, domain="testserver.local", path="/auth/oauth/github")
         callback_response = await client.get(
             "/auth/oauth/github/callback",
             params={"code": "provider-code", "state": state},
@@ -1197,8 +1412,9 @@ async def test_oauth_state_cookie_secure_flag_can_be_disabled() -> None:
 
     async with AsyncTestClient(app=app) as client:
         authorize_response = await client.get("/auth/oauth/github/authorize", follow_redirects=False)
-        state = authorize_response.cookies["__oauth_state_github"]
-        client.cookies.set("__oauth_state_github", state, domain="testserver.local", path="/auth/oauth/github")
+        state_cookie = authorize_response.cookies["__oauth_state_github"]
+        state = _oauth_state_from_cookie(state_cookie)
+        client.cookies.set("__oauth_state_github", state_cookie, domain="testserver.local", path="/auth/oauth/github")
         callback_response = await client.get(
             "/auth/oauth/github/callback",
             params={"code": "provider-code", "state": state},
@@ -1230,6 +1446,7 @@ def test_create_oauth_associate_controller_raises_when_both_or_neither_user_mana
             user_manager_dependency_key=None,
             oauth_client=client,
             redirect_base_url=MANUAL_ASSOCIATE_REDIRECT_BASE_URL,
+            oauth_flow_cookie_secret=OAUTH_FLOW_COOKIE_SECRET,
         )
     password_helper = PasswordHelper()
     user_db = InMemoryOAuthUserDatabase()
@@ -1241,6 +1458,7 @@ def test_create_oauth_associate_controller_raises_when_both_or_neither_user_mana
             user_manager_dependency_key="some_key",
             oauth_client=client,
             redirect_base_url=MANUAL_ASSOCIATE_REDIRECT_BASE_URL,
+            oauth_flow_cookie_secret=OAUTH_FLOW_COOKIE_SECRET,
         )
 
 
@@ -1274,6 +1492,7 @@ def test_manual_oauth_factories_reject_insecure_redirect_origins(
             "user_manager": cast("Any", user_manager),
             "oauth_client": FakeOAuthClient(),
             "redirect_base_url": redirect_base_url,
+            "oauth_flow_cookie_secret": OAUTH_FLOW_COOKIE_SECRET,
         }
     elif factory_name == "associate":
         factory = create_oauth_associate_controller
@@ -1282,6 +1501,7 @@ def test_manual_oauth_factories_reject_insecure_redirect_origins(
             "user_manager": cast("Any", user_manager),
             "oauth_client": FakeOAuthClient(),
             "redirect_base_url": redirect_base_url,
+            "oauth_flow_cookie_secret": OAUTH_FLOW_COOKIE_SECRET,
         }
     else:
         factory = create_provider_oauth_controller
@@ -1291,6 +1511,7 @@ def test_manual_oauth_factories_reject_insecure_redirect_origins(
             "user_manager": cast("Any", user_manager),
             "oauth_client": FakeOAuthClient(),
             "redirect_base_url": redirect_base_url,
+            "oauth_flow_cookie_secret": OAUTH_FLOW_COOKIE_SECRET,
         }
 
     with pytest.raises(ConfigurationError, match=expected_message):
@@ -1338,13 +1559,15 @@ async def test_create_provider_oauth_controller_uses_oauth_client_factory() -> N
         user_manager=cast("Any", user_manager),
         oauth_client_factory=make_client,
         redirect_base_url=MANUAL_LOGIN_REDIRECT_BASE_URL,
+        oauth_flow_cookie_secret=OAUTH_FLOW_COOKIE_SECRET,
     )
     app2 = Litestar(route_handlers=[controller])
 
     async with AsyncTestClient(app=app2) as client:
         authorize_resp = await client.get("/auth/oauth/github/authorize", follow_redirects=False)
-        state = authorize_resp.cookies["__oauth_state_github"]
-        client.cookies.set("__oauth_state_github", state, domain="testserver.local", path="/auth/oauth/github")
+        state_cookie = authorize_resp.cookies["__oauth_state_github"]
+        state = _oauth_state_from_cookie(state_cookie)
+        client.cookies.set("__oauth_state_github", state_cookie, domain="testserver.local", path="/auth/oauth/github")
         callback_resp = await client.get(
             "/auth/oauth/github/callback",
             params={"code": "provider-code", "state": state},
@@ -1363,11 +1586,12 @@ async def test_create_provider_oauth_controller_uses_oauth_client_factory() -> N
 
 async def test_associate_authenticated_user_links_oauth() -> None:
     """Authenticated user can link an OAuth account via /associate/authorize and /associate/callback."""
-    app, user_db, _, strategy, _ = build_app_with_associate()
+    app, user_db, _, strategy, oauth_client = build_app_with_associate()
     async with AsyncTestClient(app=app) as client:
         login_resp = await client.get("/auth/oauth/github/authorize", follow_redirects=False)
-        state = login_resp.cookies["__oauth_state_github"]
-        client.cookies.set("__oauth_state_github", state, domain="testserver.local", path="/auth/oauth/github")
+        state_cookie = login_resp.cookies["__oauth_state_github"]
+        state = _oauth_state_from_cookie(state_cookie)
+        client.cookies.set("__oauth_state_github", state_cookie, domain="testserver.local", path="/auth/oauth/github")
         callback_resp = await client.get(
             "/auth/oauth/github/callback",
             params={"code": "provider-code", "state": state},
@@ -1384,8 +1608,10 @@ async def test_associate_authenticated_user_links_oauth() -> None:
             follow_redirects=False,
         )
         assert associate_authorize.status_code == HTTP_FOUND
-        ass_state = associate_authorize.cookies.get("__oauth_associate_state_github")
-        assert ass_state
+        ass_state_cookie = associate_authorize.cookies.get("__oauth_associate_state_github")
+        assert ass_state_cookie
+        ass_state = _oauth_state_from_cookie(ass_state_cookie)
+        ass_code_verifier = _oauth_code_verifier_from_cookie(ass_state_cookie)
         authorize_set_cookie = associate_authorize.headers["set-cookie"].lower()
         assert "__oauth_associate_state_github=" in authorize_set_cookie
         assert "max-age=300" in authorize_set_cookie
@@ -1395,7 +1621,7 @@ async def test_associate_authenticated_user_links_oauth() -> None:
         assert "samesite=lax" in authorize_set_cookie
         client.cookies.set(
             "__oauth_associate_state_github",
-            ass_state,
+            ass_state_cookie,
             domain="testserver.local",
             path="/auth/associate/github",
         )
@@ -1416,6 +1642,65 @@ async def test_associate_authenticated_user_links_oauth() -> None:
         oauth_account = user_db.oauth_accounts.get(("github", "provider-user-1"))
         assert oauth_account is not None
         assert oauth_account.user_id == created_user.id
+        assert oauth_client.access_token_calls[-1] == (
+            "associate-code",
+            "https://app.example/auth/associate/github/callback",
+            ass_code_verifier,
+        )
+
+
+async def test_associate_rejects_flow_cookie_with_mismatched_code_verifier() -> None:
+    """Associate callback reaches token exchange but provider rejects a mismatched PKCE verifier."""
+    app, user_db, _, strategy, oauth_client = build_app_with_associate()
+    async with AsyncTestClient(app=app) as client:
+        login_resp = await client.get("/auth/oauth/github/authorize", follow_redirects=False)
+        state_cookie = login_resp.cookies["__oauth_state_github"]
+        state = _oauth_state_from_cookie(state_cookie)
+        client.cookies.set("__oauth_state_github", state_cookie, domain="testserver.local", path="/auth/oauth/github")
+        callback_resp = await client.get(
+            "/auth/oauth/github/callback",
+            params={"code": "provider-code", "state": state},
+        )
+        assert callback_resp.status_code == HTTP_OK
+        token = callback_resp.json()["access_token"]
+        created_user = await user_db.get_by_email("oauth@example.com")
+        assert created_user is not None
+        user_db.oauth_accounts.clear()
+
+        associate_authorize = await client.get(
+            "/auth/associate/github/authorize",
+            headers={"Authorization": f"Bearer {token}"},
+            follow_redirects=False,
+        )
+        assert associate_authorize.status_code == HTTP_FOUND
+        ass_state_cookie = associate_authorize.cookies.get("__oauth_associate_state_github")
+        assert ass_state_cookie
+        ass_state = _oauth_state_from_cookie(ass_state_cookie)
+        forged_cookie = _encode_oauth_flow_cookie(
+            _OAuthFlowCookie(state=ass_state, code_verifier="mismatched-associate-code-verifier"),
+            flow_cookie_cipher=_flow_cookie_cipher(),
+        )
+        client.cookies.set(
+            "__oauth_associate_state_github",
+            forged_cookie,
+            domain="testserver.local",
+            path="/auth/associate/github",
+        )
+        associate_callback = await client.get(
+            "/auth/associate/github/callback",
+            params={"code": "associate-code", "state": ass_state},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+
+    assert associate_callback.status_code == HTTP_BAD_REQUEST
+    assert associate_callback.json()["detail"] == "Provider rejected PKCE verifier."
+    assert oauth_client.access_token_calls[-1] == (
+        "associate-code",
+        "https://app.example/auth/associate/github/callback",
+        "mismatched-associate-code-verifier",
+    )
+    assert user_db.oauth_accounts == {}
+    assert strategy.tokens == {token: created_user.id}
 
 
 async def test_associate_rejects_inactive_authenticated_user() -> None:
@@ -1436,10 +1721,11 @@ async def test_associate_rejects_inactive_authenticated_user() -> None:
             follow_redirects=False,
         )
         assert authorize_response.status_code == HTTP_FOUND
-        state = authorize_response.cookies["__oauth_associate_state_github"]
+        state_cookie = authorize_response.cookies["__oauth_associate_state_github"]
+        state = _oauth_state_from_cookie(state_cookie)
         client.cookies.set(
             "__oauth_associate_state_github",
-            state,
+            state_cookie,
             domain="testserver.local",
             path="/auth/associate/github",
         )
@@ -1498,10 +1784,11 @@ async def test_associate_re_link_updates_tokens() -> None:
             follow_redirects=False,
         )
         assert auth_resp.status_code == HTTP_FOUND
-        ass_state = auth_resp.cookies["__oauth_associate_state_github"]
+        ass_state_cookie = auth_resp.cookies["__oauth_associate_state_github"]
+        ass_state = _oauth_state_from_cookie(ass_state_cookie)
         client.cookies.set(
             "__oauth_associate_state_github",
-            ass_state,
+            ass_state_cookie,
             domain="testserver.local",
             path="/auth/associate/github",
         )
@@ -1554,10 +1841,11 @@ async def test_associate_rejects_when_provider_identity_already_linked_to_anothe
             follow_redirects=False,
         )
         assert auth_resp.status_code == HTTP_FOUND
-        ass_state = auth_resp.cookies["__oauth_associate_state_github"]
+        ass_state_cookie = auth_resp.cookies["__oauth_associate_state_github"]
+        ass_state = _oauth_state_from_cookie(ass_state_cookie)
         client.cookies.set(
             "__oauth_associate_state_github",
-            ass_state,
+            ass_state_cookie,
             domain="testserver.local",
             path="/auth/associate/github",
         )
@@ -1617,10 +1905,11 @@ async def test_associate_maps_oauth_account_already_linked_error_from_upsert() -
             headers=auth_headers,
             follow_redirects=False,
         )
-        ass_state = auth_resp.cookies["__oauth_associate_state_github"]
+        ass_state_cookie = auth_resp.cookies["__oauth_associate_state_github"]
+        ass_state = _oauth_state_from_cookie(ass_state_cookie)
         client.cookies.set(
             "__oauth_associate_state_github",
-            ass_state,
+            ass_state_cookie,
             domain="testserver.local",
             path="/auth/associate/github",
         )
@@ -1644,6 +1933,7 @@ def test_associate_flow_uses_di_key_variant_and_clears_state_cookie() -> None:
         user_manager_dependency_key="litestar_auth_oauth_associate_user_manager",
         oauth_client=FakeOAuthClient(),
         redirect_base_url=MANUAL_ASSOCIATE_REDIRECT_BASE_URL,
+        oauth_flow_cookie_secret=OAUTH_FLOW_COOKIE_SECRET,
         path="/auth/associate",
         cookie_secure=True,
     )
@@ -1659,6 +1949,7 @@ def test_associate_di_key_variant_exposes_configured_dependency_parameter_name()
         user_manager_dependency_key=dependency_parameter_name,
         oauth_client=FakeOAuthClient(),
         redirect_base_url=MANUAL_ASSOCIATE_REDIRECT_BASE_URL,
+        oauth_flow_cookie_secret=OAUTH_FLOW_COOKIE_SECRET,
         path="/auth/associate",
         cookie_secure=True,
     )
@@ -1678,6 +1969,7 @@ def test_associate_direct_variant_omits_dependency_injection_callback_parameter(
         user_manager=cast("Any", user_manager),
         oauth_client=FakeOAuthClient(),
         redirect_base_url=MANUAL_ASSOCIATE_REDIRECT_BASE_URL,
+        oauth_flow_cookie_secret=OAUTH_FLOW_COOKIE_SECRET,
         path="/auth/associate",
         cookie_secure=True,
     )
@@ -1706,6 +1998,7 @@ async def test_provider_helper_mounts_login_routes_under_custom_auth_path() -> N
         user_manager=cast("Any", user_manager),
         oauth_client=oauth_client,
         redirect_base_url=MANUAL_IDENTITY_REDIRECT_BASE_URL,
+        oauth_flow_cookie_secret=OAUTH_FLOW_COOKIE_SECRET,
         auth_path="/identity",
     )
     app = Litestar(route_handlers=[controller])
@@ -1748,10 +2041,11 @@ async def test_associate_di_key_variant_links_oauth_via_litestar_dependency_inje
         )
 
         assert authorize_response.status_code == HTTP_FOUND
-        state = authorize_response.cookies["__oauth_associate_state_github"]
+        state_cookie = authorize_response.cookies["__oauth_associate_state_github"]
+        state = _oauth_state_from_cookie(state_cookie)
         client.cookies.set(
             "__oauth_associate_state_github",
-            state,
+            state_cookie,
             domain="testserver.local",
             path="/auth/associate/github",
         )

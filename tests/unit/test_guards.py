@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import ast
 import importlib
+import inspect
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from enum import StrEnum
@@ -33,6 +35,8 @@ from litestar_auth.guards._guards import (
     _require_active_guarded_user,
     _require_guarded_user,
     _require_role_capable_user,
+    _roles_include_all_fixed_work,
+    _roles_intersect_fixed_work,
 )
 from tests._helpers import ExampleUser
 
@@ -138,6 +142,17 @@ class _ExpectedInsufficientRoles:
     required_roles: frozenset[str]
     user_roles: frozenset[str]
     require_all: bool
+
+
+@dataclass(frozen=True, slots=True)
+class _RoleGuardHelperDispatchCase:
+    """Role guard helper dispatch expectation."""
+
+    factory: Callable[..., Guard]
+    helper_name: str
+    roles: tuple[str, ...]
+    user_roles: list[str]
+    expected_required_roles: tuple[str, ...]
 
 
 class _TypedRole(StrEnum):
@@ -275,6 +290,165 @@ def test_typed_role_str_enum_inputs_pass_static_type_checks() -> None:
 
 
 @pytest.mark.parametrize(
+    ("user_roles", "required_roles", "expected"),
+    [
+        pytest.param(frozenset({"admin"}), ("admin",), True, id="single-hit"),
+        pytest.param(frozenset({"billing"}), ("admin",), False, id="single-miss"),
+        pytest.param(frozenset({"support", "admin"}), ("admin", "billing"), True, id="multi-hit"),
+        pytest.param(frozenset({"support", "viewer"}), ("admin", "billing"), False, id="multi-miss"),
+        pytest.param(frozenset(), ("admin",), False, id="empty-user-roles"),
+        pytest.param(frozenset({"admin"}), ("admin", "admin"), True, id="duplicate-required-role"),
+    ],
+)
+def test_roles_intersect_fixed_work_matches_any_role_truth_table(
+    user_roles: frozenset[str],
+    required_roles: tuple[str, ...],
+    expected: object,
+) -> None:
+    """The any-role helper preserves normalized role-intersection truth-table behavior."""
+    assert _roles_intersect_fixed_work(user_roles, required_roles) is expected
+
+
+@pytest.mark.parametrize(
+    ("user_roles", "required_roles", "expected"),
+    [
+        pytest.param(frozenset({"admin", "billing"}), ("admin",), True, id="single-hit"),
+        pytest.param(frozenset({"billing"}), ("admin",), False, id="single-miss"),
+        pytest.param(frozenset({"support", "admin", "billing"}), ("admin", "billing"), True, id="multi-hit"),
+        pytest.param(frozenset({"support", "admin"}), ("admin", "billing"), False, id="multi-miss"),
+        pytest.param(frozenset(), ("admin",), False, id="empty-user-roles"),
+        pytest.param(frozenset({"admin"}), ("admin", "admin"), True, id="duplicate-required-role"),
+    ],
+)
+def test_roles_include_all_fixed_work_matches_all_role_truth_table(
+    user_roles: frozenset[str],
+    required_roles: tuple[str, ...],
+    expected: object,
+) -> None:
+    """The all-role helper preserves normalized subset truth-table behavior."""
+    assert _roles_include_all_fixed_work(user_roles, required_roles) is expected
+
+
+@pytest.mark.parametrize(
+    "helper",
+    [
+        pytest.param(_roles_intersect_fixed_work, id="any"),
+        pytest.param(_roles_include_all_fixed_work, id="all"),
+    ],
+)
+def test_fixed_work_role_helpers_do_not_use_short_circuit_role_matching(helper: Callable[..., bool]) -> None:
+    """Role helpers avoid set predicates and early returns inside role-comparison loops."""
+    source = inspect.getsource(helper)
+    tree = ast.parse(source)
+    forbidden_call_names = {"any", "all"}
+    forbidden_method_names = {"issubset", "isdisjoint", "intersection"}
+    loop_depth = 0
+    compare_digest_calls = 0
+
+    class _Visitor(ast.NodeVisitor):
+        def visit_For(self, node: ast.For) -> None:
+            nonlocal loop_depth
+            loop_depth += 1
+            self.generic_visit(node)
+            loop_depth -= 1
+
+        def visit_Return(self, node: ast.Return) -> None:
+            assert loop_depth == 0
+            self.generic_visit(node)
+
+        def visit_Call(self, node: ast.Call) -> None:
+            nonlocal compare_digest_calls
+            if isinstance(node.func, ast.Name):
+                assert node.func.id not in forbidden_call_names
+            if isinstance(node.func, ast.Attribute):
+                assert node.func.attr not in forbidden_method_names
+                if node.func.attr == "compare_digest":
+                    compare_digest_calls += 1
+            self.generic_visit(node)
+
+        def visit_BoolOp(self, node: ast.BoolOp) -> None:
+            pytest.fail("fixed-work role helpers must not use short-circuit boolean operators")
+
+        def visit_BinOp(self, node: ast.BinOp) -> None:
+            assert not isinstance(node.op, ast.BitAnd | ast.BitOr)
+            self.generic_visit(node)
+
+        def visit_AugAssign(self, node: ast.AugAssign) -> None:
+            assert not isinstance(node.op, ast.BitAnd | ast.BitOr)
+            self.generic_visit(node)
+
+    _Visitor().visit(tree)
+    assert compare_digest_calls == 1
+
+
+def test_build_role_guard_does_not_use_short_circuit_set_predicates() -> None:
+    """Role guard wiring delegates role authorization to fixed-work helper predicates."""
+    source = inspect.getsource(guards_module._build_role_guard)
+    tree = ast.parse(source)
+
+    class _Visitor(ast.NodeVisitor):
+        def visit_Call(self, node: ast.Call) -> None:
+            if isinstance(node.func, ast.Attribute):
+                assert node.func.attr not in {"intersection", "issubset", "isdisjoint"}
+            self.generic_visit(node)
+
+        def visit_BinOp(self, node: ast.BinOp) -> None:
+            assert not isinstance(node.op, ast.BitAnd | ast.BitOr)
+            self.generic_visit(node)
+
+        def visit_AugAssign(self, node: ast.AugAssign) -> None:
+            assert not isinstance(node.op, ast.BitAnd | ast.BitOr)
+            self.generic_visit(node)
+
+    _Visitor().visit(tree)
+
+
+@pytest.mark.parametrize(
+    "case",
+    [
+        pytest.param(
+            _RoleGuardHelperDispatchCase(
+                factory=has_any_role,
+                helper_name="_roles_intersect_fixed_work",
+                roles=("admin",),
+                user_roles=["viewer"],
+                expected_required_roles=("admin",),
+            ),
+            id="any-role",
+        ),
+        pytest.param(
+            _RoleGuardHelperDispatchCase(
+                factory=has_all_roles,
+                helper_name="_roles_include_all_fixed_work",
+                roles=("admin", "billing"),
+                user_roles=["admin"],
+                expected_required_roles=("admin", "billing"),
+            ),
+            id="all-role",
+        ),
+    ],
+)
+def test_role_guards_dispatch_to_fixed_work_helpers(
+    monkeypatch: pytest.MonkeyPatch,
+    case: _RoleGuardHelperDispatchCase,
+) -> None:
+    """Role guards use fixed-work helpers for authorization decisions."""
+    calls: list[tuple[frozenset[str], tuple[str, ...]]] = []
+
+    def _fake_helper(runtime_user_roles: frozenset[str], required_roles: tuple[str, ...]) -> bool:
+        calls.append((runtime_user_roles, required_roles))
+        return True
+
+    monkeypatch.setattr(guards_module, case.helper_name, _fake_helper)
+
+    guard = case.factory(*case.roles)
+    connection = _build_connection(ExampleUser(id=uuid4(), roles=case.user_roles))
+
+    assert guard(connection, _build_handler()) is None
+    assert calls == [(frozenset(case.user_roles), case.expected_required_roles)]
+
+
+@pytest.mark.parametrize(
     ("guard", "user"),
     [
         pytest.param(
@@ -398,6 +572,23 @@ def test_is_superuser_honors_configured_scope_role_name() -> None:
     connection = _build_connection(user, state={SUPERUSER_ROLE_NAME_SENTINEL: " ADMIN "})
 
     assert is_superuser(connection, _build_handler()) is None
+
+
+def test_is_superuser_dispatches_to_fixed_work_role_helper(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Superuser authorization uses the same fixed-work role predicate as role guards."""
+    calls: list[tuple[frozenset[str], tuple[str, ...]]] = []
+
+    def _fake_helper(runtime_user_roles: frozenset[str], required_roles: tuple[str, ...]) -> bool:
+        calls.append((runtime_user_roles, required_roles))
+        return True
+
+    monkeypatch.setattr(guards_module, "_roles_intersect_fixed_work", _fake_helper)
+
+    user = ExampleUser(id=uuid4(), roles=["member"])
+    connection = _build_connection(user, state={SUPERUSER_ROLE_NAME_SENTINEL: " ADMIN "})
+
+    assert is_superuser(connection, _build_handler()) is None
+    assert calls == [(frozenset({"member"}), ("admin",))]
 
 
 def test_is_superuser_falls_back_to_default_when_scope_state_is_not_mapping() -> None:

@@ -7,13 +7,14 @@ from typing import TYPE_CHECKING, Any, Literal, cast
 from uuid import UUID
 
 import pytest
+from cryptography.fernet import Fernet
 
 import litestar_auth._plugin.config as plugin_config_module
 import litestar_auth._plugin.user_manager_builder as user_manager_builder_module
 from litestar_auth.authentication.backend import AuthenticationBackend
 from litestar_auth.authentication.transport.bearer import BearerTransport
 from litestar_auth.config import DEFAULT_MINIMUM_PASSWORD_LENGTH, require_password_length
-from litestar_auth.manager import UserManagerSecurity
+from litestar_auth.manager import FernetKeyringConfig, UserManagerSecurity
 from litestar_auth.plugin import LitestarAuthConfig
 from tests.e2e.conftest import assert_structural_session_factory
 from tests.integration.test_orchestrator import (
@@ -30,6 +31,18 @@ if TYPE_CHECKING:
 
 pytestmark = pytest.mark.unit
 
+CUSTOM_VALIDATOR_MIN_LENGTH_OFFSET = 4
+FACTORY_VALIDATOR_MIN_LENGTH_OFFSET = 8
+
+
+def _generate_fernet_key() -> str:
+    """Generate and return a valid Fernet key for builder tests.
+
+    Returns:
+        A valid Fernet key.
+    """
+    return Fernet.generate_key().decode()
+
 
 def _current_password_helper_type() -> type[Any]:
     """Resolve the current PasswordHelper class to survive cross-test module reloads.
@@ -37,7 +50,8 @@ def _current_password_helper_type() -> type[Any]:
     Returns:
         The current PasswordHelper type.
     """
-    return cast("type[Any]", importlib.import_module("litestar_auth.password").PasswordHelper)
+    module = importlib.import_module("litestar_auth.password")
+    return cast("type[Any]", module.PasswordHelper)
 
 
 def _minimal_config(
@@ -96,14 +110,18 @@ def test_default_builder_contract_materializes_canonical_kwargs() -> None:
     """The default builder now forwards only the canonical security-based contract."""
 
     def password_validator(password: str) -> None:
-        require_password_length(password, DEFAULT_MINIMUM_PASSWORD_LENGTH + 4)
+        require_password_length(
+            password,
+            DEFAULT_MINIMUM_PASSWORD_LENGTH + CUSTOM_VALIDATOR_MIN_LENGTH_OFFSET,
+        )
 
     password_helper = object()
+    totp_keyring = FernetKeyringConfig(active_key_id="current", keys={"current": _generate_fernet_key()})
     config = _minimal_config(
         user_manager_security=UserManagerSecurity[UUID](
             verification_token_secret="v" * 32,
             reset_password_token_secret="r" * 32,
-            totp_secret_key="t" * 32,
+            totp_secret_keyring=totp_keyring,
         ),
         id_parser=UUID,
         login_identifier="username",
@@ -134,7 +152,7 @@ def test_default_builder_contract_materializes_canonical_kwargs() -> None:
     assert kwargs["unsafe_testing"] is False
     assert kwargs["security"].verification_token_secret == "v" * 32
     assert kwargs["security"].reset_password_token_secret == "r" * 32
-    assert kwargs["security"].totp_secret_key == "t" * 32
+    assert kwargs["security"].totp_secret_keyring is totp_keyring
     assert kwargs["security"].id_parser is UUID
 
 
@@ -159,7 +177,10 @@ def test_resolve_password_validator_prefers_factory_over_default() -> None:
     """The simplified builder resolves validators only from the explicit factory or default."""
 
     def factory_validator(password: str) -> None:
-        require_password_length(password, DEFAULT_MINIMUM_PASSWORD_LENGTH + 8)
+        require_password_length(
+            password,
+            DEFAULT_MINIMUM_PASSWORD_LENGTH + FACTORY_VALIDATOR_MIN_LENGTH_OFFSET,
+        )
 
     config = _minimal_config()
     config.password_validator_factory = lambda _config: factory_validator
@@ -187,16 +208,19 @@ def test_build_user_manager_passes_only_canonical_kwargs() -> None:
             self.received_security = cast("UserManagerSecurity[UUID]", kwargs["security"])
             super().__init__(cast("Any", user_db), **cast("Any", self.received_manager_kwargs))
 
+    totp_keyring = FernetKeyringConfig(active_key_id="current", keys={"current": _generate_fernet_key()})
+    raw_superuser_role_name = " Admin "
+    normalized_superuser_role_name = raw_superuser_role_name.strip().lower()
     config = _minimal_config(
         user_manager_class=_KwargsWrapperManager,
         user_manager_security=UserManagerSecurity[UUID](
             verification_token_secret="v" * 32,
             reset_password_token_secret="r" * 32,
-            totp_secret_key="t" * 32,
+            totp_secret_keyring=totp_keyring,
         ),
         id_parser=UUID,
         login_identifier="username",
-        superuser_role_name=" Admin ",
+        superuser_role_name=raw_superuser_role_name,
     )
 
     manager = user_manager_builder_module.build_user_manager(
@@ -223,10 +247,11 @@ def test_build_user_manager_passes_only_canonical_kwargs() -> None:
     assert typed_manager.received_manager_kwargs["password_validator"] is not None
     assert typed_manager.received_manager_kwargs["backends"] == ("bound-backend",)
     assert typed_manager.received_manager_kwargs["login_identifier"] == "username"
-    assert typed_manager.received_manager_kwargs["superuser_role_name"] == "admin"
+    assert typed_manager.received_manager_kwargs["superuser_role_name"] == normalized_superuser_role_name
+    assert typed_manager.received_manager_kwargs["superuser_role_name"] != raw_superuser_role_name
     assert typed_manager.received_manager_kwargs["unsafe_testing"] is False
     assert typed_manager.received_security.id_parser is UUID
-    assert typed_manager.received_security.totp_secret_key == "t" * 32
+    assert typed_manager.received_security.totp_secret_keyring is totp_keyring
 
 
 def test_build_user_manager_rejects_missing_manager_class_without_custom_factory() -> None:
@@ -242,4 +267,5 @@ def test_build_user_manager_rejects_missing_manager_class_without_custom_factory
             session=cast("Any", DummySession()),
             user_db=InMemoryUserDatabase([]),
             config=config,
+            backends=(),
         )

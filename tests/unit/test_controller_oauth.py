@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import builtins
 import inspect
 from pathlib import Path
 from types import SimpleNamespace
@@ -23,6 +24,10 @@ from litestar_auth.controllers._utils import _require_account_state
 from litestar_auth.controllers.oauth import (
     STATE_COOKIE_MAX_AGE,
     _clear_state_cookie,
+    _decode_oauth_flow_cookie,
+    _encode_oauth_flow_cookie,
+    _OAuthFlowCookie,
+    _OAuthFlowCookieCipher,
     _require_verified_email_evidence,
     _set_state_cookie,
     _validate_state,
@@ -47,11 +52,23 @@ REMOVED_OAUTH_CONTROLLER_ADAPTER_PASSTHROUGH_HELPERS = (
     "_get_email_verified",
     "_as_mapping",
 )
+OAUTH_FLOW_COOKIE_SECRET = "oauth-flow-cookie-secret-1234567890-abcdef123456"
+WRONG_OAUTH_FLOW_COOKIE_SECRET = "wrong-oauth-flow-cookie-secret-123456-uvwxyz987654"
+
+
+def _flow_cookie_cipher(secret: str = OAUTH_FLOW_COOKIE_SECRET) -> _OAuthFlowCookieCipher:
+    """Return the test cipher for OAuth flow-cookie envelopes."""
+    return _OAuthFlowCookieCipher.from_secret(secret)
 
 
 def _make_oauth_client() -> oauth_module.OAuthClientProtocol:
     """Return a typed OAuth client placeholder for controller tests."""
     return cast("oauth_module.OAuthClientProtocol", object())
+
+
+def _flow_cookie(state: str = "secure-state", code_verifier: str = "secure-code-verifier") -> _OAuthFlowCookie:
+    """Return a test OAuth flow cookie envelope."""
+    return _OAuthFlowCookie(state=state, code_verifier=code_verifier)
 
 
 # --- _validate_state ---
@@ -64,19 +81,81 @@ def test_set_state_cookie_uses_expected_cookie_settings() -> None:
     _set_state_cookie(
         response,
         cookie_name="__oauth_state_github",
-        state="secure-state",
+        flow_cookie=_flow_cookie(),
+        flow_cookie_cipher=_flow_cookie_cipher(),
         cookie_path="/auth/oauth/github",
         cookie_secure=True,
     )
 
     cookie = response.cookies[0]
     assert cookie.key == "__oauth_state_github"
-    assert cookie.value == "secure-state"
+    assert _decode_oauth_flow_cookie(cookie.value, flow_cookie_cipher=_flow_cookie_cipher()) == _flow_cookie()
     assert cookie.max_age == STATE_COOKIE_MAX_AGE
     assert cookie.path == "/auth/oauth/github"
     assert cookie.secure is True
     assert cookie.httponly is True
     assert cookie.samesite == "lax"
+
+
+def test_oauth_flow_cookie_round_trips_through_encrypted_envelope() -> None:
+    """OAuth flow cookie envelopes round-trip through authenticated encryption."""
+    flow_cookie = _OAuthFlowCookie(state="state-value", code_verifier="verifier-value")
+
+    encoded = _encode_oauth_flow_cookie(flow_cookie, flow_cookie_cipher=_flow_cookie_cipher())
+
+    assert "state-value" not in encoded
+    assert "verifier-value" not in encoded
+    assert encoded.startswith("v2.")
+    assert _decode_oauth_flow_cookie(encoded, flow_cookie_cipher=_flow_cookie_cipher()) == flow_cookie
+
+
+def test_oauth_flow_cookie_rejects_wrong_secret() -> None:
+    """OAuth flow cookies cannot be decrypted with a different server secret."""
+    encoded = _encode_oauth_flow_cookie(_flow_cookie(), flow_cookie_cipher=_flow_cookie_cipher())
+
+    with pytest.raises(ClientException) as exc_info:
+        _decode_oauth_flow_cookie(encoded, flow_cookie_cipher=_flow_cookie_cipher(WRONG_OAUTH_FLOW_COOKIE_SECRET))
+
+    assert exc_info.value.status_code == HTTP_400_BAD_REQUEST
+    extra = exc_info.value.extra
+    assert (extra.get("code") if isinstance(extra, dict) else None) == ErrorCode.OAUTH_STATE_INVALID
+
+
+def test_oauth_flow_cookie_crypto_dependency_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Encrypted OAuth flow cookies preserve the optional-dependency install hint."""
+    real_import = builtins.__import__
+
+    def guarded_import(
+        name: str,
+        globals_: dict[str, object] | None = None,
+        locals_: dict[str, object] | None = None,
+        fromlist: tuple[str, ...] = (),
+        level: int = 0,
+    ) -> object:
+        if name == "cryptography.fernet":
+            msg = "blocked cryptography import"
+            raise ImportError(msg)
+        return real_import(name, globals_, locals_, fromlist, level)
+
+    monkeypatch.setattr(builtins, "__import__", guarded_import)
+
+    with pytest.raises(ImportError, match=r"Install litestar-auth\[oauth\]"):
+        oauth_module._require_oauth_flow_cookie_crypto()
+
+
+@pytest.mark.parametrize(
+    "cookie_value",
+    ["not valid base64!", "non-ascii-\u2603", "e30", "eyJzdGF0ZSI6InN0YXRlLXZhbHVlIn0", "v2", "v2no-separator"],
+)
+def test_oauth_flow_cookie_decode_rejects_malformed_or_incomplete_values(cookie_value: str) -> None:
+    """Malformed, tampered, and verifier-less flow cookies share the invalid-state response."""
+    with pytest.raises(ClientException) as exc_info:
+        _decode_oauth_flow_cookie(cookie_value, flow_cookie_cipher=_flow_cookie_cipher())
+
+    assert exc_info.value.status_code == HTTP_400_BAD_REQUEST
+    assert exc_info.value.detail == "Invalid OAuth state."
+    extra = exc_info.value.extra
+    assert (extra.get("code") if isinstance(extra, dict) else None) == ErrorCode.OAUTH_STATE_INVALID
 
 
 def test_clear_state_cookie_uses_expected_cookie_settings() -> None:
@@ -160,6 +239,7 @@ def test_create_oauth_controller_builds_the_shared_client_adapter_before_assembl
         user_manager=user_manager,
         oauth_client=oauth_client,
         redirect_base_url="https://app.example/auth/oauth",
+        oauth_flow_cookie_secret=OAUTH_FLOW_COOKIE_SECRET,
     )
 
     assert created_controller is controller
@@ -170,6 +250,7 @@ def test_create_oauth_controller_builds_the_shared_client_adapter_before_assembl
         user_manager=user_manager,
         oauth_client_adapter=oauth_client_adapter,
         redirect_base_url="https://app.example/auth/oauth",
+        oauth_flow_cookie_secret=OAUTH_FLOW_COOKIE_SECRET,
         path="/auth/oauth",
         cookie_secure=True,
         oauth_scopes=None,
@@ -243,6 +324,7 @@ def _build_associate_controller(*, user_manager: object | None = None) -> object
         user_manager=cast("Any", user_manager or MagicMock()),
         oauth_client=_make_oauth_client(),
         redirect_base_url="https://app.example/auth/associate",
+        oauth_flow_cookie_secret=OAUTH_FLOW_COOKIE_SECRET,
         path="/auth/associate",
         cookie_secure=True,
     )
@@ -266,6 +348,7 @@ def _build_login_controller(
         user_manager=cast("Any", user_manager),
         oauth_client=_make_oauth_client(),
         redirect_base_url="https://app.example/auth/oauth",
+        oauth_flow_cookie_secret=OAUTH_FLOW_COOKIE_SECRET,
         path="/auth/oauth",
         cookie_secure=True,
         oauth_scopes=oauth_scopes,
@@ -317,6 +400,7 @@ def test_oauth_module_reload_preserves_helper_error_contract(monkeypatch: pytest
             user_manager_dependency_key="not-a-valid-identifier",
             oauth_client=_make_oauth_client(),
             redirect_base_url="https://app.example/auth/associate",
+            oauth_flow_cookie_secret=OAUTH_FLOW_COOKIE_SECRET,
         )
 
     extra = client_exc_info.value.extra
@@ -335,6 +419,7 @@ def test_shared_oauth_controller_assembly_uses_direct_manager_binding_and_provid
         redirect_base_url="https://app.example/auth/oauth",
         path="/auth/oauth",
         cookie_secure=True,
+        oauth_flow_cookie_secret=OAUTH_FLOW_COOKIE_SECRET,
         state_cookie_prefix=oauth_module.STATE_COOKIE_PREFIX,
         controller_name_suffix="OAuthController",
         user_manager_binding=oauth_module._build_direct_user_manager_binding(cast("Any", manager)),
@@ -362,6 +447,7 @@ def test_shared_oauth_controller_assembly_rejects_missing_client_inputs() -> Non
             redirect_base_url="https://app.example/auth/oauth",
             path="/auth/oauth",
             cookie_secure=True,
+            oauth_flow_cookie_secret=OAUTH_FLOW_COOKIE_SECRET,
             state_cookie_prefix=oauth_module.STATE_COOKIE_PREFIX,
             controller_name_suffix="OAuthController",
             user_manager_binding=oauth_module._build_direct_user_manager_binding(cast("Any", MagicMock())),
@@ -379,6 +465,7 @@ def test_shared_oauth_controller_assembly_rejects_duplicate_client_inputs() -> N
             redirect_base_url="https://app.example/auth/oauth",
             path="/auth/oauth",
             cookie_secure=True,
+            oauth_flow_cookie_secret=OAUTH_FLOW_COOKIE_SECRET,
             state_cookie_prefix=oauth_module.STATE_COOKIE_PREFIX,
             controller_name_suffix="OAuthController",
             user_manager_binding=oauth_module._build_direct_user_manager_binding(cast("Any", MagicMock())),
@@ -412,6 +499,7 @@ def test_create_oauth_controller_rejects_invalid_configured_scopes(
             user_manager=cast("Any", MagicMock()),
             oauth_client=_make_oauth_client(),
             redirect_base_url="https://app.example/auth/oauth",
+            oauth_flow_cookie_secret=OAUTH_FLOW_COOKIE_SECRET,
             oauth_scopes=cast("Any", oauth_scopes),
         )
 
@@ -436,6 +524,7 @@ def test_create_oauth_controller_rejects_insecure_redirect_base_url(
             user_manager=cast("Any", MagicMock()),
             oauth_client=_make_oauth_client(),
             redirect_base_url=redirect_base_url,
+            oauth_flow_cookie_secret=OAUTH_FLOW_COOKIE_SECRET,
         )
 
 
@@ -447,6 +536,7 @@ def test_shared_oauth_controller_assembly_uses_dependency_binding_for_associate_
         redirect_base_url="https://app.example/auth/associate",
         path="/auth/associate",
         cookie_secure=False,
+        oauth_flow_cookie_secret=OAUTH_FLOW_COOKIE_SECRET,
         state_cookie_prefix=oauth_module.ASSOCIATE_STATE_COOKIE_PREFIX,
         controller_name_suffix="OAuthAssociateController",
         user_manager_binding=oauth_module._build_associate_user_manager_binding(
@@ -482,6 +572,7 @@ async def test_oauth_associate_authorize_sets_state_cookie_and_redirects(monkeyp
         return OAuthAuthorization(
             authorization_url="https://provider.example/authorize?state=associate-state",
             state="associate-state",
+            code_verifier="associate-code-verifier",
         )
 
     monkeypatch.setattr("litestar_auth.controllers.oauth.OAuthService.authorize", fake_authorize)
@@ -494,7 +585,10 @@ async def test_oauth_associate_authorize_sets_state_cookie_and_redirects(monkeyp
     assert seen == {"redirect_uri": "https://app.example/auth/associate/github/callback", "scopes": None}
     cookie = response.cookies[0]
     assert cookie.key == "__oauth_associate_state_github"
-    assert cookie.value == "associate-state"
+    assert _decode_oauth_flow_cookie(cookie.value, flow_cookie_cipher=_flow_cookie_cipher()) == _flow_cookie(
+        state="associate-state",
+        code_verifier="associate-code-verifier",
+    )
     assert cookie.max_age == STATE_COOKIE_MAX_AGE
     assert cookie.path == "/auth/associate/github"
     assert cookie.secure is True
@@ -509,6 +603,7 @@ def test_create_oauth_associate_controller_requires_exactly_one_manager_input() 
             provider_name="github",
             oauth_client=_make_oauth_client(),
             redirect_base_url="https://app.example/auth/associate",
+            oauth_flow_cookie_secret=OAUTH_FLOW_COOKIE_SECRET,
         )
 
     with pytest.raises(ConfigurationError, match="exactly one"):
@@ -518,6 +613,7 @@ def test_create_oauth_associate_controller_requires_exactly_one_manager_input() 
             user_manager_dependency_key="litestar_auth_oauth_associate_user_manager",
             oauth_client=_make_oauth_client(),
             redirect_base_url="https://app.example/auth/associate",
+            oauth_flow_cookie_secret=OAUTH_FLOW_COOKIE_SECRET,
         )
 
 
@@ -529,6 +625,7 @@ def test_create_oauth_associate_controller_rejects_invalid_dependency_parameter_
             user_manager_dependency_key="not-a-valid-identifier",
             oauth_client=_make_oauth_client(),
             redirect_base_url="https://app.example/auth/associate",
+            oauth_flow_cookie_secret=OAUTH_FLOW_COOKIE_SECRET,
         )
 
 
@@ -551,6 +648,7 @@ def test_create_oauth_associate_controller_rejects_insecure_redirect_base_url(
             user_manager=cast("Any", MagicMock()),
             oauth_client=_make_oauth_client(),
             redirect_base_url=redirect_base_url,
+            oauth_flow_cookie_secret=OAUTH_FLOW_COOKIE_SECRET,
         )
 
 
@@ -562,12 +660,13 @@ async def test_oauth_associate_callback_links_authenticated_user_and_clears_cook
     manager = MagicMock()
     seen: dict[str, object] = {}
 
-    async def fake_associate_account(
+    async def fake_associate_account(  # noqa: PLR0913
         self: object,
         *,
         user: object,
         code: str,
         redirect_uri: str,
+        code_verifier: str,
         user_manager: object,
     ) -> None:
         del self
@@ -575,13 +674,22 @@ async def test_oauth_associate_callback_links_authenticated_user_and_clears_cook
         seen["user"] = user
         seen["code"] = code
         seen["redirect_uri"] = redirect_uri
+        seen["code_verifier"] = code_verifier
         seen["user_manager"] = user_manager
 
     monkeypatch.setattr("litestar_auth.controllers.oauth.OAuthService.associate_account", fake_associate_account)
     controller = cast("Any", _build_associate_controller(user_manager=manager))
     request = cast(
         "Any",
-        SimpleNamespace(cookies={"__oauth_associate_state_github": "associate-state"}, user=user),
+        SimpleNamespace(
+            cookies={
+                "__oauth_associate_state_github": _encode_oauth_flow_cookie(
+                    _flow_cookie(state="associate-state", code_verifier="associate-code-verifier"),
+                    flow_cookie_cipher=_flow_cookie_cipher(),
+                ),
+            },
+            user=user,
+        ),
     )
 
     response = await controller.callback.fn(
@@ -596,6 +704,7 @@ async def test_oauth_associate_callback_links_authenticated_user_and_clears_cook
         "user": user,
         "code": "provider-code",
         "redirect_uri": "https://app.example/auth/associate/github/callback",
+        "code_verifier": "associate-code-verifier",
         "user_manager": manager,
     }
     cookie = response.cookies[0]
@@ -621,7 +730,15 @@ async def test_oauth_associate_callback_rejects_inactive_user_before_linking(
     controller = cast("Any", _build_associate_controller(user_manager=manager))
     request = cast(
         "Any",
-        SimpleNamespace(cookies={"__oauth_associate_state_github": "associate-state"}, user=user),
+        SimpleNamespace(
+            cookies={
+                "__oauth_associate_state_github": _encode_oauth_flow_cookie(
+                    _flow_cookie(state="associate-state", code_verifier="associate-code-verifier"),
+                    flow_cookie_cipher=_flow_cookie_cipher(),
+                ),
+            },
+            user=user,
+        ),
     )
 
     with pytest.raises(ClientException) as exc_info:
@@ -643,7 +760,15 @@ async def test_oauth_associate_callback_rejects_invalid_state() -> None:
     controller = cast("Any", _build_associate_controller())
     request = cast(
         "Any",
-        SimpleNamespace(cookies={"__oauth_associate_state_github": "cookie-state"}, user=object()),
+        SimpleNamespace(
+            cookies={
+                "__oauth_associate_state_github": _encode_oauth_flow_cookie(
+                    _flow_cookie(state="cookie-state", code_verifier="associate-code-verifier"),
+                    flow_cookie_cipher=_flow_cookie_cipher(),
+                ),
+            },
+            user=object(),
+        ),
     )
 
     with pytest.raises(ClientException) as exc_info:
@@ -659,15 +784,16 @@ async def test_oauth_associate_callback_propagates_already_linked_error(
 ) -> None:
     """Associate callback preserves the stable linked-account error from the service layer."""
 
-    async def fail_associate_account(
+    async def fail_associate_account(  # noqa: PLR0913
         self: object,
         *,
         user: object,
         code: str,
         redirect_uri: str,
+        code_verifier: str,
         user_manager: object,
     ) -> None:
-        del self, user, code, redirect_uri, user_manager
+        del self, user, code, redirect_uri, code_verifier, user_manager
         await asyncio.sleep(0)
         raise OAuthAccountAlreadyLinkedError(
             provider="github",
@@ -679,7 +805,15 @@ async def test_oauth_associate_callback_propagates_already_linked_error(
     controller = cast("Any", _build_associate_controller())
     request = cast(
         "Any",
-        SimpleNamespace(cookies={"__oauth_associate_state_github": "associate-state"}, user=object()),
+        SimpleNamespace(
+            cookies={
+                "__oauth_associate_state_github": _encode_oauth_flow_cookie(
+                    _flow_cookie(state="associate-state", code_verifier="associate-code-verifier"),
+                    flow_cookie_cipher=_flow_cookie_cipher(),
+                ),
+            },
+            user=object(),
+        ),
     )
 
     with pytest.raises(OAuthAccountAlreadyLinkedError) as exc_info:
@@ -694,16 +828,18 @@ async def test_oauth_associate_di_callback_uses_injected_manager(monkeypatch: py
     injected_manager = MagicMock()
     seen: dict[str, object] = {}
 
-    async def fake_associate_account(
+    async def fake_associate_account(  # noqa: PLR0913
         self: object,
         *,
         user: object,
         code: str,
         redirect_uri: str,
+        code_verifier: str,
         user_manager: object,
     ) -> None:
         del self, user, code, redirect_uri
         await asyncio.sleep(0)
+        seen["code_verifier"] = code_verifier
         seen["user_manager"] = user_manager
 
     monkeypatch.setattr("litestar_auth.controllers.oauth.OAuthService.associate_account", fake_associate_account)
@@ -712,13 +848,22 @@ async def test_oauth_associate_di_callback_uses_injected_manager(monkeypatch: py
         user_manager_dependency_key=dependency_parameter_name,
         oauth_client=_make_oauth_client(),
         redirect_base_url="https://app.example/auth/associate",
+        oauth_flow_cookie_secret=OAUTH_FLOW_COOKIE_SECRET,
         path="/auth/associate",
         cookie_secure=True,
     )
     controller = cast("Any", controller_class(owner=Router(path="/", route_handlers=[])))
     request = cast(
         "Any",
-        SimpleNamespace(cookies={"__oauth_associate_state_github": "associate-state"}, user=object()),
+        SimpleNamespace(
+            cookies={
+                "__oauth_associate_state_github": _encode_oauth_flow_cookie(
+                    _flow_cookie(state="associate-state", code_verifier="associate-code-verifier"),
+                    flow_cookie_cipher=_flow_cookie_cipher(),
+                ),
+            },
+            user=object(),
+        ),
     )
 
     await controller.callback.fn(
@@ -729,7 +874,7 @@ async def test_oauth_associate_di_callback_uses_injected_manager(monkeypatch: py
         **{dependency_parameter_name: injected_manager},
     )
 
-    assert seen == {"user_manager": injected_manager}
+    assert seen == {"code_verifier": "associate-code-verifier", "user_manager": injected_manager}
 
 
 async def test_oauth_associate_di_callback_raises_when_injected_manager_missing() -> None:
@@ -739,13 +884,22 @@ async def test_oauth_associate_di_callback_raises_when_injected_manager_missing(
         user_manager_dependency_key="custom_manager_key",
         oauth_client=_make_oauth_client(),
         redirect_base_url="https://app.example/auth/associate",
+        oauth_flow_cookie_secret=OAUTH_FLOW_COOKIE_SECRET,
         path="/auth/associate",
         cookie_secure=True,
     )
     controller = cast("Any", controller_class(owner=Router(path="/", route_handlers=[])))
     request = cast(
         "Any",
-        SimpleNamespace(cookies={"__oauth_associate_state_github": "associate-state"}, user=object()),
+        SimpleNamespace(
+            cookies={
+                "__oauth_associate_state_github": _encode_oauth_flow_cookie(
+                    _flow_cookie(state="associate-state", code_verifier="associate-code-verifier"),
+                    flow_cookie_cipher=_flow_cookie_cipher(),
+                ),
+            },
+            user=object(),
+        ),
     )
 
     with pytest.raises(TypeError, match="custom_manager_key"):
@@ -769,13 +923,22 @@ async def test_oauth_associate_di_callback_rejects_duplicate_injected_manager_in
         user_manager_dependency_key=dependency_parameter_name,
         oauth_client=_make_oauth_client(),
         redirect_base_url="https://app.example/auth/associate",
+        oauth_flow_cookie_secret=OAUTH_FLOW_COOKIE_SECRET,
         path="/auth/associate",
         cookie_secure=True,
     )
     controller = cast("Any", controller_class(owner=Router(path="/", route_handlers=[])))
     request = cast(
         "Any",
-        SimpleNamespace(cookies={"__oauth_associate_state_github": "associate-state"}, user=object()),
+        SimpleNamespace(
+            cookies={
+                "__oauth_associate_state_github": _encode_oauth_flow_cookie(
+                    _flow_cookie(state="associate-state", code_verifier="associate-code-verifier"),
+                    flow_cookie_cipher=_flow_cookie_cipher(),
+                ),
+            },
+            user=object(),
+        ),
     )
     injected_manager = MagicMock()
 
@@ -799,6 +962,7 @@ def test_oauth_associate_di_callback_exposes_configured_dependency_parameter_nam
         user_manager_dependency_key="custom_manager_key",
         oauth_client=_make_oauth_client(),
         redirect_base_url="https://app.example/auth/associate",
+        oauth_flow_cookie_secret=OAUTH_FLOW_COOKIE_SECRET,
         path="/auth/associate",
         cookie_secure=True,
     )
@@ -815,6 +979,7 @@ def test_create_oauth_associate_controller_applies_openapi_security_to_both_prot
         user_manager=cast("Any", MagicMock()),
         oauth_client=_make_oauth_client(),
         redirect_base_url="https://app.example/auth/associate",
+        oauth_flow_cookie_secret=OAUTH_FLOW_COOKIE_SECRET,
         path="/auth/associate",
         security=[{"BearerToken": []}],
     )
@@ -845,6 +1010,7 @@ async def test_oauth_login_authorize_sets_state_cookie_and_redirects(monkeypatch
         return OAuthAuthorization(
             authorization_url="https://provider.example/authorize?state=login-state",
             state="login-state",
+            code_verifier="login-code-verifier",
         )
 
     monkeypatch.setattr("litestar_auth.controllers.oauth.OAuthService.authorize", fake_authorize)
@@ -870,7 +1036,10 @@ async def test_oauth_login_authorize_sets_state_cookie_and_redirects(monkeypatch
     }
     cookie = response.cookies[0]
     assert cookie.key == "__oauth_state_github"
-    assert cookie.value == "login-state"
+    assert _decode_oauth_flow_cookie(cookie.value, flow_cookie_cipher=_flow_cookie_cipher()) == _flow_cookie(
+        state="login-state",
+        code_verifier="login-code-verifier",
+    )
     assert cookie.path == "/auth/oauth/github"
 
 
@@ -902,18 +1071,31 @@ async def test_oauth_login_callback_logs_in_and_clears_state_cookie(monkeypatch:
         *,
         code: str,
         redirect_uri: str,
+        code_verifier: str,
         user_manager: object,
     ) -> object:
         del self
         await asyncio.sleep(0)
         seen["code"] = code
         seen["redirect_uri"] = redirect_uri
+        seen["code_verifier"] = code_verifier
         seen["user_manager"] = user_manager
         return user
 
     monkeypatch.setattr("litestar_auth.controllers.oauth.OAuthService.complete_login", fake_complete_login)
     controller = cast("Any", _build_login_controller(backend=backend, user_manager=manager))
-    request = cast("Any", SimpleNamespace(cookies={"__oauth_state_github": "login-state"}, user=None))
+    request = cast(
+        "Any",
+        SimpleNamespace(
+            cookies={
+                "__oauth_state_github": _encode_oauth_flow_cookie(
+                    _flow_cookie(state="login-state", code_verifier="login-code-verifier"),
+                    flow_cookie_cipher=_flow_cookie_cipher(),
+                ),
+            },
+            user=None,
+        ),
+    )
 
     response = await controller.callback.fn(controller, request, code="provider-code", oauth_state="login-state")
 
@@ -921,6 +1103,7 @@ async def test_oauth_login_callback_logs_in_and_clears_state_cookie(monkeypatch:
     assert seen == {
         "code": "provider-code",
         "redirect_uri": "https://app.example/auth/oauth/github/callback",
+        "code_verifier": "login-code-verifier",
         "user_manager": manager,
     }
     backend.login.assert_awaited_once_with(user)
@@ -938,7 +1121,18 @@ async def test_oauth_login_callback_rejects_invalid_state() -> None:
     backend = MagicMock()
     backend.login = AsyncMock()
     controller = cast("Any", _build_login_controller(backend=backend, user_manager=manager))
-    request = cast("Any", SimpleNamespace(cookies={"__oauth_state_github": "cookie-state"}, user=None))
+    request = cast(
+        "Any",
+        SimpleNamespace(
+            cookies={
+                "__oauth_state_github": _encode_oauth_flow_cookie(
+                    _flow_cookie(state="cookie-state", code_verifier="login-code-verifier"),
+                    flow_cookie_cipher=_flow_cookie_cipher(),
+                ),
+            },
+            user=None,
+        ),
+    )
 
     with pytest.raises(ClientException) as exc_info:
         await controller.callback.fn(controller, request, code="provider-code", oauth_state="query-state")

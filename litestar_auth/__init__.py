@@ -40,6 +40,7 @@ from litestar_auth.guards import has_all_roles, has_any_role, is_active, is_auth
 from litestar_auth.manager import BaseUserManager, UserManagerSecurity
 from litestar_auth.plugin import (
     DatabaseTokenAuthConfig,
+    FernetKeyringConfig,
     LitestarAuth,
     LitestarAuthConfig,
     OAuthConfig,
@@ -67,6 +68,7 @@ __all__ = (
     "CookieTransport",
     "DatabaseTokenAuthConfig",
     "ErrorCode",
+    "FernetKeyringConfig",
     "GuardedUserProtocol",
     "LitestarAuth",
     "LitestarAuthConfig",

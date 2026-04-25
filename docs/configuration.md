@@ -20,6 +20,7 @@ from litestar_auth.models import User  # or your own model
 | User model contracts, bundled ORM mixins, token tables, roles, and `SQLAlchemyUserDatabase` | [User and manager](configuration/user_and_manager.md) |
 | Role CLI, manager construction, plugin hooks, password helper, schemas, and secret contracts | [Manager customization](configuration/manager.md) |
 | Redis auth preset, shared rate limiting, replay stores, and Redis import boundaries | [Redis](configuration/redis.md) |
+| Deployment worker-count posture and production shared-store requirements | [Deployment](deployment.md#process-topology) |
 | `TotpConfig` fields and TOTP route behavior | [TOTP](configuration/totp.md) |
 | `OAuthConfig`, provider inventory, redirect policy, and token encryption | [OAuth](configuration/oauth.md) |
 | CSRF, legacy-token policy, dependency keys, and shared helpers | [Security and DI](configuration/security.md) |
@@ -91,6 +92,10 @@ Moved to: [Backends](configuration/backends.md#built-in-auth-payload-boundary).
 ## Redis-backed auth surface
 
 Moved to: [Redis](configuration/redis.md#redis-backed-auth-surface).
+
+## Deployment worker-count posture
+
+Moved to: [Deployment](deployment.md#process-topology).
 
 ### Shared-backend rate limiting
 

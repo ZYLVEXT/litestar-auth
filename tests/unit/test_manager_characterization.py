@@ -15,7 +15,7 @@ import litestar_auth.manager as manager_module
 from litestar_auth.exceptions import InvalidResetPasswordTokenError, InvalidVerifyTokenError
 from litestar_auth.manager import ENCRYPTED_TOTP_SECRET_PREFIX, BaseUserManager, UserManagerSecurity
 from litestar_auth.password import PasswordHelper
-from litestar_auth.schemas import UserCreate, UserUpdate
+from litestar_auth.schemas import AdminUserUpdate, UserCreate
 from tests._helpers import ExampleUser
 
 pytestmark = pytest.mark.unit
@@ -176,7 +176,7 @@ async def test_manager_crud_facade_characterization() -> None:
     fetched = await manager.get(updated_user.id)
     listed, total = await manager.list_users(offset=1, limit=2)
     updated = await manager.update(
-        UserUpdate(email="updated@example.com", password="new-password"),
+        AdminUserUpdate(email="updated@example.com", password="new-password"),
         created_user,
     )
     await manager.delete(created_user.id)
@@ -279,7 +279,7 @@ async def test_security_sensitive_updates_invalidate_attached_auth_backends() ->
     user_db.update.return_value = updated_user
 
     result = await manager.update(
-        UserUpdate(email="updated@example.com", password="new-password"),
+        AdminUserUpdate(email="updated@example.com", password="new-password"),
         user,
     )
 
@@ -302,7 +302,7 @@ async def test_totp_secret_facade_characterization(monkeypatch: pytest.MonkeyPat
     decrypted_secret = await manager.read_totp_secret(stored_secret)
 
     assert updated_user is encrypted_user
-    assert stored_secret.startswith(ENCRYPTED_TOTP_SECRET_PREFIX)
+    assert stored_secret.startswith(f"{ENCRYPTED_TOTP_SECRET_PREFIX}v1:default:")
     assert stored_secret != "JBSWY3DPEHPK3PXP"
     assert decrypted_secret == "JBSWY3DPEHPK3PXP"
 

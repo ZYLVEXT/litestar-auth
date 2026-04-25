@@ -11,11 +11,11 @@ from litestar_auth.ratelimit import AuthRateLimitConfig, AuthRateLimitSlot, Endp
 pytestmark = pytest.mark.unit
 
 STRICT_MAX_ATTEMPTS = 3
-LENIENT_MAX_ATTEMPTS = 12
+LENIENT_MAX_ATTEMPTS = 20
 LENIENT_STRICT_CAP = 5
-WINDOW_SECONDS = 300
-STRICT_SLOTS = ("login", "register", "totp_verify")
-LENIENT_SHARED_SLOTS = ("login", "refresh", "register")
+WINDOW_SECONDS = 60
+STRICT_SLOTS = ("login", "change_password", "register", "totp_verify", "totp_regenerate_recovery_codes")
+LENIENT_SHARED_SLOTS = ("login", "change_password", "refresh", "register")
 LENIENT_STRICT_SLOTS = (
     "forgot_password",
     "reset_password",
@@ -23,6 +23,7 @@ LENIENT_STRICT_SLOTS = (
     "totp_confirm_enable",
     "totp_verify",
     "totp_disable",
+    "totp_regenerate_recovery_codes",
     "verify_token",
     "request_verify_token",
 )
@@ -44,6 +45,11 @@ def test_auth_rate_limit_preset_strict_routes_keep_lower_login_and_register_budg
     config = AuthRateLimitConfig.strict(backend=strict_backend)
 
     assert config.login == EndpointRateLimit(backend=strict_backend, scope="ip_email", namespace="login")
+    assert config.change_password == EndpointRateLimit(
+        backend=strict_backend,
+        scope="ip_email",
+        namespace="change-password",
+    )
     assert config.register == EndpointRateLimit(backend=strict_backend, scope="ip", namespace="register")
     assert config.totp_verify == EndpointRateLimit(backend=strict_backend, scope="ip", namespace="totp-verify")
     assert config.login is not None
@@ -71,8 +77,8 @@ def test_auth_rate_limit_preset_lenient_routes_keep_higher_login_and_register_bu
 
         assert limiter == EndpointRateLimit(
             backend=lenient_backend,
-            scope="ip_email" if slot_name == "login" else "ip",
-            namespace=slot_name,
+            scope="ip_email" if slot_name in {"login", "change_password"} else "ip",
+            namespace="change-password" if slot_name == "change_password" else slot_name,
         )
         assert limiter.backend.max_attempts == LENIENT_MAX_ATTEMPTS
 

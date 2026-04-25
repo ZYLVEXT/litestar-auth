@@ -3,11 +3,14 @@
 from __future__ import annotations
 
 import importlib
+import logging
 from typing import TYPE_CHECKING, Any, cast
+from unittest.mock import AsyncMock
 from uuid import UUID
 
 import msgspec
 import pytest
+from cryptography.fernet import Fernet
 from litestar.exceptions import ValidationException
 
 import litestar_auth._plugin.controllers as controllers_module
@@ -32,7 +35,7 @@ from litestar_auth._plugin.controllers import (
 )
 from litestar_auth.authentication.backend import AuthenticationBackend
 from litestar_auth.authentication.transport.bearer import BearerTransport
-from litestar_auth.manager import UserManagerSecurity
+from litestar_auth.manager import FernetKeyringConfig, UserManagerSecurity
 from litestar_auth.totp import InMemoryTotpEnrollmentStore
 from tests.integration.test_orchestrator import (
     DummySessionMaker,
@@ -43,6 +46,7 @@ from tests.integration.test_orchestrator import (
 )
 
 pytestmark = pytest.mark.unit
+OAUTH_FLOW_COOKIE_SECRET = "oauth-flow-cookie-secret-1234567890"
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -188,6 +192,7 @@ def test_build_totp_controller_forwards_named_backend_and_config(monkeypatch: py
             totp_enrollment_store=enrollment_store,
             totp_require_replay_protection=False,
             totp_enable_requires_password=False,
+            totp_pending_require_client_binding=False,
         ),
     )
     captured: dict[str, object] = {}
@@ -211,11 +216,38 @@ def test_build_totp_controller_forwards_named_backend_and_config(monkeypatch: py
     assert captured["requires_verification"] is True
     assert captured["totp_pending_secret"] == "p" * 32
     assert captured["totp_secret_key"] is None
+    assert captured["totp_secret_keyring"] is None
     assert captured["totp_enable_requires_password"] is False
+    assert captured["totp_pending_require_client_binding"] is False
     assert captured["totp_issuer"] == "Example Issuer"
     assert captured["totp_algorithm"] == "SHA512"
     assert captured["path"] == "/auth/2fa"
     assert captured["unsafe_testing"] is False
+
+
+def test_plugin_create_totp_controller_logs_when_pending_client_binding_is_disabled(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Plugin-owned TOTP controller construction logs the explicit weaker pending-token posture."""
+    config = _minimal_config()
+    inventory = resolve_backend_inventory(config)
+    backend_index, backend = inventory.primary()
+
+    with caplog.at_level(logging.WARNING, logger="litestar_auth.controllers.totp"):
+        controller = controllers_module.create_totp_controller(
+            backend=backend,
+            backend_inventory=inventory,
+            backend_index=backend_index,
+            user_manager_dependency_key="litestar_auth_user_manager",
+            require_replay_protection=False,
+            totp_pending_secret="p" * 32,
+            totp_enable_requires_password=False,
+            totp_pending_require_client_binding=False,
+            unsafe_testing=True,
+        )
+
+    assert controller.path == "/auth/2fa"
+    assert any(getattr(record, "event", None) == "totp_pending_client_binding_disabled" for record in caplog.records)
 
 
 def test_build_totp_controller_defaults_to_primary_backend_when_name_is_unset(
@@ -265,6 +297,32 @@ def test_build_totp_controller_forwards_totp_secret_key_from_user_manager_securi
 
     assert build_totp_controller(config) == "totp-controller"
     assert captured["totp_secret_key"] == "fernet-secret-key-for-plugin-wiring"
+    assert captured["totp_secret_keyring"] is None
+
+
+def test_build_totp_controller_forwards_totp_keyring_from_user_manager_security(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """TOTP controller assembly forwards the configured versioned Fernet keyring."""
+    keyring = FernetKeyringConfig(active_key_id="current", keys={"current": Fernet.generate_key().decode()})
+    config = _minimal_config(totp_config=TotpConfig(totp_pending_secret="p" * 32))
+    config.user_manager_security = UserManagerSecurity[UUID](
+        verification_token_secret="v" * 32,
+        reset_password_token_secret="r" * 32,
+        totp_secret_keyring=keyring,
+        id_parser=UUID,
+    )
+    captured: dict[str, object] = {}
+
+    def _create_totp_controller(**kwargs: object) -> str:
+        captured.update(kwargs)
+        return "totp-controller"
+
+    monkeypatch.setattr(controllers_module, "create_totp_controller", _create_totp_controller)
+
+    assert build_totp_controller(config) == "totp-controller"
+    assert captured["totp_secret_key"] is None
+    assert captured["totp_secret_keyring"] is keyring
 
 
 def test_build_totp_controller_raises_for_unknown_named_backend_after_index_scan() -> None:
@@ -365,6 +423,104 @@ async def test_create_totp_controller_enable_validation_callback_runs_background
     await response.background()
 
 
+async def test_create_totp_controller_regenerate_validation_callback_runs_background_task() -> None:
+    """Plugin TOTP regenerate handlers keep the invalid-payload background callback wired."""
+    config = _minimal_config(
+        totp_config=TotpConfig(
+            totp_pending_secret="p" * 32,
+            totp_enrollment_store=InMemoryTotpEnrollmentStore(),
+        ),
+    )
+    inventory = resolve_backend_inventory(config)
+    controller_cls = controllers_module.create_totp_controller(
+        backend=config.resolve_startup_backends()[0],
+        backend_inventory=inventory,
+        backend_index=0,
+        user_manager_dependency_key="litestar_auth_user_manager",
+        pending_jti_store=cast("Any", object()),
+        require_replay_protection=False,
+        totp_pending_secret="p" * 32,
+        totp_enable_requires_password=True,
+        unsafe_testing=True,
+    )
+    controller_handler = cast("Any", controller_cls).regenerate_recovery_codes
+    exception_handler = controller_handler.exception_handlers[ValidationException]
+    response = exception_handler(cast("Any", object()), object())
+
+    assert response.background is not None
+    await response.background()
+
+
+async def test_plugin_totp_regenerate_route_delegates_with_step_up_payload(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Plugin TOTP regenerate route delegates to the shared handler with decoded payloads."""
+    config = _minimal_config()
+    inventory = resolve_backend_inventory(config)
+    handler = AsyncMock(return_value="response")
+    monkeypatch.setattr(controllers_module, "_totp_handle_regenerate_recovery_codes", handler)
+    controller_cls = controllers_module.create_totp_controller(
+        backend=config.resolve_startup_backends()[0],
+        backend_inventory=inventory,
+        backend_index=0,
+        user_manager_dependency_key="litestar_auth_user_manager",
+        pending_jti_store=cast("Any", object()),
+        require_replay_protection=False,
+        totp_pending_secret="p" * 32,
+        totp_enable_requires_password=True,
+        unsafe_testing=True,
+    )
+    data = object()
+    request = object()
+    user_manager = object()
+
+    response = await cast("Any", controller_cls).regenerate_recovery_codes.fn(
+        object(),
+        request,
+        user_manager,
+        data,
+    )
+
+    assert response == "response"
+    handler.assert_awaited_once()
+    await_args = handler.await_args
+    assert await_args is not None
+    assert await_args.args == (request,)
+    assert await_args.kwargs["data"] is data
+    assert await_args.kwargs["user_manager"] is user_manager
+
+
+async def test_plugin_totp_regenerate_route_delegates_without_step_up_payload(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Plugin TOTP regenerate no-body route delegates to the shared handler without data."""
+    config = _minimal_config()
+    inventory = resolve_backend_inventory(config)
+    handler = AsyncMock(return_value="response")
+    monkeypatch.setattr(controllers_module, "_totp_handle_regenerate_recovery_codes", handler)
+    controller_cls = controllers_module.create_totp_controller(
+        backend=config.resolve_startup_backends()[0],
+        backend_inventory=inventory,
+        backend_index=0,
+        user_manager_dependency_key="litestar_auth_user_manager",
+        pending_jti_store=cast("Any", object()),
+        require_replay_protection=False,
+        totp_pending_secret="p" * 32,
+        totp_enable_requires_password=False,
+        unsafe_testing=True,
+    )
+    request = object()
+    user_manager = object()
+
+    response = await cast("Any", controller_cls).regenerate_recovery_codes.fn(object(), request, user_manager)
+
+    assert response == "response"
+    handler.assert_awaited_once()
+    await_args = handler.await_args
+    assert await_args is not None
+    assert await_args.args == (request,)
+    assert "data" not in await_args.kwargs
+    assert await_args.kwargs["user_manager"] is user_manager
+
+
 def test_schema_kwargs_include_non_null_custom_schemas() -> None:
     """Schema-kwargs helpers include only explicitly configured custom schemas."""
     config = _minimal_config()
@@ -430,6 +586,7 @@ def test_append_optional_feature_controllers_appends_enabled_features_in_order(
             oauth_redirect_base_url="https://app.example/auth",
             include_oauth_associate=True,
             oauth_cookie_secure=False,
+            oauth_flow_cookie_secret=OAUTH_FLOW_COOKIE_SECRET,
         ),
         totp_config=TotpConfig(totp_pending_secret="p" * 32),
     )
@@ -491,6 +648,7 @@ def test_append_optional_feature_controllers_appends_enabled_features_in_order(
         {
             "rate_limit_config": None,
             "path": "/auth",
+            "register_minimum_response_seconds": 0.4,
             "unsafe_testing": False,
             "user_read_schema": _ReadSchema,
             "user_create_schema": _CreateSchema,
@@ -518,6 +676,7 @@ def test_append_optional_feature_controllers_appends_enabled_features_in_order(
         "users",
         {
             "id_parser": UUID,
+            "rate_limit_config": None,
             "path": "/users",
             "hard_delete": False,
             "unsafe_testing": False,
@@ -548,6 +707,7 @@ def test_append_oauth_login_controllers_uses_explicit_redirect_base_url_and_prim
             oauth_cookie_secure=False,
             oauth_associate_by_email=True,
             oauth_trust_provider_email_verified=True,
+            oauth_flow_cookie_secret=OAUTH_FLOW_COOKIE_SECRET,
         ),
     )
     captured: list[dict[str, object]] = []
@@ -573,6 +733,7 @@ def test_append_oauth_login_controllers_uses_explicit_redirect_base_url_and_prim
             "backend_inventory": resolve_backend_inventory(config),
             "backend_index": 0,
             "redirect_base_url": "https://app.example/auth/oauth",
+            "oauth_flow_cookie_secret": OAUTH_FLOW_COOKIE_SECRET,
             "path": "/auth/oauth",
             "cookie_secure": False,
             "oauth_scopes": None,
@@ -598,6 +759,7 @@ def test_append_oauth_login_controllers_forwards_per_provider_scopes(
             ],
             oauth_redirect_base_url="https://app.example/auth",
             oauth_provider_scopes={"github": ["openid", "email"]},
+            oauth_flow_cookie_secret=OAUTH_FLOW_COOKIE_SECRET,
         ),
     )
     captured: list[dict[str, object]] = []
@@ -628,6 +790,7 @@ def test_append_oauth_associate_controllers_uses_explicit_redirect_base_url(
             oauth_providers=[_oauth_provider(name="github", client=client)],
             include_oauth_associate=True,
             oauth_redirect_base_url="https://app.example/auth",
+            oauth_flow_cookie_secret=OAUTH_FLOW_COOKIE_SECRET,
         ),
     )
     captured: list[dict[str, object]] = []
@@ -652,6 +815,7 @@ def test_append_oauth_associate_controllers_uses_explicit_redirect_base_url(
             "user_manager_dependency_key": OAUTH_ASSOCIATE_USER_MANAGER_DEPENDENCY_KEY,
             "oauth_client": client,
             "redirect_base_url": "https://app.example/auth/associate",
+            "oauth_flow_cookie_secret": OAUTH_FLOW_COOKIE_SECRET,
             "path": "/auth/associate",
             "cookie_secure": True,
             "security": None,
@@ -670,6 +834,7 @@ def test_append_oauth_associate_controllers_uses_shared_provider_inventory(
             include_oauth_associate=True,
             oauth_redirect_base_url="https://app.example/auth",
             oauth_cookie_secure=False,
+            oauth_flow_cookie_secret=OAUTH_FLOW_COOKIE_SECRET,
         ),
     )
     captured: list[dict[str, object]] = []
@@ -757,6 +922,7 @@ def _oauth_login_call(
         "backend_inventory": resolve_backend_inventory(_minimal_config(backends=[backend])),
         "backend_index": 0,
         "redirect_base_url": "https://app.example/auth/oauth",
+        "oauth_flow_cookie_secret": OAUTH_FLOW_COOKIE_SECRET,
         "path": "/auth/oauth",
         "cookie_secure": False,
         "oauth_scopes": oauth_scopes,
@@ -776,6 +942,7 @@ def _oauth_associate_call(provider_name: str, oauth_client: object) -> dict[str,
         "user_manager_dependency_key": OAUTH_ASSOCIATE_USER_MANAGER_DEPENDENCY_KEY,
         "oauth_client": oauth_client,
         "redirect_base_url": "https://app.example/auth/associate",
+        "oauth_flow_cookie_secret": OAUTH_FLOW_COOKIE_SECRET,
         "path": "/auth/associate",
         "cookie_secure": False,
         "security": None,

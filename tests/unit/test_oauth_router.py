@@ -23,6 +23,7 @@ if TYPE_CHECKING:
     from litestar_auth.controllers.oauth import OAuthControllerUserManagerProtocol
 
 pytestmark = pytest.mark.unit
+OAUTH_FLOW_COOKIE_SECRET = "oauth-flow-cookie-secret-1234567890"
 
 
 def _make_oauth_client() -> router_module.OAuthClientProtocol:
@@ -116,6 +117,7 @@ def test_create_provider_oauth_controller_missing_client_config_raises_configura
             oauth_client_factory=None,
             oauth_client_class=None,
             redirect_base_url="https://example.test",
+            oauth_flow_cookie_secret=OAUTH_FLOW_COOKIE_SECRET,
         )
 
 
@@ -144,6 +146,7 @@ def test_create_provider_oauth_controller_rejects_insecure_redirect_base_url(
             user_manager=user_manager,
             oauth_client=_make_oauth_client(),
             redirect_base_url=redirect_base_url,
+            oauth_flow_cookie_secret=OAUTH_FLOW_COOKIE_SECRET,
         )
 
 
@@ -159,6 +162,7 @@ def test_create_provider_oauth_controller_rejects_route_unsafe_provider_name() -
             user_manager=user_manager,
             oauth_client=_make_oauth_client(),
             redirect_base_url="https://example.test",
+            oauth_flow_cookie_secret=OAUTH_FLOW_COOKIE_SECRET,
         )
 
 
@@ -236,6 +240,7 @@ def test_create_provider_oauth_controller_uses_factory_client(
         user_manager=user_manager,
         oauth_client_factory=oauth_client_factory,
         redirect_base_url="https://example.test",
+        oauth_flow_cookie_secret=OAUTH_FLOW_COOKIE_SECRET,
     )
 
     assert created_controller is controller
@@ -252,6 +257,7 @@ def test_create_provider_oauth_controller_uses_factory_client(
         user_manager=user_manager,
         oauth_client_adapter=oauth_client_adapter,
         redirect_base_url="https://example.test",
+        oauth_flow_cookie_secret=OAUTH_FLOW_COOKIE_SECRET,
         path="/auth/oauth",
         cookie_secure=True,
         oauth_scopes=None,
@@ -281,6 +287,7 @@ def test_create_provider_oauth_controller_uses_explicit_oauth_client(
         user_manager=user_manager,
         oauth_client=oauth_client,
         redirect_base_url="https://example.test",
+        oauth_flow_cookie_secret=OAUTH_FLOW_COOKIE_SECRET,
     )
 
     assert created_controller is controller
@@ -297,6 +304,7 @@ def test_create_provider_oauth_controller_uses_explicit_oauth_client(
         user_manager=user_manager,
         oauth_client_adapter=oauth_client_adapter,
         redirect_base_url="https://example.test",
+        oauth_flow_cookie_secret=OAUTH_FLOW_COOKIE_SECRET,
         path="/auth/oauth",
         cookie_secure=True,
         oauth_scopes=None,
@@ -326,6 +334,7 @@ def test_create_provider_oauth_controller_derives_path_from_auth_path(
         user_manager=user_manager,
         oauth_client=oauth_client,
         redirect_base_url="https://example.test/identity/oauth",
+        oauth_flow_cookie_secret=OAUTH_FLOW_COOKIE_SECRET,
         auth_path="/identity",
     )
 
@@ -343,6 +352,7 @@ def test_create_provider_oauth_controller_derives_path_from_auth_path(
         user_manager=user_manager,
         oauth_client_adapter=oauth_client_adapter,
         redirect_base_url="https://example.test/identity/oauth",
+        oauth_flow_cookie_secret=OAUTH_FLOW_COOKIE_SECRET,
         path="/identity/oauth",
         cookie_secure=True,
         oauth_scopes=None,
@@ -374,6 +384,7 @@ def test_create_provider_oauth_controller_loads_client_from_class_path(
         oauth_client_class="tests.fake.Client",
         oauth_client_kwargs={"client_id": "client-id"},
         redirect_base_url="https://example.test",
+        oauth_flow_cookie_secret=OAUTH_FLOW_COOKIE_SECRET,
     )
 
     assert created_controller is controller
@@ -390,6 +401,7 @@ def test_create_provider_oauth_controller_loads_client_from_class_path(
         user_manager=user_manager,
         oauth_client_adapter=oauth_client_adapter,
         redirect_base_url="https://example.test",
+        oauth_flow_cookie_secret=OAUTH_FLOW_COOKIE_SECRET,
         path="/auth/oauth",
         cookie_secure=True,
         oauth_scopes=None,

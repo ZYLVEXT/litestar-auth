@@ -14,13 +14,19 @@ from litestar.status_codes import HTTP_201_CREATED, HTTP_400_BAD_REQUEST
 from litestar.testing import AsyncTestClient
 
 import litestar_auth.controllers.register as register_module
-from litestar_auth.controllers.register import create_register_controller
-from litestar_auth.exceptions import ErrorCode, InvalidPasswordError, UserAlreadyExistsError
+from litestar_auth.controllers.register import (
+    DEFAULT_REGISTER_MINIMUM_RESPONSE_SECONDS,
+    _await_register_minimum_response,
+    create_register_controller,
+)
+from litestar_auth.exceptions import AuthorizationError, ErrorCode, InvalidPasswordError, UserAlreadyExistsError
 from litestar_auth.ratelimit import AuthRateLimitConfig, EndpointRateLimit
 from tests._helpers import litestar_app_with_user_manager
 
 pytestmark = pytest.mark.unit
 HTTP_UNPROCESSABLE_ENTITY = 422
+REGISTER_FAILURE_DETAIL = "Registration could not be completed."
+EXPECTED_REGISTER_MINIMUM_RESPONSE_SECONDS = 0.4
 
 
 def test_register_module_executes_under_coverage() -> None:
@@ -105,13 +111,57 @@ def _make_closure_cell(value: object) -> CellType:
     return closure[0]
 
 
+def _assert_register_failed_payload(payload: dict[str, Any] | None) -> None:
+    """Assert the public enumeration-resistant register failure payload."""
+    assert payload is not None
+    assert payload["detail"] == REGISTER_FAILURE_DETAIL
+    assert payload["extra"]["code"] == ErrorCode.REGISTER_FAILED
+
+
+def test_register_controller_default_minimum_response_seconds_is_enumeration_resistant() -> None:
+    """The direct controller factory keeps the same default timing envelope as plugin config."""
+    assert pytest.approx(EXPECTED_REGISTER_MINIMUM_RESPONSE_SECONDS) == DEFAULT_REGISTER_MINIMUM_RESPONSE_SECONDS
+
+
+def test_register_controller_rejects_negative_minimum_response_seconds() -> None:
+    """Negative timing envelopes fail at controller construction."""
+    with pytest.raises(ValueError, match="register_minimum_response_seconds must be non-negative"):
+        create_register_controller(register_minimum_response_seconds=-0.001)
+
+
+async def test_register_minimum_response_helper_awaits_remaining_duration(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Padding waits only for the remaining minimum duration."""
+    sleep = AsyncMock()
+    monkeypatch.setattr(register_module.asyncio, "sleep", sleep)
+    monkeypatch.setattr(register_module.time, "perf_counter", lambda: 10.01)
+
+    await _await_register_minimum_response(started_at=10.0, minimum_seconds=0.05)
+
+    sleep.assert_awaited_once_with(pytest.approx(0.04))
+
+
+async def test_register_minimum_response_helper_skips_elapsed_duration(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Padding is a no-op when the business logic already exceeded the minimum."""
+    sleep = AsyncMock()
+    monkeypatch.setattr(register_module.asyncio, "sleep", sleep)
+    monkeypatch.setattr(register_module.time, "perf_counter", lambda: 10.06)
+
+    await _await_register_minimum_response(started_at=10.0, minimum_seconds=0.05)
+
+    sleep.assert_not_awaited()
+
+
 async def test_register_duplicate_user_returns_400_and_increments_rate_limit() -> None:
-    """UserAlreadyExistsError is mapped to 400 REGISTER_USER_ALREADY_EXISTS and rate limit is incremented."""
+    """UserAlreadyExistsError is mapped to the generic register failure response."""
     manager = DummyUserManager(error=UserAlreadyExistsError(message="Email already registered"))
     backend = _make_rate_limit_backend()
     rate_limit = EndpointRateLimit(backend=backend, scope="ip", namespace="register")
     config = AuthRateLimitConfig(register=rate_limit)
-    controller = create_register_controller(rate_limit_config=config)
+    controller = create_register_controller(rate_limit_config=config, register_minimum_response_seconds=0)
 
     status_code, payload = await _invoke_register(
         controller,
@@ -120,18 +170,17 @@ async def test_register_duplicate_user_returns_400_and_increments_rate_limit() -
     )
 
     assert status_code == HTTP_400_BAD_REQUEST
-    assert payload is not None
-    assert payload["extra"]["code"] == ErrorCode.REGISTER_USER_ALREADY_EXISTS
+    _assert_register_failed_payload(payload)
     assert backend.increment.await_count == 1
 
 
 async def test_register_invalid_password_returns_400_and_increments_rate_limit() -> None:
-    """InvalidPasswordError is mapped to 400 REGISTER_INVALID_PASSWORD and rate limit is incremented."""
+    """InvalidPasswordError is mapped to the generic register failure response."""
     manager = DummyUserManager(error=InvalidPasswordError(message="Password too weak"))
     backend = _make_rate_limit_backend()
     rate_limit = EndpointRateLimit(backend=backend, scope="ip", namespace="register")
     config = AuthRateLimitConfig(register=rate_limit)
-    controller = create_register_controller(rate_limit_config=config)
+    controller = create_register_controller(rate_limit_config=config, register_minimum_response_seconds=0)
 
     status_code, payload = await _invoke_register(
         controller,
@@ -140,8 +189,26 @@ async def test_register_invalid_password_returns_400_and_increments_rate_limit()
     )
 
     assert status_code == HTTP_400_BAD_REQUEST
-    assert payload is not None
-    assert payload["extra"]["code"] == ErrorCode.REGISTER_INVALID_PASSWORD
+    _assert_register_failed_payload(payload)
+    assert backend.increment.await_count == 1
+
+
+async def test_register_authorization_error_returns_generic_400_and_increments_rate_limit() -> None:
+    """AuthorizationError is mapped to the same generic register failure response."""
+    manager = DummyUserManager(error=AuthorizationError("Custom registration policy rejected the request."))
+    backend = _make_rate_limit_backend()
+    rate_limit = EndpointRateLimit(backend=backend, scope="ip", namespace="register")
+    config = AuthRateLimitConfig(register=rate_limit)
+    controller = create_register_controller(rate_limit_config=config, register_minimum_response_seconds=0)
+
+    status_code, payload = await _invoke_register(
+        controller,
+        {"email": "blocked@example.com", "password": "valid-password"},
+        user_manager=manager,
+    )
+
+    assert status_code == HTTP_400_BAD_REQUEST
+    _assert_register_failed_payload(payload)
     assert backend.increment.await_count == 1
 
 
@@ -151,7 +218,7 @@ async def test_register_success_returns_201_and_resets_rate_limit() -> None:
     backend = _make_rate_limit_backend()
     rate_limit = EndpointRateLimit(backend=backend, scope="ip", namespace="register")
     config = AuthRateLimitConfig(register=rate_limit)
-    controller = create_register_controller(rate_limit_config=config)
+    controller = create_register_controller(rate_limit_config=config, register_minimum_response_seconds=0)
 
     status_code, payload = await _invoke_register(
         controller,
@@ -173,7 +240,7 @@ async def test_register_success_returns_201_and_resets_rate_limit() -> None:
 async def test_register_success_without_rate_limit_no_increment() -> None:
     """When rate_limit_config is None, no increment is called."""
     manager = DummyUserManager()
-    controller = create_register_controller(rate_limit_config=None)
+    controller = create_register_controller(rate_limit_config=None, register_minimum_response_seconds=0)
 
     status_code, payload = await _invoke_register(
         controller,
@@ -193,7 +260,10 @@ async def test_register_before_request_is_a_noop_when_rate_limit_cell_is_none() 
     """The register before_request hook exits cleanly when no limiter is configured."""
     backend = _make_rate_limit_backend()
     rate_limit = EndpointRateLimit(backend=backend, scope="ip", namespace="register")
-    controller = create_register_controller(rate_limit_config=AuthRateLimitConfig(register=rate_limit))
+    controller = create_register_controller(
+        rate_limit_config=AuthRateLimitConfig(register=rate_limit),
+        register_minimum_response_seconds=0,
+    )
     before_request = cast("Any", controller).register.before_request
     no_limit_before_request = FunctionType(
         before_request.__code__,
@@ -207,10 +277,10 @@ async def test_register_before_request_is_a_noop_when_rate_limit_cell_is_none() 
     backend.check.assert_not_awaited()
 
 
-async def test_register_invalid_password_without_rate_limit_keeps_plain_error_mapping() -> None:
-    """InvalidPasswordError still maps correctly when no rate limiter is configured."""
+async def test_register_invalid_password_without_rate_limit_keeps_generic_error_mapping() -> None:
+    """InvalidPasswordError still maps to the generic failure shape without a limiter."""
     manager = DummyUserManager(error=InvalidPasswordError(message="Password too weak"))
-    controller = create_register_controller(rate_limit_config=None)
+    controller = create_register_controller(rate_limit_config=None, register_minimum_response_seconds=0)
 
     status_code, payload = await _invoke_register(
         controller,
@@ -219,14 +289,13 @@ async def test_register_invalid_password_without_rate_limit_keeps_plain_error_ma
     )
 
     assert status_code == HTTP_400_BAD_REQUEST
-    assert payload is not None
-    assert payload["extra"]["code"] == ErrorCode.REGISTER_INVALID_PASSWORD
+    _assert_register_failed_payload(payload)
 
 
 async def test_register_schema_validation_failure_returns_422_without_manager_side_effects() -> None:
     """Schema validation errors return 422 before the manager create call runs."""
     manager = DummyUserManager()
-    controller = create_register_controller(rate_limit_config=None)
+    controller = create_register_controller(rate_limit_config=None, register_minimum_response_seconds=0)
 
     status_code, payload = await _invoke_register(
         controller,

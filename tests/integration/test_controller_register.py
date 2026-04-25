@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+import time
 from typing import TYPE_CHECKING, Any, cast
 from unittest.mock import AsyncMock
 from uuid import UUID, uuid4
@@ -10,7 +12,7 @@ import msgspec
 import pytest
 
 from litestar_auth.controllers import create_register_controller
-from litestar_auth.exceptions import ErrorCode
+from litestar_auth.exceptions import AuthorizationError, ErrorCode
 from litestar_auth.manager import BaseUserManager, UserManagerSecurity
 from litestar_auth.password import PasswordHelper
 from litestar_auth.ratelimit import AuthRateLimitConfig, EndpointRateLimit
@@ -18,10 +20,11 @@ from tests._helpers import litestar_app_with_user_manager
 from tests.integration.conftest import ExampleUser, InMemoryUserDatabase
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
+    from collections.abc import Callable, Mapping
     from contextlib import AbstractAsyncContextManager
 
     from litestar import Litestar
+    from litestar.openapi.spec import OpenAPIResponse
 else:
     from litestar.testing import AsyncTestClient
 
@@ -30,6 +33,7 @@ HTTP_CREATED = 201
 HTTP_BAD_REQUEST = 400
 HTTP_UNPROCESSABLE_ENTITY = 422
 EXPECTED_RATE_LIMITED_REQUESTS = 2
+REGISTER_FAILURE_DETAIL = "Registration could not be completed."
 
 
 class TrackingUserManager(BaseUserManager[ExampleUser, UUID]):
@@ -55,11 +59,16 @@ class TrackingUserManager(BaseUserManager[ExampleUser, UUID]):
         )
         self.registered_users: list[ExampleUser] = []
         self.registration_tokens: dict[str, str] = {}
+        self.duplicate_registration_users: list[ExampleUser] = []
 
     async def on_after_register(self, user: ExampleUser, token: str) -> None:
         """Record each successfully created user."""
         self.registered_users.append(user)
         self.registration_tokens[user.email] = token
+
+    async def on_after_register_duplicate(self, user: ExampleUser) -> None:
+        """Record duplicate registration attempts for owner notifications."""
+        self.duplicate_registration_users.append(user)
 
 
 class PrivilegedRegistrationCreate(msgspec.Struct, forbid_unknown_fields=True):
@@ -87,9 +96,18 @@ class WeakPasswordRegistrationCreate(msgspec.Struct, forbid_unknown_fields=True)
     password: str
 
 
+def _openapi_example_values(response: OpenAPIResponse) -> list[dict[str, object]]:
+    """Return OpenAPI response example values as plain dictionaries."""
+    content = response.content or {}
+    media_type = next(iter(content.values()))
+    examples = media_type.examples or {}
+    return [cast("dict[str, object]", example.value) for example in examples.values()]
+
+
 def build_app(
     *,
     rate_limit_config: AuthRateLimitConfig | None = None,
+    register_minimum_response_seconds: float = 0,
 ) -> tuple[Litestar, InMemoryUserDatabase, TrackingUserManager]:
     """Create an application wired with the generated register controller.
 
@@ -99,7 +117,10 @@ def build_app(
     password_helper = PasswordHelper()
     user_db = InMemoryUserDatabase()
     user_manager = TrackingUserManager(user_db, password_helper)
-    controller = create_register_controller(rate_limit_config=rate_limit_config)
+    controller = create_register_controller(
+        rate_limit_config=rate_limit_config,
+        register_minimum_response_seconds=register_minimum_response_seconds,
+    )
     app = litestar_app_with_user_manager(user_manager, controller)
     return app, user_db, user_manager
 
@@ -118,7 +139,10 @@ def test_register_publishes_request_body_for_custom_schema_in_openapi() -> None:
     """The configured registration schema is published as the OpenAPI request body."""
     password_helper = PasswordHelper()
     user_manager = TrackingUserManager(InMemoryUserDatabase(), password_helper)
-    controller = create_register_controller(user_create_schema=ExtendedRegistrationCreate)
+    controller = create_register_controller(
+        user_create_schema=ExtendedRegistrationCreate,
+        register_minimum_response_seconds=0,
+    )
     app = litestar_app_with_user_manager(user_manager, controller)
 
     register_post = cast("Any", app.openapi_schema.paths)["/auth/register"].post
@@ -128,6 +152,38 @@ def test_register_publishes_request_body_for_custom_schema_in_openapi() -> None:
     assert request_body is not None
     assert next(iter(request_body.content.values())).schema.ref == "#/components/schemas/ExtendedRegistrationCreate"
     assert "bio" in (register_schema.properties or {})
+
+
+def test_register_openapi_documents_enumeration_resistant_failure_codes(
+    app: tuple[Litestar, InMemoryUserDatabase, TrackingUserManager],
+) -> None:
+    """The register OpenAPI response examples expose only the generic domain failure code."""
+    litestar_app, *_ = app
+    register_post = cast("Any", litestar_app.openapi_schema.paths)["/auth/register"].post
+
+    responses = register_post.responses
+    assert {"201", "400", "422", "429"}.issubset(responses)
+    assert ErrorCode.REGISTER_FAILED.value in responses["400"].description
+    assert ErrorCode.REQUEST_BODY_INVALID.value in responses["400"].description
+    assert ErrorCode.REQUEST_BODY_INVALID.value in responses["422"].description
+    assert "Retry-After" in responses["429"].description
+
+    bad_request_examples = _openapi_example_values(responses["400"])
+    unprocessable_examples = _openapi_example_values(responses["422"])
+    register_failure_examples = [
+        example for example in bad_request_examples if example["detail"] == REGISTER_FAILURE_DETAIL
+    ]
+    validation_examples = [
+        *[example for example in bad_request_examples if example["detail"] != REGISTER_FAILURE_DETAIL],
+        *unprocessable_examples,
+    ]
+
+    assert {cast("dict[str, str]", example["extra"])["code"] for example in register_failure_examples} == {
+        ErrorCode.REGISTER_FAILED.value,
+    }
+    assert {cast("dict[str, str]", example["extra"])["code"] for example in validation_examples} == {
+        ErrorCode.REQUEST_BODY_INVALID.value,
+    }
 
 
 async def test_register_creates_user_returns_public_payload_and_calls_hook(
@@ -181,8 +237,8 @@ async def test_register_hook_token_verifies_created_user(
 async def test_register_rejects_duplicate_email(
     client: tuple[AsyncTestClient[Litestar], InMemoryUserDatabase, TrackingUserManager],
 ) -> None:
-    """Register returns a 400 response and stable error code when the email already exists."""
-    test_client, user_db, _ = client
+    """Register returns the generic failure response when the email already exists."""
+    test_client, user_db, user_manager = client
     existing_user = ExampleUser(
         id=uuid4(),
         email="duplicate@example.com",
@@ -198,18 +254,22 @@ async def test_register_rejects_duplicate_email(
 
     assert response.status_code == HTTP_BAD_REQUEST
     body = response.json()
-    assert body["detail"] == "A user with the provided credentials already exists."
-    assert body["extra"]["code"] == ErrorCode.REGISTER_USER_ALREADY_EXISTS
+    assert body["detail"] == REGISTER_FAILURE_DETAIL
+    assert body["extra"]["code"] == ErrorCode.REGISTER_FAILED
+    assert user_manager.duplicate_registration_users == [existing_user]
 
 
 async def test_register_rejects_invalid_password_with_error_code(
     async_test_client_factory: Callable[[Litestar], AbstractAsyncContextManager[AsyncTestClient[Litestar]]],
 ) -> None:
-    """Register returns a 400 response and stable error code for weak passwords."""
+    """Register returns the generic failure response for weak passwords."""
     password_helper = PasswordHelper()
     user_db = InMemoryUserDatabase()
     user_manager = TrackingUserManager(user_db, password_helper)
-    controller = create_register_controller(user_create_schema=WeakPasswordRegistrationCreate)
+    controller = create_register_controller(
+        user_create_schema=WeakPasswordRegistrationCreate,
+        register_minimum_response_seconds=0,
+    )
     app = litestar_app_with_user_manager(user_manager, controller)
 
     async with async_test_client_factory(app) as test_client:
@@ -220,8 +280,81 @@ async def test_register_rejects_invalid_password_with_error_code(
 
     assert response.status_code == HTTP_BAD_REQUEST
     body = response.json()
-    assert body["detail"] == "Password must be at least 12 characters long."
-    assert body["extra"]["code"] == ErrorCode.REGISTER_INVALID_PASSWORD
+    assert body["detail"] == REGISTER_FAILURE_DETAIL
+    assert body["extra"]["code"] == ErrorCode.REGISTER_FAILED
+
+
+async def test_register_failures_share_response_body_and_increment_rate_limit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Duplicate, password-policy, and authorization failures expose the same response body."""
+    rate_limiter_backend = AsyncMock()
+    rate_limiter_backend.check.return_value = True
+    rate_limiter_backend.retry_after.return_value = 0
+    rate_limit_config = AuthRateLimitConfig(
+        register=EndpointRateLimit(
+            backend=rate_limiter_backend,
+            scope="ip",
+            namespace="register",
+        ),
+    )
+    password_helper = PasswordHelper()
+    user_db = InMemoryUserDatabase()
+    existing_user = ExampleUser(
+        id=uuid4(),
+        email="registered@example.com",
+        hashed_password=password_helper.hash("existing-password"),
+    )
+    user_db.users_by_id[existing_user.id] = existing_user
+    user_db.user_ids_by_email[existing_user.email] = existing_user.id
+    user_manager = TrackingUserManager(user_db, password_helper)
+    controller = create_register_controller(
+        rate_limit_config=rate_limit_config,
+        user_create_schema=WeakPasswordRegistrationCreate,
+        register_minimum_response_seconds=0,
+    )
+    app = litestar_app_with_user_manager(user_manager, controller)
+
+    async with AsyncTestClient(app=app) as test_client:
+        duplicate_response = await test_client.post(
+            "/auth/register",
+            json={"email": existing_user.email, "password": "valid-password"},
+        )
+        invalid_password_response = await test_client.post(
+            "/auth/register",
+            json={"email": "weak-password@example.com", "password": "short"},
+        )
+
+        with monkeypatch.context() as patch_context:
+            patch_context.setattr(
+                user_manager,
+                "create",
+                AsyncMock(side_effect=AuthorizationError("Custom registration policy rejected the request.")),
+            )
+            authorization_response = await test_client.post(
+                "/auth/register",
+                json={"email": "authorization@example.com", "password": "valid-password"},
+            )
+
+        success_response = await test_client.post(
+            "/auth/register",
+            json={"email": "fresh@example.com", "password": "valid-password"},
+        )
+
+    failure_responses = [duplicate_response, invalid_password_response, authorization_response]
+    for response in failure_responses:
+        assert response.status_code == HTTP_BAD_REQUEST
+        assert response.json() == {
+            "status_code": HTTP_BAD_REQUEST,
+            "detail": REGISTER_FAILURE_DETAIL,
+            "extra": {"code": ErrorCode.REGISTER_FAILED},
+        }
+
+    assert duplicate_response.content == invalid_password_response.content == authorization_response.content
+    assert success_response.status_code == HTTP_CREATED
+    assert user_manager.duplicate_registration_users == [existing_user]
+    assert rate_limiter_backend.increment.await_count == len(failure_responses)
+    assert rate_limiter_backend.reset.await_count == 1
 
 
 async def test_register_rejects_schema_validation_errors() -> None:
@@ -238,6 +371,106 @@ async def test_register_rejects_schema_validation_errors() -> None:
     body = response.json()
     assert body["detail"] == "Invalid request payload."
     assert body["extra"]["code"] == ErrorCode.REQUEST_BODY_INVALID
+
+
+async def test_register_applies_minimum_response_duration_to_success_and_domain_failures(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Success, duplicate, password-policy, and authorization paths all meet the configured lower bound."""
+    minimum_seconds = 0.05
+    tolerance_seconds = 0.005
+    password_helper = PasswordHelper()
+    user_db = InMemoryUserDatabase()
+    existing_user = ExampleUser(
+        id=uuid4(),
+        email="timing-registered@example.com",
+        hashed_password=password_helper.hash("existing-password"),
+    )
+    user_db.users_by_id[existing_user.id] = existing_user
+    user_db.user_ids_by_email[existing_user.email] = existing_user.id
+    user_manager = TrackingUserManager(user_db, password_helper)
+    controller = create_register_controller(
+        user_create_schema=WeakPasswordRegistrationCreate,
+        register_minimum_response_seconds=minimum_seconds,
+    )
+    app = litestar_app_with_user_manager(user_manager, controller)
+
+    async with AsyncTestClient(app=app) as test_client:
+        started_at = time.perf_counter()
+        duplicate_response = await test_client.post(
+            "/auth/register",
+            json={"email": existing_user.email, "password": "valid-password"},
+        )
+        duplicate_elapsed = time.perf_counter() - started_at
+
+        started_at = time.perf_counter()
+        invalid_password_response = await test_client.post(
+            "/auth/register",
+            json={"email": "timing-weak@example.com", "password": "short"},
+        )
+        invalid_password_elapsed = time.perf_counter() - started_at
+
+        with monkeypatch.context() as patch_context:
+            patch_context.setattr(
+                user_manager,
+                "create",
+                AsyncMock(side_effect=AuthorizationError("Custom registration policy rejected the request.")),
+            )
+            started_at = time.perf_counter()
+            authorization_response = await test_client.post(
+                "/auth/register",
+                json={"email": "timing-authorization@example.com", "password": "valid-password"},
+            )
+            authorization_elapsed = time.perf_counter() - started_at
+
+        started_at = time.perf_counter()
+        success_response = await test_client.post(
+            "/auth/register",
+            json={"email": "timing-success@example.com", "password": "valid-password"},
+        )
+        success_elapsed = time.perf_counter() - started_at
+
+    assert duplicate_response.status_code == HTTP_BAD_REQUEST
+    assert invalid_password_response.status_code == HTTP_BAD_REQUEST
+    assert authorization_response.status_code == HTTP_BAD_REQUEST
+    assert success_response.status_code == HTTP_CREATED
+    for elapsed in (duplicate_elapsed, invalid_password_elapsed, authorization_elapsed, success_elapsed):
+        assert elapsed >= minimum_seconds - tolerance_seconds
+
+
+async def test_register_minimum_response_does_not_double_delay_after_slow_business_logic(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Naturally slow registration work is not padded again after exceeding the configured minimum."""
+    sleep = AsyncMock(wraps=asyncio.sleep)
+    monkeypatch.setattr("litestar_auth.controllers.register.asyncio.sleep", sleep)
+
+    class SlowTrackingUserManager(TrackingUserManager):
+        """Tracking manager whose create path naturally exceeds the timing envelope."""
+
+        async def create(
+            self,
+            user_create: msgspec.Struct | Mapping[str, Any],
+            *,
+            safe: bool = True,
+            allow_privileged: bool = False,
+        ) -> ExampleUser:
+            await asyncio.sleep(0.03)
+            return await super().create(user_create, safe=safe, allow_privileged=allow_privileged)
+
+    password_helper = PasswordHelper()
+    user_manager = SlowTrackingUserManager(InMemoryUserDatabase(), password_helper)
+    controller = create_register_controller(register_minimum_response_seconds=0.01)
+    app = litestar_app_with_user_manager(user_manager, controller)
+
+    async with AsyncTestClient(app=app) as test_client:
+        response = await test_client.post(
+            "/auth/register",
+            json={"email": "slow-success@example.com", "password": "plain-password"},
+        )
+
+    assert response.status_code == HTTP_CREATED
+    assert sleep.await_count == 1
 
 
 async def test_register_rejects_malformed_json_with_controller_error_contract() -> None:
@@ -301,7 +534,10 @@ async def test_register_ignores_privileged_fields_from_custom_schema(
     password_helper = PasswordHelper()
     user_db = InMemoryUserDatabase()
     user_manager = TrackingUserManager(user_db, password_helper)
-    controller = create_register_controller(user_create_schema=PrivilegedRegistrationCreate)
+    controller = create_register_controller(
+        user_create_schema=PrivilegedRegistrationCreate,
+        register_minimum_response_seconds=0,
+    )
     app = litestar_app_with_user_manager(user_manager, controller)
 
     async with async_test_client_factory(app) as test_client:
@@ -360,7 +596,10 @@ async def test_register_ignores_non_safe_fields_from_custom_schema(
     password_helper = PasswordHelper()
     user_db = InMemoryUserDatabase()
     user_manager = TrackingUserManager(user_db, password_helper)
-    controller = create_register_controller(user_create_schema=ExtendedRegistrationCreate)
+    controller = create_register_controller(
+        user_create_schema=ExtendedRegistrationCreate,
+        register_minimum_response_seconds=0,
+    )
     app = litestar_app_with_user_manager(user_manager, controller)
 
     async with async_test_client_factory(app) as test_client:

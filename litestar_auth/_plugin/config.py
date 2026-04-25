@@ -41,7 +41,7 @@ if TYPE_CHECKING:
     from litestar_auth.authentication.strategy.jwt import JWTDenylistStore
     from litestar_auth.config import OAuthProviderConfig
     from litestar_auth.exceptions import LitestarAuthError
-    from litestar_auth.manager import BaseUserManager, UserManagerSecurity
+    from litestar_auth.manager import BaseUserManager, FernetKeyringConfig, UserManagerSecurity
     from litestar_auth.password import PasswordHelper
     from litestar_auth.ratelimit import AuthRateLimitConfig
     from litestar_auth.totp import TotpAlgorithm, TotpEnrollmentStore, UsedTotpCodeStore
@@ -50,6 +50,7 @@ if TYPE_CHECKING:
 type UserDatabaseFactory[UP: UserProtocol[Any], ID] = Callable[[AsyncSession], BaseUserStore[UP, ID]]
 _SESSION_FACTORY_CONTRACT = SessionFactory
 PasswordHelper = cast("Any", import_module("litestar_auth.password").PasswordHelper)
+FernetKeyringConfig = cast("Any", import_module("litestar_auth.manager").FernetKeyringConfig)
 
 DEFAULT_CONFIG_DEPENDENCY_KEY = "litestar_auth_config"
 DEFAULT_USER_MANAGER_DEPENDENCY_KEY = "litestar_auth_user_manager"
@@ -62,6 +63,7 @@ DEFAULT_DATABASE_TOKEN_BACKEND_NAME = "database"  # noqa: S105
 DEFAULT_DATABASE_TOKEN_MAX_AGE = timedelta(hours=1)
 DEFAULT_DATABASE_TOKEN_REFRESH_MAX_AGE = timedelta(days=30)
 DEFAULT_DATABASE_TOKEN_BYTES = 32
+DEFAULT_REGISTER_MINIMUM_RESPONSE_SECONDS = 0.4
 
 
 def _current_password_helper_type() -> type[PasswordHelper]:
@@ -220,7 +222,11 @@ def _resolve_plugin_managed_totp_secret_storage_policy[UP: UserProtocol[Any], ID
         manager_security=config.user_manager_security,
         id_parser=config.id_parser,
     )
-    return _describe_totp_secret_storage_policy(manager_inputs.effective_security.totp_secret_key or None)
+    effective_security = manager_inputs.effective_security
+    return _describe_totp_secret_storage_policy(
+        totp_secret_key=effective_security.totp_secret_key or None,
+        keyring_configured=effective_security.totp_secret_keyring is not None,
+    )
 
 
 _VALID_LOGIN_IDENTIFIERS: frozenset[LoginIdentifier] = frozenset(get_args(LoginIdentifier.__value__))
@@ -285,7 +291,11 @@ def require_session_maker[UP: UserProtocol[Any], ID](
 
 @dataclass(slots=True)
 class TotpConfig:
-    """TOTP-specific plugin settings."""
+    """TOTP-specific plugin settings.
+
+    Includes recovery-code storage flow configuration and default-on
+    pending-token client binding for plugin-owned TOTP routes.
+    """
 
     # Security: hide the pending-token signing secret from debug repr output.
     totp_pending_secret: str = field(repr=False)
@@ -297,6 +307,7 @@ class TotpConfig:
     totp_enrollment_store: TotpEnrollmentStore | None = None
     totp_require_replay_protection: bool = True
     totp_enable_requires_password: bool = True
+    totp_pending_require_client_binding: bool = True
 
 
 @dataclass(slots=True)
@@ -312,6 +323,29 @@ class OAuthConfig:
     oauth_redirect_base_url: str = ""
     # Security: never leak the Fernet key through repr/str when configs are logged.
     oauth_token_encryption_key: str | None = field(default=None, repr=False)
+    oauth_token_encryption_keyring: FernetKeyringConfig | None = field(default=None, repr=False)
+    # Security: transient state + PKCE verifier material must be encrypted with
+    # server-side secret material before it is placed in the browser flow cookie.
+    oauth_flow_cookie_secret: str | None = field(default=None, repr=False)
+
+    def __post_init__(self) -> None:
+        """Reject ambiguous OAuth token-at-rest key inputs.
+
+        Raises:
+            ConfigurationError: If both one-key and keyring inputs are configured.
+        """
+        if self.oauth_token_encryption_key is None or self.oauth_token_encryption_keyring is None:
+            return
+        msg = (
+            "Configure OAuth token encryption with oauth_token_encryption_key or "
+            "oauth_token_encryption_keyring, not both."
+        )
+        raise ConfigurationError(msg)
+
+    @property
+    def has_oauth_token_encryption(self) -> bool:
+        """Return whether OAuth token-at-rest encryption material is configured."""
+        return self.oauth_token_encryption_key is not None or self.oauth_token_encryption_keyring is not None
 
 
 class PasswordValidatorFactory[UP: UserProtocol[Any], ID](Protocol):
@@ -390,7 +424,15 @@ class LitestarAuthConfig[UP: UserProtocol[Any], ID]:
         provider-specific settings.
     Security and token policy:
         ``csrf_secret``, ``csrf_header_name``, ``unsafe_testing``,
-        ``id_parser``, ``superuser_role_name``.
+        ``register_minimum_response_seconds``, ``deployment_worker_count``, ``id_parser``,
+        ``superuser_role_name``.
+        ``register_minimum_response_seconds`` pads plugin-owned registration
+        success and domain-failure responses as defense-in-depth against
+        lower-tail timing enumeration; it is independent of rate limiting.
+        ``deployment_worker_count`` is an explicit deployment-posture declaration
+        for startup validation. ``None`` means unknown topology, ``1`` means known
+        single-worker, and values greater than ``1`` mean known multi-worker. It
+        does not launch or configure ASGI server workers.
     API schemas and DB-session dependency injection:
         ``user_read_schema``, ``user_create_schema``, ``user_update_schema``,
         ``db_session_dependency_key``, ``db_session_dependency_provided_externally``.
@@ -434,6 +476,10 @@ class LitestarAuthConfig[UP: UserProtocol[Any], ID]:
     csrf_secret: str | None = field(default=None, repr=False)
     csrf_header_name: str = "X-CSRF-Token"
     unsafe_testing: bool = False
+    # Defense-in-depth against lower-tail registration timing enumeration. This is
+    # independent of rate limiting and only pads after the normal side effects run.
+    register_minimum_response_seconds: float = DEFAULT_REGISTER_MINIMUM_RESPONSE_SECONDS
+    deployment_worker_count: int | None = None
     id_parser: Callable[[str], ID] | None = None
     user_read_schema: type[msgspec.Struct] | None = None
     user_create_schema: type[msgspec.Struct] | None = None
@@ -534,8 +580,10 @@ class LitestarAuthConfig[UP: UserProtocol[Any], ID]:
         """Validate configuration fields and build defaults that depend on other fields.
 
         Raises:
-            ConfigurationError: When manager construction paths conflict or ``login_identifier`` is outside
-                :data:`LoginIdentifier`, or when ``superuser_role_name`` is not a non-empty role name.
+            ConfigurationError: When manager construction paths conflict, ``login_identifier`` is outside
+                :data:`LoginIdentifier`, ``superuser_role_name`` is not a non-empty role name, or
+                ``register_minimum_response_seconds`` is negative, or ``deployment_worker_count`` is not a
+                positive integer when provided.
             ValueError: When ``db_session_dependency_key`` is not a valid Python identifier or is a
                 reserved keyword, or when ``backends`` and ``database_token_auth`` are both configured.
         """
@@ -553,6 +601,17 @@ class LitestarAuthConfig[UP: UserProtocol[Any], ID]:
         if self.user_manager_security is not None and self.id_parser is None:
             self.id_parser = self.user_manager_security.id_parser
         self._validate_backend_configuration()
+        if self.register_minimum_response_seconds < 0:
+            msg = "register_minimum_response_seconds must be non-negative."
+            raise ConfigurationError(msg)
+        if self.deployment_worker_count is not None and (
+            not isinstance(self.deployment_worker_count, int) or isinstance(self.deployment_worker_count, bool)
+        ):
+            msg = "deployment_worker_count must be a positive integer or None."
+            raise ConfigurationError(msg)
+        if self.deployment_worker_count is not None and self.deployment_worker_count < 1:
+            msg = "deployment_worker_count must be a positive integer or None."
+            raise ConfigurationError(msg)
         # Static typing covers ordinary callers, but dataclass construction still receives runtime values.
         if self.login_identifier not in _VALID_LOGIN_IDENTIFIERS:
             msg = f"Invalid login_identifier {self.login_identifier!r}. Expected 'email' or 'username'."

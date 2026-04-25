@@ -15,6 +15,17 @@ With `include_register=True` (default), clients can call `POST {auth_path}/regis
 - **Login identifier** — `login_identifier` is `"email"` or `"username"` and selects how `POST .../login` resolves `LoginCredentials.identifier`. It does not rename the built-in registration fields.
 - **Safe creation** — registration uses `BaseUserManager.create(..., safe=True)` so only expected fields (e.g. email + password) are accepted; privileged fields such as `roles`, `is_active`, and `is_verified` are stripped from public registration payloads unless you explicitly opt into privileged manager calls. The built-in `UserCreate` request schema is strict, and custom `user_create_schema` values passed to `create_register_controller(...)` must also set `forbid_unknown_fields=True`, so stale request keys fail with `REQUEST_BODY_INVALID` instead of being silently ignored. Grant superuser access by assigning the configured superuser role instead.
 - **Built-in response body** — successful register/verify/reset responses use `UserRead`, which includes normalized `roles` alongside the existing account-state fields. New users start with `roles=[]` unless a privileged path assigns them.
+- **Failure surface** — registration is enumeration-resistant. Duplicate identifiers, password-policy failures,
+  and manager authorization rejections all return the same 400 / `REGISTER_FAILED` response with the generic
+  detail `Registration could not be completed.` Specific Python exceptions remain available inside the
+  manager/controller boundary for operator diagnostics. When a duplicate identifier is detected, the manager also
+  invokes `on_after_register_duplicate(user)` with the existing account so you can enqueue an out-of-band owner
+  notification without changing the public response.
+- **Timing envelope** — plugin-owned registration responses are also padded to
+  `LitestarAuthConfig.register_minimum_response_seconds` (default `0.4`) on both success and domain-failure
+  paths. The minimum-duration wait is a lower-tail timing-oracle defense and does not replace rate limiting. Keep
+  duplicate-register notification work in a background queue; slow synchronous I/O in `on_after_register_duplicate`
+  can still make duplicate attempts observably slower.
 - **Persistence boundary** — relational `role` / `user_role` tables are an internal storage detail of the ORM layer. Registration still accepts flat user fields only, and this route surface does not expose role-catalog management or RBAC policy payloads. Use the opt-in [HTTP role administration](role_admin_http.md) guide or the operator CLI when you need admin workflows.
 
 ## Email verification

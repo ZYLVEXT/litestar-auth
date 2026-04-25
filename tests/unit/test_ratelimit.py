@@ -70,6 +70,7 @@ LENIENT_REDIS_WINDOW_SECONDS = 120
 
 AUTH_RATE_LIMIT_SLOT_IDENTIFIERS: tuple[AuthRateLimitSlot, ...] = (
     AuthRateLimitSlot.LOGIN,
+    AuthRateLimitSlot.CHANGE_PASSWORD,
     AuthRateLimitSlot.REFRESH,
     AuthRateLimitSlot.REGISTER,
     AuthRateLimitSlot.FORGOT_PASSWORD,
@@ -78,6 +79,7 @@ AUTH_RATE_LIMIT_SLOT_IDENTIFIERS: tuple[AuthRateLimitSlot, ...] = (
     AuthRateLimitSlot.TOTP_CONFIRM_ENABLE,
     AuthRateLimitSlot.TOTP_VERIFY,
     AuthRateLimitSlot.TOTP_DISABLE,
+    AuthRateLimitSlot.TOTP_REGENERATE_RECOVERY_CODES,
     AuthRateLimitSlot.VERIFY_TOKEN,
     AuthRateLimitSlot.REQUEST_VERIFY_TOKEN,
 )
@@ -94,7 +96,7 @@ AUTH_RATE_LIMIT_SLOT_IDENTIFIERS_BY_GROUP: dict[
     AuthRateLimitEndpointGroup,
     frozenset[AuthRateLimitSlot],
 ] = {
-    "login": frozenset({AuthRateLimitSlot.LOGIN}),
+    "login": frozenset({AuthRateLimitSlot.LOGIN, AuthRateLimitSlot.CHANGE_PASSWORD}),
     "password_reset": frozenset({AuthRateLimitSlot.FORGOT_PASSWORD, AuthRateLimitSlot.RESET_PASSWORD}),
     "refresh": frozenset({AuthRateLimitSlot.REFRESH}),
     "register": frozenset({AuthRateLimitSlot.REGISTER}),
@@ -104,6 +106,7 @@ AUTH_RATE_LIMIT_SLOT_IDENTIFIERS_BY_GROUP: dict[
             AuthRateLimitSlot.TOTP_CONFIRM_ENABLE,
             AuthRateLimitSlot.TOTP_VERIFY,
             AuthRateLimitSlot.TOTP_DISABLE,
+            AuthRateLimitSlot.TOTP_REGENERATE_RECOVERY_CODES,
         },
     ),
     "verification": frozenset({AuthRateLimitSlot.VERIFY_TOKEN, AuthRateLimitSlot.REQUEST_VERIFY_TOKEN}),
@@ -230,6 +233,7 @@ def test_auth_rate_limit_slot_enum_stays_aligned_with_public_inventory() -> None
     assert tuple(member.value for member in slot_enum) == AUTH_RATE_LIMIT_SLOT_VALUES
     assert tuple(member.name for member in slot_enum) == (
         "LOGIN",
+        "CHANGE_PASSWORD",
         "REFRESH",
         "REGISTER",
         "FORGOT_PASSWORD",
@@ -238,9 +242,16 @@ def test_auth_rate_limit_slot_enum_stays_aligned_with_public_inventory() -> None
         "TOTP_CONFIRM_ENABLE",
         "TOTP_VERIFY",
         "TOTP_DISABLE",
+        "TOTP_REGENERATE_RECOVERY_CODES",
         "VERIFY_TOKEN",
         "REQUEST_VERIFY_TOKEN",
     )
+
+
+def test_auth_rate_limit_change_password_slot_is_distinct_from_login() -> None:
+    """Password rotation has an independently tunable slot instead of reusing login."""
+    assert AuthRateLimitSlot.CHANGE_PASSWORD.value == "change_password"
+    assert AuthRateLimitSlot.CHANGE_PASSWORD is not AuthRateLimitSlot.LOGIN
 
 
 def test_auth_rate_limit_slot_enum_iteration_feeds_shared_builder_inputs() -> None:
@@ -343,6 +354,7 @@ def test_auth_rate_limit_default_recipes_cover_supported_slots_scopes_groups_and
     assert catalog.groups == ratelimit_config_module._AUTH_RATE_LIMIT_ENDPOINT_GROUPS
     assert {recipe.slot: recipe.default_scope for recipe in recipes} == {
         "login": "ip_email",
+        "change_password": "ip_email",
         "refresh": "ip",
         "register": "ip",
         "forgot_password": "ip_email",
@@ -351,11 +363,13 @@ def test_auth_rate_limit_default_recipes_cover_supported_slots_scopes_groups_and
         "totp_confirm_enable": "ip",
         "totp_verify": "ip",
         "totp_disable": "ip",
+        "totp_regenerate_recovery_codes": "ip",
         "verify_token": "ip",
         "request_verify_token": "ip_email",
     }
     assert {recipe.slot: recipe.default_namespace for recipe in recipes} == {
         "login": "login",
+        "change_password": "change-password",
         "refresh": "refresh",
         "register": "register",
         "forgot_password": "forgot-password",
@@ -364,11 +378,13 @@ def test_auth_rate_limit_default_recipes_cover_supported_slots_scopes_groups_and
         "totp_confirm_enable": "totp-confirm-enable",
         "totp_verify": "totp-verify",
         "totp_disable": "totp-disable",
+        "totp_regenerate_recovery_codes": "totp-regenerate-recovery-codes",
         "verify_token": "verify-token",
         "request_verify_token": "request-verify-token",
     }
     assert {recipe.slot: recipe.group for recipe in recipes} == {
         "login": "login",
+        "change_password": "login",
         "refresh": "refresh",
         "register": "register",
         "forgot_password": "password_reset",
@@ -377,6 +393,7 @@ def test_auth_rate_limit_default_recipes_cover_supported_slots_scopes_groups_and
         "totp_confirm_enable": "totp",
         "totp_verify": "totp",
         "totp_disable": "totp",
+        "totp_regenerate_recovery_codes": "totp",
         "verify_token": "verification",
         "request_verify_token": "verification",
     }
@@ -428,6 +445,7 @@ def test_auth_rate_limit_config_from_shared_backend_accepts_all_supported_group_
 
     expected_backends = {
         "login": login_backend,
+        "change_password": login_backend,
         "refresh": refresh_backend,
         "register": register_backend,
         "forgot_password": password_reset_backend,
@@ -436,6 +454,7 @@ def test_auth_rate_limit_config_from_shared_backend_accepts_all_supported_group_
         "totp_confirm_enable": totp_backend,
         "totp_verify": totp_backend,
         "totp_disable": totp_backend,
+        "totp_regenerate_recovery_codes": totp_backend,
         "verify_token": verification_backend,
         "request_verify_token": verification_backend,
     }
@@ -487,6 +506,11 @@ def test_auth_rate_limit_config_strict_preset_enables_only_public_sign_in_slots(
         scope="ip_email",
         namespace="login",
     )
+    assert config.change_password == EndpointRateLimit(
+        backend=strict_backend,
+        scope="ip_email",
+        namespace="change-password",
+    )
     assert config.register == EndpointRateLimit(
         backend=strict_backend,
         scope="ip",
@@ -497,12 +521,18 @@ def test_auth_rate_limit_config_strict_preset_enables_only_public_sign_in_slots(
         scope="ip",
         namespace="totp-verify",
     )
+    assert config.totp_regenerate_recovery_codes == EndpointRateLimit(
+        backend=strict_backend,
+        scope="ip",
+        namespace="totp-regenerate-recovery-codes",
+    )
     assert config.refresh is None
     assert config.forgot_password is None
     assert config.reset_password is None
     assert config.totp_enable is None
     assert config.totp_confirm_enable is None
     assert config.totp_disable is None
+    assert config.totp_regenerate_recovery_codes is not None
     assert config.verify_token is None
     assert config.request_verify_token is None
 
@@ -524,6 +554,11 @@ def test_auth_rate_limit_config_lenient_preset_keeps_sensitive_routes_stricter()
         backend=lenient_backend,
         scope="ip_email",
         namespace="login",
+    )
+    assert config.change_password == EndpointRateLimit(
+        backend=lenient_backend,
+        scope="ip_email",
+        namespace="change-password",
     )
     assert config.refresh == EndpointRateLimit(
         backend=lenient_backend,
@@ -564,6 +599,11 @@ def test_auth_rate_limit_config_lenient_preset_keeps_sensitive_routes_stricter()
         backend=sensitive_backend.backend,
         scope="ip",
         namespace="totp-disable",
+    )
+    assert config.totp_regenerate_recovery_codes == EndpointRateLimit(
+        backend=sensitive_backend.backend,
+        scope="ip",
+        namespace="totp-regenerate-recovery-codes",
     )
     assert config.verify_token == EndpointRateLimit(
         backend=sensitive_backend.backend,
@@ -644,6 +684,7 @@ def test_auth_rate_limit_config_from_shared_backend_supports_partial_enablement_
     assert config.totp_enable is None
     assert config.totp_confirm_enable is None
     assert config.totp_disable is None
+    assert config.totp_regenerate_recovery_codes is None
     assert config.verify_token is None
     assert config.request_verify_token is None
 
@@ -746,6 +787,12 @@ async def test_auth_rate_limit_config_from_shared_backend_applies_explicit_slot_
             namespace="totp_disable",
             trusted_proxy=True,
         ),
+        AuthRateLimitSlot.TOTP_REGENERATE_RECOVERY_CODES: EndpointRateLimit(
+            backend=totp_backend,
+            scope="ip",
+            namespace="totp_regenerate_recovery_codes",
+            trusted_proxy=True,
+        ),
     }
     config = AuthRateLimitConfig.from_shared_backend(
         credential_backend,
@@ -767,6 +814,7 @@ async def test_auth_rate_limit_config_from_shared_backend_applies_explicit_slot_
     )
     expected_limiters = {
         "login": (credential_backend, "ip_email", "login"),
+        "change_password": (credential_backend, "ip_email", "change-password"),
         "refresh": (refresh_backend, "ip", "refresh"),
         "register": (credential_backend, "ip", "register"),
         "forgot_password": (credential_backend, "ip_email", "forgot_password"),
@@ -775,6 +823,7 @@ async def test_auth_rate_limit_config_from_shared_backend_applies_explicit_slot_
         "totp_confirm_enable": (totp_backend, "ip", "totp_confirm_enable"),
         "totp_verify": (totp_backend, "ip", "totp_verify"),
         "totp_disable": (totp_backend, "ip", "totp_disable"),
+        "totp_regenerate_recovery_codes": (totp_backend, "ip", "totp_regenerate_recovery_codes"),
     }
 
     for slot, (backend, scope, namespace) in expected_limiters.items():
@@ -790,14 +839,20 @@ async def test_auth_rate_limit_config_from_shared_backend_applies_explicit_slot_
     assert config.request_verify_token is None
     key_requests = {
         "login": credential_request,
+        "change_password": credential_request,
         "forgot_password": credential_request,
         "refresh": ip_only_request,
         "totp_verify": ip_only_request,
         "totp_disable": ip_only_request,
+        "totp_regenerate_recovery_codes": ip_only_request,
     }
     expected_keys = {
         "login": (
             f"login:{ratelimit_helpers_module._safe_key_part('10.0.0.1')}:"
+            f"{ratelimit_helpers_module._safe_key_part('user@example.com')}"
+        ),
+        "change_password": (
+            f"change-password:{ratelimit_helpers_module._safe_key_part('10.0.0.1')}:"
             f"{ratelimit_helpers_module._safe_key_part('user@example.com')}"
         ),
         "forgot_password": (
@@ -807,6 +862,9 @@ async def test_auth_rate_limit_config_from_shared_backend_applies_explicit_slot_
         "refresh": f"refresh:{ratelimit_helpers_module._safe_key_part('10.0.0.1')}",
         "totp_verify": f"totp_verify:{ratelimit_helpers_module._safe_key_part('10.0.0.1')}",
         "totp_disable": f"totp_disable:{ratelimit_helpers_module._safe_key_part('10.0.0.1')}",
+        "totp_regenerate_recovery_codes": (
+            f"totp_regenerate_recovery_codes:{ratelimit_helpers_module._safe_key_part('10.0.0.1')}"
+        ),
     }
 
     for slot, expected_key in expected_keys.items():
@@ -861,9 +919,19 @@ def test_auth_rate_limit_config_from_shared_backend_supports_documented_redis_ov
                 scope="ip",
                 namespace="totp_disable",
             ),
+            AuthRateLimitSlot.TOTP_REGENERATE_RECOVERY_CODES: EndpointRateLimit(
+                backend=totp_backend,
+                scope="ip",
+                namespace="totp_regenerate_recovery_codes",
+            ),
         },
     )
     assert config.login == EndpointRateLimit(backend=credential_backend, scope="ip_email", namespace="login")
+    assert config.change_password == EndpointRateLimit(
+        backend=credential_backend,
+        scope="ip_email",
+        namespace="change-password",
+    )
     assert config.refresh == EndpointRateLimit(backend=refresh_backend, scope="ip", namespace="refresh")
     assert config.register == EndpointRateLimit(backend=credential_backend, scope="ip", namespace="register")
     assert config.forgot_password == EndpointRateLimit(
@@ -2046,17 +2114,24 @@ async def test_totp_rate_limit_orchestrator_routes_actions_to_configured_limiter
     request = cast("Request[Any, Any, Any]", object())
     enable_limiter = AsyncMock()
     verify_limiter = AsyncMock()
+    regenerate_limiter = AsyncMock()
     orchestrator = ratelimit_module.TotpRateLimitOrchestrator(
         enable=cast("EndpointRateLimit", enable_limiter),
         verify=cast("EndpointRateLimit", verify_limiter),
+        regenerate_recovery_codes=cast("EndpointRateLimit", regenerate_limiter),
     )
     empty_orchestrator = ratelimit_module.TotpRateLimitOrchestrator()
 
-    assert orchestrator._limiters == {"enable": enable_limiter, "verify": verify_limiter}
+    assert orchestrator._limiters == {
+        "enable": enable_limiter,
+        "verify": verify_limiter,
+        "regenerate_recovery_codes": regenerate_limiter,
+    }
 
     await orchestrator.before_request("enable", request)
     await orchestrator.before_request("confirm_enable", request)
     await orchestrator.on_invalid_attempt("verify", request)
+    await orchestrator.on_invalid_attempt("regenerate_recovery_codes", request)
     await orchestrator.on_invalid_attempt("disable", request)
     await orchestrator.on_account_state_failure("verify", request)
     await orchestrator.on_account_state_failure("enable", request)
@@ -2066,4 +2141,5 @@ async def test_totp_rate_limit_orchestrator_routes_actions_to_configured_limiter
 
     enable_limiter.before_request.assert_awaited_once_with(request)
     verify_limiter.increment.assert_awaited_once_with(request)
+    regenerate_limiter.increment.assert_awaited_once_with(request)
     assert verify_limiter.reset.await_args_list == [call(request), call(request)]

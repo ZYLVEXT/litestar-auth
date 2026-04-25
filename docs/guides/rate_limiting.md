@@ -16,7 +16,8 @@ building every slot manually.
 
 Use `strict()` when the public sign-in surface should share one intentionally low-budget backend.
 This preset wires that backend to `login`, `register`, and `totp_verify` with the package default
-scopes and route-style namespaces.
+scopes and route-style namespaces. This in-memory example is for single-process development or
+pytest-style tests:
 
 ```python
 from litestar_auth.ratelimit import AuthRateLimitConfig, InMemoryRateLimiter
@@ -31,7 +32,7 @@ rate_limit_config = AuthRateLimitConfig.strict(
 Use `lenient()` when `login`, `refresh`, and `register` can share a broader built-in budget, but
 password-reset, verification, and TOTP routes still need stricter protection. The preset preserves
 the backend you pass for the lower-risk slots and clones it with a five-attempt cap for the
-sensitive routes.
+sensitive routes. This in-memory example is for single-process development or tests:
 
 ```python
 from litestar_auth.ratelimit import AuthRateLimitConfig, InMemoryRateLimiter
@@ -68,7 +69,9 @@ families, and shared-client TOTP wiring now live in one maintained place. Keep
 low-level path when applications intentionally need separate backends or deeper per-slot customization.
 
 Reach for `from_shared_backend()` when the preset is close, but you still need endpoint- or
-group-specific changes. Prefer `endpoint_overrides` for per-slot customization.
+group-specific changes. Prefer `endpoint_overrides` for per-slot customization. The in-memory
+backend shown here is only for single-process development or tests; use `RedisRateLimiter` or
+`RedisAuthPreset` for multi-worker production.
 
 ```python
 from litestar_auth.ratelimit import (
@@ -116,6 +119,7 @@ AuthRateLimitSlot.TOTP_VERIFY
 - When a limit is exceeded, clients receive **429 Too Many Requests** with **`Retry-After`**.
 - Backends: **`InMemoryRateLimiter`** (single process / dev) or **`RedisRateLimiter`** (production, multiple workers). See [Deployment](../deployment.md).
 - `InMemoryRateLimiter` fails closed for new keys when `max_keys` is reached and no expired counters can be pruned. It logs `event=rate_limit_memory_capacity`; size `max_keys` for local/dev traffic or use Redis for public multi-worker deployments.
+- `LitestarAuthConfig.deployment_worker_count` is the explicit topology declaration for startup validation. `None` means unknown worker count and preserves warning-only diagnostics, `1` means known single-worker, and values greater than `1` fail closed if any enabled auth rate-limit slot uses a process-local backend.
 - For the production shared-client Redis path, use the configuration recipe so rate
   limiting stays aligned with the TOTP Redis stores instead of hand-maintaining a partial copy in
   this guide.
@@ -136,12 +140,14 @@ verification endpoints should stay disabled.
 | `register` / `AuthRateLimitSlot.REGISTER` | `register` | `ip` | `register` | `POST {auth}/register` |
 | `forgot_password` / `AuthRateLimitSlot.FORGOT_PASSWORD` | `password_reset` | `ip_email` | `forgot-password` | `POST {auth}/forgot-password` |
 | `reset_password` / `AuthRateLimitSlot.RESET_PASSWORD` | `password_reset` | `ip` | `reset-password` | `POST {auth}/reset-password` |
+| `change_password` / `AuthRateLimitSlot.CHANGE_PASSWORD` | `login` | `ip_email` | `change-password` | `POST {users}/me/change-password` |
 | `verify_token` / `AuthRateLimitSlot.VERIFY_TOKEN` | `verification` | `ip` | `verify-token` | `POST {auth}/verify` |
 | `request_verify_token` / `AuthRateLimitSlot.REQUEST_VERIFY_TOKEN` | `verification` | `ip_email` | `request-verify-token` | `POST {auth}/request-verify-token` |
 | `totp_enable` / `AuthRateLimitSlot.TOTP_ENABLE` | `totp` | `ip` | `totp-enable` | `POST {auth}/2fa/enable` |
 | `totp_confirm_enable` / `AuthRateLimitSlot.TOTP_CONFIRM_ENABLE` | `totp` | `ip` | `totp-confirm-enable` | `POST {auth}/2fa/enable/confirm` |
 | `totp_verify` / `AuthRateLimitSlot.TOTP_VERIFY` | `totp` | `ip` | `totp-verify` | `POST {auth}/2fa/verify` |
 | `totp_disable` / `AuthRateLimitSlot.TOTP_DISABLE` | `totp` | `ip` | `totp-disable` | `POST {auth}/2fa/disable` |
+| `totp_regenerate_recovery_codes` / `AuthRateLimitSlot.TOTP_REGENERATE_RECOVERY_CODES` | `totp` | `ip` | `totp-regenerate-recovery-codes` | `POST {auth}/2fa/recovery-codes/regenerate` |
 
 The plugin wires these `totp_*` limiters through `TotpRateLimitOrchestrator` so **`totp_verify`**
 can reset counters on success or account-state failures while other TOTP routes keep independent
@@ -149,6 +155,9 @@ budgets.
 
 !!! note "Reset password counter"
     For **`reset_password`**, failed attempts (invalid token or password) can still consume budget; success may reset the window — see implementation notes in `litestar_auth.ratelimit`.
+
+!!! note "Change password counter"
+    For **`change_password`**, wrong current-password submissions consume budget, and success resets the window. The default `ip_email` scope uses the authenticated user's email because `ChangePasswordRequest` intentionally has no email field.
 
 When an application needs underscore namespaces or other slot-specific deviations, express
 them directly in `endpoint_overrides` keyed by `AuthRateLimitSlot`:

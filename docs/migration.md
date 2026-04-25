@@ -16,6 +16,27 @@ Before upgrading a deployment that still depends on unsupported stored password 
 2. Confirm the persisted hashes now match your intended Argon2 policy.
 3. Deploy the new release only after those credentials no longer depend on unsupported formats.
 
+## Self-service password rotation endpoint
+
+Self-service profile updates and password rotation are now separate contracts. `UserUpdate`
+no longer includes `password`, and requests that try to set `password` on the self-service
+profile update path are rejected with `REQUEST_BODY_INVALID`.
+
+Update clients that let authenticated users change their own password to call
+`POST /users/me/change-password` with `ChangePasswordRequest`:
+
+<!-- litestar-auth:change-password-request -->
+```json
+{
+  "current_password": "current-password",
+  "new_password": "new-secure-password"
+}
+```
+
+Wrong current passwords return the login-shaped `LOGIN_BAD_CREDENTIALS` contract. Invalid
+replacement passwords return `UPDATE_USER_INVALID_PASSWORD`. Admin-initiated password rotation
+continues through `AdminUserUpdate` on the privileged users update path.
+
 ## Superuser boolean to role membership
 
 Superuser status is now derived from role membership. The public
@@ -203,6 +224,11 @@ config = LitestarAuthConfig[User, UUID](
 ```
 
 ### String rate-limit slot keys to `AuthRateLimitSlot`
+
+These snippets use `InMemoryRateLimiter` only to show the slot-key migration in a
+small single-process/dev/test setup. For production multi-worker deployments,
+use `RedisRateLimiter` or `RedisAuthPreset` and declare the topology with
+`LitestarAuthConfig.deployment_worker_count`.
 
 Before:
 

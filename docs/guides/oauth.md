@@ -18,6 +18,8 @@ The plugin no longer treats `oauth_providers` as inert metadata: if providers ar
 
 For plugin-owned routes, production app init now fails closed unless `oauth_redirect_base_url` uses a non-loopback `https://...` origin. Keep localhost or plain-HTTP redirect bases behind `AppConfig(debug=True)` or `unsafe_testing=True` only.
 
+Plugin-owned routes require `oauth_flow_cookie_secret` when providers are configured. Manual/custom controller wiring must pass the same kind of dedicated secret through `oauth_flow_cookie_secret` on `create_provider_oauth_controller()`, `create_oauth_controller()`, and `create_oauth_associate_controller()`. The library HKDF-derives Fernet key material from that secret before storing OAuth `state` and the PKCE `code_verifier` in the browser-held flow cookie.
+
 For manual/custom controller wiring, `redirect_base_url` on `create_provider_oauth_controller()`, `create_oauth_controller()`, and `create_oauth_associate_controller()` must also use a non-loopback `https://...` origin and remain a clean callback base without embedded userinfo, query strings, or fragments. Unlike the plugin-owned route table, the low-level manual factories do not inspect `AppConfig(debug=True)` or `unsafe_testing=True`, so there is no localhost or plain-HTTP override on that API surface.
 
 ## Scope policy
@@ -47,12 +49,18 @@ Supported provisioning paths:
 
 `create_provider_oauth_controller()` resolves those provisioning options through the same adapter boundary that powers `create_oauth_controller()` and `create_oauth_associate_controller()`, so all manual entry points enforce one normalized runtime contract.
 
+All manual OAuth controller factories require `oauth_flow_cookie_secret`. Use a distinct high-entropy value with at least 32 characters; do not reuse `csrf_secret`, token-encryption keys, TOTP secrets, verification secrets, or reset secrets.
+
 Required client methods:
 
-- `get_authorization_url(redirect_uri, state, *, scope: str | None = None) -> str`
+- `get_authorization_url(redirect_uri, state, *, scope: str | None = None, code_challenge: str | None = None, code_challenge_method: Literal["S256"] | None = None) -> str`
   The return value must be a non-empty authorization URL string.
-- `get_access_token(code, redirect_uri) -> payload`
+- `get_access_token(code, redirect_uri, *, code_verifier: str | None = None) -> payload`
   The payload may be a mapping or an object with attributes. It must expose a non-empty `access_token: str`, and may expose `expires_at: int | None` and `refresh_token: str | None`.
+
+Manual clients must accept the PKCE keyword arguments even if the upstream library internally formats the
+provider URL. The library validates this at controller construction instead of silently downgrading to a
+state-only authorization-code flow.
 
 Identity resolution:
 
@@ -123,7 +131,7 @@ For manual `create_oauth_associate_controller(..., user_manager_dependency_key=.
 
 ## Token encryption
 
-OAuth access and refresh tokens persisted on `OAuthAccount` should be protected. When providers are configured, set **`oauth_token_encryption_key`** on `OAuthConfig`. The plugin validates that encryption is available for configured providers in normal (non-testing) operation and now binds that key explicitly onto each request-scoped SQLAlchemy user-store path.
+OAuth access and refresh tokens persisted on `OAuthAccount` should be protected. When providers are configured, set **`oauth_token_encryption_keyring`** on `OAuthConfig`. The plugin validates that encryption is available for configured providers in normal (non-testing) operation and binds that keyring explicitly onto each request-scoped SQLAlchemy user-store path. For single-key deployments, **`oauth_token_encryption_key`** remains a deliberate shortcut and is encoded under the `default` key id.
 
 If you bypass the plugin and instantiate `SQLAlchemyUserDatabase` directly for OAuth persistence, supply an explicit policy yourself:
 
@@ -143,7 +151,7 @@ For ad-hoc ORM queries against `OAuthAccount`, bind the same policy to the sessi
 
 ## Cookies
 
-`oauth_cookie_secure` controls secure flag behavior for OAuth-related cookies (default `True`). Align with your deployment (HTTPS vs local HTTP).
+`oauth_cookie_secure` controls secure flag behavior for OAuth-related cookies (default `True`). Align with your deployment (HTTPS vs local HTTP). The OAuth flow cookie is `HttpOnly`, provider-scoped, short-lived, and Fernet-encrypted/authenticated with key material HKDF-derived from `oauth_flow_cookie_secret`; callbacks reject missing, legacy, forged, or wrong-secret envelopes with `OAUTH_STATE_INVALID`.
 
 ## Provider email trust
 

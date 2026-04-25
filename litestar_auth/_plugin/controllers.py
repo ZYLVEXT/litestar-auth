@@ -62,11 +62,13 @@ from litestar_auth.controllers.totp import (
     _totp_handle_confirm_enable,
     _totp_handle_disable,
     _totp_handle_enable,
+    _totp_handle_regenerate_recovery_codes,
     _totp_handle_verify,
     _totp_resolve_enrollment_store,
     _totp_resolve_pending_jti_store,
     _totp_validate_replay_and_password,
     _TotpControllerContext,
+    _warn_totp_pending_client_binding_disabled,
 )
 from litestar_auth.exceptions import ErrorCode
 from litestar_auth.guards import is_authenticated
@@ -78,6 +80,8 @@ from litestar_auth.payloads import (
     TotpDisableRequest,
     TotpEnableRequest,
     TotpEnableResponse,
+    TotpRecoveryCodesResponse,
+    TotpRegenerateRecoveryCodesRequest,
     TotpVerifyRequest,
 )
 from litestar_auth.ratelimit import TotpRateLimitOrchestrator
@@ -91,6 +95,7 @@ if TYPE_CHECKING:
 
     from litestar_auth.authentication.backend import AuthenticationBackend
     from litestar_auth.authentication.strategy.jwt import JWTDenylistStore
+    from litestar_auth.manager import FernetKeyringConfig
     from litestar_auth.oauth.client_adapter import OAuthClientProtocol
     from litestar_auth.ratelimit import AuthRateLimitConfig
     from litestar_auth.totp import TotpAlgorithm, TotpEnrollmentStore, UsedTotpCodeStore
@@ -140,6 +145,7 @@ def create_auth_controller[UP: UserProtocol[Any], ID](  # noqa: PLR0913
     login_identifier: LoginIdentifier = "email",
     totp_pending_secret: str | None = None,
     totp_pending_lifetime: timedelta = timedelta(minutes=5),
+    totp_pending_require_client_binding: bool = True,
     path: str = "/auth",
     unsafe_testing: bool = False,
     security: Sequence[SecurityRequirement] | None = None,
@@ -168,6 +174,7 @@ def create_auth_controller[UP: UserProtocol[Any], ID](  # noqa: PLR0913
             login_identifier=login_identifier,
             totp_pending_secret=totp_pending_secret,
             totp_pending_lifetime=totp_pending_lifetime,
+            totp_pending_require_client_binding=totp_pending_require_client_binding,
         )
 
     class AuthController(Controller):
@@ -243,6 +250,7 @@ def create_oauth_associate_controller[UP: UserProtocol[Any], ID](  # noqa: PLR09
     user_manager_dependency_key: str,
     oauth_client: OAuthClientProtocol,
     redirect_base_url: str,
+    oauth_flow_cookie_secret: str,
     path: str = "/auth/associate",
     cookie_secure: bool = True,
     security: Sequence[SecurityRequirement] | None = None,
@@ -254,6 +262,7 @@ def create_oauth_associate_controller[UP: UserProtocol[Any], ID](  # noqa: PLR09
         user_manager_dependency_key=user_manager_dependency_key,
         oauth_client=oauth_client,
         redirect_base_url=redirect_base_url,
+        oauth_flow_cookie_secret=oauth_flow_cookie_secret,
         path=path,
         cookie_secure=cookie_secure,
         validate_redirect_base_url=False,
@@ -268,6 +277,7 @@ def create_oauth_login_controller[UP: UserProtocol[Any], ID](  # noqa: PLR0913
     backend_inventory: StartupBackendInventory[UP, ID],
     backend_index: int,
     redirect_base_url: str,
+    oauth_flow_cookie_secret: str,
     cookie_secure: bool = True,
     oauth_scopes: Sequence[str] | None = None,
     associate_by_email: bool = False,
@@ -279,6 +289,7 @@ def create_oauth_login_controller[UP: UserProtocol[Any], ID](  # noqa: PLR0913
         provider_name=provider_name,
         oauth_client=oauth_client,
         redirect_base_url=redirect_base_url,
+        oauth_flow_cookie_secret=oauth_flow_cookie_secret,
         path=path,
         cookie_secure=cookie_secure,
         state_cookie_prefix="__oauth_state_",
@@ -326,7 +337,7 @@ def create_oauth_login_controller[UP: UserProtocol[Any], ID](  # noqa: PLR0913
     )
 
 
-def _define_plugin_totp_controller_class_di[UP: UserProtocol[Any], ID](
+def _define_plugin_totp_controller_class_di[UP: UserProtocol[Any], ID](  # noqa: C901
     startup_ctx: _TotpControllerContext[UP, ID],
     *,
     backend_inventory: StartupBackendInventory[UP, ID],
@@ -404,6 +415,9 @@ def _define_plugin_totp_controller_class_di[UP: UserProtocol[Any], ID](
         async def _on_enable_request_body_error(request: Request[Any, Any, Any]) -> None:
             await startup_ctx.totp_rate_limit.on_invalid_attempt("enable", request)
 
+        async def _on_regenerate_request_body_error(request: Request[Any, Any, Any]) -> None:
+            await startup_ctx.totp_rate_limit.on_invalid_attempt("regenerate_recovery_codes", request)
+
         class TotpController(_TotpControllerBase):
             """TOTP 2FA management endpoints."""
 
@@ -422,12 +436,34 @@ def _define_plugin_totp_controller_class_di[UP: UserProtocol[Any], ID](
                     user_manager=litestar_auth_user_manager,
                 )
 
+            @post("/recovery-codes/regenerate", guards=[is_authenticated], security=security)
+            async def regenerate_recovery_codes(
+                self,
+                request: Request[Any, Any, Any],
+                litestar_auth_user_manager: Any,  # noqa: ANN401
+                data: msgspec.Struct | None = None,
+            ) -> TotpRecoveryCodesResponse:
+                del self
+                return await _totp_handle_regenerate_recovery_codes(
+                    request,
+                    ctx=startup_ctx,
+                    data=cast("TotpRegenerateRecoveryCodesRequest | None", data),
+                    user_manager=litestar_auth_user_manager,
+                )
+
         _configure_request_body_handler(
             TotpController.enable,
             schema=TotpEnableRequest,
             validation_code=ErrorCode.LOGIN_PAYLOAD_INVALID,
             on_validation_error=_on_enable_request_body_error,
             on_decode_error=_on_enable_request_body_error,
+        )
+        _configure_request_body_handler(
+            TotpController.regenerate_recovery_codes,
+            schema=TotpRegenerateRecoveryCodesRequest,
+            validation_code=ErrorCode.LOGIN_PAYLOAD_INVALID,
+            on_validation_error=_on_regenerate_request_body_error,
+            on_decode_error=_on_regenerate_request_body_error,
         )
     else:
 
@@ -442,6 +478,19 @@ def _define_plugin_totp_controller_class_di[UP: UserProtocol[Any], ID](
             ) -> TotpEnableResponse:
                 del self
                 return await _totp_handle_enable(
+                    request,
+                    ctx=startup_ctx,
+                    user_manager=litestar_auth_user_manager,
+                )
+
+            @post("/recovery-codes/regenerate", guards=[is_authenticated], security=security)
+            async def regenerate_recovery_codes(
+                self,
+                request: Request[Any, Any, Any],
+                litestar_auth_user_manager: Any,  # noqa: ANN401
+            ) -> TotpRecoveryCodesResponse:
+                del self
+                return await _totp_handle_regenerate_recovery_codes(
                     request,
                     ctx=startup_ctx,
                     user_manager=litestar_auth_user_manager,
@@ -466,10 +515,12 @@ def create_totp_controller[UP: UserProtocol[Any], ID](  # noqa: PLR0913
     requires_verification: bool = True,
     totp_pending_secret: str,
     totp_secret_key: str | None = None,
+    totp_secret_keyring: FernetKeyringConfig | None = None,
     totp_enable_requires_password: bool = True,
     totp_issuer: str = "litestar-auth",
     totp_algorithm: TotpAlgorithm = "SHA256",
     totp_pending_lifetime: timedelta | None = None,
+    totp_pending_require_client_binding: bool = True,
     id_parser: Callable[[str], ID] | None = None,
     path: str = "/auth/2fa",
     unsafe_testing: bool = False,
@@ -480,6 +531,8 @@ def create_totp_controller[UP: UserProtocol[Any], ID](  # noqa: PLR0913
     del totp_pending_lifetime
     if not unsafe_testing:
         validate_secret_length(totp_pending_secret, label="totp_pending_secret")
+    if not totp_pending_require_client_binding:
+        _warn_totp_pending_client_binding_disabled()
     _totp_validate_replay_and_password(
         used_tokens_store=used_tokens_store,
         require_replay_protection=require_replay_protection,
@@ -497,6 +550,7 @@ def create_totp_controller[UP: UserProtocol[Any], ID](  # noqa: PLR0913
     )
     enrollment_token_cipher = _resolve_enrollment_token_cipher(
         totp_secret_key=totp_secret_key,
+        totp_secret_keyring=totp_secret_keyring,
         unsafe_testing=unsafe_testing,
     )
     totp_rate_limit = TotpRateLimitOrchestrator(
@@ -504,7 +558,9 @@ def create_totp_controller[UP: UserProtocol[Any], ID](  # noqa: PLR0913
         confirm_enable=rate_limit_config.totp_confirm_enable if rate_limit_config else None,
         verify=rate_limit_config.totp_verify if rate_limit_config else None,
         disable=rate_limit_config.totp_disable if rate_limit_config else None,
+        regenerate_recovery_codes=rate_limit_config.totp_regenerate_recovery_codes if rate_limit_config else None,
     )
+    totp_verify_rate_limit = rate_limit_config.totp_verify if rate_limit_config else None
     startup_ctx = _TotpControllerContext(
         backend=cast("Any", backend),
         used_tokens_store=used_tokens_store,
@@ -515,6 +571,13 @@ def create_totp_controller[UP: UserProtocol[Any], ID](  # noqa: PLR0913
         totp_algorithm=totp_algorithm,
         totp_rate_limit=totp_rate_limit,
         totp_pending_secret=totp_pending_secret,
+        totp_pending_require_client_binding=totp_pending_require_client_binding,
+        totp_pending_client_binding_trusted_proxy=(
+            False if totp_verify_rate_limit is None else totp_verify_rate_limit.trusted_proxy
+        ),
+        totp_pending_client_binding_trusted_headers=(
+            ("X-Forwarded-For",) if totp_verify_rate_limit is None else totp_verify_rate_limit.trusted_headers
+        ),
         effective_pending_jti_store=effective_pending_jti_store,
         id_parser=id_parser,
         unsafe_testing=unsafe_testing,
@@ -586,6 +649,9 @@ def _build_auth_controllers[UP: UserProtocol[Any], ID](
                 requires_verification=config.requires_verification,
                 login_identifier=config.login_identifier,
                 totp_pending_secret=totp_pending_secret,
+                totp_pending_require_client_binding=(
+                    True if config.totp_config is None else config.totp_config.totp_pending_require_client_binding
+                ),
                 path=backend_auth_path(
                     auth_path=config.auth_path,
                     backend_name=backend.name,
@@ -611,6 +677,7 @@ def _append_optional_feature_controllers[UP: UserProtocol[Any], ID](
             create_register_controller(
                 rate_limit_config=config.rate_limit_config,
                 path=config.auth_path,
+                register_minimum_response_seconds=config.register_minimum_response_seconds,
                 unsafe_testing=config.unsafe_testing,
                 **register_schema_kwargs(config),
             ),
@@ -637,6 +704,7 @@ def _append_optional_feature_controllers[UP: UserProtocol[Any], ID](
         controllers.append(
             create_users_controller(
                 id_parser=config.id_parser,
+                rate_limit_config=config.rate_limit_config,
                 path=config.users_path,
                 hard_delete=config.hard_delete,
                 unsafe_testing=config.unsafe_testing,
@@ -680,6 +748,7 @@ def _append_oauth_login_controllers[UP: UserProtocol[Any], ID](
             backend_inventory=inventory,
             backend_index=primary_backend_index,
             redirect_base_url=redirect_base_url,
+            oauth_flow_cookie_secret=cast("str", contract.oauth_flow_cookie_secret),
             cookie_secure=contract.oauth_cookie_secure,
             oauth_scopes=contract.oauth_provider_scopes.get(entry.name),
             associate_by_email=contract.oauth_associate_by_email,
@@ -713,6 +782,7 @@ def _append_oauth_associate_controllers[UP: UserProtocol[Any], ID](
             user_manager_dependency_key=OAUTH_ASSOCIATE_USER_MANAGER_DEPENDENCY_KEY,
             oauth_client=cast("OAuthClientProtocol", entry.client),
             redirect_base_url=redirect_base_url,
+            oauth_flow_cookie_secret=cast("str", contract.oauth_flow_cookie_secret),
             path=contract.associate_path,
             cookie_secure=contract.oauth_cookie_secure,
             security=security,
@@ -742,6 +812,9 @@ def build_totp_controller[UP: UserProtocol[Any], ID](
     inventory = resolve_backend_inventory(config) if backend_inventory is None else backend_inventory
     backend_index, backend = inventory.resolve_totp(backend_name=totp_config.totp_backend_name)
     totp_secret_key = config.user_manager_security.totp_secret_key if config.user_manager_security is not None else None
+    totp_secret_keyring = (
+        config.user_manager_security.totp_secret_keyring if config.user_manager_security is not None else None
+    )
     return create_totp_controller(
         backend=backend,
         backend_inventory=inventory,
@@ -755,9 +828,11 @@ def build_totp_controller[UP: UserProtocol[Any], ID](
         requires_verification=config.requires_verification,
         totp_pending_secret=totp_config.totp_pending_secret,
         totp_secret_key=totp_secret_key,
+        totp_secret_keyring=totp_secret_keyring,
         totp_enable_requires_password=totp_config.totp_enable_requires_password,
         totp_issuer=totp_config.totp_issuer,
         totp_algorithm=totp_config.totp_algorithm,
+        totp_pending_require_client_binding=totp_config.totp_pending_require_client_binding,
         id_parser=config.id_parser,
         path=totp_path(config.auth_path),
         unsafe_testing=config.unsafe_testing,

@@ -2,14 +2,15 @@
 
 Subclass **`BaseUserManager`** and override async hooks to integrate email, analytics, or domain side effects. The default no-op implementations now live on **`UserManagerHooks`**, which `BaseUserManager` inherits, so existing subclasses keep the same override points. Hooks are **best-effort** extension points: keep them fast; offload I/O to background tasks when needed.
 
-!!! warning "Timing and `on_after_forgot_password`"
-    `forgot_password` uses enumeration-resistant logic in the manager. **`on_after_forgot_password`** runs after that path and may perform I/O (e.g. sending email). Timing differences from real SMTP or HTTP calls can still leak information unless you delegate to a **queue or background worker**. See [Registration](registration.md).
+!!! warning "Timing and enumeration-resistant hooks"
+    `forgot_password`, verify-token requests, and duplicate registration handling use enumeration-resistant logic in the manager/controller layers. Hooks such as **`on_after_forgot_password`**, **`on_after_request_verify_token`**, and **`on_after_register_duplicate`** may perform I/O (e.g. sending email). Timing differences from real SMTP or HTTP calls can still leak information unless you delegate to a **queue or background worker**. See [Registration](registration.md).
 
 ## Hook reference
 
 | Hook | When it runs | Typical use |
 | ---- | ------------ | ----------- |
 | `on_after_register(user, token)` | After a new user is persisted and a verification token exists | Send verification email, analytics |
+| `on_after_register_duplicate(user)` | After registration detects an already-existing account before returning the generic register failure | Notify the existing account owner out-of-band; keep I/O off the request path |
 | `on_after_login(user)` | After a successful login issues a session / tokens | Audit, last-login updates |
 | `on_after_verify(user)` | After email verification succeeds | Welcome email, entitlement updates |
 | `on_after_request_verify_token(user, token)` | After verify-token handling completes (`user` and `token` may be `None` for unknown or already-verified emails) | Resend verification email; **always** do equivalent async work whether `user` is `None` |

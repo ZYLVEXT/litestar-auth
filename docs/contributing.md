@@ -21,7 +21,6 @@ uv run ruff check --fix .
 uv run ruff format .
 uv run ty check
 uv run deptry .
-uv run pytest -n auto
 uv run pytest --cov --cov-report=term-missing --cov-fail-under=100 -n auto
 ```
 

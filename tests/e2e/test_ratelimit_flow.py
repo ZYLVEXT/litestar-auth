@@ -168,6 +168,12 @@ def _build_app_with_trusted_proxy(
                     namespace="totp_disable",
                     trusted_proxy=trusted_proxy,
                 ),
+                AuthRateLimitSlot.TOTP_REGENERATE_RECOVERY_CODES: EndpointRateLimit(
+                    backend=totp_rate_limiter,
+                    scope="ip",
+                    namespace="totp_regenerate_recovery_codes",
+                    trusted_proxy=trusted_proxy,
+                ),
             },
             trusted_proxy=trusted_proxy,
         )

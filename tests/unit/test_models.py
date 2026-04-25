@@ -192,6 +192,7 @@ def test_user_model_creates_schema_with_expected_columns() -> None:
             "hashed_password",
             "is_active",
             "is_verified",
+            "recovery_codes_hashes",
             "sa_orm_sentinel",
             "totp_secret",
         }
@@ -222,6 +223,7 @@ def test_user_model_persists_defaults_and_generated_uuid() -> None:
         assert user.is_verified is False
         assert user.roles == []
         assert user.totp_secret is None
+        assert user.recovery_codes_hashes is None
     finally:
         engine.dispose()
 

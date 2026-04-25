@@ -29,6 +29,8 @@ class UserManagerHooksProtocol[UP](Protocol):
 
     async def on_after_register(self, user: UP, token: str) -> None: ...  # pragma: no cover
 
+    async def on_after_register_duplicate(self, user: UP) -> None: ...  # pragma: no cover
+
     async def on_after_login(self, user: UP) -> None: ...  # pragma: no cover
 
     async def on_after_verify(self, user: UP) -> None: ...  # pragma: no cover

@@ -1,3 +1,132 @@
+## Unreleased
+
+### Added
+
+- **New rate-limit slots `AuthRateLimitSlot.CHANGE_PASSWORD` and
+  `AuthRateLimitSlot.TOTP_REGENERATE_RECOVERY_CODES`** — exported from
+  `litestar_auth.ratelimit`, registered with login-shaped (`scope=ip_email`,
+  `namespace=change-password`, `group=login`) and TOTP-shaped defaults
+  respectively, and accepted by `enabled`, `disabled`, `endpoint_overrides`,
+  `scope_overrides`, and `namespace_overrides` exactly like the existing slots.
+- **`AdminUserUpdate` and `ChangePasswordRequest` schemas** are exported from
+  `litestar_auth.schemas` for the privileged admin update path and the new
+  self-service password-rotation flow respectively.
+- **`POST /users/me/change-password`** — authenticated credential-rotation
+  endpoint on the users controller; returns `204 No Content` on success and
+  delegates the new password to `user_manager.update(...)` so existing
+  token/session invalidation hooks fire.
+- **`POST /auth/2fa/recovery-codes/regenerate`** — authenticated TOTP
+  recovery-code regeneration endpoint that atomically replaces all hashed
+  codes through the manager lifecycle and returns the new codes exactly once.
+- **`LitestarAuthConfig.register_minimum_response_seconds`** (default `0.4`)
+  — minimum wall-clock duration for plugin-owned `POST /auth/register`
+  responses, padding success and mapped domain-failure paths alike as
+  defense-in-depth against lower-tail timing-based account enumeration.
+- **`LitestarAuthConfig.deployment_worker_count`** — explicit
+  deployment-posture declaration; when set greater than `1`, plugin startup
+  fails closed if any auth rate-limit endpoint backend reports
+  `is_shared_across_workers=False`.
+- **`FernetKeyringConfig(active_key_id=..., keys=...)`** on `OAuthConfig`
+  and `UserManagerSecurity` — versioned-Fernet keyring inputs for
+  encrypted-at-rest OAuth tokens and TOTP secrets, plus
+  `OAuthTokenEncryption.requires_reencrypt(...)` /
+  `OAuthTokenEncryption.reencrypt(...)` and
+  `BaseUserManager.totp_secret_requires_reencrypt(...)` /
+  `BaseUserManager.reencrypt_totp_secret_for_storage(...)` row-level helpers
+  for explicit at-rest rotation jobs.
+- **`TotpConfig.totp_pending_require_client_binding`** (default `True`) —
+  toggles TOTP pending-login JWT client binding; set to `False` only when the
+  deployment explicitly accepts cross-client pending-token replay.
+
+### Changed
+
+- **Privileged admin updates use the dedicated `AdminUserUpdate` schema** —
+  `PATCH /users/{user_id}` now decodes against `AdminUserUpdate`, while
+  self-service `PATCH /users/me` decodes against the (now non-credential)
+  `UserUpdate` and rejects privileged fields fail-closed. The default
+  `AdminUserUpdate` accepts optional `roles` so superuser `PATCH /users/{id}`
+  can manage them.
+- **Controller OpenAPI request bodies are aligned with runtime behavior** —
+  `POST /auth/register`, `POST /auth/reset-password`, `PATCH /users/me`,
+  `POST /users/me/change-password`, and `PATCH /users/{user_id}` now publish
+  `requestBody` consistently without changing the existing 400/422 error
+  payload contract.
+
+### Security
+
+- **Self-service password rotation now requires current-password re-verification** — **Breaking for
+  clients that sent `password` through `UserUpdate` / self-service profile updates.** VULN #1 is
+  remediated by removing `password` from `UserUpdate` and moving authenticated credential rotation
+  to `POST /users/me/change-password` with `ChangePasswordRequest` (`current_password`,
+  `new_password`). Wrong current-password submissions use the existing `LOGIN_BAD_CREDENTIALS`
+  response contract, invalid replacement passwords use `UPDATE_USER_INVALID_PASSWORD`, and successful
+  rotation continues through the manager update lifecycle so existing token/session invalidation
+  hooks run. Self-service `PATCH /users/me` also fails closed (`400 REQUEST_BODY_INVALID`) when
+  callers submit any of `password`, `hashed_password`, `is_active`, `is_verified`, or `roles`
+  instead of silently stripping them. Admin-initiated password rotation remains available through
+  `AdminUserUpdate` on the privileged users update path.
+- **Public registration failures now use one enumeration-resistant response** — **Breaking for
+  clients that parsed register-specific duplicate or password-policy error codes.** VULN #2 is
+  remediated by collapsing duplicate identifiers, password-policy failures, and manager
+  authorization rejections to the same 400 / `REGISTER_FAILED` response with the generic detail
+  `Registration could not be completed.` The old register-specific `ErrorCode` members
+  (`REGISTER_USER_ALREADY_EXISTS`, `REGISTER_INVALID_PASSWORD`) are removed, plugin-owned
+  registration applies the configured minimum response-time envelope, and duplicate attempts invoke
+  `on_after_register_duplicate(user)` with the existing account so applications can enqueue
+  out-of-band owner notifications without changing the public response.
+- **OAuth authorization-code flow now enforces PKCE S256 end-to-end** — **Breaking for manual
+  `OAuthClientAdapter` integrations whose underlying client does not accept `code_challenge` /
+  `code_challenge_method` on authorize and `code_verifier` on token exchange.** VULN #3 is
+  remediated per RFC 9700 by generating a fresh 64-character verifier and unpadded
+  base64url-SHA256 `code_challenge` for every authorize call, persisting the verifier in the
+  existing httpOnly state cookie next to `state`, and forwarding the matching verifier on callback
+  token exchange. Tampered or verifier-less flow cookies map to the existing
+  `400 OAUTH_STATE_INVALID` failure response. Adapters whose underlying client cannot accept the
+  PKCE kwargs raise `ConfigurationError` at construction time rather than silently downgrading.
+- **TOTP enrollment now issues one-time recovery codes** — **Breaking for clients that assume
+  `TotpConfirmEnableResponse` contains only `enabled`.** VULN #4 is remediated by returning
+  `recovery_codes` exactly once from `POST /auth/2fa/enable/confirm`, accepting unused recovery
+  codes in `TotpVerifyRequest.code` on `POST /auth/2fa/verify`, and adding authenticated
+  `POST /auth/2fa/recovery-codes/regenerate` for rotation. The bundled user model now stores only
+  hashed recovery-code values in `recovery_codes_hashes`; custom models and migrations must add an
+  equivalent hashed-only field before enabling this flow.
+- **OAuth tokens and TOTP secrets at rest now use a versioned Fernet keyring** — **Breaking for
+  operators that supplied a single unversioned Fernet key and have no rotation plan.** VULN #5 is
+  remediated by introducing the storage format `fernet:v1:<key_id>:<ciphertext>` for new writes,
+  surfacing `FernetKeyringConfig(active_key_id=..., keys=...)` on `OAuthConfig` and
+  `UserManagerSecurity`, and exposing `OAuthTokenEncryption.requires_reencrypt(...)` /
+  `OAuthTokenEncryption.reencrypt(...)` plus
+  `BaseUserManager.totp_secret_requires_reencrypt(...)` /
+  `BaseUserManager.reencrypt_totp_secret_for_storage(...)` row-level helpers for explicit
+  at-rest rotation jobs. Single-key `oauth_token_encryption_key` and `totp_secret_key` shortcuts
+  remain supported and are persisted under the `default` key id; legacy unversioned Fernet values
+  are accepted only as explicit migration input.
+- **Library-issued JWTs now declare and validate `typ=JWT`** — VULN #6 is remediated as
+  defense-in-depth: access tokens, manager-issued verify and reset tokens, and the destroy-token
+  revocation decode all emit an explicit `typ=JWT` JOSE header on issuance and reject missing or
+  unexpected `typ` headers before the normal signed decode. This is not a substitute for
+  signature, audience, issuer, algorithm, or required-claim validation, all of which continue to
+  apply.
+- **Role-membership guards use fixed-work matching** — VULN #7 is remediated by replacing the
+  previous `user_roles & required_role_set` short-circuit predicate in `has_any_role` and the
+  subset check in `has_all_roles` with fixed-work iteration over normalized role strings using
+  `hmac.compare_digest`. This is a defense-in-depth posture, not a claim of cryptographic
+  constant-time behavior across Python or the network.
+- **Plugin startup fails closed on declared multi-worker auth rate limiting** — **Breaking for
+  declared multi-worker deployments that paired process-local rate-limit backends with the previous
+  warning-only posture.** VULN #8 is remediated by adding
+  `LitestarAuthConfig.deployment_worker_count` and raising `ConfigurationError` at startup when any
+  auth rate-limit endpoint backend reports `is_shared_across_workers=False` while
+  `deployment_worker_count > 1`. Use `RedisRateLimiter` (or
+  `RedisAuthPreset.build_rate_limit_config(...)`) for multi-worker production; in-memory rate
+  limiting remains supported for explicit single-process deployments and tests.
+- **TOTP pending-login tokens are client-bound by default** — VULN #10 is remediated by adding
+  `cip` and `uaf` SHA-256 fingerprint claims to pending-login JWTs and rejecting `/auth/2fa/verify`
+  requests whose trusted-proxy-aware client IP or User-Agent no longer matches the issuing login.
+  Mismatches reuse the existing 400 `TOTP_PENDING_BAD_TOKEN` response. Set
+  `TotpConfig.totp_pending_require_client_binding=False` only when the deployment explicitly
+  accepts cross-client pending-token replay.
+
 ## 2.1.0 (2026-04-23)
 
 ### Security

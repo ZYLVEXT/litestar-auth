@@ -25,8 +25,8 @@ class ErrorCode(StrEnum):
     TOKEN_PROCESSING_FAILED = "TOKEN_PROCESSING_FAILED"
     CONFIGURATION_INVALID = "CONFIGURATION_INVALID"
     USER_NOT_FOUND = "USER_NOT_FOUND"
-    REGISTER_USER_ALREADY_EXISTS = "REGISTER_USER_ALREADY_EXISTS"
-    REGISTER_INVALID_PASSWORD = "REGISTER_INVALID_PASSWORD"
+    USER_ALREADY_EXISTS = "USER_ALREADY_EXISTS"
+    REGISTER_FAILED = "REGISTER_FAILED"
     LOGIN_BAD_CREDENTIALS = "LOGIN_BAD_CREDENTIALS"
     LOGIN_USER_INACTIVE = "LOGIN_USER_INACTIVE"
     LOGIN_USER_NOT_VERIFIED = "LOGIN_USER_NOT_VERIFIED"
@@ -135,12 +135,14 @@ class UserAlreadyExistsError(AuthenticationError):
     """Raised when creating a user that already exists.
 
     Duplicate identifier context is stored on the exception instance for
-    operator logging, but the generated default message stays generic so HTTP
-    responses do not reveal the colliding email or username.
+    operator logging, but the generated default message stays generic. The
+    public register controller further maps this exception to the shared
+    ``REGISTER_FAILED`` response so callers cannot distinguish duplicate
+    identifiers from other registration failures.
     """
 
     default_message = "A user with the provided credentials already exists."
-    default_code = ErrorCode.REGISTER_USER_ALREADY_EXISTS
+    default_code = ErrorCode.USER_ALREADY_EXISTS
 
     def __init__(
         self,

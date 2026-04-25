@@ -7,7 +7,7 @@
 On `OAuthConfig`:
 
 ```python
-from litestar_auth import OAuthConfig, OAuthProviderConfig
+from litestar_auth import FernetKeyringConfig, OAuthConfig, OAuthProviderConfig
 
 OAuthConfig(
     oauth_providers=[
@@ -15,7 +15,11 @@ OAuthConfig(
     ],
     oauth_redirect_base_url="https://your.app/auth",
     include_oauth_associate=True,
-    oauth_token_encryption_key="...",  # required when OAuth is on
+    oauth_token_encryption_keyring=FernetKeyringConfig(
+        active_key_id=settings.oauth_token_active_key_id,
+        keys=settings.oauth_token_fernet_keys,
+    ),
+    oauth_flow_cookie_secret="replace-with-32+-char-oauth-flow-secret",
 )
 ```
 
@@ -32,7 +36,8 @@ This cookbook focuses on the authenticated associate flow. If you need associate
 ## Security defaults
 
 - Associate routes require an authenticated `request.user`; they do not use `oauth_associate_by_email`.
-- Keep **`oauth_token_encryption_key`** configured in production so stored provider tokens are encrypted at rest.
+- Keep **`oauth_token_encryption_keyring`** configured in production so stored provider tokens are encrypted at rest.
+- Keep **`oauth_flow_cookie_secret`** distinct and configured so OAuth state and the PKCE verifier are encrypted/authenticated in the short-lived flow cookie.
 
 ## See also
 

@@ -228,3 +228,58 @@ async def test_totp_enable_verify_disable_flow(
     assert final_login_response.status_code == HTTP_CREATED
     assert final_login_response.json()["token_type"] == "bearer"
     assert "access_token" in final_login_response.json()
+
+
+@pytest.mark.filterwarnings("ignore::litestar_auth.totp.SecurityWarning")
+async def test_totp_recovery_code_fallback_authenticates_pending_login_flow(
+    client: AsyncTestClient[Litestar],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A persisted user can complete a TOTP-required login with an issued recovery code."""
+    fixed_counter = 123_456
+    monkeypatch.setattr("litestar_auth.totp._current_counter", lambda: fixed_counter)
+    initial_login_response = await client.post(
+        "/auth/login",
+        json={"identifier": "user@example.com", "password": "correct-password"},
+    )
+    assert initial_login_response.status_code == HTTP_CREATED
+    initial_access_token = initial_login_response.json()["access_token"]
+
+    enable_response = await client.post(
+        "/auth/2fa/enable",
+        json={"password": "correct-password"},
+        headers={"Authorization": f"Bearer {initial_access_token}"},
+    )
+    assert enable_response.status_code == HTTP_CREATED
+    enable_payload = enable_response.json()
+
+    confirm_response = await client.post(
+        "/auth/2fa/enable/confirm",
+        json={
+            "enrollment_token": enable_payload["enrollment_token"],
+            "code": _generate_totp_code(enable_payload["secret"], fixed_counter),
+        },
+        headers={"Authorization": f"Bearer {initial_access_token}"},
+    )
+    assert confirm_response.status_code == HTTP_CREATED
+    recovery_code = confirm_response.json()["recovery_codes"][0]
+
+    pending_login_response = await client.post(
+        "/auth/login",
+        json={"identifier": "user@example.com", "password": "correct-password"},
+    )
+    assert pending_login_response.status_code == HTTP_ACCEPTED
+
+    verify_response = await client.post(
+        "/auth/2fa/verify",
+        json={"pending_token": pending_login_response.json()["pending_token"], "code": recovery_code},
+    )
+    assert verify_response.status_code == HTTP_CREATED
+    verified_access_token = verify_response.json()["access_token"]
+
+    protected_response = await client.get(
+        "/protected",
+        headers={"Authorization": f"Bearer {verified_access_token}"},
+    )
+    assert protected_response.status_code == HTTP_OK
+    assert protected_response.json() == {"email": "user@example.com"}

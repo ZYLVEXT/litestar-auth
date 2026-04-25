@@ -4,11 +4,15 @@ Use this page for user-model requirements, bundled ORM mixins, token model compo
 
 ## Custom SQLAlchemy `User` and token models
 
-`LitestarAuthConfig.user_model` must satisfy **`UserProtocol`** (see [Types](../api/types.md)): at minimum the fields and behaviors your chosen `BaseUserManager` and strategies use (`id`, `email`, `hashed_password`, `is_active`, `is_verified`, `totp_secret` as applicable). When your app wants the library's flat role-membership contract, expose `roles: Sequence[str]` and satisfy **`RoleCapableUserProtocol`**; superuser status is derived from membership in the configured superuser role, not from a model attribute. The bundled `User` already provides that `roles` collection, and custom SQLAlchemy model families can add it with `UserRoleRelationshipMixin`.
+`LitestarAuthConfig.user_model` must satisfy **`UserProtocol`** (see [Types](../api/types.md)): at minimum the fields and behaviors your chosen `BaseUserManager` and strategies use (`id`, `email`, `hashed_password`, `is_active`, `is_verified`, `totp_secret`, `recovery_codes_hashes` as applicable). When your app wants the library's flat role-membership contract, expose `roles: Sequence[str]` and satisfy **`RoleCapableUserProtocol`**; superuser status is derived from membership in the configured superuser role, not from a model attribute. The bundled `User` already provides that `roles` collection, and custom SQLAlchemy model families can add it with `UserRoleRelationshipMixin`.
 
 When `totp_config` is set, plugin startup also validates that `user_model` exposes the
 **`TotpUserProtocol`** fields (`email` and `totp_secret`). A model missing either field fails
 before routes are mounted instead of failing on the first login request that reaches 2FA.
+`UserModelMixin` also provides `recovery_codes_hashes`, a nullable JSON column that stores only
+hashed TOTP recovery-code values. `SQLAlchemyUserDatabase` exposes the set/read/consume helpers
+that later recovery-code flows use; custom stores should keep the same hashed-only contract and
+make consumption single-use.
 
 The built-in `UserRead` / `UserUpdate` schemas now also assume that same `roles` attribute. Apps
 that keep the default register/verify/reset/users controllers should either expose
@@ -240,6 +244,11 @@ def user_db_factory(session):
 ```
 
 `SQLAlchemyUserDatabase` requires **`user_model`** and accepts optional **`oauth_account_model`**. If you use OAuth methods (`get_by_oauth_account`, `upsert_oauth_account`) without providing `oauth_account_model`, a `TypeError` is raised.
+
+For TOTP recovery codes, the adapter expects the user model to expose `recovery_codes_hashes:
+list[str] | None`. The bundled `UserModelMixin` maps this as JSON to keep custom model
+composition simple; verification still walks every stored hash, and consumption removes the
+matched hash under a row-level lock when the database supports `SELECT ... FOR UPDATE`.
 
 `BaseUserStore` and `BaseOAuthAccountStore` are runtime-checkable `Protocol` contracts. Custom stores do not need to inherit from either symbol as long as they implement the documented async methods; explicit inheritance remains optional when you want to declare that compatibility on the class itself.
 

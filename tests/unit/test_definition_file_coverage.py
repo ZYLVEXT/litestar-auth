@@ -200,7 +200,6 @@ def test_schemas_module_reload_preserves_struct_definitions() -> None:
     )
     assert reloaded_module.UserCreate.__struct_fields__ == ("email", "password")
     assert reloaded_module.UserUpdate.__struct_fields__ == (
-        "password",
         "email",
         "is_active",
         "is_verified",
@@ -394,6 +393,7 @@ def test_internal_auth_model_mixins_module_reload_preserves_contract_exports(
         "hashed_password",
         "is_active",
         "is_verified",
+        "recovery_codes_hashes",
         "totp_secret",
     ]
     assert reloaded_module.UserRoleRelationshipMixin.auth_user_role_model == "UserRole"
@@ -625,6 +625,7 @@ def test_models_user_module_columns_and_relationships() -> None:
         "id",
         "is_active",
         "is_verified",
+        "recovery_codes_hashes",
         "sa_orm_sentinel",
         "totp_secret",
     }
@@ -634,6 +635,7 @@ def test_models_user_module_columns_and_relationships() -> None:
         "hashed_password",
         "is_active",
         "is_verified",
+        "recovery_codes_hashes",
         "totp_secret",
     ]
     assert set(ModelsRole.__table__.c.keys()) == {"description", "name"}

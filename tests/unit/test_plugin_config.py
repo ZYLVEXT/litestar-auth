@@ -13,12 +13,15 @@ from uuid import UUID, uuid4
 
 import msgspec
 import pytest
+from cryptography.fernet import Fernet
 
 import litestar_auth._plugin.config as plugin_config_module
 import litestar_auth._plugin.database_token as database_token_module
 from litestar_auth import DEFAULT_SUPERUSER_ROLE_NAME
 from litestar_auth._plugin.config import (
+    DEFAULT_REGISTER_MINIMUM_RESPONSE_SECONDS,
     DatabaseTokenAuthConfig,
+    FernetKeyringConfig,
     OAuthConfig,
     TotpConfig,
     require_session_maker,
@@ -64,6 +67,12 @@ if TYPE_CHECKING:
     from litestar_auth.db.base import BaseUserStore
 
 pytestmark = pytest.mark.unit
+OAUTH_FLOW_COOKIE_SECRET = "oauth-flow-cookie-secret-1234567890"
+
+
+def _fernet_key() -> str:
+    """Return a valid Fernet key for configuration tests."""
+    return Fernet.generate_key().decode()
 
 
 def _current_startup_backend_template_type() -> type[Any]:
@@ -127,6 +136,7 @@ def test_plugin_config_module_executes_under_coverage() -> None:
 
     assert reloaded_module.LitestarAuthConfig.__name__ == LitestarAuthConfig.__name__
     assert reloaded_module.DatabaseTokenAuthConfig.__name__ == DatabaseTokenAuthConfig.__name__
+    assert reloaded_module.FernetKeyringConfig.__name__ == FernetKeyringConfig.__name__
     assert reloaded_module.OAuthConfig.__name__ == OAuthConfig.__name__
 
 
@@ -258,11 +268,95 @@ def test_litestar_auth_config_declares_superuser_role_name_field() -> None:
     assert dataclass_fields["superuser_role_name"].default == DEFAULT_SUPERUSER_ROLE_NAME
 
 
+def test_litestar_auth_config_declares_register_minimum_response_seconds_field() -> None:
+    """The plugin config exposes the register timing envelope knob."""
+    dataclass_fields = LitestarAuthConfig.__dataclass_fields__
+
+    assert "register_minimum_response_seconds" in dataclass_fields
+    assert dataclass_fields["register_minimum_response_seconds"].type == "float"
+    assert dataclass_fields["register_minimum_response_seconds"].default == pytest.approx(
+        DEFAULT_REGISTER_MINIMUM_RESPONSE_SECONDS,
+    )
+
+
+def test_litestar_auth_config_declares_deployment_worker_count_field() -> None:
+    """The plugin config exposes an explicit deployment worker-count posture field."""
+    dataclass_fields = LitestarAuthConfig.__dataclass_fields__
+
+    assert "deployment_worker_count" in dataclass_fields
+    assert dataclass_fields["deployment_worker_count"].type == "int | None"
+    assert dataclass_fields["deployment_worker_count"].default is None
+
+
 def test_litestar_auth_config_login_identifier_defaults_to_email() -> None:
     """Default login mode is email."""
     config = _minimal_config()
 
     assert config.login_identifier == "email"
+
+
+def test_litestar_auth_config_rejects_negative_register_minimum_response_seconds() -> None:
+    """Negative register timing envelopes fail during config construction."""
+    with pytest.raises(ConfigurationError, match="register_minimum_response_seconds must be non-negative"):
+        LitestarAuthConfig[ExampleUser, UUID](
+            user_model=ExampleUser,
+            user_manager_class=PluginUserManager,
+            register_minimum_response_seconds=-0.001,
+        )
+
+
+@pytest.mark.parametrize("deployment_worker_count", [None, 1, 2])
+def test_litestar_auth_config_accepts_valid_deployment_worker_count(
+    deployment_worker_count: int | None,
+) -> None:
+    """Unknown, known single-worker, and known multi-worker topology declarations are valid."""
+    config = LitestarAuthConfig[ExampleUser, UUID](
+        user_model=ExampleUser,
+        user_manager_class=PluginUserManager,
+        deployment_worker_count=deployment_worker_count,
+    )
+
+    assert config.deployment_worker_count == deployment_worker_count
+
+
+@pytest.mark.parametrize("deployment_worker_count", [0, -1])
+def test_litestar_auth_config_rejects_non_positive_deployment_worker_count(
+    deployment_worker_count: int,
+) -> None:
+    """Worker-count posture must be positive when known."""
+    with pytest.raises(ConfigurationError, match="deployment_worker_count must be a positive integer or None"):
+        LitestarAuthConfig[ExampleUser, UUID](
+            user_model=ExampleUser,
+            user_manager_class=PluginUserManager,
+            deployment_worker_count=deployment_worker_count,
+        )
+
+
+@pytest.mark.parametrize("deployment_worker_count", [1.5, "2", bool(1)])
+def test_litestar_auth_config_rejects_runtime_non_int_deployment_worker_count(
+    deployment_worker_count: object,
+) -> None:
+    """Runtime values outside the typed integer contract fail during config construction."""
+    with pytest.raises(ConfigurationError, match="deployment_worker_count must be a positive integer or None"):
+        LitestarAuthConfig[ExampleUser, UUID](
+            user_model=ExampleUser,
+            user_manager_class=PluginUserManager,
+            deployment_worker_count=cast("Any", deployment_worker_count),
+        )
+
+
+def test_litestar_auth_config_repr_keeps_secret_material_hidden_with_deployment_worker_count() -> None:
+    """The new worker-count field does not disturb existing secret masking in config repr output."""
+    config = LitestarAuthConfig[ExampleUser, UUID](
+        user_model=ExampleUser,
+        user_manager_class=PluginUserManager,
+        csrf_secret="c" * 32,
+        deployment_worker_count=2,
+    )
+
+    config_repr = repr(config)
+    assert "deployment_worker_count=2" in config_repr
+    assert "cccc" not in config_repr
 
 
 def test_litestar_auth_config_superuser_role_name_defaults_and_normalizes() -> None:
@@ -812,12 +906,19 @@ def test_totp_config_defaults_match_expected_values() -> None:
     assert config.totp_enrollment_store is None
     assert config.totp_require_replay_protection is True
     assert config.totp_enable_requires_password is True
+    assert config.totp_pending_require_client_binding is True
 
 
 def test_secret_bearing_plugin_config_repr_masks_secret_values() -> None:
     """Plugin config repr output omits live secrets from debug surfaces."""
+    current_key = _fernet_key()
+    old_key = _fernet_key()
+    keyring = FernetKeyringConfig(active_key_id="current", keys={"current": current_key, "old": old_key})
     totp_config = TotpConfig(totp_pending_secret="p" * 32)
-    oauth_config = OAuthConfig(oauth_token_encryption_key="k" * 44)
+    oauth_config = OAuthConfig(
+        oauth_token_encryption_keyring=keyring,
+        oauth_flow_cookie_secret=OAUTH_FLOW_COOKIE_SECRET,
+    )
     token_config = DatabaseTokenAuthConfig(token_hash_secret="t" * 40)
     plugin_config = _minimal_config(totp_config=totp_config)
     plugin_config.oauth_config = oauth_config
@@ -825,9 +926,54 @@ def test_secret_bearing_plugin_config_repr_masks_secret_values() -> None:
     plugin_config.csrf_secret = "c" * 32
 
     assert "p" * 32 not in repr(totp_config)
-    assert "k" * 44 not in repr(oauth_config)
+    assert current_key not in repr(keyring)
+    assert old_key not in repr(keyring)
+    assert current_key not in repr(oauth_config)
+    assert old_key not in repr(oauth_config)
+    assert OAUTH_FLOW_COOKIE_SECRET not in repr(oauth_config)
     assert "t" * 40 not in repr(token_config)
     assert "c" * 32 not in repr(plugin_config)
+
+
+def test_fernet_keyring_config_validates_and_masks_key_material() -> None:
+    """Keyring config normalizes ids and keeps raw keys out of repr/str output."""
+    current_key = _fernet_key()
+    old_key = _fernet_key()
+
+    keyring = FernetKeyringConfig(active_key_id="current", keys={"current": current_key, "old": old_key})
+
+    assert keyring.active_key_id == "current"
+    assert dict(keyring.keys) == {"current": current_key, "old": old_key}
+    rendered = repr(keyring)
+    assert current_key not in rendered
+    assert old_key not in rendered
+    assert "'current': '***'" in rendered
+    assert str(keyring) == rendered
+
+
+@pytest.mark.parametrize(
+    ("active_key_id", "keys", "match"),
+    [
+        pytest.param("", {"current": _fernet_key()}, "Fernet key ids", id="missing-active-id"),
+        pytest.param("missing", {"current": _fernet_key()}, "active key id", id="unknown-active-id"),
+        pytest.param("current", {}, "at least one", id="empty-key-map"),
+        pytest.param("current", object(), "mapping or a sequence", id="not-mapping-or-sequence"),
+        pytest.param("current", ["current"], "key-id/key pairs", id="not-key-pair"),
+        pytest.param("current", [(1, _fernet_key())], "key ids must be strings", id="non-string-key-id"),
+        pytest.param("bad key", {"bad key": _fernet_key()}, "Fernet key ids", id="invalid-key-id"),
+        pytest.param("current", [("current", _fernet_key()), ("current", _fernet_key())], "unique", id="duplicate"),
+        pytest.param("current", [("current", object())], "key material is invalid", id="non-string-key"),
+        pytest.param("current", {"current": "invalid-fernet-key"}, "key material is invalid", id="invalid-key"),
+    ],
+)
+def test_fernet_keyring_config_rejects_invalid_shapes(
+    active_key_id: str,
+    keys: object,
+    match: str,
+) -> None:
+    """Keyring config fails closed for malformed keyring declarations."""
+    with pytest.raises(ConfigurationError, match=match):
+        FernetKeyringConfig(active_key_id=active_key_id, keys=cast("Any", keys))
 
 
 def test_oauth_config_defaults_match_expected_values() -> None:
@@ -842,6 +988,21 @@ def test_oauth_config_defaults_match_expected_values() -> None:
     assert config.include_oauth_associate is False
     assert not config.oauth_redirect_base_url
     assert config.oauth_token_encryption_key is None
+    assert config.oauth_token_encryption_keyring is None
+    assert config.has_oauth_token_encryption is False
+    assert config.oauth_flow_cookie_secret is None
+
+
+def test_oauth_config_accepts_keyring_and_rejects_ambiguous_encryption_inputs() -> None:
+    """OAuth config exposes a single explicit keyring contract for token encryption."""
+    keyring = FernetKeyringConfig(active_key_id="current", keys={"current": _fernet_key()})
+
+    config = OAuthConfig(oauth_token_encryption_keyring=keyring)
+
+    assert config.oauth_token_encryption_keyring is keyring
+    assert config.has_oauth_token_encryption is True
+    with pytest.raises(ConfigurationError, match="oauth_token_encryption_key or oauth_token_encryption_keyring"):
+        OAuthConfig(oauth_token_encryption_key=_fernet_key(), oauth_token_encryption_keyring=keyring)
 
 
 def test_oauth_provider_config_constructed_with_keywords() -> None:
@@ -918,10 +1079,12 @@ def test_oauth_route_registration_contract_accepts_explicit_provider_entries() -
                 oauth_provider_config_type(name="gitlab", client=object()),
             ],
             oauth_redirect_base_url="https://app.example/auth/",
+            oauth_flow_cookie_secret=OAUTH_FLOW_COOKIE_SECRET,
         ),
     )
     assert [p.name for p in contract.providers] == ["github", "gitlab"]
     assert contract.providers[0].client is gh
+    assert contract.oauth_flow_cookie_secret == OAUTH_FLOW_COOKIE_SECRET
 
 
 def test_oauth_route_registration_contract_with_no_oauth_config() -> None:
@@ -934,6 +1097,7 @@ def test_oauth_route_registration_contract_with_no_oauth_config() -> None:
     assert contract.login_path == "/auth/oauth"
     assert contract.associate_path == "/auth/associate"
     assert contract.redirect_base_url is None
+    assert contract.oauth_flow_cookie_secret is None
 
 
 def test_oauth_route_registration_contract_omits_redirects_without_plugin_owned_routes() -> None:
@@ -958,6 +1122,7 @@ def test_oauth_route_registration_contract_derives_login_and_associate_redirect_
             oauth_providers=[_oauth_provider(name="github", client=object())],
             include_oauth_associate=True,
             oauth_redirect_base_url="https://app.example/auth/",
+            oauth_flow_cookie_secret=OAUTH_FLOW_COOKIE_SECRET,
         ),
     )
 
@@ -980,6 +1145,7 @@ def test_oauth_route_registration_contract_normalizes_per_provider_scopes() -> N
             ],
             oauth_provider_scopes={"github": ["openid", "email", "openid"]},
             oauth_redirect_base_url="https://app.example/auth/",
+            oauth_flow_cookie_secret=OAUTH_FLOW_COOKIE_SECRET,
         ),
     )
 
@@ -994,6 +1160,7 @@ def test_oauth_route_registration_contract_omits_empty_provider_scope_lists() ->
             oauth_providers=[_oauth_provider(name="github", client=object())],
             oauth_provider_scopes={"github": []},
             oauth_redirect_base_url="https://app.example/auth/",
+            oauth_flow_cookie_secret=OAUTH_FLOW_COOKIE_SECRET,
         ),
     )
 
@@ -1009,6 +1176,7 @@ def test_oauth_route_registration_contract_rejects_unknown_scope_provider_names(
                 oauth_providers=[_oauth_provider(name="github", client=object())],
                 oauth_provider_scopes={"gitlab": ["openid"]},
                 oauth_redirect_base_url="https://app.example/auth/",
+                oauth_flow_cookie_secret=OAUTH_FLOW_COOKIE_SECRET,
             ),
         )
 
@@ -1038,6 +1206,7 @@ def test_oauth_route_registration_contract_rejects_invalid_scope_values(
                 oauth_providers=[_oauth_provider(name="github", client=object())],
                 oauth_provider_scopes=cast("Any", provider_scopes),
                 oauth_redirect_base_url="https://app.example/auth/",
+                oauth_flow_cookie_secret=OAUTH_FLOW_COOKIE_SECRET,
             ),
         )
 

@@ -134,18 +134,11 @@ class _ManagerLifecycleRoleUpdater[UP: UserProtocol[Any]]:
         Returns:
             The configured lifecycle-preserving role updater.
         """
-        oauth_token_encryption = None
-        if config.oauth_config is not None:
-            oauth_token_encryption = OAuthTokenEncryption(
-                config.oauth_config.oauth_token_encryption_key,
-                unsafe_testing=config.unsafe_testing,
-            )
-
         return cls(
             config=config,
             _user_db_factory=config.resolve_user_db_factory(),
             _user_manager_factory=resolve_user_manager_factory(config),
-            _oauth_token_encryption=oauth_token_encryption,
+            _oauth_token_encryption=_build_oauth_token_encryption(config),
         )
 
     def build_manager(self, session: AsyncSession) -> BaseUserManager[UP, Any]:
@@ -161,6 +154,26 @@ class _ManagerLifecycleRoleUpdater[UP: UserProtocol[Any]]:
             config=self.config,
             backends=bound_backends,
         )
+
+
+def _build_oauth_token_encryption[UP: UserProtocol[Any]](
+    config: LitestarAuthConfig[UP, Any],
+) -> OAuthTokenEncryption | None:
+    """Return the OAuth token encryption policy for role-admin manager lifecycles."""
+    oauth_config = config.oauth_config
+    if oauth_config is None:
+        return None
+    keyring = oauth_config.oauth_token_encryption_keyring
+    if keyring is not None:
+        return OAuthTokenEncryption(
+            unsafe_testing=config.unsafe_testing,
+            active_key_id=keyring.active_key_id,
+            keys=keyring.keys,
+        )
+    return OAuthTokenEncryption(
+        oauth_config.oauth_token_encryption_key,
+        unsafe_testing=config.unsafe_testing,
+    )
 
 
 @cache

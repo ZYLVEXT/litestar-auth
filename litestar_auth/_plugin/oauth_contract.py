@@ -28,6 +28,7 @@ class _OAuthRouteRegistrationContract:
     oauth_cookie_secure: bool
     oauth_associate_by_email: bool
     oauth_trust_provider_email_verified: bool
+    oauth_flow_cookie_secret: str | None
     login_path: str
     associate_path: str
     redirect_base_url: str | None
@@ -149,6 +150,7 @@ def _build_oauth_route_registration_contract(
             oauth_cookie_secure=True,
             oauth_associate_by_email=False,
             oauth_trust_provider_email_verified=False,
+            oauth_flow_cookie_secret=None,
             login_path=login_path,
             associate_path=associate_path,
             redirect_base_url=None,
@@ -166,6 +168,7 @@ def _build_oauth_route_registration_contract(
         oauth_cookie_secure=oauth_config.oauth_cookie_secure,
         oauth_associate_by_email=oauth_config.oauth_associate_by_email,
         oauth_trust_provider_email_verified=oauth_config.oauth_trust_provider_email_verified,
+        oauth_flow_cookie_secret=oauth_config.oauth_flow_cookie_secret,
         login_path=login_path,
         associate_path=associate_path,
         redirect_base_url=redirect_base_url,

@@ -10,10 +10,12 @@ import pytest
 from litestar.exceptions import ClientException, PermissionDeniedException
 
 import litestar_auth.oauth.service as oauth_service_module
-from litestar_auth.exceptions import ErrorCode
+from litestar_auth.exceptions import AuthenticationError, ErrorCode
 from litestar_auth.oauth.client_adapter import OAuthClientAdapter
 from litestar_auth.oauth.service import (
     OAuthService,
+    _build_pkce_code_challenge,
+    _generate_pkce_code_verifier,
     _require_account_state,
     _require_oauth_account_store,
     _resolve_account_state_validator,
@@ -22,6 +24,44 @@ from tests._helpers import ExampleUser
 from tests.unit.test_definition_file_coverage import load_reloaded_test_alias
 
 pytestmark = pytest.mark.unit
+_PKCE_UNRESERVED_ALPHABET = frozenset("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~")
+_PKCE_MIN_VERIFIER_LENGTH = 43
+_PKCE_MAX_VERIFIER_LENGTH = 128
+_STATE_TOKEN_BYTES = 32
+_FIXED_PKCE_VERIFIER = "A" * 64
+
+
+class _RecordingOAuthClientAdapter(OAuthClientAdapter):
+    """Capture authorization URL calls made by the service."""
+
+    def __init__(self, *, authorization_url: str = "https://provider.example/authorize") -> None:
+        self.authorization_url = authorization_url
+        self.authorization_calls: list[dict[str, object]] = []
+
+    async def get_authorization_url(
+        self,
+        *,
+        redirect_uri: str,
+        state: str,
+        scopes: list[str] | None = None,
+        code_challenge: str | None = None,
+        code_challenge_method: str | None = None,
+    ) -> str:
+        """Record authorization material and return a stable provider URL.
+
+        Returns:
+            Configured provider authorization URL.
+        """
+        self.authorization_calls.append(
+            {
+                "redirect_uri": redirect_uri,
+                "state": state,
+                "scopes": scopes,
+                "code_challenge": code_challenge,
+                "code_challenge_method": code_challenge_method,
+            },
+        )
+        return self.authorization_url
 
 
 def _build_manager(*, existing_user: ExampleUser | None = None) -> AsyncMock:
@@ -80,15 +120,46 @@ def test_oauth_service_module_reload_preserves_behavioral_error_contract(monkeyp
     assert client_exc_info.value.detail == reloaded_module.InactiveUserError.default_message
 
 
-async def test_authorize_returns_state_and_provider_url(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Authorize flow generates state and delegates URL construction to the client adapter."""
-    oauth_client = AsyncMock()
-    oauth_client.get_authorization_url.return_value = "https://provider.example/authorize?state=fixed-state"
+def test_generate_pkce_code_verifier_uses_unreserved_alphabet() -> None:
+    """Generated PKCE verifiers use the RFC 7636 unreserved URI alphabet."""
+    code_verifier = _generate_pkce_code_verifier()
+
+    assert _PKCE_MIN_VERIFIER_LENGTH <= len(code_verifier) <= _PKCE_MAX_VERIFIER_LENGTH
+    assert set(code_verifier) <= _PKCE_UNRESERVED_ALPHABET
+
+
+def test_generate_pkce_code_verifier_rejects_invalid_entropy(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Verifier generation fails closed if the entropy source returns invalid material."""
+    monkeypatch.setattr("litestar_auth.oauth.service.secrets.token_urlsafe", lambda _size: "!")
+
+    with pytest.raises(RuntimeError, match="PKCE code verifier"):
+        _generate_pkce_code_verifier()
+
+
+def test_build_pkce_code_challenge_matches_rfc7636_appendix_b() -> None:
+    """S256 challenge generation matches the RFC 7636 Appendix B vector."""
+    code_verifier = "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk"
+
+    code_challenge = _build_pkce_code_challenge(code_verifier)
+
+    assert code_challenge == "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM"
+    assert "=" not in code_challenge
+    assert set(code_challenge) <= _PKCE_UNRESERVED_ALPHABET
+
+
+async def test_authorize_returns_state_verifier_and_provider_url(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Authorize flow generates state and PKCE material before delegating URL construction."""
+    oauth_client = _RecordingOAuthClientAdapter(
+        authorization_url="https://provider.example/authorize?state=fixed-state",
+    )
     service = OAuthService(
         provider_name="github",
-        client=OAuthClientAdapter(oauth_client),
+        client=oauth_client,
     )
-    monkeypatch.setattr("litestar_auth.oauth.service.secrets.token_urlsafe", lambda _size: "fixed-state")
+    monkeypatch.setattr(
+        "litestar_auth.oauth.service.secrets.token_urlsafe",
+        lambda size: "fixed-state" if size == _STATE_TOKEN_BYTES else _FIXED_PKCE_VERIFIER,
+    )
 
     authorization = await service.authorize(
         redirect_uri="https://app.example/callback",
@@ -96,12 +167,33 @@ async def test_authorize_returns_state_and_provider_url(monkeypatch: pytest.Monk
     )
 
     assert authorization.state == "fixed-state"
+    assert authorization.code_verifier == _FIXED_PKCE_VERIFIER
     assert authorization.authorization_url == "https://provider.example/authorize?state=fixed-state"
-    oauth_client.get_authorization_url.assert_awaited_once_with(
-        "https://app.example/callback",
-        "fixed-state",
-        scope="openid email",
-    )
+    assert oauth_client.authorization_calls == [
+        {
+            "redirect_uri": "https://app.example/callback",
+            "state": "fixed-state",
+            "scopes": ["openid", "email"],
+            "code_challenge": "1T7aemN8mcx_tWbZbp-hCb8VxHhBCj9etNTE4mzQgfY",
+            "code_challenge_method": "S256",
+        },
+    ]
+
+
+async def test_authorize_generates_distinct_pkce_material_per_call() -> None:
+    """Each authorization flow receives fresh PKCE verifier and challenge material."""
+    oauth_client = _RecordingOAuthClientAdapter()
+    service = OAuthService(provider_name="github", client=oauth_client)
+
+    first_authorization = await service.authorize(redirect_uri="https://app.example/callback")
+    second_authorization = await service.authorize(redirect_uri="https://app.example/callback")
+
+    assert first_authorization.code_verifier != second_authorization.code_verifier
+    first_call = oauth_client.authorization_calls[0]
+    second_call = oauth_client.authorization_calls[1]
+    assert first_call["code_challenge"] != second_call["code_challenge"]
+    assert first_call["code_challenge_method"] == "S256"
+    assert second_call["code_challenge_method"] == "S256"
 
 
 async def test_complete_login_bootstraps_user_and_links_account(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -129,10 +221,16 @@ async def test_complete_login_bootstraps_user_and_links_account(monkeypatch: pyt
     user = await service.complete_login(
         code="provider-code",
         redirect_uri="https://app.example/callback",
+        code_verifier="pkce-code-verifier",
         user_manager=manager,
     )
 
     assert user is verified_user
+    oauth_client.get_access_token.assert_awaited_once_with(
+        "provider-code",
+        "https://app.example/callback",
+        code_verifier="pkce-code-verifier",
+    )
     manager.create.assert_awaited_once_with(
         {"email": "oauth@example.com", "password": "generated-password"},
         safe=True,
@@ -171,6 +269,7 @@ async def test_complete_login_rejects_existing_email_without_association() -> No
         await service.complete_login(
             code="provider-code",
             redirect_uri="https://app.example/callback",
+            code_verifier="pkce-code-verifier",
             user_manager=manager,
         )
 
@@ -352,6 +451,7 @@ async def test_complete_login_maps_inactive_user_to_client_error() -> None:
         await service.complete_login(
             code="provider-code",
             redirect_uri="https://app.example/callback",
+            code_verifier="pkce-code-verifier",
             user_manager=manager,
         )
 
@@ -433,6 +533,7 @@ async def test_associate_account_rejects_cross_user_link() -> None:
             user=user,
             code="provider-code",
             redirect_uri="https://app.example/callback",
+            code_verifier="pkce-code-verifier",
             user_manager=manager,
         )
 
@@ -474,6 +575,7 @@ async def test_associate_account_rejects_when_either_id_is_none(
             user=user,
             code="provider-code",
             redirect_uri="https://app.example/callback",
+            code_verifier="pkce-code-verifier",
             user_manager=manager,
         )
 
@@ -499,9 +601,15 @@ async def test_associate_account_links_provider_for_current_user() -> None:
         user=user,
         code="provider-code",
         redirect_uri="https://app.example/callback",
+        code_verifier="pkce-code-verifier",
         user_manager=manager,
     )
 
+    oauth_client.get_access_token.assert_awaited_once_with(
+        "provider-code",
+        "https://app.example/callback",
+        code_verifier="pkce-code-verifier",
+    )
     manager.oauth_account_store.upsert_oauth_account.assert_awaited_once_with(
         user,
         oauth_name="github",
@@ -536,6 +644,7 @@ async def test_associate_account_maps_store_link_conflict_to_client_error() -> N
             user=user,
             code="provider-code",
             redirect_uri="https://app.example/callback",
+            code_verifier="pkce-code-verifier",
             user_manager=manager,
         )
 
@@ -560,8 +669,46 @@ async def test_complete_login_requires_explicit_oauth_account_store() -> None:
         await service.complete_login(
             code="provider-code",
             redirect_uri="https://app.example/callback",
+            code_verifier="pkce-code-verifier",
             user_manager=manager,
         )
+
+
+@pytest.mark.parametrize("code_verifier", ["", "   "])
+async def test_complete_login_rejects_empty_code_verifier(code_verifier: str) -> None:
+    """Login token exchange requires recoverable PKCE verifier material."""
+    manager = _build_manager()
+    oauth_client = AsyncMock()
+    service = OAuthService(provider_name="github", client=OAuthClientAdapter(oauth_client))
+
+    with pytest.raises(AuthenticationError, match="PKCE code verifier"):
+        await service.complete_login(
+            code="provider-code",
+            redirect_uri="https://app.example/callback",
+            code_verifier=code_verifier,
+            user_manager=manager,
+        )
+
+    oauth_client.get_access_token.assert_not_awaited()
+
+
+@pytest.mark.parametrize("code_verifier", ["", "   "])
+async def test_associate_account_rejects_empty_code_verifier(code_verifier: str) -> None:
+    """Associate token exchange requires recoverable PKCE verifier material."""
+    manager = _build_manager()
+    oauth_client = AsyncMock()
+    service = OAuthService(provider_name="github", client=OAuthClientAdapter(oauth_client))
+
+    with pytest.raises(AuthenticationError, match="PKCE code verifier"):
+        await service.associate_account(
+            user=ExampleUser(id=uuid4(), email="user@example.com"),
+            code="provider-code",
+            redirect_uri="https://app.example/callback",
+            code_verifier=code_verifier,
+            user_manager=manager,
+        )
+
+    oauth_client.get_access_token.assert_not_awaited()
 
 
 def test_require_oauth_account_store_returns_explicit_store() -> None:

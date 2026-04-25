@@ -111,6 +111,10 @@ _RESET_PASSWORD_TOKEN_SECRET_ROLE = _SecretRole(
     protected_surface="reset-password JWT signing and password fingerprints",
     audiences=(RESET_PASSWORD_TOKEN_AUDIENCE,),
 )
+_LOGIN_IDENTIFIER_TELEMETRY_SECRET_ROLE = _SecretRole(
+    setting_name="login_identifier_telemetry_secret",
+    protected_surface="failed-login identifier digest telemetry",
+)
 _TOTP_SECRET_KEY_ROLE = _SecretRole(
     setting_name="totp_secret_key",
     protected_surface="persisted TOTP secret encryption at rest",
@@ -120,6 +124,33 @@ _TOTP_PENDING_SECRET_ROLE = _SecretRole(
     protected_surface="pending/enrollment TOTP JWT signing",
     audiences=(TOTP_PENDING_AUDIENCE, TOTP_ENROLL_AUDIENCE),
 )
+_OAUTH_FLOW_COOKIE_SECRET_ROLE = _SecretRole(
+    setting_name="oauth_flow_cookie_secret",
+    protected_surface="transient OAuth state and PKCE verifier cookie encryption",
+)
+
+
+@dataclass(frozen=True, slots=True)
+class SecretRoleValues:
+    """Configured secret material grouped by the auth role each value protects."""
+
+    verification_token_secret: str | None
+    reset_password_token_secret: str | None
+    login_identifier_telemetry_secret: str | None = None
+    totp_secret_key: str | None = None
+    totp_pending_secret: str | None = None
+    oauth_flow_cookie_secret: str | None = None
+
+    def as_role_pairs(self) -> tuple[tuple[_SecretRole, str | None], ...]:
+        """Return role metadata paired with the configured secret material."""
+        return (
+            (_VERIFICATION_TOKEN_SECRET_ROLE, self.verification_token_secret),
+            (_RESET_PASSWORD_TOKEN_SECRET_ROLE, self.reset_password_token_secret),
+            (_LOGIN_IDENTIFIER_TELEMETRY_SECRET_ROLE, self.login_identifier_telemetry_secret),
+            (_TOTP_SECRET_KEY_ROLE, self.totp_secret_key),
+            (_TOTP_PENDING_SECRET_ROLE, self.totp_pending_secret),
+            (_OAUTH_FLOW_COOKIE_SECRET_ROLE, self.oauth_flow_cookie_secret),
+        )
 
 
 def validate_secret_length(secret: str, *, label: str, minimum_length: int = MINIMUM_SECRET_LENGTH) -> None:
@@ -210,13 +241,7 @@ def _resolve_token_secret(
     return secret
 
 
-def validate_secret_roles_are_distinct(
-    *,
-    verification_token_secret: str | None,
-    reset_password_token_secret: str | None,
-    totp_secret_key: str | None = None,
-    totp_pending_secret: str | None = None,
-) -> None:
+def validate_secret_roles_are_distinct(role_values: SecretRoleValues) -> None:
     """Raise when one configured secret value is reused across distinct auth roles.
 
     Distinct JWT audiences already keep verification, reset-password, and TOTP
@@ -228,14 +253,8 @@ def validate_secret_roles_are_distinct(
         ConfigurationError: If one configured secret value is reused across
             multiple roles.
     """
-    configured_roles = (
-        (_VERIFICATION_TOKEN_SECRET_ROLE, verification_token_secret),
-        (_RESET_PASSWORD_TOKEN_SECRET_ROLE, reset_password_token_secret),
-        (_TOTP_SECRET_KEY_ROLE, totp_secret_key),
-        (_TOTP_PENDING_SECRET_ROLE, totp_pending_secret),
-    )
     roles_by_secret: dict[str, list[_SecretRole]] = {}
-    for role, secret in configured_roles:
+    for role, secret in role_values.as_role_pairs():
         if not secret:
             continue
         roles_by_secret.setdefault(secret, []).append(role)
@@ -252,8 +271,9 @@ def validate_secret_roles_are_distinct(
     role_descriptions = "; ".join(", ".join(role.render_usage() for role in roles) for roles in reused_roles)
     msg = (
         "Distinct secrets/keys are the supported production posture for "
-        "verification, reset-password, and TOTP roles. Distinct JWT audiences "
-        "still prevent token cross-use, but reusing one configured value across "
+        "verification, reset-password, login telemetry, TOTP, and OAuth flow-cookie roles. "
+        "Distinct JWT audiences "
+        "and encrypted-cookie envelopes still prevent token cross-use, but reusing one configured value across "
         "roles increases blast radius if that secret leaks. "
         f"Detected shared secret material across: {role_descriptions}. "
         "Configure one distinct high-entropy value for each secret role, or use "

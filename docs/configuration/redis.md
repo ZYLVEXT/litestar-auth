@@ -16,6 +16,13 @@ pending enrollment, replay protection, and pending-login-token JTI deduplication
 `litestar_auth.contrib.redis.RedisAuthPreset` plus explicit verification slots from
 `litestar_auth.ratelimit.AuthRateLimitSlot`:
 
+This is the recommended rate-limit backend posture for multi-worker production. Pair the generated
+rate-limit config with `LitestarAuthConfig.deployment_worker_count=2` or the actual known worker
+count so startup can fail closed if a later configuration change accidentally reintroduces a
+process-local auth rate-limit backend. Leave `deployment_worker_count=None` only when the host
+topology is genuinely unknown; in that case the plugin preserves warning-only diagnostics because it
+cannot reliably infer every ASGI server's process count.
+
 For strict typing, annotate the shared client with
 `litestar_auth.contrib.redis.RedisAuthClientProtocol`. The shared-client recipe assumes a
 `redis.asyncio.Redis`-compatible runtime client. The shared protocol covers the combined operations
@@ -23,7 +30,7 @@ used by the preset's rate-limiter, pending-enrollment, used-code replay, and pen
 `eval(...)`, `delete(...)`, `set(name, value, nx=True, px=ttl_ms)`, `get(...)`, and `setex(...)`.
 
 ```python
-from litestar_auth import TotpConfig
+from litestar_auth import LitestarAuthConfig, TotpConfig
 from litestar_auth.contrib.redis import (
     RedisAuthClientProtocol,
     RedisAuthPreset,
@@ -48,6 +55,14 @@ totp_config = TotpConfig(
     totp_enrollment_store=redis_auth.build_totp_enrollment_store(),
     totp_pending_jti_store=redis_auth.build_totp_pending_jti_store(),
     totp_used_tokens_store=redis_auth.build_totp_used_tokens_store(),
+)
+config = LitestarAuthConfig(
+    user_model=User,
+    session_maker=session_maker,
+    backends=backends,
+    rate_limit_config=rate_limit_config,
+    totp_config=totp_config,
+    deployment_worker_count=2,
 )
 ```
 
@@ -123,6 +138,11 @@ totp_used_tokens_store = RedisUsedTotpCodeStore(redis=redis_client)
 totp_enrollment_store = RedisTotpEnrollmentStore(redis=redis_client)
 ```
 
+`RedisRateLimiter.is_shared_across_workers` satisfies the plugin's declared multi-worker startup
+contract. A process-local backend such as `InMemoryRateLimiter` does not; with
+`deployment_worker_count > 1`, startup raises `ConfigurationError` and names the affected
+auth rate-limit slots.
+
 The shared builder uses the defaults below as its supported slot contract:
 
 | `AuthRateLimitSlot` value | `AuthRateLimitEndpointGroup` value | Default scope | Default namespace token |
@@ -132,10 +152,12 @@ The shared builder uses the defaults below as its supported slot contract:
 | `AuthRateLimitSlot.REGISTER` | `register` | `ip` | `register` |
 | `AuthRateLimitSlot.FORGOT_PASSWORD` | `password_reset` | `ip_email` | `forgot-password` |
 | `AuthRateLimitSlot.RESET_PASSWORD` | `password_reset` | `ip` | `reset-password` |
+| `AuthRateLimitSlot.CHANGE_PASSWORD` | `login` | `ip_email` | `change-password` |
 | `AuthRateLimitSlot.TOTP_ENABLE` | `totp` | `ip` | `totp-enable` |
 | `AuthRateLimitSlot.TOTP_CONFIRM_ENABLE` | `totp` | `ip` | `totp-confirm-enable` |
 | `AuthRateLimitSlot.TOTP_VERIFY` | `totp` | `ip` | `totp-verify` |
 | `AuthRateLimitSlot.TOTP_DISABLE` | `totp` | `ip` | `totp-disable` |
+| `AuthRateLimitSlot.TOTP_REGENERATE_RECOVERY_CODES` | `totp` | `ip` | `totp-regenerate-recovery-codes` |
 | `AuthRateLimitSlot.VERIFY_TOKEN` | `verification` | `ip` | `verify-token` |
 | `AuthRateLimitSlot.REQUEST_VERIFY_TOKEN` | `verification` | `ip_email` | `request-verify-token` |
 

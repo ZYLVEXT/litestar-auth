@@ -8,6 +8,24 @@ Time-based one-time passwords in **litestar-auth** split into a **low-level cryp
 
 **Enrollment** is intentionally **two-phase**: first **enable** (receive secret, otpauth material, and a short-lived enrollment token while the secret is kept in `TotpEnrollmentStore`, not in the JWT), then **confirm** with a valid code so the secret is stored—mirroring the route flow documented in [TOTP (two-factor authentication)](../guides/totp.md). **Verification** (during login or disable flows) checks the current code and relies on replay protection when configured.
 
+Generated recovery codes are 28 lowercase hex characters (112 bits). They are returned only from
+confirm-enable or regenerate responses and are stored only as Argon2 hashes by the manager/store
+surface.
+
+## Persisted secret encryption
+
+Persisted user-row TOTP secrets are owned by `BaseUserManager`, not by the low-level
+`litestar_auth.totp` primitives. Configure `UserManagerSecurity.totp_secret_keyring` with
+`FernetKeyringConfig(active_key_id=..., keys=...)` for production. Stored non-null values use the
+`fernet:v1:<key_id>:<ciphertext>` envelope, and plaintext persisted rows fail closed.
+
+Rotation is intentionally explicit. `BaseUserManager.totp_secret_requires_reencrypt(value)` checks
+whether one stored value uses a non-active configured key id, and
+`BaseUserManager.reencrypt_totp_secret_for_storage(value)` rewrites that one value with the active
+key. Operators must scan and update their own persisted rows, verify that no value still requires
+rotation, and then retire old key ids. Legacy unversioned Fernet rows need an explicit old-key
+migration path because the stored value has no key id.
+
 ## Replay store contract (`UsedTotpCodeStore` and `UsedTotpMarkResult`)
 
 Custom implementations of **`UsedTotpCodeStore`** must implement **`mark_used(user_id, counter, ttl_seconds)`** and return **`UsedTotpMarkResult`**, not a bare boolean. The result tells callers whether the `(user_id, counter)` pair was newly recorded and, when it was not, **why** verification should fail:

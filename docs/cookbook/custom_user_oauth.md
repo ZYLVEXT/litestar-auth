@@ -107,7 +107,7 @@ Keep the same models-owned workflow described in [Configuration](../configuratio
 
 ## Token encryption
 
-Set **`oauth_token_encryption_key`** on `OAuthConfig` in production when providers are configured. Plugin-managed OAuth flows bind that key onto each request-scoped `SQLAlchemyUserDatabase` automatically.
+Set **`oauth_token_encryption_keyring`** on `OAuthConfig` in production when providers are configured. Plugin-managed OAuth flows bind that keyring onto each request-scoped `SQLAlchemyUserDatabase` automatically. The one-key **`oauth_token_encryption_key`** field remains available for single-key deployments.
 
 If you instantiate `SQLAlchemyUserDatabase` directly for OAuth persistence outside the plugin-managed request path, pass an explicit policy yourself:
 
