@@ -330,10 +330,8 @@ class JWTStrategy(Strategy[UP, ID]):
                     key=self.verify_key,
                     algorithms=[self.algorithm],
                     audience=JWT_ACCESS_TOKEN_AUDIENCE,
-                    options={
-                        "verify_exp": False,
-                        "verify_iss": False,
-                    },
+                    options={"verify_exp": False},
+                    issuer=self.issuer,
                 ),
             )
         except InvalidTokenError:
