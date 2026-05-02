@@ -1,0 +1,8 @@
+name: litestar-auth CodeQL
+
+paths:
+  - litestar_auth
+
+paths-ignore:
+  - tests
+  - docs
