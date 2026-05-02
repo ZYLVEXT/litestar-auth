@@ -354,7 +354,6 @@ def test_endpoint_rate_limit_annotations_are_runtime_resolvable() -> None:
     assert get_args(build_key_hints["request"]) == (Any, Any, Any)
     assert build_key_hints["return"] is str
     assert ratelimit_config_module.EndpointRateLimit is ratelimit_endpoint_module.EndpointRateLimit
-    assert ratelimit_config_module.RateLimitScope is ratelimit_endpoint_module.RateLimitScope
 
 
 def test_auth_rate_limit_default_recipes_cover_supported_slots_scopes_groups_and_namespaces() -> None:
@@ -1357,7 +1356,6 @@ async def test_endpoint_rate_limit_shared_backend_preserves_namespace_and_scope_
                 "AuthRateLimitEndpointGroup",
                 "AuthRateLimitSlot",
                 "EndpointRateLimit",
-                "RateLimitScope",
             ),
             id="_config",
         ),

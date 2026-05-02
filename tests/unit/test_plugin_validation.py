@@ -94,6 +94,7 @@ OAUTH_FLOW_COOKIE_SECRET = "oauth-flow-cookie-secret-1234567890"
 JWT_SECRET = "s" * 32
 TOKEN_HASH_SECRET = "t" * 32
 TOTP_SECRET_KEY = "u" * 32
+TOTP_RECOVERY_CODE_LOOKUP_SECRET = "lookup-secret-for-recovery-codes"
 
 
 def _fernet_key() -> str:
@@ -1402,6 +1403,20 @@ def test_validate_totp_pending_secret_config_rejects_short_secret() -> None:
     assert type(exc_info.value).__name__ == "ConfigurationError"
 
 
+def test_validate_totp_pending_secret_config_requires_recovery_code_lookup_secret() -> None:
+    """TOTP startup validation requires lookup secret material for recovery codes."""
+    config = _minimal_config(
+        totp_config=_configured_totp_config(),
+        user_manager_security=UserManagerSecurity[UUID](
+            verification_token_secret="v" * 32,
+            reset_password_token_secret="r" * 32,
+        ),
+    )
+
+    with pytest.raises(ConfigurationError, match="totp_recovery_code_lookup_secret is required"):
+        _validate_totp_pending_secret_config(config)
+
+
 def test_validate_totp_user_model_protocol_accepts_totp_user_model() -> None:
     """TOTP startup validation accepts a model exposing the required protocol fields."""
     config = _minimal_config(totp_config=_configured_totp_config())
@@ -1426,6 +1441,7 @@ def test_validate_config_rejects_totp_enabled_user_model_without_totp_fields() -
             verification_token_secret="v" * 32,
             reset_password_token_secret="r" * 32,
             totp_secret_key=TOTP_SECRET_KEY,
+            totp_recovery_code_lookup_secret=TOTP_RECOVERY_CODE_LOOKUP_SECRET,
             id_parser=UUID,
         ),
     )
@@ -1484,6 +1500,7 @@ def test_validate_totp_encryption_key_allows_configured_secret_in_production(
             verification_token_secret="v" * 32,
             reset_password_token_secret="r" * 32,
             totp_secret_key=TOTP_SECRET_KEY,
+            totp_recovery_code_lookup_secret=TOTP_RECOVERY_CODE_LOOKUP_SECRET,
         ),
     )
 
@@ -1511,7 +1528,10 @@ def test_validate_totp_encryption_key_allows_typed_security_secret_in_production
     """The canonical typed security bundle satisfies the production TOTP requirement."""
     config = _minimal_config(
         totp_config=TotpConfig(totp_pending_secret="p" * 32),
-        user_manager_security=UserManagerSecurity[UUID](totp_secret_key=TOTP_SECRET_KEY),
+        user_manager_security=UserManagerSecurity[UUID](
+            totp_secret_key=TOTP_SECRET_KEY,
+            totp_recovery_code_lookup_secret=TOTP_RECOVERY_CODE_LOOKUP_SECRET,
+        ),
     )
 
     _validate_totp_encryption_key(config)
@@ -1589,6 +1609,7 @@ def test_validate_config_accepts_typed_user_manager_security_contract() -> None:
             verification_token_secret="s" * 32,
             reset_password_token_secret="r" * 32,
             totp_secret_key=TOTP_SECRET_KEY,
+            totp_recovery_code_lookup_secret=TOTP_RECOVERY_CODE_LOOKUP_SECRET,
             id_parser=UUID,
         ),
         id_parser=UUID,
@@ -1607,6 +1628,7 @@ def test_validate_user_manager_security_config_rejects_when_secret_roles_share_o
             reset_password_token_secret=shared_secret,
             login_identifier_telemetry_secret=shared_secret,
             totp_secret_key=shared_secret,
+            totp_recovery_code_lookup_secret=shared_secret,
         ),
         totp_config=_configured_totp_config(
             totp_pending_secret=shared_secret,
@@ -1623,6 +1645,7 @@ def test_validate_user_manager_security_config_rejects_when_secret_roles_share_o
     assert "login_identifier_telemetry_secret" in message
     assert "totp_secret_key" in message
     assert "totp_pending_secret" in message
+    assert "totp_recovery_code_lookup_secret" in message
     assert VERIFY_TOKEN_AUDIENCE in message
     assert RESET_PASSWORD_TOKEN_AUDIENCE in message
     assert TOTP_PENDING_AUDIENCE in message
@@ -2284,6 +2307,7 @@ def _minimal_config(  # noqa: PLR0913
     resolved_manager_security = user_manager_security or UserManagerSecurity[UUID](
         verification_token_secret="v" * 32,
         reset_password_token_secret="r" * 32,
+        totp_recovery_code_lookup_secret=TOTP_RECOVERY_CODE_LOOKUP_SECRET if totp_config is not None else None,
     )
     user_db = InMemoryUserDatabase([])
     configured_backends = (

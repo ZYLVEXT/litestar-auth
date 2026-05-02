@@ -45,6 +45,7 @@ HTTP_BAD_REQUEST = 400
 HTTP_CREATED = 201
 HTTP_TOO_MANY_REQUESTS = 429
 HTTP_ACCEPTED = 202
+TOTP_RECOVERY_CODE_LOOKUP_SECRET = "test-recovery-code-lookup-secret-123"
 
 
 class RateLimitUserManager(BaseUserManager[User, UUID]):
@@ -209,6 +210,7 @@ def _build_app_with_trusted_proxy(
             verification_token_secret="verify-secret-1234567890-1234567890",
             reset_password_token_secret="reset-secret-1234567890-1234567890",
             totp_secret_key=Fernet.generate_key().decode(),
+            totp_recovery_code_lookup_secret=TOTP_RECOVERY_CODE_LOOKUP_SECRET,
             id_parser=UUID,
             password_helper=password_helper,
         ),

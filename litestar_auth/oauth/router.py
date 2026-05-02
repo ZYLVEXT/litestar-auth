@@ -6,11 +6,11 @@ from dataclasses import dataclass
 from importlib import import_module
 from typing import TYPE_CHECKING, Any, NotRequired, Required, TypedDict, Unpack, overload
 
+from litestar_auth.controllers._oauth_helpers import _validate_manual_oauth_redirect_base_url
 from litestar_auth.controllers.oauth import (
     OAuthControllerUserManagerProtocol,
     _create_login_oauth_controller,
     _OAuthLoginControllerSettings,
-    _validate_manual_oauth_redirect_base_url,
 )
 from litestar_auth.exceptions import ConfigurationError
 from litestar_auth.oauth.client_adapter import _build_oauth_client_adapter

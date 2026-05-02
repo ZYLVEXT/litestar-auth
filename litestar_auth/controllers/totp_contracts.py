@@ -10,6 +10,7 @@ from litestar_auth.controllers._utils import AccountStateValidatorProvider
 from litestar_auth.types import LoginIdentifier, UserProtocol
 
 if TYPE_CHECKING:
+    from litestar_auth.password import PasswordHelper
     from litestar_auth.ratelimit import TotpSensitiveEndpoint
 
 INVALID_TOTP_TOKEN_DETAIL = "Invalid or expired 2FA pending token."  # noqa: S105
@@ -43,14 +44,22 @@ class TotpUserManagerProtocol[UP: UserProtocol[Any], ID](AccountStateValidatorPr
     async def read_totp_secret(self, secret: str | None) -> str | None:
         """Return a plain-text TOTP secret from storage."""
 
-    async def set_recovery_code_hashes(self, user: UP, hashes: tuple[str, ...]) -> UP:
-        """Replace the active TOTP recovery-code hashes for a user."""
+    async def set_recovery_code_hashes(self, user: UP, code_index: dict[str, str]) -> UP:
+        """Replace the active TOTP recovery-code lookup index for a user."""
 
-    async def read_recovery_code_hashes(self, user: UP) -> tuple[str, ...]:
-        """Return active TOTP recovery-code hashes for a user."""
+    async def find_recovery_code_hash_by_lookup(self, user: UP, lookup_hex: str) -> str | None:
+        """Return the active recovery-code hash matching ``lookup_hex``."""
 
-    async def consume_recovery_code_hash(self, user: UP, matched_hash: str) -> bool:
-        """Atomically consume a matched recovery-code hash."""
+    async def consume_recovery_code_by_lookup(self, user: UP, lookup_hex: str) -> bool:
+        """Atomically consume a matched recovery-code lookup entry."""
+
+    @property
+    def recovery_code_lookup_secret(self) -> bytes | None:
+        """Return the HMAC lookup key for recovery-code verification."""
+
+    @property
+    def password_helper(self) -> PasswordHelper:
+        """Return the configured password helper used for recovery-code hashing."""
 
     async def authenticate(
         self,

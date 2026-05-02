@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING, Any, NotRequired, Required, TypedDict, Unpack
 
 from litestar_auth._totp_enrollment import _resolve_enrollment_token_cipher
 from litestar_auth.config import validate_secret_length
-from litestar_auth.controllers._utils import _decode_request_body, _mark_litestar_auth_route_handler
+from litestar_auth.controllers._utils import _mark_litestar_auth_route_handler
 from litestar_auth.controllers.totp_context import (
     _build_totp_controller_context,
     _totp_resolve_enrollment_store,
@@ -77,7 +77,6 @@ __all__ = (
     "_TotpControllerContext",
     "_TotpControllerContextSettings",
     "_build_totp_controller_context",
-    "_decode_request_body",
     "_resolve_totp_controller_factory_settings",
     "_totp_handle_confirm_enable",
     "_totp_handle_disable",

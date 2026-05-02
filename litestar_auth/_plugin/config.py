@@ -1,5 +1,14 @@
 """Configuration contracts for the plugin facade."""
 
+# Test-suite reload-coverage pattern note:
+# Several helpers below keep cross-module class identity coherent after tests
+# call `importlib.reload(...)`. The reload pattern is load-bearing for the 100%
+# coverage gate; removing these helpers requires first replacing the
+# coverage-startup mechanism. See the investigation outcome at
+# refactoring-test-reload-investigation.json (REFAC-001): a naive
+# `coverage.run.parallel = true` configuration drops import-time coverage of
+# `_plugin/oauth_contract.py` from 100% to 70.8%.
+
 from __future__ import annotations
 
 from collections.abc import Callable
@@ -67,8 +76,14 @@ StartupBackendInventory = _backend_inventory.StartupBackendInventory
 StartupBackendTemplate = _backend_inventory.StartupBackendTemplate
 
 
-def _sync_backend_inventory_exports() -> None:
-    """Refresh relocated backend-inventory aliases after cross-test module reloads."""
+def _resync_after_test_reload() -> None:
+    """Resync backend-inventory aliases after a test reloads the source module.
+
+    Without this, cross-module ``isinstance`` and class-identity checks would see
+    stale ``StartupBackendInventory`` and ``StartupBackendTemplate`` class
+    objects after ``importlib.reload(_backend_inventory)``. Test-infrastructure
+    helper -- see the module-level note above.
+    """
     global StartupBackendInventory, StartupBackendTemplate  # noqa: PLW0603
     StartupBackendInventory = _backend_inventory.StartupBackendInventory
     StartupBackendTemplate = _backend_inventory.StartupBackendTemplate
@@ -76,19 +91,28 @@ def _sync_backend_inventory_exports() -> None:
     StartupBackendTemplate.__module__ = __name__
 
 
-_sync_backend_inventory_exports()
+_resync_after_test_reload()
 
 
 def resolve_backend_inventory[UP: UserProtocol[Any], ID](
     config: LitestarAuthConfig[UP, ID],
 ) -> StartupBackendInventory[UP, ID]:
-    """Return the current backend inventory while preserving the historical config import path."""
-    _sync_backend_inventory_exports()
+    """Refresh test-reload-safe aliases and return the resolved backend inventory.
+
+    Returns:
+        The current startup backend inventory for ``config``.
+    """
+    _resync_after_test_reload()
     return _backend_inventory.resolve_backend_inventory(config)
 
 
 def _current_password_helper_type() -> type[PasswordHelper]:
-    """Resolve PasswordHelper lazily so cross-test module reloads stay coherent.
+    """Resolve ``PasswordHelper`` lazily for the memoized default helper.
+
+    This lets ``LitestarAuthConfig._memoized_default_password_helper`` pick up
+    the post-reload class identity if a test calls
+    ``importlib.reload(litestar_auth.password)``. Test-infrastructure helper --
+    see the module-level note above.
 
     Returns:
         The current PasswordHelper type from ``litestar_auth.password``.

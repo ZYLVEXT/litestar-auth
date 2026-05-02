@@ -136,6 +136,7 @@ def _build_user_manager_security[ID](
     verification_token_secret: str | None = None,
     reset_password_token_secret: str | None = None,
     totp_secret_key: str | None = None,
+    totp_recovery_code_lookup_secret: str | None = None,
     id_parser: Callable[[str], ID] | None = None,
 ) -> UserManagerSecurity[ID]:
     """Return the concrete manager-security bundle."""
@@ -145,6 +146,7 @@ def _build_user_manager_security[ID](
         verification_token_secret=verification_token_secret,
         reset_password_token_secret=reset_password_token_secret,
         totp_secret_key=totp_secret_key,
+        totp_recovery_code_lookup_secret=totp_recovery_code_lookup_secret,
         id_parser=id_parser,
     )
 
@@ -204,6 +206,11 @@ def resolve_secret_inputs[ID](
         validate_secret_length(
             resolved_login_identifier_telemetry_secret,
             label="login_identifier_telemetry_secret",
+        )
+    if resolved_security.totp_recovery_code_lookup_secret is not None and not unsafe_testing:
+        validate_secret_length(
+            resolved_security.totp_recovery_code_lookup_secret,
+            label="totp_recovery_code_lookup_secret",
         )
 
     return ResolvedSecretInputs(

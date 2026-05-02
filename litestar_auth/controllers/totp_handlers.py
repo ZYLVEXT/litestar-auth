@@ -16,9 +16,9 @@ from litestar_auth._totp_enrollment import (
 from litestar_auth.controllers._utils import (
     AccountStateValidatorProvider,
     RequestBodyErrorConfig,
+    _decode_request_body,
     _require_account_state,
 )
-from litestar_auth.controllers._utils import _decode_request_body as _default_decode_request_body
 from litestar_auth.controllers.auth import INVALID_CREDENTIALS_DETAIL
 from litestar_auth.controllers.totp_contracts import (
     INVALID_ENROLL_TOKEN_DETAIL,
@@ -35,10 +35,10 @@ from litestar_auth.payloads import (
     TotpRegenerateRecoveryCodesRequest,
 )
 from litestar_auth.totp import (
+    build_recovery_code_index,
     generate_totp_recovery_codes,
     generate_totp_secret,
     generate_totp_uri,
-    hash_totp_recovery_codes,
     verify_totp,
 )
 from litestar_auth.totp_flow import (
@@ -127,23 +127,6 @@ def _totp_request_body_error_config(
     )
 
 
-async def _decode_totp_request_body(
-    request: Request[Any, Any, Any],
-    *,
-    schema: type[Any],
-    error_config: RequestBodyErrorConfig,
-) -> object:
-    """Decode TOTP request bodies through the historical controller monkeypatch seam.
-
-    Returns:
-        Decoded request body payload.
-    """
-    from litestar_auth.controllers import totp as totp_facade  # noqa: PLC0415
-
-    decoder = getattr(totp_facade, "_decode_request_body", _default_decode_request_body)
-    return await decoder(request, schema=schema, error_config=error_config)
-
-
 async def _totp_resolve_enable_payload(
     request: Request[Any, Any, Any],
     *,
@@ -159,7 +142,7 @@ async def _totp_resolve_enable_payload(
         if isinstance(data, TotpEnableRequest):
             return data
         _raise_invalid_totp_payload()
-    decoded = await _decode_totp_request_body(
+    decoded = await _decode_request_body(
         request,
         schema=TotpEnableRequest,
         error_config=_totp_request_body_error_config(runtime, "enable"),
@@ -184,7 +167,7 @@ async def _totp_resolve_regenerate_payload(
         if isinstance(data, TotpRegenerateRecoveryCodesRequest):
             return data
         _raise_invalid_totp_payload()
-    decoded = await _decode_totp_request_body(
+    decoded = await _decode_request_body(
         request,
         schema=TotpRegenerateRecoveryCodesRequest,
         error_config=_totp_request_body_error_config(runtime, "regenerate_recovery_codes"),
@@ -382,12 +365,23 @@ async def _totp_persist_confirmed_secret[UP: UserProtocol[Any], ID](
 
     Returns:
         Plaintext recovery codes to show once.
+
+    Raises:
+        RuntimeError: If recovery-code lookup secret configuration is missing.
     """
     recovery_codes = generate_totp_recovery_codes()
-    recovery_code_hashes = hash_totp_recovery_codes(recovery_codes)
+    lookup_secret = user_manager.recovery_code_lookup_secret
+    if lookup_secret is None:
+        msg = "totp_recovery_code_lookup_secret is required to persist TOTP recovery codes."
+        raise RuntimeError(msg)
+    recovery_code_index = build_recovery_code_index(
+        recovery_codes,
+        password_helper=user_manager.password_helper,
+        lookup_secret=lookup_secret,
+    )
     try:
         updated_user = await user_manager.set_totp_secret(user, secret)
-        await user_manager.set_recovery_code_hashes(updated_user, recovery_code_hashes)
+        await user_manager.set_recovery_code_hashes(updated_user, recovery_code_index)
     except Exception:
         await user_manager.set_totp_secret(user, None)
         raise

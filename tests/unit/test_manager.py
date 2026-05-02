@@ -2337,23 +2337,33 @@ async def test_totp_secret_helpers_delegate_to_totp_service() -> None:
 
 
 async def test_recovery_code_hash_helpers_delegate_to_user_store() -> None:
-    """TOTP recovery-code helper methods delegate to the persistence store."""
+    """TOTP recovery-code lookup-index helper methods delegate to the persistence store."""
     user_db = AsyncMock()
     password_helper = PasswordHelper()
     manager = TrackingUserManager(user_db, password_helper)
     user = _build_user(password_helper)
-    updated_user = replace(user, recovery_codes_hashes=["hash-1", "hash-2"])
+    code_index = {"lookup-1": "hash-1", "lookup-2": "hash-2"}
+    updated_user = replace(user, recovery_codes=code_index)
     user_db.set_recovery_code_hashes.return_value = updated_user
-    user_db.read_recovery_code_hashes.return_value = ("hash-1", "hash-2")
-    user_db.consume_recovery_code_hash.return_value = True
+    user_db.find_recovery_code_hash_by_lookup.return_value = "hash-1"
+    user_db.consume_recovery_code_by_lookup.return_value = True
 
-    assert await manager.set_recovery_code_hashes(user, ("hash-1", "hash-2")) is updated_user
-    assert await manager.read_recovery_code_hashes(user) == ("hash-1", "hash-2")
-    assert await manager.consume_recovery_code_hash(user, "hash-1") is True
+    assert await manager.set_recovery_code_hashes(user, code_index) is updated_user
+    assert await manager.find_recovery_code_hash_by_lookup(user, "lookup-1") == "hash-1"
+    assert await manager.consume_recovery_code_by_lookup(user, "lookup-1") is True
 
-    user_db.set_recovery_code_hashes.assert_awaited_once_with(user, ("hash-1", "hash-2"))
-    user_db.read_recovery_code_hashes.assert_awaited_once_with(user)
-    user_db.consume_recovery_code_hash.assert_awaited_once_with(user, "hash-1")
+    user_db.set_recovery_code_hashes.assert_awaited_once_with(user, code_index)
+    user_db.find_recovery_code_hash_by_lookup.assert_awaited_once_with(user, "lookup-1")
+    user_db.consume_recovery_code_by_lookup.assert_awaited_once_with(user, "lookup-1")
+
+
+def test_recovery_code_lookup_secret_returns_none_when_unconfigured() -> None:
+    """Managers without TOTP recovery-code lookup material expose no lookup secret."""
+    user_db = AsyncMock()
+    password_helper = PasswordHelper()
+    manager = TrackingUserManager(user_db, password_helper)
+
+    assert manager.recovery_code_lookup_secret is None
 
 
 async def test_read_totp_secret_requires_key_when_encrypted() -> None:

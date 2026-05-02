@@ -182,6 +182,7 @@ class BaseUserManager[UP: UserProtocol[Any], ID](  # noqa: PLR0904
         self.password_validator = settings.password_validator
         self.reset_verification_on_email_change = settings.reset_verification_on_email_change
         self.totp_secret_key = resolved_security.totp_secret_key
+        self._totp_recovery_code_lookup_secret = resolved_security.totp_recovery_code_lookup_secret
         self.backends: tuple[object, ...] = settings.backends
         self.login_identifier: LoginIdentifier = settings.login_identifier
         self.superuser_role_name = normalize_superuser_role_name(settings.superuser_role_name)
@@ -239,6 +240,13 @@ class BaseUserManager[UP: UserProtocol[Any], ID](  # noqa: PLR0904
     def totp_secret_storage_posture(self) -> TotpSecretStoragePosture:
         """Return the explicit storage contract for persisted TOTP secrets."""
         return self._totp_secrets.storage_posture
+
+    @property
+    def recovery_code_lookup_secret(self) -> bytes | None:
+        """Return the configured TOTP recovery-code lookup HMAC key."""
+        if self._totp_recovery_code_lookup_secret is None:
+            return None
+        return self._totp_recovery_code_lookup_secret.encode("utf-8")
 
     @property
     def users(self) -> UserLifecycleService[UP, ID]:
@@ -411,25 +419,25 @@ class BaseUserManager[UP: UserProtocol[Any], ID](  # noqa: PLR0904
             load_cryptography_fernet=_load_cryptography_fernet,
         )
 
-    async def set_recovery_code_hashes(self, user: UP, hashes: tuple[str, ...]) -> UP:
-        """Replace the active TOTP recovery-code hashes for a user.
+    async def set_recovery_code_hashes(self, user: UP, code_index: dict[str, str]) -> UP:
+        """Replace the active TOTP recovery-code lookup index for a user.
 
         Returns:
             The updated user instance.
         """
-        return cast("UP", await self.user_db.set_recovery_code_hashes(user, hashes))
+        return cast("UP", await self.user_db.set_recovery_code_hashes(user, code_index))
 
-    async def read_recovery_code_hashes(self, user: UP) -> tuple[str, ...]:
-        """Return active TOTP recovery-code hashes for a user."""
-        return cast("tuple[str, ...]", await self.user_db.read_recovery_code_hashes(user))
+    async def find_recovery_code_hash_by_lookup(self, user: UP, lookup_hex: str) -> str | None:
+        """Return the active recovery-code hash matching ``lookup_hex``."""
+        return cast("str | None", await self.user_db.find_recovery_code_hash_by_lookup(user, lookup_hex))
 
-    async def consume_recovery_code_hash(self, user: UP, matched_hash: str) -> bool:
-        """Atomically consume an active TOTP recovery-code hash.
+    async def consume_recovery_code_by_lookup(self, user: UP, lookup_hex: str) -> bool:
+        """Atomically consume an active TOTP recovery-code lookup entry.
 
         Returns:
-            ``True`` when the hash was consumed, otherwise ``False``.
+            ``True`` when the lookup entry was consumed, otherwise ``False``.
         """
-        return cast("bool", await self.user_db.consume_recovery_code_hash(user, matched_hash))
+        return cast("bool", await self.user_db.consume_recovery_code_by_lookup(user, lookup_hex))
 
     def _prepare_totp_secret_for_storage(self, secret: str | None) -> str | None:
         """Return the database representation for a TOTP secret."""

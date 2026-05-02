@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import binascii
+import hashlib
+import hmac
 import importlib
 import logging
 import warnings
@@ -28,6 +30,7 @@ STORE_CAP = 2
 USED_TOTP_TTL_MS = 1_250
 PENDING_JTI_TTL_SECONDS = 30
 PENDING_JTI_TTL_FLOOR = PENDING_JTI_TTL_SECONDS - 1
+RECOVERY_LOOKUP_SECRET = b"test-recovery-code-lookup-secret"
 
 
 def _replay(
@@ -112,17 +115,127 @@ def test_generate_totp_recovery_codes_rejects_negative_count() -> None:
         totp.generate_totp_recovery_codes(count=-1)
 
 
-def test_hash_totp_recovery_codes_uses_password_helper_verification() -> None:
-    """Recovery codes are stored in the same hash format as password secrets."""
+def _recovery_lookup(code: str) -> str:
+    return hmac.new(RECOVERY_LOOKUP_SECRET, code.casefold().encode("utf-8"), hashlib.sha256).hexdigest()
+
+
+class _RecoveryCodeManager:
+    """Minimal recovery-code manager for helper tests."""
+
+    def __init__(self, code_index: dict[str, str], *, lookup_secret: bytes | None = RECOVERY_LOOKUP_SECRET) -> None:
+        self.code_index = code_index
+        self.consumed_lookups: list[str] = []
+        self._lookup_secret = lookup_secret
+
+    @property
+    def recovery_code_lookup_secret(self) -> bytes | None:
+        """Return the configured lookup secret."""
+        return self._lookup_secret
+
+    async def find_recovery_code_hash_by_lookup(self, user: object, lookup_hex: str) -> str | None:
+        """Return the indexed hash for ``lookup_hex``."""
+        del user
+        return self.code_index.get(lookup_hex)
+
+    async def consume_recovery_code_by_lookup(self, user: object, lookup_hex: str) -> bool:
+        """Consume ``lookup_hex`` once.
+
+        Returns:
+            ``True`` when the lookup was active.
+        """
+        del user
+        if lookup_hex not in self.code_index:
+            return False
+        self.consumed_lookups.append(lookup_hex)
+        self.code_index.pop(lookup_hex)
+        return True
+
+
+def test_build_recovery_code_index_uses_lookup_digest_and_password_hash() -> None:
+    """Recovery codes are stored as HMAC lookup digests mapped to Argon2 hashes."""
     password_helper = PasswordHelper.from_defaults()
     codes = ("0123456789abcdef", "fedcba9876543210")
 
-    hashes = totp.hash_totp_recovery_codes(codes, password_helper=password_helper)
+    code_index = totp.build_recovery_code_index(
+        codes,
+        password_helper=password_helper,
+        lookup_secret=RECOVERY_LOOKUP_SECRET,
+    )
 
-    assert len(hashes) == len(codes)
-    assert hashes[0] != codes[0]
-    assert password_helper.verify(codes[0], hashes[0]) is True
-    assert password_helper.verify("wrong-code", hashes[0]) is False
+    first_lookup = _recovery_lookup(codes[0])
+    assert set(code_index) == {first_lookup, _recovery_lookup(codes[1])}
+    assert code_index[first_lookup] != codes[0]
+    assert password_helper.verify(codes[0], code_index[first_lookup]) is True
+    assert password_helper.verify("wrong-code", code_index[first_lookup]) is False
+
+
+async def test_consume_matching_recovery_code_uses_lookup_index() -> None:
+    """A matching recovery code consumes only its HMAC lookup entry."""
+    password_helper = PasswordHelper.from_defaults()
+    code_index = totp.build_recovery_code_index(
+        ("matching-code",),
+        password_helper=password_helper,
+        lookup_secret=RECOVERY_LOOKUP_SECRET,
+    )
+    manager = _RecoveryCodeManager(code_index)
+
+    assert await totp._consume_matching_recovery_code(
+        manager,
+        object(),
+        "MATCHING-CODE",
+        password_helper=password_helper,
+    )
+    assert manager.consumed_lookups == [_recovery_lookup("matching-code")]
+    assert manager.code_index == {}
+
+
+async def test_consume_matching_recovery_code_miss_runs_dummy_verify(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A recovery-code miss performs a dummy Argon2 verify and returns false."""
+    password_helper = PasswordHelper.from_defaults()
+    dummy_hash = password_helper.hash("dummy")
+    verify_calls: list[tuple[str, str]] = []
+
+    def record_verify(password: str, hashed: str) -> bool:
+        verify_calls.append((password, hashed))
+        return False
+
+    monkeypatch.setattr(totp, "_DUMMY_ARGON2_HASH", dummy_hash)
+    monkeypatch.setattr(password_helper, "verify", record_verify)
+    manager = _RecoveryCodeManager({})
+
+    assert not await totp._consume_matching_recovery_code(manager, object(), "missing", password_helper=password_helper)
+    assert verify_calls == [("missing", dummy_hash)]
+
+
+async def test_consume_matching_recovery_code_rejects_missing_lookup_secret() -> None:
+    """Recovery-code verification fails closed without a lookup secret."""
+    manager = _RecoveryCodeManager({}, lookup_secret=None)
+
+    assert not await totp._consume_matching_recovery_code(manager, object(), "missing")
+
+
+async def test_consume_matching_recovery_code_collision_runs_dummy_verify(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A lookup hit with a non-matching Argon2 hash performs dummy verification."""
+    password_helper = PasswordHelper.from_defaults()
+    dummy_hash = password_helper.hash("dummy")
+    wrong_hash = password_helper.hash("different-code")
+    verify_calls: list[tuple[str, str]] = []
+
+    def record_verify(password: str, hashed: str) -> bool:
+        verify_calls.append((password, hashed))
+        return False
+
+    monkeypatch.setattr(totp, "_DUMMY_ARGON2_HASH", dummy_hash)
+    monkeypatch.setattr(password_helper, "verify", record_verify)
+    manager = _RecoveryCodeManager({_recovery_lookup("submitted-code"): wrong_hash})
+
+    assert not await totp._consume_matching_recovery_code(
+        manager,
+        object(),
+        "submitted-code",
+        password_helper=password_helper,
+    )
+    assert verify_calls == [("submitted-code", wrong_hash), ("submitted-code", dummy_hash)]
 
 
 def test_totp_default_algorithm_is_sha256() -> None:
@@ -733,6 +846,32 @@ async def test_redis_totp_enrollment_store_coerces_non_bytes_eval_result(
     )
 
     assert await store.consume(user_id="user-1", jti="jti") == "secret"
+
+
+async def test_redis_totp_enrollment_store_save_returns_false_when_setex_signals_refusal(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A falsy ``setex`` return is surfaced so callers fail closed."""
+
+    class _RefusingRedisClient:
+        async def setex(self, name: str, time: int, value: str) -> object:
+            del name, time, value
+            return None
+
+        async def eval(self, script: str, numkeys: int, *keys_and_args: object) -> object:
+            msg = "eval should not be called on the save() path"
+            raise AssertionError(msg)
+
+        async def delete(self, *names: str) -> int:
+            msg = "delete should not be called on the save() path"
+            raise AssertionError(msg)
+
+    monkeypatch.setattr(totp._totp_stores, "_load_enrollment_redis_asyncio", lambda: None)
+    store = totp.RedisTotpEnrollmentStore(
+        redis=cast("totp.RedisTotpEnrollmentStoreClient", _RefusingRedisClient()),
+    )
+
+    assert await store.save(user_id="user-1", jti="jti", secret="secret", ttl_seconds=60) is False
 
 
 def test_redis_totp_enrollment_store_preserves_lazy_dependency_error(monkeypatch: pytest.MonkeyPatch) -> None:

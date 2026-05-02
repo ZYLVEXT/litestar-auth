@@ -80,6 +80,7 @@ if TYPE_CHECKING:
 
 pytestmark = pytest.mark.unit
 OAUTH_FLOW_COOKIE_SECRET = "oauth-flow-cookie-secret-1234567890"
+TOTP_RECOVERY_CODE_LOOKUP_SECRET = "test-recovery-code-lookup-secret-123"
 
 
 def _current_startup_backend_template_type() -> type[Any]:
@@ -726,6 +727,7 @@ def test_on_app_init_warns_security_warning_for_inmemory_totp_used_store(
         verification_token_secret="verify-secret-12345678901234567890",
         reset_password_token_secret="reset-secret-123456789012345678901",
         totp_secret_key=Fernet.generate_key().decode(),
+        totp_recovery_code_lookup_secret=TOTP_RECOVERY_CODE_LOOKUP_SECRET,
         id_parser=UUID,
     )
     plugin = LitestarAuth(config)
@@ -829,6 +831,7 @@ def test_on_app_init_testing_recipe_suppresses_single_process_security_warnings(
         verification_token_secret="verify-secret-12345678901234567890",
         reset_password_token_secret="reset-secret-123456789012345678901",
         totp_secret_key=Fernet.generate_key().decode(),
+        totp_recovery_code_lookup_secret=TOTP_RECOVERY_CODE_LOOKUP_SECRET,
         id_parser=UUID,
     )
     plugin = LitestarAuth(config)

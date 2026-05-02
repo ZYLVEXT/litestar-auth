@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING, Any, Self, cast
 import jwt
 from jwt import ExpiredSignatureError, InvalidTokenError
 
+from litestar_auth._jwt_headers import JwtDecodeConfig, decode_signed_jwt, jwt_encode_headers
 from litestar_auth._optional_deps import require_cryptography_fernet
 from litestar_auth._secrets_at_rest import FernetKeyring, SecretAtRestError
 from litestar_auth.config import TOTP_ENROLL_AUDIENCE
@@ -45,7 +46,6 @@ class _EnrollmentTokenCipher:
     """Fernet cipher dedicated to server-side TOTP enrollment secret values."""
 
     _keyring: FernetKeyring
-    _legacy_single_key_id: str | None = None
 
     @classmethod
     def from_keyring(
@@ -53,28 +53,18 @@ class _EnrollmentTokenCipher:
         *,
         active_key_id: str,
         keys: Mapping[str, FernetKey],
-        legacy_single_key_id: str | None = None,
     ) -> Self:
         """Build a cipher from a versioned Fernet keyring.
 
         Returns:
             A cipher bound to the provided keyring for enrollment-token claims.
-
-        Raises:
-            SecretAtRestError: If the keyring or legacy key id is invalid.
         """
         keyring = FernetKeyring(
             active_key_id=active_key_id,
             keys=keys,
             _load_cryptography_fernet=cast("Any", _load_cryptography_fernet),
         )
-        if legacy_single_key_id is not None and legacy_single_key_id not in keyring.keys:
-            msg = "Legacy single-key id must reference a configured Fernet key."
-            raise SecretAtRestError(msg)
-        return cls(
-            _keyring=keyring,
-            _legacy_single_key_id=legacy_single_key_id,
-        )
+        return cls(_keyring=keyring)
 
     def encrypt(self, plaintext: str) -> str:
         """Return a Fernet token string for the provided plaintext secret.
@@ -84,29 +74,13 @@ class _EnrollmentTokenCipher:
         """
         return self._keyring.encrypt(plaintext)
 
-    def decrypt(self, ciphertext: str) -> str | None:
+    def decrypt(self, ciphertext: str) -> str:
         """Decrypt a Fernet token string.
 
         Returns:
-            The plaintext secret, or ``None`` when the ciphertext is invalid.
+            The plaintext secret.
         """
-        try:
-            return self._keyring.decrypt(ciphertext)
-        except SecretAtRestError:
-            return self._decrypt_legacy_single_key_value(ciphertext)
-
-    def _decrypt_legacy_single_key_value(self, ciphertext: str) -> str | None:
-        """Return plaintext for raw Fernet values minted by the former single-key path."""
-        if self._legacy_single_key_id is None:
-            return None
-        key = self._keyring.keys[self._legacy_single_key_id]
-        fernet_module = cast("Any", _load_cryptography_fernet())
-        key_material = key if isinstance(key, bytes) else key.encode("utf-8")
-        fernet = fernet_module.Fernet(key_material)
-        try:
-            return cast("str", fernet.decrypt(ciphertext.encode()).decode())
-        except fernet_module.InvalidToken:
-            return None
+        return self._keyring.decrypt(ciphertext)
 
 
 def _resolve_enrollment_token_cipher(
@@ -137,7 +111,6 @@ def _resolve_enrollment_token_cipher(
         return _EnrollmentTokenCipher.from_keyring(
             active_key_id=_DEFAULT_TOTP_FERNET_KEY_ID,
             keys={_DEFAULT_TOTP_FERNET_KEY_ID: totp_secret_key},
-            legacy_single_key_id=_DEFAULT_TOTP_FERNET_KEY_ID,
         )
     if unsafe_testing:
         return None
@@ -181,7 +154,7 @@ def _sign_enrollment_token(
         "jti": jti,
         _ENROLLMENT_ENCODING_CLAIM: encoding,
     }
-    return jwt.encode(payload, signing_key, algorithm="HS256")
+    return jwt.encode(payload, signing_key, algorithm="HS256", headers=jwt_encode_headers())
 
 
 def _encode_enrollment_secret(secret: str, *, cipher: _EnrollmentTokenCipher | None) -> tuple[str, str]:
@@ -202,7 +175,10 @@ def _decode_enrollment_secret(
         return encoded_secret if encoding == _ENROLLMENT_ENCODING_PLAIN else None
     if encoding != _ENROLLMENT_ENCODING_FERNET:
         return None
-    return cipher.decrypt(encoded_secret)
+    try:
+        return cipher.decrypt(encoded_secret)
+    except SecretAtRestError:
+        return None
 
 
 @dataclass(frozen=True, slots=True)
@@ -287,22 +263,24 @@ def _decode_enrollment_token_payload(token: str, *, signing_key: str) -> Mapping
     try:
         return cast(
             "Mapping[str, Any]",
-            jwt.decode(
+            decode_signed_jwt(
                 token,
-                signing_key,
-                algorithms=["HS256"],
-                audience=TOTP_ENROLL_AUDIENCE,
-                options={
-                    "require": [
-                        "exp",
-                        "aud",
-                        "iat",
-                        "nbf",
-                        "jti",
-                        "sub",
-                        _ENROLLMENT_ENCODING_CLAIM,
-                    ],
-                },
+                config=JwtDecodeConfig(
+                    key=signing_key,
+                    algorithms=["HS256"],
+                    audience=TOTP_ENROLL_AUDIENCE,
+                    options={
+                        "require": [
+                            "exp",
+                            "aud",
+                            "iat",
+                            "nbf",
+                            "jti",
+                            "sub",
+                            _ENROLLMENT_ENCODING_CLAIM,
+                        ],
+                    },
+                ),
             ),
         )
     except (ExpiredSignatureError, InvalidTokenError) as exc:

@@ -41,6 +41,7 @@ if TYPE_CHECKING:
     from litestar_auth.db.base import BaseUserStore
 
 pytestmark = [pytest.mark.integration]
+TOTP_RECOVERY_CODE_LOOKUP_SECRET = "test-recovery-code-lookup-secret-123"
 
 HTTP_ACCEPTED = 202
 HTTP_BAD_REQUEST = 400
@@ -446,6 +447,7 @@ def build_advanced_app() -> tuple[
             verification_token_secret="verify-secret-12345678901234567890",
             reset_password_token_secret="reset-secret-123456789012345678901",
             totp_secret_key=Fernet.generate_key().decode(),
+            totp_recovery_code_lookup_secret=TOTP_RECOVERY_CODE_LOOKUP_SECRET,
             id_parser=UUID,
             password_helper=password_helper,
         ),

@@ -52,6 +52,10 @@ _TOTP_PENDING_SECRET_ROLE = _SecretRole(
     protected_surface="pending/enrollment TOTP JWT signing",
     audiences=(TOTP_PENDING_AUDIENCE, TOTP_ENROLL_AUDIENCE),
 )
+_TOTP_RECOVERY_CODE_LOOKUP_SECRET_ROLE = _SecretRole(
+    setting_name="totp_recovery_code_lookup_secret",
+    protected_surface="TOTP recovery-code lookup index HMAC",
+)
 _OAUTH_FLOW_COOKIE_SECRET_ROLE = _SecretRole(
     setting_name="oauth_flow_cookie_secret",
     protected_surface="transient OAuth state and PKCE verifier cookie encryption",
@@ -67,6 +71,7 @@ class SecretRoleValues:
     login_identifier_telemetry_secret: str | None = None
     totp_secret_key: str | None = None
     totp_pending_secret: str | None = None
+    totp_recovery_code_lookup_secret: str | None = None
     oauth_flow_cookie_secret: str | None = None
 
     def as_role_pairs(self) -> tuple[tuple[_SecretRole, str | None], ...]:
@@ -77,6 +82,7 @@ class SecretRoleValues:
             (_LOGIN_IDENTIFIER_TELEMETRY_SECRET_ROLE, self.login_identifier_telemetry_secret),
             (_TOTP_SECRET_KEY_ROLE, self.totp_secret_key),
             (_TOTP_PENDING_SECRET_ROLE, self.totp_pending_secret),
+            (_TOTP_RECOVERY_CODE_LOOKUP_SECRET_ROLE, self.totp_recovery_code_lookup_secret),
             (_OAUTH_FLOW_COOKIE_SECRET_ROLE, self.oauth_flow_cookie_secret),
         )
 

@@ -7,6 +7,8 @@ from typing import TYPE_CHECKING
 
 import jwt
 
+from litestar_auth.config import JWT_TIME_CLAIM_LEEWAY_SECONDS
+
 if TYPE_CHECKING:
     from collections.abc import Sequence
     from datetime import timedelta
@@ -25,7 +27,7 @@ class JwtDecodeConfig:
     audience: str
     options: Options
     issuer: str | None = None
-    leeway: float | timedelta = 0
+    leeway: float | timedelta = JWT_TIME_CLAIM_LEEWAY_SECONDS
 
 
 def jwt_encode_headers() -> dict[str, str]:

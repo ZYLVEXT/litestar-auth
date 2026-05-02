@@ -13,10 +13,8 @@ from litestar_auth.controllers._users_helpers import (
     SELF_UPDATE_FORBIDDEN_FIELDS as _USERS_SELF_UPDATE_FORBIDDEN_FIELDS,
 )
 from litestar_auth.controllers._users_helpers import (
-    _build_change_password_rate_limit_key,  # noqa: F401
     _build_safe_self_update,
     _create_change_password_rate_limit_handlers,
-    _reject_blocked_self_update_fields,  # noqa: F401
 )
 from litestar_auth.controllers._utils import (
     AccountStateValidatorProvider,
@@ -29,7 +27,6 @@ from litestar_auth.controllers._utils import (
 )
 from litestar_auth.controllers.auth import INVALID_CREDENTIALS_DETAIL
 from litestar_auth.exceptions import AuthorizationError, ErrorCode, InvalidPasswordError, UserAlreadyExistsError
-from litestar_auth.ratelimit._helpers import _safe_key_part  # noqa: F401
 from litestar_auth.schemas import AdminUserUpdate, ChangePasswordRequest, UserRead, UserUpdate
 from litestar_auth.types import RoleCapableUserProtocol
 

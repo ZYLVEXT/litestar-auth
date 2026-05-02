@@ -185,6 +185,25 @@ contract during startup, so a misconfigured app fails before routes are mounted.
 Previously, the same misconfiguration could surface only after a login reached
 the pending-2FA branch.
 
+### TOTP recovery-code lookup index migration
+
+TOTP recovery-code storage changed from `recovery_codes_hashes: list[str]` to
+`recovery_codes: dict[str, str]`. The dict maps a server-side HMAC-SHA-256
+lookup digest to the Argon2 hash for that one recovery code, so verification
+performs one dictionary lookup and one Argon2 verify instead of checking every
+active hash.
+
+Migration steps:
+
+1. Add a distinct 32+ character
+   `UserManagerSecurity.totp_recovery_code_lookup_secret`.
+2. Run your application migration to remove or null `recovery_codes_hashes` and
+   add nullable JSON `recovery_codes`.
+3. Deploy the library/application change.
+4. Notify TOTP users that existing recovery codes no longer work; they should
+   authenticate with their TOTP app and regenerate codes through
+   `/auth/2fa/recovery-codes/regenerate`.
+
 ### `DbSessionDependencyKey` adoption
 
 Annotate custom DB-session dependency keys with `DbSessionDependencyKey` instead

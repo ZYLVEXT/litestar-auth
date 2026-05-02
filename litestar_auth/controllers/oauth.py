@@ -31,16 +31,11 @@ from litestar_auth.controllers._oauth_assembly import (
 )
 from litestar_auth.controllers._oauth_associate_routes import _create_associate_callback_handler
 from litestar_auth.controllers._oauth_helpers import (
-    STATE_COOKIE_MAX_AGE,  # noqa: F401
-    _build_callback_url_from_base,  # noqa: F401
     _clear_state_cookie,
     _decode_oauth_flow_cookie,
-    _encode_oauth_flow_cookie,  # noqa: F401
     _OAuthCookieSettings,
     _reject_runtime_oauth_scope_override,
-    _require_verified_email_evidence,  # noqa: F401
     _set_state_cookie,
-    _validate_manual_oauth_redirect_base_url,  # noqa: F401
     _validate_state,
 )
 from litestar_auth.controllers._utils import _mark_litestar_auth_route_handler
@@ -49,7 +44,6 @@ from litestar_auth.guards import is_authenticated
 from litestar_auth.oauth import service as _oauth_service
 from litestar_auth.oauth._flow_cookie import _OAuthFlowCookie
 from litestar_auth.oauth.client_adapter import OAuthClientProtocol, _build_oauth_client_adapter
-from litestar_auth.oauth.service import OAuthService  # noqa: F401
 from litestar_auth.types import UserProtocol
 
 OAuthControllerUserManagerProtocol = _oauth_service.OAuthServiceUserManagerProtocol

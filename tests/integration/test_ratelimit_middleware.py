@@ -51,6 +51,7 @@ HTTP_TOO_MANY_REQUESTS = 429
 
 TOTP_PENDING_SECRET = "test-totp-pending-secret-thirty-two!"
 TOTP_SECRET_KEY = Fernet.generate_key().decode()
+TOTP_RECOVERY_CODE_LOOKUP_SECRET = "test-recovery-code-lookup-secret-123"
 
 
 def build_rate_limit_config() -> AuthRateLimitConfig:
@@ -165,6 +166,7 @@ def build_app(*, rate_limit_config: AuthRateLimitConfig | None = None) -> Litest
             verification_token_secret="verify-secret-1234567890-1234567890",
             reset_password_token_secret="reset-password-secret-1234567890-1234567890",
             totp_secret_key=TOTP_SECRET_KEY,
+            totp_recovery_code_lookup_secret=TOTP_RECOVERY_CODE_LOOKUP_SECRET,
             id_parser=UUID,
         ),
         reset_password_token_lifetime=timedelta(hours=1),

@@ -14,13 +14,15 @@ from litestar.exceptions import ClientException, NotFoundException
 from litestar.status_codes import HTTP_400_BAD_REQUEST
 
 import litestar_auth.controllers.users as users_module
+from litestar_auth.controllers._users_helpers import (
+    _build_change_password_rate_limit_key,
+    _reject_blocked_self_update_fields,
+)
 from litestar_auth.controllers._utils import _require_account_state
 from litestar_auth.controllers.auth import INVALID_CREDENTIALS_DETAIL
 from litestar_auth.controllers.users import (
     UsersControllerConfig,
-    _build_change_password_rate_limit_key,
     _build_safe_self_update,
-    _reject_blocked_self_update_fields,
     _users_get_user_or_404,
     _users_handle_change_password,
     _users_handle_delete_user,
@@ -31,6 +33,7 @@ from litestar_auth.controllers.users import (
 )
 from litestar_auth.exceptions import AuthorizationError, ErrorCode, UnverifiedUserError
 from litestar_auth.ratelimit import EndpointRateLimit, InMemoryRateLimiter
+from litestar_auth.ratelimit._helpers import _safe_key_part
 from litestar_auth.schemas import AdminUserUpdate, ChangePasswordRequest, UserRead, UserUpdate
 
 pytestmark = pytest.mark.unit
@@ -366,7 +369,7 @@ async def test_change_password_rate_limit_key_uses_endpoint_key_for_ip_scope() -
 
     key = await _build_change_password_rate_limit_key(limiter, request)
 
-    assert key == f"change-password:{users_module._safe_key_part('127.0.0.1')}"
+    assert key == f"change-password:{_safe_key_part('127.0.0.1')}"
 
 
 async def test_change_password_rate_limit_key_falls_back_to_body_identity_without_user_email() -> None:
@@ -380,9 +383,7 @@ async def test_change_password_rate_limit_key_falls_back_to_body_identity_withou
 
     key = await _build_change_password_rate_limit_key(limiter, request)
 
-    assert key == (
-        f"change-password:{users_module._safe_key_part('127.0.0.1')}:{users_module._safe_key_part('body@example.com')}"
-    )
+    assert key == f"change-password:{_safe_key_part('127.0.0.1')}:{_safe_key_part('body@example.com')}"
 
 
 async def test_users_handle_change_password_reverifies_current_password_and_updates_user() -> None:

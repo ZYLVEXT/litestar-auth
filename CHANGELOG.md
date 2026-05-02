@@ -1,3 +1,24 @@
+## Unreleased
+
+### Security
+
+- **TOTP pending-login and enrollment JWTs now require an explicit `typ:JWT`
+  JOSE header.** Tokens minted by older library versions are rejected by the new
+  decoders. Both token types have a 5-minute TTL, so in-flight tokens expire
+  within the rollout window. `JwtDecodeConfig.leeway` now defaults to the
+  package's 30-second clock-skew tolerance; consumers that require strict
+  zero-leeway decoding must pass `leeway=0` explicitly.
+- **TOTP recovery-code verification now uses a keyed lookup index before one
+  Argon2 verify.** **Breaking schema/config change:** recovery-code persistence
+  moves from `recovery_codes_hashes: list[str]` to
+  `recovery_codes: dict[str, str]`, where keys are HMAC-SHA-256 lookup digests
+  and values are Argon2 hashes. Existing recovery codes are invalidated during
+  deployment; users must authenticate with their TOTP app and regenerate codes
+  via `POST /auth/2fa/recovery-codes/regenerate`. Production `totp_config`
+  deployments must now set a distinct 32+ character
+  `UserManagerSecurity.totp_recovery_code_lookup_secret`. This closes V1, the
+  recovery-code Argon2 amplification CPU-DoS vector.
+
 ## 2.3.0 (2026-05-02)
 
 ### Added

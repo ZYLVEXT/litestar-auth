@@ -5,6 +5,7 @@ from __future__ import annotations
 import warnings
 from typing import TYPE_CHECKING, Any
 
+from litestar_auth._manager.construction import ManagerConstructorInputs
 from litestar_auth._plugin.config import (
     _resolve_plugin_managed_totp_secret_storage_policy,
 )
@@ -34,6 +35,7 @@ def _validate_totp_pending_secret_config[UP: UserProtocol[Any], ID](config: Lite
     """Validate TOTP pending-secret and algorithm constraints.
 
     Raises:
+        ConfigurationError: If recovery-code lookup secret requirements are not satisfied.
         ValueError: If TOTP algorithm requirements are not satisfied.
     """
     if config.totp_config is None:
@@ -51,6 +53,20 @@ def _validate_totp_pending_secret_config[UP: UserProtocol[Any], ID](config: Lite
     if totp_config.totp_algorithm not in _SUPPORTED_TOTP_ALGORITHMS:
         msg = "totp_algorithm must be one of: SHA256, SHA512."
         raise ValueError(msg)
+    manager_inputs = ManagerConstructorInputs(
+        manager_security=config.user_manager_security,
+        id_parser=config.id_parser,
+    )
+    lookup_secret = manager_inputs.effective_security.totp_recovery_code_lookup_secret
+    if not lookup_secret:
+        msg = "totp_recovery_code_lookup_secret is required when totp_config is set."
+        raise ConfigurationError(msg)
+    if not config.unsafe_testing:
+        validate_secret_length(
+            lookup_secret,
+            label="totp_recovery_code_lookup_secret",
+            minimum_length=MINIMUM_SECRET_LENGTH,
+        )
 
 
 def _validate_totp_encryption_key[UP: UserProtocol[Any], ID](config: LitestarAuthConfig[UP, ID]) -> None:

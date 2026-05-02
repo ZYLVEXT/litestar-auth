@@ -30,8 +30,8 @@ from litestar_auth.payloads import (
 from litestar_auth.totp import (
     TotpReplayProtection,
     _consume_matching_recovery_code,
+    build_recovery_code_index,
     generate_totp_recovery_codes,
-    hash_totp_recovery_codes,
     verify_totp_with_store,
 )
 from litestar_auth.totp_flow import (
@@ -238,7 +238,7 @@ async def _totp_handle_disable[UP: UserProtocol[Any], ID](
         msg = INVALID_TOTP_CODE_DETAIL
         raise ClientException(status_code=400, detail=msg, extra={"code": ErrorCode.TOTP_CODE_INVALID})
     await user_manager.set_totp_secret(user, None)
-    await user_manager.set_recovery_code_hashes(user, ())
+    await user_manager.set_recovery_code_hashes(user, {})
     await enrollment.enrollment_store.clear(user_id=str(user.id))
     await runtime.rate_limit.on_success("disable", request)
 
@@ -255,6 +255,9 @@ async def _totp_handle_regenerate_recovery_codes[UP: UserProtocol[Any], ID](
     Returns:
         The new plaintext recovery codes. They are not stored and cannot be
         retrieved again.
+
+    Raises:
+        RuntimeError: If recovery-code lookup secret configuration is missing.
     """
     runtime = ctx.runtime
     security = ctx.security
@@ -280,8 +283,16 @@ async def _totp_handle_regenerate_recovery_codes[UP: UserProtocol[Any], ID](
         )
 
     recovery_codes = generate_totp_recovery_codes()
-    recovery_code_hashes = hash_totp_recovery_codes(recovery_codes)
-    await user_manager.set_recovery_code_hashes(cast("UP", user), recovery_code_hashes)
+    lookup_secret = user_manager.recovery_code_lookup_secret
+    if lookup_secret is None:
+        msg = "totp_recovery_code_lookup_secret is required to persist TOTP recovery codes."
+        raise RuntimeError(msg)
+    recovery_code_index = build_recovery_code_index(
+        recovery_codes,
+        password_helper=user_manager.password_helper,
+        lookup_secret=lookup_secret,
+    )
+    await user_manager.set_recovery_code_hashes(cast("UP", user), recovery_code_index)
     logger.info("Regenerated %d TOTP recovery codes for user_id=%s.", len(recovery_codes), user.id)
     await runtime.rate_limit.on_success("regenerate_recovery_codes", request)
     return TotpRecoveryCodesResponse(recovery_codes=recovery_codes)

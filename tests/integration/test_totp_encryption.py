@@ -44,6 +44,7 @@ HTTP_CREATED = 201
 HTTP_ACCEPTED = 202
 TOTP_PENDING_SECRET = "test-totp-pending-secret-thirty-two!"
 TOTP_SECRET_KEY = "test-totp-secret-key-123456789012345="
+TOTP_RECOVERY_CODE_LOOKUP_SECRET = "test-recovery-code-lookup-secret-123"
 
 
 @get("/probe")
@@ -121,6 +122,7 @@ def _build_manager(
             verification_token_secret="verify-secret-1234567890-1234567890",
             reset_password_token_secret="reset-secret-1234567890-1234567890",
             totp_secret_key=totp_secret_key,
+            totp_recovery_code_lookup_secret=TOTP_RECOVERY_CODE_LOOKUP_SECRET,
             id_parser=UUID,
         ),
     )
@@ -147,6 +149,7 @@ def _build_app() -> tuple[Litestar, InMemoryUserDatabase]:
             verification_token_secret="verify-secret-1234567890-1234567890",
             reset_password_token_secret="reset-secret-1234567890-1234567890",
             totp_secret_key=TOTP_SECRET_KEY,
+            totp_recovery_code_lookup_secret=TOTP_RECOVERY_CODE_LOOKUP_SECRET,
             id_parser=UUID,
         ),
     )

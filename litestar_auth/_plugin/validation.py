@@ -319,6 +319,12 @@ def validate_user_manager_security_config[UP: UserProtocol[Any], ID](config: Lit
             label="login_identifier_telemetry_secret",
             minimum_length=MINIMUM_SECRET_LENGTH,
         )
+    if config.totp_config is not None and effective_security.totp_recovery_code_lookup_secret is not None:
+        validate_secret_length(
+            effective_security.totp_recovery_code_lookup_secret,
+            label="totp_recovery_code_lookup_secret",
+            minimum_length=MINIMUM_SECRET_LENGTH,
+        )
     validate_user_manager_security_secret_roles_are_distinct(
         effective_security,
         totp_pending_secret=config.totp_config.totp_pending_secret if config.totp_config is not None else None,

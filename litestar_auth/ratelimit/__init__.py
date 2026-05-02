@@ -34,9 +34,9 @@ from ._config import (
     AuthRateLimitEndpointGroup,
     AuthRateLimitSlot,
     EndpointRateLimit,
-    RateLimitScope,
     SharedRateLimitConfigOptions,
 )
+from ._endpoint import RateLimitScope
 from ._helpers import DEFAULT_KEY_PREFIX, RedisScriptResult, SlidingWindow
 from ._memory import InMemoryRateLimiter
 from ._orchestrator import TotpRateLimitOrchestrator, TotpSensitiveEndpoint

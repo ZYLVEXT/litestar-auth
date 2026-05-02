@@ -31,7 +31,8 @@ cannot be confirmed later.
 
 Successful confirmation returns `TotpConfirmEnableResponse` with `enabled: true`
 and `recovery_codes`. The plaintext recovery codes are issued only in that
-response; the user model stores only Argon2 hashes in `recovery_codes_hashes`.
+response; the user model stores HMAC-SHA-256 lookup digests mapped to Argon2
+hashes in `recovery_codes`.
 Generated recovery codes are 28 lowercase hex characters (112 bits).
 
 ## Recovery-code rotation
@@ -64,6 +65,23 @@ pending-token replay; the controller logs that weaker posture at factory time.
 ## Disable
 
 - **`POST .../2fa/disable`** — requires a valid current TOTP code or an unused recovery code. A recovery-code disable consumes the matching code, clears the TOTP secret, and clears any remaining recovery-code hashes.
+
+## Recovery-code lookup secret and schema migration
+
+Production `totp_config` deployments must set
+`UserManagerSecurity.totp_recovery_code_lookup_secret` to a distinct 32+
+character secret. The user table stores recovery codes in `recovery_codes`
+(`dict[str, str] | None`), where each key is a server-side HMAC-SHA-256 lookup
+digest and each value is the Argon2 hash of the code.
+
+Migration checklist:
+
+1. Configure `totp_recovery_code_lookup_secret` on `UserManagerSecurity`.
+2. Run a data migration that drops or nulls the legacy `recovery_codes_hashes`
+   column and adds nullable JSON `recovery_codes`.
+3. Deploy the application.
+4. Tell users with TOTP enabled to log in using their authenticator app and
+   regenerate recovery codes at `/auth/2fa/recovery-codes/regenerate`.
 
 ## Replay protection
 

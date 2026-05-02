@@ -51,8 +51,8 @@ class UserModelMixin:
     is_active: Mapped[bool] = mapped_column(default=True, nullable=False)
     is_verified: Mapped[bool] = mapped_column(default=False, nullable=False)
     totp_secret: Mapped[str | None] = mapped_column(String(length=255), default=None, nullable=True)
-    # JSON keeps custom user-model composition simple; verification still walks every hash.
-    recovery_codes_hashes: Mapped[list[str] | None] = mapped_column(JSON, default=None, nullable=True)
+    # JSON keeps custom user-model composition simple while supporting O(1) HMAC lookup.
+    recovery_codes: Mapped[dict[str, str] | None] = mapped_column(JSON, default=None, nullable=True)
 
     @declared_attr
     def hashed_password(cls) -> Mapped[str]:  # noqa: N805

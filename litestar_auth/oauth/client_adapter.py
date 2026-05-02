@@ -34,7 +34,6 @@ from litestar_auth.oauth._client_contracts import (
 from litestar_auth.oauth._client_features import (
     _is_httpx_oauth_client,
     _supports_access_token,
-    _supports_async_email_verified,  # noqa: F401
     _supports_authorization_url,
     _supports_direct_identity,
     _supports_email_verified,

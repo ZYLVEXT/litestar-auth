@@ -322,27 +322,26 @@ class SQLAlchemyUserDatabase[UP: SQLAlchemyUserModelProtocol](BaseUserStore[UP, 
             load=self._user_load or None,
         )
 
-    async def set_recovery_code_hashes(self, user: UP, hashes: tuple[str, ...]) -> UP:
-        """Replace the user's active TOTP recovery-code hashes.
+    async def set_recovery_code_hashes(self, user: UP, code_index: dict[str, str]) -> UP:
+        """Replace the user's active TOTP recovery-code lookup index.
 
         Returns:
             Updated user instance.
         """
-        return await self.update(user, {"recovery_codes_hashes": list(hashes) or None})
+        return await self.update(user, {"recovery_codes": dict(code_index) or None})
 
-    async def read_recovery_code_hashes(self, user: UP) -> tuple[str, ...]:
-        """Return the user's active TOTP recovery-code hashes."""
+    async def find_recovery_code_hash_by_lookup(self, user: UP, lookup_hex: str) -> str | None:
+        """Return the user's active recovery-code hash for ``lookup_hex``."""
         if not isinstance(user, self.user_model):
-            return ()
-        if stored_hashes := getattr(user, "recovery_codes_hashes", None):
-            return tuple(stored_hashes)
-        return ()
+            return None
+        stored_index = getattr(user, "recovery_codes", None) or {}
+        return cast("dict[str, str]", stored_index).get(lookup_hex)
 
-    async def consume_recovery_code_hash(self, user: UP, matched_hash: str) -> bool:
-        """Atomically mark ``matched_hash`` consumed for the user.
+    async def consume_recovery_code_by_lookup(self, user: UP, lookup_hex: str) -> bool:
+        """Atomically mark the recovery code keyed by ``lookup_hex`` consumed.
 
         Returns:
-            ``True`` when the hash was active and is now consumed; ``False`` when
+            ``True`` when the code was active and is now consumed; ``False`` when
             it was already consumed or never existed.
         """
         primary_key_column = inspect(self.user_model).primary_key[0]
@@ -353,12 +352,12 @@ class SQLAlchemyUserDatabase[UP: SQLAlchemyUserModelProtocol](BaseUserStore[UP, 
         if persistent_user is None:
             return False
 
-        active_hashes = list(getattr(persistent_user, "recovery_codes_hashes", None) or ())
-        if matched_hash not in active_hashes:
+        active_index = dict(getattr(persistent_user, "recovery_codes", None) or {})
+        if lookup_hex not in active_index:
             return False
 
-        active_hashes.remove(matched_hash)
-        persistent_user.recovery_codes_hashes = active_hashes or None
+        active_index.pop(lookup_hex)
+        persistent_user.recovery_codes = active_index or None
         await self._repository().update(
             persistent_user,
             auto_refresh=True,

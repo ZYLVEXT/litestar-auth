@@ -12,6 +12,7 @@ import pytest
 from litestar.status_codes import HTTP_429_TOO_MANY_REQUESTS
 from litestar.testing import AsyncTestClient
 
+from litestar_auth.config import JWT_TIME_CLAIM_LEEWAY_SECONDS
 from litestar_auth.controllers import create_reset_password_controller
 from litestar_auth.exceptions import ErrorCode
 from litestar_auth.manager import BaseUserManager, UserManagerSecurity
@@ -218,7 +219,9 @@ async def test_reset_password_token_invalid_after_password_change(
 
 async def test_reset_password_rejects_invalid_and_expired_tokens() -> None:
     """Reset-password returns a 400 response for malformed and expired tokens."""
-    app, user_db, user_manager = build_app(reset_password_token_lifetime=timedelta(seconds=-1))
+    app, user_db, user_manager = build_app(
+        reset_password_token_lifetime=timedelta(seconds=-(JWT_TIME_CLAIM_LEEWAY_SECONDS + 1)),
+    )
     user = ExampleUser(
         id=uuid4(),
         email="expired@example.com",

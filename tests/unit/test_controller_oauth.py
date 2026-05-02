@@ -21,15 +21,17 @@ from litestar.status_codes import HTTP_400_BAD_REQUEST
 import litestar_auth.controllers._utils as controller_utils_module
 import litestar_auth.controllers.oauth as oauth_module
 import litestar_auth.oauth._flow_cookie as flow_cookie_module
+from litestar_auth.controllers._oauth_helpers import (
+    STATE_COOKIE_MAX_AGE,
+    _encode_oauth_flow_cookie,
+    _require_verified_email_evidence,
+)
 from litestar_auth.controllers._utils import _require_account_state
 from litestar_auth.controllers.oauth import (
-    STATE_COOKIE_MAX_AGE,
     OAuthAssociateControllerConfig,
     OAuthControllerConfig,
     _clear_state_cookie,
     _decode_oauth_flow_cookie,
-    _encode_oauth_flow_cookie,
-    _require_verified_email_evidence,
     _set_state_cookie,
     _validate_state,
     create_oauth_associate_controller,
@@ -579,11 +581,6 @@ def test_oauth_module_reload_preserves_helper_error_contract(monkeypatch: pytest
         monkeypatch=monkeypatch,
     )
 
-    assert reloaded.STATE_COOKIE_MAX_AGE == STATE_COOKIE_MAX_AGE
-    assert reloaded._build_callback_url_from_base("https://app.example/auth", "github") == (
-        "https://app.example/auth/github/callback"
-    )
-
     with pytest.raises(ClientException) as client_exc_info:
         reloaded._validate_state("cookie-state", "query-state")
 
@@ -785,7 +782,7 @@ async def test_oauth_associate_authorize_sets_state_cookie_and_redirects(monkeyp
             code_verifier="associate-code-verifier",
         )
 
-    monkeypatch.setattr("litestar_auth.controllers.oauth.OAuthService.authorize", fake_authorize)
+    monkeypatch.setattr("litestar_auth.oauth.service.OAuthService.authorize", fake_authorize)
     controller = cast("Any", _build_associate_controller())
 
     response = await controller.authorize.fn(controller, cast("Any", SimpleNamespace(cookies={}, user=object())))
@@ -887,7 +884,7 @@ async def test_oauth_associate_callback_links_authenticated_user_and_clears_cook
         seen["code_verifier"] = code_verifier
         seen["user_manager"] = user_manager
 
-    monkeypatch.setattr("litestar_auth.controllers.oauth.OAuthService.associate_account", fake_associate_account)
+    monkeypatch.setattr("litestar_auth.oauth.service.OAuthService.associate_account", fake_associate_account)
     controller = cast("Any", _build_associate_controller(user_manager=manager))
     request = cast(
         "Any",
@@ -936,7 +933,7 @@ async def test_oauth_associate_callback_rejects_inactive_user_before_linking(
     manager.require_account_state.side_effect = InactiveUserError
     associate_account = AsyncMock()
 
-    monkeypatch.setattr("litestar_auth.controllers.oauth.OAuthService.associate_account", associate_account)
+    monkeypatch.setattr("litestar_auth.oauth.service.OAuthService.associate_account", associate_account)
     controller = cast("Any", _build_associate_controller(user_manager=manager))
     request = cast(
         "Any",
@@ -1011,7 +1008,7 @@ async def test_oauth_associate_callback_propagates_already_linked_error(
             existing_user_id="existing-user",
         )
 
-    monkeypatch.setattr("litestar_auth.controllers.oauth.OAuthService.associate_account", fail_associate_account)
+    monkeypatch.setattr("litestar_auth.oauth.service.OAuthService.associate_account", fail_associate_account)
     controller = cast("Any", _build_associate_controller())
     request = cast(
         "Any",
@@ -1052,7 +1049,7 @@ async def test_oauth_associate_di_callback_uses_injected_manager(monkeypatch: py
         seen["code_verifier"] = code_verifier
         seen["user_manager"] = user_manager
 
-    monkeypatch.setattr("litestar_auth.controllers.oauth.OAuthService.associate_account", fake_associate_account)
+    monkeypatch.setattr("litestar_auth.oauth.service.OAuthService.associate_account", fake_associate_account)
     controller_class = create_oauth_associate_controller(
         provider_name="github",
         user_manager_dependency_key=dependency_parameter_name,
@@ -1127,7 +1124,7 @@ async def test_oauth_associate_di_callback_rejects_duplicate_injected_manager_in
     """DI-key associate callback fails closed when the manager is supplied twice."""
     dependency_parameter_name = "custom_manager_key"
     associate_account = AsyncMock()
-    monkeypatch.setattr("litestar_auth.controllers.oauth.OAuthService.associate_account", associate_account)
+    monkeypatch.setattr("litestar_auth.oauth.service.OAuthService.associate_account", associate_account)
     controller_class = create_oauth_associate_controller(
         provider_name="github",
         user_manager_dependency_key=dependency_parameter_name,
@@ -1223,7 +1220,7 @@ async def test_oauth_login_authorize_sets_state_cookie_and_redirects(monkeypatch
             code_verifier="login-code-verifier",
         )
 
-    monkeypatch.setattr("litestar_auth.controllers.oauth.OAuthService.authorize", fake_authorize)
+    monkeypatch.setattr("litestar_auth.oauth.service.OAuthService.authorize", fake_authorize)
     controller = cast(
         "Any",
         _build_login_controller(
@@ -1292,7 +1289,7 @@ async def test_oauth_login_callback_logs_in_and_clears_state_cookie(monkeypatch:
         seen["user_manager"] = user_manager
         return user
 
-    monkeypatch.setattr("litestar_auth.controllers.oauth.OAuthService.complete_login", fake_complete_login)
+    monkeypatch.setattr("litestar_auth.oauth.service.OAuthService.complete_login", fake_complete_login)
     controller = cast("Any", _build_login_controller(backend=backend, user_manager=manager))
     request = cast(
         "Any",

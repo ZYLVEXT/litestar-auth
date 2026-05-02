@@ -16,18 +16,14 @@ from jwt import ExpiredSignatureError, InvalidTokenError
 
 from litestar_auth._jwt_headers import JwtDecodeConfig, decode_signed_jwt, jwt_encode_headers
 from litestar_auth.authentication.strategy._jwt_denylist import (
-    _INMEMORY_JWT_DENYLIST_STARTUP_WARNING,  # noqa: F401
-    _MISSING_JWT_DENYLIST_STORE_ERROR,  # noqa: F401
     InMemoryJWTDenylistStore,  # noqa: F401
     JWTDenylistStore,
     JWTRevocationPosture,
-    JWTRevocationPostureKey,  # noqa: F401
     RedisJWTDenylistStore,  # noqa: F401
-    _load_redis_asyncio,  # noqa: F401
     _resolve_jwt_revocation,
 )
 from litestar_auth.authentication.strategy.base import Strategy, UserManagerProtocol
-from litestar_auth.config import JWT_ACCESS_TOKEN_AUDIENCE, JWT_TIME_CLAIM_LEEWAY_SECONDS, validate_secret_length
+from litestar_auth.config import JWT_ACCESS_TOKEN_AUDIENCE, validate_secret_length
 from litestar_auth.exceptions import TokenError
 from litestar_auth.types import ID, UP
 
@@ -230,7 +226,6 @@ class JWTStrategy(Strategy[UP, ID]):
                     audience=JWT_ACCESS_TOKEN_AUDIENCE,
                     options={"require": ["exp", "aud", "iat", "nbf", "jti"]},
                     issuer=self.issuer,
-                    leeway=JWT_TIME_CLAIM_LEEWAY_SECONDS,
                 ),
             )
         except (ExpiredSignatureError, InvalidTokenError):

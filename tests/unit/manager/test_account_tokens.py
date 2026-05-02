@@ -14,6 +14,7 @@ import pytest
 
 import litestar_auth._manager.account_tokens as account_tokens_module
 from litestar_auth._jwt_headers import EXPECTED_JWT_TYPE
+from litestar_auth.config import JWT_TIME_CLAIM_LEEWAY_SECONDS
 from litestar_auth.exceptions import InvalidResetPasswordTokenError, InvalidVerifyTokenError, UserNotExistsError
 from litestar_auth.manager import RESET_PASSWORD_TOKEN_AUDIENCE, VERIFY_TOKEN_AUDIENCE
 from litestar_auth.manager import logger as manager_logger
@@ -210,7 +211,7 @@ async def test_reset_password_rejects_expired_token() -> None:
         user,
         secret=manager.reset_password_token_secret.get_secret_value(),
         audience=RESET_PASSWORD_TOKEN_AUDIENCE,
-        lifetime=timedelta(seconds=-1),
+        lifetime=timedelta(seconds=-(JWT_TIME_CLAIM_LEEWAY_SECONDS + 1)),
     )
 
     with pytest.raises(InvalidResetPasswordTokenError):

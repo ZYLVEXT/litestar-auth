@@ -15,6 +15,8 @@ import jwt
 import pytest
 
 import litestar_auth.totp_flow as totp_flow_module
+from litestar_auth import totp
+from litestar_auth._jwt_headers import jwt_encode_headers
 from litestar_auth.exceptions import TokenError
 from litestar_auth.password import PasswordHelper
 from litestar_auth.totp import SecurityWarning
@@ -31,6 +33,7 @@ from tests._helpers import ExampleUser
 pytestmark = pytest.mark.unit
 
 TOTP_PENDING_SECRET = "test-totp-pending-secret-thirty-two!"
+RECOVERY_LOOKUP_SECRET = b"test-recovery-code-lookup-secret"
 CLIENT_BINDING = PendingTotpClientBinding(
     client_ip_fingerprint="client-ip-fingerprint",
     user_agent_fingerprint="user-agent-fingerprint",
@@ -69,14 +72,16 @@ def _build_manager(
     *,
     user: ExampleUser | None = None,
     read_secret: str | None = "plain-secret",
-    recovery_code_hashes: tuple[str, ...] = (),
+    recovery_code_index: dict[str, str] | None = None,
 ) -> AsyncMock:
     """Return an async mock manager with the TOTP-flow contract attached."""
     manager = AsyncMock()
     manager.get.return_value = user
     manager.read_totp_secret.return_value = read_secret
-    manager.read_recovery_code_hashes.return_value = recovery_code_hashes
-    manager.consume_recovery_code_hash.return_value = True
+    manager.recovery_code_lookup_secret = RECOVERY_LOOKUP_SECRET
+    active_index = {} if recovery_code_index is None else dict(recovery_code_index)
+    manager.find_recovery_code_hash_by_lookup.side_effect = lambda _user, lookup_hex: active_index.get(lookup_hex)
+    manager.consume_recovery_code_by_lookup.return_value = True
     return manager
 
 
@@ -337,7 +342,13 @@ async def test_authenticate_pending_login_rejects_invalid_totp_code() -> None:
 async def test_authenticate_pending_login_accepts_matching_recovery_code_after_totp_failure() -> None:
     """A valid unused recovery code completes the pending login after TOTP rejects the code."""
     user = ExampleUser(id=uuid4(), email="user@example.com")
-    manager = _build_manager(user=user, recovery_code_hashes=("hash-1", "hash-2", "hash-3"))
+    password_helper = PasswordHelper.from_defaults()
+    recovery_code_index = totp.build_recovery_code_index(
+        ("recovery-code",),
+        password_helper=password_helper,
+        lookup_secret=RECOVERY_LOOKUP_SECRET,
+    )
+    manager = _build_manager(user=user, recovery_code_index=recovery_code_index)
     pending_jti_store = AsyncMock()
     pending_jti_store.is_denied.return_value = False
     pending_jti_store.deny.return_value = True
@@ -347,7 +358,6 @@ async def test_authenticate_pending_login_accepts_matching_recovery_code_after_t
         pending_jti_store=pending_jti_store,
         id_parser=UUID,
     )
-    password_helper = _RecordingPasswordHelper(matching_hash="hash-2")
     service._password_helper = password_helper
     pending_token = await _issue_pending_token(service, user)
     assert pending_token is not None
@@ -361,22 +371,27 @@ async def test_authenticate_pending_login_accepts_matching_recovery_code_after_t
         )
 
     assert verified_user is user
-    assert password_helper.seen_hashes == ["hash-1", "hash-2", "hash-3"]
-    manager.consume_recovery_code_hash.assert_awaited_once_with(user, "hash-2")
+    manager.consume_recovery_code_by_lookup.assert_awaited_once()
     pending_jti_store.deny.assert_awaited_once()
 
 
 async def test_authenticate_pending_login_rejects_consumed_matching_recovery_code() -> None:
     """Atomic consume failure keeps the same invalid-code signal as a wrong TOTP."""
     user = ExampleUser(id=uuid4(), email="user@example.com")
-    manager = _build_manager(user=user, recovery_code_hashes=("hash-1",))
-    manager.consume_recovery_code_hash.return_value = False
+    password_helper = PasswordHelper.from_defaults()
+    recovery_code_index = totp.build_recovery_code_index(
+        ("recovery-code",),
+        password_helper=password_helper,
+        lookup_secret=RECOVERY_LOOKUP_SECRET,
+    )
+    manager = _build_manager(user=user, recovery_code_index=recovery_code_index)
+    manager.consume_recovery_code_by_lookup.return_value = False
     service = _service(
         manager,
         totp_pending_secret=TOTP_PENDING_SECRET,
         id_parser=UUID,
     )
-    service._password_helper = _RecordingPasswordHelper(matching_hash="hash-1")
+    service._password_helper = password_helper
     pending_token = await _issue_pending_token(service, user)
     assert pending_token is not None
 
@@ -389,13 +404,15 @@ async def test_authenticate_pending_login_rejects_consumed_matching_recovery_cod
                 code="recovery-code",
             )
 
-    manager.consume_recovery_code_hash.assert_awaited_once_with(user, "hash-1")
+    manager.consume_recovery_code_by_lookup.assert_awaited_once()
 
 
-async def test_authenticate_pending_login_traverses_every_recovery_hash_before_consuming() -> None:
-    """Recovery-code lookup does not short-circuit when an earlier hash matches."""
+async def test_authenticate_pending_login_uses_one_indexed_recovery_hash_before_consuming() -> None:
+    """Recovery-code lookup verifies the single hash addressed by the keyed index."""
     user = ExampleUser(id=uuid4(), email="user@example.com")
-    manager = _build_manager(user=user, recovery_code_hashes=("hash-1", "hash-2", "hash-3", "hash-4"))
+    manager = _build_manager(user=user, recovery_code_index={"lookup": "hash-1"})
+    manager.find_recovery_code_hash_by_lookup.side_effect = None
+    manager.find_recovery_code_hash_by_lookup.return_value = "hash-1"
     service = _service(
         manager,
         totp_pending_secret=TOTP_PENDING_SECRET,
@@ -416,7 +433,7 @@ async def test_authenticate_pending_login_traverses_every_recovery_hash_before_c
                 code="recovery-code",
             )
 
-    assert password_helper.seen_hashes == ["hash-1", "hash-2", "hash-3", "hash-4"]
+    assert password_helper.seen_hashes == ["hash-1"]
 
 
 async def test_authenticate_pending_login_rejects_missing_secret_after_pending_token_issue() -> None:
@@ -463,10 +480,16 @@ async def test_resolve_pending_login_wraps_jwt_decode_errors(
     def _raise_decode_error(*_args: object, **_kwargs: object) -> dict[str, object]:
         raise decode_error
 
-    monkeypatch.setattr("litestar_auth.totp_flow.jwt.decode", _raise_decode_error)
+    monkeypatch.setattr("litestar_auth._jwt_headers.jwt.decode", _raise_decode_error)
+    pending_token = jwt.encode(
+        _pending_payload(user),
+        TOTP_PENDING_SECRET,
+        algorithm="HS256",
+        headers=jwt_encode_headers(),
+    )
 
     with pytest.raises(totp_flow_module.InvalidTotpPendingTokenError) as exc_info:
-        await service._resolve_pending_login("ignored", client_binding=CLIENT_BINDING)
+        await service._resolve_pending_login(pending_token, client_binding=CLIENT_BINDING)
 
     assert isinstance(exc_info.value.__cause__, expected_cause)
 
@@ -494,12 +517,18 @@ async def test_resolve_pending_login_rejects_invalid_payload_shapes(
         id_parser=UUID,
     )
     monkeypatch.setattr(
-        "litestar_auth.totp_flow.jwt.decode",
+        "litestar_auth._jwt_headers.jwt.decode",
         lambda *_args, **_kwargs: _pending_payload(user) | payload,
+    )
+    pending_token = jwt.encode(
+        _pending_payload(user),
+        TOTP_PENDING_SECRET,
+        algorithm="HS256",
+        headers=jwt_encode_headers(),
     )
 
     with pytest.raises(totp_flow_module.InvalidTotpPendingTokenError):
-        await service._resolve_pending_login("ignored", client_binding=CLIENT_BINDING)
+        await service._resolve_pending_login(pending_token, client_binding=CLIENT_BINDING)
 
     manager.get.assert_not_awaited()
 
@@ -513,13 +542,18 @@ async def test_resolve_pending_login_rejects_missing_user() -> None:
         totp_pending_secret=TOTP_PENDING_SECRET,
         id_parser=UUID,
     )
-    pending_token = jwt.encode(_pending_payload(user), TOTP_PENDING_SECRET, algorithm="HS256")
+    pending_token = jwt.encode(
+        _pending_payload(user),
+        TOTP_PENDING_SECRET,
+        algorithm="HS256",
+        headers=jwt_encode_headers(),
+    )
 
     with pytest.raises(totp_flow_module.InvalidTotpPendingTokenError):
         await service._resolve_pending_login(pending_token, client_binding=CLIENT_BINDING)
 
 
-async def test_authenticate_pending_login_rejects_unparseable_expiration(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_authenticate_pending_login_rejects_unparseable_expiration() -> None:
     """A decoded payload with an invalid expiration shape is rejected."""
     user = ExampleUser(id=uuid4(), email="user@example.com")
     manager = _build_manager(user=user)
@@ -528,20 +562,19 @@ async def test_authenticate_pending_login_rejects_unparseable_expiration(monkeyp
         totp_pending_secret=TOTP_PENDING_SECRET,
         id_parser=UUID,
     )
-
-    monkeypatch.setattr(
-        "litestar_auth.totp_flow.jwt.decode",
-        lambda *_args, **_kwargs: {
-            "sub": str(user.id),
-            "aud": TOTP_PENDING_AUDIENCE,
-            "iat": datetime.now(tz=UTC),
-            "exp": "not-a-datetime",
-            "jti": "a" * 32,
-        },
+    pending_token = jwt.encode(
+        _pending_payload(user) | {"exp": "not-a-datetime"},
+        TOTP_PENDING_SECRET,
+        algorithm="HS256",
+        headers=jwt_encode_headers(),
     )
 
     with pytest.raises(totp_flow_module.InvalidTotpPendingTokenError):
-        await service.authenticate_pending_login(client_binding=CLIENT_BINDING, pending_token="ignored", code="123456")
+        await service.authenticate_pending_login(
+            client_binding=CLIENT_BINDING,
+            pending_token=pending_token,
+            code="123456",
+        )
 
 
 async def test_deny_pending_login_records_pending_jti_with_remaining_ttl(monkeypatch: pytest.MonkeyPatch) -> None:

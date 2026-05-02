@@ -9,8 +9,8 @@ Time-based one-time passwords in **litestar-auth** split into a **low-level cryp
 **Enrollment** is intentionally **two-phase**: first **enable** (receive secret, otpauth material, and a short-lived enrollment token while the secret is kept in `TotpEnrollmentStore`, not in the JWT), then **confirm** with a valid code so the secret is stored—mirroring the route flow documented in [TOTP (two-factor authentication)](../guides/totp.md). **Verification** (during login or disable flows) checks the current code and relies on replay protection when configured.
 
 Generated recovery codes are 28 lowercase hex characters (112 bits). They are returned only from
-confirm-enable or regenerate responses and are stored only as Argon2 hashes by the manager/store
-surface.
+confirm-enable or regenerate responses and are stored as HMAC lookup digests mapped to Argon2
+hashes by the manager/store surface.
 
 ## Persisted secret encryption
 

@@ -15,6 +15,7 @@ from typing import TYPE_CHECKING, Any, Protocol, TypeGuard, cast
 import jwt
 from jwt import ExpiredSignatureError, InvalidTokenError
 
+from litestar_auth._jwt_headers import JwtDecodeConfig, decode_signed_jwt, jwt_encode_headers
 from litestar_auth.config import TOTP_PENDING_AUDIENCE
 from litestar_auth.exceptions import ConfigurationError, TokenError
 from litestar_auth.password import PasswordHelper
@@ -101,11 +102,15 @@ class TotpFlowUserManagerProtocol[UP: TotpUserProtocol[Any], ID](Protocol):
     async def read_totp_secret(self, secret: str | None) -> str | None:
         """Return a plain-text TOTP secret from storage."""
 
-    async def read_recovery_code_hashes(self, user: UP) -> tuple[str, ...]:
-        """Return active TOTP recovery-code hashes for a user."""
+    async def find_recovery_code_hash_by_lookup(self, user: UP, lookup_hex: str) -> str | None:
+        """Return the active recovery-code hash matching ``lookup_hex``."""
 
-    async def consume_recovery_code_hash(self, user: UP, matched_hash: str) -> bool:
-        """Atomically consume a matched recovery-code hash."""
+    async def consume_recovery_code_by_lookup(self, user: UP, lookup_hex: str) -> bool:
+        """Atomically consume a matched recovery-code lookup entry."""
+
+    @property
+    def recovery_code_lookup_secret(self) -> bytes | None:
+        """Return the HMAC lookup key for recovery-code verification."""
 
 
 type PendingUserValidator[UP] = Callable[[UP], Awaitable[None]]
@@ -194,7 +199,7 @@ class TotpLoginFlowService[UP: TotpUserProtocol[Any], ID]:
                 raise InvalidTotpPendingTokenError
             payload[_CLIENT_IP_FINGERPRINT_CLAIM] = client_binding.client_ip_fingerprint
             payload[_USER_AGENT_FINGERPRINT_CLAIM] = client_binding.user_agent_fingerprint
-        return jwt.encode(payload, self._totp_pending_secret, algorithm="HS256")
+        return jwt.encode(payload, self._totp_pending_secret, algorithm="HS256", headers=jwt_encode_headers())
 
     async def authenticate_pending_login(
         self,
@@ -267,12 +272,14 @@ class TotpLoginFlowService[UP: TotpUserProtocol[Any], ID]:
         if self._require_client_binding:
             required_claims.extend([_CLIENT_IP_FINGERPRINT_CLAIM, _USER_AGENT_FINGERPRINT_CLAIM])
         try:
-            return jwt.decode(
+            return decode_signed_jwt(
                 pending_token,
-                self._totp_pending_secret,
-                algorithms=["HS256"],
-                audience=TOTP_PENDING_AUDIENCE,
-                options={"require": required_claims},
+                config=JwtDecodeConfig(
+                    key=self._totp_pending_secret,
+                    algorithms=["HS256"],
+                    audience=TOTP_PENDING_AUDIENCE,
+                    options={"require": required_claims},
+                ),
             )
         except (ExpiredSignatureError, InvalidTokenError) as exc:
             raise InvalidTotpPendingTokenError from exc

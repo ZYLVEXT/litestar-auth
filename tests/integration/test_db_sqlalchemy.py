@@ -389,7 +389,7 @@ async def test_sqlalchemy_user_database_crud(session: SASession) -> None:
 
 
 async def test_sqlalchemy_user_database_round_trips_recovery_code_hashes(session: SASession) -> None:
-    """The SQLAlchemy adapter stores only caller-provided recovery-code hashes."""
+    """The SQLAlchemy adapter stores caller-provided recovery-code lookup indexes."""
     database = create_database(session)
     user = await database.create(
         {
@@ -398,14 +398,15 @@ async def test_sqlalchemy_user_database_round_trips_recovery_code_hashes(session
         },
     )
 
-    updated_user = await database.set_recovery_code_hashes(user, ("hash-1", "hash-2", "hash-3"))
+    code_index = {"lookup-1": "hash-1", "lookup-2": "hash-2", "lookup-3": "hash-3"}
+    updated_user = await database.set_recovery_code_hashes(user, code_index)
 
-    assert await database.read_recovery_code_hashes(updated_user) == ("hash-1", "hash-2", "hash-3")
-    assert updated_user.recovery_codes_hashes == ["hash-1", "hash-2", "hash-3"]
+    assert await database.find_recovery_code_hash_by_lookup(updated_user, "lookup-2") == "hash-2"
+    assert updated_user.recovery_codes == code_index
 
 
 async def test_sqlalchemy_user_database_consumes_recovery_code_hash_once(session: SASession) -> None:
-    """Recovery-code consumption removes only the matched active hash."""
+    """Recovery-code consumption removes only the matched active lookup entry."""
     database = create_database(session)
     user = await database.create(
         {
@@ -413,18 +414,21 @@ async def test_sqlalchemy_user_database_consumes_recovery_code_hash_once(session
             "hashed_password": "hashed-password",
         },
     )
-    updated_user = await database.set_recovery_code_hashes(user, ("hash-1", "hash-2", "hash-3"))
+    updated_user = await database.set_recovery_code_hashes(
+        user,
+        {"lookup-1": "hash-1", "lookup-2": "hash-2", "lookup-3": "hash-3"},
+    )
 
-    assert await database.consume_recovery_code_hash(updated_user, "hash-2") is True
-    assert await database.consume_recovery_code_hash(updated_user, "hash-2") is False
+    assert await database.consume_recovery_code_by_lookup(updated_user, "lookup-2") is True
+    assert await database.consume_recovery_code_by_lookup(updated_user, "lookup-2") is False
 
     reloaded_user = await database.get(updated_user.id)
     assert reloaded_user is not None
-    assert await database.read_recovery_code_hashes(reloaded_user) == ("hash-1", "hash-3")
+    assert reloaded_user.recovery_codes == {"lookup-1": "hash-1", "lookup-3": "hash-3"}
 
 
 async def test_sqlalchemy_user_database_recovery_code_missing_paths(session: SASession) -> None:
-    """Recovery-code helpers return empty/false for users without active hashes."""
+    """Recovery-code helpers return none/false for users without active lookup entries."""
     database = create_database(session)
     user = await database.create(
         {
@@ -434,10 +438,10 @@ async def test_sqlalchemy_user_database_recovery_code_missing_paths(session: SAS
     )
     transient_user = User(id=uuid4(), email="transient@example.com", hashed_password="hashed-password")
 
-    assert await database.read_recovery_code_hashes(user) == ()
-    assert await database.read_recovery_code_hashes(cast("Any", object())) == ()
-    assert await database.consume_recovery_code_hash(user, "missing-hash") is False
-    assert await database.consume_recovery_code_hash(transient_user, "missing-hash") is False
+    assert await database.find_recovery_code_hash_by_lookup(user, "missing-lookup") is None
+    assert await database.find_recovery_code_hash_by_lookup(cast("Any", object()), "missing-lookup") is None
+    assert await database.consume_recovery_code_by_lookup(user, "missing-lookup") is False
+    assert await database.consume_recovery_code_by_lookup(transient_user, "missing-lookup") is False
 
 
 async def test_sqlalchemy_user_database_concurrent_recovery_code_consume_returns_single_success(
@@ -451,11 +455,11 @@ async def test_sqlalchemy_user_database_concurrent_recovery_code_consume_returns
             "hashed_password": "hashed-password",
         },
     )
-    updated_user = await database.set_recovery_code_hashes(user, ("hash-1", "hash-2"))
+    updated_user = await database.set_recovery_code_hashes(user, {"lookup-1": "hash-1", "lookup-2": "hash-2"})
 
     results = await asyncio.gather(
-        database.consume_recovery_code_hash(updated_user, "hash-1"),
-        database.consume_recovery_code_hash(updated_user, "hash-1"),
+        database.consume_recovery_code_by_lookup(updated_user, "lookup-1"),
+        database.consume_recovery_code_by_lookup(updated_user, "lookup-1"),
     )
 
     assert results.count(True) == 1

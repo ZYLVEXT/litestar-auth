@@ -40,18 +40,18 @@ class _OAuthTokenEncryptionBindable(Protocol):
 
 
 class _TotpRecoveryCodeStore[UP](Protocol):
-    """Store contract for hashed TOTP recovery-code persistence."""
+    """Store contract for TOTP recovery-code lookup-index persistence."""
 
-    async def set_recovery_code_hashes(self, user: UP, hashes: tuple[str, ...]) -> UP:
-        """Replace the active recovery-code hashes for ``user``."""
+    async def set_recovery_code_hashes(self, user: UP, code_index: dict[str, str]) -> UP:
+        """Replace the active recovery-code lookup index for ``user``."""
         ...  # pragma: no cover
 
-    async def read_recovery_code_hashes(self, user: UP) -> tuple[str, ...]:
-        """Return the active recovery-code hashes for ``user``."""
+    async def find_recovery_code_hash_by_lookup(self, user: UP, lookup_hex: str) -> str | None:
+        """Return the active recovery-code hash matching ``lookup_hex``."""
         ...  # pragma: no cover
 
-    async def consume_recovery_code_hash(self, user: UP, matched_hash: str) -> bool:
-        """Consume ``matched_hash`` for ``user`` when it is still active."""
+    async def consume_recovery_code_by_lookup(self, user: UP, lookup_hex: str) -> bool:
+        """Consume the recovery code keyed by ``lookup_hex`` when still active."""
         ...  # pragma: no cover
 
 
@@ -119,28 +119,28 @@ class _ScopedUserDatabaseProxy[UP: UserProtocol[Any], ID](BaseUserStore[UP, ID])
         """Delete the user identified by ``user_id`` from storage."""
         await self._user_db.delete(user_id)
 
-    async def set_recovery_code_hashes(self, user: UP, hashes: tuple[str, ...]) -> UP:
-        """Replace active TOTP recovery-code hashes through the wrapped store.
+    async def set_recovery_code_hashes(self, user: UP, code_index: dict[str, str]) -> UP:
+        """Replace active TOTP recovery-code lookup index through the wrapped store.
 
         Returns:
             The updated user instance.
         """
         recovery_store = cast("_TotpRecoveryCodeStore[UP]", self._user_db)
-        return await recovery_store.set_recovery_code_hashes(user, hashes)
+        return await recovery_store.set_recovery_code_hashes(user, code_index)
 
-    async def read_recovery_code_hashes(self, user: UP) -> tuple[str, ...]:
-        """Return active TOTP recovery-code hashes through the wrapped store."""
+    async def find_recovery_code_hash_by_lookup(self, user: UP, lookup_hex: str) -> str | None:
+        """Return active TOTP recovery-code hash through the wrapped store."""
         recovery_store = cast("_TotpRecoveryCodeStore[UP]", self._user_db)
-        return await recovery_store.read_recovery_code_hashes(user)
+        return await recovery_store.find_recovery_code_hash_by_lookup(user, lookup_hex)
 
-    async def consume_recovery_code_hash(self, user: UP, matched_hash: str) -> bool:
-        """Consume an active TOTP recovery-code hash through the wrapped store.
+    async def consume_recovery_code_by_lookup(self, user: UP, lookup_hex: str) -> bool:
+        """Consume an active TOTP recovery-code lookup entry through the wrapped store.
 
         Returns:
-            ``True`` when the hash was active and consumed.
+            ``True`` when the lookup entry was active and consumed.
         """
         recovery_store = cast("_TotpRecoveryCodeStore[UP]", self._user_db)
-        return await recovery_store.consume_recovery_code_hash(user, matched_hash)
+        return await recovery_store.consume_recovery_code_by_lookup(user, lookup_hex)
 
     async def get_by_oauth_account(self, oauth_name: str, account_id: str) -> UP | None:
         """Load a linked OAuth account through the wrapped store.

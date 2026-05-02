@@ -23,9 +23,9 @@ from litestar_auth.controllers import (
     create_oauth_associate_controller,
     create_oauth_controller,
 )
+from litestar_auth.controllers._oauth_helpers import _encode_oauth_flow_cookie
 from litestar_auth.controllers.oauth import (
     _decode_oauth_flow_cookie,
-    _encode_oauth_flow_cookie,
 )
 from litestar_auth.db.base import BaseUserStore, OAuthAccountData
 from litestar_auth.exceptions import (

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import base64
 import binascii
+import hashlib
 import hmac
 import logging
 import secrets
@@ -73,10 +74,10 @@ __all__ = (
     "TotpReplayProtection",
     "UsedTotpCodeStore",
     "UsedTotpMarkResult",
+    "build_recovery_code_index",
     "generate_totp_recovery_codes",
     "generate_totp_secret",
     "generate_totp_uri",
-    "hash_totp_recovery_codes",
     "verify_totp",
     "verify_totp_with_store",
 )
@@ -87,6 +88,7 @@ _TOTP_HASH_MAP: dict[TotpAlgorithm, str] = {
 }
 
 logger = logging.getLogger(__name__)
+_DUMMY_ARGON2_HASH = PasswordHelper.from_defaults().hash(secrets.token_hex(16))
 
 
 def _validate_totp_algorithm(algorithm: TotpAlgorithm) -> TotpAlgorithm:
@@ -121,18 +123,27 @@ def generate_totp_recovery_codes(*, count: int = DEFAULT_TOTP_RECOVERY_CODE_COUN
     return tuple(codes)
 
 
-def hash_totp_recovery_codes(
+def _recovery_code_lookup_hex(code: str, *, lookup_secret: bytes) -> str:
+    """Return the stable keyed lookup digest for a recovery code."""
+    normalized_code = code.casefold()
+    return hmac.new(lookup_secret, normalized_code.encode("utf-8"), hashlib.sha256).hexdigest()
+
+
+def build_recovery_code_index(
     codes: tuple[str, ...],
     *,
+    lookup_secret: bytes,
     password_helper: PasswordHelper | None = None,
-) -> tuple[str, ...]:
-    """Hash TOTP recovery codes using the library's Argon2 password policy.
+) -> dict[str, str]:
+    """Build a keyed lookup index for TOTP recovery-code hashes.
 
     Returns:
-        Hashes suitable for persistence in ``recovery_codes_hashes``.
+        Mapping of HMAC-SHA-256 lookup hex digests to Argon2 hashes.
     """
     helper = password_helper or PasswordHelper.from_defaults()
-    return tuple(helper.hash(code) for code in codes)
+    return {
+        _recovery_code_lookup_hex(code, lookup_secret=lookup_secret): helper.hash(code.casefold()) for code in codes
+    }
 
 
 class SecurityWarning(UserWarning):
@@ -142,11 +153,15 @@ class SecurityWarning(UserWarning):
 class TotpRecoveryCodeUserManager[UP](Protocol):
     """User-manager behavior required to verify and consume TOTP recovery codes."""
 
-    async def read_recovery_code_hashes(self, user: UP) -> tuple[str, ...]:
-        """Return active TOTP recovery-code hashes for a user."""
+    async def find_recovery_code_hash_by_lookup(self, user: UP, lookup_hex: str) -> str | None:
+        """Return the Argon2 hash matching ``lookup_hex``, if active."""
 
-    async def consume_recovery_code_hash(self, user: UP, matched_hash: str) -> bool:
-        """Atomically consume a matched recovery-code hash."""
+    async def consume_recovery_code_by_lookup(self, user: UP, lookup_hex: str) -> bool:
+        """Atomically consume the active recovery-code entry for ``lookup_hex``."""
+
+    @property
+    def recovery_code_lookup_secret(self) -> bytes | None:
+        """Return the HMAC lookup key for recovery-code verification."""
 
 
 async def _consume_matching_recovery_code[UP](
@@ -158,20 +173,26 @@ async def _consume_matching_recovery_code[UP](
 ) -> bool:
     """Consume ``submitted_code`` when it matches one active TOTP recovery-code hash.
 
-    Every active hash is verified before consuming the match to preserve the
-    recovery-code lookup timing shape.
-
     Returns:
         ``True`` when one active hash matched and was consumed.
     """
-    helper = password_helper or PasswordHelper.from_defaults()
-    recovery_code_hashes = await user_manager.read_recovery_code_hashes(user)
-    matched_hash: str | None = None
-    for recovery_code_hash in recovery_code_hashes:
-        if helper.verify(submitted_code, recovery_code_hash):
-            matched_hash = recovery_code_hash
+    lookup_secret = user_manager.recovery_code_lookup_secret
+    if lookup_secret is None:
+        return False
 
-    return matched_hash is not None and await user_manager.consume_recovery_code_hash(user, matched_hash)
+    helper = password_helper or PasswordHelper.from_defaults()
+    normalized_code = submitted_code.casefold()
+    lookup_hex = _recovery_code_lookup_hex(normalized_code, lookup_secret=lookup_secret)
+    candidate_hash = await user_manager.find_recovery_code_hash_by_lookup(user, lookup_hex)
+    if candidate_hash is None:
+        _ = helper.verify(normalized_code, _DUMMY_ARGON2_HASH)
+        return False
+
+    if not helper.verify(normalized_code, candidate_hash):
+        _ = helper.verify(normalized_code, _DUMMY_ARGON2_HASH)
+        return False
+
+    return await user_manager.consume_recovery_code_by_lookup(user, lookup_hex)
 
 
 def generate_totp_secret(algorithm: TotpAlgorithm = TOTP_ALGORITHM) -> str:

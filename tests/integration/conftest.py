@@ -93,29 +93,29 @@ class InMemoryUserDatabase[UP: _EmailUserProtocol](BaseUserStore[UP, UUID]):
             self.user_ids_by_email[user.email] = user.id
         return user
 
-    async def set_recovery_code_hashes(self, user: UP, hashes: tuple[str, ...]) -> UP:
-        """Replace active TOTP recovery-code hashes for ``user``.
+    async def set_recovery_code_hashes(self, user: UP, code_index: dict[str, str]) -> UP:
+        """Replace active TOTP recovery-code lookup index for ``user``.
 
         Returns:
             The updated user instance.
         """
-        return await self.update(user, {"recovery_codes_hashes": list(hashes) or None})
+        return await self.update(user, {"recovery_codes": dict(code_index) or None})
 
-    async def read_recovery_code_hashes(self, user: UP) -> tuple[str, ...]:
-        """Return active TOTP recovery-code hashes for ``user``."""
-        return tuple(getattr(user, "recovery_codes_hashes", None) or ())
+    async def find_recovery_code_hash_by_lookup(self, user: UP, lookup_hex: str) -> str | None:
+        """Return active TOTP recovery-code hash for ``lookup_hex``."""
+        return dict(getattr(user, "recovery_codes", None) or {}).get(lookup_hex)
 
-    async def consume_recovery_code_hash(self, user: UP, matched_hash: str) -> bool:
-        """Consume ``matched_hash`` if it is active for ``user``.
+    async def consume_recovery_code_by_lookup(self, user: UP, lookup_hex: str) -> bool:
+        """Consume the recovery code keyed by ``lookup_hex`` if active for ``user``.
 
         Returns:
-            ``True`` when the hash was active and removed.
+            ``True`` when the lookup entry was active and removed.
         """
-        active_hashes = list(getattr(user, "recovery_codes_hashes", None) or ())
-        if matched_hash not in active_hashes:
+        active_index = dict(getattr(user, "recovery_codes", None) or {})
+        if lookup_hex not in active_index:
             return False
-        active_hashes.remove(matched_hash)
-        await self.update(user, {"recovery_codes_hashes": active_hashes or None})
+        active_index.pop(lookup_hex)
+        await self.update(user, {"recovery_codes": active_index or None})
         return True
 
     @override

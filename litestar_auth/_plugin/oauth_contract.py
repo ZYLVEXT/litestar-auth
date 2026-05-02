@@ -1,5 +1,13 @@
 """OAuth route registration contract for plugin-owned login and associate routes."""
 
+# Test-suite reload-coverage pattern note:
+# `_current_oauth_provider_config_type` lazily resolves `OAuthProviderConfig` so
+# callers pick up the post-reload class identity after tests call
+# `importlib.reload(...)`. The reload pattern is load-bearing for the 100%
+# coverage gate; removing this helper requires first replacing the
+# coverage-startup mechanism. See the investigation outcome at
+# refactoring-test-reload-investigation.json (REFAC-001).
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -14,7 +22,15 @@ if TYPE_CHECKING:
 
 
 def _current_oauth_provider_config_type() -> type[OAuthProviderConfig]:
-    """Return the current OAuthProviderConfig type after module reloads."""
+    """Resolve ``OAuthProviderConfig`` lazily for OAuth provider normalization.
+
+    This lets ``_normalize_oauth_provider_inventory()`` pick up the post-reload
+    class identity if a test calls ``importlib.reload(litestar_auth.config)``.
+    Test-infrastructure helper -- see the module-level note above.
+
+    Returns:
+        The current ``OAuthProviderConfig`` type from ``litestar_auth.config``.
+    """
     return import_module("litestar_auth.config").OAuthProviderConfig
 
 

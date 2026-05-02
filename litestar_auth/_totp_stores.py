@@ -159,11 +159,13 @@ class RedisTotpEnrollmentStore:
         """Persist the latest pending enrollment secret for ``user_id`` with a TTL.
 
         Returns:
-            ``True`` when the secret is stored.
+            ``True`` when Redis confirms the write; ``False`` when the
+            underlying client signals refusal via a falsy return. Connection-level
+            failures continue to raise so callers fail closed regardless.
         """
         value = f"{jti}{_TOTP_ENROLLMENT_VALUE_SEPARATOR}{secret}"
-        await self._redis.setex(self._key(user_id), max(ttl_seconds, 1), value)
-        return True
+        result = await self._redis.setex(self._key(user_id), max(ttl_seconds, 1), value)
+        return bool(result)
 
     async def consume(self, *, user_id: str, jti: str) -> str | None:
         """Atomically consume the latest pending enrollment if its JTI matches.

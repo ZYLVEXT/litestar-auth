@@ -644,8 +644,8 @@ def test_supports_async_email_verified_detects_only_coroutine_contract() -> None
     async_client = _make_oauth_client(get_email_verified=AsyncMock(return_value=True))
     sync_client = _make_oauth_client(get_email_verified=lambda _access_token: True)
 
-    assert client_adapter_module._supports_async_email_verified(async_client)
-    assert not client_adapter_module._supports_async_email_verified(sync_client)
+    assert _client_features._supports_async_email_verified(async_client)
+    assert not _client_features._supports_async_email_verified(sync_client)
 
 
 def test_supports_email_verified_rejects_sync_only_contract() -> None:

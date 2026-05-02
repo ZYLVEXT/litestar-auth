@@ -49,6 +49,8 @@ from .test_orchestrator import (
     PluginUserManager,
 )
 
+TOTP_RECOVERY_CODE_LOOKUP_SECRET = "test-recovery-code-lookup-secret-123"
+
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -735,6 +737,7 @@ def test_totp_backend_resolves_named_backend() -> None:
         verification_token_secret="verify-secret-12345678901234567890",
         reset_password_token_secret="reset-secret-123456789012345678901",
         totp_secret_key=Fernet.generate_key().decode(),
+        totp_recovery_code_lookup_secret=TOTP_RECOVERY_CODE_LOOKUP_SECRET,
         id_parser=UUID,
     )
     plugin = LitestarAuth(config)
@@ -766,6 +769,7 @@ def test_totp_backend_unknown_name_raises_value_error() -> None:
         verification_token_secret="verify-secret-12345678901234567890",
         reset_password_token_secret="reset-secret-123456789012345678901",
         totp_secret_key=Fernet.generate_key().decode(),
+        totp_recovery_code_lookup_secret=TOTP_RECOVERY_CODE_LOOKUP_SECRET,
         id_parser=UUID,
     )
     plugin = LitestarAuth(config)
@@ -818,6 +822,7 @@ def test_plugin_totp_routes_include_recovery_code_regeneration() -> None:
         verification_token_secret="verify-secret-12345678901234567890",
         reset_password_token_secret="reset-secret-123456789012345678901",
         totp_secret_key=Fernet.generate_key().decode(),
+        totp_recovery_code_lookup_secret=TOTP_RECOVERY_CODE_LOOKUP_SECRET,
         id_parser=UUID,
     )
 
