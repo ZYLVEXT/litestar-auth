@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import cast
+from typing import Any, cast
 from uuid import UUID
 
 import pytest
@@ -11,12 +11,16 @@ from cryptography.fernet import Fernet
 
 from litestar_auth._manager.construction import (
     ManagerConstructorInputs,
-    SecretFactory,
     resolve_account_token_secrets,
 )
 from litestar_auth.manager import FernetKeyringConfig, UserManagerSecurity
 
 pytestmark = pytest.mark.unit
+
+
+def _as_any(value: object) -> Any:  # noqa: ANN401
+    """Return a value through the test-only dynamic type boundary."""
+    return cast("Any", value)
 
 
 def _fernet_key() -> str:
@@ -45,7 +49,7 @@ def test_resolve_account_token_secrets_wraps_account_token_secrets() -> None:
 
     resolved = resolve_account_token_secrets(
         manager_security,
-        secret_factory=cast("SecretFactory", SecretWrapper),
+        secret_factory=_as_any(SecretWrapper),
         warning_stacklevel=5,
     )
 

@@ -31,7 +31,7 @@ from litestar_auth.authentication.transport.bearer import BearerTransport
 from litestar_auth.manager import BaseUserManager, UserManagerSecurity
 from litestar_auth.models import User
 from litestar_auth.plugin import LitestarAuth, LitestarAuthConfig
-from litestar_auth.types import StrategyProtocol, UserProtocol
+from litestar_auth.types import UserProtocol
 from tests._helpers import ExampleUser
 from tests.e2e.conftest import assert_structural_session_factory
 from tests.integration.conftest import DummySessionMaker, InMemoryUserDatabase
@@ -39,9 +39,12 @@ from tests.integration.conftest import DummySessionMaker, InMemoryUserDatabase
 if TYPE_CHECKING:
     from click import Group
 
-    from litestar_auth._plugin.scoped_session import SessionFactory
-
 pytestmark = pytest.mark.unit
+
+
+def _as_any(value: object) -> Any:  # noqa: ANN401
+    """Return a value through the test-only dynamic type boundary."""
+    return cast("Any", value)
 
 
 class _EmailUserProtocol(UserProtocol[UUID], Protocol):
@@ -107,13 +110,13 @@ def _minimal_config[UP: _EmailUserProtocol](
     backend = AuthenticationBackend[UP, UUID](
         name="primary",
         transport=BearerTransport(),
-        strategy=cast("StrategyProtocol[UP, UUID]", _CLIInMemoryTokenStrategy[UP]()),
+        strategy=_as_any(_CLIInMemoryTokenStrategy[UP]()),
     )
     return LitestarAuthConfig[UP, UUID](
         backends=[backend],
         user_model=user_model,
         user_manager_class=_CLIUserManager,
-        session_maker=cast("SessionFactory", assert_structural_session_factory(DummySessionMaker())),
+        session_maker=_as_any(assert_structural_session_factory(DummySessionMaker())),
         user_db_factory=lambda _session: user_db,
         user_manager_security=UserManagerSecurity[UUID](
             verification_token_secret="verification-secret-123456789012",

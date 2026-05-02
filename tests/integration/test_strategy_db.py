@@ -14,7 +14,6 @@ import litestar_auth.authentication.strategy.db as db_strategy_module
 from litestar_auth.authentication.strategy import DatabaseTokenModels
 from litestar_auth.authentication.strategy._opaque_tokens import digest_opaque_token
 from litestar_auth.authentication.strategy.base import RefreshableStrategy, Strategy
-from litestar_auth.authentication.strategy.db import DatabaseTokenStrategy
 from litestar_auth.authentication.strategy.db_models import AccessToken, RefreshToken
 from litestar_auth.exceptions import ConfigurationError
 from litestar_auth.models import (
@@ -24,6 +23,8 @@ from litestar_auth.models import (
     UserAuthRelationshipMixin,
     UserModelMixin,
 )
+
+DatabaseTokenStrategy = db_strategy_module.DatabaseTokenStrategy
 
 if TYPE_CHECKING:
     from collections.abc import Iterable, Mapping, Sequence

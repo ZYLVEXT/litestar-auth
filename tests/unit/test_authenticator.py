@@ -3,20 +3,15 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, cast
+from typing import Any, cast
 from unittest.mock import AsyncMock
-from uuid import UUID, uuid4
+from uuid import uuid4
 
 import pytest
 from litestar.connection import ASGIConnection
 
 from litestar_auth.authentication.authenticator import Authenticator
 from tests._helpers import ExampleUser
-
-if TYPE_CHECKING:
-    from litestar.types import HTTPScope
-
-    from litestar_auth.authentication.backend import AuthenticationBackend
 
 pytestmark = pytest.mark.unit
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -34,7 +29,7 @@ def _build_connection() -> ASGIConnection[Any, Any, Any, Any]:
         "path_params": {},
         "query_string": b"",
     }
-    return ASGIConnection(scope=cast("HTTPScope", scope))
+    return ASGIConnection(scope=cast("Any", scope))
 
 
 async def test_authenticator_returns_first_successful_backend() -> None:
@@ -56,10 +51,7 @@ async def test_authenticator_returns_first_successful_backend() -> None:
     third_backend.authenticate.return_value = ExampleUser(id=uuid4())
 
     authenticator = Authenticator(
-        cast(
-            "list[AuthenticationBackend[ExampleUser, UUID]]",
-            [first_backend, second_backend, third_backend],
-        ),
+        cast("Any", [first_backend, second_backend, third_backend]),
         user_manager,
     )
 
@@ -85,7 +77,7 @@ async def test_authenticator_returns_none_when_all_backends_miss() -> None:
     second_backend.authenticate.return_value = None
 
     authenticator = Authenticator(
-        cast("list[AuthenticationBackend[ExampleUser, UUID]]", [first_backend, second_backend]),
+        cast("Any", [first_backend, second_backend]),
         user_manager,
     )
 

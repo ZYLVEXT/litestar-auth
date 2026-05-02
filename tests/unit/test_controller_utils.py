@@ -15,7 +15,6 @@ import litestar_auth._account_state as account_state_module
 import litestar_auth.controllers._error_responses as error_responses_module
 import litestar_auth.controllers._request_body as request_body_module
 import litestar_auth.controllers._user_schema as user_schema_module
-import litestar_auth.oauth.service as oauth_service_module
 from litestar_auth.controllers import _utils
 from litestar_auth.controllers._utils import (
     RequestBodyErrorConfig,
@@ -616,9 +615,8 @@ def test_resolve_account_state_validator_returns_none_for_missing_manager() -> N
 
 
 def test_account_state_helper_aliases_point_to_shared_core() -> None:
-    """Controllers and OAuth service share the same resolver core."""
+    """Controller helpers share the same resolver core."""
     assert _utils._resolve_account_state_validator is account_state_module.resolve_account_state_validator
-    assert oauth_service_module._resolve_account_state_validator is account_state_module.resolve_account_state_validator
 
 
 def test_resolve_account_state_validator_returns_none_for_non_callable_attribute() -> None:

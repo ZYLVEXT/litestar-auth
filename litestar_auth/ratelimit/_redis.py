@@ -6,12 +6,12 @@ import time
 from typing import TYPE_CHECKING
 from uuid import uuid4
 
+from litestar_auth._clock import Clock, read_clock
+
 from . import _helpers as helpers_module
 from ._helpers import DEFAULT_KEY_PREFIX, RedisScriptResult, _validate_configuration
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
-
     from ._protocol import RedisClientProtocol
 
 
@@ -25,8 +25,7 @@ def _load_package_redis_asyncio() -> object:
     Returns:
         The object returned by the private helper Redis loader.
     """
-    loader = vars(helpers_module)["_load_redis_asyncio"]
-    return loader()
+    return helpers_module._load_redis_asyncio()  # noqa: SLF001
 
 
 class RedisRateLimiter:
@@ -93,7 +92,7 @@ return math.max(math.ceil(window - (now - tonumber(oldest[2]))), 0)
         max_attempts: int,
         window_seconds: float,
         key_prefix: str = DEFAULT_KEY_PREFIX,
-        clock: Callable[[], float] = time.time,
+        clock: Clock = time.time,
     ) -> None:
         """Store the Redis client and shared rate-limiter configuration."""
         _load_package_redis_asyncio()
@@ -103,7 +102,7 @@ return math.max(math.ceil(window - (now - tonumber(oldest[2]))), 0)
         self.max_attempts = max_attempts
         self.window_seconds = window_seconds
         self.key_prefix = key_prefix
-        self._clock = clock
+        self._clock: Clock = clock
 
     def _key(self, key: str) -> str:
         """Return the namespaced Redis key for ``key``."""
@@ -144,7 +143,7 @@ return math.max(math.ceil(window - (now - tonumber(oldest[2]))), 0)
             await self._eval(
                 self._CHECK_SCRIPT,
                 key,
-                self._clock(),
+                read_clock(self._clock),
                 self.window_seconds,
                 self.max_attempts,
             ),
@@ -153,7 +152,7 @@ return math.max(math.ceil(window - (now - tonumber(oldest[2]))), 0)
 
     async def increment(self, key: str) -> None:
         """Record a new attempt for ``key`` atomically in Redis."""
-        now = self._clock()
+        now = read_clock(self._clock)
         await self._eval(
             self._INCREMENT_SCRIPT,
             key,
@@ -174,7 +173,7 @@ return math.max(math.ceil(window - (now - tonumber(oldest[2]))), 0)
                 await self._eval(
                     self._RETRY_AFTER_SCRIPT,
                     key,
-                    self._clock(),
+                    read_clock(self._clock),
                     self.window_seconds,
                     self.max_attempts,
                 ),

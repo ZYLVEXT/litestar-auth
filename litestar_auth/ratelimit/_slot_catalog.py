@@ -13,9 +13,6 @@ if TYPE_CHECKING:
 type AuthRateLimitEndpointGroup = Literal["login", "password_reset", "refresh", "register", "totp", "verification"]
 type _RecipeScope = Literal["ip", "ip_email"]
 
-_AUTH_RATE_LIMIT_NAMESPACE_STYLES = frozenset({"route", "snake_case"})
-_MISSING_OVERRIDE = object()
-
 
 class _BuilderNamesValidator(Protocol):
     """Validator callback supplied by the config builder."""
@@ -27,7 +24,8 @@ class _BuilderNamesValidator(Protocol):
         allowed: frozenset[NameT],
         parameter_name: str,
         item_name: str,
-    ) -> None: ...
+    ) -> None:
+        pass  # pragma: no cover
 
 
 class AuthRateLimitSlot(StrEnum):
@@ -240,16 +238,3 @@ def _build_auth_rate_limit_endpoint_catalog() -> _AuthRateLimitEndpointCatalog:
         ),
         groups=frozenset(recipe.group for recipe in _AUTH_RATE_LIMIT_ENDPOINT_RECIPES),
     )
-
-
-_AUTH_RATE_LIMIT_ENDPOINT_CATALOG = _build_auth_rate_limit_endpoint_catalog()
-_AUTH_RATE_LIMIT_ENDPOINT_RECIPES_BY_SLOT: MappingProxyType[AuthRateLimitSlot, _AuthRateLimitEndpointRecipe] = (
-    _AUTH_RATE_LIMIT_ENDPOINT_CATALOG.recipes_by_slot
-)
-_AUTH_RATE_LIMIT_ENDPOINT_SLOTS: tuple[AuthRateLimitSlot, ...] = _AUTH_RATE_LIMIT_ENDPOINT_CATALOG.slots
-_AUTH_RATE_LIMIT_ENDPOINT_SLOT_SET: frozenset[AuthRateLimitSlot] = _AUTH_RATE_LIMIT_ENDPOINT_CATALOG.slot_set
-_AUTH_RATE_LIMIT_ENDPOINT_SLOTS_BY_GROUP: MappingProxyType[
-    AuthRateLimitEndpointGroup,
-    frozenset[AuthRateLimitSlot],
-] = _AUTH_RATE_LIMIT_ENDPOINT_CATALOG.slots_by_group
-_AUTH_RATE_LIMIT_ENDPOINT_GROUPS: frozenset[AuthRateLimitEndpointGroup] = _AUTH_RATE_LIMIT_ENDPOINT_CATALOG.groups

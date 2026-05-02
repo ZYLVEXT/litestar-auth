@@ -37,47 +37,6 @@ import litestar_auth.plugin as plugin_module
 import litestar_auth.ratelimit as ratelimit_module
 import litestar_auth.schemas as schemas_module
 import litestar_auth.totp as totp_module
-from litestar_auth import (
-    AuthenticationBackend,
-    Authenticator,
-    BaseUserManager,
-    BaseUserManagerConfig,
-    BearerTransport,
-    CookieTransport,
-    CookieTransportConfig,
-    DatabaseTokenAuthConfig,
-    ErrorCode,
-    FernetKeyringConfig,
-    GuardedUserProtocol,
-    LitestarAuth,
-    LitestarAuthConfig,
-    LitestarAuthError,
-    OAuthConfig,
-    OAuthProviderConfig,
-    RoleCapableUserProtocol,
-    TotpConfig,
-    TotpUserProtocol,
-    UserManagerSecurity,
-    UserProtocol,
-    UserProtocolStrict,
-    __all__,
-    __version__,
-    has_all_roles,
-    has_any_role,
-    is_active,
-    is_authenticated,
-    is_superuser,
-    is_verified,
-)
-from litestar_auth.authentication.strategy import (
-    DatabaseTokenStrategy,
-    DatabaseTokenStrategyConfig,
-    JWTStrategy,
-    JWTStrategyConfig,
-    RedisTokenStrategy,
-    RedisTokenStrategyConfig,
-    Strategy,
-)
 from litestar_auth.authentication.strategy.db_models import AccessToken, RefreshToken
 from litestar_auth.authentication.strategy.jwt import (
     InMemoryJWTDenylistStore,
@@ -86,37 +45,6 @@ from litestar_auth.authentication.strategy.jwt import (
     RedisJWTDenylistStore,
 )
 from litestar_auth.authentication.transport import Transport
-from litestar_auth.config import require_password_length
-from litestar_auth.contrib.redis import (
-    RedisAuthClientProtocol,
-    RedisAuthPreset,
-    RedisAuthRateLimitConfigOptions,
-    RedisAuthRateLimitTier,
-)
-from litestar_auth.contrib.redis import (
-    RedisTokenStrategyConfig as ContribRedisTokenStrategyConfig,
-)
-from litestar_auth.contrib.redis import (
-    RedisTotpEnrollmentStore as ContribRedisTotpEnrollmentStore,
-)
-from litestar_auth.controllers import (
-    AuthControllerConfig,
-    OAuthAssociateControllerConfig,
-    OAuthControllerConfig,
-    RegisterControllerConfig,
-    TotpControllerOptions,
-    TotpUserManagerProtocol,
-    UsersControllerConfig,
-    create_auth_controller,
-    create_oauth_associate_controller,
-    create_oauth_controller,
-    create_register_controller,
-    create_reset_password_controller,
-    create_totp_controller,
-    create_users_controller,
-    create_verify_controller,
-)
-from litestar_auth.db import BaseOAuthAccountStore, BaseUserStore, OAuthAccountData
 from litestar_auth.db.sqlalchemy import SQLAlchemyUserDatabase
 from litestar_auth.exceptions import (
     AuthenticationError,
@@ -130,49 +58,111 @@ from litestar_auth.exceptions import (
     UserAlreadyExistsError,
     UserNotExistsError,
 )
-from litestar_auth.oauth import create_provider_oauth_controller, load_httpx_oauth_client
 from litestar_auth.oauth.client_adapter import (
     OAuthEmailVerificationAsyncClientProtocol,
     OAuthEmailVerificationSyncClientProtocol,
     make_async_email_verification_client,
 )
 from litestar_auth.password import PasswordHelper
-from litestar_auth.payloads import (
-    ForgotPassword,
-    LoginCredentials,
-    RefreshTokenRequest,
-    RequestVerifyToken,
-    ResetPassword,
-    TotpConfirmEnableRequest,
-    TotpConfirmEnableResponse,
-    TotpDisableRequest,
-    TotpEnableResponse,
-    TotpVerifyRequest,
-    VerifyToken,
-)
-from litestar_auth.ratelimit import (
-    AuthRateLimitConfig,
-    AuthRateLimitEndpointGroup,
-    AuthRateLimitSlot,
-    EndpointRateLimit,
-    InMemoryRateLimiter,
-    RedisRateLimiter,
-    SharedRateLimitConfigOptions,
-)
-from litestar_auth.schemas import AdminUserUpdate, ChangePasswordRequest, UserCreate, UserRead, UserUpdate
-from litestar_auth.totp import (
-    InMemoryTotpEnrollmentStore,
-    InMemoryUsedTotpCodeStore,
-    RedisTotpEnrollmentStore,
-    RedisUsedTotpCodeStore,
-    generate_totp_secret,
-    generate_totp_uri,
-    verify_totp,
-    verify_totp_with_store,
-)
 from litestar_auth.types import DbSessionDependencyKey
 from tests._helpers import ExampleUser, cast_fakeredis
 from tests.conftest import project_version_from_pyproject
+
+AuthenticationBackend = litestar_auth.AuthenticationBackend
+Authenticator = litestar_auth.Authenticator
+BaseUserManager = litestar_auth.BaseUserManager
+BaseUserManagerConfig = litestar_auth.BaseUserManagerConfig
+BearerTransport = litestar_auth.BearerTransport
+CookieTransport = litestar_auth.CookieTransport
+CookieTransportConfig = litestar_auth.CookieTransportConfig
+DatabaseTokenAuthConfig = litestar_auth.DatabaseTokenAuthConfig
+ErrorCode = litestar_auth.ErrorCode
+FernetKeyringConfig = litestar_auth.FernetKeyringConfig
+GuardedUserProtocol = litestar_auth.GuardedUserProtocol
+LitestarAuth = litestar_auth.LitestarAuth
+LitestarAuthConfig = litestar_auth.LitestarAuthConfig
+LitestarAuthError = litestar_auth.LitestarAuthError
+OAuthConfig = litestar_auth.OAuthConfig
+OAuthProviderConfig = litestar_auth.OAuthProviderConfig
+RoleCapableUserProtocol = litestar_auth.RoleCapableUserProtocol
+TotpConfig = litestar_auth.TotpConfig
+TotpUserProtocol = litestar_auth.TotpUserProtocol
+UserManagerSecurity = litestar_auth.UserManagerSecurity
+UserProtocol = litestar_auth.UserProtocol
+UserProtocolStrict = litestar_auth.UserProtocolStrict
+__all__ = litestar_auth.__all__
+__version__ = litestar_auth.__version__
+has_all_roles = litestar_auth.has_all_roles
+has_any_role = litestar_auth.has_any_role
+is_active = litestar_auth.is_active
+is_authenticated = litestar_auth.is_authenticated
+is_superuser = litestar_auth.is_superuser
+is_verified = litestar_auth.is_verified
+DatabaseTokenStrategy = strategy_module.DatabaseTokenStrategy
+DatabaseTokenStrategyConfig = strategy_module.DatabaseTokenStrategyConfig
+JWTStrategy = strategy_module.JWTStrategy
+JWTStrategyConfig = strategy_module.JWTStrategyConfig
+RedisTokenStrategy = strategy_module.RedisTokenStrategy
+RedisTokenStrategyConfig = strategy_module.RedisTokenStrategyConfig
+Strategy = strategy_module.Strategy
+require_password_length = config_module.require_password_length
+RedisAuthClientProtocol = redis_contrib_module.RedisAuthClientProtocol
+RedisAuthPreset = redis_contrib_module.RedisAuthPreset
+RedisAuthRateLimitConfigOptions = redis_contrib_module.RedisAuthRateLimitConfigOptions
+RedisAuthRateLimitTier = redis_contrib_module.RedisAuthRateLimitTier
+ContribRedisTokenStrategyConfig = redis_contrib_module.RedisTokenStrategyConfig
+ContribRedisTotpEnrollmentStore = redis_contrib_module.RedisTotpEnrollmentStore
+AuthControllerConfig = controllers_package.AuthControllerConfig
+OAuthAssociateControllerConfig = controllers_package.OAuthAssociateControllerConfig
+OAuthControllerConfig = controllers_package.OAuthControllerConfig
+RegisterControllerConfig = controllers_package.RegisterControllerConfig
+TotpControllerOptions = controllers_package.TotpControllerOptions
+TotpUserManagerProtocol = controllers_package.TotpUserManagerProtocol
+UsersControllerConfig = controllers_package.UsersControllerConfig
+create_auth_controller = controllers_package.create_auth_controller
+create_oauth_associate_controller = controllers_package.create_oauth_associate_controller
+create_oauth_controller = controllers_package.create_oauth_controller
+create_register_controller = controllers_package.create_register_controller
+create_reset_password_controller = controllers_package.create_reset_password_controller
+create_totp_controller = controllers_package.create_totp_controller
+create_users_controller = controllers_package.create_users_controller
+create_verify_controller = controllers_package.create_verify_controller
+BaseOAuthAccountStore = db_module.BaseOAuthAccountStore
+BaseUserStore = db_module.BaseUserStore
+OAuthAccountData = db_module.OAuthAccountData
+create_provider_oauth_controller = oauth_package_module.create_provider_oauth_controller
+load_httpx_oauth_client = oauth_package_module.load_httpx_oauth_client
+ForgotPassword = payloads_module.ForgotPassword
+LoginCredentials = payloads_module.LoginCredentials
+RefreshTokenRequest = payloads_module.RefreshTokenRequest
+RequestVerifyToken = payloads_module.RequestVerifyToken
+ResetPassword = payloads_module.ResetPassword
+TotpConfirmEnableRequest = payloads_module.TotpConfirmEnableRequest
+TotpConfirmEnableResponse = payloads_module.TotpConfirmEnableResponse
+TotpDisableRequest = payloads_module.TotpDisableRequest
+TotpEnableResponse = payloads_module.TotpEnableResponse
+TotpVerifyRequest = payloads_module.TotpVerifyRequest
+VerifyToken = payloads_module.VerifyToken
+AuthRateLimitConfig = ratelimit_module.AuthRateLimitConfig
+AuthRateLimitEndpointGroup = ratelimit_module.AuthRateLimitEndpointGroup
+AuthRateLimitSlot = ratelimit_module.AuthRateLimitSlot
+EndpointRateLimit = ratelimit_module.EndpointRateLimit
+InMemoryRateLimiter = ratelimit_module.InMemoryRateLimiter
+RedisRateLimiter = ratelimit_module.RedisRateLimiter
+SharedRateLimitConfigOptions = ratelimit_module.SharedRateLimitConfigOptions
+AdminUserUpdate = schemas_module.AdminUserUpdate
+ChangePasswordRequest = schemas_module.ChangePasswordRequest
+UserCreate = schemas_module.UserCreate
+UserRead = schemas_module.UserRead
+UserUpdate = schemas_module.UserUpdate
+InMemoryTotpEnrollmentStore = totp_module.InMemoryTotpEnrollmentStore
+InMemoryUsedTotpCodeStore = totp_module.InMemoryUsedTotpCodeStore
+RedisTotpEnrollmentStore = totp_module.RedisTotpEnrollmentStore
+RedisUsedTotpCodeStore = totp_module.RedisUsedTotpCodeStore
+generate_totp_secret = totp_module.generate_totp_secret
+generate_totp_uri = totp_module.generate_totp_uri
+verify_totp = totp_module.verify_totp
+verify_totp_with_store = totp_module.verify_totp_with_store
 
 if TYPE_CHECKING:
     import msgspec
@@ -404,7 +394,8 @@ def test_root_package_exports_canonical_database_token_preset_entrypoint() -> No
     assert isinstance(backend, plugin_module.StartupBackendTemplate)
     assert backend.name == "database"
     assert isinstance(backend.transport, BearerTransport)
-    assert isinstance(backend.strategy, DatabaseTokenStrategy)
+    assert not isinstance(backend.strategy, DatabaseTokenStrategy)
+    assert callable(getattr(backend.strategy, "with_session", None))
 
 
 def test_public_user_schema_reuse_surface_stays_importable() -> None:
@@ -718,8 +709,8 @@ def test_ratelimit_module_exposes_canonical_shared_backend_builder() -> None:
         ),
     )
 
-    assert AuthRateLimitConfig.__name__ == AuthRateLimitConfig.__name__
-    assert EndpointRateLimit.__name__ == EndpointRateLimit.__name__
+    assert ratelimit_module.AuthRateLimitConfig is AuthRateLimitConfig
+    assert ratelimit_module.EndpointRateLimit is EndpointRateLimit
     assert current_memory_limiter_class.__name__ == InMemoryRateLimiter.__name__
     assert current_redis_limiter_class.__name__ == RedisRateLimiter.__name__
     assert "AuthRateLimitConfig" in ratelimit_module.__all__

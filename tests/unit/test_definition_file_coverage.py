@@ -10,7 +10,6 @@ import uuid
 import warnings
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast, get_args, get_type_hints
-from uuid import uuid4
 
 import pytest
 from sqlalchemy import Uuid, inspect
@@ -28,21 +27,21 @@ import litestar_auth.schemas as schemas_module
 import litestar_auth.types as types_module
 from litestar_auth.authentication.strategy.db_models import AccessToken as ModelsAccessToken
 from litestar_auth.authentication.strategy.db_models import RefreshToken as ModelsRefreshToken
-from litestar_auth.models.mixins import (
-    AccessTokenMixin,
-    OAuthAccountMixin,
-    RefreshTokenMixin,
-    RoleMixin,
-    UserAuthRelationshipMixin,
-    UserModelMixin,
-    UserRoleAssociationMixin,
-    UserRoleRelationshipMixin,
-)
 from litestar_auth.models.oauth import OAuthAccount as ModelsOAuthAccount
 from litestar_auth.models.role import Role as ModelsRole
 from litestar_auth.models.role import UserRole as ModelsUserRole
 from litestar_auth.models.user import User as ModelsUser
 from tests._helpers import ExampleUser
+
+uuid4 = uuid.uuid4
+AccessTokenMixin = model_mixins_module.AccessTokenMixin
+OAuthAccountMixin = model_mixins_module.OAuthAccountMixin
+RefreshTokenMixin = model_mixins_module.RefreshTokenMixin
+RoleMixin = model_mixins_module.RoleMixin
+UserAuthRelationshipMixin = model_mixins_module.UserAuthRelationshipMixin
+UserModelMixin = model_mixins_module.UserModelMixin
+UserRoleAssociationMixin = model_mixins_module.UserRoleAssociationMixin
+UserRoleRelationshipMixin = model_mixins_module.UserRoleRelationshipMixin
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -234,7 +233,8 @@ async def test_db_base_protocol_method_stubs_execute_under_coverage() -> None:
     assert await db_base_module.BaseUserStore.create(dummy_self, {"email": "user@example.com"}) is None
     assert await db_base_module.BaseUserStore.list_users(dummy_self, offset=0, limit=10) is None
     assert await db_base_module.BaseUserStore.update(dummy_self, cast("Any", object()), {"email": "updated"}) is None
-    assert await db_base_module.BaseUserStore.delete(dummy_self, uuid4()) is None
+    delete_result = await db_base_module.BaseUserStore.delete(dummy_self, uuid4())
+    assert delete_result is None
     assert await db_base_module.BaseOAuthAccountStore.get_by_oauth_account(dummy_self, "provider", "account") is None
     assert (
         await db_base_module.BaseOAuthAccountStore.upsert_oauth_account(

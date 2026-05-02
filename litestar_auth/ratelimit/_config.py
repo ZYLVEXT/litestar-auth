@@ -13,16 +13,7 @@ from ._memory import InMemoryRateLimiter
 from ._protocol import RateLimiterBackend  # noqa: TC001
 from ._redis import RedisRateLimiter
 from ._slot_catalog import (
-    _AUTH_RATE_LIMIT_ENDPOINT_CATALOG as _SLOT_CATALOG,
-)
-from ._slot_catalog import (
     _AUTH_RATE_LIMIT_ENDPOINT_RECIPES as _SLOT_RECIPES,
-)
-from ._slot_catalog import (
-    _AUTH_RATE_LIMIT_ENDPOINT_SLOTS as _SLOT_ORDER,
-)
-from ._slot_catalog import (
-    _MISSING_OVERRIDE as _SLOT_MISSING_OVERRIDE,
 )
 from ._slot_catalog import (
     AuthRateLimitEndpointGroup,
@@ -34,7 +25,12 @@ from ._slot_catalog import (
 from ._slot_catalog import (
     _AuthRateLimitEndpointRecipe as _SlotRecipe,
 )
+from ._slot_catalog import (
+    _build_auth_rate_limit_endpoint_catalog as _build_slot_catalog,
+)
 
+_SLOT_MISSING_OVERRIDE = object()
+_SLOT_CATALOG = _build_slot_catalog()
 _STRICT_AUTH_RATE_LIMIT_PRESET_SLOTS: frozenset[AuthRateLimitSlot] = frozenset(
     {
         AuthRateLimitSlot.LOGIN,
@@ -51,9 +47,6 @@ _LENIENT_AUTH_RATE_LIMIT_SHARED_SLOTS: frozenset[AuthRateLimitSlot] = frozenset(
         AuthRateLimitSlot.REFRESH,
         AuthRateLimitSlot.REGISTER,
     },
-)
-_LENIENT_AUTH_RATE_LIMIT_STRICT_SLOTS: frozenset[AuthRateLimitSlot] = frozenset(
-    slot for slot in _SLOT_ORDER if slot not in _LENIENT_AUTH_RATE_LIMIT_SHARED_SLOTS
 )
 _LENIENT_STRICT_MAX_ATTEMPTS_CAP = 5
 
@@ -470,6 +463,6 @@ class AuthRateLimitConfig:
         return cls(**cast("Any", config_kwargs))
 
 
-if tuple(field.name for field in fields(AuthRateLimitConfig)) != tuple(slot.value for slot in _SLOT_ORDER):
+if tuple(field.name for field in fields(AuthRateLimitConfig)) != tuple(slot.value for slot in _SLOT_CATALOG.slots):
     msg = "AuthRateLimitConfig fields must stay aligned with the private auth rate-limit endpoint catalog."
     raise RuntimeError(msg)

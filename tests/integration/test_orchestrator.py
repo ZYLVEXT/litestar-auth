@@ -27,13 +27,12 @@ from litestar_auth.exceptions import ErrorCode
 from litestar_auth.manager import BaseUserManager, UserManagerSecurity
 from litestar_auth.password import PasswordHelper
 from litestar_auth.plugin import LitestarAuth, LitestarAuthConfig
-from litestar_auth.totp import (
-    InMemoryTotpEnrollmentStore,
-    InMemoryUsedTotpCodeStore,
-    _current_counter,
-    _generate_totp_code,
-)
 from tests.integration.conftest import ExampleUser, InMemoryUserDatabase
+
+InMemoryTotpEnrollmentStore = _totp_mod.InMemoryTotpEnrollmentStore
+InMemoryUsedTotpCodeStore = _totp_mod.InMemoryUsedTotpCodeStore
+_current_counter = _totp_mod._current_counter
+_generate_totp_code = _totp_mod._generate_totp_code
 
 if TYPE_CHECKING:
     from types import TracebackType

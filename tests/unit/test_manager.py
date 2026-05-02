@@ -18,6 +18,7 @@ from cryptography.fernet import Fernet
 import litestar_auth._optional_deps as optional_deps_module
 import litestar_auth.manager as manager_module
 from litestar_auth._manager._coercions import _account_state_user, _as_dict, _managed_user, _require_str
+from litestar_auth._manager.construction import resolve_oauth_account_store
 from litestar_auth._manager.security import _SecretValue
 from litestar_auth._manager.user_lifecycle import PRIVILEGED_FIELDS
 from litestar_auth._manager.user_policy import UserPolicy
@@ -34,18 +35,17 @@ from litestar_auth.exceptions import (
     UserAlreadyExistsError,
     UserNotExistsError,
 )
-from litestar_auth.manager import (
-    RESET_PASSWORD_TOKEN_AUDIENCE,
-    BaseUserManager,
-    BaseUserManagerConfig,
-    FernetKeyringConfig,
-    UserManagerSecurity,
-)
-from litestar_auth.manager import logger as manager_logger
 from litestar_auth.password import PasswordHelper
 from litestar_auth.schemas import AdminUserUpdate, UserCreate, UserUpdate
 from litestar_auth.totp import SecurityWarning
 from tests._helpers import ExampleUser
+
+RESET_PASSWORD_TOKEN_AUDIENCE = manager_module.RESET_PASSWORD_TOKEN_AUDIENCE
+BaseUserManager = manager_module.BaseUserManager
+BaseUserManagerConfig = manager_module.BaseUserManagerConfig
+FernetKeyringConfig = manager_module.FernetKeyringConfig
+UserManagerSecurity = manager_module.UserManagerSecurity
+manager_logger = manager_module.logger
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -60,6 +60,11 @@ EXPECTED_SHARED_HELPER_DUMMY_HASH_CALLS = 2
 LOGIN_IDENTIFIER_TELEMETRY_SECRET = "login-telemetry-secret-1234567890"
 
 pytestmark = pytest.mark.unit
+
+
+def _as_any(value: object) -> Any:  # noqa: ANN401
+    """Return a value through the test-only dynamic type boundary."""
+    return cast("Any", value)
 
 
 def _fernet_key() -> str:
@@ -396,7 +401,7 @@ def test_manager_init_rejects_config_combined_with_user_db_or_options() -> None:
         ),
     )
 
-    loose_ctor = cast("Any", BaseUserManager)
+    loose_ctor = _as_any(BaseUserManager)
 
     with pytest.raises(ValueError, match="BaseUserManagerConfig or user_db plus keyword options"):
         loose_ctor(user_db, config=config)
@@ -407,7 +412,7 @@ def test_manager_init_rejects_config_combined_with_user_db_or_options() -> None:
 
 def test_manager_init_requires_user_db_or_config() -> None:
     """BaseUserManager fails loudly when no persistence boundary is provided."""
-    loose_ctor = cast("Any", BaseUserManager)
+    loose_ctor = _as_any(BaseUserManager)
 
     with pytest.raises(TypeError, match="requires user_db or config"):
         loose_ctor()
@@ -812,8 +817,8 @@ def test_resolve_oauth_account_store_returns_matching_protocol_instance() -> Non
 
     store = DummyOAuthAccountStore()
 
-    assert manager_module._resolve_oauth_account_store(store) is store
-    assert manager_module._resolve_oauth_account_store(object()) is None
+    assert resolve_oauth_account_store(store) is store
+    assert resolve_oauth_account_store(object()) is None
 
 
 def test_manager_init_wires_services_and_configuration() -> None:
@@ -1908,7 +1913,8 @@ async def test_delete_removes_user_and_calls_hook() -> None:
     user = _build_user(password_helper)
     user_db.get.return_value = user
 
-    assert await manager.delete(user.id) is None
+    delete_result = await manager.delete(user.id)
+    assert delete_result is None
 
     user_db.get.assert_awaited_once_with(user.id)
     assert manager.before_delete_users == [user]

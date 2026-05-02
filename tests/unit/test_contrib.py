@@ -17,37 +17,23 @@ from sqlalchemy.exc import IntegrityError
 import litestar_auth.contrib.redis as redis_module
 import litestar_auth.contrib.redis._surface as redis_surface_module
 import litestar_auth.contrib.role_admin as role_admin_module
+import litestar_auth.contrib.role_admin._controller as role_admin_controller_module
+import litestar_auth.contrib.role_admin._controller_handler_utils as role_admin_controller_handler_utils_module
+import litestar_auth.contrib.role_admin._controller_handlers as role_admin_controller_handlers_module
+import litestar_auth.contrib.role_admin._error_responses as role_admin_error_responses_module
+import litestar_auth.contrib.role_admin._session_wiring as role_admin_session_wiring_module
 import litestar_auth.ratelimit as ratelimit_module
 from litestar_auth._plugin.role_admin import RoleAdminRoleNotFoundError, RoleAdminUserNotFoundError
 from litestar_auth.authentication.backend import AuthenticationBackend
 from litestar_auth.authentication.strategy.redis import RedisTokenStrategy as BaseRedisTokenStrategy
 from litestar_auth.authentication.strategy.redis import RedisTokenStrategyConfig as BaseRedisTokenStrategyConfig
 from litestar_auth.authentication.transport.bearer import BearerTransport
-from litestar_auth.contrib.redis import (
-    RedisAuthClientProtocol,
-    RedisAuthPreset,
-    RedisAuthRateLimitConfigOptions,
-    RedisAuthRateLimitTier,
-    RedisTokenStrategy,
-    RedisTokenStrategyConfig,
-    RedisTotpEnrollmentStore,
-    RedisUsedTotpCodeStore,
-)
-from litestar_auth.contrib.redis import __all__ as redis_all
-from litestar_auth.contrib.role_admin import RoleAdminControllerConfig, create_role_admin_controller
-from litestar_auth.contrib.role_admin import __all__ as role_admin_all
-from litestar_auth.contrib.role_admin import _controller as role_admin_controller_module
-from litestar_auth.contrib.role_admin import _controller_handler_utils as role_admin_controller_handler_utils_module
-from litestar_auth.contrib.role_admin import _controller_handlers as role_admin_controller_handlers_module
-from litestar_auth.contrib.role_admin import _error_responses as role_admin_error_responses_module
-from litestar_auth.contrib.role_admin import _session_wiring as role_admin_session_wiring_module
 from litestar_auth.contrib.role_admin._schemas import RoleCreate, RoleRead, RoleUpdate, UserBrief
 from litestar_auth.controllers.oauth import OAuthControllerUserManagerProtocol
 from litestar_auth.exceptions import ConfigurationError, ErrorCode
 from litestar_auth.guards import is_authenticated, is_superuser
 from litestar_auth.models import Role, User, UserRole
 from litestar_auth.oauth import create_provider_oauth_controller
-from litestar_auth.ratelimit import AuthRateLimitEndpointGroup, AuthRateLimitSlot
 from litestar_auth.totp import RedisTotpEnrollmentStore as BaseRedisTotpEnrollmentStore
 from litestar_auth.totp import RedisUsedTotpCodeStore as BaseRedisUsedTotpCodeStore
 from tests._helpers import ExampleUser, cast_fakeredis
@@ -57,6 +43,21 @@ from tests.unit.test_plugin_role_admin import (
     _build_missing_roles_attribute_user_model,
     _minimal_config,
 )
+
+RedisAuthClientProtocol = redis_module.RedisAuthClientProtocol
+RedisAuthPreset = redis_module.RedisAuthPreset
+RedisAuthRateLimitConfigOptions = redis_module.RedisAuthRateLimitConfigOptions
+RedisAuthRateLimitTier = redis_module.RedisAuthRateLimitTier
+RedisTokenStrategy = redis_module.RedisTokenStrategy
+RedisTokenStrategyConfig = redis_module.RedisTokenStrategyConfig
+RedisTotpEnrollmentStore = redis_module.RedisTotpEnrollmentStore
+RedisUsedTotpCodeStore = redis_module.RedisUsedTotpCodeStore
+redis_all = redis_module.__all__
+RoleAdminControllerConfig = role_admin_module.RoleAdminControllerConfig
+create_role_admin_controller = role_admin_module.create_role_admin_controller
+role_admin_all = role_admin_module.__all__
+AuthRateLimitEndpointGroup = ratelimit_module.AuthRateLimitEndpointGroup
+AuthRateLimitSlot = ratelimit_module.AuthRateLimitSlot
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
@@ -77,6 +78,11 @@ PENDING_JTI_TTL_FLOOR = PENDING_JTI_TTL_SECONDS - 1
 AUTH_RATE_LIMIT_VERIFICATION_SLOT_IDENTIFIERS = frozenset(
     {AuthRateLimitSlot.VERIFY_TOKEN, AuthRateLimitSlot.REQUEST_VERIFY_TOKEN},
 )
+
+
+def _as_any(value: object) -> Any:  # noqa: ANN401
+    """Return a value through the test-only dynamic type boundary."""
+    return cast("Any", value)
 
 
 class ExampleStrategy:
@@ -159,7 +165,7 @@ def test_contrib_role_admin_factory_builds_controller_from_explicit_models() -> 
         user_role_model=UserRole,
         route_prefix="admin/roles",
     )
-    context = cast("Any", controller).role_admin_context
+    context = _as_any(controller).role_admin_context
 
     assert issubclass(controller, Controller)
     assert controller.path == "/admin/roles"
@@ -247,8 +253,9 @@ def test_contrib_role_admin_factory_rejects_empty_route_prefix() -> None:
 
 def test_contrib_role_admin_package_rejects_unknown_public_attributes() -> None:
     """The public package raises ``AttributeError`` for unknown exports."""
+    missing_name = "missing_factory"
     with pytest.raises(AttributeError, match=r"missing_factory"):
-        _missing_factory = cast("Any", role_admin_module).missing_factory
+        getattr(cast("Any", role_admin_module), missing_name)
 
 
 @pytest.mark.parametrize(

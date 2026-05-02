@@ -13,15 +13,14 @@ from litestar.status_codes import HTTP_201_CREATED, HTTP_400_BAD_REQUEST
 from litestar.testing import AsyncTestClient
 
 import litestar_auth.controllers.register as register_module
-from litestar_auth.controllers.register import (
-    DEFAULT_REGISTER_MINIMUM_RESPONSE_SECONDS,
-    RegisterControllerConfig,
-    _await_register_minimum_response,
-    create_register_controller,
-)
 from litestar_auth.exceptions import AuthorizationError, ErrorCode, InvalidPasswordError, UserAlreadyExistsError
 from litestar_auth.ratelimit import AuthRateLimitConfig, EndpointRateLimit
 from tests._helpers import litestar_app_with_user_manager
+
+DEFAULT_REGISTER_MINIMUM_RESPONSE_SECONDS = register_module.DEFAULT_REGISTER_MINIMUM_RESPONSE_SECONDS
+RegisterControllerConfig = register_module.RegisterControllerConfig
+_await_register_minimum_response = register_module._await_register_minimum_response
+create_register_controller = register_module.create_register_controller
 
 pytestmark = pytest.mark.unit
 HTTP_UNPROCESSABLE_ENTITY = 422

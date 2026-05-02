@@ -15,11 +15,10 @@ import jwt
 from jwt import ExpiredSignatureError, InvalidTokenError
 
 from litestar_auth._jwt_headers import JwtDecodeConfig, decode_signed_jwt, jwt_encode_headers
+from litestar_auth.authentication.strategy import _jwt_denylist
 from litestar_auth.authentication.strategy._jwt_denylist import (
-    InMemoryJWTDenylistStore,  # noqa: F401
     JWTDenylistStore,
     JWTRevocationPosture,
-    RedisJWTDenylistStore,  # noqa: F401
     _resolve_jwt_revocation,
 )
 from litestar_auth.authentication.strategy.base import Strategy, UserManagerProtocol
@@ -34,6 +33,8 @@ if TYPE_CHECKING:
 
 DEFAULT_ALGORITHM = "HS256"
 DEFAULT_LIFETIME = timedelta(minutes=15)
+InMemoryJWTDenylistStore = _jwt_denylist.InMemoryJWTDenylistStore
+RedisJWTDenylistStore = _jwt_denylist.RedisJWTDenylistStore
 _ALLOWED_ALGORITHMS = frozenset(
     {
         "HS256",
@@ -119,10 +120,12 @@ class JWTStrategy(Strategy[UP, ID]):
     """
 
     @overload
-    def __init__(self, *, config: JWTStrategyConfig[UP, ID]) -> None: ...  # pragma: no cover
+    def __init__(self, *, config: JWTStrategyConfig[UP, ID]) -> None:
+        pass  # pragma: no cover
 
     @overload
-    def __init__(self, **options: Unpack[JWTStrategyOptions[UP, ID]]) -> None: ...  # pragma: no cover
+    def __init__(self, **options: Unpack[JWTStrategyOptions[UP, ID]]) -> None:
+        pass  # pragma: no cover
 
     def __init__(
         self,

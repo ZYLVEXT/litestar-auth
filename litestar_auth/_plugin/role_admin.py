@@ -68,7 +68,7 @@ class _RoleLifecycleManager[UP: UserProtocol[Any]](Protocol):
         allow_privileged: bool = False,
     ) -> UP:
         """Apply a role-related update through the normal manager lifecycle hooks."""
-        ...  # pragma: no cover
+        # pragma: no cover
 
 
 def _require_role_admin_session_maker[UP: UserProtocol[Any]](

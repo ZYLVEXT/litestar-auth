@@ -36,7 +36,6 @@ _ACCOUNT_STATE_ERROR_TYPES = _shared_account_state.AccountStateErrorTypes(
     inactive_error=InactiveUserError,
     unverified_error=UnverifiedUserError,
 )
-_resolve_account_state_validator = _shared_account_state.resolve_account_state_validator
 
 
 class OAuthServiceUserStoreProtocol[UP: UserProtocol[Any], ID](Protocol):

@@ -11,6 +11,7 @@ from dataclasses import dataclass
 from functools import partial
 from typing import TYPE_CHECKING, Protocol, runtime_checkable
 
+from litestar_auth._clock import Clock, read_clock
 from litestar_auth._optional_deps import _require_redis_asyncio
 from litestar_auth._redis_protocols import (
     RedisConditionalSetClient,
@@ -20,7 +21,8 @@ from litestar_auth._redis_protocols import (
 )
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Hashable
+    from collections.abc import Hashable
+
 
 DEFAULT_TOTP_USED_KEY_PREFIX = "litestar_auth:totp:used:"
 DEFAULT_TOTP_ENROLLMENT_KEY_PREFIX = "litestar_auth:totp:enroll:"
@@ -248,7 +250,7 @@ class InMemoryUsedTotpCodeStore:
     def __init__(
         self,
         *,
-        clock: Callable[[], float] = time.monotonic,
+        clock: Clock = time.monotonic,
         max_entries: int = 50_000,
     ) -> None:
         """Store the monotonic clock and initialize cache state.
@@ -260,7 +262,7 @@ class InMemoryUsedTotpCodeStore:
             msg = "max_entries must be at least 1"
             raise ValueError(msg)
 
-        self._clock = clock
+        self._clock: Clock = clock
         self.max_entries = max_entries
         self._entries: dict[tuple[Hashable, int], float] = {}
         self._lock = asyncio.Lock()
@@ -276,7 +278,7 @@ class InMemoryUsedTotpCodeStore:
             (fail-closed under capacity pressure; see class docs).
         """
         async with self._lock:
-            now = self._clock()
+            now = read_clock(self._clock)
             self._prune(now)
             key = (user_id, counter)
             if key in self._entries:
@@ -312,7 +314,7 @@ class InMemoryTotpEnrollmentStore:
     def __init__(
         self,
         *,
-        clock: Callable[[], float] = time.monotonic,
+        clock: Clock = time.monotonic,
         max_entries: int = 50_000,
     ) -> None:
         """Initialize an empty enrollment store.
@@ -324,7 +326,7 @@ class InMemoryTotpEnrollmentStore:
             msg = "max_entries must be at least 1"
             raise ValueError(msg)
 
-        self._clock = clock
+        self._clock: Clock = clock
         self.max_entries = max_entries
         self._entries: dict[str, _TotpEnrollmentEntry] = {}
         self._lock = asyncio.Lock()
@@ -341,7 +343,7 @@ class InMemoryTotpEnrollmentStore:
             ``True`` when stored, or ``False`` when capacity pressure rejects a new user key.
         """
         async with self._lock:
-            now = self._clock()
+            now = read_clock(self._clock)
             self._prune(now)
             if user_id not in self._entries and len(self._entries) >= self.max_entries:
                 logger.error(
@@ -367,7 +369,7 @@ class InMemoryTotpEnrollmentStore:
             Stored secret value, or ``None`` if the state is absent, stale, or expired.
         """
         async with self._lock:
-            now = self._clock()
+            now = read_clock(self._clock)
             self._prune(now)
             entry = self._entries.get(user_id)
             if entry is None or not hmac.compare_digest(entry.jti, jti):

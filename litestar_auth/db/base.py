@@ -29,11 +29,9 @@ class BaseUserStore[UP: UserProtocol[Any], ID](Protocol):
 
     async def get(self, user_id: ID) -> UP | None:
         """Return the user with the given identifier, if present."""
-        ...
 
     async def get_by_email(self, email: str) -> UP | None:
         """Return the user matching the provided email, if present."""
-        ...
 
     async def get_by_field(self, field_name: LoginIdentifier, value: str) -> UP | None:
         """Return the user where ``field_name`` equals ``value``, if present.
@@ -44,23 +42,18 @@ class BaseUserStore[UP: UserProtocol[Any], ID](Protocol):
         programming error and may surface as backend-specific errors at
         runtime when callers bypass static typing.
         """
-        ...
 
     async def create(self, user_dict: Mapping[str, Any]) -> UP:
         """Persist and return a newly created user."""
-        ...
 
     async def list_users(self, *, offset: int, limit: int) -> tuple[list[UP], int]:
         """Return paginated users and the total available count."""
-        ...
 
     async def update(self, user: UP, update_dict: Mapping[str, Any]) -> UP:
         """Persist and return updates for an existing user."""
-        ...
 
     async def delete(self, user_id: ID) -> None:
         """Delete the user identified by ``user_id`` from storage."""
-        ...
 
 
 @runtime_checkable

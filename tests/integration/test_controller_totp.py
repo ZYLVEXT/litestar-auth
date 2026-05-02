@@ -30,15 +30,6 @@ import litestar_auth.controllers.totp_handlers as totp_handlers_module
 import litestar_auth.totp as _totp_mod
 from litestar_auth._plugin.config import DEFAULT_USER_MANAGER_DEPENDENCY_KEY, TotpConfig
 from litestar_auth._secrets_at_rest import decode_versioned_fernet_value
-from litestar_auth._totp_enrollment import (
-    _DEFAULT_TOTP_FERNET_KEY_ID,
-    _consume_enrollment_secret,
-    _decode_enrollment_token,
-    _EnrollmentTokenCipher,
-    _EnrollmentTokenIssueConfig,
-    _issue_enrollment_token,
-    _sign_enrollment_token,
-)
 from litestar_auth.authentication.authenticator import Authenticator
 from litestar_auth.authentication.backend import AuthenticationBackend
 from litestar_auth.authentication.middleware import LitestarAuthMiddleware
@@ -47,32 +38,36 @@ from litestar_auth.authentication.transport.bearer import BearerTransport
 from litestar_auth.config import TOTP_ENROLL_AUDIENCE
 from litestar_auth.controllers import create_auth_controller, create_totp_controller
 from litestar_auth.controllers.auth import INVALID_CREDENTIALS_DETAIL, TOTP_PENDING_AUDIENCE
-from litestar_auth.controllers.totp import (
-    INVALID_ENROLL_TOKEN_DETAIL,
-    INVALID_TOTP_CODE_DETAIL,
-    INVALID_TOTP_TOKEN_DETAIL,
-    _totp_handle_confirm_enable,
-    _totp_handle_disable,
-    _totp_handle_enable,
-    _totp_handle_regenerate_recovery_codes,
-    _totp_resolve_enrollment_store,
-    _totp_resolve_pending_jti_store,
-    _totp_validate_replay_and_password,
-)
 from litestar_auth.exceptions import ConfigurationError, ErrorCode, InactiveUserError, TokenError
 from litestar_auth.manager import ENCRYPTED_TOTP_SECRET_PREFIX, BaseUserManager, UserManagerSecurity
 from litestar_auth.password import PasswordHelper
 from litestar_auth.plugin import LitestarAuth, LitestarAuthConfig
 from litestar_auth.ratelimit import AuthRateLimitConfig, EndpointRateLimit
-from litestar_auth.totp import (
-    InMemoryTotpEnrollmentStore,
-    InMemoryUsedTotpCodeStore,
-    _current_counter,
-    _generate_totp_code,
-)
 from litestar_auth.totp_flow import InvalidTotpPendingTokenError
 from tests._helpers import auth_middleware_get_request_session, litestar_app_with_user_manager
 from tests.integration.conftest import DummySessionMaker, ExampleUser, InMemoryTokenStrategy, InMemoryUserDatabase
+
+_DEFAULT_TOTP_FERNET_KEY_ID = totp_enrollment_module._DEFAULT_TOTP_FERNET_KEY_ID
+_consume_enrollment_secret = totp_enrollment_module._consume_enrollment_secret
+_decode_enrollment_token = totp_enrollment_module._decode_enrollment_token
+_EnrollmentTokenCipher = totp_enrollment_module._EnrollmentTokenCipher
+_EnrollmentTokenIssueConfig = totp_enrollment_module._EnrollmentTokenIssueConfig
+_issue_enrollment_token = totp_enrollment_module._issue_enrollment_token
+_sign_enrollment_token = totp_enrollment_module._sign_enrollment_token
+INVALID_ENROLL_TOKEN_DETAIL = totp_controller_module.INVALID_ENROLL_TOKEN_DETAIL
+INVALID_TOTP_CODE_DETAIL = totp_controller_module.INVALID_TOTP_CODE_DETAIL
+INVALID_TOTP_TOKEN_DETAIL = totp_controller_module.INVALID_TOTP_TOKEN_DETAIL
+_totp_handle_confirm_enable = totp_controller_module._totp_handle_confirm_enable
+_totp_handle_disable = totp_controller_module._totp_handle_disable
+_totp_handle_enable = totp_controller_module._totp_handle_enable
+_totp_handle_regenerate_recovery_codes = totp_controller_module._totp_handle_regenerate_recovery_codes
+_totp_resolve_enrollment_store = totp_controller_module._totp_resolve_enrollment_store
+_totp_resolve_pending_jti_store = totp_controller_module._totp_resolve_pending_jti_store
+_totp_validate_replay_and_password = totp_controller_module._totp_validate_replay_and_password
+InMemoryTotpEnrollmentStore = _totp_mod.InMemoryTotpEnrollmentStore
+InMemoryUsedTotpCodeStore = _totp_mod.InMemoryUsedTotpCodeStore
+_current_counter = _totp_mod._current_counter
+_generate_totp_code = _totp_mod._generate_totp_code
 
 if TYPE_CHECKING:
     from litestar_auth.db.base import BaseUserStore

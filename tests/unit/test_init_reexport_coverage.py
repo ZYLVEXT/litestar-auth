@@ -20,8 +20,10 @@ import litestar_auth.ratelimit as ratelimit_module
 import litestar_auth.ratelimit._endpoint as ratelimit_endpoint_module
 import litestar_auth.ratelimit._slot_catalog as ratelimit_slot_catalog_module
 from litestar_auth.authentication.strategy.db_models import AccessToken, DatabaseTokenModels, RefreshToken
-from litestar_auth.ratelimit import AuthRateLimitEndpointGroup, AuthRateLimitSlot
 from tests.conftest import project_version_from_pyproject
+
+AuthRateLimitEndpointGroup = ratelimit_module.AuthRateLimitEndpointGroup
+AuthRateLimitSlot = ratelimit_module.AuthRateLimitSlot
 
 pytestmark = [pytest.mark.unit, pytest.mark.imports]
 
@@ -210,9 +212,7 @@ def test_ratelimit_reexport_module_keeps_private_helpers_internal() -> None:
         ),
     )
     assert hasattr(ratelimit_slot_catalog_module, "_AUTH_RATE_LIMIT_ENDPOINT_RECIPES")
-    assert hasattr(ratelimit_slot_catalog_module, "_AUTH_RATE_LIMIT_ENDPOINT_RECIPES_BY_SLOT")
-    assert hasattr(ratelimit_slot_catalog_module, "_AUTH_RATE_LIMIT_ENDPOINT_SLOTS")
-    assert hasattr(ratelimit_slot_catalog_module, "_AUTH_RATE_LIMIT_ENDPOINT_GROUPS")
+    assert hasattr(ratelimit_slot_catalog_module, "_build_auth_rate_limit_endpoint_catalog")
     assert ratelimit_endpoint_module.EndpointRateLimit is ratelimit_module.EndpointRateLimit
     assert ratelimit_endpoint_module.RateLimitScope is ratelimit_module.RateLimitScope
     assert get_args(ratelimit_module.AuthRateLimitEndpointGroup.__value__) == get_args(
@@ -229,6 +229,4 @@ def test_ratelimit_reexport_module_keeps_private_helpers_internal() -> None:
     assert not hasattr(ratelimit_module, "importlib")
     assert not hasattr(ratelimit_module, "logger")
     assert not hasattr(ratelimit_module, "_AUTH_RATE_LIMIT_ENDPOINT_RECIPES")
-    assert not hasattr(ratelimit_module, "_AUTH_RATE_LIMIT_ENDPOINT_RECIPES_BY_SLOT")
-    assert not hasattr(ratelimit_module, "_AUTH_RATE_LIMIT_ENDPOINT_SLOTS")
-    assert not hasattr(ratelimit_module, "_AUTH_RATE_LIMIT_ENDPOINT_GROUPS")
+    assert not hasattr(ratelimit_module, "_build_auth_rate_limit_endpoint_catalog")

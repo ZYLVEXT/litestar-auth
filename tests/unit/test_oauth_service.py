@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import cast
 from unittest.mock import AsyncMock, MagicMock
 from uuid import UUID, uuid4
 
@@ -13,14 +14,7 @@ import litestar_auth.oauth._pkce as pkce_module
 import litestar_auth.oauth.service as oauth_service_module
 from litestar_auth.db import OAuthAccountData
 from litestar_auth.exceptions import AuthenticationError, ErrorCode
-from litestar_auth.oauth._pkce import PkceMaterial, _build_pkce_code_challenge, _generate_pkce_code_verifier
 from litestar_auth.oauth.client_adapter import OAuthClientAdapter
-from litestar_auth.oauth.service import (
-    OAuthService,
-    _require_account_state,
-    _require_oauth_account_store,
-    _resolve_account_state_validator,
-)
 from tests._helpers import ExampleUser
 from tests.unit.test_definition_file_coverage import load_reloaded_test_alias
 
@@ -28,11 +22,10 @@ pytestmark = pytest.mark.unit
 _PKCE_UNRESERVED_ALPHABET = frozenset("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~")
 _PKCE_MIN_VERIFIER_LENGTH = 43
 _PKCE_MAX_VERIFIER_LENGTH = 128
-_STATE_TOKEN_BYTES = 32
 _FIXED_PKCE_VERIFIER = "A" * 64
 
 
-class _RecordingOAuthClientAdapter(OAuthClientAdapter):
+class _RecordingOAuthClientAdapter:
     """Capture authorization URL calls made by the service."""
 
     def __init__(self, *, authorization_url: str = "https://provider.example/authorize") -> None:
@@ -112,7 +105,7 @@ def test_oauth_service_module_reload_preserves_behavioral_error_contract(monkeyp
             user_manager=manager,
         )
 
-    assert reloaded_module.OAuthService.__name__ == OAuthService.__name__
+    assert reloaded_module.OAuthService.__name__ == oauth_service_module.OAuthService.__name__
     assert reloaded_module.OAuthAuthorization.__name__ == "OAuthAuthorization"
     assert type(exc_info.value).__name__ == "ConfigurationError"
     assert getattr(exc_info.value, "code", None) == ErrorCode.CONFIGURATION_INVALID
@@ -141,7 +134,7 @@ def test_pkce_module_reload_preserves_generation_contract(monkeypatch: pytest.Mo
 
 def test_generate_pkce_code_verifier_uses_unreserved_alphabet() -> None:
     """Generated PKCE verifiers use the RFC 7636 unreserved URI alphabet."""
-    code_verifier = _generate_pkce_code_verifier()
+    code_verifier = pkce_module._generate_pkce_code_verifier()
 
     assert _PKCE_MIN_VERIFIER_LENGTH <= len(code_verifier) <= _PKCE_MAX_VERIFIER_LENGTH
     assert set(code_verifier) <= _PKCE_UNRESERVED_ALPHABET
@@ -152,14 +145,14 @@ def test_generate_pkce_code_verifier_rejects_invalid_entropy(monkeypatch: pytest
     monkeypatch.setattr("litestar_auth.oauth._pkce.secrets.token_urlsafe", lambda _size: "!")
 
     with pytest.raises(RuntimeError, match="PKCE code verifier"):
-        _generate_pkce_code_verifier()
+        pkce_module._generate_pkce_code_verifier()
 
 
 def test_build_pkce_code_challenge_matches_rfc7636_appendix_b() -> None:
     """S256 challenge generation matches the RFC 7636 Appendix B vector."""
     code_verifier = "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk"
 
-    code_challenge = _build_pkce_code_challenge(code_verifier)
+    code_challenge = pkce_module._build_pkce_code_challenge(code_verifier)
 
     assert code_challenge == "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM"
     assert "=" not in code_challenge
@@ -171,9 +164,9 @@ async def test_authorize_returns_state_verifier_and_provider_url(monkeypatch: py
     oauth_client = _RecordingOAuthClientAdapter(
         authorization_url="https://provider.example/authorize?state=fixed-state",
     )
-    service = OAuthService(
+    service = oauth_service_module.OAuthService(
         provider_name="github",
-        client=oauth_client,
+        client=cast("OAuthClientAdapter", oauth_client),
     )
     monkeypatch.setattr(
         "litestar_auth.oauth.service.secrets.token_urlsafe",
@@ -181,7 +174,7 @@ async def test_authorize_returns_state_verifier_and_provider_url(monkeypatch: py
     )
     monkeypatch.setattr(
         "litestar_auth.oauth.service._generate_pkce_material",
-        lambda: PkceMaterial(
+        lambda: pkce_module.PkceMaterial(
             code_verifier=_FIXED_PKCE_VERIFIER,
             code_challenge="1T7aemN8mcx_tWbZbp-hCb8VxHhBCj9etNTE4mzQgfY",
             code_challenge_method="S256",
@@ -210,7 +203,7 @@ async def test_authorize_returns_state_verifier_and_provider_url(monkeypatch: py
 async def test_authorize_generates_distinct_pkce_material_per_call() -> None:
     """Each authorization flow receives fresh PKCE verifier and challenge material."""
     oauth_client = _RecordingOAuthClientAdapter()
-    service = OAuthService(provider_name="github", client=oauth_client)
+    service = oauth_service_module.OAuthService(provider_name="github", client=cast("OAuthClientAdapter", oauth_client))
 
     first_authorization = await service.authorize(redirect_uri="https://app.example/callback")
     second_authorization = await service.authorize(redirect_uri="https://app.example/callback")
@@ -233,7 +226,7 @@ async def test_complete_login_bootstraps_user_and_links_account(monkeypatch: pyt
     }
     oauth_client.get_id_email.return_value = ("provider-user", "oauth@example.com")
     oauth_client.get_email_verified.return_value = True
-    service = OAuthService(
+    service = oauth_service_module.OAuthService(
         provider_name="github",
         client=OAuthClientAdapter(oauth_client),
         trust_provider_email_verified=True,
@@ -289,7 +282,7 @@ async def test_complete_login_rejects_existing_email_without_association() -> No
     oauth_client.get_access_token.return_value = {"access_token": "provider-access-token"}
     oauth_client.get_id_email.return_value = ("provider-user", "existing@example.com")
     oauth_client.get_email_verified.return_value = True
-    service = OAuthService(
+    service = oauth_service_module.OAuthService(
         provider_name="github",
         client=OAuthClientAdapter(oauth_client),
     )
@@ -309,7 +302,7 @@ async def test_complete_login_rejects_existing_email_without_association() -> No
 
 def test_require_provider_verification_signal_rejects_missing_signal_in_strict_mode() -> None:
     """Strict verification mode requires a provider verification signal."""
-    service = OAuthService(
+    service = oauth_service_module.OAuthService(
         provider_name="github",
         client=OAuthClientAdapter(AsyncMock()),
         trust_provider_email_verified=True,
@@ -330,7 +323,7 @@ async def test_resolve_candidate_user_prefers_existing_oauth_link() -> None:
     linked_user = ExampleUser(id=uuid4(), email="linked@example.com")
     manager = _build_manager()
     manager.oauth_account_store.get_by_oauth_account.return_value = linked_user
-    service = OAuthService(provider_name="github", client=OAuthClientAdapter(AsyncMock()))
+    service = oauth_service_module.OAuthService(provider_name="github", client=OAuthClientAdapter(AsyncMock()))
 
     user, existing_by_email = await service._resolve_candidate_user(
         user_manager=manager,
@@ -347,7 +340,7 @@ async def test_resolve_candidate_user_prefers_existing_oauth_link() -> None:
 async def test_materialize_or_validate_user_creates_new_user_when_missing(monkeypatch: pytest.MonkeyPatch) -> None:
     """The service delegates new-user materialization to the OAuth bootstrap helper."""
     manager = _build_manager()
-    service = OAuthService(provider_name="github", client=OAuthClientAdapter(AsyncMock()))
+    service = oauth_service_module.OAuthService(provider_name="github", client=OAuthClientAdapter(AsyncMock()))
     created_user = ExampleUser(id=uuid4(), email="new@example.com")
     create_user_from_oauth = AsyncMock(return_value=created_user)
     monkeypatch.setattr(service, "_create_user_from_oauth", create_user_from_oauth)
@@ -372,7 +365,7 @@ async def test_materialize_or_validate_user_returns_existing_link_without_email_
     """Linked users are returned directly when there is no email collision."""
     linked_user = ExampleUser(id=uuid4(), email="linked@example.com")
     manager = _build_manager()
-    service = OAuthService(provider_name="github", client=OAuthClientAdapter(AsyncMock()))
+    service = oauth_service_module.OAuthService(provider_name="github", client=OAuthClientAdapter(AsyncMock()))
 
     user = await service._materialize_or_validate_user(
         user_manager=manager,
@@ -389,7 +382,7 @@ async def test_materialize_or_validate_user_validates_email_link_policy(monkeypa
     """Existing email matches invoke the configured linking policy validator."""
     existing_user = ExampleUser(id=uuid4(), email="existing@example.com")
     manager = _build_manager()
-    service = OAuthService(provider_name="github", client=OAuthClientAdapter(AsyncMock()))
+    service = oauth_service_module.OAuthService(provider_name="github", client=OAuthClientAdapter(AsyncMock()))
     validate_existing_email_link_policy = MagicMock()
     monkeypatch.setattr(service, "_validate_existing_email_link_policy", validate_existing_email_link_policy)
 
@@ -418,7 +411,7 @@ def test_require_account_state_rejects_user_without_guarded_protocol_on_attribut
     manager.require_account_state = "not-callable"
 
     with pytest.raises(PermissionDeniedException) as exc_info:
-        _require_account_state(_MinimalUser(), user_manager=manager)
+        oauth_service_module._require_account_state(_MinimalUser(), user_manager=manager)
 
     assert "account state" in (exc_info.value.detail or "").lower()
 
@@ -429,7 +422,10 @@ def test_require_account_state_maps_unverified_user_error() -> None:
     manager.require_account_state.side_effect = oauth_service_module.UnverifiedUserError()
 
     with pytest.raises(ClientException) as exc_info:
-        _require_account_state(ExampleUser(id=uuid4(), email="user@example.com"), user_manager=manager)
+        oauth_service_module._require_account_state(
+            ExampleUser(id=uuid4(), email="user@example.com"),
+            user_manager=manager,
+        )
 
     extra = exc_info.value.extra
     assert (extra.get("code") if isinstance(extra, dict) else None) == ErrorCode.LOGIN_USER_NOT_VERIFIED
@@ -441,7 +437,7 @@ def test_require_account_state_rejects_inactive_guarded_user_without_validator()
     manager.require_account_state = None
 
     with pytest.raises(ClientException) as exc_info:
-        _require_account_state(
+        oauth_service_module._require_account_state(
             ExampleUser(id=uuid4(), email="inactive@example.com", is_active=False),
             user_manager=manager,
         )
@@ -455,7 +451,7 @@ def test_require_account_state_allows_active_guarded_user_without_validator() ->
     manager = MagicMock()
     manager.require_account_state = None
 
-    _require_account_state(
+    oauth_service_module._require_account_state(
         ExampleUser(id=uuid4(), email="active@example.com", is_active=True),
         user_manager=manager,
     )
@@ -471,7 +467,7 @@ async def test_complete_login_maps_inactive_user_to_client_error() -> None:
     oauth_client.get_access_token.return_value = {"access_token": "provider-access-token"}
     oauth_client.get_id_email.return_value = ("provider-user", "inactive@example.com")
     oauth_client.get_email_verified.return_value = True
-    service = OAuthService(
+    service = oauth_service_module.OAuthService(
         provider_name="github",
         client=OAuthClientAdapter(oauth_client),
     )
@@ -491,7 +487,7 @@ async def test_complete_login_maps_inactive_user_to_client_error() -> None:
 
 def test_validate_existing_email_link_policy_rejects_association_without_provider_trust() -> None:
     """Association by email is rejected unless provider verification is trusted."""
-    service = OAuthService(
+    service = oauth_service_module.OAuthService(
         provider_name="github",
         client=OAuthClientAdapter(AsyncMock()),
         associate_by_email=True,
@@ -506,7 +502,7 @@ def test_validate_existing_email_link_policy_rejects_association_without_provide
 
 def test_validate_existing_email_link_policy_rejects_unverified_email_in_trusted_mode() -> None:
     """Trusted association still requires an explicit verified-email signal."""
-    service = OAuthService(
+    service = oauth_service_module.OAuthService(
         provider_name="github",
         client=OAuthClientAdapter(AsyncMock()),
         associate_by_email=True,
@@ -522,7 +518,7 @@ def test_validate_existing_email_link_policy_rejects_unverified_email_in_trusted
 
 def test_validate_existing_email_link_policy_rejects_when_association_disabled() -> None:
     """Existing email collisions remain rejected when association by email is disabled."""
-    service = OAuthService(provider_name="github", client=OAuthClientAdapter(AsyncMock()))
+    service = oauth_service_module.OAuthService(provider_name="github", client=OAuthClientAdapter(AsyncMock()))
 
     with pytest.raises(ClientException) as exc_info:
         service._validate_existing_email_link_policy(email_verified=True)
@@ -533,7 +529,7 @@ def test_validate_existing_email_link_policy_rejects_when_association_disabled()
 
 def test_validate_existing_email_link_policy_allows_verified_association() -> None:
     """Verified emails can be linked when the provider signal is trusted."""
-    service = OAuthService(
+    service = oauth_service_module.OAuthService(
         provider_name="github",
         client=OAuthClientAdapter(AsyncMock()),
         associate_by_email=True,
@@ -552,7 +548,7 @@ async def test_associate_account_rejects_cross_user_link() -> None:
     oauth_client = AsyncMock()
     oauth_client.get_access_token.return_value = {"access_token": "provider-access-token"}
     oauth_client.get_id_email.return_value = ("provider-user", "user@example.com")
-    service = OAuthService(
+    service = oauth_service_module.OAuthService(
         provider_name="github",
         client=OAuthClientAdapter(oauth_client),
     )
@@ -594,7 +590,7 @@ async def test_associate_account_rejects_when_either_id_is_none(
     oauth_client = AsyncMock()
     oauth_client.get_access_token.return_value = {"access_token": "provider-access-token"}
     oauth_client.get_id_email.return_value = ("provider-user", "user@example.com")
-    service = OAuthService(
+    service = oauth_service_module.OAuthService(
         provider_name="github",
         client=OAuthClientAdapter(oauth_client),
     )
@@ -624,7 +620,7 @@ async def test_associate_account_links_provider_for_current_user() -> None:
         "refresh_token": "provider-refresh-token",
     }
     oauth_client.get_id_email.return_value = ("provider-user", "user@example.com")
-    service = OAuthService(provider_name="github", client=OAuthClientAdapter(oauth_client))
+    service = oauth_service_module.OAuthService(provider_name="github", client=OAuthClientAdapter(oauth_client))
 
     await service.associate_account(
         user=user,
@@ -668,7 +664,7 @@ async def test_associate_account_maps_store_link_conflict_to_client_error() -> N
         "refresh_token": None,
     }
     oauth_client.get_id_email.return_value = ("provider-user", "user@example.com")
-    service = OAuthService(provider_name="github", client=OAuthClientAdapter(oauth_client))
+    service = oauth_service_module.OAuthService(provider_name="github", client=OAuthClientAdapter(oauth_client))
 
     with pytest.raises(ClientException) as exc_info:
         await service.associate_account(
@@ -691,7 +687,7 @@ async def test_complete_login_requires_explicit_oauth_account_store() -> None:
     oauth_client.get_access_token.return_value = {"access_token": "provider-access-token"}
     oauth_client.get_id_email.return_value = ("provider-user", "oauth@example.com")
     oauth_client.get_email_verified.return_value = True
-    service = OAuthService(
+    service = oauth_service_module.OAuthService(
         provider_name="github",
         client=OAuthClientAdapter(oauth_client),
     )
@@ -710,7 +706,7 @@ async def test_complete_login_rejects_empty_code_verifier(code_verifier: str) ->
     """Login token exchange requires recoverable PKCE verifier material."""
     manager = _build_manager()
     oauth_client = AsyncMock()
-    service = OAuthService(provider_name="github", client=OAuthClientAdapter(oauth_client))
+    service = oauth_service_module.OAuthService(provider_name="github", client=OAuthClientAdapter(oauth_client))
 
     with pytest.raises(AuthenticationError, match="PKCE code verifier"):
         await service.complete_login(
@@ -728,7 +724,7 @@ async def test_associate_account_rejects_empty_code_verifier(code_verifier: str)
     """Associate token exchange requires recoverable PKCE verifier material."""
     manager = _build_manager()
     oauth_client = AsyncMock()
-    service = OAuthService(provider_name="github", client=OAuthClientAdapter(oauth_client))
+    service = oauth_service_module.OAuthService(provider_name="github", client=OAuthClientAdapter(oauth_client))
 
     with pytest.raises(AuthenticationError, match="PKCE code verifier"):
         await service.associate_account(
@@ -746,16 +742,4 @@ def test_require_oauth_account_store_returns_explicit_store() -> None:
     """OAuth-account store helper returns the configured store contract."""
     manager = _build_manager()
 
-    assert _require_oauth_account_store(manager) is manager.oauth_account_store
-
-
-def test_resolve_account_state_validator_returns_callable_only() -> None:
-    """Only callable account-state validators are exposed."""
-    callable_manager = MagicMock()
-    callable_validator = MagicMock()
-    callable_manager.require_account_state = callable_validator
-    non_callable_manager = MagicMock()
-    non_callable_manager.require_account_state = "not-callable"
-
-    assert _resolve_account_state_validator(callable_manager) is callable_validator
-    assert _resolve_account_state_validator(non_callable_manager) is None
+    assert oauth_service_module._require_oauth_account_store(manager) is manager.oauth_account_store

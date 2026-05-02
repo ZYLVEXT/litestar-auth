@@ -12,11 +12,9 @@ from litestar import Controller
 from litestar.exceptions import ClientException
 
 import litestar_auth.contrib.role_admin as role_admin_module
+import litestar_auth.contrib.role_admin._controller as role_admin_controller_module
+import litestar_auth.contrib.role_admin._controller_handler_utils as role_admin_controller_handler_utils_module
 from litestar_auth._plugin.role_admin import RoleAdminRoleNotFoundError, RoleAdminUserNotFoundError
-from litestar_auth.contrib.role_admin import RoleAdminControllerConfig, create_role_admin_controller
-from litestar_auth.contrib.role_admin import __all__ as role_admin_all
-from litestar_auth.contrib.role_admin import _controller as role_admin_controller_module
-from litestar_auth.contrib.role_admin import _controller_handler_utils as role_admin_controller_handler_utils_module
 from litestar_auth.contrib.role_admin._schemas import RoleCreate, RoleRead, RoleUpdate, UserBrief
 from litestar_auth.exceptions import ConfigurationError, ErrorCode
 from litestar_auth.guards import is_authenticated, is_superuser
@@ -27,7 +25,16 @@ from tests.unit.test_plugin_role_admin import (
     _minimal_config,
 )
 
+RoleAdminControllerConfig = role_admin_module.RoleAdminControllerConfig
+create_role_admin_controller = role_admin_module.create_role_admin_controller
+role_admin_all = role_admin_module.__all__
+
 pytestmark = pytest.mark.unit
+
+
+def _as_any(value: object) -> Any:  # noqa: ANN401
+    """Return a value through the test-only dynamic type boundary."""
+    return cast("Any", value)
 
 
 def test_contrib_role_admin_package_exposes_only_its_documented_factory() -> None:
@@ -35,8 +42,9 @@ def test_contrib_role_admin_package_exposes_only_its_documented_factory() -> Non
     assert role_admin_all == ("RoleAdminControllerConfig", "create_role_admin_controller")
     assert role_admin_module.RoleAdminControllerConfig is RoleAdminControllerConfig
 
+    missing_name = "missing_factory"
     with pytest.raises(AttributeError, match="missing_factory"):
-        _missing_factory = cast("Any", role_admin_module).missing_factory
+        getattr(_as_any(role_admin_module), missing_name)
 
 
 def test_contrib_role_admin_factory_builds_controller_from_explicit_models() -> None:

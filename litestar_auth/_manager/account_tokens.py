@@ -50,7 +50,8 @@ class _AccountTokensManagerProtocol[UP, ID](
     verification_token_lifetime: timedelta
     reset_password_token_lifetime: timedelta
 
-    async def _invalidate_all_tokens(self, user: UP) -> None: ...  # pragma: no cover
+    async def _invalidate_all_tokens(self, user: UP) -> None:
+        pass  # pragma: no cover
 
 
 class AccountTokenSecurityService[UP, ID]:

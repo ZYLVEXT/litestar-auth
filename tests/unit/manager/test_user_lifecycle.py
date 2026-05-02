@@ -413,7 +413,8 @@ async def test_delete_calls_hooks_and_rejects_missing_users() -> None:
     missing_user_id = uuid4()
     user_db.get.side_effect = [user, None]
 
-    assert await service.delete(user.id) is None
+    delete_result = await service.delete(user.id)
+    assert delete_result is None
 
     assert manager.before_delete_users == [user]
     assert manager.deleted_users == [user]

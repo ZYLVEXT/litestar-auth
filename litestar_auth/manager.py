@@ -51,8 +51,7 @@ from litestar_auth.password import PasswordHelper
 from litestar_auth.types import LoginIdentifier, UserProtocol
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Mapping
-    from types import ModuleType
+    from collections.abc import Mapping
 
     import msgspec
 
@@ -71,7 +70,6 @@ _TOTP_SECRET_FERNET_INSTALL_HINT = "Install litestar-auth[totp] to use TOTP secr
 
 _get_dummy_hash = get_dummy_hash
 _login_identifier_digest = login_identifier_digest
-_resolve_oauth_account_store = resolve_oauth_account_store
 
 
 class BaseUserManager[UP: UserProtocol[Any], ID](  # noqa: PLR0904
@@ -88,14 +86,16 @@ class BaseUserManager[UP: UserProtocol[Any], ID](  # noqa: PLR0904
     """
 
     @overload
-    def __init__(self, *, config: BaseUserManagerConfig[UP, ID]) -> None: ...  # pragma: no cover
+    def __init__(self, *, config: BaseUserManagerConfig[UP, ID]) -> None:
+        pass  # pragma: no cover
 
     @overload
     def __init__(  # pragma: no cover
         self,
         user_db: BaseUserStore[UP, ID],
         **options: Unpack[BaseUserManagerOptions[UP, ID]],
-    ) -> None: ...
+    ) -> None:
+        pass
 
     @overload
     def __init__(  # pragma: no cover
@@ -103,7 +103,8 @@ class BaseUserManager[UP: UserProtocol[Any], ID](  # noqa: PLR0904
         *,
         user_db: BaseUserStore[UP, ID],
         **options: Unpack[BaseUserManagerOptions[UP, ID]],
-    ) -> None: ...
+    ) -> None:
+        pass
 
     def __init__(
         self: BaseUserManager[UP, ID],
@@ -494,6 +495,6 @@ class BaseUserManager[UP: UserProtocol[Any], ID](  # noqa: PLR0904
 
 
 _load_cryptography_fernet = cast(
-    "Callable[[], ModuleType]",
+    "Any",
     partial(require_cryptography_fernet, install_hint=_TOTP_SECRET_FERNET_INSTALL_HINT),
 )

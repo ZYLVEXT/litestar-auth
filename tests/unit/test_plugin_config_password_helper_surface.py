@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, cast
+from typing import Any, cast
 from uuid import UUID
 
 import pytest
@@ -21,10 +21,12 @@ from tests.integration.test_orchestrator import (
     PluginUserManager,
 )
 
-if TYPE_CHECKING:
-    from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
-
 pytestmark = pytest.mark.unit
+
+
+def _as_any(value: object) -> Any:  # noqa: ANN401
+    """Return a value through the test-only dynamic type boundary."""
+    return cast("Any", value)
 
 
 def _make_config(
@@ -43,14 +45,14 @@ def _make_config(
     backend = AuthenticationBackend[ExampleUser, UUID](
         name="primary",
         transport=BearerTransport(),
-        strategy=cast("Any", InMemoryTokenStrategy(token_prefix="plugin-config-password-helper")),
+        strategy=_as_any(InMemoryTokenStrategy(token_prefix="plugin-config-password-helper")),
     )
     return LitestarAuthConfig[ExampleUser, UUID](
         backends=[backend],
         user_model=ExampleUser,
         user_manager_class=PluginUserManager,
         session_maker=cast(
-            "async_sessionmaker[AsyncSession]",
+            "Any",
             assert_structural_session_factory(DummySessionMaker()),
         ),
         user_db_factory=lambda _session: InMemoryUserDatabase([]),

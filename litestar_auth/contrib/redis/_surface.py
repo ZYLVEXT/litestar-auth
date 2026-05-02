@@ -14,15 +14,16 @@ from types import MappingProxyType
 from typing import Protocol, runtime_checkable
 
 import litestar_auth._redis_protocols as redis_protocols_module
-import litestar_auth.ratelimit as ratelimit_module
 from litestar_auth.authentication.strategy.jwt import RedisJWTDenylistStore
 from litestar_auth.authentication.strategy.redis import RedisTokenStrategy, RedisTokenStrategyConfig
 from litestar_auth.ratelimit import (
+    DEFAULT_KEY_PREFIX,
     AuthRateLimitConfig,
     AuthRateLimitEndpointGroup,
     AuthRateLimitSlot,
     EndpointRateLimit,
     RateLimiterBackend,
+    RedisRateLimiter,
     SharedRateLimitConfigOptions,
 )
 from litestar_auth.totp import (
@@ -142,8 +143,8 @@ class RedisAuthPreset:
 
     def _build_rate_limit_backend(self, tier: RedisAuthRateLimitTier) -> RateLimiterBackend:
         """Return a ``RedisRateLimiter`` for ``tier`` using the preset's client."""
-        key_prefix = ratelimit_module.DEFAULT_KEY_PREFIX if tier.key_prefix is None else tier.key_prefix
-        return ratelimit_module.RedisRateLimiter(
+        key_prefix = DEFAULT_KEY_PREFIX if tier.key_prefix is None else tier.key_prefix
+        return RedisRateLimiter(
             redis=self.redis,
             max_attempts=tier.max_attempts,
             window_seconds=tier.window_seconds,

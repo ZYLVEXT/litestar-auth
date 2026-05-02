@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import sys
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Never, cast
 
 from litestar_auth.types import UserProtocol
@@ -20,6 +20,8 @@ if TYPE_CHECKING:
     )
     from litestar_auth.authentication.backend import AuthenticationBackend  # pragma: no cover
     from litestar_auth.authentication.strategy import DatabaseTokenModels  # pragma: no cover
+    from litestar_auth.authentication.strategy.base import UserManagerProtocol  # pragma: no cover
+    from litestar_auth.authentication.strategy.db import AsyncSessionT  # pragma: no cover
     from litestar_auth.types import StrategyProtocol  # pragma: no cover
 
 
@@ -54,48 +56,55 @@ class _DatabaseTokenStrategySettings:
     unsafe_testing: bool
 
 
-class _StartupOnlyDatabaseTokenStrategyMixin[UP: UserProtocol[Any], ID]:
-    """Fail-closed startup-only wrapper for the DB-token strategy settings."""
+@dataclass(slots=True)
+class _StartupOnlyDatabaseTokenStrategy[UP: UserProtocol[Any], ID]:
+    """Fail-closed startup-only DB-token strategy metadata holder."""
 
-    def __init__(
-        self,
-        *,
-        settings: _DatabaseTokenStrategySettings,
-        token_models: DatabaseTokenModels,
-        runtime_strategy_cls: type[Any],
-    ) -> None:
-        self._runtime_strategy_settings = settings
-        self._runtime_strategy_cls = runtime_strategy_cls
-        self._token_hash_secret = settings.token_hash_secret.encode()
-        self.token_models = token_models
-        self.access_token_model = token_models.access_token_model
-        self.refresh_token_model = token_models.refresh_token_model
-        self.max_age = settings.max_age
-        self.refresh_max_age = settings.refresh_max_age
-        self.token_bytes = settings.token_bytes
-        self.unsafe_testing = settings.unsafe_testing
+    settings: _DatabaseTokenStrategySettings
+    token_models: DatabaseTokenModels
+    runtime_strategy_cls: type[Any]
+    _token_hash_secret: bytes = field(init=False)
+    access_token_model: type[Any] = field(init=False)
+    refresh_token_model: type[Any] = field(init=False)
+    max_age: timedelta = field(init=False)
+    refresh_max_age: timedelta = field(init=False)
+    token_bytes: int = field(init=False)
+    unsafe_testing: bool = field(init=False)
+
+    def __post_init__(self) -> None:
+        """Expose DB-token metadata without constructing a request-bound strategy."""
+        self._token_hash_secret = self.settings.token_hash_secret.encode()
+        self.access_token_model = self.token_models.access_token_model
+        self.refresh_token_model = self.token_models.refresh_token_model
+        self.max_age = self.settings.max_age
+        self.refresh_max_age = self.settings.refresh_max_age
+        self.token_bytes = self.settings.token_bytes
+        self.unsafe_testing = self.settings.unsafe_testing
 
     def _raise_startup_only_runtime_error(self) -> Never:
         del self
         return _raise_startup_only_database_token_runtime_error()
 
-    def with_session(self, session: AsyncSession) -> StrategyProtocol[UP, ID]:
+    def with_session(self, session: AsyncSessionT) -> StrategyProtocol[UP, ID]:
         """Return a request-bound strategy for ``session``."""
-        settings = self._runtime_strategy_settings
         return cast(
             "StrategyProtocol[UP, ID]",
-            self._runtime_strategy_cls(
+            self.runtime_strategy_cls(
                 session=session,
-                token_hash_secret=settings.token_hash_secret,
+                token_hash_secret=self.settings.token_hash_secret,
                 token_models=self.token_models,
-                max_age=settings.max_age,
-                refresh_max_age=settings.refresh_max_age,
-                token_bytes=settings.token_bytes,
-                unsafe_testing=settings.unsafe_testing,
+                max_age=self.settings.max_age,
+                refresh_max_age=self.settings.refresh_max_age,
+                token_bytes=self.settings.token_bytes,
+                unsafe_testing=self.settings.unsafe_testing,
             ),
         )
 
-    async def read_token(self, token: str | None, user_manager: object) -> UP | None:
+    async def read_token(
+        self,
+        token: str | None,
+        user_manager: UserManagerProtocol[UP, ID],
+    ) -> UP | None:
         """Reject token reads until a request ``AsyncSession`` is bound.
 
         Returns:
@@ -132,7 +141,7 @@ class _StartupOnlyDatabaseTokenStrategyMixin[UP: UserProtocol[Any], ID]:
     async def rotate_refresh_token(
         self,
         refresh_token: str,
-        user_manager: object,
+        user_manager: UserManagerProtocol[UP, ID],
     ) -> tuple[UP, str] | None:
         """Reject refresh-token rotation until a request ``AsyncSession`` is bound.
 
@@ -170,9 +179,6 @@ def _build_startup_only_database_token_strategy[UP: UserProtocol[Any], ID](
     """
     from litestar_auth.authentication.strategy.db import DatabaseTokenStrategy  # noqa: PLC0415
     from litestar_auth.authentication.strategy.db_models import DatabaseTokenModels  # noqa: PLC0415
-
-    class _StartupOnlyDatabaseTokenStrategy(_StartupOnlyDatabaseTokenStrategyMixin, DatabaseTokenStrategy):
-        """Concrete startup-only DB-token strategy tied to the current strategy module."""
 
     settings = _DatabaseTokenStrategySettings(
         token_hash_secret=database_token_auth.token_hash_secret,

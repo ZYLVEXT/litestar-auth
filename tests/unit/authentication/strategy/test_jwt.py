@@ -29,7 +29,6 @@ if TYPE_CHECKING:
     from collections.abc import Callable, Mapping
     from types import ModuleType
 
-    from litestar_auth.types import ID
     from tests._helpers import AsyncFakeRedis
 
 pytestmark = pytest.mark.unit
@@ -37,6 +36,11 @@ REDIS_DENYLIST_TTL_SECONDS = 30
 REDIS_DENYLIST_TTL_FLOOR = REDIS_DENYLIST_TTL_SECONDS - 1
 MINIMUM_TTL_SECONDS = 1
 MINIMUM_TTL_FLOOR = 0
+
+
+def _as_any(value: object) -> Any:  # noqa: ANN401
+    """Return a value through the test-only dynamic type boundary."""
+    return cast("Any", value)
 
 
 def _jwt_module() -> ModuleType:
@@ -358,8 +362,8 @@ def test_jwt_strategy_validate_fingerprint_accepts_missing_server_fingerprint_wi
     )
     user = ExampleUser(id=uuid4())
 
-    assert strategy._validate_fingerprint({}, cast("Any", user)) is True
-    assert strategy._validate_fingerprint({"sfp": "token-value"}, cast("Any", user)) is False
+    assert strategy._validate_fingerprint({}, _as_any(user)) is True
+    assert strategy._validate_fingerprint({"sfp": "token-value"}, _as_any(user)) is False
 
 
 def test_jwt_strategy_validate_fingerprint_rejects_missing_token_claim_for_known_fingerprint() -> None:
@@ -481,7 +485,7 @@ async def test_jwt_strategy_read_token_returns_none_when_subject_decoder_returns
     user = ExampleUser(id=uuid4())
     strategy = JWTStrategy(
         secret=DEFAULT_SECRET,
-        subject_decoder=cast("Callable[[str], ID]", _subject_decoder_returns_none),
+        subject_decoder=cast("Any", _subject_decoder_returns_none),
         allow_inmemory_denylist=True,
     )
     user_manager = ExampleUserManager(user)
@@ -570,7 +574,7 @@ async def test_jwt_strategy_read_token_rejects_invalid_decoder_and_denied_token(
     )
     decoder_error_strategy = JWTStrategy(
         secret=DEFAULT_SECRET,
-        subject_decoder=cast("Callable[[str], ID]", _subject_decoder_raises_value_error),
+        subject_decoder=cast("Any", _subject_decoder_raises_value_error),
         allow_inmemory_denylist=True,
     )
     decoder_error_token = _make_token(

@@ -10,7 +10,8 @@ import pytest
 
 import litestar_auth._schema_fields as schema_fields_module
 from litestar_auth.config import DEFAULT_MINIMUM_PASSWORD_LENGTH, MAX_PASSWORD_LENGTH
-from litestar_auth.controllers.auth import _LOGIN_EMAIL_MAX_LENGTH, LoginCredentials, RefreshTokenRequest
+from litestar_auth.controllers._auth_helpers import _LOGIN_EMAIL_MAX_LENGTH
+from litestar_auth.controllers.auth import LoginCredentials, RefreshTokenRequest
 from litestar_auth.controllers.reset import ForgotPassword, ResetPassword
 from litestar_auth.controllers.totp import (
     TotpConfirmEnableRequest,

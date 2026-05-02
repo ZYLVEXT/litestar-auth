@@ -7,6 +7,7 @@ import sys
 from collections.abc import Callable, Sequence
 from datetime import timedelta
 from functools import partial
+from operator import eq
 from typing import TYPE_CHECKING, Any, Literal, assert_type, cast, get_args, get_origin, get_type_hints
 from uuid import UUID, uuid4
 
@@ -19,14 +20,6 @@ import litestar_auth._plugin.config as plugin_config_module
 import litestar_auth._plugin.database_token as database_token_module
 import litestar_auth._plugin.feature_configs as feature_configs_module
 from litestar_auth import DEFAULT_SUPERUSER_ROLE_NAME
-from litestar_auth._plugin.config import (
-    DEFAULT_REGISTER_MINIMUM_RESPONSE_SECONDS,
-    DatabaseTokenAuthConfig,
-    OAuthConfig,
-    StartupBackendTemplate,
-    TotpConfig,
-    require_session_maker,
-)
 from litestar_auth._plugin.oauth_contract import _build_oauth_route_registration_contract
 from litestar_auth._plugin.scoped_session import SessionFactory
 from litestar_auth._plugin.user_manager_builder import (
@@ -61,6 +54,12 @@ from tests.integration.test_orchestrator import (
 
 # Canonical substring from ``_raise_startup_only_database_token_runtime_error`` (database_token.py).
 _DB_TOKEN_STARTUP_ONLY_FAIL_CLOSED = re.escape("LitestarAuthConfig.resolve_backends(session)")
+DEFAULT_REGISTER_MINIMUM_RESPONSE_SECONDS = plugin_config_module.DEFAULT_REGISTER_MINIMUM_RESPONSE_SECONDS
+DatabaseTokenAuthConfig = plugin_config_module.DatabaseTokenAuthConfig
+OAuthConfig = plugin_config_module.OAuthConfig
+StartupBackendTemplate = plugin_config_module.StartupBackendTemplate
+TotpConfig = plugin_config_module.TotpConfig
+require_session_maker = plugin_config_module.require_session_maker
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -1228,13 +1227,15 @@ def test_database_token_auth_field_builds_canonical_db_bearer_backend() -> None:
 
     backend = config.resolve_startup_backends()[0]
     database_token_strategy_type = DatabaseTokenStrategy
+    startup_strategy = cast("Any", backend.strategy)
     assert isinstance(backend, StartupBackendTemplate)
     assert backend.name == "database"
     assert isinstance(backend.transport, BearerTransport)
-    assert isinstance(backend.strategy, database_token_strategy_type)
-    assert backend.strategy.max_age == timedelta(minutes=5)
-    assert backend.strategy.refresh_max_age == timedelta(hours=12)
-    assert backend.strategy.token_bytes == configured_token_bytes
+    assert not isinstance(startup_strategy, database_token_strategy_type)
+    assert callable(getattr(startup_strategy, "with_session", None))
+    assert startup_strategy.max_age == timedelta(minutes=5)
+    assert startup_strategy.refresh_max_age == timedelta(hours=12)
+    assert startup_strategy.token_bytes == configured_token_bytes
     assert require_session_maker(config) is session_maker
 
 
@@ -1304,7 +1305,7 @@ def test_startup_database_token_templates_do_not_embed_a_placeholder_session() -
 
     startup_backend = config.resolve_startup_backends()[0]
 
-    assert "session" not in vars(cast("Any", startup_backend.strategy))
+    assert not hasattr(cast("Any", startup_backend.strategy), "session")
 
 
 def test_startup_backend_template_eq_identity_short_circuits() -> None:
@@ -1315,7 +1316,7 @@ def test_startup_backend_template_eq_identity_short_circuits() -> None:
         strategy=cast("Any", InMemoryTokenStrategy(token_prefix="a")),
     )
     template = plugin_config_module.StartupBackendTemplate.from_runtime_backend(backend)
-    assert template == template  # noqa: PLR0124
+    assert eq(template, template)
 
 
 def test_startup_backend_template_eq_rejects_foreign_type() -> None:
@@ -1399,7 +1400,7 @@ async def test_startup_database_token_templates_fail_closed_for_remaining_runtim
 
     for operation in runtime_calls:
         with pytest.raises(RuntimeError, match=_DB_TOKEN_STARTUP_ONLY_FAIL_CLOSED):
-            await operation
+            _ = await operation
 
 
 def test_build_database_token_backend_binds_the_explicit_runtime_session() -> None:
@@ -1507,7 +1508,8 @@ def test_resolve_backends_realizes_database_token_preset_from_request_session() 
     assert isinstance(runtime_backends[0], authentication_backend_type)
     assert runtime_backends[0].name == "database"
     assert runtime_backends[0] is not startup_backend
-    assert isinstance(startup_backend.strategy, database_token_strategy_type)
+    assert not isinstance(startup_backend.strategy, database_token_strategy_type)
+    assert callable(getattr(startup_backend.strategy, "with_session", None))
     assert isinstance(runtime_backends[0].strategy, database_token_strategy_type)
     assert cast("Any", runtime_backends[0].strategy).session is active_session
 
@@ -1579,7 +1581,8 @@ def test_resolve_backends_preserves_database_token_runtime_contract_details() ->
     assert isinstance(runtime_backends[0], authentication_backend_type)
     assert runtime_backends[0].name == "opaque-db"
     assert runtime_backends[0] is not startup_backend
-    assert isinstance(startup_backend.strategy, database_token_strategy_type)
+    assert not isinstance(startup_backend.strategy, database_token_strategy_type)
+    assert callable(getattr(startup_backend.strategy, "with_session", None))
     assert isinstance(runtime_backends[0].strategy, database_token_strategy_type)
     assert cast("Any", runtime_backends[0].strategy).session is active_session
     assert cast("Any", runtime_backends[0].strategy).refresh_max_age == timedelta(days=14)

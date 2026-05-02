@@ -16,12 +16,6 @@ from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 from sqlalchemy.orm import Session as SASession
 
 import litestar_auth._plugin.role_admin as role_admin_module
-from litestar_auth._plugin.role_admin import (
-    SQLAlchemyRoleAdmin,
-    _ManagerLifecycleRoleUpdater,
-    _RoleLifecycleManager,
-    resolve_role_model_family,
-)
 from litestar_auth._roles import normalize_roles
 from litestar_auth.exceptions import ConfigurationError
 from litestar_auth.manager import UserManagerSecurity
@@ -36,6 +30,11 @@ from litestar_auth.models import (
 )
 from litestar_auth.plugin import FernetKeyringConfig, LitestarAuthConfig, OAuthConfig
 from tests.integration.test_orchestrator import PluginUserManager
+
+SQLAlchemyRoleAdmin = role_admin_module.SQLAlchemyRoleAdmin
+_ManagerLifecycleRoleUpdater = role_admin_module._ManagerLifecycleRoleUpdater
+_RoleLifecycleManager = role_admin_module._RoleLifecycleManager
+resolve_role_model_family = role_admin_module.resolve_role_model_family
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
@@ -433,6 +432,7 @@ def _build_missing_role_relationship_user_model() -> type[Any]:
         )
         user: Mapped[MissingRoleRelationshipUser] = relationship(back_populates="role_assignments")
 
+    assert MissingRoleRelationshipRole.__tablename__ == "missing_role_relationship_role"
     return MissingRoleRelationshipUser
 
 

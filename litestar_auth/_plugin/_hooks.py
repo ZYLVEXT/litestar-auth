@@ -21,13 +21,15 @@ class ExceptionResponseHook(Protocol):
         exc: LitestarAuthError,
         request: Request[Any, Any, Any],
         /,
-    ) -> Response[Any]: ...  # pragma: no cover
+    ) -> Response[Any]:
+        pass  # pragma: no cover
 
 
 class MiddlewareHook(Protocol):
     """Adjust the constructed auth middleware before plugin insertion."""
 
-    def __call__(self, middleware: DefineMiddleware, /) -> DefineMiddleware: ...  # pragma: no cover
+    def __call__(self, middleware: DefineMiddleware, /) -> DefineMiddleware:
+        pass  # pragma: no cover
 
 
 class ControllerHook(Protocol):
@@ -37,4 +39,5 @@ class ControllerHook(Protocol):
         self,
         controllers: list[ControllerRouterHandler],
         /,
-    ) -> list[ControllerRouterHandler]: ...  # pragma: no cover
+    ) -> list[ControllerRouterHandler]:
+        pass  # pragma: no cover

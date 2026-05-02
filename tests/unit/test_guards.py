@@ -30,16 +30,15 @@ from litestar_auth.guards import (
     is_superuser,
     is_verified,
 )
-from litestar_auth.guards._guards import (
-    _roles_include_all_fixed_work,
-    _roles_intersect_fixed_work,
-)
 from litestar_auth.guards._protocol_narrowing import (
     _require_active_guarded_user,
     _require_guarded_user,
     _require_role_capable_user,
 )
 from tests._helpers import ExampleUser
+
+_roles_include_all_fixed_work = guards_module._roles_include_all_fixed_work
+_roles_intersect_fixed_work = guards_module._roles_intersect_fixed_work
 
 if TYPE_CHECKING:
     from litestar.types import HTTPScope

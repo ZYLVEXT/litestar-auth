@@ -6,12 +6,10 @@ import asyncio
 import math
 import time
 from collections import deque
-from typing import TYPE_CHECKING
+
+from litestar_auth._clock import Clock, read_clock
 
 from ._helpers import SlidingWindow, _validate_configuration, logger
-
-if TYPE_CHECKING:
-    from collections.abc import Callable
 
 
 class InMemoryRateLimiter:
@@ -28,7 +26,7 @@ class InMemoryRateLimiter:
         window_seconds: float,
         max_keys: int = 100_000,
         sweep_interval: int = 1_000,
-        clock: Callable[[], float] = time.monotonic,
+        clock: Clock = time.monotonic,
     ) -> None:
         """Store the limiter configuration and request counters.
 
@@ -47,7 +45,7 @@ class InMemoryRateLimiter:
         self.window_seconds = window_seconds
         self.max_keys = max_keys
         self.sweep_interval = sweep_interval
-        self._clock = clock
+        self._clock: Clock = clock
         self._lock = asyncio.Lock()
         self._windows: dict[str, SlidingWindow] = {}
         self._operation_count = 0
@@ -60,7 +58,7 @@ class InMemoryRateLimiter:
     async def check(self, key: str) -> bool:
         """Return whether ``key`` can perform another attempt."""
         async with self._lock:
-            now = self._clock()
+            now = read_clock(self._clock)
             self._maybe_sweep(now)
             timestamps = self._prune(key, now)
             if timestamps is None:
@@ -74,7 +72,7 @@ class InMemoryRateLimiter:
     async def increment(self, key: str) -> None:
         """Record a new attempt for ``key`` in the current window."""
         async with self._lock:
-            now = self._clock()
+            now = read_clock(self._clock)
             self._maybe_sweep(now)
             timestamps = self._prune(key, now)
             if timestamps is None:
@@ -94,7 +92,7 @@ class InMemoryRateLimiter:
     async def retry_after(self, key: str) -> int:
         """Return the remaining block duration for ``key`` in whole seconds."""
         async with self._lock:
-            now = self._clock()
+            now = read_clock(self._clock)
             timestamps = self._prune(key, now)
             if timestamps is None or len(timestamps) < self.max_attempts:
                 return 0

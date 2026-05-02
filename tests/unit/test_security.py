@@ -15,7 +15,6 @@ import pytest
 
 import litestar_auth.config as config_module
 from litestar_auth._jwt_headers import jwt_encode_headers
-from litestar_auth.config import MAX_PASSWORD_LENGTH, require_password_length
 from litestar_auth.exceptions import InvalidResetPasswordTokenError, InvalidVerifyTokenError
 from litestar_auth.manager import RESET_PASSWORD_TOKEN_AUDIENCE
 from litestar_auth.manager import logger as manager_logger
@@ -23,6 +22,9 @@ from litestar_auth.password import PasswordHelper
 from litestar_auth.schemas import AdminUserUpdate, UserCreate, UserPasswordField
 from litestar_auth.totp import verify_totp
 from tests.unit.test_manager import TrackingUserManager, _build_user
+
+MAX_PASSWORD_LENGTH = config_module.MAX_PASSWORD_LENGTH
+require_password_length = config_module.require_password_length
 
 pytestmark = pytest.mark.unit
 

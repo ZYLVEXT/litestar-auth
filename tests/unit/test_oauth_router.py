@@ -12,10 +12,9 @@ import pytest
 import litestar_auth.oauth.router as router_module
 from litestar_auth.authentication.backend import AuthenticationBackend
 from litestar_auth.oauth import router
-from litestar_auth.oauth.router import (
-    ProviderOAuthControllerConfig,
-)
 from litestar_auth.types import UserProtocol
+
+ProviderOAuthControllerConfig = router_module.ProviderOAuthControllerConfig
 
 if TYPE_CHECKING:
     from litestar.connection import ASGIConnection

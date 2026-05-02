@@ -6,7 +6,6 @@ import hashlib
 import importlib as _importlib
 import logging
 from collections import deque
-from functools import partial
 from typing import TYPE_CHECKING, Any
 
 from litestar_auth._optional_deps import _require_redis_asyncio
@@ -21,10 +20,18 @@ type RedisScriptResult = bytes | str | int | float
 DEFAULT_KEY_PREFIX = "litestar_auth:ratelimit:"
 logger = logging.getLogger("litestar_auth.ratelimit")
 
-_load_redis_asyncio = partial(_require_redis_asyncio, feature_name="RedisRateLimiter")
 importlib = _importlib
 
 _DEFAULT_TRUSTED_HEADERS: tuple[str, ...] = ("X-Forwarded-For",)
+
+
+def _load_redis_asyncio() -> object:
+    """Load ``redis.asyncio`` for the Redis rate limiter.
+
+    Returns:
+        The imported ``redis.asyncio`` module.
+    """
+    return _require_redis_asyncio(feature_name="RedisRateLimiter")
 
 
 def _validate_configuration(*, max_attempts: int, window_seconds: float) -> None:

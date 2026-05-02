@@ -19,15 +19,14 @@ from litestar_auth._jwt_headers import jwt_encode_headers
 from litestar_auth.exceptions import TokenError
 from litestar_auth.password import PasswordHelper
 from litestar_auth.totp import SecurityWarning
-from litestar_auth.totp_flow import (
-    TOTP_PENDING_AUDIENCE,
-    PendingTotpClientBinding,
-    PendingTotpLogin,
-    TotpLoginFlowConfig,
-    TotpLoginFlowService,
-    _fingerprint_client_binding_value,
-)
 from tests._helpers import ExampleUser
+
+TOTP_PENDING_AUDIENCE = totp_flow_module.TOTP_PENDING_AUDIENCE
+PendingTotpClientBinding = totp_flow_module.PendingTotpClientBinding
+PendingTotpLogin = totp_flow_module.PendingTotpLogin
+TotpLoginFlowConfig = totp_flow_module.TotpLoginFlowConfig
+TotpLoginFlowService = totp_flow_module.TotpLoginFlowService
+_fingerprint_client_binding_value = totp_flow_module._fingerprint_client_binding_value
 
 pytestmark = pytest.mark.unit
 
@@ -80,6 +79,7 @@ class _RecordingPasswordHelper(PasswordHelper):
     """Password-helper stub that records every recovery-code hash verification."""
 
     def __init__(self, *, matching_hash: str | None) -> None:
+        super().__init__()
         self.matching_hash = matching_hash
         self.seen_hashes: list[str] = []
 

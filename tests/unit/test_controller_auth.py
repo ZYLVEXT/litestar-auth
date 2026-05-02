@@ -19,21 +19,19 @@ from litestar_auth.authentication.backend import AuthenticationBackend
 from litestar_auth.authentication.strategy.base import Strategy, UserManagerProtocol
 from litestar_auth.authentication.transport.bearer import BearerTransport
 from litestar_auth.authentication.transport.cookie import CookieTransport
-from litestar_auth.controllers.auth import (
-    _LOGIN_EMAIL_MAX_LENGTH,
-    _LOGIN_USERNAME_MAX_LENGTH,
-    AuthControllerConfig,
-    LoginCredentials,
-    _attach_refresh_token,
-    _AuthControllerSettings,
-    _get_refresh_strategy,
-    _make_auth_controller_context,
-    _resolve_cookie_transport,
-    _resolve_login_identifier,
-    create_auth_controller,
-)
+from litestar_auth.controllers._auth_helpers import _LOGIN_EMAIL_MAX_LENGTH, _LOGIN_USERNAME_MAX_LENGTH
 from litestar_auth.exceptions import ConfigurationError, ErrorCode, InactiveUserError
 from litestar_auth.guards import is_authenticated
+
+AuthControllerConfig = auth_controller_module.AuthControllerConfig
+LoginCredentials = auth_controller_module.LoginCredentials
+_attach_refresh_token = auth_controller_module._attach_refresh_token
+_AuthControllerSettings = auth_controller_module._AuthControllerSettings
+_get_refresh_strategy = auth_controller_module._get_refresh_strategy
+_make_auth_controller_context = auth_controller_module._make_auth_controller_context
+_resolve_cookie_transport = auth_controller_module._resolve_cookie_transport
+_resolve_login_identifier = auth_controller_module._resolve_login_identifier
+create_auth_controller = auth_controller_module.create_auth_controller
 
 pytestmark = pytest.mark.unit
 

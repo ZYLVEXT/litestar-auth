@@ -414,13 +414,15 @@ def _create_users_page_schema_type() -> type[msgspec.Struct]:
 def create_users_controller[UP: UsersControllerUserProtocol[Any], ID](
     *,
     config: UsersControllerConfig[ID],
-) -> type[Controller]: ...  # pragma: no cover
+) -> type[Controller]:
+    pass  # pragma: no cover
 
 
 @overload
 def create_users_controller[UP: UsersControllerUserProtocol[Any], ID](
     **options: Unpack[UsersControllerOptions[ID]],
-) -> type[Controller]: ...  # pragma: no cover
+) -> type[Controller]:
+    pass  # pragma: no cover
 
 
 def create_users_controller[UP: UsersControllerUserProtocol[Any], ID](

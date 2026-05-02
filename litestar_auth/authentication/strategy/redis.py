@@ -71,10 +71,12 @@ class RedisTokenStrategy(Strategy[UP, ID]):
     """Stateful strategy that stores opaque tokens in Redis with TTL."""
 
     @overload
-    def __init__(self, *, config: RedisTokenStrategyConfig[ID]) -> None: ...  # pragma: no cover
+    def __init__(self, *, config: RedisTokenStrategyConfig[ID]) -> None:
+        pass  # pragma: no cover
 
     @overload
-    def __init__(self, **options: Unpack[RedisTokenStrategyOptions[ID]]) -> None: ...  # pragma: no cover
+    def __init__(self, **options: Unpack[RedisTokenStrategyOptions[ID]]) -> None:
+        pass  # pragma: no cover
 
     def __init__(
         self,

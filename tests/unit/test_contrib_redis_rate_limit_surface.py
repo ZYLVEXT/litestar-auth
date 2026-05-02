@@ -14,12 +14,11 @@ from litestar_auth.contrib.redis import (
     RedisAuthRateLimitConfigOptions,
     RedisAuthRateLimitTier,
 )
-from litestar_auth.ratelimit import (
-    AuthRateLimitSlot,
-    EndpointRateLimit,
-    InMemoryRateLimiter,
-)
 from tests._helpers import cast_fakeredis
+
+AuthRateLimitSlot = ratelimit_module.AuthRateLimitSlot
+EndpointRateLimit = ratelimit_module.EndpointRateLimit
+InMemoryRateLimiter = ratelimit_module.InMemoryRateLimiter
 
 if TYPE_CHECKING:
     from tests._helpers import AsyncFakeRedis

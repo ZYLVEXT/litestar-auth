@@ -27,6 +27,13 @@ DEFAULT_SECRET = "a" * 32
 REDIS_TOKEN_HASH_SECRET = "redis-token-hash-secret-1234567890"
 HS512_SECRET = "b" * 64
 JTI_HEX_LENGTH = 32
+
+
+def _as_any(value: object) -> Any:  # noqa: ANN401
+    """Return a value through the test-only dynamic type boundary."""
+    return cast("Any", value)
+
+
 RSA_PRIVATE_KEY = """-----BEGIN PRIVATE KEY-----
 MIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQC3K1ozO4WRwj7u
 NR0edcAn3S/wAjSIHnCUjNlyboWhicbIUpO57kVJw4VEls2s7UQ4yxAZU1DoUxxm
@@ -321,7 +328,7 @@ def test_validate_secret_length_raises_for_short_secret() -> None:
 def test_database_token_strategy_re_raises_secret_validation_error() -> None:
     """DatabaseTokenStrategy re-raises secret validation failures as ConfigurationError."""
     with pytest.raises(ConfigurationError, match="DatabaseTokenStrategy token_hash_secret"):
-        DatabaseTokenStrategy(session=cast("Any", object()), token_hash_secret="short")
+        DatabaseTokenStrategy(session=_as_any(object()), token_hash_secret="short")
 
 
 def test_database_token_strategy_rejects_config_combined_with_keyword_options() -> None:

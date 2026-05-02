@@ -7,7 +7,9 @@ from types import ModuleType
 import pytest
 
 import litestar_auth._optional_deps as optional_deps_module
-from litestar_auth._optional_deps import _require_redis_asyncio, require_cryptography_fernet
+
+_require_redis_asyncio = optional_deps_module._require_redis_asyncio
+require_cryptography_fernet = optional_deps_module.require_cryptography_fernet
 
 pytestmark = pytest.mark.unit
 

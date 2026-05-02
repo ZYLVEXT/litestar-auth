@@ -28,6 +28,11 @@ from tests.unit.test_definition_file_coverage import load_reloaded_test_alias
 pytestmark = pytest.mark.unit
 
 
+def _as_any(value: object) -> Any:  # noqa: ANN401
+    """Return a value through the test-only dynamic type boundary."""
+    return cast("Any", value)
+
+
 def _fernet_key_string(seed: bytes = b"0") -> str:
     """Return a deterministic valid Fernet key string."""
     pytest.importorskip("cryptography.fernet")
@@ -454,7 +459,7 @@ def test_raw_fernet_backend_decrypt_accepts_bytes_and_rejects_invalid_values_whe
             return "plain-token"
 
     backend = _RawFernetBackend()
-    backend._keyring = cast("Any", _FakeKeyring())
+    backend._keyring = _as_any(_FakeKeyring())
 
     assert backend.decrypt(b"ciphertext") == "plain-token"
 

@@ -28,12 +28,6 @@ from litestar_auth.authentication.strategy.base import (
 )
 from litestar_auth.config import validate_secret_length
 from litestar_auth.controllers._auth_helpers import (
-    _LOGIN_EMAIL_MAX_LENGTH as _AUTH_LOGIN_EMAIL_MAX_LENGTH,
-)
-from litestar_auth.controllers._auth_helpers import (
-    _LOGIN_USERNAME_MAX_LENGTH as _AUTH_LOGIN_USERNAME_MAX_LENGTH,
-)
-from litestar_auth.controllers._auth_helpers import (
     _attach_refresh_token,
     _get_refresh_strategy,
     _resolve_cookie_transport,
@@ -73,8 +67,6 @@ INVALID_CREDENTIALS_DETAIL = "Invalid credentials."
 INVALID_REFRESH_TOKEN_DETAIL = "The refresh token is invalid."  # noqa: S105
 TOTP_PENDING_AUDIENCE = _TOTP_PENDING_AUDIENCE
 _DEFAULT_PENDING_TOKEN_LIFETIME = timedelta(minutes=5)
-_LOGIN_EMAIL_MAX_LENGTH = _AUTH_LOGIN_EMAIL_MAX_LENGTH
-_LOGIN_USERNAME_MAX_LENGTH = _AUTH_LOGIN_USERNAME_MAX_LENGTH
 
 
 @runtime_checkable
@@ -424,13 +416,15 @@ from litestar_auth.controllers._auth_routes import (  # noqa: E402
 def create_auth_controller[UP: UserProtocol[Any], ID](
     *,
     config: AuthControllerConfig[UP, ID],
-) -> type[Controller]: ...  # pragma: no cover
+) -> type[Controller]:
+    pass  # pragma: no cover
 
 
 @overload
 def create_auth_controller[UP: UserProtocol[Any], ID](
     **options: Unpack[AuthControllerOptions[UP, ID]],
-) -> type[Controller]: ...  # pragma: no cover
+) -> type[Controller]:
+    pass  # pragma: no cover
 
 
 def create_auth_controller[UP: UserProtocol[Any], ID](

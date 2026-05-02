@@ -9,8 +9,12 @@ import msgspec
 import pytest
 
 import litestar_auth._manager._coercions as coercions_module
-from litestar_auth._manager._coercions import _account_state_user, _as_dict, _managed_user, _require_str
 from tests._helpers import ExampleUser
+
+_account_state_user = coercions_module._account_state_user
+_as_dict = coercions_module._as_dict
+_managed_user = coercions_module._managed_user
+_require_str = coercions_module._require_str
 
 pytestmark = pytest.mark.unit
 

@@ -55,7 +55,8 @@ class UserModelMixin:
     recovery_codes: Mapped[dict[str, str] | None] = mapped_column(JSON, default=None, nullable=True)
 
     @declared_attr
-    def hashed_password(cls) -> Mapped[str]:  # noqa: N805
+    @classmethod
+    def hashed_password(cls) -> Mapped[str]:
         """Map the password-hash attribute to the configured SQL column name.
 
         Returns:
@@ -82,7 +83,8 @@ class UserRoleRelationshipMixin:
         role_assignments: Mapped[list[Any]]
 
     @declared_attr
-    def role_assignments(cls) -> Mapped[list[Any]]:  # noqa: N805
+    @classmethod
+    def role_assignments(cls) -> Mapped[list[Any]]:
         """Map the user-side role-assignment collection.
 
         Returns:
@@ -135,7 +137,8 @@ class RoleMixin:
         return normalize_role_name(value)
 
     @declared_attr
-    def user_assignments(cls) -> Mapped[list[Any]]:  # noqa: N805
+    @classmethod
+    def user_assignments(cls) -> Mapped[list[Any]]:
         """Map the inverse collection of user-role association rows.
 
         Returns:
@@ -167,7 +170,8 @@ class UserRoleAssociationMixin:
         role: Mapped[Any]
 
     @declared_attr
-    def user_id(cls) -> Mapped[uuid.UUID]:  # noqa: N805
+    @classmethod
+    def user_id(cls) -> Mapped[uuid.UUID]:
         """Map the user foreign key for the association row.
 
         Returns:
@@ -176,7 +180,8 @@ class UserRoleAssociationMixin:
         return mapped_column(ForeignKey(f"{cls.auth_user_table}.id"), primary_key=True)
 
     @declared_attr
-    def role_name(cls) -> Mapped[str]:  # noqa: N805
+    @classmethod
+    def role_name(cls) -> Mapped[str]:
         """Map the normalized role-name foreign key for the association row.
 
         Returns:
@@ -199,7 +204,8 @@ class UserRoleAssociationMixin:
         return normalize_role_name(value)
 
     @declared_attr
-    def user(cls) -> Mapped[Any]:  # noqa: N805
+    @classmethod
+    def user(cls) -> Mapped[Any]:
         """Map the relationship back to the configured user model.
 
         Returns:
@@ -212,7 +218,8 @@ class UserRoleAssociationMixin:
         )
 
     @declared_attr
-    def role(cls) -> Mapped[Any]:  # noqa: N805
+    @classmethod
+    def role(cls) -> Mapped[Any]:
         """Map the relationship back to the configured role model.
 
         Returns:
@@ -337,7 +344,8 @@ class UserAuthRelationshipMixin:
         return cast("Mapped[list[Any]]", relationship(target, **relationship_kwargs))
 
     @declared_attr
-    def access_tokens(cls) -> Mapped[list[Any]]:  # noqa: N805
+    @classmethod
+    def access_tokens(cls) -> Mapped[list[Any]]:
         """Map the inverse side of the configured access-token model when enabled.
 
         Returns:
@@ -349,7 +357,8 @@ class UserAuthRelationshipMixin:
         )
 
     @declared_attr
-    def refresh_tokens(cls) -> Mapped[list[Any]]:  # noqa: N805
+    @classmethod
+    def refresh_tokens(cls) -> Mapped[list[Any]]:
         """Map the inverse side of the configured refresh-token model when enabled.
 
         Returns:
@@ -361,7 +370,8 @@ class UserAuthRelationshipMixin:
         )
 
     @declared_attr
-    def oauth_accounts(cls) -> Mapped[list[Any]]:  # noqa: N805
+    @classmethod
+    def oauth_accounts(cls) -> Mapped[list[Any]]:
         """Map the inverse side of the configured OAuth-account model when enabled.
 
         Returns:
@@ -391,7 +401,8 @@ class _TokenModelMixin:
     )
 
     @declared_attr
-    def user_id(cls) -> Mapped[uuid.UUID]:  # noqa: N805
+    @classmethod
+    def user_id(cls) -> Mapped[uuid.UUID]:
         """Map the foreign key to the configured user table.
 
         Returns:
@@ -400,7 +411,8 @@ class _TokenModelMixin:
         return mapped_column(ForeignKey(f"{cls.auth_user_table}.id"), nullable=False)
 
     @declared_attr
-    def user(cls) -> Mapped[Any]:  # noqa: N805
+    @classmethod
+    def user(cls) -> Mapped[Any]:
         """Map the relationship back to the configured user model.
 
         Returns:

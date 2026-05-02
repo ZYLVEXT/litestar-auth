@@ -40,6 +40,11 @@ HTTP_NOT_FOUND = 404
 HTTP_OK = 200
 
 
+def _as_any(value: object) -> Any:  # noqa: ANN401
+    """Return a value through the test-only dynamic type boundary."""
+    return cast("Any", value)
+
+
 class HeaderInjectingAuthMiddleware(LitestarAuthMiddleware[ExampleUser, UUID]):
     """Auth middleware wrapper used to prove middleware-hook replacement works."""
 
@@ -48,7 +53,7 @@ class HeaderInjectingAuthMiddleware(LitestarAuthMiddleware[ExampleUser, UUID]):
 
         async def send_with_hook_header(message: Message) -> None:
             if message["type"] == "http.response.start":
-                start_message = cast("Any", message)
+                start_message = _as_any(message)
                 headers = list(start_message.get("headers", []))
                 headers.append((b"x-auth-hook", b"enabled"))
                 start_message["headers"] = headers

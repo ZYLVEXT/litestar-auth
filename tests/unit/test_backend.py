@@ -22,8 +22,6 @@ from tests._helpers import ExampleUser
 if TYPE_CHECKING:
     from types import ModuleType
 
-    from litestar.types import HTTPScope
-
 pytestmark = pytest.mark.unit
 
 HTTP_SERVICE_UNAVAILABLE = 503
@@ -50,7 +48,7 @@ def _build_connection() -> ASGIConnection[Any, Any, Any, Any]:
         "path_params": {},
         "query_string": b"",
     }
-    return ASGIConnection(scope=cast("HTTPScope", scope))
+    return ASGIConnection(scope=cast("Any", scope))
 
 
 async def test_backend_login_composes_strategy_and_transport() -> None:

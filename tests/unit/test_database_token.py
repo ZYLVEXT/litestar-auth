@@ -74,7 +74,8 @@ def test_build_database_token_backend_template_and_internal_builder() -> None:
         unsafe_testing=True,
     )
     assert startup_backend.name == "dbtok"
-    assert isinstance(startup_backend.strategy, DatabaseTokenStrategy)
+    assert not isinstance(startup_backend.strategy, DatabaseTokenStrategy)
+    assert callable(getattr(startup_backend.strategy, "with_session", None))
 
     bound = database_token_module._build_database_token_backend(
         auth,

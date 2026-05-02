@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
-from typing import TYPE_CHECKING, Any, cast
+from typing import Any, cast
 from uuid import uuid4
 
 import pytest
@@ -19,9 +19,6 @@ from litestar_auth._superuser_role import (
     set_scope_superuser_role_name,
 )
 from tests._helpers import ExampleUser
-
-if TYPE_CHECKING:
-    from litestar.types import HTTPScope
 
 pytestmark = pytest.mark.unit
 
@@ -50,7 +47,7 @@ def _build_connection(
     }
     if state is not None:
         scope["state"] = state
-    return ASGIConnection(scope=cast("HTTPScope", scope))
+    return ASGIConnection(scope=cast("Any", scope))
 
 
 def test_default_superuser_role_name_is_normalized() -> None:

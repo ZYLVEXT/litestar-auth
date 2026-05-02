@@ -43,13 +43,17 @@ def test_create_totp_controller_step_up_requires_authenticate() -> None:
     """Step-up enrollment requires user_manager.authenticate."""
 
     class _NoAuthManager:  # pragma: no cover - shape-only for validation
-        async def get(self, _user_id: object) -> object: ...
+        async def get(self, _user_id: object) -> object:
+            pass
 
-        async def on_after_login(self, _user: object) -> None: ...
+        async def on_after_login(self, _user: object) -> None:
+            pass
 
-        async def set_totp_secret(self, _user: object, _secret: str | None) -> object: ...
+        async def set_totp_secret(self, _user: object, _secret: str | None) -> object:
+            pass
 
-        async def read_totp_secret(self, _secret: str | None) -> str | None: ...
+        async def read_totp_secret(self, _secret: str | None) -> str | None:
+            pass
 
     with pytest.raises(ConfigurationError, match=r"totp_enable_requires_password=True"):
         _totp_validate_replay_and_password(

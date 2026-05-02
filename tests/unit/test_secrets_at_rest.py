@@ -6,15 +6,14 @@ import pytest
 
 import litestar_auth._optional_deps as optional_deps_module
 import litestar_auth._secrets_at_rest as secrets_at_rest
-from litestar_auth._secrets_at_rest import (
-    FernetKey,
-    FernetKeyring,
-    SecretAtRestError,
-    UnknownFernetKeyError,
-    decode_versioned_fernet_value,
-    encode_versioned_fernet_value,
-    validate_fernet_key_id,
-)
+
+FernetKey = secrets_at_rest.FernetKey
+FernetKeyring = secrets_at_rest.FernetKeyring
+SecretAtRestError = secrets_at_rest.SecretAtRestError
+UnknownFernetKeyError = secrets_at_rest.UnknownFernetKeyError
+decode_versioned_fernet_value = secrets_at_rest.decode_versioned_fernet_value
+encode_versioned_fernet_value = secrets_at_rest.encode_versioned_fernet_value
+validate_fernet_key_id = secrets_at_rest.validate_fernet_key_id
 
 pytestmark = pytest.mark.unit
 

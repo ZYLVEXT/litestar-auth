@@ -46,13 +46,6 @@ from litestar_auth.config import require_password_length
 from litestar_auth.exceptions import ConfigurationError
 from litestar_auth.manager import UserManagerSecurity
 from litestar_auth.password import PasswordHelper
-from litestar_auth.plugin import (
-    FernetKeyringConfig,
-    LitestarAuth,
-    LitestarAuthConfig,
-    OAuthConfig,
-    TotpConfig,
-)
 from litestar_auth.ratelimit import (
     AuthRateLimitConfig,
     EndpointRateLimit,
@@ -70,6 +63,12 @@ from tests.integration.test_orchestrator import (
     InMemoryUserDatabase,
     PluginUserManager,
 )
+
+FernetKeyringConfig = plugin_module.FernetKeyringConfig
+LitestarAuth = plugin_module.LitestarAuth
+LitestarAuthConfig = plugin_module.LitestarAuthConfig
+OAuthConfig = plugin_module.OAuthConfig
+TotpConfig = plugin_module.TotpConfig
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -1360,7 +1359,8 @@ def test_session_bound_backends_realizes_database_token_preset_from_request_sess
     assert isinstance(template_backend, startup_backend_template_type)
     assert isinstance(rebound_backends[0], authentication_backend_type)
     assert rebound_backends[0] is not template_backend
-    assert isinstance(template_strategy, database_token_strategy_type)
+    assert not isinstance(template_strategy, database_token_strategy_type)
+    assert callable(getattr(template_strategy, "with_session", None))
     assert isinstance(rebound_strategy, database_token_strategy_type)
     assert rebound_strategy.session is active_session
     assert rebound_strategy.refresh_max_age == timedelta(days=14)
@@ -1453,16 +1453,7 @@ def test_resolve_account_state_validator_returns_callable_account_state_contract
             superuser_role_name: str = DEFAULT_SUPERUSER_ROLE_NAME,
             unsafe_testing: bool = False,
         ) -> None:
-            del (
-                user_db,
-                password_helper,
-                security,
-                password_validator,
-                backends,
-                login_identifier,
-                superuser_role_name,
-                unsafe_testing,
-            )
+            pass
 
         @staticmethod
         async def authenticate(identifier: str, password: str) -> None:
@@ -1648,7 +1639,8 @@ def test_provide_request_backends_realizes_database_token_preset_from_request_se
     assert isinstance(template_backend, startup_backend_template_type)
     assert [backend.name for backend in rebound_backends] == ["database"]
     assert isinstance(rebound_backends[0], authentication_backend_type)
-    assert isinstance(template_backend.strategy, database_token_strategy_type)
+    assert not isinstance(template_backend.strategy, database_token_strategy_type)
+    assert callable(getattr(template_backend.strategy, "with_session", None))
     assert isinstance(rebound_backends[0].strategy, database_token_strategy_type)
     assert rebound_backends[0].strategy.session is active_session
 

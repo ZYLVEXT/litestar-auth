@@ -2,9 +2,7 @@
 
 from __future__ import annotations
 
-from litestar_auth._error_codes import ErrorCode, UserIdentifier, UserIdentifierType
-
-_USER_IDENTIFIER_TYPE_REEXPORT = UserIdentifierType
+from litestar_auth._error_codes import ErrorCode, UserIdentifier
 
 
 class LitestarAuthError(Exception):

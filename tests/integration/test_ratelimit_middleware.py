@@ -34,9 +34,11 @@ from litestar_auth.ratelimit import (
     InMemoryRateLimiter,
     SharedRateLimitConfigOptions,
 )
-from litestar_auth.totp import InMemoryUsedTotpCodeStore, _generate_totp_code
 from tests._helpers import auth_middleware_get_request_session, litestar_app_with_user_manager
 from tests.integration.conftest import DummySessionMaker, ExampleUser, InMemoryTokenStrategy, InMemoryUserDatabase
+
+InMemoryUsedTotpCodeStore = _totp_mod.InMemoryUsedTotpCodeStore
+_generate_totp_code = _totp_mod._generate_totp_code
 
 if TYPE_CHECKING:
     from httpx import Response

@@ -67,7 +67,7 @@ def _decrypt_loaded_oauth_tokens(
     policy = _resolve_instance_oauth_token_encryption(target, session=session)
     if policy is None:
         return
-    state = cast("Any", sa_inspect(target))
+    state: Any = sa_inspect(target)
     for field_name in field_names:
         if state.attrs[field_name].history.has_changes():
             continue
@@ -181,7 +181,7 @@ def _encrypt_oauth_tokens_before_insert(mapper: object, connection: object, targ
 def _encrypt_oauth_tokens_before_update(mapper: object, connection: object, target: object) -> None:
     """Encrypt changed OAuth token fields immediately before UPDATE statements."""
     del mapper, connection
-    state = cast("Any", sa_inspect(target))
+    state: Any = sa_inspect(target)
     changed_fields = tuple(
         field_name for field_name in _OAUTH_TOKEN_FIELDS if state.attrs[field_name].history.has_changes()
     )

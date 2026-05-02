@@ -9,25 +9,24 @@ import pytest
 
 import litestar_auth._error_codes as error_codes_module
 import litestar_auth.exceptions as exceptions_module
-from litestar_auth.exceptions import (
-    AuthenticationError,
-    AuthorizationError,
-    ConfigurationError,
-    ErrorCode,
-    InactiveUserError,
-    InsufficientRolesError,
-    InvalidPasswordError,
-    InvalidResetPasswordTokenError,
-    InvalidVerifyTokenError,
-    LitestarAuthError,
-    OAuthAccountAlreadyLinkedError,
-    TokenError,
-    UnverifiedUserError,
-    UserAlreadyExistsError,
-    UserIdentifier,
-    UserNotExistsError,
-)
 from tests.unit.test_definition_file_coverage import load_reloaded_test_alias
+
+AuthenticationError = exceptions_module.AuthenticationError
+AuthorizationError = exceptions_module.AuthorizationError
+ConfigurationError = exceptions_module.ConfigurationError
+ErrorCode = exceptions_module.ErrorCode
+InactiveUserError = exceptions_module.InactiveUserError
+InsufficientRolesError = exceptions_module.InsufficientRolesError
+InvalidPasswordError = exceptions_module.InvalidPasswordError
+InvalidResetPasswordTokenError = exceptions_module.InvalidResetPasswordTokenError
+InvalidVerifyTokenError = exceptions_module.InvalidVerifyTokenError
+LitestarAuthError = exceptions_module.LitestarAuthError
+OAuthAccountAlreadyLinkedError = exceptions_module.OAuthAccountAlreadyLinkedError
+TokenError = exceptions_module.TokenError
+UnverifiedUserError = exceptions_module.UnverifiedUserError
+UserAlreadyExistsError = exceptions_module.UserAlreadyExistsError
+UserIdentifier = exceptions_module.UserIdentifier
+UserNotExistsError = exceptions_module.UserNotExistsError
 
 pytestmark = pytest.mark.unit
 

@@ -5,7 +5,6 @@ from __future__ import annotations
 import re
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
-from functools import partial
 from types import MappingProxyType
 from typing import Protocol, cast
 
@@ -48,10 +47,13 @@ class _FernetModule(Protocol):
 type FernetModuleLoader = Callable[[], _FernetModule]
 
 
-_load_cryptography_fernet = cast(
-    "FernetModuleLoader",
-    partial(require_cryptography_fernet, install_hint=_FERNET_INSTALL_HINT),
-)
+def _load_cryptography_fernet() -> _FernetModule:
+    """Load ``cryptography.fernet`` with the secret-at-rest install hint.
+
+    Returns:
+        The imported ``cryptography.fernet`` module.
+    """
+    return cast("_FernetModule", require_cryptography_fernet(install_hint=_FERNET_INSTALL_HINT))
 
 
 class SecretAtRestError(RuntimeError):

@@ -280,13 +280,15 @@ def _create_register_controller_type(settings: _RegisterControllerSettings) -> t
 def create_register_controller[UP: RegisterControllerUserProtocol[Any], ID](
     *,
     config: RegisterControllerConfig,
-) -> type[Controller]: ...  # pragma: no cover
+) -> type[Controller]:
+    pass  # pragma: no cover
 
 
 @overload
 def create_register_controller[UP: RegisterControllerUserProtocol[Any], ID](
     **options: Unpack[RegisterControllerOptions],
-) -> type[Controller]: ...  # pragma: no cover
+) -> type[Controller]:
+    pass  # pragma: no cover
 
 
 def create_register_controller[UP: RegisterControllerUserProtocol[Any], ID](

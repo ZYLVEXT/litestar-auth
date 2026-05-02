@@ -26,26 +26,26 @@ from litestar_auth.controllers._oauth_helpers import (
     _encode_oauth_flow_cookie,
     _require_verified_email_evidence,
 )
-from litestar_auth.controllers._utils import _require_account_state
-from litestar_auth.controllers.oauth import (
-    OAuthAssociateControllerConfig,
-    OAuthControllerConfig,
-    _clear_state_cookie,
-    _decode_oauth_flow_cookie,
-    _set_state_cookie,
-    _validate_state,
-    create_oauth_associate_controller,
-    create_oauth_controller,
-)
 from litestar_auth.exceptions import (
     ConfigurationError,
     ErrorCode,
     InactiveUserError,
     OAuthAccountAlreadyLinkedError,
 )
-from litestar_auth.oauth._flow_cookie import _OAuthFlowCookie, _OAuthFlowCookieCipher
 from litestar_auth.oauth.service import OAuthAuthorization
 from tests.unit.test_definition_file_coverage import load_reloaded_test_alias
+
+_require_account_state = controller_utils_module._require_account_state
+OAuthAssociateControllerConfig = oauth_module.OAuthAssociateControllerConfig
+OAuthControllerConfig = oauth_module.OAuthControllerConfig
+_clear_state_cookie = oauth_module._clear_state_cookie
+_decode_oauth_flow_cookie = oauth_module._decode_oauth_flow_cookie
+_set_state_cookie = oauth_module._set_state_cookie
+_validate_state = oauth_module._validate_state
+create_oauth_associate_controller = oauth_module.create_oauth_associate_controller
+create_oauth_controller = oauth_module.create_oauth_controller
+_OAuthFlowCookie = flow_cookie_module._OAuthFlowCookie
+_OAuthFlowCookieCipher = flow_cookie_module._OAuthFlowCookieCipher
 
 pytestmark = pytest.mark.unit
 

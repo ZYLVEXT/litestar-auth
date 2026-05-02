@@ -24,28 +24,25 @@ from litestar_auth.authentication.strategy import (
 )
 from litestar_auth.authentication.strategy.db_models import AccessToken, DatabaseTokenModels, RefreshToken
 from litestar_auth.exceptions import ConfigurationError
-from litestar_auth.models import (
-    AccessTokenMixin,
-    OAuthAccount,
-    OAuthAccountMixin,
-    RefreshTokenMixin,
-    Role,
-    RoleMixin,
-    User,
-    UserAuthRelationshipMixin,
-    UserModelMixin,
-    UserRole,
-    UserRoleAssociationMixin,
-    UserRoleRelationshipMixin,
-)
-from litestar_auth.models import (
-    import_token_orm_models as import_token_orm_models_from_models,
-)
 from litestar_auth.models._oauth_encrypted_types import (
     oauth_access_token_type,
     oauth_refresh_token_type,
 )
 from litestar_auth.oauth_encryption import OAuthTokenEncryption, bind_oauth_token_encryption
+
+AccessTokenMixin = litestar_auth_models.AccessTokenMixin
+OAuthAccount = litestar_auth_models.OAuthAccount
+OAuthAccountMixin = litestar_auth_models.OAuthAccountMixin
+RefreshTokenMixin = litestar_auth_models.RefreshTokenMixin
+Role = litestar_auth_models.Role
+RoleMixin = litestar_auth_models.RoleMixin
+User = litestar_auth_models.User
+UserAuthRelationshipMixin = litestar_auth_models.UserAuthRelationshipMixin
+UserModelMixin = litestar_auth_models.UserModelMixin
+UserRole = litestar_auth_models.UserRole
+UserRoleAssociationMixin = litestar_auth_models.UserRoleAssociationMixin
+UserRoleRelationshipMixin = litestar_auth_models.UserRoleRelationshipMixin
+import_token_orm_models_from_models = litestar_auth_models.import_token_orm_models
 
 if TYPE_CHECKING:
     from sqlalchemy.engine import Engine
@@ -869,6 +866,7 @@ def test_custom_role_mixins_round_trip_normalized_membership() -> None:
         assert user_role_columns == {"role_name", "user_id"}
         assert inspect(CustomRolesUser).relationships["role_assignments"].lazy == "select"
         assert inspect(CustomRole).relationships["user_assignments"].lazy == "selectin"
+        assert CustomUserRole.__tablename__ == "custom_user_role"
 
         with Session(engine) as session:
             user = CustomRolesUser(

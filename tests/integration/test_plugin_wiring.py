@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, cast
+from typing import Any, cast
 from uuid import UUID, uuid4
 
 import pytest
@@ -51,16 +51,16 @@ from .test_orchestrator import (
 
 TOTP_RECOVERY_CODE_LOOKUP_SECRET = "test-recovery-code-lookup-secret-123"
 
-if TYPE_CHECKING:
-    from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
-
-    from litestar_auth.manager import BaseUserManager
-
 pytestmark = [pytest.mark.integration, pytest.mark.filterwarnings("ignore::pytest.PytestUnraisableExceptionWarning")]
 HTTP_OK = 200
 HTTP_CREATED = 201
 HTTP_NOT_FOUND = 404
 OAUTH_FLOW_COOKIE_SECRET = "oauth-flow-cookie-secret-1234567890"
+
+
+def _as_any(value: object) -> Any:  # noqa: ANN401
+    """Return a value through the test-only dynamic type boundary."""
+    return cast("Any", value)
 
 
 class _OpenAPIOAuthClient:
@@ -102,13 +102,13 @@ def _minimal_litestar_auth_config(
         AuthenticationBackend[ExampleUser, UUID](
             name="primary",
             transport=BearerTransport(),
-            strategy=cast("Any", InMemoryTokenStrategy(token_prefix="plugin-wiring")),
+            strategy=_as_any(InMemoryTokenStrategy(token_prefix="plugin-wiring")),
         ),
     ]
     return LitestarAuthConfig[ExampleUser, UUID](
         backends=strategies,
         session_maker=cast(
-            "async_sessionmaker[AsyncSession]",
+            "Any",
             assert_structural_session_factory(DummySessionMaker()),
         ),
         user_model=ExampleUser,
@@ -186,11 +186,11 @@ def test_validate_config_include_users_requires_list_users() -> None:
     config = LitestarAuthConfig[ExampleUser, UUID](
         backends=_minimal_litestar_auth_config().backends,
         session_maker=cast(
-            "async_sessionmaker[AsyncSession]",
+            "Any",
             assert_structural_session_factory(DummySessionMaker()),
         ),
         user_model=ExampleUser,
-        user_manager_class=cast("type[BaseUserManager[ExampleUser, UUID]]", _UserManagerWithoutListUsers),
+        user_manager_class=cast("Any", _UserManagerWithoutListUsers),
         user_db_factory=lambda _session: user_db,
         user_manager_security=UserManagerSecurity[UUID](),
         include_users=True,
@@ -228,7 +228,7 @@ async def test_plugin_propagates_login_identifier_username_to_auth_login() -> No
     config = LitestarAuthConfig[ExampleUser, UUID](
         backends=[backend],
         session_maker=cast(
-            "async_sessionmaker[AsyncSession]",
+            "Any",
             assert_structural_session_factory(DummySessionMaker()),
         ),
         user_model=ExampleUser,
@@ -577,7 +577,7 @@ async def test_plugin_respects_public_mount_paths_and_dependency_keys() -> None:
     config = LitestarAuthConfig[ExampleUser, UUID](
         backends=[backend],
         session_maker=cast(
-            "async_sessionmaker[AsyncSession]",
+            "Any",
             assert_structural_session_factory(DummySessionMaker()),
         ),
         user_model=ExampleUser,
@@ -842,7 +842,7 @@ def test_database_token_preset_mounts_primary_auth_routes_without_startup_sessio
         ),
         user_model=ExampleUser,
         user_manager_class=PluginUserManager,
-        session_maker=cast("async_sessionmaker[AsyncSession]", session_maker),
+        session_maker=cast("Any", session_maker),
         user_db_factory=lambda _session: InMemoryUserDatabase([]),
         user_manager_security=UserManagerSecurity[UUID](
             verification_token_secret="verify-secret-12345678901234567890",

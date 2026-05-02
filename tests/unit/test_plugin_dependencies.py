@@ -26,16 +26,6 @@ from litestar_auth._plugin import (
     OAUTH_ASSOCIATE_USER_MANAGER_DEPENDENCY_KEY,
 )
 from litestar_auth._plugin.config import LitestarAuthConfig, OAuthConfig
-from litestar_auth._plugin.dependencies import (
-    DependencyProviders,
-    _make_backends_dependency_provider,
-    _make_db_session_provide,
-    _make_user_manager_dependency_provider,
-    authorization_error_handler,
-    client_exception_handler,
-    register_dependencies,
-    register_exception_handlers,
-)
 from litestar_auth._plugin.scoped_session import SessionFactory
 from litestar_auth.authentication.backend import AuthenticationBackend
 from litestar_auth.authentication.transport.bearer import BearerTransport
@@ -50,6 +40,15 @@ from tests.integration.test_orchestrator import (
     InMemoryUserDatabase,
     PluginUserManager,
 )
+
+DependencyProviders = dependencies_module.DependencyProviders
+_make_backends_dependency_provider = dependencies_module._make_backends_dependency_provider
+_make_db_session_provide = dependencies_module._make_db_session_provide
+_make_user_manager_dependency_provider = dependencies_module._make_user_manager_dependency_provider
+authorization_error_handler = dependencies_module.authorization_error_handler
+client_exception_handler = dependencies_module.client_exception_handler
+register_dependencies = dependencies_module.register_dependencies
+register_exception_handlers = dependencies_module.register_exception_handlers
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker

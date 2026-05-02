@@ -19,21 +19,20 @@ from litestar_auth.controllers._users_helpers import (
 )
 from litestar_auth.controllers._utils import _require_account_state
 from litestar_auth.controllers.auth import INVALID_CREDENTIALS_DETAIL
-from litestar_auth.controllers.users import (
-    UsersControllerConfig,
-    _build_safe_self_update,
-    _users_get_user_or_404,
-    _users_handle_change_password,
-    _users_handle_delete_user,
-    _users_handle_get_me,
-    _users_handle_update_me,
-    _UsersControllerContext,
-    create_users_controller,
-)
 from litestar_auth.exceptions import AuthorizationError, ErrorCode, UnverifiedUserError
 from litestar_auth.ratelimit import EndpointRateLimit, InMemoryRateLimiter
 from litestar_auth.ratelimit._helpers import _safe_key_part
 from litestar_auth.schemas import AdminUserUpdate, ChangePasswordRequest, UserRead, UserUpdate
+
+UsersControllerConfig = users_module.UsersControllerConfig
+_build_safe_self_update = users_module._build_safe_self_update
+_users_get_user_or_404 = users_module._users_get_user_or_404
+_users_handle_change_password = users_module._users_handle_change_password
+_users_handle_delete_user = users_module._users_handle_delete_user
+_users_handle_get_me = users_module._users_handle_get_me
+_users_handle_update_me = users_module._users_handle_update_me
+_UsersControllerContext = users_module._UsersControllerContext
+create_users_controller = users_module.create_users_controller
 
 pytestmark = pytest.mark.unit
 HTTP_FORBIDDEN = 403

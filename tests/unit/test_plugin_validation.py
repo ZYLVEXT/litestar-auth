@@ -22,38 +22,7 @@ import litestar_auth._plugin.security_policy as plugin_security_policy_module
 import litestar_auth._plugin.startup as startup_module
 import litestar_auth._plugin.user_manager_builder as user_manager_builder_module
 import litestar_auth._plugin.validation as validation_module
-from litestar_auth._plugin.config import (
-    DEFAULT_CSRF_COOKIE_NAME,
-    DatabaseTokenAuthConfig,
-    LitestarAuthConfig,
-    OAuthConfig,
-    TotpConfig,
-)
 from litestar_auth._plugin.middleware import build_csrf_config, get_cookie_transports
-from litestar_auth._plugin.rate_limit import iter_rate_limit_endpoints
-from litestar_auth._plugin.startup import (
-    has_configured_oauth_providers,
-    has_configured_oauth_providers_for,
-    require_oauth_token_encryption_for_configured_providers,
-    require_secure_oauth_redirect_in_production,
-    warn_insecure_plugin_startup_defaults,
-)
-from litestar_auth._plugin.validation import (
-    _validate_backend_strategy_security,
-    _validate_totp_encryption_key,
-    _validate_totp_pending_secret_config,
-    validate_config,
-    validate_cookie_auth_config,
-    validate_password_validator_config,
-    validate_rate_limit_config,
-    validate_session_maker_or_external_db_session,
-    validate_superuser_role_name_config,
-    validate_totp_config,
-    validate_totp_sub_config,
-    validate_totp_user_model_protocol,
-    validate_user_manager_security_config,
-    validate_user_model_login_identifier_fields,
-)
 from litestar_auth.authentication.backend import AuthenticationBackend
 from litestar_auth.authentication.strategy.db import DatabaseTokenStrategy
 from litestar_auth.authentication.transport.bearer import BearerTransport
@@ -78,6 +47,34 @@ from tests.integration.test_orchestrator import (
     InMemoryUserDatabase,
     PluginUserManager,
 )
+
+DEFAULT_CSRF_COOKIE_NAME = plugin_config_module.DEFAULT_CSRF_COOKIE_NAME
+DatabaseTokenAuthConfig = plugin_config_module.DatabaseTokenAuthConfig
+LitestarAuthConfig = plugin_config_module.LitestarAuthConfig
+OAuthConfig = plugin_config_module.OAuthConfig
+TotpConfig = plugin_config_module.TotpConfig
+iter_rate_limit_endpoints = rate_limit_module.iter_rate_limit_endpoints
+has_configured_oauth_providers = startup_module.has_configured_oauth_providers
+has_configured_oauth_providers_for = startup_module.has_configured_oauth_providers_for
+require_oauth_token_encryption_for_configured_providers = (
+    startup_module.require_oauth_token_encryption_for_configured_providers
+)
+require_secure_oauth_redirect_in_production = startup_module.require_secure_oauth_redirect_in_production
+warn_insecure_plugin_startup_defaults = startup_module.warn_insecure_plugin_startup_defaults
+_validate_backend_strategy_security = validation_module._validate_backend_strategy_security
+_validate_totp_encryption_key = validation_module._validate_totp_encryption_key
+_validate_totp_pending_secret_config = validation_module._validate_totp_pending_secret_config
+validate_config = validation_module.validate_config
+validate_cookie_auth_config = validation_module.validate_cookie_auth_config
+validate_password_validator_config = validation_module.validate_password_validator_config
+validate_rate_limit_config = validation_module.validate_rate_limit_config
+validate_session_maker_or_external_db_session = validation_module.validate_session_maker_or_external_db_session
+validate_superuser_role_name_config = validation_module.validate_superuser_role_name_config
+validate_totp_config = validation_module.validate_totp_config
+validate_totp_sub_config = validation_module.validate_totp_sub_config
+validate_totp_user_model_protocol = validation_module.validate_totp_user_model_protocol
+validate_user_manager_security_config = validation_module.validate_user_manager_security_config
+validate_user_model_login_identifier_fields = validation_module.validate_user_model_login_identifier_fields
 
 if TYPE_CHECKING:
     from collections.abc import Callable

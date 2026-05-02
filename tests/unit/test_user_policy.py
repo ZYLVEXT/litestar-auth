@@ -59,7 +59,7 @@ def _make_policy(
 
 
 def test_normalize_email_strips_and_lowercases() -> None:
-    """Whitespace and mixed case are normalised."""
+    """Whitespace and mixed case are normalized."""
     assert _user_policy_cls().normalize_email("  Alice@Example.COM  ") == "alice@example.com"
 
 
@@ -82,7 +82,7 @@ def test_normalize_email_rejects_exceeding_max_length() -> None:
 
 
 def test_normalize_username_strips_and_lowercases() -> None:
-    """Whitespace and mixed case are normalised."""
+    """Whitespace and mixed case are normalized."""
     assert _user_policy_cls().normalize_username_lookup("  Alice  ") == "alice"
 
 

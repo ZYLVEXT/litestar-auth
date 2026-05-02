@@ -143,7 +143,8 @@ async def test_redis_token_strategy_read_token_none_and_invalidate_all_tokens(
 
     user = _DummyUser(uuid4())
     token = await strategy.write_token(user)
-    assert await async_fakeredis.delete(strategy._user_index_key(str(user.id))) == 1
+    deleted_index_count = await async_fakeredis.delete(strategy._user_index_key(str(user.id)))
+    assert deleted_index_count == 1
 
     await strategy.invalidate_all_tokens(user)
 
@@ -182,7 +183,8 @@ async def test_redis_token_strategy_invalidate_all_tokens_without_index_leaves_f
     user = _DummyUser(uuid4())
     other_user = _DummyUser(uuid4())
     token = await strategy.write_token(other_user)
-    assert await async_fakeredis.delete(strategy._user_index_key(str(other_user.id))) == 1
+    deleted_index_count = await async_fakeredis.delete(strategy._user_index_key(str(other_user.id)))
+    assert deleted_index_count == 1
 
     await strategy.invalidate_all_tokens(user)
 

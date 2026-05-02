@@ -316,13 +316,15 @@ def _create_login_oauth_controller[UP: UserProtocol[Any], ID](
 def create_oauth_controller[UP: UserProtocol[Any], ID](
     *,
     config: OAuthControllerConfig[UP, ID],
-) -> type[Controller]: ...  # pragma: no cover
+) -> type[Controller]:
+    pass  # pragma: no cover
 
 
 @overload
 def create_oauth_controller[UP: UserProtocol[Any], ID](
     **options: Unpack[OAuthControllerOptions[UP, ID]],
-) -> type[Controller]: ...  # pragma: no cover
+) -> type[Controller]:
+    pass  # pragma: no cover
 
 
 def create_oauth_controller[UP: UserProtocol[Any], ID](
@@ -415,13 +417,15 @@ def _create_oauth_associate_controller[UP: UserProtocol[Any], ID](
 def create_oauth_associate_controller[UP: UserProtocol[Any], ID](
     *,
     config: OAuthAssociateControllerConfig[UP, ID],
-) -> type[Controller]: ...  # pragma: no cover
+) -> type[Controller]:
+    pass  # pragma: no cover
 
 
 @overload
 def create_oauth_associate_controller[UP: UserProtocol[Any], ID](
     **options: Unpack[OAuthAssociateControllerOptions[UP, ID]],
-) -> type[Controller]: ...  # pragma: no cover
+) -> type[Controller]:
+    pass  # pragma: no cover
 
 
 def create_oauth_associate_controller[UP: UserProtocol[Any], ID](

@@ -1,8 +1,15 @@
 name: litestar-auth CodeQL
 
+query-filters:
+  # Ruff enforces unused imports with Python 3.12+ syntax support; CodeQL's
+  # py/unused-import currently reports false positives for postponed
+  # annotations and PEP 695 generic bases used throughout the library.
+  - exclude:
+      id: py/unused-import
+
 paths:
   - litestar_auth
 
 paths-ignore:
-  - tests
-  - docs
+  - tests/**
+  - docs/**

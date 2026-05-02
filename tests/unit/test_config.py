@@ -13,18 +13,17 @@ import litestar_auth.config as config_module
 import litestar_auth.controllers.totp as totp_controller_module
 import litestar_auth.manager as manager_module
 import litestar_auth.totp_flow as totp_flow_module
-from litestar_auth.config import (
-    JWT_ACCESS_TOKEN_AUDIENCE,
-    MINIMUM_SECRET_LENGTH,
-    RESET_PASSWORD_TOKEN_AUDIENCE,
-    TOTP_ENROLL_AUDIENCE,
-    TOTP_PENDING_AUDIENCE,
-    VERIFY_TOKEN_AUDIENCE,
-    _resolve_token_secret,
-    resolve_trusted_proxy_setting,
-    validate_secret_length,
-)
 from litestar_auth.exceptions import ConfigurationError
+
+JWT_ACCESS_TOKEN_AUDIENCE = config_module.JWT_ACCESS_TOKEN_AUDIENCE
+MINIMUM_SECRET_LENGTH = config_module.MINIMUM_SECRET_LENGTH
+RESET_PASSWORD_TOKEN_AUDIENCE = config_module.RESET_PASSWORD_TOKEN_AUDIENCE
+TOTP_ENROLL_AUDIENCE = config_module.TOTP_ENROLL_AUDIENCE
+TOTP_PENDING_AUDIENCE = config_module.TOTP_PENDING_AUDIENCE
+VERIFY_TOKEN_AUDIENCE = config_module.VERIFY_TOKEN_AUDIENCE
+_resolve_token_secret = config_module._resolve_token_secret
+resolve_trusted_proxy_setting = config_module.resolve_trusted_proxy_setting
+validate_secret_length = config_module.validate_secret_length
 
 pytestmark = pytest.mark.unit
 GENERATED_SECRET_HEX_LENGTH = 64

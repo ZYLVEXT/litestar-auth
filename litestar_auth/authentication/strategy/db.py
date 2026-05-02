@@ -81,10 +81,12 @@ class DatabaseTokenStrategy[UP: UserProtocol[Any], ID](Strategy[UP, ID], Refresh
     """Stateful strategy that persists opaque tokens in the database."""
 
     @overload
-    def __init__(self, *, config: DatabaseTokenStrategyConfig) -> None: ...  # pragma: no cover
+    def __init__(self, *, config: DatabaseTokenStrategyConfig) -> None:
+        pass  # pragma: no cover
 
     @overload
-    def __init__(self, **options: Unpack[DatabaseTokenStrategyOptions]) -> None: ...  # pragma: no cover
+    def __init__(self, **options: Unpack[DatabaseTokenStrategyOptions]) -> None:
+        pass  # pragma: no cover
 
     def __init__(
         self,

@@ -55,7 +55,7 @@ if TYPE_CHECKING:
     from litestar_auth._plugin.config import UserManagerFactory
     from litestar_auth.db.base import BaseUserStore
     from litestar_auth.password import PasswordHelper
-    from litestar_auth.types import LoginIdentifier, StrategyProtocol
+    from litestar_auth.types import LoginIdentifier
 
 pytestmark = [pytest.mark.integration]
 
@@ -594,7 +594,7 @@ def _build_config[UP: SQLAlchemyUserModelProtocol](  # noqa: PLR0913
     backend = AuthenticationBackend[UP, UUID](
         name="primary",
         transport=BearerTransport(),
-        strategy=cast("StrategyProtocol[UP, UUID]", _RoleCLITokenStrategy[UP]()),
+        strategy=cast("Any", _RoleCLITokenStrategy[UP]()),
     )
     if session_maker is None:
         if engine is None:

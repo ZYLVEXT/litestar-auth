@@ -17,26 +17,12 @@ import litestar_auth._plugin._oauth_controllers as oauth_controllers_module
 import litestar_auth._plugin._totp_controller as totp_controllers_module
 import litestar_auth._plugin.controllers as controllers_module
 import litestar_auth._plugin.totp_route_handlers as totp_route_handlers_module
-from litestar_auth._plugin._oauth_controllers import (
-    _append_oauth_associate_controllers,
-    _append_oauth_login_controllers,
-)
 from litestar_auth._plugin.config import (
     OAUTH_ASSOCIATE_USER_MANAGER_DEPENDENCY_KEY,
     LitestarAuthConfig,
     OAuthConfig,
     TotpConfig,
     resolve_backend_inventory,
-)
-from litestar_auth._plugin.controllers import (
-    _append_optional_feature_controllers,
-    _build_auth_controllers,
-    build_controllers,
-    build_totp_controller,
-    register_schema_kwargs,
-    totp_backend,
-    user_read_schema_kwargs,
-    users_schema_kwargs,
 )
 from litestar_auth.authentication.backend import AuthenticationBackend
 from litestar_auth.authentication.transport.bearer import BearerTransport
@@ -49,6 +35,17 @@ from tests.integration.test_orchestrator import (
     InMemoryUserDatabase,
     PluginUserManager,
 )
+
+_append_oauth_associate_controllers = oauth_controllers_module._append_oauth_associate_controllers
+_append_oauth_login_controllers = oauth_controllers_module._append_oauth_login_controllers
+_append_optional_feature_controllers = controllers_module._append_optional_feature_controllers
+_build_auth_controllers = controllers_module._build_auth_controllers
+build_controllers = controllers_module.build_controllers
+build_totp_controller = controllers_module.build_totp_controller
+register_schema_kwargs = controllers_module.register_schema_kwargs
+totp_backend = controllers_module.totp_backend
+user_read_schema_kwargs = controllers_module.user_read_schema_kwargs
+users_schema_kwargs = controllers_module.users_schema_kwargs
 
 pytestmark = pytest.mark.unit
 OAUTH_FLOW_COOKIE_SECRET = "oauth-flow-cookie-secret-1234567890"

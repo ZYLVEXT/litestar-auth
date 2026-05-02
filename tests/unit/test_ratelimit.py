@@ -25,6 +25,7 @@ import litestar_auth.ratelimit._config as ratelimit_config_module
 import litestar_auth.ratelimit._endpoint as ratelimit_endpoint_module
 import litestar_auth.ratelimit._helpers as ratelimit_helpers_module
 import litestar_auth.ratelimit._slot_catalog as ratelimit_slot_catalog_module
+from litestar_auth._clock import read_clock
 from litestar_auth.authentication.strategy.redis import RedisClientProtocol as RedisTokenClientProtocol
 from litestar_auth.authentication.strategy.redis import RedisTokenStrategy, RedisTokenStrategyConfig
 from litestar_auth.contrib.redis import (
@@ -34,19 +35,18 @@ from litestar_auth.contrib.redis import (
     RedisAuthRateLimitTier,
 )
 from litestar_auth.exceptions import ConfigurationError
-from litestar_auth.ratelimit import (
-    DEFAULT_KEY_PREFIX,
-    AuthRateLimitConfig,
-    AuthRateLimitEndpointGroup,
-    AuthRateLimitSlot,
-    EndpointRateLimit,
-    InMemoryRateLimiter,
-    RateLimiterBackend,
-    RedisClientProtocol,
-    RedisRateLimiter,
-    SharedRateLimitConfigOptions,
-)
 from tests._helpers import cast_fakeredis
+
+DEFAULT_KEY_PREFIX = ratelimit_module.DEFAULT_KEY_PREFIX
+AuthRateLimitConfig = ratelimit_module.AuthRateLimitConfig
+AuthRateLimitEndpointGroup = ratelimit_module.AuthRateLimitEndpointGroup
+AuthRateLimitSlot = ratelimit_module.AuthRateLimitSlot
+EndpointRateLimit = ratelimit_module.EndpointRateLimit
+InMemoryRateLimiter = ratelimit_module.InMemoryRateLimiter
+RateLimiterBackend = ratelimit_module.RateLimiterBackend
+RedisClientProtocol = ratelimit_module.RedisClientProtocol
+RedisRateLimiter = ratelimit_module.RedisRateLimiter
+SharedRateLimitConfigOptions = ratelimit_module.SharedRateLimitConfigOptions
 
 pytestmark = pytest.mark.unit
 
@@ -149,6 +149,12 @@ class FakeClock:
         self.now += seconds
 
 
+def test_read_clock_rejects_non_callable_clock() -> None:
+    """Clock helper rejects invalid injectable clocks before use."""
+    with pytest.raises(TypeError, match="clock must be callable"):
+        read_clock(cast("Any", object()))
+
+
 @dataclass(slots=True)
 class ClientStub:
     """Minimal client object carrying a host value."""
@@ -214,15 +220,13 @@ def test_auth_rate_limit_config_exposes_stable_endpoint_slots() -> None:
 def test_auth_rate_limit_identifier_helpers_stay_aligned_with_public_builder_contract() -> None:
     """Default recipe metadata stays aligned with the public enum builder contract."""
     group_identifiers = get_args(ratelimit_module.AuthRateLimitEndpointGroup.__value__)
+    catalog = ratelimit_slot_catalog_module._build_auth_rate_limit_endpoint_catalog()
 
     assert tuple(field.name for field in fields(AuthRateLimitConfig)) == AUTH_RATE_LIMIT_SLOT_VALUES
-    assert AUTH_RATE_LIMIT_SLOT_IDENTIFIERS == ratelimit_slot_catalog_module._AUTH_RATE_LIMIT_ENDPOINT_SLOTS
+    assert catalog.slots == AUTH_RATE_LIMIT_SLOT_IDENTIFIERS
     assert group_identifiers == AUTH_RATE_LIMIT_GROUP_IDENTIFIERS
-    assert frozenset(group_identifiers) == ratelimit_slot_catalog_module._AUTH_RATE_LIMIT_ENDPOINT_GROUPS
-    assert (
-        ratelimit_slot_catalog_module._AUTH_RATE_LIMIT_ENDPOINT_SLOTS_BY_GROUP
-        == AUTH_RATE_LIMIT_SLOT_IDENTIFIERS_BY_GROUP
-    )
+    assert frozenset(group_identifiers) == catalog.groups
+    assert catalog.slots_by_group == AUTH_RATE_LIMIT_SLOT_IDENTIFIERS_BY_GROUP
 
 
 def test_auth_rate_limit_slot_enum_stays_aligned_with_public_inventory() -> None:
@@ -347,18 +351,15 @@ def test_endpoint_rate_limit_annotations_are_runtime_resolvable() -> None:
 def test_auth_rate_limit_default_recipes_cover_supported_slots_scopes_groups_and_namespaces() -> None:
     """Default auth rate-limit recipes cover the supported slot inventory."""
     recipes = ratelimit_slot_catalog_module._AUTH_RATE_LIMIT_ENDPOINT_RECIPES
-    catalog = ratelimit_slot_catalog_module._AUTH_RATE_LIMIT_ENDPOINT_CATALOG
+    catalog = ratelimit_slot_catalog_module._build_auth_rate_limit_endpoint_catalog()
 
     assert tuple(recipe.slot for recipe in recipes) == tuple(field.name for field in fields(AuthRateLimitConfig))
-    assert tuple(ratelimit_slot_catalog_module._AUTH_RATE_LIMIT_ENDPOINT_RECIPES_BY_SLOT) == tuple(
-        field.name for field in fields(AuthRateLimitConfig)
-    )
+    assert tuple(catalog.recipes_by_slot) == tuple(field.name for field in fields(AuthRateLimitConfig))
     assert catalog.recipes == recipes
-    assert catalog.recipes_by_slot == ratelimit_slot_catalog_module._AUTH_RATE_LIMIT_ENDPOINT_RECIPES_BY_SLOT
-    assert catalog.slots == ratelimit_slot_catalog_module._AUTH_RATE_LIMIT_ENDPOINT_SLOTS
-    assert catalog.slot_set == ratelimit_slot_catalog_module._AUTH_RATE_LIMIT_ENDPOINT_SLOT_SET
-    assert catalog.slots_by_group == ratelimit_slot_catalog_module._AUTH_RATE_LIMIT_ENDPOINT_SLOTS_BY_GROUP
-    assert catalog.groups == ratelimit_slot_catalog_module._AUTH_RATE_LIMIT_ENDPOINT_GROUPS
+    assert catalog.slots == tuple(field.name for field in fields(AuthRateLimitConfig))
+    assert catalog.slot_set == frozenset(catalog.slots)
+    assert catalog.slots_by_group == AUTH_RATE_LIMIT_SLOT_IDENTIFIERS_BY_GROUP
+    assert catalog.groups == frozenset(AUTH_RATE_LIMIT_GROUP_IDENTIFIERS)
     assert {recipe.slot: recipe.default_scope for recipe in recipes} == {
         "login": "ip_email",
         "change_password": "ip_email",
@@ -410,16 +411,14 @@ def test_auth_rate_limit_default_recipes_cover_supported_slots_scopes_groups_and
 def test_auth_rate_limit_slot_catalog_module_executes_standalone() -> None:
     """The extracted slot catalog can initialize without importing the config module."""
     module_globals = runpy.run_path(str(Path(ratelimit_slot_catalog_module.__file__).resolve()))
-    catalog = module_globals["_AUTH_RATE_LIMIT_ENDPOINT_CATALOG"]
-    slots = module_globals["_AUTH_RATE_LIMIT_ENDPOINT_SLOTS"]
+    catalog = module_globals["_build_auth_rate_limit_endpoint_catalog"]()
 
-    assert tuple(slot.value for slot in slots) == AUTH_RATE_LIMIT_SLOT_VALUES
-    assert catalog.slots == slots
+    assert tuple(slot.value for slot in catalog.slots) == AUTH_RATE_LIMIT_SLOT_VALUES
 
 
 def test_auth_rate_limit_catalog_query_helpers_respect_slot_order_and_disablement() -> None:
     """Builder slot selection stays ordered and respects disablement."""
-    catalog = ratelimit_slot_catalog_module._AUTH_RATE_LIMIT_ENDPOINT_CATALOG
+    catalog = ratelimit_slot_catalog_module._build_auth_rate_limit_endpoint_catalog()
     enabled_slots = catalog.resolve_enabled_slots(
         (AuthRateLimitSlot.LOGIN, AuthRateLimitSlot.REFRESH, AuthRateLimitSlot.TOTP_VERIFY),
     )
@@ -1247,15 +1246,11 @@ def test_auth_rate_limit_config_import_check_rejects_slot_alignment_drift() -> N
 
 def test_auth_rate_limit_default_recipe_helpers_are_not_reexported_from_public_module() -> None:
     """Default recipe helpers are not re-exported from the public module."""
-    assert hasattr(ratelimit_slot_catalog_module, "_AUTH_RATE_LIMIT_ENDPOINT_CATALOG")
     assert hasattr(ratelimit_slot_catalog_module, "_AUTH_RATE_LIMIT_ENDPOINT_RECIPES")
-    assert hasattr(ratelimit_slot_catalog_module, "_AUTH_RATE_LIMIT_ENDPOINT_RECIPES_BY_SLOT")
-    assert "_AUTH_RATE_LIMIT_ENDPOINT_CATALOG" not in ratelimit_module.__all__
+    assert "_build_auth_rate_limit_endpoint_catalog" not in ratelimit_module.__all__
     assert "_AUTH_RATE_LIMIT_ENDPOINT_RECIPES" not in ratelimit_module.__all__
-    assert "_AUTH_RATE_LIMIT_ENDPOINT_RECIPES_BY_SLOT" not in ratelimit_module.__all__
-    assert not hasattr(ratelimit_module, "_AUTH_RATE_LIMIT_ENDPOINT_CATALOG")
+    assert not hasattr(ratelimit_module, "_build_auth_rate_limit_endpoint_catalog")
     assert not hasattr(ratelimit_module, "_AUTH_RATE_LIMIT_ENDPOINT_RECIPES")
-    assert not hasattr(ratelimit_module, "_AUTH_RATE_LIMIT_ENDPOINT_RECIPES_BY_SLOT")
 
 
 async def test_endpoint_rate_limit_shared_backend_preserves_namespace_and_scope_per_slot() -> None:
@@ -1413,7 +1408,8 @@ async def test_ratelimit_protocol_stubs_behave_as_type_contracts() -> None:
     assert pipeline_protocol.incr(dummy, "counter") is None
     assert pipeline_protocol.expire(dummy, "counter", 60) is None
     assert await pipeline_protocol.execute(dummy) is None
-    assert await client_protocol.delete(dummy, "key") is None
+    delete_result = await client_protocol.delete(dummy, "key")
+    assert delete_result is None
     assert await client_protocol.eval(dummy, "return 1", 1, "key") is None
     assert property_getter is not None
     assert property_getter(dummy) is None

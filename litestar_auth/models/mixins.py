@@ -56,7 +56,8 @@ class OAuthAccountMixin:
         setattr(cls, _OAUTH_EVENTS_REGISTERED_ATTR, True)
 
     @declared_attr.directive
-    def __table_args__(cls) -> tuple[UniqueConstraint]:  # noqa: N805, PLW3201
+    @classmethod
+    def __table_args__(cls) -> tuple[UniqueConstraint]:  # noqa: PLW3201
         """Create the provider-identity uniqueness constraint for each subclass.
 
         Returns:
@@ -68,7 +69,8 @@ class OAuthAccountMixin:
         return (UniqueConstraint("oauth_name", "account_id", name=constraint_name),)
 
     @declared_attr
-    def user_id(cls) -> Mapped[uuid.UUID]:  # noqa: N805
+    @classmethod
+    def user_id(cls) -> Mapped[uuid.UUID]:
         """Map the foreign key to the configured user table.
 
         Returns:
@@ -90,7 +92,8 @@ class OAuthAccountMixin:
     """OAuth provider refresh token. Fernet-encrypted at rest when configured."""
 
     @declared_attr
-    def user(cls) -> Mapped[Any]:  # noqa: N805
+    @classmethod
+    def user(cls) -> Mapped[Any]:
         """Map the relationship back to the configured user model.
 
         Returns:

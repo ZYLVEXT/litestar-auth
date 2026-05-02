@@ -63,14 +63,16 @@ class LitestarAuthMiddleware[UP: UserProtocol[Any], ID](AbstractAuthenticationMi
     """Resolve request users through an authenticator built with the request-scoped DB session."""
 
     @overload
-    def __init__(self, app: ASGIApp, *, config: LitestarAuthMiddlewareConfig[UP, ID]) -> None: ...  # pragma: no cover
+    def __init__(self, app: ASGIApp, *, config: LitestarAuthMiddlewareConfig[UP, ID]) -> None:
+        pass  # pragma: no cover
 
     @overload
     def __init__(  # pragma: no cover
         self,
         app: ASGIApp,
         **options: Unpack[LitestarAuthMiddlewareOptions[UP, ID]],
-    ) -> None: ...
+    ) -> None:
+        pass
 
     def __init__(
         self,

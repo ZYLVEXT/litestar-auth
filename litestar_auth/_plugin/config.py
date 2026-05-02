@@ -13,7 +13,7 @@ from litestar_auth._manager.construction import ManagerConstructorInputs
 from litestar_auth._plugin import _hooks as _plugin_hooks
 from litestar_auth._plugin import backend_inventory as _backend_inventory
 from litestar_auth._plugin import feature_configs as _feature_configs
-from litestar_auth._plugin.scoped_session import SessionFactory
+from litestar_auth._plugin.scoped_session import SessionFactory  # noqa: TC001
 from litestar_auth._plugin.security_policy import (
     _describe_totp_secret_storage_policy,
     _PluginSecurityNotice,
@@ -40,7 +40,6 @@ if TYPE_CHECKING:
     from litestar_auth.ratelimit import AuthRateLimitConfig
 
 type UserDatabaseFactory[UP: UserProtocol[Any], ID] = Callable[[AsyncSession], BaseUserStore[UP, ID]]
-_SESSION_FACTORY_CONTRACT = SessionFactory
 
 DEFAULT_CONFIG_DEPENDENCY_KEY = "litestar_auth_config"
 DEFAULT_USER_MANAGER_DEPENDENCY_KEY = "litestar_auth_user_manager"
@@ -150,7 +149,8 @@ class PasswordValidatorFactory[UP: UserProtocol[Any], ID](Protocol):
         self,
         config: LitestarAuthConfig[UP, ID],
         /,
-    ) -> Callable[[str], None] | None: ...  # pragma: no cover
+    ) -> Callable[[str], None] | None:
+        pass  # pragma: no cover
 
 
 class UserManagerFactory[UP: UserProtocol[Any], ID](Protocol):
@@ -171,7 +171,8 @@ class UserManagerFactory[UP: UserProtocol[Any], ID](Protocol):
         user_db: BaseUserStore[UP, ID],
         config: LitestarAuthConfig[UP, ID],
         backends: tuple[object, ...] = (),
-    ) -> BaseUserManager[UP, ID]: ...  # pragma: no cover
+    ) -> BaseUserManager[UP, ID]:
+        pass  # pragma: no cover
 
 
 @dataclass(slots=True)
