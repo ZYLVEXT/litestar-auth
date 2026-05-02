@@ -1,4 +1,4 @@
-## Unreleased
+## 2.3.0 (2026-05-02)
 
 ### Added
 - **`CookieTransportConfig`** — typed cookie transport settings object for
