@@ -320,24 +320,24 @@ class UserAuthRelationshipMixin:
         *,
         lazy: str | None = None,
         foreign_keys: str | None = None,
-    ) -> object | None:
+    ) -> Mapped[list[Any]]:
         """Build a configured user-side relationship when the target is enabled.
 
         Returns:
             The relationship descriptor, or ``None`` when the target is disabled.
         """
         if target is None:
-            return None
+            return cast("Mapped[list[Any]]", None)
 
         relationship_kwargs: dict[str, Any] = {"back_populates": _USER_RELATIONSHIP_NAME}
         if lazy is not None:
             relationship_kwargs["lazy"] = lazy
         if foreign_keys is not None:
             relationship_kwargs["foreign_keys"] = foreign_keys
-        return relationship(target, **relationship_kwargs)
+        return cast("Mapped[list[Any]]", relationship(target, **relationship_kwargs))
 
     @declared_attr
-    def access_tokens(cls):  # noqa: ANN202, N805
+    def access_tokens(cls) -> Mapped[list[Any]]:  # noqa: N805
         """Map the inverse side of the configured access-token model when enabled.
 
         Returns:
@@ -349,7 +349,7 @@ class UserAuthRelationshipMixin:
         )
 
     @declared_attr
-    def refresh_tokens(cls):  # noqa: ANN202, N805
+    def refresh_tokens(cls) -> Mapped[list[Any]]:  # noqa: N805
         """Map the inverse side of the configured refresh-token model when enabled.
 
         Returns:
@@ -361,7 +361,7 @@ class UserAuthRelationshipMixin:
         )
 
     @declared_attr
-    def oauth_accounts(cls):  # noqa: ANN202, N805
+    def oauth_accounts(cls) -> Mapped[list[Any]]:  # noqa: N805
         """Map the inverse side of the configured OAuth-account model when enabled.
 
         Returns:

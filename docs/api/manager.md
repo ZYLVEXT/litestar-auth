@@ -20,7 +20,8 @@ typed `security=UserManagerSecurity(...)` bundle only. Pair that with `PasswordH
 when you want the library's default Argon2-only hasher policy. Unsupported stored password hashes
 fail closed under that default, so rotate or reset those credentials before rollout. Use
 `PasswordHelper(password_hash=...)` only for deliberate application-owned custom pwdlib
-composition.
+composition. Use `BaseUserManagerConfig(...)` when direct construction code should pass the manager
+settings as one typed object instead of individual keyword arguments.
 
 Across plugin-managed and direct-manager flows, the stable account-state policy surface remains
 `require_account_state(user, *, require_verified=False)`. The built-in implementation delegates to

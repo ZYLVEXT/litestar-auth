@@ -44,6 +44,7 @@ This local example keeps logout revocation state in-process with `allow_inmemory
 
 from __future__ import annotations
 
+import os
 from datetime import timedelta
 from typing import Any
 from uuid import UUID
@@ -65,6 +66,10 @@ from litestar_auth.db.sqlalchemy import SQLAlchemyUserDatabase
 from litestar_auth.models import User
 
 DATABASE_URL = "sqlite+aiosqlite:///./quickstart.db"
+JWT_SECRET = os.environ["LITESTAR_AUTH_JWT_SECRET"]
+RESET_PASSWORD_TOKEN_SECRET = os.environ["LITESTAR_AUTH_RESET_PASSWORD_TOKEN_SECRET"]
+VERIFY_TOKEN_SECRET = os.environ["LITESTAR_AUTH_VERIFY_TOKEN_SECRET"]
+
 engine = create_async_engine(DATABASE_URL, echo=False)
 session_maker = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
 
@@ -90,7 +95,7 @@ backend = AuthenticationBackend[User, UUID](
     name="bearer",
     transport=BearerTransport(),
     strategy=JWTStrategy[User, UUID](
-        secret="replace-with-32+-char-jwt-secret",
+        secret=JWT_SECRET,
         lifetime=timedelta(minutes=15),
         subject_decoder=UUID,
         allow_inmemory_denylist=True,
@@ -104,8 +109,8 @@ config = LitestarAuthConfig[User, UUID](
     user_manager_class=UserManager,
     user_db_factory=lambda session: SQLAlchemyUserDatabase(session, user_model=User),
     user_manager_security=UserManagerSecurity(
-        verification_token_secret="replace-with-32+-char-secret-for-verify",
-        reset_password_token_secret="replace-with-32+-char-secret-for-reset",
+        verification_token_secret=VERIFY_TOKEN_SECRET,
+        reset_password_token_secret=RESET_PASSWORD_TOKEN_SECRET,
     ),
     include_users=False,
 )
@@ -116,6 +121,9 @@ app = Litestar(route_handlers=[protected], plugins=[LitestarAuth(config)])
 ## 4. Run the app
 
 ```bash
+export LITESTAR_AUTH_JWT_SECRET="$(python -c 'import secrets; print(secrets.token_urlsafe(32))')"
+export LITESTAR_AUTH_RESET_PASSWORD_TOKEN_SECRET="$(python -c 'import secrets; print(secrets.token_urlsafe(32))')"
+export LITESTAR_AUTH_VERIFY_TOKEN_SECRET="$(python -c 'import secrets; print(secrets.token_urlsafe(32))')"
 uv run python create_tables.py
 uv run litestar run --debug
 ```

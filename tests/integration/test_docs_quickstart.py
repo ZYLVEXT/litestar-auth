@@ -40,6 +40,9 @@ async def quickstart_module(
         The imported quickstart module and a Litestar app rebound to the isolated test database.
     """
     monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("LITESTAR_AUTH_JWT_SECRET", "test-jwt-secret-1234567890-1234567890")
+    monkeypatch.setenv("LITESTAR_AUTH_RESET_PASSWORD_TOKEN_SECRET", "test-reset-secret-1234567890-1234567890")
+    monkeypatch.setenv("LITESTAR_AUTH_VERIFY_TOKEN_SECRET", "test-verify-secret-1234567890-1234567890")
     sys.modules.pop(MODULE_NAME, None)
     monkeypatch.setitem(sys.modules, "aiosqlite", build_fake_aiosqlite_module())
 

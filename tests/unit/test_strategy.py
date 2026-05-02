@@ -15,9 +15,9 @@ import pytest
 from litestar_auth._jwt_headers import jwt_encode_headers
 from litestar_auth.authentication.strategy import base as strategy_base_module
 from litestar_auth.authentication.strategy.base import Strategy
-from litestar_auth.authentication.strategy.db import DatabaseTokenStrategy
-from litestar_auth.authentication.strategy.jwt import JWT_ACCESS_TOKEN_AUDIENCE, JWTStrategy
-from litestar_auth.authentication.strategy.redis import RedisTokenStrategy
+from litestar_auth.authentication.strategy.db import DatabaseTokenStrategy, DatabaseTokenStrategyConfig
+from litestar_auth.authentication.strategy.jwt import JWT_ACCESS_TOKEN_AUDIENCE, JWTStrategy, JWTStrategyConfig
+from litestar_auth.authentication.strategy.redis import RedisTokenStrategy, RedisTokenStrategyConfig
 from litestar_auth.config import validate_secret_length
 from litestar_auth.exceptions import ConfigurationError
 from tests._helpers import ExampleUser
@@ -324,6 +324,16 @@ def test_database_token_strategy_re_raises_secret_validation_error() -> None:
         DatabaseTokenStrategy(session=cast("Any", object()), token_hash_secret="short")
 
 
+def test_database_token_strategy_rejects_config_combined_with_keyword_options() -> None:
+    """DatabaseTokenStrategy accepts either a config object or keyword options."""
+    with pytest.raises(ValueError, match="DatabaseTokenStrategyConfig or keyword options"):
+        DatabaseTokenStrategy(
+            config=DatabaseTokenStrategyConfig(session=cast("Any", object()), token_hash_secret="x" * 40),
+            session=cast("Any", object()),
+            token_hash_secret="y" * 40,
+        )
+
+
 async def test_jwt_strategy_supports_custom_algorithm_and_lifetime() -> None:
     """JWTStrategy accepts non-default algorithms and custom lifetimes."""
     user = ExampleUser(id=uuid4())
@@ -549,6 +559,16 @@ def test_jwt_strategy_rejects_disallowed_algorithm() -> None:
         JWTStrategy(secret=DEFAULT_SECRET, algorithm="none", allow_inmemory_denylist=True)
 
 
+def test_jwt_strategy_rejects_config_combined_with_keyword_options() -> None:
+    """JWTStrategy accepts either a config object or keyword options."""
+    with pytest.raises(ValueError, match="JWTStrategyConfig or keyword options"):
+        JWTStrategy(
+            config=JWTStrategyConfig(secret=DEFAULT_SECRET, allow_inmemory_denylist=True),
+            secret=DEFAULT_SECRET,
+            allow_inmemory_denylist=True,
+        )
+
+
 def test_redis_strategy_lazy_import_error_message(monkeypatch: pytest.MonkeyPatch) -> None:
     """RedisTokenStrategy explains how to install the optional dependency."""
 
@@ -558,4 +578,6 @@ def test_redis_strategy_lazy_import_error_message(monkeypatch: pytest.MonkeyPatc
     monkeypatch.setattr(importlib, "import_module", fail_import)
 
     with pytest.raises(ImportError, match="Install litestar-auth\\[redis\\] to use RedisTokenStrategy"):
-        RedisTokenStrategy(redis=cast("Any", object()), token_hash_secret=REDIS_TOKEN_HASH_SECRET)
+        RedisTokenStrategy(
+            config=RedisTokenStrategyConfig(redis=cast("Any", object()), token_hash_secret=REDIS_TOKEN_HASH_SECRET),
+        )

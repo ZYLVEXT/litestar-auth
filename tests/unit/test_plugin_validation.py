@@ -15,11 +15,14 @@ import pytest
 from cryptography.fernet import Fernet
 from litestar.config.app import AppConfig
 
+import litestar_auth._plugin._redirect_validation as redirect_validation_module
 import litestar_auth._plugin.config as plugin_config_module
 import litestar_auth._plugin.middleware as middleware_module
+import litestar_auth._plugin.oauth_validation as oauth_validation_module
 import litestar_auth._plugin.rate_limit as rate_limit_module
 import litestar_auth._plugin.security_policy as plugin_security_policy_module
 import litestar_auth._plugin.startup as startup_module
+import litestar_auth._plugin.totp_validation as totp_validation_module
 import litestar_auth._plugin.user_manager_builder as user_manager_builder_module
 import litestar_auth._plugin.validation as validation_module
 from litestar_auth._plugin.config import (
@@ -242,8 +245,14 @@ class _ProcessLocalRateLimitBackend:
 
 def test_plugin_validation_module_executes_under_coverage() -> None:
     """Reload the module in-test so coverage records module-body execution."""
+    reloaded_oauth_module = importlib.reload(oauth_validation_module)
+    reloaded_totp_module = importlib.reload(totp_validation_module)
     reloaded_module = importlib.reload(validation_module)
 
+    assert reloaded_oauth_module.validate_oauth_route_registration_config.__name__ == (
+        "validate_oauth_route_registration_config"
+    )
+    assert reloaded_totp_module.validate_totp_config.__name__ == "validate_totp_config"
     assert reloaded_module.validate_config.__name__ == validation_module.validate_config.__name__
 
 
@@ -392,6 +401,32 @@ def test_plugin_startup_module_executes_under_coverage() -> None:
     assert reloaded_module.require_shared_rate_limit_backends_for_multiworker.__name__ == (
         startup_module.require_shared_rate_limit_backends_for_multiworker.__name__
     )
+
+
+def test_plugin_redirect_validation_module_executes_under_coverage() -> None:
+    """Reload the redirect validation module in-test so coverage records module-body execution."""
+    reloaded_module = importlib.reload(redirect_validation_module)
+
+    assert reloaded_module._is_loopback_host.__name__ == redirect_validation_module._is_loopback_host.__name__
+
+
+@pytest.mark.parametrize(
+    ("host", "expected"),
+    [
+        pytest.param("localhost", True, id="lowercase-localhost"),
+        pytest.param("LOCALHOST", False, id="uppercase-localhost-preserves-case-sensitivity"),
+        pytest.param("127.0.0.1", True, id="ipv4-loopback"),
+        pytest.param("::1", True, id="ipv6-loopback"),
+        pytest.param("192.0.2.1", False, id="non-loopback-ip"),
+        pytest.param("app.example.com", False, id="non-ip-host"),
+    ],
+)
+def test_redirect_validation_loopback_host_helper_preserves_startup_contract(
+    host: str,
+    expected: object,
+) -> None:
+    """The relocated plugin redirect helper preserves exact localhost and IP-loopback behavior."""
+    assert redirect_validation_module._is_loopback_host(host) is expected
 
 
 def test_warn_insecure_plugin_startup_defaults_emits_all_expected_security_warnings(

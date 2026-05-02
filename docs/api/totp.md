@@ -4,7 +4,7 @@ Time-based one-time passwords in **litestar-auth** split into a **low-level cryp
 
 **`litestar_auth.totp`** holds the primitives: generating secrets and otpauth URIs (**`generate_totp_secret`**, **`generate_totp_uri`**), verifying a code against a stored secret (**`verify_totp`**, **`verify_totp_with_store`**), the **`UsedTotpCodeStore`** protocol used to reject **replay** of successfully verified codes, and the **`TotpEnrollmentStore`** protocol used to keep pending enrollment secrets server-side. TOTP helpers support **SHA256** and **SHA512** algorithms. Built-in replay stores are **`InMemoryUsedTotpCodeStore`** (async-safe, single-process) and **`RedisUsedTotpCodeStore`** (shared Redis `SET … NX` semantics for multi-worker deployments). Built-in enrollment stores are **`InMemoryTotpEnrollmentStore`** (tests/single-process only) and **`RedisTotpEnrollmentStore`** (shared latest-only, single-use pending enrollment state). Choose stores that match your durability and scaling needs; production setups typically wire Redis through plugin configuration (see [TOTP guide](../guides/totp.md)).
 
-**`litestar_auth.totp_flow`** builds on those primitives for **pending-login** challenges: **`TotpLoginFlowService`** issues short-lived pending JWTs and finishes login after a valid TOTP code, using **`verify_totp_with_store`** and optional **`UsedTotpCodeStore`** / denylist wiring. That path complements the HTTP **`controllers`** enrollment and verify routes.
+**`litestar_auth.totp_flow`** builds on those primitives for **pending-login** challenges: **`TotpLoginFlowService`** issues short-lived pending JWTs and finishes login after a valid TOTP code, using **`verify_totp_with_store`** and optional **`UsedTotpCodeStore`** / denylist wiring. Construct it with **`TotpLoginFlowConfig`** so pending-token signing, replay stores, JTI denylisting, ID parsing, and testing posture are declared as one typed configuration object. That path complements the HTTP **`controllers`** enrollment and verify routes.
 
 **Enrollment** is intentionally **two-phase**: first **enable** (receive secret, otpauth material, and a short-lived enrollment token while the secret is kept in `TotpEnrollmentStore`, not in the JWT), then **confirm** with a valid code so the secret is stored—mirroring the route flow documented in [TOTP (two-factor authentication)](../guides/totp.md). **Verification** (during login or disable flows) checks the current code and relies on replay protection when configured.
 
@@ -27,6 +27,8 @@ rotation, and then retire old key ids. Legacy unversioned Fernet rows need an ex
 migration path because the stored value has no key id.
 
 ## Replay store contract (`UsedTotpCodeStore` and `UsedTotpMarkResult`)
+
+Call **`verify_totp_with_store(secret, code, replay=TotpReplayProtection(...))`** when a verified code must also be recorded in a replay store. **`TotpReplayProtection`** groups the user id, optional **`UsedTotpCodeStore`**, production replay requirement, and explicit testing override for that one verification attempt.
 
 Custom implementations of **`UsedTotpCodeStore`** must implement **`mark_used(user_id, counter, ttl_seconds)`** and return **`UsedTotpMarkResult`**, not a bare boolean. The result tells callers whether the `(user_id, counter)` pair was newly recorded and, when it was not, **why** verification should fail:
 

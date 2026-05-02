@@ -10,8 +10,10 @@ from __future__ import annotations
 from litestar_auth.contrib.redis._surface import (
     RedisAuthClientProtocol,
     RedisAuthPreset,
+    RedisAuthRateLimitConfigOptions,
     RedisAuthRateLimitTier,
     RedisTokenStrategy,
+    RedisTokenStrategyConfig,
     RedisTotpEnrollmentStore,
     RedisUsedTotpCodeStore,
 )
@@ -19,8 +21,10 @@ from litestar_auth.contrib.redis._surface import (
 __all__ = (
     "RedisAuthClientProtocol",
     "RedisAuthPreset",
+    "RedisAuthRateLimitConfigOptions",
     "RedisAuthRateLimitTier",
     "RedisTokenStrategy",
+    "RedisTokenStrategyConfig",
     "RedisTotpEnrollmentStore",
     "RedisUsedTotpCodeStore",
 )

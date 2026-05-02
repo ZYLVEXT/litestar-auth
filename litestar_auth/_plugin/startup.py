@@ -5,10 +5,10 @@ from __future__ import annotations
 import importlib
 import warnings
 from functools import cache
-from ipaddress import ip_address
 from typing import TYPE_CHECKING, Any, cast
 from urllib.parse import urlsplit
 
+from litestar_auth._plugin._redirect_validation import _is_loopback_host
 from litestar_auth._plugin.middleware import get_cookie_transports
 from litestar_auth._plugin.oauth_contract import _build_oauth_route_registration_contract
 from litestar_auth._plugin.rate_limit import iter_rate_limit_endpoint_items
@@ -52,20 +52,31 @@ def warn_insecure_plugin_startup_defaults(config: LitestarAuthConfig[Any, Any]) 
     if config.unsafe_testing:
         return
 
+    _warn_plaintext_oauth_token_storage(config)
+    _warn_jwt_revocation_policy(config)
+    _warn_process_local_rate_limit_backend(config)
+    _warn_process_local_totp_stores(config)
+    _warn_refresh_cookie_max_age_mismatch(config)
+
+
+def _warn_plaintext_oauth_token_storage(config: LitestarAuthConfig[Any, Any]) -> None:
     contract = _build_oauth_route_registration_contract(
         auth_path=config.auth_path,
         oauth_config=config.oauth_config,
     )
     oauth_config = config.oauth_config
-    if oauth_config is not None and contract.has_configured_providers and not oauth_config.has_oauth_token_encryption:
-        warnings.warn(
-            "OAuth providers are configured but OAuth token encryption key material is not set; "
-            "OAuth access and refresh tokens may be stored in plaintext at rest. "
-            "Configure a Fernet keyring via oauth_token_encryption_keyring for production.",
-            SecurityWarning,
-            stacklevel=2,
-        )
+    if oauth_config is None or not contract.has_configured_providers or oauth_config.has_oauth_token_encryption:
+        return
+    warnings.warn(
+        "OAuth providers are configured but OAuth token encryption key material is not set; "
+        "OAuth access and refresh tokens may be stored in plaintext at rest. "
+        "Configure a Fernet keyring via oauth_token_encryption_keyring for production.",
+        SecurityWarning,
+        stacklevel=2,
+    )
 
+
+def _warn_jwt_revocation_policy(config: LitestarAuthConfig[Any, Any]) -> None:
     for backend in config.resolve_startup_backends():
         strategy = getattr(backend, "strategy", None)
         notice = _describe_jwt_revocation_policy(getattr(strategy, "revocation_posture", None))
@@ -78,6 +89,8 @@ def warn_insecure_plugin_startup_defaults(config: LitestarAuthConfig[Any, Any]) 
             )
             break
 
+
+def _warn_process_local_rate_limit_backend(config: LitestarAuthConfig[Any, Any]) -> None:
     if _has_inmemory_rate_limit_backend(config):
         warnings.warn(
             "Auth rate limiting is configured with a process-local in-memory backend. "
@@ -87,40 +100,43 @@ def warn_insecure_plugin_startup_defaults(config: LitestarAuthConfig[Any, Any]) 
             stacklevel=2,
         )
 
-    totp_config = config.totp_config
-    if totp_config is not None:
-        from litestar_auth.authentication.strategy.jwt import (  # noqa: PLC0415
-            InMemoryJWTDenylistStore as CurrentInMemoryJWTDenylistStore,
-        )
-        from litestar_auth.totp import (  # noqa: PLC0415
-            InMemoryTotpEnrollmentStore as CurrentInMemoryTotpEnrollmentStore,
-        )
-        from litestar_auth.totp import (  # noqa: PLC0415
-            InMemoryUsedTotpCodeStore as CurrentInMemoryUsedTotpCodeStore,
-        )
 
-        if isinstance(totp_config.totp_used_tokens_store, CurrentInMemoryUsedTotpCodeStore):
-            warnings.warn(
-                "TOTP replay protection uses InMemoryUsedTotpCodeStore; used-code state is not "
-                "shared across workers. Use RedisUsedTotpCodeStore for production multi-worker deployments.",
-                SecurityWarning,
-                stacklevel=2,
-            )
-        if isinstance(totp_config.totp_enrollment_store, CurrentInMemoryTotpEnrollmentStore):
-            warnings.warn(
-                "TOTP enrollment state uses InMemoryTotpEnrollmentStore; pending enrollment secrets are not "
-                "shared across workers. Use RedisTotpEnrollmentStore for production multi-worker deployments.",
-                SecurityWarning,
-                stacklevel=2,
-            )
-        if isinstance(totp_config.totp_pending_jti_store, CurrentInMemoryJWTDenylistStore):
-            warnings.warn(
-                "TOTP pending-token replay protection uses InMemoryJWTDenylistStore; pending JTI state is not "
-                "shared across workers. Use RedisJWTDenylistStore for production multi-worker deployments.",
-                SecurityWarning,
-                stacklevel=2,
-            )
-    _warn_refresh_cookie_max_age_mismatch(config)
+def _warn_process_local_totp_stores(config: LitestarAuthConfig[Any, Any]) -> None:
+    totp_config = config.totp_config
+    if totp_config is None:
+        return
+
+    from litestar_auth.authentication.strategy.jwt import (  # noqa: PLC0415
+        InMemoryJWTDenylistStore as CurrentInMemoryJWTDenylistStore,
+    )
+    from litestar_auth.totp import (  # noqa: PLC0415
+        InMemoryTotpEnrollmentStore as CurrentInMemoryTotpEnrollmentStore,
+    )
+    from litestar_auth.totp import (  # noqa: PLC0415
+        InMemoryUsedTotpCodeStore as CurrentInMemoryUsedTotpCodeStore,
+    )
+
+    if isinstance(totp_config.totp_used_tokens_store, CurrentInMemoryUsedTotpCodeStore):
+        warnings.warn(
+            "TOTP replay protection uses InMemoryUsedTotpCodeStore; used-code state is not "
+            "shared across workers. Use RedisUsedTotpCodeStore for production multi-worker deployments.",
+            SecurityWarning,
+            stacklevel=2,
+        )
+    if isinstance(totp_config.totp_enrollment_store, CurrentInMemoryTotpEnrollmentStore):
+        warnings.warn(
+            "TOTP enrollment state uses InMemoryTotpEnrollmentStore; pending enrollment secrets are not "
+            "shared across workers. Use RedisTotpEnrollmentStore for production multi-worker deployments.",
+            SecurityWarning,
+            stacklevel=2,
+        )
+    if isinstance(totp_config.totp_pending_jti_store, CurrentInMemoryJWTDenylistStore):
+        warnings.warn(
+            "TOTP pending-token replay protection uses InMemoryJWTDenylistStore; pending JTI state is not "
+            "shared across workers. Use RedisJWTDenylistStore for production multi-worker deployments.",
+            SecurityWarning,
+            stacklevel=2,
+        )
 
 
 def require_oauth_token_encryption_for_configured_providers(
@@ -179,12 +195,7 @@ def require_secure_oauth_redirect_in_production(
     config: LitestarAuthConfig[Any, Any],
     app_config: AppConfig,
 ) -> None:
-    """Fail closed when plugin-owned OAuth redirects use insecure production origins.
-
-    Raises:
-        ConfigurationError: If plugin-owned OAuth routes use a non-HTTPS, loopback,
-            or malformed redirect origin outside explicit debug or testing overrides.
-    """
+    """Fail closed when plugin-owned OAuth redirects use insecure production origins."""
     if config.unsafe_testing or getattr(app_config, "debug", False):
         return
 
@@ -199,45 +210,54 @@ def require_secure_oauth_redirect_in_production(
         return
 
     parsed_redirect_base_url = urlsplit(redirect_base_url)
-    if parsed_redirect_base_url.scheme.lower() != "https":
-        msg = (
-            "Plugin-managed OAuth routes require oauth_redirect_base_url to use a public HTTPS origin in production. "
-            f"Received {redirect_base_url!r}. Use AppConfig(debug=True) or unsafe_testing=True only for explicit "
-            "local-development and test recipes."
-        )
-        raise ConfigurationError(msg)
-
-    host = parsed_redirect_base_url.hostname
-    if host is None or _is_loopback_host(host):
-        msg = (
-            "Plugin-managed OAuth routes require oauth_redirect_base_url to use a non-loopback public HTTPS origin "
-            f"in production. Received {redirect_base_url!r}. Use AppConfig(debug=True) or unsafe_testing=True only "
-            "for explicit local-development and test recipes."
-        )
-        raise ConfigurationError(msg)
-    if (
-        parsed_redirect_base_url.username is not None
-        or parsed_redirect_base_url.password is not None
-        or parsed_redirect_base_url.query
-        or parsed_redirect_base_url.fragment
-    ):
-        msg = (
-            "Plugin-managed OAuth routes require oauth_redirect_base_url to be a clean HTTPS callback base without "
-            "userinfo, query, or fragment components in production. "
-            f"Received {redirect_base_url!r}. Use AppConfig(debug=True) or unsafe_testing=True only for explicit "
-            "local-development and test recipes."
-        )
-        raise ConfigurationError(msg)
+    _require_https_oauth_redirect_base_url(redirect_base_url, parsed_redirect_base_url.scheme)
+    _require_public_oauth_redirect_host(redirect_base_url, parsed_redirect_base_url.hostname)
+    _require_clean_oauth_redirect_base_url(
+        redirect_base_url,
+        has_userinfo=parsed_redirect_base_url.username is not None or parsed_redirect_base_url.password is not None,
+        has_query=bool(parsed_redirect_base_url.query),
+        has_fragment=bool(parsed_redirect_base_url.fragment),
+    )
 
 
-def _is_loopback_host(host: str) -> bool:
-    """Return whether ``host`` is a localhost or loopback IP literal."""
-    if host == "localhost":
-        return True
-    try:
-        return ip_address(host).is_loopback
-    except ValueError:
-        return False
+def _require_https_oauth_redirect_base_url(redirect_base_url: str, scheme: str) -> None:
+    if scheme.lower() == "https":
+        return
+    msg = (
+        "Plugin-managed OAuth routes require oauth_redirect_base_url to use a public HTTPS origin in production. "
+        f"Received {redirect_base_url!r}. Use AppConfig(debug=True) or unsafe_testing=True only for explicit "
+        "local-development and test recipes."
+    )
+    raise ConfigurationError(msg)
+
+
+def _require_public_oauth_redirect_host(redirect_base_url: str, host: str | None) -> None:
+    if host is not None and not _is_loopback_host(host):
+        return
+    msg = (
+        "Plugin-managed OAuth routes require oauth_redirect_base_url to use a non-loopback public HTTPS origin "
+        f"in production. Received {redirect_base_url!r}. Use AppConfig(debug=True) or unsafe_testing=True only "
+        "for explicit local-development and test recipes."
+    )
+    raise ConfigurationError(msg)
+
+
+def _require_clean_oauth_redirect_base_url(
+    redirect_base_url: str,
+    *,
+    has_userinfo: bool,
+    has_query: bool,
+    has_fragment: bool,
+) -> None:
+    if not has_userinfo and not has_query and not has_fragment:
+        return
+    msg = (
+        "Plugin-managed OAuth routes require oauth_redirect_base_url to be a clean HTTPS callback base without "
+        "userinfo, query, or fragment components in production. "
+        f"Received {redirect_base_url!r}. Use AppConfig(debug=True) or unsafe_testing=True only for explicit "
+        "local-development and test recipes."
+    )
+    raise ConfigurationError(msg)
 
 
 def _has_inmemory_rate_limit_backend(config: LitestarAuthConfig[Any, Any]) -> bool:

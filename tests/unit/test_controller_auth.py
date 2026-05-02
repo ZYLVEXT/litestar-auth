@@ -23,10 +23,13 @@ from litestar_auth.authentication.transport.cookie import CookieTransport
 from litestar_auth.controllers.auth import (
     _LOGIN_EMAIL_MAX_LENGTH,
     _LOGIN_USERNAME_MAX_LENGTH,
+    AuthControllerConfig,
     LoginCredentials,
     _attach_refresh_token,
+    _AuthControllerSettings,
     _get_refresh_strategy,
     _make_auth_controller_context,
+    _resolve_cookie_transport,
     _resolve_login_identifier,
     create_auth_controller,
 )
@@ -97,6 +100,29 @@ def test_attach_refresh_token_with_non_mapping_content_replaces_payload() -> Non
     assert out is response
     assert out.content == {"refresh_token": "rt"}
     assert out.media_type == MediaType.JSON
+
+
+def test_resolve_cookie_transport_returns_cookie_transport() -> None:
+    """Cookie backends resolve to the concrete CookieTransport instance."""
+    transport = CookieTransport(cookie_name="auth")
+    backend = AuthenticationBackend(
+        name="test",
+        transport=transport,
+        strategy=cast("Any", _make_minimal_strategy()),
+    )
+
+    assert _resolve_cookie_transport(backend) is transport
+
+
+def test_resolve_cookie_transport_returns_none_for_non_cookie_transport() -> None:
+    """Non-cookie backends keep refresh-token attachment on the response body path."""
+    backend = AuthenticationBackend(
+        name="test",
+        transport=BearerTransport(),
+        strategy=cast("Any", _make_minimal_strategy()),
+    )
+
+    assert _resolve_cookie_transport(backend) is None
 
 
 def test_logout_guard_raises_not_authorized_when_no_credentials() -> None:
@@ -292,6 +318,32 @@ def test_create_auth_controller_accepts_manual_cookie_auth_with_external_csrf_co
     )
 
     assert controller_class.path == "/auth"
+
+
+def test_create_auth_controller_accepts_config_object() -> None:
+    """The public auth controller factory can receive settings as one typed config."""
+    backend = AuthenticationBackend(
+        name="bearer",
+        transport=BearerTransport(),
+        strategy=cast("Any", _make_minimal_strategy()),
+    )
+
+    controller_class = create_auth_controller(config=AuthControllerConfig(backend=backend, path="/session"))
+
+    assert controller_class.path == "/session"
+    assert controller_class.__name__ == "BearerAuthController"
+
+
+def test_create_auth_controller_rejects_config_combined_with_keyword_options() -> None:
+    """The auth controller factory accepts either config or keyword options."""
+    backend = AuthenticationBackend(
+        name="bearer",
+        transport=BearerTransport(),
+        strategy=cast("Any", _make_minimal_strategy()),
+    )
+
+    with pytest.raises(ValueError, match="AuthControllerConfig or keyword options"):
+        create_auth_controller(config=AuthControllerConfig(backend=backend), backend=backend)
 
 
 def test_create_auth_controller_accepts_explicit_insecure_cookie_auth_override() -> None:
@@ -594,13 +646,15 @@ async def test_login_rejects_invalid_identifier_before_authentication() -> None:
         strategy=cast("Any", _make_minimal_strategy()),
     )
     ctx = _make_auth_controller_context(
-        backend=backend,
-        rate_limit_config=None,
-        enable_refresh=False,
-        requires_verification=False,
-        login_identifier="email",
-        totp_pending_secret=None,
-        totp_pending_lifetime=timedelta(minutes=5),
+        _AuthControllerSettings(
+            backend=backend,
+            rate_limit_config=None,
+            enable_refresh=False,
+            requires_verification=False,
+            login_identifier="email",
+            totp_pending_secret=None,
+            totp_pending_lifetime=timedelta(minutes=5),
+        ),
     )
     request = MagicMock()
     user_manager = MagicMock()
@@ -634,13 +688,15 @@ async def test_login_returns_pending_token_when_totp_enabled() -> None:
         strategy=cast("Any", _make_minimal_strategy()),
     )
     ctx = _make_auth_controller_context(
-        backend=backend,
-        rate_limit_config=None,
-        enable_refresh=False,
-        requires_verification=False,
-        login_identifier="email",
-        totp_pending_secret="pending-secret-for-unit-tests-1234",
-        totp_pending_lifetime=timedelta(minutes=5),
+        _AuthControllerSettings(
+            backend=backend,
+            rate_limit_config=None,
+            enable_refresh=False,
+            requires_verification=False,
+            login_identifier="email",
+            totp_pending_secret="pending-secret-for-unit-tests-1234",
+            totp_pending_lifetime=timedelta(minutes=5),
+        ),
     )
     request = MagicMock()
     request.client.host = "testclient"
@@ -683,13 +739,15 @@ async def test_login_falls_back_to_full_login_when_totp_pending_token_is_not_iss
         strategy=cast("Any", _make_minimal_strategy()),
     )
     ctx = _make_auth_controller_context(
-        backend=backend,
-        rate_limit_config=None,
-        enable_refresh=False,
-        requires_verification=False,
-        login_identifier="email",
-        totp_pending_secret="pending-secret-for-unit-tests-1234",
-        totp_pending_lifetime=timedelta(minutes=5),
+        _AuthControllerSettings(
+            backend=backend,
+            rate_limit_config=None,
+            enable_refresh=False,
+            requires_verification=False,
+            login_identifier="email",
+            totp_pending_secret="pending-secret-for-unit-tests-1234",
+            totp_pending_lifetime=timedelta(minutes=5),
+        ),
     )
     request = MagicMock()
     request.client.host = "testclient"
@@ -757,13 +815,15 @@ async def test_refresh_rejects_invalid_token_and_increments_rate_limit() -> None
         strategy=cast("Any", _RefreshEnabledStrategy()),
     )
     ctx = _make_auth_controller_context(
-        backend=backend,
-        rate_limit_config=cast("Any", MagicMock(refresh=refresh_rate_limit)),
-        enable_refresh=True,
-        requires_verification=False,
-        login_identifier="email",
-        totp_pending_secret=None,
-        totp_pending_lifetime=timedelta(minutes=5),
+        _AuthControllerSettings(
+            backend=backend,
+            rate_limit_config=cast("Any", MagicMock(refresh=refresh_rate_limit)),
+            enable_refresh=True,
+            requires_verification=False,
+            login_identifier="email",
+            totp_pending_secret=None,
+            totp_pending_lifetime=timedelta(minutes=5),
+        ),
     )
     request = MagicMock()
 
@@ -824,13 +884,15 @@ async def test_refresh_success_returns_rotated_tokens_and_resets_rate_limit() ->
         strategy=cast("Any", _RefreshEnabledStrategy()),
     )
     ctx = _make_auth_controller_context(
-        backend=backend,
-        rate_limit_config=cast("Any", MagicMock(refresh=refresh_rate_limit)),
-        enable_refresh=True,
-        requires_verification=False,
-        login_identifier="email",
-        totp_pending_secret=None,
-        totp_pending_lifetime=timedelta(minutes=5),
+        _AuthControllerSettings(
+            backend=backend,
+            rate_limit_config=cast("Any", MagicMock(refresh=refresh_rate_limit)),
+            enable_refresh=True,
+            requires_verification=False,
+            login_identifier="email",
+            totp_pending_secret=None,
+            totp_pending_lifetime=timedelta(minutes=5),
+        ),
     )
     request = MagicMock()
     user_manager = MagicMock()
@@ -963,24 +1025,28 @@ def test_make_auth_controller_context_stores_login_identifier() -> None:
     backend = AuthenticationBackend(name="test", transport=transport, strategy=cast("Any", strategy))
 
     ctx_email = _make_auth_controller_context(
-        backend=backend,
-        rate_limit_config=None,
-        enable_refresh=False,
-        requires_verification=False,
-        login_identifier="email",
-        totp_pending_secret=None,
-        totp_pending_lifetime=timedelta(minutes=5),
+        _AuthControllerSettings(
+            backend=backend,
+            rate_limit_config=None,
+            enable_refresh=False,
+            requires_verification=False,
+            login_identifier="email",
+            totp_pending_secret=None,
+            totp_pending_lifetime=timedelta(minutes=5),
+        ),
     )
     assert ctx_email.login_identifier == "email"
 
     ctx_username = _make_auth_controller_context(
-        backend=backend,
-        rate_limit_config=None,
-        enable_refresh=False,
-        requires_verification=False,
-        login_identifier="username",
-        totp_pending_secret=None,
-        totp_pending_lifetime=timedelta(minutes=5),
+        _AuthControllerSettings(
+            backend=backend,
+            rate_limit_config=None,
+            enable_refresh=False,
+            requires_verification=False,
+            login_identifier="username",
+            totp_pending_secret=None,
+            totp_pending_lifetime=timedelta(minutes=5),
+        ),
     )
     assert ctx_username.login_identifier == "username"
 

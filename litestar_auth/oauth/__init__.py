@@ -23,11 +23,16 @@ if TYPE_CHECKING:
         OAuthEmailVerificationSyncClientProtocol,
         make_async_email_verification_client,
     )
-    from litestar_auth.oauth.router import create_provider_oauth_controller, load_httpx_oauth_client
+    from litestar_auth.oauth.router import (
+        ProviderOAuthControllerConfig,
+        create_provider_oauth_controller,
+        load_httpx_oauth_client,
+    )
 
 __all__ = (
     "OAuthEmailVerificationAsyncClientProtocol",
     "OAuthEmailVerificationSyncClientProtocol",
+    "ProviderOAuthControllerConfig",
     "create_provider_oauth_controller",
     "load_httpx_oauth_client",
     "make_async_email_verification_client",
@@ -46,6 +51,9 @@ def __getattr__(name: str) -> Callable[..., object]:
     if name == "create_provider_oauth_controller":
         router = import_module("litestar_auth.oauth.router")
         return router.create_provider_oauth_controller
+    if name == "ProviderOAuthControllerConfig":
+        router = import_module("litestar_auth.oauth.router")
+        return router.ProviderOAuthControllerConfig
     if name == "load_httpx_oauth_client":
         router = import_module("litestar_auth.oauth.router")
         return router.load_httpx_oauth_client

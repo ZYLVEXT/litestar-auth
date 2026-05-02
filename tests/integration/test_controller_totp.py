@@ -23,27 +23,38 @@ from litestar.exceptions import ClientException, NotAuthorizedException
 from litestar.middleware import DefineMiddleware
 from litestar.testing import AsyncTestClient
 
+import litestar_auth._optional_deps as optional_deps_module
+import litestar_auth._totp_enrollment as totp_enrollment_module
 import litestar_auth.controllers.totp as totp_controller_module
+import litestar_auth.controllers.totp_context as totp_context_module
+import litestar_auth.controllers.totp_contracts as totp_contracts_module
+import litestar_auth.controllers.totp_handlers as totp_handlers_module
+import litestar_auth.controllers.totp_routes as totp_routes_module
+import litestar_auth.controllers.totp_session_handlers as totp_session_handlers_module
 import litestar_auth.totp as _totp_mod
 from litestar_auth._plugin.config import DEFAULT_USER_MANAGER_DEPENDENCY_KEY, TotpConfig
-from litestar_auth._secrets_at_rest import decode_versioned_fernet_value
+from litestar_auth._secrets_at_rest import SecretAtRestError, decode_versioned_fernet_value
+from litestar_auth._totp_enrollment import (
+    _DEFAULT_TOTP_FERNET_KEY_ID,
+    _consume_enrollment_secret,
+    _decode_enrollment_token,
+    _EnrollmentTokenCipher,
+    _EnrollmentTokenIssueConfig,
+    _issue_enrollment_token,
+    _sign_enrollment_token,
+)
 from litestar_auth.authentication.authenticator import Authenticator
 from litestar_auth.authentication.backend import AuthenticationBackend
 from litestar_auth.authentication.middleware import LitestarAuthMiddleware
 from litestar_auth.authentication.strategy.jwt import InMemoryJWTDenylistStore
 from litestar_auth.authentication.transport.bearer import BearerTransport
+from litestar_auth.config import TOTP_ENROLL_AUDIENCE
 from litestar_auth.controllers import create_auth_controller, create_totp_controller
 from litestar_auth.controllers.auth import INVALID_CREDENTIALS_DETAIL, TOTP_PENDING_AUDIENCE
 from litestar_auth.controllers.totp import (
     INVALID_ENROLL_TOKEN_DETAIL,
     INVALID_TOTP_CODE_DETAIL,
     INVALID_TOTP_TOKEN_DETAIL,
-    TOTP_ENROLL_AUDIENCE,
-    _consume_enrollment_secret,
-    _decode_enrollment_token,
-    _EnrollmentTokenCipher,
-    _issue_enrollment_token,
-    _sign_enrollment_token,
     _totp_handle_confirm_enable,
     _totp_handle_disable,
     _totp_handle_enable,
@@ -52,7 +63,7 @@ from litestar_auth.controllers.totp import (
     _totp_resolve_pending_jti_store,
     _totp_validate_replay_and_password,
 )
-from litestar_auth.exceptions import ConfigurationError, ErrorCode, TokenError
+from litestar_auth.exceptions import ConfigurationError, ErrorCode, InactiveUserError, TokenError
 from litestar_auth.manager import ENCRYPTED_TOTP_SECRET_PREFIX, BaseUserManager, UserManagerSecurity
 from litestar_auth.password import PasswordHelper
 from litestar_auth.plugin import LitestarAuth, LitestarAuthConfig
@@ -84,7 +95,11 @@ TWO_CALLS = 2
 
 TOTP_PENDING_SECRET = "test-totp-pending-secret-thirty-two!"  # ≥ 32 bytes
 TOTP_SECRET_KEY = Fernet.generate_key().decode()
-_TEST_ENROLLMENT_CIPHER = _EnrollmentTokenCipher.from_key(TOTP_SECRET_KEY)
+_TEST_ENROLLMENT_CIPHER = _EnrollmentTokenCipher.from_keyring(
+    active_key_id=_DEFAULT_TOTP_FERNET_KEY_ID,
+    keys={_DEFAULT_TOTP_FERNET_KEY_ID: TOTP_SECRET_KEY},
+    legacy_single_key_id=_DEFAULT_TOTP_FERNET_KEY_ID,
+)
 PENDING_JTI_HEX_LENGTH = 32
 SHA256_HEX_LENGTH = 64
 _DEFAULT_USED_TOKENS_STORE = object()
@@ -269,24 +284,26 @@ def _build_direct_totp_context(
     )
     backend = AsyncMock()
     backend.login.return_value = {"access_token": "verified-token"}
-    ctx = totp_controller_module._TotpControllerContext(
-        backend=backend,
-        used_tokens_store=None,
-        require_replay_protection=require_replay_protection,
-        requires_verification=False,
-        totp_enable_requires_password=totp_enable_requires_password,
-        totp_issuer="Test App",
-        totp_algorithm="SHA256",
-        totp_rate_limit=cast("Any", rate_limit),
-        totp_pending_secret=TOTP_PENDING_SECRET,
-        totp_pending_require_client_binding=True,
-        totp_pending_client_binding_trusted_proxy=False,
-        totp_pending_client_binding_trusted_headers=("X-Forwarded-For",),
-        effective_pending_jti_store=cast("Any", effective_pending_jti_store),
-        id_parser=UUID,
-        unsafe_testing=False,
-        enrollment_token_cipher=_TEST_ENROLLMENT_CIPHER,
-        enrollment_store=InMemoryTotpEnrollmentStore(),
+    ctx = totp_controller_module._build_totp_controller_context(
+        totp_controller_module._TotpControllerContextSettings(
+            backend=backend,
+            used_tokens_store=None,
+            require_replay_protection=require_replay_protection,
+            requires_verification=False,
+            totp_enable_requires_password=totp_enable_requires_password,
+            totp_issuer="Test App",
+            totp_algorithm="SHA256",
+            totp_rate_limit=cast("Any", rate_limit),
+            totp_pending_secret=TOTP_PENDING_SECRET,
+            totp_pending_require_client_binding=True,
+            totp_pending_client_binding_trusted_proxy=False,
+            totp_pending_client_binding_trusted_headers=("X-Forwarded-For",),
+            effective_pending_jti_store=cast("Any", effective_pending_jti_store),
+            id_parser=UUID,
+            unsafe_testing=False,
+            enrollment_token_cipher=_TEST_ENROLLMENT_CIPHER,
+            enrollment_store=InMemoryTotpEnrollmentStore(),
+        ),
     )
     return ctx, rate_limit, backend
 
@@ -311,11 +328,29 @@ def app() -> tuple[Litestar, InMemoryUserDatabase]:
 
 def test_totp_controller_module_executes_under_coverage() -> None:
     """Reload the TOTP controller module so coverage records its module body."""
+    reloaded_contracts = importlib.reload(totp_contracts_module)
+    reloaded_context = importlib.reload(totp_context_module)
+    reloaded_handlers = importlib.reload(totp_handlers_module)
+    reloaded_session_handlers = importlib.reload(totp_session_handlers_module)
+    reloaded_routes = importlib.reload(totp_routes_module)
     reloaded_module = importlib.reload(totp_controller_module)
 
+    assert reloaded_contracts.TOTP_ENROLL_AUDIENCE == TOTP_ENROLL_AUDIENCE
+    assert reloaded_context._TotpControllerContext.__name__.endswith("Context")
+    assert reloaded_handlers._totp_handle_enable.__name__ == "_totp_handle_enable"
+    assert reloaded_session_handlers._totp_handle_verify.__name__ == "_totp_handle_verify"
+    assert reloaded_routes._create_totp_controller_type.__name__ == "_create_totp_controller_type"
     assert reloaded_module.TOTP_ENROLL_AUDIENCE == TOTP_ENROLL_AUDIENCE
     assert reloaded_module.TotpEnableRequest.__name__ == totp_controller_module.TotpEnableRequest.__name__
     assert reloaded_module.TotpUserManagerProtocol.__name__.endswith("Protocol")
+
+
+def test_totp_enrollment_module_executes_under_coverage() -> None:
+    """Reload the TOTP enrollment module so coverage records its module body."""
+    reloaded_module = importlib.reload(totp_enrollment_module)
+
+    assert reloaded_module._DEFAULT_TOTP_FERNET_KEY_ID == _DEFAULT_TOTP_FERNET_KEY_ID
+    assert reloaded_module._EnrollmentTokenCipher.__name__ == _EnrollmentTokenCipher.__name__
 
 
 def test_validate_replay_and_password_requires_replay_store_outside_testing() -> None:
@@ -511,10 +546,10 @@ def test_enrollment_cipher_reports_missing_cryptography(monkeypatch: pytest.Monk
             raise ImportError(msg)
         return importlib.import_module(module_name)
 
-    monkeypatch.setattr(totp_controller_module.importlib, "import_module", fail_import)
+    monkeypatch.setattr(optional_deps_module.importlib, "import_module", fail_import)
 
     with pytest.raises(ImportError, match=r"litestar-auth\[totp\]"):
-        totp_controller_module._load_cryptography_fernet()
+        totp_enrollment_module._load_cryptography_fernet()
 
 
 async def test_issue_and_consume_enrollment_token_round_trip_encrypted() -> None:
@@ -523,10 +558,12 @@ async def test_issue_and_consume_enrollment_token_round_trip_encrypted() -> None
     token = await _issue_enrollment_token(
         user_id="user-123",
         secret="totp-secret",
-        signing_key=TOTP_PENDING_SECRET,
-        cipher=_TEST_ENROLLMENT_CIPHER,
-        enrollment_store=enrollment_store,
-        lifetime_seconds=120,
+        config=_EnrollmentTokenIssueConfig(
+            signing_key=TOTP_PENDING_SECRET,
+            cipher=_TEST_ENROLLMENT_CIPHER,
+            enrollment_store=enrollment_store,
+            lifetime_seconds=120,
+        ),
     )
 
     payload = jwt.decode(
@@ -561,10 +598,12 @@ async def test_issue_and_consume_enrollment_token_round_trip_plaintext() -> None
     token = await _issue_enrollment_token(
         user_id="user-123",
         secret="totp-secret",
-        signing_key=TOTP_PENDING_SECRET,
-        cipher=None,
-        enrollment_store=enrollment_store,
-        lifetime_seconds=120,
+        config=_EnrollmentTokenIssueConfig(
+            signing_key=TOTP_PENDING_SECRET,
+            cipher=None,
+            enrollment_store=enrollment_store,
+            lifetime_seconds=120,
+        ),
     )
 
     payload = jwt.decode(
@@ -591,16 +630,18 @@ async def test_issue_enrollment_token_raises_when_store_rejects_write() -> None:
         await _issue_enrollment_token(
             user_id="user-123",
             secret="totp-secret",
-            signing_key=TOTP_PENDING_SECRET,
-            cipher=None,
-            enrollment_store=await _full_enrollment_store(),
+            config=_EnrollmentTokenIssueConfig(
+                signing_key=TOTP_PENDING_SECRET,
+                cipher=None,
+                enrollment_store=await _full_enrollment_store(),
+            ),
         )
 
 
 def test_decode_enrollment_secret_rejects_plain_encoding_when_cipher_is_active() -> None:
     """Cipher-enabled deployments reject plaintext server-side enrollment values."""
     assert (
-        totp_controller_module._decode_enrollment_secret(
+        totp_enrollment_module._decode_enrollment_secret(
             "totp-secret",
             cipher=_TEST_ENROLLMENT_CIPHER,
             encoding="plain",
@@ -642,14 +683,20 @@ def test_decode_enrollment_token_rejects_encoding_mismatch() -> None:
 
 async def test_consume_enrollment_token_rejects_wrong_cipher_key() -> None:
     """Enrollment state encrypted with another Fernet key cannot be consumed."""
-    other_cipher = _EnrollmentTokenCipher.from_key(Fernet.generate_key().decode())
+    other_cipher = _EnrollmentTokenCipher.from_keyring(
+        active_key_id=_DEFAULT_TOTP_FERNET_KEY_ID,
+        keys={_DEFAULT_TOTP_FERNET_KEY_ID: Fernet.generate_key().decode()},
+        legacy_single_key_id=_DEFAULT_TOTP_FERNET_KEY_ID,
+    )
     enrollment_store = InMemoryTotpEnrollmentStore()
     token = await _issue_enrollment_token(
         user_id="user-123",
         secret="totp-secret",
-        signing_key=TOTP_PENDING_SECRET,
-        cipher=other_cipher,
-        enrollment_store=enrollment_store,
+        config=_EnrollmentTokenIssueConfig(
+            signing_key=TOTP_PENDING_SECRET,
+            cipher=other_cipher,
+            enrollment_store=enrollment_store,
+        ),
     )
     claims = _decode_enrollment_token(
         token,
@@ -680,6 +727,26 @@ def test_enrollment_keyring_cipher_reads_non_active_key_values() -> None:
     assert stored.startswith("fernet:v1:old:")
     assert current_cipher.decrypt(stored) == "totp-secret"
     assert current_cipher.decrypt("fernet:v1:missing:ciphertext") is None
+
+
+def test_enrollment_single_key_cipher_reads_legacy_raw_fernet_values() -> None:
+    """Pending-enrollment state from the former single-key path remains readable."""
+    legacy_stored = Fernet(TOTP_SECRET_KEY.encode()).encrypt(b"totp-secret").decode()
+    current_stored = _TEST_ENROLLMENT_CIPHER.encrypt("totp-secret")
+
+    assert current_stored.startswith(f"fernet:v1:{_DEFAULT_TOTP_FERNET_KEY_ID}:")
+    assert _TEST_ENROLLMENT_CIPHER.decrypt(legacy_stored) == "totp-secret"
+    assert _TEST_ENROLLMENT_CIPHER.decrypt(current_stored) == "totp-secret"
+
+
+def test_enrollment_cipher_rejects_unknown_legacy_key_id() -> None:
+    """Legacy single-key fallback must reference the configured keyring."""
+    with pytest.raises(SecretAtRestError, match="Legacy single-key id"):
+        _EnrollmentTokenCipher.from_keyring(
+            active_key_id="current",
+            keys={"current": Fernet.generate_key().decode()},
+            legacy_single_key_id="missing",
+        )
 
 
 def test_decode_enrollment_token_rejects_invalid_jti() -> None:
@@ -754,7 +821,12 @@ def test_resolve_enrollment_store_handles_explicit_and_unsafe_testing_modes() ->
     configured_store = InMemoryTotpEnrollmentStore()
 
     assert _totp_resolve_enrollment_store(configured_store, unsafe_testing=False) is configured_store
-    assert isinstance(_totp_resolve_enrollment_store(None, unsafe_testing=True), InMemoryTotpEnrollmentStore)
+    fallback_store = _totp_resolve_enrollment_store(None, unsafe_testing=True)
+    # Compare by qualified type name so this assertion stays correct after sibling
+    # coverage tests reload the TOTP facade/store modules and the controller module
+    # rebinds ``InMemoryTotpEnrollmentStore`` to a fresh class object.
+    assert type(fallback_store).__module__ == "litestar_auth._totp_stores"
+    assert type(fallback_store).__qualname__ == "InMemoryTotpEnrollmentStore"
     with pytest.raises(ConfigurationError, match="totp_enrollment_store is required"):
         _totp_resolve_enrollment_store(None, unsafe_testing=False)
 
@@ -843,7 +915,7 @@ async def test_handle_enable_maps_enrollment_store_rejection_to_service_unavaila
     _app, user_db, _strategy, _user_manager = build_app()
     user = next(iter(user_db.users_by_id.values()))
     ctx, rate_limit, _backend = _build_direct_totp_context()
-    ctx.enrollment_store = await _full_enrollment_store()
+    ctx.enrollment.enrollment_store = await _full_enrollment_store()
     user_manager = SimpleNamespace(authenticate=AsyncMock(return_value=user))
 
     async def return_valid_payload(*_args: object, **_kwargs: object) -> object:
@@ -1765,9 +1837,11 @@ async def test_handle_confirm_enable_rejects_invalid_code_directly() -> None:
     enrollment_token = await _issue_enrollment_token(
         user_id=str(user.id),
         secret="totp-secret",
-        signing_key=TOTP_PENDING_SECRET,
-        cipher=_TEST_ENROLLMENT_CIPHER,
-        enrollment_store=ctx.enrollment_store,
+        config=_EnrollmentTokenIssueConfig(
+            signing_key=TOTP_PENDING_SECRET,
+            cipher=_TEST_ENROLLMENT_CIPHER,
+            enrollment_store=ctx.enrollment.enrollment_store,
+        ),
     )
 
     with pytest.raises(ClientException) as exc_info:
@@ -1792,9 +1866,11 @@ async def test_handle_confirm_enable_rolls_back_totp_secret_when_recovery_code_p
     enrollment_token = await _issue_enrollment_token(
         user_id=str(user.id),
         secret=secret,
-        signing_key=TOTP_PENDING_SECRET,
-        cipher=_TEST_ENROLLMENT_CIPHER,
-        enrollment_store=ctx.enrollment_store,
+        config=_EnrollmentTokenIssueConfig(
+            signing_key=TOTP_PENDING_SECRET,
+            cipher=_TEST_ENROLLMENT_CIPHER,
+            enrollment_store=ctx.enrollment.enrollment_store,
+        ),
     )
 
     class FailingRecoveryCodeManager:
@@ -1846,9 +1922,11 @@ async def test_handle_confirm_enable_logs_recovery_code_count_without_plaintext(
     enrollment_token = await _issue_enrollment_token(
         user_id=str(user.id),
         secret=secret,
-        signing_key=TOTP_PENDING_SECRET,
-        cipher=_TEST_ENROLLMENT_CIPHER,
-        enrollment_store=ctx.enrollment_store,
+        config=_EnrollmentTokenIssueConfig(
+            signing_key=TOTP_PENDING_SECRET,
+            cipher=_TEST_ENROLLMENT_CIPHER,
+            enrollment_store=ctx.enrollment.enrollment_store,
+        ),
     )
 
     class RecoveryCodeManager:
@@ -2297,6 +2375,59 @@ async def test_verify_account_state_failures_reset_without_incrementing_rate_lim
 
     assert rate_limiter_backend.increment.await_count == 0
     assert rate_limiter_backend.reset.await_count == 1
+
+
+async def test_verify_routes_through_manager_account_state_validator() -> None:
+    """`/verify` must invoke ``user_manager.require_account_state``.
+
+    Regression test for a HIGH-severity bypass that previously skipped the
+    manager-level account-state seam on the second-factor `/verify` step while
+    every other auth endpoint enforced it. The bypass meant apps that override
+    ``BaseUserManager.require_account_state`` to enforce manager-only state
+    (lockout flags, suspension, role-revocation) would silently miss those
+    checks during TOTP verify, even though attribute-level state was still
+    healthy.
+    """
+    app, user_db, _, user_manager = build_app(
+        account_state=AccountState(requires_verification=True, is_active=True, is_verified=True),
+    )
+
+    locked_user_ids: set[UUID] = set()
+    base_validator = user_manager.require_account_state
+
+    def manager_only_lockout(user: ExampleUser, *, require_verified: bool = False) -> None:
+        base_validator(user, require_verified=require_verified)
+        if user.id in locked_user_ids:
+            raise InactiveUserError
+
+    # ``setattr`` bypasses static-method-shape inference; instance-attribute shadowing
+    # of the bound class method is intentional here so the manager seam fires only for
+    # this test scope without monkey-patching the ``BaseUserManager`` class itself.
+    setattr(user_manager, "require_account_state", manager_only_lockout)  # noqa: B010
+
+    async with AsyncTestClient(app=app) as client:
+        secret = await _enable_totp_and_get_secret(client)
+        pending_token = (
+            await client.post(
+                "/auth/login",
+                json={"identifier": "user@example.com", "password": "correct-password"},
+            )
+        ).json()["pending_token"]
+
+        # Attribute-level state is healthy; the lock is visible only via the manager seam.
+        user = next(iter(user_db.users_by_id.values()))
+        assert user.is_active is True
+        assert user.is_verified is True
+        locked_user_ids.add(user.id)
+
+        resp = await client.post(
+            "/auth/2fa/verify",
+            json={"pending_token": pending_token, "code": _generate_totp_code(secret, _current_counter())},
+        )
+
+    assert resp.status_code == HTTP_BAD_REQUEST
+    assert resp.json()["detail"] == "The user account is inactive."
+    assert resp.json()["extra"]["code"] == ErrorCode.LOGIN_USER_INACTIVE.value
 
 
 async def test_verify_rejects_replayed_code_when_store_enabled() -> None:

@@ -41,8 +41,10 @@ from litestar_auth import (
     AuthenticationBackend,
     Authenticator,
     BaseUserManager,
+    BaseUserManagerConfig,
     BearerTransport,
     CookieTransport,
+    CookieTransportConfig,
     DatabaseTokenAuthConfig,
     ErrorCode,
     FernetKeyringConfig,
@@ -67,21 +69,44 @@ from litestar_auth import (
     is_superuser,
     is_verified,
 )
-from litestar_auth.authentication.strategy import DatabaseTokenStrategy, JWTStrategy, RedisTokenStrategy, Strategy
+from litestar_auth.authentication.strategy import (
+    DatabaseTokenStrategy,
+    DatabaseTokenStrategyConfig,
+    JWTStrategy,
+    JWTStrategyConfig,
+    RedisTokenStrategy,
+    RedisTokenStrategyConfig,
+    Strategy,
+)
 from litestar_auth.authentication.strategy.db_models import AccessToken, RefreshToken
-from litestar_auth.authentication.strategy.jwt import InMemoryJWTDenylistStore, JWTDenylistStore, RedisJWTDenylistStore
+from litestar_auth.authentication.strategy.jwt import (
+    InMemoryJWTDenylistStore,
+    JWTDenylistStore,
+    JWTRevocationPosture,
+    RedisJWTDenylistStore,
+)
 from litestar_auth.authentication.transport import Transport
 from litestar_auth.config import require_password_length
 from litestar_auth.contrib.redis import (
     RedisAuthClientProtocol,
     RedisAuthPreset,
+    RedisAuthRateLimitConfigOptions,
     RedisAuthRateLimitTier,
+)
+from litestar_auth.contrib.redis import (
+    RedisTokenStrategyConfig as ContribRedisTokenStrategyConfig,
 )
 from litestar_auth.contrib.redis import (
     RedisTotpEnrollmentStore as ContribRedisTotpEnrollmentStore,
 )
 from litestar_auth.controllers import (
+    AuthControllerConfig,
+    OAuthAssociateControllerConfig,
+    OAuthControllerConfig,
+    RegisterControllerConfig,
+    TotpControllerOptions,
     TotpUserManagerProtocol,
+    UsersControllerConfig,
     create_auth_controller,
     create_oauth_associate_controller,
     create_oauth_controller,
@@ -91,7 +116,7 @@ from litestar_auth.controllers import (
     create_users_controller,
     create_verify_controller,
 )
-from litestar_auth.db import BaseOAuthAccountStore, BaseUserStore
+from litestar_auth.db import BaseOAuthAccountStore, BaseUserStore, OAuthAccountData
 from litestar_auth.db.sqlalchemy import SQLAlchemyUserDatabase
 from litestar_auth.exceptions import (
     AuthenticationError,
@@ -132,6 +157,7 @@ from litestar_auth.ratelimit import (
     EndpointRateLimit,
     InMemoryRateLimiter,
     RedisRateLimiter,
+    SharedRateLimitConfigOptions,
 )
 from litestar_auth.schemas import AdminUserUpdate, ChangePasswordRequest, UserCreate, UserRead, UserUpdate
 from litestar_auth.totp import (
@@ -204,6 +230,7 @@ REMOVED_ROOT_SECONDARY_EXPORTS = (
     "AuthenticationError",
     "AuthorizationError",
     "ConfigurationError",
+    "DatabaseTokenStrategyConfig",
     "DatabaseTokenStrategy",
     "DbSessionDependencyKey",
     "EndpointRateLimit",
@@ -215,12 +242,14 @@ REMOVED_ROOT_SECONDARY_EXPORTS = (
     "InvalidResetPasswordTokenError",
     "InvalidVerifyTokenError",
     "JWTDenylistStore",
+    "JWTStrategyConfig",
     "JWTStrategy",
     "OAuthAccountAlreadyLinkedError",
     "PasswordHelper",
     "RedisJWTDenylistStore",
     "RedisRateLimiter",
     "RedisTokenStrategy",
+    "RedisTokenStrategyConfig",
     "RedisTotpEnrollmentStore",
     "RedisUsedTotpCodeStore",
     "RefreshToken",
@@ -326,12 +355,14 @@ def test_root_package_reexports_public_api() -> None:
     assert TotpUserProtocol is not None
     assert BearerTransport is not None
     assert CookieTransport is not None
+    assert CookieTransportConfig is not None
     assert DatabaseTokenAuthConfig is not None
     assert FernetKeyringConfig is not None
     assert OAuthConfig is not None
     assert OAuthProviderConfig is not None
     assert TotpConfig is not None
     assert BaseUserManager is not None
+    assert BaseUserManagerConfig is not None
     assert UserManagerSecurity is not None
     assert callable(is_authenticated)
     assert callable(is_active)
@@ -508,8 +539,11 @@ def test_models_and_strategy_modules_expose_documented_orm_setup_surface() -> No
     assert strategy_module.__all__ == (
         "DatabaseTokenModels",
         "DatabaseTokenStrategy",
+        "DatabaseTokenStrategyConfig",
         "JWTStrategy",
+        "JWTStrategyConfig",
         "RedisTokenStrategy",
+        "RedisTokenStrategyConfig",
         "RefreshableStrategy",
         "Strategy",
         "UserManagerProtocol",
@@ -548,9 +582,10 @@ def test_root_and_db_packages_keep_orm_symbols_on_documented_modules() -> None:
     assert not hasattr(litestar_auth, "User")
     assert not hasattr(litestar_auth, "OAuthAccount")
     assert not hasattr(litestar_auth, "SQLAlchemyUserDatabase")
-    assert db_module.__all__ == ("BaseOAuthAccountStore", "BaseUserStore")
+    assert db_module.__all__ == ("BaseOAuthAccountStore", "BaseUserStore", "OAuthAccountData")
     assert db_module.BaseOAuthAccountStore is BaseOAuthAccountStore
     assert db_module.BaseUserStore is BaseUserStore
+    assert db_module.OAuthAccountData is OAuthAccountData
     assert not hasattr(db_module, "SQLAlchemyUserDatabase")
 
 
@@ -577,7 +612,17 @@ def test_controller_factories_and_payloads_stay_canonical() -> None:
     assert TotpEnableResponse.__struct_fields__ == ("secret", "uri", "enrollment_token")
     assert TotpVerifyRequest.__struct_fields__ == ("pending_token", "code")
     assert TotpDisableRequest.__struct_fields__ == ("code",)
+    assert {
+        "backend",
+        "user_manager_dependency_key",
+        "totp_pending_secret",
+    } <= TotpControllerOptions.__annotations__.keys()
     assert TotpUserManagerProtocol is not None
+    assert AuthControllerConfig is not None
+    assert OAuthAssociateControllerConfig is not None
+    assert OAuthControllerConfig is not None
+    assert RegisterControllerConfig is not None
+    assert UsersControllerConfig is not None
     assert callable(create_auth_controller)
     assert callable(create_register_controller)
     assert callable(create_verify_controller)
@@ -615,14 +660,19 @@ def test_oauth_package_exposes_canonical_login_helper_and_not_advanced_controlle
     assert oauth_package_module.__all__ == (
         "OAuthEmailVerificationAsyncClientProtocol",
         "OAuthEmailVerificationSyncClientProtocol",
+        "ProviderOAuthControllerConfig",
         "create_provider_oauth_controller",
         "load_httpx_oauth_client",
         "make_async_email_verification_client",
     )
     assert oauth_package_module.OAuthEmailVerificationAsyncClientProtocol is OAuthEmailVerificationAsyncClientProtocol
     assert oauth_package_module.OAuthEmailVerificationSyncClientProtocol is OAuthEmailVerificationSyncClientProtocol
-    assert oauth_package_module.create_provider_oauth_controller is create_provider_oauth_controller
-    assert oauth_package_module.load_httpx_oauth_client is load_httpx_oauth_client
+    assert oauth_package_module.ProviderOAuthControllerConfig.__module__ == "litestar_auth.oauth.router"
+    assert oauth_package_module.ProviderOAuthControllerConfig.__name__ == "ProviderOAuthControllerConfig"
+    assert oauth_package_module.create_provider_oauth_controller.__module__ == "litestar_auth.oauth.router"
+    assert oauth_package_module.create_provider_oauth_controller.__name__ == create_provider_oauth_controller.__name__
+    assert oauth_package_module.load_httpx_oauth_client.__module__ == "litestar_auth.oauth.router"
+    assert oauth_package_module.load_httpx_oauth_client.__name__ == load_httpx_oauth_client.__name__
     assert oauth_package_module.make_async_email_verification_client is make_async_email_verification_client
     assert not hasattr(litestar_auth, "create_provider_oauth_controller")
     assert not hasattr(litestar_auth, "load_httpx_oauth_client")
@@ -664,8 +714,10 @@ def test_ratelimit_module_exposes_canonical_shared_backend_builder() -> None:
 
     config = current_config_class.from_shared_backend(
         credential_backend,
-        group_backends=group_backends,
-        disabled=disabled_slots,
+        options=SharedRateLimitConfigOptions(
+            group_backends=group_backends,
+            disabled=disabled_slots,
+        ),
     )
 
     assert current_config_class.__name__ == AuthRateLimitConfig.__name__
@@ -717,8 +769,8 @@ async def test_root_package_supports_documented_redis_migration_recipe_and_totp_
         return object()
 
     monkeypatch.setattr("litestar_auth.ratelimit._helpers._load_redis_asyncio", load_optional_redis)
-    monkeypatch.setattr(totp_module, "_load_used_totp_redis_asyncio", load_optional_redis)
-    monkeypatch.setattr(totp_module, "_load_enrollment_redis_asyncio", load_optional_redis)
+    monkeypatch.setattr(totp_module._totp_stores, "_load_used_totp_redis_asyncio", load_optional_redis)
+    monkeypatch.setattr(totp_module._totp_stores, "_load_enrollment_redis_asyncio", load_optional_redis)
 
     current_config_class = ratelimit_module.AuthRateLimitConfig
     current_endpoint_class = ratelimit_module.EndpointRateLimit
@@ -767,17 +819,19 @@ async def test_root_package_supports_documented_redis_migration_recipe_and_totp_
     )
     rate_limit_config = current_config_class.from_shared_backend(
         credential_backend,
-        group_backends={"refresh": refresh_backend, "totp": totp_backend},
-        disabled=AUTH_RATE_LIMIT_VERIFICATION_SLOT_IDENTIFIERS,
-        endpoint_overrides={
-            current_slot_enum.FORGOT_PASSWORD: forgot_password_override,
-            current_slot_enum.RESET_PASSWORD: reset_password_override,
-            current_slot_enum.TOTP_ENABLE: totp_enable_override,
-            current_slot_enum.TOTP_CONFIRM_ENABLE: totp_confirm_enable_override,
-            current_slot_enum.TOTP_VERIFY: totp_verify_override,
-            current_slot_enum.TOTP_DISABLE: totp_disable_override,
-            current_slot_enum.TOTP_REGENERATE_RECOVERY_CODES: totp_regenerate_override,
-        },
+        options=SharedRateLimitConfigOptions(
+            group_backends={"refresh": refresh_backend, "totp": totp_backend},
+            disabled=AUTH_RATE_LIMIT_VERIFICATION_SLOT_IDENTIFIERS,
+            endpoint_overrides={
+                current_slot_enum.FORGOT_PASSWORD: forgot_password_override,
+                current_slot_enum.RESET_PASSWORD: reset_password_override,
+                current_slot_enum.TOTP_ENABLE: totp_enable_override,
+                current_slot_enum.TOTP_CONFIRM_ENABLE: totp_confirm_enable_override,
+                current_slot_enum.TOTP_VERIFY: totp_verify_override,
+                current_slot_enum.TOTP_DISABLE: totp_disable_override,
+                current_slot_enum.TOTP_REGENERATE_RECOVERY_CODES: totp_regenerate_override,
+            },
+        ),
     )
     used_tokens_store = RedisUsedTotpCodeStore(redis=totp_redis)
     enrollment_store = RedisTotpEnrollmentStore(redis=totp_redis)
@@ -826,12 +880,16 @@ def test_contrib_redis_module_exposes_high_level_preset_without_root_reexport() 
     preset_hints = get_type_hints(RedisAuthPreset, include_extras=True)
 
     assert redis_contrib_module.RedisAuthPreset is RedisAuthPreset
+    assert redis_contrib_module.RedisAuthRateLimitConfigOptions is RedisAuthRateLimitConfigOptions
     assert redis_contrib_module.RedisAuthRateLimitTier is RedisAuthRateLimitTier
+    assert redis_contrib_module.RedisTokenStrategyConfig is ContribRedisTokenStrategyConfig
     assert redis_contrib_module.__all__ == (
         "RedisAuthClientProtocol",
         "RedisAuthPreset",
+        "RedisAuthRateLimitConfigOptions",
         "RedisAuthRateLimitTier",
         "RedisTokenStrategy",
+        "RedisTokenStrategyConfig",
         "RedisTotpEnrollmentStore",
         "RedisUsedTotpCodeStore",
     )
@@ -842,9 +900,11 @@ def test_contrib_redis_module_exposes_high_level_preset_without_root_reexport() 
     assert hasattr(RedisAuthPreset, "build_totp_pending_jti_store")
     assert "RedisAuthClientProtocol" not in __all__
     assert "RedisAuthPreset" not in __all__
+    assert "RedisAuthRateLimitConfigOptions" not in __all__
     assert "RedisAuthRateLimitTier" not in __all__
     assert not hasattr(litestar_auth, "RedisAuthClientProtocol")
     assert not hasattr(litestar_auth, "RedisAuthPreset")
+    assert not hasattr(litestar_auth, "RedisAuthRateLimitConfigOptions")
     assert not hasattr(litestar_auth, "RedisAuthRateLimitTier")
 
 
@@ -858,9 +918,9 @@ async def test_contrib_redis_preset_supports_documented_shared_client_recipe(
         return object()
 
     monkeypatch.setattr("litestar_auth.ratelimit._helpers._load_redis_asyncio", load_optional_redis)
-    monkeypatch.setattr(totp_module, "_load_used_totp_redis_asyncio", load_optional_redis)
-    monkeypatch.setattr(totp_module, "_load_enrollment_redis_asyncio", load_optional_redis)
-    monkeypatch.setattr("litestar_auth.authentication.strategy.jwt._load_redis_asyncio", load_optional_redis)
+    monkeypatch.setattr(totp_module._totp_stores, "_load_used_totp_redis_asyncio", load_optional_redis)
+    monkeypatch.setattr(totp_module._totp_stores, "_load_enrollment_redis_asyncio", load_optional_redis)
+    monkeypatch.setattr("litestar_auth.authentication.strategy._jwt_denylist._load_redis_asyncio", load_optional_redis)
     redis_client = cast_fakeredis(async_fakeredis, RedisAuthClientProtocol)
     assert isinstance(redis_client, RedisAuthClientProtocol)
     preset = RedisAuthPreset(
@@ -885,7 +945,7 @@ async def test_contrib_redis_preset_supports_documented_shared_client_recipe(
     )
 
     rate_limit_config = preset.build_rate_limit_config(
-        disabled=AUTH_RATE_LIMIT_VERIFICATION_SLOT_IDENTIFIERS,
+        options=RedisAuthRateLimitConfigOptions(disabled=AUTH_RATE_LIMIT_VERIFICATION_SLOT_IDENTIFIERS),
     )
     used_tokens_store = preset.build_totp_used_tokens_store()
     pending_jti_store = preset.build_totp_pending_jti_store()
@@ -987,7 +1047,13 @@ def test_ratelimit_identifier_contract_stays_on_the_public_ratelimit_module() ->
 def test_payload_module_is_authoritative_boundary_without_controllers_package_reexports() -> None:
     """Payloads resolve from the dedicated module without controllers-package aliases."""
     assert controllers_package.__all__ == (
+        "AuthControllerConfig",
+        "OAuthAssociateControllerConfig",
+        "OAuthControllerConfig",
+        "RegisterControllerConfig",
+        "TotpControllerOptions",
         "TotpUserManagerProtocol",
+        "UsersControllerConfig",
         "create_auth_controller",
         "create_oauth_associate_controller",
         "create_oauth_controller",
@@ -1063,8 +1129,10 @@ def test_root_package_all_excludes_private_symbols() -> None:
         "AuthenticationBackend",
         "Authenticator",
         "BaseUserManager",
+        "BaseUserManagerConfig",
         "BearerTransport",
         "CookieTransport",
+        "CookieTransportConfig",
         "DatabaseTokenAuthConfig",
         "ErrorCode",
         "FernetKeyringConfig",
@@ -1122,8 +1190,12 @@ def test_root_package_does_not_reexport_secondary_surfaces() -> None:
     assert Strategy is not None
     assert DbSessionDependencyKey is not None
     assert JWTStrategy is not None
+    assert JWTStrategyConfig is not None
     assert DatabaseTokenStrategy is not None
+    assert DatabaseTokenStrategyConfig is not None
     assert RedisTokenStrategy is not None
+    assert RedisTokenStrategyConfig is not None
+    assert ContribRedisTokenStrategyConfig is not None
     assert InMemoryRateLimiter is not None
     assert RedisRateLimiter is not None
     assert EndpointRateLimit is not None
@@ -1132,6 +1204,7 @@ def test_root_package_does_not_reexport_secondary_surfaces() -> None:
     assert InMemoryTotpEnrollmentStore is not None
     assert InMemoryUsedTotpCodeStore is not None
     assert JWTDenylistStore is not None
+    assert JWTRevocationPosture is not None
     assert RedisJWTDenylistStore is not None
     assert RedisTotpEnrollmentStore is not None
     assert RedisUsedTotpCodeStore is not None

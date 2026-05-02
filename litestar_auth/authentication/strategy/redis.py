@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
-import secrets
+from dataclasses import dataclass
 from datetime import timedelta
 from functools import partial
-from typing import TYPE_CHECKING, Protocol, cast, override
+from typing import TYPE_CHECKING, NotRequired, Protocol, Required, TypedDict, Unpack, cast, overload, override
 
 from litestar_auth._optional_deps import _require_redis_asyncio
 from litestar_auth._redis_protocols import (
@@ -16,7 +16,7 @@ from litestar_auth._redis_protocols import (
     RedisStoredValue,
     RedisValueReadClient,
 )
-from litestar_auth.authentication.strategy._opaque_tokens import build_opaque_token_key
+from litestar_auth.authentication.strategy._opaque_tokens import build_opaque_token_key, mint_opaque_token
 from litestar_auth.authentication.strategy.base import Strategy, UserManagerProtocol
 from litestar_auth.config import validate_secret_length
 from litestar_auth.exceptions import ConfigurationError
@@ -44,45 +44,71 @@ class RedisClientProtocol(
     """Minimal async Redis client interface used by the token strategy."""
 
 
+@dataclass(frozen=True, slots=True)
+class RedisTokenStrategyConfig[ID]:
+    """Configuration for :class:`RedisTokenStrategy`."""
+
+    redis: RedisClientProtocol
+    token_hash_secret: str
+    lifetime: timedelta = DEFAULT_LIFETIME
+    token_bytes: int = DEFAULT_TOKEN_BYTES
+    key_prefix: str = DEFAULT_KEY_PREFIX
+    subject_decoder: Callable[[str], ID] | None = None
+
+
+class RedisTokenStrategyOptions[ID](TypedDict):
+    """Keyword options accepted by :class:`RedisTokenStrategy`."""
+
+    redis: Required[RedisClientProtocol]
+    token_hash_secret: Required[str]
+    lifetime: NotRequired[timedelta]
+    token_bytes: NotRequired[int]
+    key_prefix: NotRequired[str]
+    subject_decoder: NotRequired[Callable[[str], ID] | None]
+
+
 class RedisTokenStrategy(Strategy[UP, ID]):
     """Stateful strategy that stores opaque tokens in Redis with TTL."""
 
-    def __init__(  # noqa: PLR0913
+    @overload
+    def __init__(self, *, config: RedisTokenStrategyConfig[ID]) -> None: ...  # pragma: no cover
+
+    @overload
+    def __init__(self, **options: Unpack[RedisTokenStrategyOptions[ID]]) -> None: ...  # pragma: no cover
+
+    def __init__(
         self,
         *,
-        redis: RedisClientProtocol,
-        token_hash_secret: str,
-        lifetime: timedelta = DEFAULT_LIFETIME,
-        token_bytes: int = DEFAULT_TOKEN_BYTES,
-        key_prefix: str = DEFAULT_KEY_PREFIX,
-        subject_decoder: Callable[[str], ID] | None = None,
+        config: RedisTokenStrategyConfig[ID] | None = None,
+        **options: Unpack[RedisTokenStrategyOptions[ID]],
     ) -> None:
         """Initialize the strategy.
 
         Args:
-            redis: Async Redis client compatible with ``redis.asyncio.Redis``.
-            token_hash_secret: High-entropy secret used for keyed token hashing (HMAC-SHA256).
-            lifetime: Token TTL applied to persisted keys.
-            token_bytes: Number of random bytes used for token generation.
-            key_prefix: Prefix used to namespace token keys in Redis.
-            subject_decoder: Optional callable that converts the stored user id
-                string into the identifier type expected by the user manager.
+            config: Redis strategy configuration.
+            **options: Individual Redis strategy settings. Do not combine with
+                ``config``.
 
         Raises:
+            ValueError: If ``config`` and keyword options are combined.
             ConfigurationError: When ``token_hash_secret`` fails minimum-length requirements.
         """
+        if config is not None and options:
+            msg = "Pass either RedisTokenStrategyConfig or keyword options, not both."
+            raise ValueError(msg)
+        settings = RedisTokenStrategyConfig(**options) if config is None else config
         _load_redis_asyncio()
         try:
-            validate_secret_length(token_hash_secret, label="RedisTokenStrategy token_hash_secret")
+            validate_secret_length(settings.token_hash_secret, label="RedisTokenStrategy token_hash_secret")
         except ConfigurationError as exc:
             raise ConfigurationError(str(exc)) from exc
 
-        self.redis = redis
-        self._token_hash_secret = token_hash_secret.encode()
-        self.lifetime = lifetime
-        self.token_bytes = token_bytes
-        self.key_prefix = key_prefix
-        self.subject_decoder = subject_decoder
+        self.redis = settings.redis
+        self._token_hash_secret = settings.token_hash_secret.encode()
+        self.lifetime = settings.lifetime
+        self.token_bytes = settings.token_bytes
+        self.key_prefix = settings.key_prefix
+        self.subject_decoder = settings.subject_decoder
 
     def _key(self, token: str) -> str:
         """Return the Redis key for a token."""
@@ -91,6 +117,14 @@ class RedisTokenStrategy(Strategy[UP, ID]):
             token_hash_secret=self._token_hash_secret,
             token=token,
         )
+
+    def _mint_token_key(self) -> tuple[str, str]:
+        """Return a raw token and its Redis storage key."""
+        token, token_digest = mint_opaque_token(
+            token_bytes=self.token_bytes,
+            token_hash_secret=self._token_hash_secret,
+        )
+        return token, f"{self.key_prefix}{token_digest}"
 
     def _user_index_key(self, user_id: str) -> str:
         """Return the Redis key for the per-user token index."""
@@ -147,8 +181,7 @@ class RedisTokenStrategy(Strategy[UP, ID]):
         Returns:
             Newly created opaque token string.
         """
-        token = secrets.token_urlsafe(self.token_bytes)
-        token_key = self._key(token)
+        token, token_key = self._mint_token_key()
         user_id = str(user.id)
         await self.redis.setex(token_key, self._ttl_seconds, user_id)
         index_key = self._user_index_key(user_id)

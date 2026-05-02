@@ -264,12 +264,14 @@ async def test_db_base_protocol_method_stubs_execute_under_coverage() -> None:
         await reloaded_module.BaseOAuthAccountStore.upsert_oauth_account(
             dummy_self,
             cast("Any", object()),
-            oauth_name="provider",
-            account_id="account",
-            account_email="user@example.com",
-            access_token="token",
-            expires_at=None,
-            refresh_token=None,
+            account=reloaded_module.OAuthAccountData(
+                oauth_name="provider",
+                account_id="account",
+                account_email="user@example.com",
+                access_token="token",
+                expires_at=None,
+                refresh_token=None,
+            ),
         )
         is None
     )

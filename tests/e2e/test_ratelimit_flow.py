@@ -24,7 +24,13 @@ from litestar_auth.manager import BaseUserManager, UserManagerSecurity
 from litestar_auth.models import User
 from litestar_auth.password import PasswordHelper
 from litestar_auth.plugin import LitestarAuth, LitestarAuthConfig
-from litestar_auth.ratelimit import AuthRateLimitConfig, AuthRateLimitSlot, EndpointRateLimit, InMemoryRateLimiter
+from litestar_auth.ratelimit import (
+    AuthRateLimitConfig,
+    AuthRateLimitSlot,
+    EndpointRateLimit,
+    InMemoryRateLimiter,
+    SharedRateLimitConfigOptions,
+)
 from litestar_auth.totp import (
     InMemoryTotpEnrollmentStore,
     InMemoryUsedTotpCodeStore,
@@ -129,53 +135,55 @@ def _build_app_with_trusted_proxy(
     rate_limit_config = (
         AuthRateLimitConfig.from_shared_backend(
             credential_rate_limiter,
-            group_backends={"totp": totp_rate_limiter, "refresh": refresh_rate_limiter},
-            disabled={AuthRateLimitSlot.VERIFY_TOKEN, AuthRateLimitSlot.REQUEST_VERIFY_TOKEN},
-            endpoint_overrides={
-                AuthRateLimitSlot.FORGOT_PASSWORD: EndpointRateLimit(
-                    backend=credential_rate_limiter,
-                    scope="ip_email",
-                    namespace="forgot_password",
-                    trusted_proxy=trusted_proxy,
-                ),
-                AuthRateLimitSlot.RESET_PASSWORD: EndpointRateLimit(
-                    backend=credential_rate_limiter,
-                    scope="ip",
-                    namespace="reset_password",
-                    trusted_proxy=trusted_proxy,
-                ),
-                AuthRateLimitSlot.TOTP_ENABLE: EndpointRateLimit(
-                    backend=totp_rate_limiter,
-                    scope="ip",
-                    namespace="totp_enable",
-                    trusted_proxy=trusted_proxy,
-                ),
-                AuthRateLimitSlot.TOTP_CONFIRM_ENABLE: EndpointRateLimit(
-                    backend=totp_rate_limiter,
-                    scope="ip",
-                    namespace="totp_confirm_enable",
-                    trusted_proxy=trusted_proxy,
-                ),
-                AuthRateLimitSlot.TOTP_VERIFY: EndpointRateLimit(
-                    backend=totp_rate_limiter,
-                    scope="ip",
-                    namespace="totp_verify",
-                    trusted_proxy=trusted_proxy,
-                ),
-                AuthRateLimitSlot.TOTP_DISABLE: EndpointRateLimit(
-                    backend=totp_rate_limiter,
-                    scope="ip",
-                    namespace="totp_disable",
-                    trusted_proxy=trusted_proxy,
-                ),
-                AuthRateLimitSlot.TOTP_REGENERATE_RECOVERY_CODES: EndpointRateLimit(
-                    backend=totp_rate_limiter,
-                    scope="ip",
-                    namespace="totp_regenerate_recovery_codes",
-                    trusted_proxy=trusted_proxy,
-                ),
-            },
-            trusted_proxy=trusted_proxy,
+            options=SharedRateLimitConfigOptions(
+                group_backends={"totp": totp_rate_limiter, "refresh": refresh_rate_limiter},
+                disabled={AuthRateLimitSlot.VERIFY_TOKEN, AuthRateLimitSlot.REQUEST_VERIFY_TOKEN},
+                endpoint_overrides={
+                    AuthRateLimitSlot.FORGOT_PASSWORD: EndpointRateLimit(
+                        backend=credential_rate_limiter,
+                        scope="ip_email",
+                        namespace="forgot_password",
+                        trusted_proxy=trusted_proxy,
+                    ),
+                    AuthRateLimitSlot.RESET_PASSWORD: EndpointRateLimit(
+                        backend=credential_rate_limiter,
+                        scope="ip",
+                        namespace="reset_password",
+                        trusted_proxy=trusted_proxy,
+                    ),
+                    AuthRateLimitSlot.TOTP_ENABLE: EndpointRateLimit(
+                        backend=totp_rate_limiter,
+                        scope="ip",
+                        namespace="totp_enable",
+                        trusted_proxy=trusted_proxy,
+                    ),
+                    AuthRateLimitSlot.TOTP_CONFIRM_ENABLE: EndpointRateLimit(
+                        backend=totp_rate_limiter,
+                        scope="ip",
+                        namespace="totp_confirm_enable",
+                        trusted_proxy=trusted_proxy,
+                    ),
+                    AuthRateLimitSlot.TOTP_VERIFY: EndpointRateLimit(
+                        backend=totp_rate_limiter,
+                        scope="ip",
+                        namespace="totp_verify",
+                        trusted_proxy=trusted_proxy,
+                    ),
+                    AuthRateLimitSlot.TOTP_DISABLE: EndpointRateLimit(
+                        backend=totp_rate_limiter,
+                        scope="ip",
+                        namespace="totp_disable",
+                        trusted_proxy=trusted_proxy,
+                    ),
+                    AuthRateLimitSlot.TOTP_REGENERATE_RECOVERY_CODES: EndpointRateLimit(
+                        backend=totp_rate_limiter,
+                        scope="ip",
+                        namespace="totp_regenerate_recovery_codes",
+                        trusted_proxy=trusted_proxy,
+                    ),
+                },
+                trusted_proxy=trusted_proxy,
+            ),
         )
         if shared_builder_recipe
         else AuthRateLimitConfig(

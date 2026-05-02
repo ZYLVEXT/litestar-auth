@@ -27,7 +27,8 @@ class _UserLifecycleManagerProtocol[UP, ID](
     reset_verification_on_email_change: bool
     backends: tuple[object, ...] | list[object]
 
-    def write_verify_token(self, user: UP) -> str: ...  # pragma: no cover
+    def write_verify_token(self, user: UP) -> str:  # pragma: no cover
+        """Issue a verification token for the supplied user."""
 
 
 @runtime_checkable

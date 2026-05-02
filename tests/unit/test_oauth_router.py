@@ -13,7 +13,11 @@ import pytest
 import litestar_auth.oauth.router as router_module
 from litestar_auth.authentication.backend import AuthenticationBackend
 from litestar_auth.oauth import router
-from litestar_auth.oauth.router import create_provider_oauth_controller, load_httpx_oauth_client
+from litestar_auth.oauth.router import (
+    ProviderOAuthControllerConfig,
+    create_provider_oauth_controller,
+    load_httpx_oauth_client,
+)
 from litestar_auth.types import UserProtocol
 
 if TYPE_CHECKING:
@@ -92,13 +96,14 @@ def test_oauth_router_module_executes_under_coverage() -> None:
     reloaded_module = importlib.reload(router_module)
 
     assert reloaded_module is router_module
+    assert reloaded_module.ProviderOAuthControllerConfig.__name__ == ProviderOAuthControllerConfig.__name__
     assert reloaded_module.create_provider_oauth_controller.__name__ == create_provider_oauth_controller.__name__
     assert reloaded_module.load_httpx_oauth_client.__name__ == load_httpx_oauth_client.__name__
 
 
 def test_create_provider_oauth_controller_exposes_typed_client_annotations() -> None:
     """Router helper advertises the explicit manual OAuth client contract."""
-    annotations = router_module.create_provider_oauth_controller.__annotations__
+    annotations = router_module.ProviderOAuthControllerConfig.__annotations__
     assert annotations["oauth_client"] == "OAuthClientProtocol | None"
     assert annotations["oauth_client_factory"] == "OAuthClientFactory | None"
 
@@ -252,18 +257,20 @@ def test_create_provider_oauth_controller_uses_factory_client(
         oauth_client_class_loader=router_module.load_httpx_oauth_client,
     )
     create_controller.assert_called_once_with(
-        provider_name="example",
-        backend=backend,
-        user_manager=user_manager,
-        oauth_client_adapter=oauth_client_adapter,
-        redirect_base_url="https://example.test",
-        oauth_flow_cookie_secret=OAUTH_FLOW_COOKIE_SECRET,
-        path="/auth/oauth",
-        cookie_secure=True,
-        oauth_scopes=None,
-        associate_by_email=False,
-        trust_provider_email_verified=False,
-        validate_redirect_base_url=False,
+        router_module._OAuthLoginControllerSettings(
+            provider_name="example",
+            backend=backend,
+            user_manager=user_manager,
+            oauth_client_adapter=oauth_client_adapter,
+            redirect_base_url="https://example.test",
+            oauth_flow_cookie_secret=OAUTH_FLOW_COOKIE_SECRET,
+            path="/auth/oauth",
+            cookie_secure=True,
+            oauth_scopes=None,
+            associate_by_email=False,
+            trust_provider_email_verified=False,
+            validate_redirect_base_url=False,
+        ),
     )
 
 
@@ -299,19 +306,95 @@ def test_create_provider_oauth_controller_uses_explicit_oauth_client(
         oauth_client_class_loader=router_module.load_httpx_oauth_client,
     )
     create_controller.assert_called_once_with(
-        provider_name="example",
-        backend=backend,
-        user_manager=user_manager,
-        oauth_client_adapter=oauth_client_adapter,
-        redirect_base_url="https://example.test",
-        oauth_flow_cookie_secret=OAUTH_FLOW_COOKIE_SECRET,
-        path="/auth/oauth",
-        cookie_secure=True,
-        oauth_scopes=None,
-        associate_by_email=False,
-        trust_provider_email_verified=False,
-        validate_redirect_base_url=False,
+        router_module._OAuthLoginControllerSettings(
+            provider_name="example",
+            backend=backend,
+            user_manager=user_manager,
+            oauth_client_adapter=oauth_client_adapter,
+            redirect_base_url="https://example.test",
+            oauth_flow_cookie_secret=OAUTH_FLOW_COOKIE_SECRET,
+            path="/auth/oauth",
+            cookie_secure=True,
+            oauth_scopes=None,
+            associate_by_email=False,
+            trust_provider_email_verified=False,
+            validate_redirect_base_url=False,
+        ),
     )
+
+
+def test_create_provider_oauth_controller_accepts_config_object(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Canonical helper can receive provider OAuth settings as one typed config."""
+    backend = _make_backend()
+    user_manager = _make_user_manager()
+    oauth_client = _make_oauth_client()
+    oauth_client_adapter = Mock()
+    controller = cast("type[Any]", object())
+    build_adapter = Mock(return_value=oauth_client_adapter)
+    create_controller = Mock(return_value=controller)
+    monkeypatch.setattr(router_module, "_build_oauth_client_adapter", build_adapter)
+    monkeypatch.setattr(router_module, "_create_login_oauth_controller", create_controller)
+
+    created_controller = router_module.create_provider_oauth_controller(
+        config=ProviderOAuthControllerConfig(
+            provider_name="example",
+            backend=backend,
+            user_manager=user_manager,
+            oauth_client=oauth_client,
+            redirect_base_url="https://example.test/custom/oauth",
+            oauth_flow_cookie_secret=OAUTH_FLOW_COOKIE_SECRET,
+            path="/custom/oauth",
+            cookie_secure=False,
+            oauth_scopes=("user:email",),
+            associate_by_email=True,
+            trust_provider_email_verified=True,
+        ),
+    )
+
+    assert created_controller is controller
+    build_adapter.assert_called_once_with(
+        oauth_client=oauth_client,
+        oauth_client_factory=None,
+        oauth_client_class=None,
+        oauth_client_kwargs=None,
+        oauth_client_class_loader=router_module.load_httpx_oauth_client,
+    )
+    create_controller.assert_called_once_with(
+        router_module._OAuthLoginControllerSettings(
+            provider_name="example",
+            backend=backend,
+            user_manager=user_manager,
+            oauth_client_adapter=oauth_client_adapter,
+            redirect_base_url="https://example.test/custom/oauth",
+            oauth_flow_cookie_secret=OAUTH_FLOW_COOKIE_SECRET,
+            path="/custom/oauth",
+            cookie_secure=False,
+            oauth_scopes=("user:email",),
+            associate_by_email=True,
+            trust_provider_email_verified=True,
+            validate_redirect_base_url=False,
+        ),
+    )
+
+
+def test_create_provider_oauth_controller_rejects_config_combined_with_keyword_options() -> None:
+    """The provider OAuth helper accepts either config or keyword options."""
+    factory = cast("Any", router_module.create_provider_oauth_controller)
+
+    with pytest.raises(ValueError, match="ProviderOAuthControllerConfig or keyword options"):
+        factory(
+            config=ProviderOAuthControllerConfig(
+                provider_name="example",
+                backend=_make_backend(),
+                user_manager=_make_user_manager(),
+                oauth_client=_make_oauth_client(),
+                redirect_base_url="https://example.test",
+                oauth_flow_cookie_secret=OAUTH_FLOW_COOKIE_SECRET,
+            ),
+            provider_name="example",
+        )
 
 
 def test_create_provider_oauth_controller_derives_path_from_auth_path(
@@ -347,18 +430,20 @@ def test_create_provider_oauth_controller_derives_path_from_auth_path(
         oauth_client_class_loader=router_module.load_httpx_oauth_client,
     )
     create_controller.assert_called_once_with(
-        provider_name="example",
-        backend=backend,
-        user_manager=user_manager,
-        oauth_client_adapter=oauth_client_adapter,
-        redirect_base_url="https://example.test/identity/oauth",
-        oauth_flow_cookie_secret=OAUTH_FLOW_COOKIE_SECRET,
-        path="/identity/oauth",
-        cookie_secure=True,
-        oauth_scopes=None,
-        associate_by_email=False,
-        trust_provider_email_verified=False,
-        validate_redirect_base_url=False,
+        router_module._OAuthLoginControllerSettings(
+            provider_name="example",
+            backend=backend,
+            user_manager=user_manager,
+            oauth_client_adapter=oauth_client_adapter,
+            redirect_base_url="https://example.test/identity/oauth",
+            oauth_flow_cookie_secret=OAUTH_FLOW_COOKIE_SECRET,
+            path="/identity/oauth",
+            cookie_secure=True,
+            oauth_scopes=None,
+            associate_by_email=False,
+            trust_provider_email_verified=False,
+            validate_redirect_base_url=False,
+        ),
     )
 
 
@@ -396,18 +481,20 @@ def test_create_provider_oauth_controller_loads_client_from_class_path(
         oauth_client_class_loader=load_client,
     )
     create_controller.assert_called_once_with(
-        provider_name="example",
-        backend=backend,
-        user_manager=user_manager,
-        oauth_client_adapter=oauth_client_adapter,
-        redirect_base_url="https://example.test",
-        oauth_flow_cookie_secret=OAUTH_FLOW_COOKIE_SECRET,
-        path="/auth/oauth",
-        cookie_secure=True,
-        oauth_scopes=None,
-        associate_by_email=False,
-        trust_provider_email_verified=False,
-        validate_redirect_base_url=False,
+        router_module._OAuthLoginControllerSettings(
+            provider_name="example",
+            backend=backend,
+            user_manager=user_manager,
+            oauth_client_adapter=oauth_client_adapter,
+            redirect_base_url="https://example.test",
+            oauth_flow_cookie_secret=OAUTH_FLOW_COOKIE_SECRET,
+            path="/auth/oauth",
+            cookie_secure=True,
+            oauth_scopes=None,
+            associate_by_email=False,
+            trust_provider_email_verified=False,
+            validate_redirect_base_url=False,
+        ),
     )
 
 

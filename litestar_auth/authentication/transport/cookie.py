@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, Literal, override
+from dataclasses import dataclass
+from typing import TYPE_CHECKING, Any, Literal, TypedDict, Unpack, override
 
 from litestar_auth.authentication.transport.base import Transport
 
@@ -13,58 +14,72 @@ if TYPE_CHECKING:
 type SameSitePolicy = Literal["lax", "strict", "none"]
 
 
+@dataclass(frozen=True, slots=True)
+class CookieTransportConfig:
+    """Configuration for :class:`CookieTransport`."""
+
+    cookie_name: str = "litestar_auth"
+    max_age: int | None = None
+    path: str = "/"
+    domain: str | None = None
+    secure: bool = True
+    httponly: bool = True
+    samesite: SameSitePolicy = "lax"
+    allow_insecure_cookie_auth: bool = False
+    refresh_max_age: int | None = None
+
+
+class CookieTransportConfigOptions(TypedDict, total=False):
+    """Keyword options accepted by :class:`CookieTransport`."""
+
+    cookie_name: str
+    max_age: int | None
+    path: str
+    domain: str | None
+    secure: bool
+    httponly: bool
+    samesite: SameSitePolicy
+    allow_insecure_cookie_auth: bool
+    refresh_max_age: int | None
+
+
 class CookieTransport(Transport):
     """Transport that stores authentication tokens in HTTP cookies."""
 
-    def __init__(  # noqa: PLR0913
+    def __init__(
         self,
-        *,
-        cookie_name: str = "litestar_auth",
-        max_age: int | None = None,
-        path: str = "/",
-        domain: str | None = None,
-        secure: bool = True,
-        httponly: bool = True,
-        samesite: SameSitePolicy = "lax",
-        allow_insecure_cookie_auth: bool = False,
-        refresh_max_age: int | None = None,
+        config: CookieTransportConfig | None = None,
+        **options: Unpack[CookieTransportConfigOptions],
     ) -> None:
         """Initialize the cookie transport configuration.
 
         Args:
-            cookie_name: Name of the auth cookie.
-            max_age: Optional cookie max-age in seconds.
-            path: Cookie path.
-            domain: Optional cookie domain.
-            secure: Whether to set the Secure attribute.
-            httponly: Whether to set the HttpOnly attribute on the auth cookie.
-            samesite: SameSite policy for cookies.
-            allow_insecure_cookie_auth: When ``True``, allow cookie auth with
-                plugin-managed CSRF disabled. This is unsafe for browser
-                authentication and should only be used for controlled,
-                non-browser scenarios.
-            refresh_max_age: Optional cookie max-age in seconds for the refresh-token
-                cookie. When ``None``, falls back to ``max_age``. Set this to match
-                your strategy's ``refresh_max_age`` so the cookie outlives the
-                access-token cookie.
+            config: Cookie transport configuration. Omit for secure defaults.
+            **options: Individual cookie transport settings. Do not combine with
+                ``config``.
 
         Raises:
+            ValueError: If ``config`` and keyword options are combined.
             ValueError: If ``samesite="none"`` is configured with ``secure=False``.
         """
-        if samesite == "none" and not secure:
+        if config is not None and options:
+            msg = "Pass either CookieTransportConfig or keyword options, not both."
+            raise ValueError(msg)
+        settings = CookieTransportConfig(**options) if config is None else config
+        if settings.samesite == "none" and not settings.secure:
             msg = 'CookieTransport with samesite="none" requires secure=True.'
             raise ValueError(msg)
-        self.cookie_name = cookie_name
-        self.max_age = max_age
-        self.path = path
-        self.domain = domain
-        self.secure = secure
-        self.httponly = httponly
-        self.samesite = samesite
-        self.allow_insecure_cookie_auth = allow_insecure_cookie_auth
+        self.cookie_name = settings.cookie_name
+        self.max_age = settings.max_age
+        self.path = settings.path
+        self.domain = settings.domain
+        self.secure = settings.secure
+        self.httponly = settings.httponly
+        self.samesite = settings.samesite
+        self.allow_insecure_cookie_auth = settings.allow_insecure_cookie_auth
         # Security: separate refresh cookie lifetime prevents premature browser
         # deletion when access-token max_age is shorter than the refresh strategy TTL.
-        self.refresh_max_age = refresh_max_age
+        self.refresh_max_age = settings.refresh_max_age
 
     @property
     def refresh_cookie_name(self) -> str:

@@ -55,15 +55,15 @@ dev = [
     "pytest-xdist>=3.8.0",
     "ruff>=0.15.12",
     "rust-just>=1.50.0",
-    "ty>=0.0.32",
+    "ty>=0.0.34",
     "deptry>=0.25.1",
-    "prek>=0.3.10",
+    "prek>=0.3.11",
     "fakeredis[lua]>=2.35.1",
 ]
 docs = [
     "mkdocstrings[python]>=1.0.4",
     "pymdown-extensions>=10.21.2",
-    "zensical>=0.0.36",
+    "zensical>=0.0.39",
 ]
 
 [tool.ty.environment]
@@ -129,9 +129,9 @@ convention = "google"
 # secrets, but the values are stable error-code labels surfaced in API responses,
 # never credentials.
 "litestar_auth/exceptions.py" = ["S105"]
-# S105: JWT audience strings ("litestar-auth:verify", etc.) are public protocol
-# constants embedded in tokens, not secrets.
-"litestar_auth/config.py" = ["S105"]
+# S105: JWT audience strings ("litestar-auth:verify", etc.) and secret-role
+# setting names are public protocol/catalog constants, not credentials.
+"litestar_auth/_secret_roles.py" = ["S105"]
 # S105: ORM column/class-name strings ("hashed_password", "AccessToken",
 # "RefreshToken") are SQLAlchemy attribute identifiers, not credentials.
 "litestar_auth/_auth_model_mixins.py" = ["S105"]

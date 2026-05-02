@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any, Protocol, cast
 
-from litestar_auth.db.base import BaseOAuthAccountStore, BaseUserStore
+from litestar_auth.db.base import BaseOAuthAccountStore, BaseUserStore, OAuthAccountData
 from litestar_auth.types import LoginIdentifier, UserProtocol
 
 if TYPE_CHECKING:
@@ -34,17 +34,25 @@ class _OAuthTokenEncryptionBindable(Protocol):
     def bind_oauth_token_encryption(
         self,
         oauth_token_encryption: OAuthTokenEncryption,
-    ) -> object: ...  # pragma: no cover
+    ) -> object:
+        """Return a store bound to the supplied OAuth token encryption policy."""
+        ...  # pragma: no cover
 
 
 class _TotpRecoveryCodeStore[UP](Protocol):
     """Store contract for hashed TOTP recovery-code persistence."""
 
-    async def set_recovery_code_hashes(self, user: UP, hashes: tuple[str, ...]) -> UP: ...  # pragma: no cover
+    async def set_recovery_code_hashes(self, user: UP, hashes: tuple[str, ...]) -> UP:
+        """Replace the active recovery-code hashes for ``user``."""
+        ...  # pragma: no cover
 
-    async def read_recovery_code_hashes(self, user: UP) -> tuple[str, ...]: ...  # pragma: no cover
+    async def read_recovery_code_hashes(self, user: UP) -> tuple[str, ...]:
+        """Return the active recovery-code hashes for ``user``."""
+        ...  # pragma: no cover
 
-    async def consume_recovery_code_hash(self, user: UP, matched_hash: str) -> bool: ...  # pragma: no cover
+    async def consume_recovery_code_hash(self, user: UP, matched_hash: str) -> bool:
+        """Consume ``matched_hash`` for ``user`` when it is still active."""
+        ...  # pragma: no cover
 
 
 class _ScopedUserDatabaseProxy[UP: UserProtocol[Any], ID](BaseUserStore[UP, ID]):
@@ -143,25 +151,15 @@ class _ScopedUserDatabaseProxy[UP: UserProtocol[Any], ID](BaseUserStore[UP, ID])
         oauth_store = cast("BaseOAuthAccountStore[UP, ID]", self._user_db)
         return await oauth_store.get_by_oauth_account(oauth_name, account_id)
 
-    async def upsert_oauth_account(  # noqa: PLR0913
+    async def upsert_oauth_account(
         self,
         user: UP,
         *,
-        oauth_name: str,
-        account_id: str,
-        account_email: str,
-        access_token: str,
-        expires_at: int | None,
-        refresh_token: str | None,
+        account: OAuthAccountData,
     ) -> None:
         """Persist a linked OAuth account through the wrapped store."""
         oauth_store = cast("BaseOAuthAccountStore[UP, ID]", self._user_db)
         await oauth_store.upsert_oauth_account(
             user,
-            oauth_name=oauth_name,
-            account_id=account_id,
-            account_email=account_email,
-            access_token=access_token,
-            expires_at=expires_at,
-            refresh_token=refresh_token,
+            account=account,
         )

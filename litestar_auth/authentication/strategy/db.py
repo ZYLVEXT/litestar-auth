@@ -2,16 +2,16 @@
 
 from __future__ import annotations
 
-import secrets
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from functools import cache
-from typing import Any, cast, override
+from typing import Any, NotRequired, Protocol, Required, TypedDict, Unpack, cast, overload, override
 
 from advanced_alchemy.repository import SQLAlchemyAsyncRepository
 from sqlalchemy import delete
 from sqlalchemy.ext.asyncio import AsyncSession, async_scoped_session
 
-from litestar_auth.authentication.strategy._opaque_tokens import digest_opaque_token
+from litestar_auth.authentication.strategy._opaque_tokens import digest_opaque_token, mint_opaque_token
 from litestar_auth.authentication.strategy.base import RefreshableStrategy, Strategy, UserManagerProtocol
 from litestar_auth.authentication.strategy.db_models import AccessToken, DatabaseTokenModels, RefreshToken
 from litestar_auth.config import validate_secret_length
@@ -19,6 +19,7 @@ from litestar_auth.exceptions import ConfigurationError
 from litestar_auth.types import UserProtocol
 
 type AsyncSessionT = AsyncSession | async_scoped_session[AsyncSession]
+type TokenRepositoryType = type[SQLAlchemyAsyncRepository[Any]]
 
 DEFAULT_MAX_AGE = timedelta(hours=1)
 DEFAULT_REFRESH_MAX_AGE = timedelta(days=30)
@@ -26,7 +27,7 @@ DEFAULT_TOKEN_BYTES = 32
 
 
 @cache
-def _build_token_repository(token_model: type[Any]) -> type[SQLAlchemyAsyncRepository[Any]]:
+def _build_token_repository(token_model: type[Any]) -> TokenRepositoryType:
     """Create a repository type bound to the provided token model.
 
     Returns:
@@ -43,52 +44,85 @@ AccessTokenRepository = _build_token_repository(AccessToken)
 RefreshTokenRepository = _build_token_repository(RefreshToken)
 
 
+class _RefreshTokenRow(Protocol):
+    """Persistence contract needed by refresh-token rotation."""
+
+    token: str
+    created_at: datetime
+    user: object
+
+
+@dataclass(frozen=True, slots=True)
+class DatabaseTokenStrategyConfig:
+    """Configuration for :class:`DatabaseTokenStrategy`."""
+
+    session: AsyncSessionT
+    token_hash_secret: str
+    token_models: DatabaseTokenModels | None = None
+    max_age: timedelta = DEFAULT_MAX_AGE
+    refresh_max_age: timedelta = DEFAULT_REFRESH_MAX_AGE
+    token_bytes: int = DEFAULT_TOKEN_BYTES
+    unsafe_testing: bool = False
+
+
+class DatabaseTokenStrategyOptions(TypedDict):
+    """Keyword options accepted by :class:`DatabaseTokenStrategy`."""
+
+    session: Required[AsyncSessionT]
+    token_hash_secret: Required[str]
+    token_models: NotRequired[DatabaseTokenModels | None]
+    max_age: NotRequired[timedelta]
+    refresh_max_age: NotRequired[timedelta]
+    token_bytes: NotRequired[int]
+    unsafe_testing: NotRequired[bool]
+
+
 class DatabaseTokenStrategy[UP: UserProtocol[Any], ID](Strategy[UP, ID], RefreshableStrategy[UP, ID]):
     """Stateful strategy that persists opaque tokens in the database."""
 
-    def __init__(  # noqa: PLR0913
+    @overload
+    def __init__(self, *, config: DatabaseTokenStrategyConfig) -> None: ...  # pragma: no cover
+
+    @overload
+    def __init__(self, **options: Unpack[DatabaseTokenStrategyOptions]) -> None: ...  # pragma: no cover
+
+    def __init__(
         self,
         *,
-        session: AsyncSessionT,
-        token_hash_secret: str,
-        token_models: DatabaseTokenModels | None = None,
-        max_age: timedelta = DEFAULT_MAX_AGE,
-        refresh_max_age: timedelta = DEFAULT_REFRESH_MAX_AGE,
-        token_bytes: int = DEFAULT_TOKEN_BYTES,
-        unsafe_testing: bool = False,
+        config: DatabaseTokenStrategyConfig | None = None,
+        **options: Unpack[DatabaseTokenStrategyOptions],
     ) -> None:
         """Initialize the strategy.
 
         Args:
-            session: SQLAlchemy session used by the repository.
-            token_hash_secret: High-entropy secret used for keyed token hashing (HMAC-SHA256).
-            token_models: Access-token and refresh-token ORM models used for persistence. Omit to
-                keep the bundled ``AccessToken`` / ``RefreshToken`` behavior.
-            max_age: Maximum token age before it is rejected.
-            refresh_max_age: Maximum refresh-token age before it is rejected.
-            token_bytes: Number of random bytes used for token generation.
-            unsafe_testing: Reserved for test-only constructor parity with plugin-managed
-                strategy construction. It currently has no runtime effect.
+            config: Database-token strategy configuration.
+            **options: Individual database-token strategy settings. Do not combine
+                with ``config``.
 
         Raises:
+            ValueError: If ``config`` and keyword options are combined.
             ConfigurationError: When ``token_hash_secret`` fails minimum-length requirements.
         """
+        if config is not None and options:
+            msg = "Pass either DatabaseTokenStrategyConfig or keyword options, not both."
+            raise ValueError(msg)
+        settings = DatabaseTokenStrategyConfig(**options) if config is None else config
         try:
-            validate_secret_length(token_hash_secret, label="DatabaseTokenStrategy token_hash_secret")
+            validate_secret_length(settings.token_hash_secret, label="DatabaseTokenStrategy token_hash_secret")
         except ConfigurationError as exc:
             raise ConfigurationError(str(exc)) from exc
 
-        self.session = session
-        self._token_hash_secret = token_hash_secret.encode()
-        self.token_models = DatabaseTokenModels() if token_models is None else token_models
+        self.session = settings.session
+        self._token_hash_secret = settings.token_hash_secret.encode()
+        self.token_models = DatabaseTokenModels() if settings.token_models is None else settings.token_models
         self.access_token_model = self.token_models.access_token_model
         self.refresh_token_model = self.token_models.refresh_token_model
         self._access_token_repository_type = _build_token_repository(self.access_token_model)
         self._refresh_token_repository_type = _build_token_repository(self.refresh_token_model)
-        self.max_age = max_age
-        self.refresh_max_age = refresh_max_age
-        self.token_bytes = token_bytes
-        self.unsafe_testing = unsafe_testing
+        self.max_age = settings.max_age
+        self.refresh_max_age = settings.refresh_max_age
+        self.token_bytes = settings.token_bytes
+        self.unsafe_testing = settings.unsafe_testing
 
     def with_session(self, session: AsyncSessionT) -> DatabaseTokenStrategy[UP, ID]:
         """Return a copy of the strategy bound to the provided async session."""
@@ -102,21 +136,13 @@ class DatabaseTokenStrategy[UP: UserProtocol[Any], ID](Strategy[UP, ID], Refresh
             unsafe_testing=self.unsafe_testing,
         )
 
-    def _repository(self) -> SQLAlchemyAsyncRepository[Any]:
+    def _repository(self, repository_type: TokenRepositoryType) -> SQLAlchemyAsyncRepository[Any]:
         """Create a repository bound to the current session.
 
         Returns:
-            Repository instance for access-token persistence.
+            Repository instance for token persistence.
         """
-        return self._access_token_repository_type(session=self.session)
-
-    def _refresh_repository(self) -> SQLAlchemyAsyncRepository[Any]:
-        """Create a repository bound to the current session for refresh tokens.
-
-        Returns:
-            Repository instance for refresh-token persistence.
-        """
-        return self._refresh_token_repository_type(session=self.session)
+        return repository_type(session=self.session)
 
     @staticmethod
     def _normalize_timestamp(value: datetime) -> datetime:
@@ -194,7 +220,7 @@ class DatabaseTokenStrategy[UP: UserProtocol[Any], ID](Strategy[UP, ID], Refresh
         access_token = cast(
             "Any",
             await self._resolve_token(
-                self._repository(),
+                self._repository(self._access_token_repository_type),
                 token,
                 load=[self.access_token_model.user],
             ),
@@ -211,9 +237,9 @@ class DatabaseTokenStrategy[UP: UserProtocol[Any], ID](Strategy[UP, ID], Refresh
         Returns:
             Newly created opaque token string.
         """
-        token = secrets.token_urlsafe(self.token_bytes)
-        access_token = self.access_token_model(token=self._token_digest(token), user_id=user.id)
-        await self._repository().add(access_token, auto_refresh=True)
+        token, token_digest = mint_opaque_token(token_bytes=self.token_bytes, token_hash_secret=self._token_hash_secret)
+        access_token = self.access_token_model(token=token_digest, user_id=user.id)
+        await self._repository(self._access_token_repository_type).add(access_token, auto_refresh=True)
         return token
 
     @override
@@ -221,7 +247,7 @@ class DatabaseTokenStrategy[UP: UserProtocol[Any], ID](Strategy[UP, ID], Refresh
         """Delete a persisted token."""
         del user
         token_digest = self._token_digest(token)
-        await self._repository().delete_where(token=token_digest, auto_commit=False)
+        await self._repository(self._access_token_repository_type).delete_where(token=token_digest, auto_commit=False)
         await self.session.commit()
 
     @override
@@ -231,10 +257,50 @@ class DatabaseTokenStrategy[UP: UserProtocol[Any], ID](Strategy[UP, ID], Refresh
         Returns:
             Newly created opaque refresh-token string.
         """
-        token = secrets.token_urlsafe(self.token_bytes)
-        refresh_token = self.refresh_token_model(token=self._token_digest(token), user_id=user.id)
-        await self._refresh_repository().add(refresh_token, auto_refresh=True)
+        token, token_digest = mint_opaque_token(token_bytes=self.token_bytes, token_hash_secret=self._token_hash_secret)
+        refresh_token = self.refresh_token_model(token=token_digest, user_id=user.id)
+        await self._repository(self._refresh_token_repository_type).add(refresh_token, auto_refresh=True)
         return token
+
+    async def _load_refresh_token_for_rotation(self, refresh_token: str) -> _RefreshTokenRow | None:
+        """Load a refresh-token row for rotation.
+
+        Returns:
+            Persisted refresh-token row with its user loaded, otherwise ``None``.
+        """
+        return cast(
+            "_RefreshTokenRow | None",
+            await self._resolve_token(
+                self._repository(self._refresh_token_repository_type),
+                refresh_token,
+                load=[self.refresh_token_model.user],
+            ),
+        )
+
+    async def _delete_refresh_token_row(self, persisted_token: _RefreshTokenRow) -> None:
+        """Mark a persisted refresh-token row for deletion within the current transaction."""
+        await self._repository(self._refresh_token_repository_type).delete_where(
+            token=persisted_token.token,
+            auto_commit=False,
+        )
+
+    async def _mint_replacement_refresh_token(self, user: UP) -> str:
+        """Persist and return a replacement refresh token for ``user``.
+
+        Returns:
+            Newly created opaque refresh-token string.
+        """
+        rotated_refresh_token, token_digest = mint_opaque_token(
+            token_bytes=self.token_bytes,
+            token_hash_secret=self._token_hash_secret,
+        )
+        rotated_model = self.refresh_token_model(token=token_digest, user_id=user.id)
+        await self._repository(self._refresh_token_repository_type).add(
+            rotated_model,
+            auto_commit=False,
+            auto_refresh=True,
+        )
+        return rotated_refresh_token
 
     @override
     async def rotate_refresh_token(
@@ -248,29 +314,20 @@ class DatabaseTokenStrategy[UP: UserProtocol[Any], ID](Strategy[UP, ID], Refresh
             Tuple of the resolved user and rotated refresh token, or ``None`` when invalid.
         """
         del user_manager
-        persisted_token = cast(
-            "Any",
-            await self._resolve_token(
-                self._refresh_repository(),
-                refresh_token,
-                load=[self.refresh_token_model.user],
-            ),
-        )
+        persisted_token = await self._load_refresh_token_for_rotation(refresh_token)
         if persisted_token is None:
             return None
         if self._is_token_expired(persisted_token.created_at, self.refresh_max_age):
-            await self._refresh_repository().delete_where(token=persisted_token.token, auto_commit=False)
+            await self._delete_refresh_token_row(persisted_token)
             return None
 
         user = cast("UP", persisted_token.user)
-        await self._refresh_repository().delete_where(token=persisted_token.token, auto_commit=False)
-        rotated_refresh_token = secrets.token_urlsafe(self.token_bytes)
-        rotated_model = self.refresh_token_model(token=self._token_digest(rotated_refresh_token), user_id=user.id)
-        await self._refresh_repository().add(rotated_model, auto_commit=False, auto_refresh=True)
+        await self._delete_refresh_token_row(persisted_token)
+        rotated_refresh_token = await self._mint_replacement_refresh_token(user)
         return user, rotated_refresh_token
 
     async def invalidate_all_tokens(self, user: UP) -> None:
         """Delete all persisted access and refresh tokens for the given user."""
-        await self._repository().delete_where(user_id=user.id, auto_commit=False)
-        await self._refresh_repository().delete_where(user_id=user.id, auto_commit=False)
+        await self._repository(self._access_token_repository_type).delete_where(user_id=user.id, auto_commit=False)
+        await self._repository(self._refresh_token_repository_type).delete_where(user_id=user.id, auto_commit=False)
         await self.session.commit()

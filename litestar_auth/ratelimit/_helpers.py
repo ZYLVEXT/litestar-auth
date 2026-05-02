@@ -69,6 +69,7 @@ def _client_host(
     """
 
     def fallback_host() -> str:
+        """Return the direct client host, or ``"unknown"`` when Litestar did not expose one."""
         client = request.client
         if client is None or not client.host:
             return "unknown"

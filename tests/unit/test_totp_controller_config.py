@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import inspect
 from typing import Any, cast
 from unittest.mock import AsyncMock
 
@@ -15,6 +14,7 @@ from litestar_auth._plugin.config import TotpConfig
 from litestar_auth.controllers.totp import (
     TOTP_RATE_LIMITED_ENDPOINTS,
     TOTP_SENSITIVE_ENDPOINTS,
+    _resolve_totp_controller_factory_settings,
     _totp_validate_replay_and_password,
     create_totp_controller,
 )
@@ -175,9 +175,17 @@ def test_totp_defaults_use_sha256() -> None:
     """Plugin and controller defaults use SHA256 for new enrollments."""
     assert TotpConfig.__dataclass_fields__["totp_algorithm"].default == "SHA256"
     assert LitestarAuthConfig.__dataclass_fields__["totp_config"].default is None
-    signature = inspect.signature(create_totp_controller)
-    assert signature.parameters["totp_algorithm"].default == "SHA256"
-    assert signature.parameters["totp_secret_keyring"].default is None
+    settings, path, security = _resolve_totp_controller_factory_settings(
+        {
+            "backend": AsyncMock(),
+            "user_manager_dependency_key": "litestar_auth_user_manager",
+            "totp_pending_secret": "test-totp-pending-secret-thirty-two!",
+        },
+    )
+    assert settings.totp_algorithm == "SHA256"
+    assert settings.totp_secret_keyring is None
+    assert path == "/auth/2fa"
+    assert security is None
 
 
 @pytest.mark.unit

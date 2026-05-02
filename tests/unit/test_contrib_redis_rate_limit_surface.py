@@ -8,7 +8,12 @@ from typing import TYPE_CHECKING, Any, cast
 import pytest
 
 import litestar_auth.ratelimit as ratelimit_module
-from litestar_auth.contrib.redis import RedisAuthClientProtocol, RedisAuthPreset, RedisAuthRateLimitTier
+from litestar_auth.contrib.redis import (
+    RedisAuthClientProtocol,
+    RedisAuthPreset,
+    RedisAuthRateLimitConfigOptions,
+    RedisAuthRateLimitTier,
+)
 from litestar_auth.ratelimit import (
     AuthRateLimitSlot,
     EndpointRateLimit,
@@ -28,13 +33,7 @@ def test_redis_auth_preset_build_rate_limit_config_signature_tracks_canonical_bu
 
     assert parameter_names == (
         "self",
-        "enabled",
-        "disabled",
-        "group_backends",
-        "endpoint_overrides",
-        "trusted_proxy",
-        "identity_fields",
-        "trusted_headers",
+        "options",
     )
 
 
@@ -68,11 +67,13 @@ def test_redis_auth_preset_build_rate_limit_config_uses_endpoint_overrides(
     )
 
     config = preset.build_rate_limit_config(
-        group_backends={"refresh": refresh_backend},
-        endpoint_overrides=endpoint_overrides,
-        trusted_proxy=True,
-        identity_fields=("email",),
-        trusted_headers=("X-Real-IP",),
+        options=RedisAuthRateLimitConfigOptions(
+            group_backends={"refresh": refresh_backend},
+            endpoint_overrides=endpoint_overrides,
+            trusted_proxy=True,
+            identity_fields=("email",),
+            trusted_headers=("X-Real-IP",),
+        ),
     )
 
     assert config.login is not None

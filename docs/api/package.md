@@ -40,6 +40,7 @@ For OAuth, plugin-managed apps should configure `OAuthConfig` on `LitestarAuthCo
 Opaque DB-token wiring:
 
 ```python
+import os
 from uuid import UUID
 
 from litestar import Litestar
@@ -52,16 +53,20 @@ from litestar_auth import (
 from litestar_auth.manager import UserManagerSecurity
 from litestar_auth.models import User
 
+database_token_hash_secret = os.environ["LITESTAR_AUTH_DATABASE_TOKEN_HASH_SECRET"]
+reset_password_token_secret = os.environ["LITESTAR_AUTH_RESET_PASSWORD_TOKEN_SECRET"]
+verify_token_secret = os.environ["LITESTAR_AUTH_VERIFY_TOKEN_SECRET"]
+
 config = LitestarAuthConfig[User, UUID](
     database_token_auth=DatabaseTokenAuthConfig(
-        token_hash_secret="replace-with-32+-char-db-token-secret",
+        token_hash_secret=database_token_hash_secret,
     ),
     user_model=User,
     user_manager_class=YourUserManager,
     session_maker=session_maker,
     user_manager_security=UserManagerSecurity(
-        verification_token_secret="replace-with-32+-char-secret",
-        reset_password_token_secret="replace-with-32+-char-secret",
+        verification_token_secret=verify_token_secret,
+        reset_password_token_secret=reset_password_token_secret,
     ),
 )
 app = Litestar(plugins=[LitestarAuth(config)])
@@ -88,8 +93,8 @@ operations. The library still does not ship permission matrices.
 | Area | Types / functions |
 | ---- | ----------------- |
 | Plugin | `LitestarAuth`, `LitestarAuthConfig`, `DatabaseTokenAuthConfig`, `OAuthConfig`, `OAuthProviderConfig`, `TotpConfig`, `DEFAULT_SUPERUSER_ROLE_NAME` |
-| Backends | `AuthenticationBackend`, `Authenticator`, `BearerTransport`, `CookieTransport`; strategies from `litestar_auth.authentication.strategy` |
-| Manager | `BaseUserManager`, `UserManagerSecurity`; `PasswordHelper` and password policy helpers from their submodules |
+| Backends | `AuthenticationBackend`, `Authenticator`, `BearerTransport`, `CookieTransport`, `CookieTransportConfig`; strategies from `litestar_auth.authentication.strategy` |
+| Manager | `BaseUserManager`, `BaseUserManagerConfig`, `UserManagerSecurity`; `PasswordHelper` and password policy helpers from their submodules |
 | Payloads / schemas | Auth lifecycle DTOs from `litestar_auth.payloads`; user CRUD schemas from `litestar_auth.schemas` |
 | Persistence | `User`, `Role`, `UserRole`, `OAuthAccount` (from `litestar_auth.models` / submodules), `AccessToken`, `RefreshToken`, `SQLAlchemyUserDatabase` (from `litestar_auth.db.sqlalchemy`) |
 | Guards | `is_authenticated`, `is_active`, `is_verified`, `is_superuser`, `has_any_role`, `has_all_roles` |

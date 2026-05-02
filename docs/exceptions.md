@@ -40,12 +40,23 @@ Example catch/log flow:
 ```python
 from logging import getLogger
 
+from litestar_auth.db import OAuthAccountData
 from litestar_auth.exceptions import OAuthAccountAlreadyLinkedError
 
 logger = getLogger(__name__)
 
 try:
-    await user_db.upsert_oauth_account(user, oauth_name="google", account_id="acct-123")
+    await user_db.upsert_oauth_account(
+        user,
+        account=OAuthAccountData(
+            oauth_name="google",
+            account_id="acct-123",
+            account_email="user@example.com",
+            access_token="provider-access-token",
+            expires_at=None,
+            refresh_token=None,
+        ),
+    )
 except OAuthAccountAlreadyLinkedError as exc:
     logger.warning(
         "OAuth account conflict provider=%s account_id=%s existing_user_id=%s",

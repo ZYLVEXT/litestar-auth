@@ -26,3 +26,21 @@ def _require_redis_asyncio(*, feature_name: str) -> ModuleType:
     except ImportError as exc:
         msg = f"Install litestar-auth[redis] to use {feature_name}"
         raise ImportError(msg) from exc
+
+
+def require_cryptography_fernet(*, install_hint: str) -> ModuleType:
+    """Import the optional ``cryptography.fernet`` dependency.
+
+    Args:
+        install_hint: Exact installation-guidance message raised when the dependency is missing.
+
+    Returns:
+        The imported ``cryptography.fernet`` module.
+
+    Raises:
+        ImportError: If the optional cryptography dependency is not installed.
+    """
+    try:
+        return importlib.import_module("cryptography.fernet")
+    except ImportError as exc:
+        raise ImportError(install_hint) from exc

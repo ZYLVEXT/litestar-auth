@@ -13,9 +13,10 @@ from litestar.exceptions import ClientException
 
 import litestar_auth.contrib.role_admin as role_admin_module
 from litestar_auth._plugin.role_admin import RoleAdminRoleNotFoundError, RoleAdminUserNotFoundError
+from litestar_auth.contrib.role_admin import RoleAdminControllerConfig, create_role_admin_controller
 from litestar_auth.contrib.role_admin import __all__ as role_admin_all
 from litestar_auth.contrib.role_admin import _controller as role_admin_controller_module
-from litestar_auth.contrib.role_admin import create_role_admin_controller
+from litestar_auth.contrib.role_admin import _controller_handler_utils as role_admin_controller_handler_utils_module
 from litestar_auth.contrib.role_admin._schemas import RoleCreate, RoleRead, RoleUpdate, UserBrief
 from litestar_auth.exceptions import ConfigurationError, ErrorCode
 from litestar_auth.guards import is_authenticated, is_superuser
@@ -31,7 +32,8 @@ pytestmark = pytest.mark.unit
 
 def test_contrib_role_admin_package_exposes_only_its_documented_factory() -> None:
     """The contrib package preserves its narrow public surface."""
-    assert role_admin_all == ("create_role_admin_controller",)
+    assert role_admin_all == ("RoleAdminControllerConfig", "create_role_admin_controller")
+    assert role_admin_module.RoleAdminControllerConfig is RoleAdminControllerConfig
 
     with pytest.raises(AttributeError, match="missing_factory"):
         _missing_factory = cast("Any", role_admin_module).missing_factory
@@ -53,6 +55,37 @@ def test_contrib_role_admin_factory_builds_controller_from_explicit_models() -> 
     assert context.model_family.user_model is User
     assert context.model_family.role_model is Role
     assert context.model_family.user_role_model is UserRole
+
+
+def test_contrib_role_admin_factory_accepts_controller_config_object() -> None:
+    """The factory can receive role-admin settings as one typed controller config."""
+    controller = create_role_admin_controller(
+        controller_config=RoleAdminControllerConfig(
+            user_model=User,
+            role_model=Role,
+            user_role_model=UserRole,
+            route_prefix="admin/roles",
+            guards=[],
+        ),
+    )
+    context = cast("Any", controller).role_admin_context
+
+    assert controller.path == "/admin/roles"
+    assert controller.guards == []
+    assert context.model_family.user_model is User
+    assert context.model_family.role_model is Role
+    assert context.model_family.user_role_model is UserRole
+
+
+def test_contrib_role_admin_factory_rejects_controller_config_combined_with_keyword_options() -> None:
+    """The role-admin factory accepts either controller_config or keyword options."""
+    factory = cast("Any", create_role_admin_controller)
+
+    with pytest.raises(ValueError, match="RoleAdminControllerConfig or keyword options"):
+        factory(
+            controller_config=RoleAdminControllerConfig(user_model=User, role_model=Role, user_role_model=UserRole),
+            route_prefix="admin/roles",
+        )
 
 
 def test_contrib_role_admin_factory_supports_config_driven_model_resolution_and_guard_overrides() -> None:
@@ -98,6 +131,7 @@ def test_contrib_role_admin_factory_tolerates_custom_db_session_dependency_key_w
     controller = cast("Any", create_role_admin_controller(config=config))
 
     assert controller.role_admin_context.db_session_dependency_key == "custom_db_session"
+    role_admin_controller_module._configure_request_session_dependency(controller, parameter_name="another_session")
     for handler_name in (
         "list_roles",
         "create_role",
@@ -232,7 +266,7 @@ async def test_contrib_role_admin_assignment_helpers_map_missing_role_and_user_e
         del role_admin, normalized_role_name
         return SimpleNamespace(name="billing", description="Docs")
 
-    monkeypatch.setattr(role_admin_controller_module, "_load_role_row", _load_role_row_stub)
+    monkeypatch.setattr(role_admin_controller_handler_utils_module, "_load_role_row", _load_role_row_stub)
     role_admin = RoleAdminStub()
     page_schema_type = msgspec.defstruct(
         "RoleUserPageCoverageSchema",
@@ -240,7 +274,7 @@ async def test_contrib_role_admin_assignment_helpers_map_missing_role_and_user_e
     )
 
     with pytest.raises(ClientException, match="configured catalog") as missing_role_exc:
-        await role_admin_controller_module._assign_role_user(
+        await role_admin_controller_handler_utils_module._assign_role_user(
             cast("Any", role_admin),
             role_name="missing",
             user_id="user-1",
@@ -248,7 +282,7 @@ async def test_contrib_role_admin_assignment_helpers_map_missing_role_and_user_e
     assert missing_role_exc.value.extra == {"code": ErrorCode.ROLE_NOT_FOUND}
 
     with pytest.raises(ClientException, match="could not find a user") as missing_user_exc:
-        await role_admin_controller_module._assign_role_user(
+        await role_admin_controller_handler_utils_module._assign_role_user(
             cast("Any", role_admin),
             role_name="billing",
             user_id="missing-user",
@@ -256,7 +290,7 @@ async def test_contrib_role_admin_assignment_helpers_map_missing_role_and_user_e
     assert missing_user_exc.value.extra == {"code": ErrorCode.ROLE_ASSIGNMENT_USER_NOT_FOUND}
 
     with pytest.raises(ClientException, match="could not find a user") as missing_unassign_exc:
-        await role_admin_controller_module._unassign_role_user(
+        await role_admin_controller_handler_utils_module._unassign_role_user(
             cast("Any", role_admin),
             role_name="billing",
             user_id="missing-user",
@@ -264,7 +298,7 @@ async def test_contrib_role_admin_assignment_helpers_map_missing_role_and_user_e
     assert missing_unassign_exc.value.extra == {"code": ErrorCode.ROLE_ASSIGNMENT_USER_NOT_FOUND}
 
     with pytest.raises(ClientException, match="configured catalog") as missing_page_exc:
-        await role_admin_controller_module._list_role_user_page(
+        await role_admin_controller_handler_utils_module._list_role_user_page(
             cast("Any", role_admin),
             page_schema_type=page_schema_type,
             role_name="missing",

@@ -255,17 +255,20 @@ from litestar_auth.ratelimit import (
     AuthRateLimitSlot,
     EndpointRateLimit,
     InMemoryRateLimiter,
+    SharedRateLimitConfigOptions,
 )
 
 config = AuthRateLimitConfig.from_shared_backend(
     backend=InMemoryRateLimiter(max_attempts=5, window_seconds=60),
-    endpoint_overrides={
-        AuthRateLimitSlot.TOTP_VERIFY: EndpointRateLimit(
-            backend=InMemoryRateLimiter(max_attempts=3, window_seconds=60),
-            scope="ip",
-            namespace="totp-verify",
-        ),
-    },
+    options=SharedRateLimitConfigOptions(
+        endpoint_overrides={
+            AuthRateLimitSlot.TOTP_VERIFY: EndpointRateLimit(
+                backend=InMemoryRateLimiter(max_attempts=3, window_seconds=60),
+                scope="ip",
+                namespace="totp-verify",
+            ),
+        },
+    ),
 )
 ```
 

@@ -17,13 +17,9 @@ from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 from sqlalchemy.orm import Session as SASession
 
 from litestar_auth.authentication.strategy.db_models import AccessToken
-from litestar_auth.db import BaseOAuthAccountStore, BaseUserStore
-from litestar_auth.db.sqlalchemy import (
-    SQLAlchemyUserDatabase,
-    _build_oauth_repository,
-    _build_user_load,
-    _build_user_repository,
-)
+from litestar_auth.db import BaseOAuthAccountStore, BaseUserStore, OAuthAccountData
+from litestar_auth.db._repositories import _build_oauth_repository, _build_user_load, _build_user_repository
+from litestar_auth.db.sqlalchemy import SQLAlchemyUserDatabase
 from litestar_auth.exceptions import ConfigurationError, OAuthAccountAlreadyLinkedError
 from litestar_auth.models import (
     AccessTokenMixin,
@@ -338,8 +334,8 @@ def test_custom_user_relationship_option_overrides_keep_mapper_contract_stable()
 
 def test_sqlalchemy_module_reload_preserves_repository_factory_contract() -> None:
     """Reloading the module preserves the dynamic repository factory behavior."""
-    sqlalchemy_module = importlib.import_module("litestar_auth.db.sqlalchemy")
-    reloaded_module = importlib.reload(sqlalchemy_module)
+    repository_module = importlib.import_module("litestar_auth.db._repositories")
+    reloaded_module = importlib.reload(repository_module)
     reloaded_repository = reloaded_module._build_user_repository(User)
 
     assert reloaded_repository is reloaded_module._build_user_repository(User)
@@ -671,12 +667,14 @@ async def test_sqlalchemy_user_database_custom_oauth_model_mixin_contract(sessio
     )
     await database.upsert_oauth_account(
         user,
-        oauth_name="github",
-        account_id="custom-gh-1",
-        account_email=user.email,
-        access_token="custom-access-token",
-        expires_at=3_600,
-        refresh_token="custom-refresh-token",
+        account=OAuthAccountData(
+            oauth_name="github",
+            account_id="custom-gh-1",
+            account_email=user.email,
+            access_token="custom-access-token",
+            expires_at=3_600,
+            refresh_token="custom-refresh-token",
+        ),
     )
 
     resolved_user = await database.get_by_oauth_account("github", "custom-gh-1")
@@ -724,12 +722,14 @@ async def test_sqlalchemy_user_database_supports_relationship_option_override_mo
     )
     await database.upsert_oauth_account(
         user,
-        oauth_name="github",
-        account_id="configured-gh-1",
-        account_email=user.email,
-        access_token="configured-access-token",
-        expires_at=7_200,
-        refresh_token="configured-refresh-token",
+        account=OAuthAccountData(
+            oauth_name="github",
+            account_id="configured-gh-1",
+            account_email=user.email,
+            access_token="configured-access-token",
+            expires_at=7_200,
+            refresh_token="configured-refresh-token",
+        ),
     )
 
     resolved_user = await database.get_by_oauth_account("github", "configured-gh-1")
@@ -754,12 +754,14 @@ async def test_sqlalchemy_user_database_upsert_oauth_account_create(session: SAS
     )
     await database.upsert_oauth_account(
         user,
-        oauth_name="github",
-        account_id="gh-1",
-        account_email=user.email,
-        access_token="at-1",
-        expires_at=3600,
-        refresh_token="rt-1",
+        account=OAuthAccountData(
+            oauth_name="github",
+            account_id="gh-1",
+            account_email=user.email,
+            access_token="at-1",
+            expires_at=3600,
+            refresh_token="rt-1",
+        ),
     )
 
     resolved = await database.get_by_oauth_account("github", "gh-1")
@@ -813,12 +815,14 @@ async def test_sqlalchemy_user_database_upsert_oauth_account_requires_explicit_e
     with pytest.raises(ConfigurationError, match="OAuth token writes require oauth_token_encryption"):
         await database.upsert_oauth_account(
             user,
-            oauth_name="github",
-            account_id="missing-policy",
-            account_email=user.email,
-            access_token="token",
-            expires_at=60,
-            refresh_token=None,
+            account=OAuthAccountData(
+                oauth_name="github",
+                account_id="missing-policy",
+                account_email=user.email,
+                access_token="token",
+                expires_at=60,
+                refresh_token=None,
+            ),
         )
 
 
@@ -834,22 +838,26 @@ async def test_sqlalchemy_user_database_upsert_oauth_account_update(session: SAS
     )
     await database.upsert_oauth_account(
         user,
-        oauth_name="google",
-        account_id="go-1",
-        account_email="first@example.com",
-        access_token="at-old",
-        expires_at=1800,
-        refresh_token="rt-old",
+        account=OAuthAccountData(
+            oauth_name="google",
+            account_id="go-1",
+            account_email="first@example.com",
+            access_token="at-old",
+            expires_at=1800,
+            refresh_token="rt-old",
+        ),
     )
 
     await database.upsert_oauth_account(
         user,
-        oauth_name="google",
-        account_id="go-1",
-        account_email="updated@example.com",
-        access_token="at-new",
-        expires_at=7200,
-        refresh_token="rt-new",
+        account=OAuthAccountData(
+            oauth_name="google",
+            account_id="go-1",
+            account_email="updated@example.com",
+            access_token="at-new",
+            expires_at=7200,
+            refresh_token="rt-new",
+        ),
     )
 
     resolved = await database.get_by_oauth_account("google", "go-1")
@@ -895,22 +903,26 @@ async def test_sqlalchemy_user_database_upsert_oauth_account_rejects_cross_user_
     )
     await database.upsert_oauth_account(
         user_a,
-        oauth_name="google",
-        account_id="shared-id",
-        account_email=user_a.email,
-        access_token="at-a",
-        expires_at=3600,
-        refresh_token="rt-a",
+        account=OAuthAccountData(
+            oauth_name="google",
+            account_id="shared-id",
+            account_email=user_a.email,
+            access_token="at-a",
+            expires_at=3600,
+            refresh_token="rt-a",
+        ),
     )
     with pytest.raises(OAuthAccountAlreadyLinkedError) as exc_info:
         await database.upsert_oauth_account(
             user_b,
-            oauth_name="google",
-            account_id="shared-id",
-            account_email=user_b.email,
-            access_token="at-b",
-            expires_at=3600,
-            refresh_token="rt-b",
+            account=OAuthAccountData(
+                oauth_name="google",
+                account_id="shared-id",
+                account_email=user_b.email,
+                access_token="at-b",
+                expires_at=3600,
+                refresh_token="rt-b",
+            ),
         )
     assert exc_info.value.provider == "google"
     assert exc_info.value.account_id == "shared-id"

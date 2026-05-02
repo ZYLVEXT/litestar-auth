@@ -19,7 +19,14 @@ from litestar_auth.config import TOTP_PENDING_AUDIENCE
 from litestar_auth.exceptions import ConfigurationError, TokenError
 from litestar_auth.password import PasswordHelper
 from litestar_auth.ratelimit._helpers import _client_host
-from litestar_auth.totp import SecurityWarning, TotpAlgorithm, UsedTotpCodeStore, verify_totp_with_store
+from litestar_auth.totp import (
+    SecurityWarning,
+    TotpAlgorithm,
+    TotpReplayProtection,
+    UsedTotpCodeStore,
+    _consume_matching_recovery_code,
+    verify_totp_with_store,
+)
 from litestar_auth.types import TotpUserProtocol
 
 if TYPE_CHECKING:
@@ -32,7 +39,6 @@ _PENDING_JTI_HEX_LENGTH = 32
 _CLIENT_IP_FINGERPRINT_CLAIM = "cip"
 _USER_AGENT_FINGERPRINT_CLAIM = "uaf"
 logger = logging.getLogger(__name__)
-_pending_jti_disabled_logged = False
 
 
 if "InvalidTotpPendingTokenError" not in globals():
@@ -75,21 +81,15 @@ def build_pending_totp_client_binding(
     )
 
 
-def _warn_pending_jti_disabled() -> None:
-    """Emit warning and structured telemetry for unsafe pending-token replay posture."""
-    global _pending_jti_disabled_logged  # noqa: PLW0603
-    warnings.warn(
-        "TOTP pending-token JTI deduplication is DISABLED because unsafe_testing=True.",
-        SecurityWarning,
-        stacklevel=3,
-    )
-    if _pending_jti_disabled_logged:
-        return
-    logger.critical(
-        "TOTP pending-token JTI deduplication is disabled because unsafe_testing=True.",
-        extra={"event": "totp_pending_jti_dedup_disabled", "unsafe_testing": True},
-    )
-    _pending_jti_disabled_logged = True
+@dataclass(slots=True)
+class _PendingJtiWarningState:
+    """Deduplicate unsafe pending-JTI critical logs for one login-flow service instance."""
+
+    logged: bool = False
+
+    def reset(self) -> None:
+        """Allow tests to reset service-local warning deduplication state."""
+        self.logged = False
 
 
 class TotpFlowUserManagerProtocol[UP: TotpUserProtocol[Any], ID](Protocol):
@@ -120,6 +120,21 @@ class PendingTotpLogin[UP: TotpUserProtocol[Any]]:
     expires_at: datetime
 
 
+@dataclass(frozen=True, slots=True)
+class TotpLoginFlowConfig[ID]:
+    """Configuration for pending-login TOTP issue and verification."""
+
+    totp_pending_secret: str
+    totp_pending_lifetime: timedelta = _DEFAULT_PENDING_TOKEN_LIFETIME
+    totp_algorithm: TotpAlgorithm = "SHA256"
+    require_replay_protection: bool = True
+    used_tokens_store: UsedTotpCodeStore | None = None
+    pending_jti_store: JWTDenylistStore | None = None
+    id_parser: Callable[[str], ID] | None = None
+    require_client_binding: bool = True
+    unsafe_testing: bool = False
+
+
 class TotpLoginFlowService[UP: TotpUserProtocol[Any], ID]:
     """Issue and verify pending TOTP login challenges.
 
@@ -129,32 +144,25 @@ class TotpLoginFlowService[UP: TotpUserProtocol[Any], ID]:
     the public wrong-code response shape.
     """
 
-    def __init__(  # noqa: PLR0913
+    def __init__(
         self,
         *,
         user_manager: TotpFlowUserManagerProtocol[UP, ID],
-        totp_pending_secret: str,
-        totp_pending_lifetime: timedelta = _DEFAULT_PENDING_TOKEN_LIFETIME,
-        totp_algorithm: TotpAlgorithm = "SHA256",
-        require_replay_protection: bool = True,
-        used_tokens_store: UsedTotpCodeStore | None = None,
-        pending_jti_store: JWTDenylistStore | None = None,
-        id_parser: Callable[[str], ID] | None = None,
-        require_client_binding: bool = True,
-        unsafe_testing: bool = False,
+        config: TotpLoginFlowConfig[ID],
     ) -> None:
         """Bind the dependencies used by the pending-login handshake."""
         self._user_manager = user_manager
-        self._totp_pending_secret = totp_pending_secret
-        self._totp_pending_lifetime = totp_pending_lifetime
-        self._totp_algorithm = totp_algorithm
-        self._require_replay_protection = require_replay_protection
-        self._used_tokens_store = used_tokens_store
-        self._pending_jti_store = pending_jti_store
-        self._id_parser = id_parser
-        self._require_client_binding = require_client_binding
-        self._unsafe_testing = unsafe_testing
+        self._totp_pending_secret = config.totp_pending_secret
+        self._totp_pending_lifetime = config.totp_pending_lifetime
+        self._totp_algorithm = config.totp_algorithm
+        self._require_replay_protection = config.require_replay_protection
+        self._used_tokens_store = config.used_tokens_store
+        self._pending_jti_store = config.pending_jti_store
+        self._id_parser = config.id_parser
+        self._require_client_binding = config.require_client_binding
+        self._unsafe_testing = config.unsafe_testing
         self._password_helper = PasswordHelper.from_defaults()
+        self._pending_jti_warning_state = _PendingJtiWarningState()
 
     async def issue_pending_token(
         self,
@@ -218,24 +226,22 @@ class TotpLoginFlowService[UP: TotpUserProtocol[Any], ID]:
         if not await verify_totp_with_store(
             secret,
             code,
-            user_id=pending_login.user.id,
-            used_tokens_store=self._used_tokens_store,
+            replay=TotpReplayProtection(
+                user_id=pending_login.user.id,
+                used_tokens_store=self._used_tokens_store,
+                require_replay_protection=self._require_replay_protection,
+                unsafe_testing=self._unsafe_testing,
+            ),
             algorithm=self._totp_algorithm,
-            require_replay_protection=self._require_replay_protection,
-            unsafe_testing=self._unsafe_testing,
-        ) and not await self._consume_matching_recovery_code(pending_login.user, code):
+        ) and not await _consume_matching_recovery_code(
+            self._user_manager,
+            pending_login.user,
+            code,
+            password_helper=self._password_helper,
+        ):
             raise InvalidTotpCodeError
         await self._deny_pending_login(pending_login)
         return pending_login.user
-
-    async def _consume_matching_recovery_code(self, user: UP, submitted_code: str) -> bool:
-        recovery_code_hashes = await self._user_manager.read_recovery_code_hashes(user)
-        matched_hash: str | None = None
-        for recovery_code_hash in recovery_code_hashes:
-            if self._password_helper.verify(submitted_code, recovery_code_hash):
-                matched_hash = recovery_code_hash
-
-        return matched_hash is not None and await self._user_manager.consume_recovery_code_hash(user, matched_hash)
 
     async def _resolve_pending_login(
         self,
@@ -243,11 +249,25 @@ class TotpLoginFlowService[UP: TotpUserProtocol[Any], ID]:
         *,
         client_binding: PendingTotpClientBinding | None = None,
     ) -> PendingTotpLogin[UP]:
+        payload = self._decode_pending_token(pending_token)
+        subject = self._validate_pending_subject(payload)
+        pending_jti = self._validate_pending_jti(payload)
+        expires_at = self._validate_pending_expiration(payload)
+        await self._ensure_pending_jti_is_unused(pending_jti)
+        self._validate_pending_client_binding(payload, client_binding=client_binding)
+
+        user = await self._user_manager.get(self._parse_user_id(subject))
+        if user is None:
+            raise InvalidTotpPendingTokenError
+
+        return PendingTotpLogin(user=user, pending_jti=pending_jti, expires_at=expires_at)
+
+    def _decode_pending_token(self, pending_token: str) -> dict[str, Any]:
         required_claims = ["exp", "aud", "iat", "nbf", "jti"]
         if self._require_client_binding:
             required_claims.extend([_CLIENT_IP_FINGERPRINT_CLAIM, _USER_AGENT_FINGERPRINT_CLAIM])
         try:
-            payload = jwt.decode(
+            return jwt.decode(
                 pending_token,
                 self._totp_pending_secret,
                 algorithms=["HS256"],
@@ -257,30 +277,39 @@ class TotpLoginFlowService[UP: TotpUserProtocol[Any], ID]:
         except (ExpiredSignatureError, InvalidTokenError) as exc:
             raise InvalidTotpPendingTokenError from exc
 
+    @staticmethod
+    def _validate_pending_subject(payload: dict[str, Any]) -> str:
         subject = payload.get("sub")
         if not isinstance(subject, str) or not subject:
             raise InvalidTotpPendingTokenError
+        return subject
 
-        pending_jti_value = payload.get("jti")
-        if not self._is_structurally_valid_jti(pending_jti_value):
+    @classmethod
+    def _validate_pending_jti(cls, payload: dict[str, Any]) -> str:
+        pending_jti = payload.get("jti")
+        if not cls._is_structurally_valid_jti(pending_jti):
             raise InvalidTotpPendingTokenError
-        pending_jti = pending_jti_value
+        return pending_jti
 
-        expires_at = self._parse_pending_expiration(payload.get("exp"))
+    @classmethod
+    def _validate_pending_expiration(cls, payload: dict[str, Any]) -> datetime:
+        expires_at = cls._parse_pending_expiration(payload.get("exp"))
         if expires_at is None:
             raise InvalidTotpPendingTokenError
+        return expires_at
 
+    async def _ensure_pending_jti_is_unused(self, pending_jti: str) -> None:
         if self._pending_jti_store is not None and await self._pending_jti_store.is_denied(pending_jti):
             raise InvalidTotpPendingTokenError
 
+    def _validate_pending_client_binding(
+        self,
+        payload: dict[str, Any],
+        *,
+        client_binding: PendingTotpClientBinding | None,
+    ) -> None:
         if self._require_client_binding and not self._has_valid_client_binding(payload, client_binding):
             raise InvalidTotpPendingTokenError
-
-        user = await self._user_manager.get(self._parse_user_id(subject))
-        if user is None:
-            raise InvalidTotpPendingTokenError
-
-        return PendingTotpLogin(user=user, pending_jti=pending_jti, expires_at=expires_at)
 
     @staticmethod
     def _has_valid_client_binding(
@@ -306,7 +335,7 @@ class TotpLoginFlowService[UP: TotpUserProtocol[Any], ID]:
                     "Configure a JWTDenylistStore for pending_jti_store."
                 )
                 raise ConfigurationError(msg)
-            _warn_pending_jti_disabled()
+            self._warn_pending_jti_disabled()
             return
 
         ttl_seconds = max(int((pending_login.expires_at - datetime.now(tz=UTC)).total_seconds()), 1)
@@ -317,6 +346,25 @@ class TotpLoginFlowService[UP: TotpUserProtocol[Any], ID]:
                 "Use RedisJWTDenylistStore or increase max_entries."
             )
             raise TokenError(msg)
+
+    def _warn_pending_jti_disabled(self) -> None:
+        """Emit warning and structured telemetry for unsafe pending-token replay posture."""
+        warnings.warn(
+            "TOTP pending-token JTI deduplication is DISABLED because unsafe_testing=True.",
+            SecurityWarning,
+            stacklevel=3,
+        )
+        if self._pending_jti_warning_state.logged:
+            return
+        logger.critical(
+            "TOTP pending-token JTI deduplication is disabled because unsafe_testing=True.",
+            extra={"event": "totp_pending_jti_dedup_disabled", "unsafe_testing": True},
+        )
+        self._pending_jti_warning_state.logged = True
+
+    def _reset_pending_jti_warning_state(self) -> None:
+        """Reset this service instance's unsafe pending-JTI warning deduplication state."""
+        self._pending_jti_warning_state.reset()
 
     def _parse_user_id(self, subject: str) -> ID:
         # JWT `sub` is a string; when no id_parser is configured, ID must be str-compatible.

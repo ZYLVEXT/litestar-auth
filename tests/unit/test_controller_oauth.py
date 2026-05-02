@@ -20,14 +20,15 @@ from litestar.status_codes import HTTP_400_BAD_REQUEST
 
 import litestar_auth.controllers._utils as controller_utils_module
 import litestar_auth.controllers.oauth as oauth_module
+import litestar_auth.oauth._flow_cookie as flow_cookie_module
 from litestar_auth.controllers._utils import _require_account_state
 from litestar_auth.controllers.oauth import (
     STATE_COOKIE_MAX_AGE,
+    OAuthAssociateControllerConfig,
+    OAuthControllerConfig,
     _clear_state_cookie,
     _decode_oauth_flow_cookie,
     _encode_oauth_flow_cookie,
-    _OAuthFlowCookie,
-    _OAuthFlowCookieCipher,
     _require_verified_email_evidence,
     _set_state_cookie,
     _validate_state,
@@ -40,6 +41,7 @@ from litestar_auth.exceptions import (
     InactiveUserError,
     OAuthAccountAlreadyLinkedError,
 )
+from litestar_auth.oauth._flow_cookie import _OAuthFlowCookie, _OAuthFlowCookieCipher
 from litestar_auth.oauth.service import OAuthAuthorization
 from tests.unit.test_definition_file_coverage import load_reloaded_test_alias
 
@@ -80,11 +82,13 @@ def test_set_state_cookie_uses_expected_cookie_settings() -> None:
 
     _set_state_cookie(
         response,
-        cookie_name="__oauth_state_github",
         flow_cookie=_flow_cookie(),
-        flow_cookie_cipher=_flow_cookie_cipher(),
-        cookie_path="/auth/oauth/github",
-        cookie_secure=True,
+        cookie_settings=oauth_module._OAuthCookieSettings(
+            cookie_name="__oauth_state_github",
+            cookie_path="/auth/oauth/github",
+            cookie_secure=True,
+            flow_cookie_cipher=_flow_cookie_cipher(),
+        ),
     )
 
     cookie = response.cookies[0]
@@ -121,6 +125,25 @@ def test_oauth_flow_cookie_rejects_wrong_secret() -> None:
     assert (extra.get("code") if isinstance(extra, dict) else None) == ErrorCode.OAUTH_STATE_INVALID
 
 
+@pytest.mark.parametrize(
+    "flow_cookie",
+    [
+        pytest.param(_OAuthFlowCookie(state="", code_verifier="verifier-value"), id="missing-state"),
+        pytest.param(_OAuthFlowCookie(state="state-value", code_verifier=""), id="missing-code-verifier"),
+    ],
+)
+def test_oauth_flow_cookie_rejects_empty_decrypted_fields(flow_cookie: _OAuthFlowCookie) -> None:
+    """Encrypted OAuth flow cookies must carry both state and PKCE verifier."""
+    encoded = _encode_oauth_flow_cookie(flow_cookie, flow_cookie_cipher=_flow_cookie_cipher())
+
+    with pytest.raises(ClientException) as exc_info:
+        _decode_oauth_flow_cookie(encoded, flow_cookie_cipher=_flow_cookie_cipher())
+
+    assert exc_info.value.status_code == HTTP_400_BAD_REQUEST
+    extra = exc_info.value.extra
+    assert (extra.get("code") if isinstance(extra, dict) else None) == ErrorCode.OAUTH_STATE_INVALID
+
+
 def test_oauth_flow_cookie_crypto_dependency_error(monkeypatch: pytest.MonkeyPatch) -> None:
     """Encrypted OAuth flow cookies preserve the optional-dependency install hint."""
     real_import = builtins.__import__
@@ -140,14 +163,62 @@ def test_oauth_flow_cookie_crypto_dependency_error(monkeypatch: pytest.MonkeyPat
     monkeypatch.setattr(builtins, "__import__", guarded_import)
 
     with pytest.raises(ImportError, match=r"Install litestar-auth\[oauth\]"):
-        oauth_module._require_oauth_flow_cookie_crypto()
+        _OAuthFlowCookieCipher.from_secret(OAUTH_FLOW_COOKIE_SECRET)
+
+
+def test_oauth_flow_cookie_decrypt_reuses_constructed_crypto(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Decrypt does not re-import cryptography after cipher construction."""
+    cipher = _flow_cookie_cipher()
+    encoded = cipher.encrypt(_flow_cookie())
+    real_import = builtins.__import__
+
+    def guarded_import(
+        name: str,
+        globals_: dict[str, object] | None = None,
+        locals_: dict[str, object] | None = None,
+        fromlist: tuple[str, ...] = (),
+        level: int = 0,
+    ) -> object:
+        if name.startswith("cryptography"):
+            msg = "decrypt must not import cryptography"
+            raise ImportError(msg)
+        return real_import(name, globals_, locals_, fromlist, level)
+
+    monkeypatch.setattr(builtins, "__import__", guarded_import)
+
+    assert cipher.decrypt(encoded) == _flow_cookie()
+
+
+def test_oauth_flow_cookie_module_reload_preserves_cipher_contract(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Reloading the extracted flow-cookie module preserves encrypted envelope behavior."""
+    assert flow_cookie_module.__file__ is not None
+    reloaded = load_reloaded_test_alias(
+        alias_name="_coverage_alias_oauth_flow_cookie",
+        source_path=Path(flow_cookie_module.__file__).resolve(),
+        monkeypatch=monkeypatch,
+    )
+
+    cipher = reloaded._OAuthFlowCookieCipher.from_secret(OAUTH_FLOW_COOKIE_SECRET)
+    flow_cookie = reloaded._OAuthFlowCookie(state="state-value", code_verifier="verifier-value")
+    encoded = cipher.encrypt(flow_cookie)
+
+    assert encoded.startswith("v2.")
+    assert cipher.decrypt(encoded) == flow_cookie
 
 
 @pytest.mark.parametrize(
     "cookie_value",
-    ["not valid base64!", "non-ascii-\u2603", "e30", "eyJzdGF0ZSI6InN0YXRlLXZhbHVlIn0", "v2", "v2no-separator"],
+    [
+        None,
+        "not valid base64!",
+        "non-ascii-\u2603",
+        "e30",
+        "eyJzdGF0ZSI6InN0YXRlLXZhbHVlIn0",
+        "v2",
+        "v2no-separator",
+    ],
 )
-def test_oauth_flow_cookie_decode_rejects_malformed_or_incomplete_values(cookie_value: str) -> None:
+def test_oauth_flow_cookie_decode_rejects_malformed_or_incomplete_values(cookie_value: str | None) -> None:
     """Malformed, tampered, and verifier-less flow cookies share the invalid-state response."""
     with pytest.raises(ClientException) as exc_info:
         _decode_oauth_flow_cookie(cookie_value, flow_cookie_cipher=_flow_cookie_cipher())
@@ -206,8 +277,8 @@ def test_validate_state_raises_when_mismatch() -> None:
 
 def test_manual_oauth_factories_expose_typed_client_annotations() -> None:
     """Manual controller factories advertise the explicit OAuth client protocol."""
-    assert create_oauth_controller.__annotations__["oauth_client"] == "OAuthClientProtocol"
-    assert create_oauth_associate_controller.__annotations__["oauth_client"] == "OAuthClientProtocol"
+    assert OAuthControllerConfig.__annotations__["oauth_client"] == "OAuthClientProtocol"
+    assert OAuthAssociateControllerConfig.__annotations__["oauth_client"] == "OAuthClientProtocol"
 
 
 def test_oauth_module_does_not_expose_removed_adapter_passthrough_helpers() -> None:
@@ -245,18 +316,140 @@ def test_create_oauth_controller_builds_the_shared_client_adapter_before_assembl
     assert created_controller is controller
     build_adapter.assert_called_once_with(oauth_client=oauth_client)
     create_controller.assert_called_once_with(
-        provider_name="github",
-        backend=backend,
-        user_manager=user_manager,
-        oauth_client_adapter=oauth_client_adapter,
-        redirect_base_url="https://app.example/auth/oauth",
-        oauth_flow_cookie_secret=OAUTH_FLOW_COOKIE_SECRET,
-        path="/auth/oauth",
-        cookie_secure=True,
-        oauth_scopes=None,
-        associate_by_email=False,
-        trust_provider_email_verified=False,
+        oauth_module._OAuthLoginControllerSettings(
+            provider_name="github",
+            backend=backend,
+            user_manager=user_manager,
+            oauth_client_adapter=oauth_client_adapter,
+            redirect_base_url="https://app.example/auth/oauth",
+            oauth_flow_cookie_secret=OAUTH_FLOW_COOKIE_SECRET,
+            path="/auth/oauth",
+            cookie_secure=True,
+            oauth_scopes=None,
+            associate_by_email=False,
+            trust_provider_email_verified=False,
+        ),
     )
+
+
+def test_create_oauth_controller_accepts_config_object(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Manual login controller wiring can receive settings as one typed config."""
+    oauth_client = _make_oauth_client()
+    oauth_client_adapter = MagicMock()
+    backend = cast("Any", MagicMock())
+    user_manager = cast("Any", MagicMock())
+    controller = cast("type[Any]", object())
+    build_adapter = MagicMock(return_value=oauth_client_adapter)
+    create_controller = MagicMock(return_value=controller)
+    monkeypatch.setattr(oauth_module, "_build_oauth_client_adapter", build_adapter)
+    monkeypatch.setattr(oauth_module, "_create_login_oauth_controller", create_controller)
+
+    created_controller = create_oauth_controller(
+        config=OAuthControllerConfig(
+            provider_name="github",
+            backend=backend,
+            user_manager=user_manager,
+            oauth_client=oauth_client,
+            redirect_base_url="https://app.example/custom/oauth",
+            oauth_flow_cookie_secret=OAUTH_FLOW_COOKIE_SECRET,
+            path="/custom/oauth",
+            cookie_secure=False,
+            oauth_scopes=("user:email",),
+            associate_by_email=True,
+            trust_provider_email_verified=True,
+        ),
+    )
+
+    assert created_controller is controller
+    build_adapter.assert_called_once_with(oauth_client=oauth_client)
+    create_controller.assert_called_once_with(
+        oauth_module._OAuthLoginControllerSettings(
+            provider_name="github",
+            backend=backend,
+            user_manager=user_manager,
+            oauth_client_adapter=oauth_client_adapter,
+            redirect_base_url="https://app.example/custom/oauth",
+            oauth_flow_cookie_secret=OAUTH_FLOW_COOKIE_SECRET,
+            path="/custom/oauth",
+            cookie_secure=False,
+            oauth_scopes=("user:email",),
+            associate_by_email=True,
+            trust_provider_email_verified=True,
+        ),
+    )
+
+
+def test_create_oauth_controller_rejects_config_combined_with_keyword_options() -> None:
+    """The OAuth login controller factory accepts either config or keyword options."""
+    factory = cast("Any", create_oauth_controller)
+
+    with pytest.raises(ValueError, match="OAuthControllerConfig or keyword options"):
+        factory(
+            config=OAuthControllerConfig(
+                provider_name="github",
+                backend=cast("Any", MagicMock()),
+                user_manager=cast("Any", MagicMock()),
+                oauth_client=_make_oauth_client(),
+                redirect_base_url="https://app.example/auth/oauth",
+                oauth_flow_cookie_secret=OAUTH_FLOW_COOKIE_SECRET,
+            ),
+            provider_name="github",
+        )
+
+
+def test_create_oauth_associate_controller_accepts_config_object(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Manual account-linking controller wiring can receive settings as one typed config."""
+    oauth_client = _make_oauth_client()
+    user_manager = cast("Any", MagicMock())
+    controller = cast("type[Any]", object())
+    create_controller = MagicMock(return_value=controller)
+    security = cast("Any", [{"BearerToken": []}])
+    monkeypatch.setattr(oauth_module, "_create_oauth_associate_controller", create_controller)
+
+    created_controller = create_oauth_associate_controller(
+        config=OAuthAssociateControllerConfig(
+            provider_name="github",
+            user_manager=user_manager,
+            oauth_client=oauth_client,
+            redirect_base_url="https://app.example/custom/associate",
+            oauth_flow_cookie_secret=OAUTH_FLOW_COOKIE_SECRET,
+            path="/custom/associate",
+            cookie_secure=False,
+            security=security,
+        ),
+    )
+
+    assert created_controller is controller
+    create_controller.assert_called_once_with(
+        oauth_module._OAuthAssociateControllerSettings(
+            provider_name="github",
+            user_manager=user_manager,
+            user_manager_dependency_key=None,
+            oauth_client=oauth_client,
+            redirect_base_url="https://app.example/custom/associate",
+            oauth_flow_cookie_secret=OAUTH_FLOW_COOKIE_SECRET,
+            path="/custom/associate",
+            cookie_secure=False,
+            security=security,
+        ),
+    )
+
+
+def test_create_oauth_associate_controller_rejects_config_combined_with_keyword_options() -> None:
+    """The OAuth associate controller factory accepts either config or keyword options."""
+    factory = cast("Any", create_oauth_associate_controller)
+
+    with pytest.raises(ValueError, match="OAuthAssociateControllerConfig or keyword options"):
+        factory(
+            config=OAuthAssociateControllerConfig(
+                provider_name="github",
+                user_manager=cast("Any", MagicMock()),
+                oauth_client=_make_oauth_client(),
+                redirect_base_url="https://app.example/auth/associate",
+                oauth_flow_cookie_secret=OAUTH_FLOW_COOKIE_SECRET,
+            ),
+            provider_name="github",
+        )
 
 
 async def test_require_account_state_calls_optional_validator() -> None:
@@ -414,18 +607,24 @@ def test_shared_oauth_controller_assembly_uses_direct_manager_binding_and_provid
     manager = MagicMock()
 
     assembly = oauth_module._build_oauth_controller_assembly(
-        provider_name="github",
-        oauth_client_adapter=oauth_module._build_oauth_client_adapter(oauth_client=_make_oauth_client()),
-        redirect_base_url="https://app.example/auth/oauth",
-        path="/auth/oauth",
-        cookie_secure=True,
-        oauth_flow_cookie_secret=OAUTH_FLOW_COOKIE_SECRET,
-        state_cookie_prefix=oauth_module.STATE_COOKIE_PREFIX,
-        controller_name_suffix="OAuthController",
+        settings=oauth_module._OAuthControllerAssemblySettings(
+            provider_name="github",
+            redirect_base_url="https://app.example/auth/oauth",
+            path="/auth/oauth",
+            cookie_secure=True,
+            oauth_flow_cookie_secret=OAUTH_FLOW_COOKIE_SECRET,
+            state_cookie_prefix=oauth_module.STATE_COOKIE_PREFIX,
+            controller_name_suffix="OAuthController",
+        ),
+        client_binding=oauth_module._OAuthClientBinding(
+            oauth_client_adapter=oauth_module._build_oauth_client_adapter(oauth_client=_make_oauth_client()),
+        ),
         user_manager_binding=oauth_module._build_direct_user_manager_binding(cast("Any", manager)),
-        oauth_scopes=("openid", "email", "openid"),
-        associate_by_email=True,
-        trust_provider_email_verified=True,
+        service_settings=oauth_module._OAuthServiceSettings(
+            oauth_scopes=("openid", "email", "openid"),
+            associate_by_email=True,
+            trust_provider_email_verified=True,
+        ),
     )
 
     assert assembly.controller_name == "GithubOAuthController"
@@ -443,15 +642,18 @@ def test_shared_oauth_controller_assembly_rejects_missing_client_inputs() -> Non
     """Internal controller assembly requires either a raw client or a resolved adapter."""
     with pytest.raises(ValueError, match="Provide oauth_client or oauth_client_adapter"):
         oauth_module._build_oauth_controller_assembly(
-            provider_name="github",
-            redirect_base_url="https://app.example/auth/oauth",
-            path="/auth/oauth",
-            cookie_secure=True,
-            oauth_flow_cookie_secret=OAUTH_FLOW_COOKIE_SECRET,
-            state_cookie_prefix=oauth_module.STATE_COOKIE_PREFIX,
-            controller_name_suffix="OAuthController",
+            settings=oauth_module._OAuthControllerAssemblySettings(
+                provider_name="github",
+                redirect_base_url="https://app.example/auth/oauth",
+                path="/auth/oauth",
+                cookie_secure=True,
+                oauth_flow_cookie_secret=OAUTH_FLOW_COOKIE_SECRET,
+                state_cookie_prefix=oauth_module.STATE_COOKIE_PREFIX,
+                controller_name_suffix="OAuthController",
+                validate_redirect_base_url=False,
+            ),
+            client_binding=oauth_module._OAuthClientBinding(),
             user_manager_binding=oauth_module._build_direct_user_manager_binding(cast("Any", MagicMock())),
-            validate_redirect_base_url=False,
         )
 
 
@@ -459,17 +661,21 @@ def test_shared_oauth_controller_assembly_rejects_duplicate_client_inputs() -> N
     """Internal controller assembly fails closed when both raw and adapted clients are supplied."""
     with pytest.raises(ValueError, match="Provide only one of oauth_client or oauth_client_adapter"):
         oauth_module._build_oauth_controller_assembly(
-            provider_name="github",
-            oauth_client=_make_oauth_client(),
-            oauth_client_adapter=oauth_module._build_oauth_client_adapter(oauth_client=_make_oauth_client()),
-            redirect_base_url="https://app.example/auth/oauth",
-            path="/auth/oauth",
-            cookie_secure=True,
-            oauth_flow_cookie_secret=OAUTH_FLOW_COOKIE_SECRET,
-            state_cookie_prefix=oauth_module.STATE_COOKIE_PREFIX,
-            controller_name_suffix="OAuthController",
+            settings=oauth_module._OAuthControllerAssemblySettings(
+                provider_name="github",
+                redirect_base_url="https://app.example/auth/oauth",
+                path="/auth/oauth",
+                cookie_secure=True,
+                oauth_flow_cookie_secret=OAUTH_FLOW_COOKIE_SECRET,
+                state_cookie_prefix=oauth_module.STATE_COOKIE_PREFIX,
+                controller_name_suffix="OAuthController",
+                validate_redirect_base_url=False,
+            ),
+            client_binding=oauth_module._OAuthClientBinding(
+                oauth_client=_make_oauth_client(),
+                oauth_client_adapter=oauth_module._build_oauth_client_adapter(oauth_client=_make_oauth_client()),
+            ),
             user_manager_binding=oauth_module._build_direct_user_manager_binding(cast("Any", MagicMock())),
-            validate_redirect_base_url=False,
         )
 
 
@@ -531,14 +737,18 @@ def test_create_oauth_controller_rejects_insecure_redirect_base_url(
 def test_shared_oauth_controller_assembly_uses_dependency_binding_for_associate_routes() -> None:
     """Shared assembly keeps associate DI bindings on the provider-scoped cookie and callback contract."""
     assembly = oauth_module._build_oauth_controller_assembly(
-        provider_name="github",
-        oauth_client_adapter=oauth_module._build_oauth_client_adapter(oauth_client=_make_oauth_client()),
-        redirect_base_url="https://app.example/auth/associate",
-        path="/auth/associate",
-        cookie_secure=False,
-        oauth_flow_cookie_secret=OAUTH_FLOW_COOKIE_SECRET,
-        state_cookie_prefix=oauth_module.ASSOCIATE_STATE_COOKIE_PREFIX,
-        controller_name_suffix="OAuthAssociateController",
+        settings=oauth_module._OAuthControllerAssemblySettings(
+            provider_name="github",
+            redirect_base_url="https://app.example/auth/associate",
+            path="/auth/associate",
+            cookie_secure=False,
+            oauth_flow_cookie_secret=OAUTH_FLOW_COOKIE_SECRET,
+            state_cookie_prefix=oauth_module.ASSOCIATE_STATE_COOKIE_PREFIX,
+            controller_name_suffix="OAuthAssociateController",
+        ),
+        client_binding=oauth_module._OAuthClientBinding(
+            oauth_client_adapter=oauth_module._build_oauth_client_adapter(oauth_client=_make_oauth_client()),
+        ),
         user_manager_binding=oauth_module._build_associate_user_manager_binding(
             user_manager=None,
             user_manager_dependency_key="litestar_auth_oauth_associate_user_manager",

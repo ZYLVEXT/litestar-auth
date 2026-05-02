@@ -19,6 +19,7 @@ from litestar.exceptions import NotAuthorizedException, PermissionDeniedExceptio
 from litestar.handlers.base import BaseRouteHandler
 
 import litestar_auth.guards._guards as guards_module
+import litestar_auth.guards._protocol_narrowing as protocol_narrowing_module
 from litestar_auth._superuser_role import DEFAULT_SUPERUSER_ROLE_NAME, SUPERUSER_ROLE_NAME_SENTINEL
 from litestar_auth.exceptions import ErrorCode, InsufficientRolesError
 from litestar_auth.guards import (
@@ -31,12 +32,13 @@ from litestar_auth.guards import (
     is_verified,
 )
 from litestar_auth.guards._guards import (
-    _connection_superuser_role_name,
+    _roles_include_all_fixed_work,
+    _roles_intersect_fixed_work,
+)
+from litestar_auth.guards._protocol_narrowing import (
     _require_active_guarded_user,
     _require_guarded_user,
     _require_role_capable_user,
-    _roles_include_all_fixed_work,
-    _roles_intersect_fixed_work,
 )
 from tests._helpers import ExampleUser
 
@@ -175,6 +177,15 @@ def test_guards_module_executes_under_coverage() -> None:
     assert reloaded_module.is_active is _guards.is_active
     assert reloaded_module.is_verified is _guards.is_verified
     assert reloaded_module.is_superuser is _guards.is_superuser
+
+
+def test_protocol_narrowing_module_executes_under_coverage() -> None:
+    """Reload the protocol-narrowing module in-test so coverage records module execution."""
+    reloaded_module = importlib.reload(protocol_narrowing_module)
+
+    assert reloaded_module._require_active_guarded_user is protocol_narrowing_module._require_active_guarded_user
+    assert reloaded_module._require_guarded_user is protocol_narrowing_module._require_guarded_user
+    assert reloaded_module._require_role_capable_user is protocol_narrowing_module._require_role_capable_user
 
 
 @pytest.mark.parametrize(
@@ -593,12 +604,13 @@ def test_is_superuser_dispatches_to_fixed_work_role_helper(monkeypatch: pytest.M
 
 def test_is_superuser_falls_back_to_default_when_scope_state_is_not_mapping() -> None:
     """Non-plugin scope state does not override the canonical default role."""
+    user = ExampleUser(id=uuid4(), roles=[DEFAULT_SUPERUSER_ROLE_NAME])
     connection = cast(
         "ASGIConnection[Any, Any, Any, Any]",
-        SimpleNamespace(scope={"state": object()}),
+        SimpleNamespace(user=user, scope={"state": object()}),
     )
 
-    assert _connection_superuser_role_name(connection) == DEFAULT_SUPERUSER_ROLE_NAME
+    assert is_superuser(connection, _build_handler()) is None
 
 
 @pytest.mark.parametrize(

@@ -11,7 +11,7 @@ from urllib.parse import parse_qs, urlparse
 
 import pytest
 
-from litestar_auth import totp
+from litestar_auth import _totp_stores, totp
 from litestar_auth.contrib.redis import RedisAuthClientProtocol, RedisAuthPreset
 from litestar_auth.password import PasswordHelper
 from tests._helpers import cast_fakeredis
@@ -30,6 +30,21 @@ PENDING_JTI_TTL_SECONDS = 30
 PENDING_JTI_TTL_FLOOR = PENDING_JTI_TTL_SECONDS - 1
 
 
+def _replay(
+    user_id: object = "user-1",
+    *,
+    used_tokens_store: totp.UsedTotpCodeStore | None = None,
+    require_replay_protection: bool = True,
+    unsafe_testing: bool = False,
+) -> totp.TotpReplayProtection:
+    return totp.TotpReplayProtection(
+        user_id=user_id,
+        used_tokens_store=used_tokens_store,
+        require_replay_protection=require_replay_protection,
+        unsafe_testing=unsafe_testing,
+    )
+
+
 def test_totp_module_executes_under_coverage() -> None:
     """Reload the module in-test so coverage records module and class execution."""
     original_security_warning = totp.SecurityWarning
@@ -42,6 +57,16 @@ def test_totp_module_executes_under_coverage() -> None:
     assert reloaded_module.InMemoryTotpEnrollmentStore.__name__ == totp.InMemoryTotpEnrollmentStore.__name__
     assert reloaded_module.RedisUsedTotpCodeStore.__name__ == totp.RedisUsedTotpCodeStore.__name__
     assert reloaded_module.RedisTotpEnrollmentStore.__name__ == totp.RedisTotpEnrollmentStore.__name__
+
+
+def test_totp_stores_module_executes_under_coverage() -> None:
+    """Reload the private store module so coverage records module and class execution."""
+    reloaded_module = importlib.reload(_totp_stores)
+
+    assert reloaded_module.InMemoryUsedTotpCodeStore.__name__ == _totp_stores.InMemoryUsedTotpCodeStore.__name__
+    assert reloaded_module.InMemoryTotpEnrollmentStore.__name__ == _totp_stores.InMemoryTotpEnrollmentStore.__name__
+    assert reloaded_module.RedisUsedTotpCodeStore.__name__ == _totp_stores.RedisUsedTotpCodeStore.__name__
+    assert reloaded_module.RedisTotpEnrollmentStore.__name__ == _totp_stores.RedisTotpEnrollmentStore.__name__
 
 
 def test_generate_totp_secret_returns_base32_secret() -> None:
@@ -204,8 +229,7 @@ async def test_verify_totp_with_store_rejects_same_window_replay(monkeypatch: py
         await totp.verify_totp_with_store(
             RFC_SECRET,
             current_code,
-            user_id="user-1",
-            used_tokens_store=store,
+            replay=_replay(used_tokens_store=store),
         )
         is True
     )
@@ -213,8 +237,7 @@ async def test_verify_totp_with_store_rejects_same_window_replay(monkeypatch: py
         await totp.verify_totp_with_store(
             RFC_SECRET,
             current_code,
-            user_id="user-1",
-            used_tokens_store=store,
+            replay=_replay(used_tokens_store=store),
         )
         is False
     )
@@ -230,9 +253,7 @@ async def test_verify_totp_with_store_warns_when_replay_protection_disabled(monk
             await totp.verify_totp_with_store(
                 RFC_SECRET,
                 current_code,
-                user_id="user-1",
-                used_tokens_store=None,
-                require_replay_protection=False,
+                replay=_replay(require_replay_protection=False),
             )
             is True
         )
@@ -244,7 +265,7 @@ async def test_verify_totp_with_store_requires_store_outside_testing(monkeypatch
     current_code = totp._generate_totp_code(RFC_SECRET, 1)
 
     with pytest.raises(totp.ConfigurationError, match="UsedTotpCodeStore"):
-        await totp.verify_totp_with_store(RFC_SECRET, current_code, user_id="user-1")
+        await totp.verify_totp_with_store(RFC_SECRET, current_code, replay=_replay())
 
 
 async def test_verify_totp_with_store_warns_in_testing_without_store(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -257,8 +278,7 @@ async def test_verify_totp_with_store_warns_in_testing_without_store(monkeypatch
             await totp.verify_totp_with_store(
                 RFC_SECRET,
                 current_code,
-                user_id="user-1",
-                unsafe_testing=True,
+                replay=_replay(unsafe_testing=True),
             )
             is True
         )
@@ -276,8 +296,7 @@ async def test_verify_totp_with_store_does_not_warn_when_store_provided(monkeypa
             await totp.verify_totp_with_store(
                 RFC_SECRET,
                 current_code,
-                user_id="user-1",
-                used_tokens_store=store,
+                replay=_replay(used_tokens_store=store),
             )
             is True
         )
@@ -293,7 +312,7 @@ async def test_verify_totp_with_store_logs_warning_on_invalid_code(
     monkeypatch.setattr(totp.time, "time", lambda: 59.0)
 
     with caplog.at_level(logging.WARNING, logger=totp.logger.name):
-        assert await totp.verify_totp_with_store(RFC_SECRET, "000000", user_id="user-1") is False
+        assert await totp.verify_totp_with_store(RFC_SECRET, "000000", replay=_replay()) is False
 
     assert len(caplog.records) == 1
     record = caplog.records[0]
@@ -316,8 +335,7 @@ async def test_verify_totp_with_store_logs_warning_on_replay(
         await totp.verify_totp_with_store(
             RFC_SECRET,
             current_code,
-            user_id="user-1",
-            used_tokens_store=store,
+            replay=_replay(used_tokens_store=store),
         )
         is True
     )
@@ -328,8 +346,7 @@ async def test_verify_totp_with_store_logs_warning_on_replay(
             await totp.verify_totp_with_store(
                 RFC_SECRET,
                 current_code,
-                user_id="user-1",
-                used_tokens_store=store,
+                replay=_replay(used_tokens_store=store),
             )
             is False
         )
@@ -355,8 +372,7 @@ async def test_verify_totp_with_store_logs_capacity_event_when_in_memory_store_f
         await totp.verify_totp_with_store(
             RFC_SECRET,
             current_code,
-            user_id="user-1",
-            used_tokens_store=store,
+            replay=_replay(used_tokens_store=store),
         )
         is True
     )
@@ -364,8 +380,7 @@ async def test_verify_totp_with_store_logs_capacity_event_when_in_memory_store_f
         await totp.verify_totp_with_store(
             RFC_SECRET,
             current_code,
-            user_id="user-2",
-            used_tokens_store=store,
+            replay=_replay("user-2", used_tokens_store=store),
         )
         is True
     )
@@ -376,8 +391,7 @@ async def test_verify_totp_with_store_logs_capacity_event_when_in_memory_store_f
             await totp.verify_totp_with_store(
                 RFC_SECRET,
                 current_code,
-                user_id="user-3",
-                used_tokens_store=store,
+                replay=_replay("user-3", used_tokens_store=store),
             )
             is False
         )
@@ -406,8 +420,8 @@ async def test_verify_totp_with_store_keys_replay_on_matched_counter(monkeypatch
 
     store = RecordingStore()
 
-    assert await totp.verify_totp_with_store(RFC_SECRET, code, user_id="user-1", used_tokens_store=store) is True
-    assert await totp.verify_totp_with_store(RFC_SECRET, code, user_id="user-1", used_tokens_store=store) is False
+    assert await totp.verify_totp_with_store(RFC_SECRET, code, replay=_replay(used_tokens_store=store)) is True
+    assert await totp.verify_totp_with_store(RFC_SECRET, code, replay=_replay(used_tokens_store=store)) is False
     assert seen_counters == [matched_counter, matched_counter]
 
 
@@ -430,8 +444,7 @@ async def test_verify_totp_with_store_isolated_per_user_and_ttl(monkeypatch: pyt
         await totp.verify_totp_with_store(
             RFC_SECRET,
             current_code,
-            user_id="user-1",
-            used_tokens_store=store,
+            replay=_replay(used_tokens_store=store),
         )
         is True
     )
@@ -439,8 +452,7 @@ async def test_verify_totp_with_store_isolated_per_user_and_ttl(monkeypatch: pyt
         await totp.verify_totp_with_store(
             RFC_SECRET,
             current_code,
-            user_id="user-2",
-            used_tokens_store=store,
+            replay=_replay("user-2", used_tokens_store=store),
         )
         is True
     )
@@ -637,7 +649,7 @@ def test_redis_used_totp_code_store_preserves_lazy_dependency_error(monkeypatch:
         msg = "Install litestar-auth[redis] to use RedisUsedTotpCodeStore"
         raise ImportError(msg)
 
-    monkeypatch.setattr(totp, "_load_used_totp_redis_asyncio", fail_load_redis)
+    monkeypatch.setattr(totp._totp_stores, "_load_used_totp_redis_asyncio", fail_load_redis)
 
     redis_client_sentinel = cast("totp.RedisUsedTotpCodeStoreClient", object())
     with pytest.raises(ImportError, match="Install litestar-auth\\[redis\\] to use RedisUsedTotpCodeStore"):
@@ -715,7 +727,7 @@ async def test_redis_totp_enrollment_store_coerces_non_bytes_eval_result(
             del names
             return 1
 
-    monkeypatch.setattr(totp, "_load_enrollment_redis_asyncio", lambda: None)
+    monkeypatch.setattr(totp._totp_stores, "_load_enrollment_redis_asyncio", lambda: None)
     store = totp.RedisTotpEnrollmentStore(
         redis=cast("totp.RedisTotpEnrollmentStoreClient", _StringEvalRedisClient()),
     )
@@ -730,7 +742,7 @@ def test_redis_totp_enrollment_store_preserves_lazy_dependency_error(monkeypatch
         msg = "Install litestar-auth[redis] to use RedisTotpEnrollmentStore"
         raise ImportError(msg)
 
-    monkeypatch.setattr(totp, "_load_enrollment_redis_asyncio", fail_load_redis)
+    monkeypatch.setattr(totp._totp_stores, "_load_enrollment_redis_asyncio", fail_load_redis)
 
     redis_client_sentinel = cast("totp.RedisTotpEnrollmentStoreClient", object())
     with pytest.raises(ImportError, match="Install litestar-auth\\[redis\\] to use RedisTotpEnrollmentStore"):
@@ -746,9 +758,9 @@ async def test_contrib_redis_preset_builds_totp_store_with_prefix_override(
     def load_optional_redis() -> object:
         return object()
 
-    monkeypatch.setattr(totp, "_load_used_totp_redis_asyncio", load_optional_redis)
-    monkeypatch.setattr(totp, "_load_enrollment_redis_asyncio", load_optional_redis)
-    monkeypatch.setattr("litestar_auth.authentication.strategy.jwt._load_redis_asyncio", load_optional_redis)
+    monkeypatch.setattr(totp._totp_stores, "_load_used_totp_redis_asyncio", load_optional_redis)
+    monkeypatch.setattr(totp._totp_stores, "_load_enrollment_redis_asyncio", load_optional_redis)
+    monkeypatch.setattr("litestar_auth.authentication.strategy._jwt_denylist._load_redis_asyncio", load_optional_redis)
 
     preset = RedisAuthPreset(
         redis=cast_fakeredis(async_fakeredis, RedisAuthClientProtocol),

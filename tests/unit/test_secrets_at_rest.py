@@ -6,6 +6,7 @@ import importlib
 
 import pytest
 
+import litestar_auth._optional_deps as optional_deps_module
 import litestar_auth._secrets_at_rest as secrets_at_rest
 from litestar_auth._secrets_at_rest import (
     FernetKey,
@@ -108,7 +109,7 @@ def test_load_cryptography_fernet_imports_on_demand(monkeypatch: pytest.MonkeyPa
         loaded_modules.append(name)
         return fake_module
 
-    monkeypatch.setattr(secrets_at_rest.importlib, "import_module", import_module)
+    monkeypatch.setattr(optional_deps_module.importlib, "import_module", import_module)
 
     assert secrets_at_rest._load_cryptography_fernet() is fake_module
     assert loaded_modules == ["cryptography.fernet"]
@@ -123,7 +124,7 @@ def test_load_cryptography_fernet_missing_dependency_raises_extra_hint(
         msg = "missing cryptography"
         raise ImportError(msg)
 
-    monkeypatch.setattr(secrets_at_rest.importlib, "import_module", import_module)
+    monkeypatch.setattr(optional_deps_module.importlib, "import_module", import_module)
 
     with pytest.raises(ImportError, match=r"litestar-auth\[oauth,totp\]") as exc_info:
         secrets_at_rest._load_cryptography_fernet()

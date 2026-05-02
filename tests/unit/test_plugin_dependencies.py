@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import importlib
 import inspect
-from typing import TYPE_CHECKING, Any, ClassVar, cast, get_type_hints
+from typing import TYPE_CHECKING, Any, cast, get_type_hints
 from uuid import UUID
 
 import pytest
@@ -216,8 +216,9 @@ def test_register_exception_handlers_preserves_existing_handlers() -> None:
 
     @_mark_litestar_auth_route_handler
     class ExistingController(Controller):
-        exception_handlers: ClassVar[dict[type[Exception], object] | None] = {RuntimeError: existing_handler}
         path = "/auth"
+
+    ExistingController.exception_handlers = {RuntimeError: existing_handler}
 
     register_exception_handlers([ExistingController])
     handlers = cast("dict[type[Exception], object]", ExistingController.exception_handlers)
@@ -230,7 +231,7 @@ def test_register_exception_handlers_preserves_existing_handlers() -> None:
 def test_register_exception_handlers_preserves_existing_client_exception_handler() -> None:
     """Registering auth handlers does not override controller-local ClientException handlers."""
 
-    def existing_handler(_request: object, _exc: ClientException) -> Response[dict[str, str]]:
+    def existing_handler(_request: object, _exc: Exception) -> Response[dict[str, str]]:
         """Return a sentinel response for identity assertions.
 
         Returns:
@@ -240,8 +241,9 @@ def test_register_exception_handlers_preserves_existing_client_exception_handler
 
     @_mark_litestar_auth_route_handler
     class ExistingController(Controller):
-        exception_handlers: ClassVar[dict[type[Exception], object] | None] = {ClientException: existing_handler}
         path = "/auth"
+
+    ExistingController.exception_handlers = {ClientException: existing_handler}
 
     register_exception_handlers([ExistingController])
     handlers = cast("dict[type[Exception], object]", ExistingController.exception_handlers)
@@ -254,11 +256,11 @@ def test_register_exception_handlers_only_mutates_handlers_it_receives() -> None
 
     @_mark_litestar_auth_route_handler
     class PluginOwnedController(Controller):
-        exception_handlers: ClassVar[dict[type[Exception], object] | None] = None
+        exception_handlers: dict[type[Exception], object] | None = None
         path = "/auth"
 
     class NonAuthController(Controller):
-        exception_handlers: ClassVar[dict[type[Exception], object] | None] = None
+        exception_handlers: dict[type[Exception], object] | None = None
         path = "/auth-state"
 
     register_exception_handlers([PluginOwnedController])
@@ -272,7 +274,7 @@ def test_register_exception_handlers_adds_authorization_handler_to_non_auth_rout
     """AuthorizationError mapping is attached to app routes so library guards work outside generated controllers."""
 
     class ApplicationRoute(Controller):
-        exception_handlers: ClassVar[dict[type[Exception], object] | None] = None
+        exception_handlers: dict[type[Exception], object] | None = None
         path = "/app"
 
     register_exception_handlers([ApplicationRoute])

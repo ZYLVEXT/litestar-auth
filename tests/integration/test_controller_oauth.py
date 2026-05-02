@@ -26,10 +26,8 @@ from litestar_auth.controllers import (
 from litestar_auth.controllers.oauth import (
     _decode_oauth_flow_cookie,
     _encode_oauth_flow_cookie,
-    _OAuthFlowCookie,
-    _OAuthFlowCookieCipher,
 )
-from litestar_auth.db.base import BaseUserStore
+from litestar_auth.db.base import BaseUserStore, OAuthAccountData
 from litestar_auth.exceptions import (
     ConfigurationError,
     ErrorCode,
@@ -38,7 +36,8 @@ from litestar_auth.exceptions import (
 )
 from litestar_auth.manager import BaseUserManager, UserManagerSecurity
 from litestar_auth.oauth import create_provider_oauth_controller
-from litestar_auth.oauth.service import _build_pkce_code_challenge
+from litestar_auth.oauth._flow_cookie import _OAuthFlowCookie, _OAuthFlowCookieCipher
+from litestar_auth.oauth._pkce import _build_pkce_code_challenge
 from litestar_auth.password import PasswordHelper
 from tests._helpers import ExampleUser, auth_middleware_get_request_session
 
@@ -122,26 +121,21 @@ class InMemoryOAuthUserDatabase(BaseUserStore[ExampleUser, UUID]):
         oauth_account = self.oauth_accounts.get((oauth_name, account_id))
         return await self.get(oauth_account.user_id) if oauth_account is not None else None
 
-    async def upsert_oauth_account(  # noqa: PLR0913
+    async def upsert_oauth_account(
         self,
         user: ExampleUser,
         *,
-        oauth_name: str,
-        account_id: str,
-        account_email: str,
-        access_token: str,
-        expires_at: int | None,
-        refresh_token: str | None,
+        account: OAuthAccountData,
     ) -> None:
         """Create or update an OAuth account record."""
-        self.oauth_accounts[oauth_name, account_id] = OAuthAccountRecord(
+        self.oauth_accounts[account.oauth_name, account.account_id] = OAuthAccountRecord(
             user_id=user.id,
-            oauth_name=oauth_name,
-            account_id=account_id,
-            account_email=account_email,
-            access_token=access_token,
-            expires_at=expires_at,
-            refresh_token=refresh_token,
+            oauth_name=account.oauth_name,
+            account_id=account.account_id,
+            account_email=account.account_email,
+            access_token=account.access_token,
+            expires_at=account.expires_at,
+            refresh_token=account.refresh_token,
         )
 
     async def create(self, user_dict: Mapping[str, Any]) -> ExampleUser:
@@ -1080,17 +1074,12 @@ async def test_callback_maps_oauth_account_already_linked_error_on_upsert() -> N
         trust_provider_email_verified=True,
     )
 
-    async def fail_upsert(  # noqa: PLR0913
+    async def fail_upsert(
         user: ExampleUser,
         *,
-        oauth_name: str,
-        account_id: str,
-        account_email: str,
-        access_token: str,
-        expires_at: int | None,
-        refresh_token: str | None,
+        account: OAuthAccountData,
     ) -> None:
-        del user, oauth_name, account_id, account_email, access_token, expires_at, refresh_token
+        del user, account
         await asyncio.sleep(0)
         raise OAuthAccountAlreadyLinkedError(
             provider="github",
@@ -1877,17 +1866,12 @@ async def test_associate_maps_oauth_account_already_linked_error_from_upsert() -
         oauth_client=FakeOAuthClient(account_id="provider-user-upsert", email="linked@example.com"),
     )
 
-    async def fail_upsert(  # noqa: PLR0913
+    async def fail_upsert(
         user: ExampleUser,
         *,
-        oauth_name: str,
-        account_id: str,
-        account_email: str,
-        access_token: str,
-        expires_at: int | None,
-        refresh_token: str | None,
+        account: OAuthAccountData,
     ) -> None:
-        del user, oauth_name, account_id, account_email, access_token, expires_at, refresh_token
+        del user, account
         await asyncio.sleep(0)
         raise OAuthAccountAlreadyLinkedError(
             provider="github",

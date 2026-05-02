@@ -9,14 +9,23 @@ import secrets
 import time
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from functools import partial
-from typing import TYPE_CHECKING, Literal, Protocol, Self, cast, override
+from typing import TYPE_CHECKING, NotRequired, Required, TypedDict, Unpack, cast, overload, override
 
 import jwt
 from jwt import ExpiredSignatureError, InvalidTokenError
 
-from litestar_auth._jwt_headers import jwt_encode_headers, validate_jwt_type_header
-from litestar_auth._optional_deps import _require_redis_asyncio
+from litestar_auth._jwt_headers import JwtDecodeConfig, decode_signed_jwt, jwt_encode_headers
+from litestar_auth.authentication.strategy._jwt_denylist import (
+    _INMEMORY_JWT_DENYLIST_STARTUP_WARNING,  # noqa: F401
+    _MISSING_JWT_DENYLIST_STORE_ERROR,  # noqa: F401
+    InMemoryJWTDenylistStore,  # noqa: F401
+    JWTDenylistStore,
+    JWTRevocationPosture,
+    JWTRevocationPostureKey,  # noqa: F401
+    RedisJWTDenylistStore,  # noqa: F401
+    _load_redis_asyncio,  # noqa: F401
+    _resolve_jwt_revocation,
+)
 from litestar_auth.authentication.strategy.base import Strategy, UserManagerProtocol
 from litestar_auth.config import JWT_ACCESS_TOKEN_AUDIENCE, JWT_TIME_CLAIM_LEEWAY_SECONDS, validate_secret_length
 from litestar_auth.exceptions import TokenError
@@ -24,12 +33,8 @@ from litestar_auth.types import ID, UP
 
 logger = logging.getLogger(__name__)
 
-_load_redis_asyncio = partial(_require_redis_asyncio, feature_name="RedisJWTDenylistStore")
-
 if TYPE_CHECKING:
     from collections.abc import Callable
-
-    from litestar_auth._redis_protocols import RedisExpiringValueStoreClient
 
 DEFAULT_ALGORITHM = "HS256"
 DEFAULT_LIFETIME = timedelta(minutes=15)
@@ -46,230 +51,6 @@ _ALLOWED_ALGORITHMS = frozenset(
         "ES512",
     },
 )
-_MISSING_JWT_DENYLIST_STORE_ERROR = (
-    "JWTStrategy requires explicit JWT revocation storage. "
-    "Configure denylist_store=RedisJWTDenylistStore(...) or another shared JWTDenylistStore for production. "
-    "For single-process tests, development, or consciously single-process apps only, set "
-    "allow_inmemory_denylist=True to construct InMemoryJWTDenylistStore explicitly."
-)
-_INMEMORY_JWT_DENYLIST_STARTUP_WARNING = (
-    "JWTStrategy is configured with an explicit process-local in-memory denylist. "
-    "Revoked tokens are not visible across workers; use RedisJWTDenylistStore or another shared "
-    "JWTDenylistStore for production deployments that rely on revocation."
-)
-
-type JWTRevocationPostureKey = Literal["in_memory", "shared_store"]
-
-
-class JWTDenylistStore(Protocol):
-    """Shared denylist storage for JWT `jti` revocation."""
-
-    async def deny(self, jti: str, *, ttl_seconds: int) -> bool:
-        """Mark a JTI as revoked for ``ttl_seconds``.
-
-        Returns:
-            ``True`` when the revocation was recorded or an existing JTI's TTL was refreshed.
-            ``False`` when a **new** revocation could not be stored (for example, an
-            in-memory store at capacity after pruning expired entries). Implementations
-            that always persist (such as Redis) should return ``True``.
-        """
-
-    async def is_denied(self, jti: str) -> bool:
-        """Return whether the JTI is revoked."""
-
-
-class InMemoryJWTDenylistStore:
-    """Process-local denylist store (best-effort).
-
-    **Capacity:** Each :meth:`deny` call prunes expired JTIs first. When the map is already at
-    ``max_entries`` and no expired entries remain, :meth:`deny` **fails closed**: it logs an
-    error and does **not** insert the new JTI, preserving every existing active revocation.
-    The store never evicts a still-valid revoked JTI to admit another (older releases dropped
-    the soonest-expiring entry under pressure, which could revive a revoked token). Size
-    ``max_entries`` for peak concurrent revocations or use :class:`RedisJWTDenylistStore` for
-    shared, unbounded-by-process-memory semantics in production.
-    """
-
-    def __init__(self, *, max_entries: int = 10_000) -> None:
-        """Initialize an empty denylist map with per-entry expiration.
-
-        Raises:
-            ValueError: If ``max_entries`` is less than 1.
-        """
-        if max_entries < 1:
-            msg = "max_entries must be at least 1"
-            raise ValueError(msg)
-
-        self.max_entries = max_entries
-        self._denylisted_until: dict[str, float] = {}
-
-    async def deny(self, jti: str, *, ttl_seconds: int) -> bool:
-        """Record the revoked JTI (TTL is best-effort in memory).
-
-        When the store is at capacity and no expired rows can be reclaimed, the new revocation
-        is skipped (fail-closed) so existing denylist entries are never dropped to make room.
-
-        Returns:
-            ``False`` when a new JTI could not be inserted at capacity; ``True`` otherwise.
-        """
-        now = time.time()
-        self._prune_expired(now)
-        expires_at = now + max(ttl_seconds, 1)
-        if jti in self._denylisted_until:
-            self._denylisted_until[jti] = expires_at
-            return True
-        if len(self._denylisted_until) >= self.max_entries:
-            logger.error(
-                "Rejected in-memory JWT denylist insert: capacity %d reached with no "
-                "expired entries to reclaim (fail closed). Use RedisJWTDenylistStore or "
-                "increase max_entries for high-volume deployments.",
-                self.max_entries,
-            )
-            return False
-
-        self._denylisted_until[jti] = expires_at
-        return True
-
-    async def is_denied(self, jti: str) -> bool:
-        """Return whether the JTI has been revoked in this process."""
-        expires_at = self._denylisted_until.get(jti)
-        if expires_at is None:
-            return False
-        if expires_at <= time.time():
-            self._denylisted_until.pop(jti, None)
-            return False
-        return True
-
-    def _prune_expired(self, now: float) -> None:
-        """Remove all entries whose TTL has elapsed."""
-        expired_jtis = [jti for jti, expires_at in self._denylisted_until.items() if expires_at <= now]
-        for expired_jti in expired_jtis:
-            self._denylisted_until.pop(expired_jti, None)
-
-
-class RedisJWTDenylistStore:
-    """Redis-backed denylist store keyed by `jti` with TTL."""
-
-    def __init__(
-        self,
-        *,
-        redis: RedisExpiringValueStoreClient,
-        key_prefix: str = "litestar_auth:jwt:denylist:",
-    ) -> None:
-        """Initialize the store with a Redis client and key prefix.
-
-        Args:
-            redis: Async Redis client supporting ``get(name)`` plus
-                ``setex(name, ttl_seconds, value)``. The same client may also
-                be annotated as
-                :class:`litestar_auth.contrib.redis.RedisAuthClientProtocol`
-                when it backs the contrib preset or TOTP replay store.
-            key_prefix: Prefix used to namespace denylist keys by JTI.
-        """
-        _load_redis_asyncio()
-        self.redis = redis
-        self.key_prefix = key_prefix
-
-    def _key(self, jti: str) -> str:
-        return f"{self.key_prefix}{jti}"
-
-    async def deny(self, jti: str, *, ttl_seconds: int) -> bool:
-        """Store the JTI key with an expiry aligned to token lifetime.
-
-        Returns:
-            ``True`` after the key is written (Redis denylist writes always succeed).
-        """
-        await self.redis.setex(self._key(jti), max(ttl_seconds, 1), "1")
-        return True
-
-    async def is_denied(self, jti: str) -> bool:
-        """Return whether the JTI key exists in Redis."""
-        return await self.redis.get(self._key(jti)) is not None
-
-
-@dataclass(slots=True, frozen=True)
-class JWTRevocationPosture:
-    """Explicit contract describing the durability semantics of JWT revocation."""
-
-    key: JWTRevocationPostureKey
-    denylist_store_type: str
-    revocation_is_durable: bool
-    requires_explicit_production_opt_in: bool
-
-    @classmethod
-    def in_memory(cls, *, denylist_store_type: str) -> Self:
-        """Return the explicit process-local in-memory revocation posture."""
-        return cls(
-            key="in_memory",
-            denylist_store_type=denylist_store_type,
-            revocation_is_durable=False,
-            requires_explicit_production_opt_in=False,
-        )
-
-    @classmethod
-    def shared_store(cls, *, denylist_store_type: str) -> Self:
-        """Return the durable shared-store revocation posture."""
-        return cls(
-            key="shared_store",
-            denylist_store_type=denylist_store_type,
-            revocation_is_durable=True,
-            requires_explicit_production_opt_in=False,
-        )
-
-    @classmethod
-    def from_denylist_store(cls, denylist_store: JWTDenylistStore) -> Self:
-        """Build the posture contract for a concrete denylist backend.
-
-        Returns:
-            The explicit revocation posture for ``denylist_store``.
-        """
-        store_type = type(denylist_store).__name__
-        if isinstance(denylist_store, InMemoryJWTDenylistStore):
-            return cls.in_memory(denylist_store_type=store_type)
-        return cls.shared_store(denylist_store_type=store_type)
-
-    @property
-    def production_validation_error(self) -> str | None:
-        """Return the plugin validation error for this posture, if any.
-
-        JWT revocation storage is validated at strategy construction time, so
-        constructed postures do not require a second plugin-level compatibility
-        override.
-        """
-        return None
-
-    @property
-    def startup_warning(self) -> str | None:
-        """Return the startup warning for this posture, if any."""
-        if self.revocation_is_durable:
-            return None
-        return _INMEMORY_JWT_DENYLIST_STARTUP_WARNING
-
-
-def _resolve_jwt_revocation(
-    denylist_store: JWTDenylistStore | None,
-    *,
-    allow_inmemory_denylist: bool,
-) -> tuple[JWTDenylistStore, JWTRevocationPosture]:
-    """Resolve the effective denylist backend and its explicit posture contract.
-
-    Returns:
-        Tuple of the denylist backend used at runtime and the posture it reports.
-
-    Raises:
-        ValueError: If no denylist store is configured or both configuration paths are supplied.
-    """
-    if denylist_store is not None:
-        if allow_inmemory_denylist:
-            msg = "allow_inmemory_denylist=True cannot be combined with denylist_store."
-            raise ValueError(msg)
-        return denylist_store, JWTRevocationPosture.from_denylist_store(denylist_store)
-
-    if not allow_inmemory_denylist:
-        raise ValueError(_MISSING_JWT_DENYLIST_STORE_ERROR)
-
-    resolved_denylist_store = InMemoryJWTDenylistStore()
-    return resolved_denylist_store, JWTRevocationPosture.from_denylist_store(resolved_denylist_store)
 
 
 def _default_session_fingerprint(key: bytes) -> Callable[[object], str | None]:
@@ -294,6 +75,37 @@ def _default_session_fingerprint(key: bytes) -> Callable[[object], str | None]:
     return getter
 
 
+@dataclass(frozen=True, slots=True)
+class JWTStrategyConfig[UP, ID]:
+    """Configuration for :class:`JWTStrategy`."""
+
+    secret: str
+    verify_key: str | None = None
+    algorithm: str = DEFAULT_ALGORITHM
+    lifetime: timedelta = DEFAULT_LIFETIME
+    subject_decoder: Callable[[str], ID] | None = None
+    issuer: str | None = None
+    denylist_store: JWTDenylistStore | None = None
+    allow_inmemory_denylist: bool = False
+    session_fingerprint_getter: Callable[[UP], str | None] | None = None
+    session_fingerprint_claim: str = "sfp"
+
+
+class JWTStrategyOptions[UP, ID](TypedDict):
+    """Keyword options accepted by :class:`JWTStrategy`."""
+
+    secret: Required[str]
+    verify_key: NotRequired[str | None]
+    algorithm: NotRequired[str]
+    lifetime: NotRequired[timedelta]
+    subject_decoder: NotRequired[Callable[[str], ID] | None]
+    issuer: NotRequired[str | None]
+    denylist_store: NotRequired[JWTDenylistStore | None]
+    allow_inmemory_denylist: NotRequired[bool]
+    session_fingerprint_getter: NotRequired[Callable[[UP], str | None] | None]
+    session_fingerprint_claim: NotRequired[str]
+
+
 class JWTStrategy(Strategy[UP, ID]):
     """Stateless strategy that stores user identifiers inside JWTs.
 
@@ -310,69 +122,57 @@ class JWTStrategy(Strategy[UP, ID]):
     shared-store revocation.
     """
 
-    def __init__(  # noqa: PLR0913
+    @overload
+    def __init__(self, *, config: JWTStrategyConfig[UP, ID]) -> None: ...  # pragma: no cover
+
+    @overload
+    def __init__(self, **options: Unpack[JWTStrategyOptions[UP, ID]]) -> None: ...  # pragma: no cover
+
+    def __init__(
         self,
         *,
-        secret: str,
-        verify_key: str | None = None,
-        algorithm: str = DEFAULT_ALGORITHM,
-        lifetime: timedelta = DEFAULT_LIFETIME,
-        subject_decoder: Callable[[str], ID] | None = None,
-        issuer: str | None = None,
-        denylist_store: JWTDenylistStore | None = None,
-        allow_inmemory_denylist: bool = False,
-        session_fingerprint_getter: Callable[[UP], str | None] | None = None,
-        session_fingerprint_claim: str = "sfp",
+        config: JWTStrategyConfig[UP, ID] | None = None,
+        **options: Unpack[JWTStrategyOptions[UP, ID]],
     ) -> None:
         """Initialize the JWT strategy.
 
         Args:
-            secret: Signing secret or private key used for JWT encoding.
-            verify_key: Optional verification key used for JWT decoding. When
-                omitted, ``secret`` is used for both encoding and decoding.
-            algorithm: JWT signing algorithm.
-            lifetime: Token lifetime added to the expiration claim.
-            subject_decoder: Optional callable that converts the ``sub`` claim
-                into the identifier type expected by the user manager.
-            issuer: Optional issuer string to embed in the ``iss`` claim and
-                validate when decoding.
-            denylist_store: Shared denylist backend for token revocation across
-                workers. Omit only when using ``allow_inmemory_denylist=True``.
-            allow_inmemory_denylist: Explicitly construct a process-local
-                :class:`InMemoryJWTDenylistStore` for single-process tests or
-                development. Do not combine with ``denylist_store``.
-            session_fingerprint_getter: Optional callable that returns a fingerprint
-                representing a user's current security state. When the returned value
-                is embedded into tokens, password/email changes can invalidate old
-                tokens without server-side session storage.
-            session_fingerprint_claim: JWT claim name used to store the session
-                fingerprint.
+            config: JWT strategy configuration.
+            **options: Individual JWT strategy settings. Do not combine with
+                ``config``.
 
         Raises:
+            ValueError: If ``config`` and keyword options are combined.
             ValueError: Raised when the configured algorithm is not allow-listed, when
                 no denylist store is configured, or when both revocation configuration
                 paths are supplied.
         """
-        if algorithm not in _ALLOWED_ALGORITHMS:
-            msg = f"Unsupported JWT algorithm '{algorithm}'. Allowed algorithms: {sorted(_ALLOWED_ALGORITHMS)}"
+        if config is not None and options:
+            msg = "Pass either JWTStrategyConfig or keyword options, not both."
+            raise ValueError(msg)
+        settings = JWTStrategyConfig(**options) if config is None else config
+        if settings.algorithm not in _ALLOWED_ALGORITHMS:
+            msg = f"Unsupported JWT algorithm '{settings.algorithm}'. Allowed algorithms: {sorted(_ALLOWED_ALGORITHMS)}"
             raise ValueError(msg)
 
-        validate_secret_length(secret, label="JWT signing secret")
-        self.secret = secret
-        self.verify_key = verify_key if verify_key is not None else secret
-        self.algorithm = algorithm
-        self.lifetime = lifetime
-        self.subject_decoder = subject_decoder
-        self.issuer = issuer
+        validate_secret_length(settings.secret, label="JWT signing secret")
+        self.secret = settings.secret
+        self.verify_key = settings.verify_key if settings.verify_key is not None else settings.secret
+        self.algorithm = settings.algorithm
+        self.lifetime = settings.lifetime
+        self.subject_decoder = settings.subject_decoder
+        self.issuer = settings.issuer
         self._denylist_store, self._revocation_posture = _resolve_jwt_revocation(
-            denylist_store,
-            allow_inmemory_denylist=allow_inmemory_denylist,
+            settings.denylist_store,
+            allow_inmemory_denylist=settings.allow_inmemory_denylist,
         )
         # Security: always derive the fingerprint HMAC key from the signing secret
         # (kept private by the strategy), never from the public verify_key.
         fingerprint_key = self.secret.encode()
-        self.session_fingerprint_getter = session_fingerprint_getter or _default_session_fingerprint(fingerprint_key)
-        self.session_fingerprint_claim = session_fingerprint_claim
+        self.session_fingerprint_getter = settings.session_fingerprint_getter or _default_session_fingerprint(
+            fingerprint_key,
+        )
+        self.session_fingerprint_claim = settings.session_fingerprint_claim
 
     @property
     def revocation_posture(self) -> JWTRevocationPosture:
@@ -422,26 +222,17 @@ class JWTStrategy(Strategy[UP, ID]):
             Verified JWT claims, or ``None`` when decoding fails.
         """
         try:
-            validate_jwt_type_header(token)
-            if self.issuer is None:
-                raw = jwt.decode(
-                    token,
-                    self.verify_key,
+            raw = decode_signed_jwt(
+                token,
+                config=JwtDecodeConfig(
+                    key=self.verify_key,
                     algorithms=[self.algorithm],
                     audience=JWT_ACCESS_TOKEN_AUDIENCE,
-                    leeway=JWT_TIME_CLAIM_LEEWAY_SECONDS,
                     options={"require": ["exp", "aud", "iat", "nbf", "jti"]},
-                )
-            else:
-                raw = jwt.decode(
-                    token,
-                    self.verify_key,
-                    algorithms=[self.algorithm],
-                    audience=JWT_ACCESS_TOKEN_AUDIENCE,
                     issuer=self.issuer,
                     leeway=JWT_TIME_CLAIM_LEEWAY_SECONDS,
-                    options={"require": ["exp", "aud", "iat", "nbf", "jti"]},
-                )
+                ),
+            )
         except (ExpiredSignatureError, InvalidTokenError):
             return None
         return raw
@@ -533,16 +324,17 @@ class JWTStrategy(Strategy[UP, ID]):
         del user
 
         try:
-            validate_jwt_type_header(token)
-            payload = jwt.decode(
+            payload = decode_signed_jwt(
                 token,
-                self.verify_key,
-                algorithms=[self.algorithm],
-                audience=JWT_ACCESS_TOKEN_AUDIENCE,
-                options={
-                    "verify_exp": False,
-                    "verify_iss": False,
-                },
+                config=JwtDecodeConfig(
+                    key=self.verify_key,
+                    algorithms=[self.algorithm],
+                    audience=JWT_ACCESS_TOKEN_AUDIENCE,
+                    options={
+                        "verify_exp": False,
+                        "verify_iss": False,
+                    },
+                ),
             )
         except InvalidTokenError:
             return

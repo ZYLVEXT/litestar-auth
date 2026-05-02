@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
-from functools import cache
 from typing import TYPE_CHECKING, Any, Protocol, cast
 from uuid import UUID
 
@@ -12,11 +11,15 @@ from sqlalchemy import delete, inspect, select
 from sqlalchemy.exc import IntegrityError, NoInspectionAvailable
 from sqlalchemy.orm import selectinload
 
-from litestar_auth._plugin.session_binding import _ScopedUserDatabaseProxy
-from litestar_auth._plugin.user_manager_builder import resolve_user_manager_factory
+from litestar_auth._plugin.role_admin_contracts import (
+    RoleAdminRoleNotFoundError,
+    RoleAdminUserNotFoundError,
+    UserRoleMembership,
+)
+from litestar_auth._plugin.role_lifecycle import _ManagerLifecycleRoleUpdater
+from litestar_auth._plugin.role_model_family import RoleModelFamily, _model_name, resolve_role_model_family
 from litestar_auth._roles import normalize_role_name, normalize_roles
 from litestar_auth.exceptions import ConfigurationError
-from litestar_auth.oauth_encryption import OAuthTokenEncryption
 from litestar_auth.types import UserProtocol
 
 if TYPE_CHECKING:
@@ -25,12 +28,9 @@ if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
     from sqlalchemy.sql import Select
 
-    from litestar_auth._plugin.config import LitestarAuthConfig, UserDatabaseFactory, UserManagerFactory
+    from litestar_auth._plugin.config import LitestarAuthConfig
     from litestar_auth._plugin.scoped_session import SessionFactory
-    from litestar_auth.manager import BaseUserManager
 
-_ROLE_ASSIGNMENTS_RELATIONSHIP_NAME = "role_assignments"
-_ROLE_RELATIONSHIP_NAME = "role"
 _REQUIRED_SESSION_METHODS = (
     "add",
     "execute",
@@ -45,27 +45,6 @@ _REQUIRED_SESSION_METHODS = (
 _REQUIRED_SESSION_ATTRIBUTES = ("no_autoflush",)
 
 
-def _model_name(model: object) -> str:
-    """Return a stable display name for a configured model class."""
-    return cast("str", getattr(model, "__name__", repr(model)))
-
-
-def _role_contract_error(
-    user_model: object,
-    detail: str,
-) -> str:
-    """Build one fail-closed error message for incompatible role contracts.
-
-    Returns:
-        The error message describing the incompatible role contract.
-    """
-    return (
-        "Role admin requires LitestarAuthConfig.user_model "
-        f"{_model_name(user_model)!r} to compose UserRoleRelationshipMixin or an equivalent "
-        f"relational role contract. {detail}"
-    )
-
-
 def _session_factory_error(detail: str) -> str:
     """Build one fail-closed error message for unusable session factories.
 
@@ -78,31 +57,6 @@ def _session_factory_error(detail: str) -> str:
     )
 
 
-@dataclass(frozen=True, slots=True)
-class RoleModelFamily[UP: UserProtocol[Any]]:
-    """Resolved SQLAlchemy model family behind the flat user-role contract."""
-
-    user_model: type[UP]
-    role_model: type[Any]
-    user_role_model: type[Any]
-
-
-@dataclass(frozen=True, slots=True)
-class UserRoleMembership:
-    """Normalized role membership for one CLI-targeted user."""
-
-    email: str
-    roles: list[str]
-
-
-class RoleAdminRoleNotFoundError(LookupError):
-    """Raised when the configured role catalog does not contain the requested role."""
-
-
-class RoleAdminUserNotFoundError(LookupError):
-    """Raised when the configured user lookup target does not exist."""
-
-
 class _RoleLifecycleManager[UP: UserProtocol[Any]](Protocol):
     """Manager surface required to preserve update-hook parity for CLI role work."""
 
@@ -112,141 +66,9 @@ class _RoleLifecycleManager[UP: UserProtocol[Any]](Protocol):
         user: UP,
         *,
         allow_privileged: bool = False,
-    ) -> UP: ...  # pragma: no cover
-
-
-@dataclass(frozen=True, slots=True)
-class _ManagerLifecycleRoleUpdater[UP: UserProtocol[Any]]:
-    """Build request-scoped user managers for CLI role mutations."""
-
-    config: LitestarAuthConfig[UP, Any]
-    _user_db_factory: UserDatabaseFactory[UP, Any]
-    _user_manager_factory: UserManagerFactory[UP, Any]
-    _oauth_token_encryption: OAuthTokenEncryption | None
-
-    @classmethod
-    def from_config(
-        cls,
-        config: LitestarAuthConfig[UP, Any],
-    ) -> _ManagerLifecycleRoleUpdater[UP]:
-        """Build the manager-backed role updater from plugin configuration.
-
-        Returns:
-            The configured lifecycle-preserving role updater.
-        """
-        return cls(
-            config=config,
-            _user_db_factory=config.resolve_user_db_factory(),
-            _user_manager_factory=resolve_user_manager_factory(config),
-            _oauth_token_encryption=_build_oauth_token_encryption(config),
-        )
-
-    def build_manager(self, session: AsyncSession) -> BaseUserManager[UP, Any]:
-        """Return a request-scoped manager bound to ``session``."""
-        user_db = _ScopedUserDatabaseProxy(
-            self._user_db_factory(session),
-            oauth_token_encryption=self._oauth_token_encryption,
-        )
-        bound_backends = self.config.resolve_backends(session)
-        return self._user_manager_factory(
-            session=session,
-            user_db=user_db,
-            config=self.config,
-            backends=bound_backends,
-        )
-
-
-def _build_oauth_token_encryption[UP: UserProtocol[Any]](
-    config: LitestarAuthConfig[UP, Any],
-) -> OAuthTokenEncryption | None:
-    """Return the OAuth token encryption policy for role-admin manager lifecycles."""
-    oauth_config = config.oauth_config
-    if oauth_config is None:
-        return None
-    keyring = oauth_config.oauth_token_encryption_keyring
-    if keyring is not None:
-        return OAuthTokenEncryption(
-            unsafe_testing=config.unsafe_testing,
-            active_key_id=keyring.active_key_id,
-            keys=keyring.keys,
-        )
-    return OAuthTokenEncryption(
-        oauth_config.oauth_token_encryption_key,
-        unsafe_testing=config.unsafe_testing,
-    )
-
-
-@cache
-def resolve_role_model_family[UP: UserProtocol[Any]](
-    user_model: type[UP],
-) -> RoleModelFamily[UP]:
-    """Resolve the active relational role model family from ``user_model``.
-
-    Returns:
-        The resolved SQLAlchemy user, role, and association models.
-
-    Raises:
-        ConfigurationError: If the configured user model does not expose the
-            documented relational role contract.
-    """
-    if not hasattr(user_model, "roles"):
-        msg = _role_contract_error(
-            user_model,
-            "Expected a normalized flat 'roles' attribute on the user model.",
-        )
-        raise ConfigurationError(msg)
-
-    try:
-        user_relationships = inspect(user_model).relationships
-    except NoInspectionAvailable as exc:
-        msg = _role_contract_error(
-            user_model,
-            "Expected a SQLAlchemy mapped class, but mapper inspection is unavailable.",
-        )
-        raise ConfigurationError(msg) from exc
-
-    if _ROLE_ASSIGNMENTS_RELATIONSHIP_NAME not in user_relationships:
-        msg = _role_contract_error(
-            user_model,
-            "Expected a mapped 'role_assignments' relationship on the user model.",
-        )
-        raise ConfigurationError(msg)
-
-    user_role_model = cast(
-        "type[Any]",
-        user_relationships[_ROLE_ASSIGNMENTS_RELATIONSHIP_NAME].mapper.class_,
-    )
-    if not hasattr(user_role_model, "role_name"):
-        msg = _role_contract_error(
-            user_model,
-            "Expected role-assignment rows with a normalized 'role_name' attribute.",
-        )
-        raise ConfigurationError(msg)
-
-    user_role_relationships = inspect(user_role_model).relationships
-    if _ROLE_RELATIONSHIP_NAME not in user_role_relationships:
-        msg = _role_contract_error(
-            user_model,
-            "Expected role-assignment rows with a mapped 'role' relationship.",
-        )
-        raise ConfigurationError(msg)
-
-    role_model = cast(
-        "type[Any]",
-        user_role_relationships[_ROLE_RELATIONSHIP_NAME].mapper.class_,
-    )
-    if not hasattr(role_model, "name"):
-        msg = _role_contract_error(
-            user_model,
-            "Expected related role rows with a normalized 'name' attribute.",
-        )
-        raise ConfigurationError(msg)
-
-    return RoleModelFamily(
-        user_model=user_model,
-        role_model=role_model,
-        user_role_model=user_role_model,
-    )
+    ) -> UP:
+        """Apply a role-related update through the normal manager lifecycle hooks."""
+        ...  # pragma: no cover
 
 
 def _require_role_admin_session_maker[UP: UserProtocol[Any]](

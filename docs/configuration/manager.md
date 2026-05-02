@@ -250,6 +250,9 @@ Compatibility and migration:
   from `LitestarAuthConfig.id_parser` is folded into that bundle (not as a standalone `id_parser=` kwarg on the
   builder call). If your manager narrows or renames that surface, configure it with
   `user_manager_factory=...`.
+- Direct manager construction can also use `BaseUserManagerConfig(...)` to pass the same settings
+  as one typed object. The plugin builder still uses the keyword constructor surface so subclass
+  constructors remain straightforward.
 - When `user_manager_security` is present, the effective manager parser comes from
   `user_manager_security.id_parser` first and otherwise falls back to `LitestarAuthConfig.id_parser`. When
   `user_manager_security` is absent, the default builder still materializes `security=UserManagerSecurity(...)`

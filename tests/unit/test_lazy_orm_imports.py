@@ -32,7 +32,7 @@ def test_import_root_package_does_not_load_default_models() -> None:
 
 
 def test_import_db_package_does_not_load_sqlalchemy_adapter() -> None:
-    """``import litestar_auth.db`` exposes base types only."""
+    """``import litestar_auth.db`` exposes base contracts only."""
     proc = _run_isolated(
         "import sys\n"
         "import litestar_auth.db\n"
@@ -47,7 +47,7 @@ def test_import_db_package_exposes_only_base_store_types() -> None:
     proc = _run_isolated(
         "import sys\n"
         "import litestar_auth.db as auth_db\n"
-        "assert auth_db.__all__ == ('BaseOAuthAccountStore', 'BaseUserStore')\n"
+        "assert auth_db.__all__ == ('BaseOAuthAccountStore', 'BaseUserStore', 'OAuthAccountData')\n"
         "assert not hasattr(auth_db, 'SQLAlchemyUserDatabase')\n"
         "assert 'litestar_auth.db.sqlalchemy' not in sys.modules\n",
     )
@@ -126,7 +126,7 @@ def test_import_models_mixins_module_does_not_register_oauth_encryption_events()
     proc = _run_isolated(
         "from sqlalchemy import event\n"
         "from litestar_auth.models.mixins import OAuthAccountMixin\n"
-        "from litestar_auth.oauth_encryption import _decrypt_loaded_oauth_tokens\n"
+        "from litestar_auth._oauth_mapper_events import _decrypt_loaded_oauth_tokens\n"
         "assert not event.contains(OAuthAccountMixin, 'load', _decrypt_loaded_oauth_tokens)\n",
     )
     assert proc.returncode == 0, proc.stdout + proc.stderr
@@ -166,7 +166,7 @@ def test_importing_oauth_model_registers_oauth_encryption_events() -> None:
         "import sys\n"
         "from sqlalchemy import event\n"
         "from litestar_auth.models.oauth import OAuthAccount\n"
-        "from litestar_auth.oauth_encryption import _decrypt_loaded_oauth_tokens\n"
+        "from litestar_auth._oauth_mapper_events import _decrypt_loaded_oauth_tokens\n"
         "assert event.contains(OAuthAccount, 'load', _decrypt_loaded_oauth_tokens)\n"
         "assert 'litestar_auth.models.user' not in sys.modules\n",
     )
@@ -239,8 +239,11 @@ def test_import_strategy_package_keeps_models_namespace_unloaded() -> None:
         "assert strategy.__all__ == (\n"
         "    'DatabaseTokenModels',\n"
         "    'DatabaseTokenStrategy',\n"
+        "    'DatabaseTokenStrategyConfig',\n"
         "    'JWTStrategy',\n"
+        "    'JWTStrategyConfig',\n"
         "    'RedisTokenStrategy',\n"
+        "    'RedisTokenStrategyConfig',\n"
         "    'RefreshableStrategy',\n"
         "    'Strategy',\n"
         "    'UserManagerProtocol',\n"

@@ -33,9 +33,9 @@ When you assemble `JWTStrategy` or `BaseUserManager` yourself, inspect the runti
 
 - `JWTStrategy(secret=..., denylist_store=RedisJWTDenylistStore(...))` reports the durable `shared_store` posture.
 - `JWTStrategy(secret=..., allow_inmemory_denylist=True)` reports the explicit process-local `in_memory` posture. `revocation_is_durable` stays `False` and logout / revoke remains single-process.
-- Plugin-managed JWT revocation notices consume the concrete current-module `JWTRevocationPosture`
-  returned by `JWTStrategy.revocation_posture`; posture-shaped wrappers or objects retained from
-  earlier module identities are ignored.
+- Plugin-managed JWT revocation notices consume the live `JWTRevocationPosture` exported from
+  `litestar_auth.authentication.strategy.jwt` and returned by `JWTStrategy.revocation_posture`;
+  posture-shaped wrappers or objects retained from earlier module identities are ignored.
 - `BaseUserManager.totp_secret_storage_posture` reports the `fernet_encrypted` persisted-secret contract. Supplying `totp_secret_keyring=FernetKeyringConfig(...)` on `UserManagerSecurity(...)` lets direct/custom integrations store and read encrypted TOTP secrets with an active key id and configured old keys. The one-key `totp_secret_key` field remains a deliberate ergonomic shortcut and is encoded under the `default` key id.
 - New persisted TOTP secret writes use `fernet:v1:<key_id>:<ciphertext>` values. `BaseUserManager.totp_secret_requires_reencrypt(...)` and `BaseUserManager.reencrypt_totp_secret_for_storage(...)` are the manager helpers for explicit at-rest rotation jobs.
 - With `totp_secret_keyring` and `totp_secret_key` omitted, `None` still represents disabled 2FA, but non-null TOTP secret writes and unprefixed legacy plaintext reads fail closed. Encrypt, rotate, or clear existing plaintext TOTP secret rows before upgrading.

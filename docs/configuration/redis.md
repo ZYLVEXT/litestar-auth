@@ -34,6 +34,7 @@ from litestar_auth import LitestarAuthConfig, TotpConfig
 from litestar_auth.contrib.redis import (
     RedisAuthClientProtocol,
     RedisAuthPreset,
+    RedisAuthRateLimitConfigOptions,
     RedisAuthRateLimitTier,
 )
 from litestar_auth.ratelimit import AuthRateLimitSlot
@@ -48,7 +49,9 @@ redis_auth = RedisAuthPreset(
     },
 )
 rate_limit_config = redis_auth.build_rate_limit_config(
-    disabled={AuthRateLimitSlot.VERIFY_TOKEN, AuthRateLimitSlot.REQUEST_VERIFY_TOKEN},
+    options=RedisAuthRateLimitConfigOptions(
+        disabled={AuthRateLimitSlot.VERIFY_TOKEN, AuthRateLimitSlot.REQUEST_VERIFY_TOKEN},
+    ),
 )
 totp_config = TotpConfig(
     totp_pending_secret="replace-with-32+-char-secret",
@@ -70,13 +73,14 @@ config = LitestarAuthConfig(
 
 - `litestar_auth.contrib.redis` owns the higher-level convenience entrypoints such as `RedisAuthPreset`,
   `RedisAuthRateLimitTier`, `RedisAuthClientProtocol`, `RedisTokenStrategy`,
+  `RedisTokenStrategyConfig`,
   `RedisTotpEnrollmentStore`, and `RedisUsedTotpCodeStore`.
 - `litestar_auth.ratelimit` owns the lower-level shared-builder surface such as
   `AuthRateLimitConfig.from_shared_backend()`, `RedisRateLimiter`, the typed slot enum, and the group alias.
 
-`RedisAuthPreset.build_rate_limit_config()` forwards the live shared-builder inputs:
-`enabled`, `disabled`, `group_backends`, and `endpoint_overrides`, plus the shared proxy and
-identity settings. Explicit `group_backends` still win over any preset
+`RedisAuthPreset.build_rate_limit_config()` accepts `RedisAuthRateLimitConfigOptions`, which carries
+the live shared-builder inputs: `enabled`, `disabled`, `group_backends`, and `endpoint_overrides`,
+plus the shared proxy and identity settings. Explicit `group_backends` still win over any preset
 `group_rate_limit_tiers`. `RedisAuthPreset.group_rate_limit_tiers` is snapshotted into a read-only
 mapping at construction time, so later mutations to the caller's source `dict` do not silently
 change the preset's runtime budget layout.
@@ -87,8 +91,10 @@ preset default, and `None` preserves each low-level store's current built-in pre
 ### Redis opaque-token invalidation
 
 `RedisTokenStrategy` writes each opaque token under a TTL-backed token key and records that key in a
-per-user Redis set. `invalidate_all_tokens(user)` uses only that per-user set: indexed tokens and
-the index key are deleted together, and the strategy does not scan the broader keyspace.
+per-user Redis set. Use `RedisTokenStrategyConfig(...)` when the shared Redis client and token
+settings should travel as one typed object. `invalidate_all_tokens(user)` uses only that per-user set:
+indexed tokens and the index key are deleted together, and the strategy does not scan the broader
+keyspace.
 
 If you are upgrading from a version that created Redis token keys without the per-user index, those
 orphaned keys are not force-invalidated by `invalidate_all_tokens(...)`; they remain valid only
@@ -108,7 +114,7 @@ verification_slots = {AuthRateLimitSlot.VERIFY_TOKEN, AuthRateLimitSlot.REQUEST_
 - `AuthRateLimitSlot` names the per-endpoint enum keys accepted by `enabled`, `disabled`, and
   `endpoint_overrides`.
 - `AuthRateLimitEndpointGroup` names the shared-backend keys accepted by `group_backends`.
-- Use `tuple(AuthRateLimitSlot)` for explicit `enabled=...` calls that should include every
+- Use `tuple(AuthRateLimitSlot)` for explicit `enabled=...` options that should include every
   supported slot.
 - Use `{AuthRateLimitSlot.VERIFY_TOKEN, AuthRateLimitSlot.REQUEST_VERIFY_TOKEN}` for
   `disabled=...` when verification routes stay off.
@@ -125,14 +131,17 @@ from litestar_auth.ratelimit import (
     AuthRateLimitConfig,
     AuthRateLimitSlot,
     RedisRateLimiter,
+    SharedRateLimitConfigOptions,
 )
 from litestar_auth.totp import RedisTotpEnrollmentStore, RedisUsedTotpCodeStore
 
 shared_backend = RedisRateLimiter(redis=redis_client, max_attempts=5, window_seconds=60)
 rate_limit_config = AuthRateLimitConfig.from_shared_backend(
     shared_backend,
-    enabled=tuple(AuthRateLimitSlot),
-    disabled={AuthRateLimitSlot.VERIFY_TOKEN, AuthRateLimitSlot.REQUEST_VERIFY_TOKEN},
+    options=SharedRateLimitConfigOptions(
+        enabled=tuple(AuthRateLimitSlot),
+        disabled={AuthRateLimitSlot.VERIFY_TOKEN, AuthRateLimitSlot.REQUEST_VERIFY_TOKEN},
+    ),
 )
 totp_used_tokens_store = RedisUsedTotpCodeStore(redis=redis_client)
 totp_enrollment_store = RedisTotpEnrollmentStore(redis=redis_client)
@@ -180,7 +189,7 @@ leaves verification slots unset. The preset is just a higher-level wrapper aroun
 slot and override rules still apply.
 
 ```python
-from litestar_auth.contrib.redis import RedisAuthPreset, RedisAuthRateLimitTier
+from litestar_auth.contrib.redis import RedisAuthPreset, RedisAuthRateLimitConfigOptions, RedisAuthRateLimitTier
 from litestar_auth.ratelimit import AuthRateLimitSlot
 
 redis_auth = RedisAuthPreset(
@@ -193,7 +202,9 @@ redis_auth = RedisAuthPreset(
 )
 
 rate_limit_config = redis_auth.build_rate_limit_config(
-    disabled={AuthRateLimitSlot.VERIFY_TOKEN, AuthRateLimitSlot.REQUEST_VERIFY_TOKEN},
+    options=RedisAuthRateLimitConfigOptions(
+        disabled={AuthRateLimitSlot.VERIFY_TOKEN, AuthRateLimitSlot.REQUEST_VERIFY_TOKEN},
+    ),
 )
 ```
 

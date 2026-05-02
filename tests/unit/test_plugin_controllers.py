@@ -13,7 +13,14 @@ import pytest
 from cryptography.fernet import Fernet
 from litestar.exceptions import ValidationException
 
+import litestar_auth._plugin._oauth_controllers as oauth_controllers_module
+import litestar_auth._plugin._totp_controller as totp_controllers_module
 import litestar_auth._plugin.controllers as controllers_module
+import litestar_auth._plugin.totp_route_handlers as totp_route_handlers_module
+from litestar_auth._plugin._oauth_controllers import (
+    _append_oauth_associate_controllers,
+    _append_oauth_login_controllers,
+)
 from litestar_auth._plugin.config import (
     OAUTH_ASSOCIATE_USER_MANAGER_DEPENDENCY_KEY,
     LitestarAuthConfig,
@@ -22,8 +29,6 @@ from litestar_auth._plugin.config import (
     resolve_backend_inventory,
 )
 from litestar_auth._plugin.controllers import (
-    _append_oauth_associate_controllers,
-    _append_oauth_login_controllers,
     _append_optional_feature_controllers,
     _build_auth_controllers,
     build_controllers,
@@ -92,9 +97,16 @@ def _oauth_provider(*, name: str, client: object) -> OAuthProviderConfig:
 def test_plugin_controllers_module_executes_under_coverage() -> None:
     """Reload the module in-test so coverage records module-body execution."""
     reloaded_module = importlib.reload(controllers_module)
+    reloaded_oauth_module = importlib.reload(oauth_controllers_module)
+    reloaded_totp_route_handlers_module = importlib.reload(totp_route_handlers_module)
+    reloaded_totp_module = importlib.reload(totp_controllers_module)
 
     assert reloaded_module.build_controllers.__name__ == build_controllers.__name__
-    assert reloaded_module.build_totp_controller.__name__ == build_totp_controller.__name__
+    assert reloaded_oauth_module.create_oauth_login_controller.__name__ == "create_oauth_login_controller"
+    assert reloaded_totp_route_handlers_module.define_plugin_totp_controller_class.__name__ == (
+        "define_plugin_totp_controller_class"
+    )
+    assert reloaded_totp_module.build_totp_controller.__name__ == build_totp_controller.__name__
 
 
 def test_build_controllers_combines_auth_and_optional_controllers(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -146,9 +158,16 @@ def test_build_auth_controllers_builds_backend_specific_paths_and_totp_secret(
     )
     calls: list[dict[str, object]] = []
 
-    def _create_auth_controller(**kwargs: object) -> str:
-        calls.append(dict(kwargs))
-        return cast("str", kwargs["path"])
+    def _create_auth_controller(settings: Any) -> str:  # noqa: ANN401
+        calls.append(
+            {
+                "backend": settings.backend,
+                "totp_pending_secret": settings.totp_pending_secret,
+                "unsafe_testing": settings.unsafe_testing,
+                "path": settings.path,
+            },
+        )
+        return cast("str", settings.path)
 
     monkeypatch.setattr(controllers_module, "create_auth_controller", _create_auth_controller)
 
@@ -201,7 +220,7 @@ def test_build_totp_controller_forwards_named_backend_and_config(monkeypatch: py
         captured.update(kwargs)
         return "totp-controller"
 
-    monkeypatch.setattr(controllers_module, "create_totp_controller", _create_totp_controller)
+    monkeypatch.setattr(totp_controllers_module, "create_totp_controller", _create_totp_controller)
 
     assert build_totp_controller(config) == "totp-controller"
     assert isinstance(captured["backend"], _current_startup_backend_template_type())
@@ -268,7 +287,7 @@ def test_build_totp_controller_defaults_to_primary_backend_when_name_is_unset(
         captured.update(kwargs)
         return "totp-controller"
 
-    monkeypatch.setattr(controllers_module, "create_totp_controller", _create_totp_controller)
+    monkeypatch.setattr(totp_controllers_module, "create_totp_controller", _create_totp_controller)
 
     assert build_totp_controller(config) == "totp-controller"
     assert isinstance(captured["backend"], _current_startup_backend_template_type())
@@ -293,7 +312,7 @@ def test_build_totp_controller_forwards_totp_secret_key_from_user_manager_securi
         captured.update(kwargs)
         return "totp-controller"
 
-    monkeypatch.setattr(controllers_module, "create_totp_controller", _create_totp_controller)
+    monkeypatch.setattr(totp_controllers_module, "create_totp_controller", _create_totp_controller)
 
     assert build_totp_controller(config) == "totp-controller"
     assert captured["totp_secret_key"] == "fernet-secret-key-for-plugin-wiring"
@@ -318,7 +337,7 @@ def test_build_totp_controller_forwards_totp_keyring_from_user_manager_security(
         captured.update(kwargs)
         return "totp-controller"
 
-    monkeypatch.setattr(controllers_module, "create_totp_controller", _create_totp_controller)
+    monkeypatch.setattr(totp_controllers_module, "create_totp_controller", _create_totp_controller)
 
     assert build_totp_controller(config) == "totp-controller"
     assert captured["totp_secret_key"] is None
@@ -375,7 +394,7 @@ def test_resolve_request_backend_raises_when_backend_index_is_missing() -> None:
     inventory = resolve_backend_inventory(_minimal_config(backends=[secondary_backend, primary_backend]))
 
     with pytest.raises(RuntimeError, match="Missing backend index 1 for 'primary'"):
-        controllers_module._resolve_request_backend(
+        totp_controllers_module._resolve_request_backend(
             inventory,
             [secondary_backend],
             backend_index=1,
@@ -388,7 +407,7 @@ def test_resolve_request_backend_raises_when_backend_name_changes() -> None:
     inventory = resolve_backend_inventory(_minimal_config(backends=[_backend(name="primary", token_prefix="primary")]))
 
     with pytest.raises(RuntimeError, match="Expected backend 'primary' at index 0, got 'secondary'"):
-        controllers_module._resolve_request_backend(
+        totp_controllers_module._resolve_request_backend(
             inventory,
             [backend],
             backend_index=0,
@@ -456,8 +475,8 @@ async def test_plugin_totp_regenerate_route_delegates_with_step_up_payload(monke
     config = _minimal_config()
     inventory = resolve_backend_inventory(config)
     handler = AsyncMock(return_value="response")
-    monkeypatch.setattr(controllers_module, "_totp_handle_regenerate_recovery_codes", handler)
-    controller_cls = controllers_module.create_totp_controller(
+    monkeypatch.setattr(totp_route_handlers_module, "_totp_handle_regenerate_recovery_codes", handler)
+    controller_cls = totp_controllers_module.create_totp_controller(
         backend=config.resolve_startup_backends()[0],
         backend_inventory=inventory,
         backend_index=0,
@@ -495,8 +514,8 @@ async def test_plugin_totp_regenerate_route_delegates_without_step_up_payload(
     config = _minimal_config()
     inventory = resolve_backend_inventory(config)
     handler = AsyncMock(return_value="response")
-    monkeypatch.setattr(controllers_module, "_totp_handle_regenerate_recovery_codes", handler)
-    controller_cls = controllers_module.create_totp_controller(
+    monkeypatch.setattr(totp_route_handlers_module, "_totp_handle_regenerate_recovery_codes", handler)
+    controller_cls = totp_controllers_module.create_totp_controller(
         backend=config.resolve_startup_backends()[0],
         backend_inventory=inventory,
         backend_index=0,
@@ -556,12 +575,12 @@ def test_append_optional_feature_controllers_skips_totp_and_oauth_when_not_confi
         lambda _config, **_kwargs: pytest.fail("build_totp_controller should not be called"),
     )
     monkeypatch.setattr(
-        controllers_module,
+        oauth_controllers_module,
         "create_oauth_associate_controller",
         lambda **_kwargs: pytest.fail("create_oauth_associate_controller should not be called"),
     )
     monkeypatch.setattr(
-        controllers_module,
+        oauth_controllers_module,
         "create_oauth_login_controller",
         lambda **_kwargs: pytest.fail("create_oauth_login_controller should not be called"),
     )
@@ -609,22 +628,24 @@ def test_append_optional_feature_controllers_appends_enabled_features_in_order(
     monkeypatch.setattr(controllers_module, "create_users_controller", _record("users"))
     monkeypatch.setattr(controllers_module, "build_totp_controller", lambda _config, **_kwargs: "totp")
 
-    def _create_oauth_login_controller(**kwargs: object) -> str:
-        calls.append(("oauth-login", dict(kwargs)))
-        return cast("str", kwargs["provider_name"])
+    def _create_oauth_login_controller(settings: Any) -> str:  # noqa: ANN401
+        values = _settings_values(settings)
+        calls.append(("oauth-login", values))
+        return cast("str", values["provider_name"])
 
-    def _create_oauth_associate_controller(**kwargs: object) -> str:
-        calls.append(("oauth-associate", dict(kwargs)))
-        return f"associate-{kwargs['provider_name']}"
+    def _create_oauth_associate_controller(settings: Any) -> str:  # noqa: ANN401
+        values = _settings_values(settings)
+        calls.append(("oauth-associate", values))
+        return f"associate-{values['provider_name']}"
 
     monkeypatch.setattr(
-        controllers_module,
+        oauth_controllers_module,
         "create_oauth_login_controller",
         _create_oauth_login_controller,
     )
 
     monkeypatch.setattr(
-        controllers_module,
+        oauth_controllers_module,
         "create_oauth_associate_controller",
         _create_oauth_associate_controller,
     )
@@ -712,12 +733,12 @@ def test_append_oauth_login_controllers_uses_explicit_redirect_base_url_and_prim
     )
     captured: list[dict[str, object]] = []
 
-    def _create_oauth_login_controller(**kwargs: object) -> str:
-        captured.append(dict(kwargs))
+    def _create_oauth_login_controller(settings: Any) -> str:  # noqa: ANN401
+        captured.append(_settings_values(settings))
         return "github"
 
     monkeypatch.setattr(
-        controllers_module,
+        oauth_controllers_module,
         "create_oauth_login_controller",
         _create_oauth_login_controller,
     )
@@ -764,11 +785,12 @@ def test_append_oauth_login_controllers_forwards_per_provider_scopes(
     )
     captured: list[dict[str, object]] = []
 
-    def _create_oauth_login_controller(**kwargs: object) -> str:
-        captured.append(dict(kwargs))
-        return cast("str", kwargs["provider_name"])
+    def _create_oauth_login_controller(settings: Any) -> str:  # noqa: ANN401
+        values = _settings_values(settings)
+        captured.append(values)
+        return cast("str", values["provider_name"])
 
-    monkeypatch.setattr(controllers_module, "create_oauth_login_controller", _create_oauth_login_controller)
+    monkeypatch.setattr(oauth_controllers_module, "create_oauth_login_controller", _create_oauth_login_controller)
 
     controllers: list[ControllerRouterHandler] = []
     _append_oauth_login_controllers(controllers=controllers, config=config)
@@ -795,12 +817,12 @@ def test_append_oauth_associate_controllers_uses_explicit_redirect_base_url(
     )
     captured: list[dict[str, object]] = []
 
-    def _create_oauth_associate_controller(**kwargs: object) -> str:
-        captured.append(dict(kwargs))
+    def _create_oauth_associate_controller(settings: Any) -> str:  # noqa: ANN401
+        captured.append(_settings_values(settings))
         return "github"
 
     monkeypatch.setattr(
-        controllers_module,
+        oauth_controllers_module,
         "create_oauth_associate_controller",
         _create_oauth_associate_controller,
     )
@@ -839,12 +861,13 @@ def test_append_oauth_associate_controllers_uses_shared_provider_inventory(
     )
     captured: list[dict[str, object]] = []
 
-    def _create_oauth_associate_controller(**kwargs: object) -> str:
-        captured.append(dict(kwargs))
-        return cast("str", kwargs["provider_name"])
+    def _create_oauth_associate_controller(settings: Any) -> str:  # noqa: ANN401
+        values = _settings_values(settings)
+        captured.append(values)
+        return cast("str", values["provider_name"])
 
     monkeypatch.setattr(
-        controllers_module,
+        oauth_controllers_module,
         "create_oauth_associate_controller",
         _create_oauth_associate_controller,
     )
@@ -929,6 +952,15 @@ def _oauth_login_call(
         "associate_by_email": False,
         "trust_provider_email_verified": False,
     }
+
+
+def _settings_values(settings: Any) -> dict[str, object]:  # noqa: ANN401
+    """Return dataclass settings fields as a plain dictionary.
+
+    Returns:
+        Field names and values from a controller settings dataclass.
+    """
+    return {field_name: getattr(settings, field_name) for field_name in settings.__dataclass_fields__}
 
 
 def _oauth_associate_call(provider_name: str, oauth_client: object) -> dict[str, object]:

@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from importlib import import_module
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, NotRequired, Required, TypedDict, Unpack, overload
 
 from litestar_auth.controllers.oauth import (
     OAuthControllerUserManagerProtocol,
     _create_login_oauth_controller,
+    _OAuthLoginControllerSettings,
     _validate_manual_oauth_redirect_base_url,
 )
 from litestar_auth.exceptions import ConfigurationError
@@ -20,26 +22,71 @@ if TYPE_CHECKING:
     from litestar import Controller
 
     from litestar_auth.authentication.backend import AuthenticationBackend
-    from litestar_auth.oauth.client_adapter import OAuthClientConstructor, OAuthClientFactory, OAuthClientProtocol
+    from litestar_auth.oauth._client_contracts import OAuthClientConstructor, OAuthClientFactory, OAuthClientProtocol
 
 
-def create_provider_oauth_controller[UP: UserProtocol[Any], ID](  # noqa: PLR0913
+@dataclass(frozen=True, slots=True)
+class ProviderOAuthControllerConfig[UP: UserProtocol[Any], ID]:
+    """Configuration for :func:`create_provider_oauth_controller`."""
+
+    provider_name: str
+    backend: AuthenticationBackend[UP, ID]
+    user_manager: OAuthControllerUserManagerProtocol[UP, ID]
+    redirect_base_url: str
+    oauth_flow_cookie_secret: str
+    oauth_client: OAuthClientProtocol | None = None
+    oauth_client_factory: OAuthClientFactory | None = None
+    oauth_client_class: str | None = None
+    oauth_client_kwargs: Mapping[str, object] | None = None
+    auth_path: str = "/auth"
+    path: str | None = None
+    cookie_secure: bool = True
+    oauth_scopes: Sequence[str] | None = None
+    associate_by_email: bool = False
+    trust_provider_email_verified: bool = False
+
+
+class ProviderOAuthControllerOptions[UP: UserProtocol[Any], ID](TypedDict):
+    """Keyword options accepted by :func:`create_provider_oauth_controller`."""
+
+    provider_name: Required[str]
+    backend: Required[AuthenticationBackend[UP, ID]]
+    user_manager: Required[OAuthControllerUserManagerProtocol[UP, ID]]
+    oauth_client: NotRequired[OAuthClientProtocol | None]
+    oauth_client_factory: NotRequired[OAuthClientFactory | None]
+    oauth_client_class: NotRequired[str | None]
+    oauth_client_kwargs: NotRequired[Mapping[str, object] | None]
+    redirect_base_url: Required[str]
+    oauth_flow_cookie_secret: Required[str]
+    auth_path: NotRequired[str]
+    path: NotRequired[str | None]
+    cookie_secure: NotRequired[bool]
+    oauth_scopes: NotRequired[Sequence[str] | None]
+    associate_by_email: NotRequired[bool]
+    trust_provider_email_verified: NotRequired[bool]
+
+
+@overload
+def create_provider_oauth_controller[UP: UserProtocol[Any], ID](  # noqa: D418
     *,
-    provider_name: str,
-    backend: AuthenticationBackend[UP, ID],
-    user_manager: OAuthControllerUserManagerProtocol[UP, ID],
-    oauth_client: OAuthClientProtocol | None = None,
-    oauth_client_factory: OAuthClientFactory | None = None,
-    oauth_client_class: str | None = None,
-    oauth_client_kwargs: Mapping[str, object] | None = None,
-    redirect_base_url: str,
-    oauth_flow_cookie_secret: str,
-    auth_path: str = "/auth",
-    path: str | None = None,
-    cookie_secure: bool = True,
-    oauth_scopes: Sequence[str] | None = None,
-    associate_by_email: bool = False,
-    trust_provider_email_verified: bool = False,
+    config: ProviderOAuthControllerConfig[UP, ID],
+) -> type[Controller]:
+    """Build a provider OAuth controller from grouped settings."""
+    # pragma: no cover
+
+
+@overload
+def create_provider_oauth_controller[UP: UserProtocol[Any], ID](  # noqa: D418
+    **options: Unpack[ProviderOAuthControllerOptions[UP, ID]],
+) -> type[Controller]:
+    """Build a provider OAuth controller from keyword settings."""
+    # pragma: no cover
+
+
+def create_provider_oauth_controller[UP: UserProtocol[Any], ID](
+    *,
+    config: ProviderOAuthControllerConfig[UP, ID] | None = None,
+    **options: Unpack[ProviderOAuthControllerOptions[UP, ID]],
 ) -> type[Controller]:
     """Build a provider-specific OAuth controller from a client or lazy factory.
 
@@ -54,30 +101,40 @@ def create_provider_oauth_controller[UP: UserProtocol[Any], ID](  # noqa: PLR091
 
     Returns:
         Generated controller class mounted under the provider-specific path.
+
+    Raises:
+        ValueError: If ``config`` and keyword options are combined.
     """
-    _validate_manual_oauth_redirect_base_url(redirect_base_url)
+    if config is not None and options:
+        msg = "Pass either ProviderOAuthControllerConfig or keyword options, not both."
+        raise ValueError(msg)
+    settings = ProviderOAuthControllerConfig(**options) if config is None else config
+
+    _validate_manual_oauth_redirect_base_url(settings.redirect_base_url)
     oauth_client_adapter = _build_oauth_client_adapter(
-        oauth_client=oauth_client,
-        oauth_client_factory=oauth_client_factory,
-        oauth_client_class=oauth_client_class,
-        oauth_client_kwargs=oauth_client_kwargs,
+        oauth_client=settings.oauth_client,
+        oauth_client_factory=settings.oauth_client_factory,
+        oauth_client_class=settings.oauth_client_class,
+        oauth_client_kwargs=settings.oauth_client_kwargs,
         oauth_client_class_loader=load_httpx_oauth_client,
     )
-    resolved_path = path if path is not None else _build_oauth_login_path(auth_path)
+    resolved_path = settings.path if settings.path is not None else _build_oauth_login_path(settings.auth_path)
 
     return _create_login_oauth_controller(
-        provider_name=provider_name,
-        backend=backend,
-        user_manager=user_manager,
-        oauth_client_adapter=oauth_client_adapter,
-        redirect_base_url=redirect_base_url,
-        oauth_flow_cookie_secret=oauth_flow_cookie_secret,
-        path=resolved_path,
-        cookie_secure=cookie_secure,
-        oauth_scopes=oauth_scopes,
-        associate_by_email=associate_by_email,
-        trust_provider_email_verified=trust_provider_email_verified,
-        validate_redirect_base_url=False,
+        _OAuthLoginControllerSettings(
+            provider_name=settings.provider_name,
+            backend=settings.backend,
+            user_manager=settings.user_manager,
+            oauth_client_adapter=oauth_client_adapter,
+            redirect_base_url=settings.redirect_base_url,
+            oauth_flow_cookie_secret=settings.oauth_flow_cookie_secret,
+            path=resolved_path,
+            cookie_secure=settings.cookie_secure,
+            oauth_scopes=settings.oauth_scopes,
+            associate_by_email=settings.associate_by_email,
+            trust_provider_email_verified=settings.trust_provider_email_verified,
+            validate_redirect_base_url=False,
+        ),
     )
 
 

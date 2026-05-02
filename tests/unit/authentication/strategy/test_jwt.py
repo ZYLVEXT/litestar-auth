@@ -16,6 +16,7 @@ import pytest
 from litestar_auth import _jwt_headers as jwt_headers_module
 from litestar_auth._jwt_headers import jwt_encode_headers
 from litestar_auth._redis_protocols import RedisExpiringValueStoreClient
+from litestar_auth.authentication.strategy import _jwt_denylist as jwt_denylist_module
 from litestar_auth.authentication.strategy import jwt as jwt_strategy_module
 from litestar_auth.authentication.strategy.jwt import (
     JWT_ACCESS_TOKEN_AUDIENCE,
@@ -114,12 +115,13 @@ def _make_token(
 def test_jwt_module_executes_under_coverage() -> None:
     """Reload the JWT strategy module in-test so coverage records class-body execution."""
     reloaded_headers_module = importlib.reload(jwt_headers_module)
+    reloaded_denylist_module = importlib.reload(jwt_denylist_module)
     reloaded_module = importlib.reload(jwt_strategy_module)
 
     assert reloaded_headers_module.jwt_encode_headers() == jwt_encode_headers()
     assert reloaded_module.JWTStrategy is _jwt_module().JWTStrategy
-    assert reloaded_module.InMemoryJWTDenylistStore is not None
-    assert reloaded_module.RedisJWTDenylistStore is not None
+    assert reloaded_module.InMemoryJWTDenylistStore is reloaded_denylist_module.InMemoryJWTDenylistStore
+    assert reloaded_module.RedisJWTDenylistStore is reloaded_denylist_module.RedisJWTDenylistStore
 
 
 def test_in_memory_jwt_denylist_store_rejects_invalid_capacity() -> None:
@@ -137,7 +139,7 @@ async def test_in_memory_jwt_denylist_store_prunes_expired_entries_before_insert
     def fake_time() -> float:
         return fake_now
 
-    monkeypatch.setattr("litestar_auth.authentication.strategy.jwt.time.time", fake_time)
+    monkeypatch.setattr("litestar_auth.authentication.strategy._jwt_denylist.time.time", fake_time)
     store = InMemoryJWTDenylistStore(max_entries=2)
     await store.deny("expired", ttl_seconds=1)
     await store.deny("active", ttl_seconds=10)
@@ -157,7 +159,7 @@ async def test_in_memory_jwt_denylist_store_fails_closed_under_capacity_pressure
     def fake_time() -> float:
         return fake_now
 
-    monkeypatch.setattr("litestar_auth.authentication.strategy.jwt.time.time", fake_time)
+    monkeypatch.setattr("litestar_auth.authentication.strategy._jwt_denylist.time.time", fake_time)
     store = InMemoryJWTDenylistStore(max_entries=2)
     await store.deny("short", ttl_seconds=5)
     await store.deny("long", ttl_seconds=10)
@@ -180,7 +182,7 @@ async def test_in_memory_jwt_denylist_store_expires_entries_during_lookup(
     def fake_time() -> float:
         return fake_now
 
-    monkeypatch.setattr("litestar_auth.authentication.strategy.jwt.time.time", fake_time)
+    monkeypatch.setattr("litestar_auth.authentication.strategy._jwt_denylist.time.time", fake_time)
     store = InMemoryJWTDenylistStore()
     await store.deny("soon-expired", ttl_seconds=1)
 

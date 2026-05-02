@@ -15,8 +15,10 @@ import msgspec
 import pytest
 from cryptography.fernet import Fernet
 
+import litestar_auth._plugin.backend_inventory as backend_inventory_module
 import litestar_auth._plugin.config as plugin_config_module
 import litestar_auth._plugin.database_token as database_token_module
+import litestar_auth._plugin.feature_configs as feature_configs_module
 from litestar_auth import DEFAULT_SUPERUSER_ROLE_NAME
 from litestar_auth._plugin.config import (
     DEFAULT_REGISTER_MINIMUM_RESPONSE_SECONDS,
@@ -138,6 +140,67 @@ def test_plugin_config_module_executes_under_coverage() -> None:
     assert reloaded_module.DatabaseTokenAuthConfig.__name__ == DatabaseTokenAuthConfig.__name__
     assert reloaded_module.FernetKeyringConfig.__name__ == FernetKeyringConfig.__name__
     assert reloaded_module.OAuthConfig.__name__ == OAuthConfig.__name__
+
+
+def test_plugin_config_reexports_feature_config_contracts() -> None:
+    """Historical config-module imports resolve to the relocated feature config classes."""
+    assert plugin_config_module.DatabaseTokenAuthConfig is feature_configs_module.DatabaseTokenAuthConfig
+    assert plugin_config_module.OAuthConfig is feature_configs_module.OAuthConfig
+    assert plugin_config_module.TotpConfig is feature_configs_module.TotpConfig
+
+
+def test_backend_inventory_module_executes_under_coverage() -> None:
+    """Reload the backend-inventory module so coverage records relocated definitions."""
+    reloaded_module = importlib.reload(backend_inventory_module)
+    config = _minimal_config()
+    inventory = reloaded_module.resolve_backend_inventory(config)
+    startup_backend = inventory.startup_backends()[0]
+
+    assert reloaded_module.StartupBackendTemplate.__name__ == "StartupBackendTemplate"
+    assert reloaded_module.StartupBackendInventory.__name__ == "StartupBackendInventory"
+    same_backend = startup_backend
+    assert startup_backend == same_backend
+    assert startup_backend != object()
+    assert hash(startup_backend) == hash(startup_backend)
+    assert startup_backend.bind_runtime_backend(cast("Any", DummySession())).name == startup_backend.name
+    assert inventory.primary() == (0, startup_backend)
+    assert inventory.resolve_totp(backend_name=None) == (0, startup_backend)
+    assert inventory.resolve_named(startup_backend.name) == (0, startup_backend)
+    assert inventory.resolve_request_backend(
+        [startup_backend.bind_runtime_backend(cast("Any", DummySession()))],
+        backend_index=0,
+    )
+
+    with pytest.raises(ValueError, match="Unknown TOTP backend"):
+        inventory.resolve_named("missing")
+    with pytest.raises(RuntimeError, match="Missing backend index 0"):
+        inventory.resolve_request_backend([], backend_index=0)
+
+    mismatched_backend = AuthenticationBackend[ExampleUser, UUID](
+        name="mismatch",
+        transport=BearerTransport(),
+        strategy=cast("Any", InMemoryTokenStrategy(token_prefix="mismatch")),
+    )
+    with pytest.raises(RuntimeError, match="no longer matches"):
+        inventory.resolve_request_backend(
+            [mismatched_backend],
+            backend_index=0,
+        )
+
+
+def test_feature_configs_module_executes_under_coverage() -> None:
+    """Reload the relocated feature-config module so coverage records its definitions."""
+    reloaded_module = importlib.reload(feature_configs_module)
+    totp_config_type = reloaded_module.TotpConfig
+    oauth_config_type = reloaded_module.OAuthConfig
+    database_token_config_type = reloaded_module.DatabaseTokenAuthConfig
+
+    assert totp_config_type(totp_pending_secret="p" * 32).totp_algorithm == "SHA256"
+    assert oauth_config_type().has_oauth_token_encryption is False
+    assert database_token_config_type(token_hash_secret="t" * 40).backend_name == "database"
+    keyring = FernetKeyringConfig(active_key_id="current", keys={"current": _fernet_key()})
+    with pytest.raises(ConfigurationError, match="oauth_token_encryption_key or oauth_token_encryption_keyring"):
+        oauth_config_type(oauth_token_encryption_key=_fernet_key(), oauth_token_encryption_keyring=keyring)
 
 
 def test_plugin_config_module_does_not_reexport_database_token_helpers() -> None:

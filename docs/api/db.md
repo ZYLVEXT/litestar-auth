@@ -1,6 +1,6 @@
 # Database adapters
 
-The **`litestar_auth.db`** package exposes only the abstract persistence contracts: **`BaseUserStore`** and **`BaseOAuthAccountStore`**. These protocols describe how the user manager talks to your storage layer without tying the library to a particular ORM.
+The **`litestar_auth.db`** package exposes only the abstract persistence contracts and their lightweight data payloads: **`BaseUserStore`**, **`BaseOAuthAccountStore`**, and **`OAuthAccountData`**. These protocols describe how the user manager talks to your storage layer without tying the library to a particular ORM.
 
 The concrete **SQLAlchemy** implementation lives in a dedicated submodule: import **`SQLAlchemyUserDatabase`** from **`litestar_auth.db.sqlalchemy`**. It is **not** re-exported from `litestar_auth.db` on purpose—eagerly importing the adapter would register SQLAlchemy mappers and break the lazy-import boundary described in the project guide. Use the submodule when you are ready to wire real tables.
 

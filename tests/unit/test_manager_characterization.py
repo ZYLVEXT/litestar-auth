@@ -11,7 +11,7 @@ from uuid import UUID, uuid4
 
 import pytest
 
-import litestar_auth.manager as manager_module
+import litestar_auth._optional_deps as optional_deps_module
 from litestar_auth.exceptions import InvalidResetPasswordTokenError, InvalidVerifyTokenError
 from litestar_auth.manager import ENCRYPTED_TOTP_SECRET_PREFIX, BaseUserManager, UserManagerSecurity
 from litestar_auth.password import PasswordHelper
@@ -136,7 +136,7 @@ def _install_fake_cryptography(monkeypatch: pytest.MonkeyPatch) -> None:
         msg = name
         raise ImportError(msg)
 
-    monkeypatch.setattr(manager_module.importlib, "import_module", fake_import_module)
+    monkeypatch.setattr(optional_deps_module.importlib, "import_module", fake_import_module)
 
 
 def _build_user(

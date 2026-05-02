@@ -10,7 +10,11 @@ from uuid import UUID, uuid4
 import pytest
 
 from litestar_auth.authentication.strategy.db import AsyncSessionT, DatabaseTokenStrategy
-from litestar_auth.authentication.strategy.redis import RedisClientProtocol, RedisTokenStrategy
+from litestar_auth.authentication.strategy.redis import (
+    RedisClientProtocol,
+    RedisTokenStrategy,
+    RedisTokenStrategyConfig,
+)
 from litestar_auth.manager import BaseUserManager, UserManagerSecurity
 from litestar_auth.models import User
 from litestar_auth.password import PasswordHelper
@@ -123,9 +127,11 @@ async def test_redis_strategy_invalidate_all_tokens_deletes_only_matching_subjec
 ) -> None:
     """Redis invalidation removes keys recorded in the user's token index."""
     strategy = RedisTokenStrategy(
-        redis=cast_fakeredis(async_fakeredis, RedisClientProtocol),
-        token_hash_secret=REDIS_TOKEN_HASH_SECRET,
-        key_prefix="litestar_auth:token:",
+        config=RedisTokenStrategyConfig(
+            redis=cast_fakeredis(async_fakeredis, RedisClientProtocol),
+            token_hash_secret=REDIS_TOKEN_HASH_SECRET,
+            key_prefix="litestar_auth:token:",
+        ),
     )
 
     user = _User(id=uuid4(), email="user@example.com", hashed_password="hashed")
@@ -164,11 +170,20 @@ async def test_database_strategy_invalidate_all_tokens_deletes_by_user_id() -> N
 
     db_user = User(id=uuid4(), email="user@example.com", hashed_password="hashed")
 
-    with (
-        patch.object(DatabaseTokenStrategy, "_repository", return_value=repo),
-        patch.object(DatabaseTokenStrategy, "_refresh_repository", return_value=refresh_repo),
-    ):
+    def _repository_for(repository_type: object) -> AsyncMock:
+        if repository_type is strategy._access_token_repository_type:
+            return repo
+        if repository_type is strategy._refresh_token_repository_type:
+            return refresh_repo
+        msg = f"Unexpected repository type: {repository_type!r}"
+        raise AssertionError(msg)
+
+    with patch.object(DatabaseTokenStrategy, "_repository", side_effect=_repository_for) as repository:
         await strategy.invalidate_all_tokens(db_user)
 
+    assert [call.args for call in repository.call_args_list] == [
+        (strategy._access_token_repository_type,),
+        (strategy._refresh_token_repository_type,),
+    ]
     repo.delete_where.assert_awaited_once_with(user_id=db_user.id, auto_commit=False)
     refresh_repo.delete_where.assert_awaited_once_with(user_id=db_user.id, auto_commit=False)

@@ -18,7 +18,8 @@ import litestar_auth.db as db_module
 import litestar_auth.guards as guards_module
 import litestar_auth.models as models_module
 import litestar_auth.ratelimit as ratelimit_module
-import litestar_auth.ratelimit._config as ratelimit_config_module
+import litestar_auth.ratelimit._endpoint as ratelimit_endpoint_module
+import litestar_auth.ratelimit._slot_catalog as ratelimit_slot_catalog_module
 from litestar_auth.authentication.strategy.db_models import AccessToken, DatabaseTokenModels, RefreshToken
 from litestar_auth.ratelimit import AuthRateLimitEndpointGroup, AuthRateLimitSlot
 from tests.conftest import project_version_from_pyproject
@@ -72,8 +73,11 @@ def _assert_exported_symbols(module: ModuleType, *, expected_names: Iterable[str
             (
                 "DatabaseTokenModels",
                 "DatabaseTokenStrategy",
+                "DatabaseTokenStrategyConfig",
                 "JWTStrategy",
+                "JWTStrategyConfig",
                 "RedisTokenStrategy",
+                "RedisTokenStrategyConfig",
                 "RefreshableStrategy",
                 "Strategy",
                 "UserManagerProtocol",
@@ -82,12 +86,17 @@ def _assert_exported_symbols(module: ModuleType, *, expected_names: Iterable[str
         ),
         pytest.param(
             transport_module,
-            ("BearerTransport", "CookieTransport", "Transport"),
+            ("BearerTransport", "CookieTransport", "CookieTransportConfig", "Transport"),
             id="authentication.transport",
         ),
         pytest.param(
             controllers_module,
             (
+                "AuthControllerConfig",
+                "OAuthAssociateControllerConfig",
+                "OAuthControllerConfig",
+                "RegisterControllerConfig",
+                "UsersControllerConfig",
                 "create_auth_controller",
                 "create_totp_controller",
                 "create_users_controller",
@@ -96,7 +105,7 @@ def _assert_exported_symbols(module: ModuleType, *, expected_names: Iterable[str
         ),
         pytest.param(
             db_module,
-            ("BaseOAuthAccountStore", "BaseUserStore"),
+            ("BaseOAuthAccountStore", "BaseUserStore", "OAuthAccountData"),
             id="db",
         ),
         pytest.param(
@@ -138,8 +147,10 @@ def test_root_reexport_module_executes_under_coverage(monkeypatch: pytest.Monkey
             "AuthenticationBackend",
             "Authenticator",
             "BaseUserManager",
+            "BaseUserManagerConfig",
             "BearerTransport",
             "CookieTransport",
+            "CookieTransportConfig",
             "DatabaseTokenAuthConfig",
             "DEFAULT_SUPERUSER_ROLE_NAME",
             "ErrorCode",
@@ -178,8 +189,11 @@ def test_models_package_owns_token_registration_helper_and_strategy_keeps_db_tok
     assert strategy_module.__all__ == (
         "DatabaseTokenModels",
         "DatabaseTokenStrategy",
+        "DatabaseTokenStrategyConfig",
         "JWTStrategy",
+        "JWTStrategyConfig",
         "RedisTokenStrategy",
+        "RedisTokenStrategyConfig",
         "RefreshableStrategy",
         "Strategy",
         "UserManagerProtocol",
@@ -210,10 +224,12 @@ def test_ratelimit_reexport_module_keeps_private_helpers_internal() -> None:
             "TotpSensitiveEndpoint",
         ),
     )
-    assert hasattr(ratelimit_config_module, "_AUTH_RATE_LIMIT_ENDPOINT_RECIPES")
-    assert hasattr(ratelimit_config_module, "_AUTH_RATE_LIMIT_ENDPOINT_RECIPES_BY_SLOT")
-    assert hasattr(ratelimit_config_module, "_AUTH_RATE_LIMIT_ENDPOINT_SLOTS")
-    assert hasattr(ratelimit_config_module, "_AUTH_RATE_LIMIT_ENDPOINT_GROUPS")
+    assert hasattr(ratelimit_slot_catalog_module, "_AUTH_RATE_LIMIT_ENDPOINT_RECIPES")
+    assert hasattr(ratelimit_slot_catalog_module, "_AUTH_RATE_LIMIT_ENDPOINT_RECIPES_BY_SLOT")
+    assert hasattr(ratelimit_slot_catalog_module, "_AUTH_RATE_LIMIT_ENDPOINT_SLOTS")
+    assert hasattr(ratelimit_slot_catalog_module, "_AUTH_RATE_LIMIT_ENDPOINT_GROUPS")
+    assert ratelimit_endpoint_module.EndpointRateLimit is reloaded_module.EndpointRateLimit
+    assert ratelimit_endpoint_module.RateLimitScope is reloaded_module.RateLimitScope
     assert get_args(reloaded_module.AuthRateLimitEndpointGroup.__value__) == get_args(
         AuthRateLimitEndpointGroup.__value__,
     )

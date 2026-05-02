@@ -19,6 +19,7 @@ from litestar_auth._plugin.scoped_session import get_or_create_scoped_session
 from litestar_auth._superuser_role import SUPERUSER_ROLE_NAME_SENTINEL
 from litestar_auth.authentication.middleware import (
     LitestarAuthMiddleware,
+    LitestarAuthMiddlewareConfig,
     _cookie_header_contains_any_cookie_name,
     _request_supplied_auth_credentials,
 )
@@ -152,6 +153,23 @@ async def _app(scope: Scope, receive: Receive, send: Send) -> None:
     del receive
     del send
     await asyncio.sleep(0)
+
+
+def test_middleware_rejects_config_combined_with_keyword_options() -> None:
+    """LitestarAuthMiddleware accepts either a config object or keyword options."""
+    session_maker = DummySessionMaker(DummySession())
+    authenticator_factory = Mock()
+
+    with pytest.raises(ValueError, match="LitestarAuthMiddlewareConfig or keyword options"):
+        LitestarAuthMiddleware[ExampleUser, UUID](
+            app=_app,
+            config=LitestarAuthMiddlewareConfig[ExampleUser, UUID](
+                get_request_session=partial(get_or_create_scoped_session, session_maker=cast("Any", session_maker)),
+                authenticator_factory=authenticator_factory,
+            ),
+            get_request_session=partial(get_or_create_scoped_session, session_maker=cast("Any", session_maker)),
+            authenticator_factory=authenticator_factory,
+        )
 
 
 async def test_middleware_sets_authenticated_user_in_scope() -> None:

@@ -13,7 +13,7 @@ from litestar.response import Response
 import litestar_auth.authentication.transport.bearer as bearer_module
 import litestar_auth.authentication.transport.cookie as cookie_module
 from litestar_auth.authentication.transport.base import LogoutTokenReadable, Transport
-from litestar_auth.authentication.transport.cookie import CookieTransport
+from litestar_auth.authentication.transport.cookie import CookieTransport, CookieTransportConfig
 
 if TYPE_CHECKING:
     from litestar.datastructures.cookie import Cookie
@@ -223,6 +223,12 @@ def test_cookie_transport_rejects_insecure_samesite_none_without_secure() -> Non
     """SameSite=None cookies must be Secure to avoid CSRF-downgrade and browser rejection."""
     with pytest.raises(ValueError, match=r"samesite=\"none\" requires secure=True"):
         CookieTransport(secure=False, samesite="none")
+
+
+def test_cookie_transport_rejects_config_combined_with_keyword_options() -> None:
+    """CookieTransport accepts either a config object or keyword options."""
+    with pytest.raises(ValueError, match="CookieTransportConfig or keyword options"):
+        CookieTransport(CookieTransportConfig(cookie_name="session"), cookie_name="other")
 
 
 def test_cookie_security_logout_keeps_hardened_cookie_flags() -> None:

@@ -57,7 +57,7 @@ Exact JSON layout follows your Litestar exception handler configuration.
 
 `USER_ALREADY_EXISTS`, `REGISTER_FAILED`, and `UPDATE_USER_INVALID_PASSWORD` keep stable HTTP mappings even though the corresponding Python exceptions now use keyword-only structured context.
 
-Source of truth in code: `litestar_auth.exceptions.ErrorCode` and controller `ClientException` sites. Full exception hierarchy: [Python API — Exceptions](api/exceptions.md).
+Source of truth in code: `litestar_auth._error_codes.ErrorCode` (re-exported from `litestar_auth.exceptions`) and controller `ClientException` sites. Full exception hierarchy: [Python API — Exceptions](api/exceptions.md).
 
 ## Enumeration safety
 

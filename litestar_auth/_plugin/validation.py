@@ -10,23 +10,28 @@ from typing import TYPE_CHECKING, Any, cast
 from sqlalchemy import inspect as sa_inspect
 
 from litestar_auth._manager.construction import ManagerConstructorInputs
+from litestar_auth._manager.security import validate_user_manager_security_secret_roles_are_distinct
 from litestar_auth._plugin.config import (
     LitestarAuthConfig,
-    TotpConfig,
     _normalize_config_superuser_role_name,
-    _resolve_plugin_managed_totp_secret_storage_policy,
 )
 from litestar_auth._plugin.middleware import get_cookie_transports
-from litestar_auth._plugin.oauth_contract import _build_oauth_route_registration_contract
+from litestar_auth._plugin.oauth_validation import validate_oauth_route_registration_config as _validate_oauth_routes
 from litestar_auth._plugin.rate_limit import iter_rate_limit_endpoints
+from litestar_auth._plugin.totp_validation import (
+    _validate_totp_encryption_key,
+    _validate_totp_pending_secret_config,
+    validate_totp_config,
+    validate_totp_encryption_config,
+    validate_totp_secret_config,
+    validate_totp_sub_config,
+)
 from litestar_auth.config import (
     MINIMUM_SECRET_LENGTH,
-    OAuthProviderConfig,
     resolve_trusted_proxy_setting,
     validate_secret_length,
 )
 from litestar_auth.exceptions import ConfigurationError
-from litestar_auth.manager import validate_user_manager_security_secret_roles_are_distinct
 from litestar_auth.schemas import UserRead, UserUpdate
 from litestar_auth.totp import SecurityWarning
 from litestar_auth.types import UserProtocol
@@ -35,7 +40,15 @@ if TYPE_CHECKING:
     from litestar_auth._plugin.session_binding import _AccountStateValidator as PluginAccountStateValidator
     from litestar_auth.authentication.strategy.jwt import JWTStrategy
 
-_SUPPORTED_TOTP_ALGORITHMS = ("SHA256", "SHA512")
+__all__ = (
+    "SecurityWarning",
+    "_validate_totp_encryption_key",
+    "_validate_totp_pending_secret_config",
+    "validate_totp_config",
+    "validate_totp_encryption_config",
+    "validate_totp_secret_config",
+    "validate_totp_sub_config",
+)
 
 
 def _current_jwt_strategy_type() -> type[JWTStrategy]:
@@ -191,76 +204,13 @@ def validate_request_security_config[UP: UserProtocol[Any], ID](config: Litestar
 
 
 def validate_oauth_route_registration_config[UP: UserProtocol[Any], ID](config: LitestarAuthConfig[UP, ID]) -> None:
-    """Validate the deterministic plugin OAuth route-registration contract.
-
-    Raises:
-        ConfigurationError: If plugin-owned OAuth routes are missing required secret material.
-        ValueError: If plugin-owned OAuth routes are declared with incomplete config.
-    """
-    oauth_config = config.oauth_config
-    if oauth_config is None:
-        return
-
-    contract = _build_oauth_route_registration_contract(
-        auth_path=config.auth_path,
-        oauth_config=oauth_config,
-    )
-    _validate_unique_oauth_provider_names(
-        providers=contract.providers,
-        field_name="oauth_providers",
-    )
-
-    if contract.include_oauth_associate and not contract.providers:
-        msg = "include_oauth_associate=True requires oauth_providers to be configured."
-        raise ValueError(msg)
-
-    if oauth_config.oauth_redirect_base_url and not contract.providers:
-        msg = "oauth_redirect_base_url requires oauth_providers to be configured."
-        raise ValueError(msg)
-
-    if contract.providers and contract.redirect_base_url is None:
-        msg = "oauth_redirect_base_url is required when oauth_providers are configured."
-        raise ValueError(msg)
-
-    if contract.oauth_associate_by_email and not contract.providers:
-        msg = "oauth_associate_by_email only affects plugin-owned OAuth login routes configured via oauth_providers."
-        raise ValueError(msg)
-
-    if contract.oauth_trust_provider_email_verified and not contract.providers:
-        msg = (
-            "oauth_trust_provider_email_verified only affects plugin-owned OAuth login routes configured "
-            "via oauth_providers."
-        )
-        raise ValueError(msg)
-
-    if oauth_config.oauth_flow_cookie_secret is not None:
-        validate_secret_length(
-            oauth_config.oauth_flow_cookie_secret,
-            label="oauth_flow_cookie_secret",
-            minimum_length=MINIMUM_SECRET_LENGTH,
-        )
-
-    if contract.providers and not oauth_config.oauth_flow_cookie_secret:
-        msg = (
-            "oauth_flow_cookie_secret is required when oauth_providers are configured. "
-            'Generate one with `python -c "from secrets import token_urlsafe; print(token_urlsafe(32))"`.'
-        )
-        raise ConfigurationError(msg)
-
-
-def validate_totp_secret_config[UP: UserProtocol[Any], ID](config: LitestarAuthConfig[UP, ID]) -> None:
-    """Validate TOTP secret-material and algorithm requirements."""
-    _validate_totp_pending_secret_config(config)
+    """Validate the deterministic plugin OAuth route-registration contract."""
+    _validate_oauth_routes(config.oauth_config, auth_path=config.auth_path)
 
 
 def validate_backend_security_config[UP: UserProtocol[Any], ID](config: LitestarAuthConfig[UP, ID]) -> None:
     """Validate backend-strategy security posture for constructor-time setup."""
     _validate_backend_strategy_security(config)
-
-
-def validate_totp_encryption_config[UP: UserProtocol[Any], ID](config: LitestarAuthConfig[UP, ID]) -> None:
-    """Validate production encryption requirements for persisted TOTP secrets."""
-    _validate_totp_encryption_key(config)
 
 
 def validate_config[UP: UserProtocol[Any], ID](config: LitestarAuthConfig[UP, ID]) -> None:
@@ -281,29 +231,6 @@ def validate_config[UP: UserProtocol[Any], ID](config: LitestarAuthConfig[UP, ID
 def validate_superuser_role_name_config[UP: UserProtocol[Any], ID](config: LitestarAuthConfig[UP, ID]) -> None:
     """Validate and normalize the configured superuser role name."""
     config.superuser_role_name = _normalize_config_superuser_role_name(config.superuser_role_name)
-
-
-def _validate_totp_pending_secret_config[UP: UserProtocol[Any], ID](config: LitestarAuthConfig[UP, ID]) -> None:
-    """Validate TOTP pending-secret and algorithm constraints.
-
-    Raises:
-        ValueError: If TOTP algorithm requirements are not satisfied.
-    """
-    if config.totp_config is None:
-        return
-    totp_config = config.totp_config
-
-    validate_secret_length(
-        totp_config.totp_pending_secret,
-        label="totp_pending_secret",
-        minimum_length=MINIMUM_SECRET_LENGTH,
-    )
-    if not getattr(totp_config, "totp_algorithm", None):
-        msg = "totp_algorithm must be configured when totp_config is set."
-        raise ValueError(msg)
-    if totp_config.totp_algorithm not in _SUPPORTED_TOTP_ALGORITHMS:
-        msg = "totp_algorithm must be one of: SHA256, SHA512."
-        raise ValueError(msg)
 
 
 def _validate_backend_strategy_security[UP: UserProtocol[Any], ID](config: LitestarAuthConfig[UP, ID]) -> None:
@@ -331,25 +258,6 @@ def _warn_backend_name_strategy_mismatch(*, backend_name: object, strategy: obje
         UserWarning,
         stacklevel=4,
     )
-
-
-def _validate_totp_encryption_key[UP: UserProtocol[Any], ID](config: LitestarAuthConfig[UP, ID]) -> None:
-    """Require TOTP secret encryption key in production when TOTP is enabled.
-
-    Raises:
-        ConfigurationError: If TOTP is configured but both ``totp_secret_keyring``
-            and ``totp_secret_key`` are missing while ``config.unsafe_testing`` is false.
-    """
-    if config.totp_config is None or config.unsafe_testing:
-        return
-    notice = _resolve_plugin_managed_totp_secret_storage_policy(config)
-    if notice is None or not notice.requires_explicit_production_opt_in:
-        return
-
-    msg = notice.production_validation_error
-    if msg is None:  # pragma: no cover - missing-key posture always provides a validation error
-        return
-    raise ConfigurationError(msg)
 
 
 def validate_totp_user_model_protocol[UP: UserProtocol[Any], ID](config: LitestarAuthConfig[UP, ID]) -> None:
@@ -506,31 +414,6 @@ def resolve_user_manager_account_state_validator[UP: UserProtocol[Any]](
     raise TypeError(msg)
 
 
-def _validate_unique_oauth_provider_names(
-    *,
-    providers: tuple[OAuthProviderConfig, ...],
-    field_name: str,
-) -> None:
-    """Reject duplicate provider names within one declared OAuth inventory.
-
-    Raises:
-        ValueError: If a provider name appears more than once in the same inventory.
-    """
-    seen: set[str] = set()
-    duplicates: list[str] = []
-    for provider in providers:
-        provider_name = provider.name
-        if provider_name in seen and provider_name not in duplicates:
-            duplicates.append(provider_name)
-            continue
-        seen.add(provider_name)
-
-    if duplicates:
-        duplicate_names = ", ".join(sorted(duplicates))
-        msg = f"{field_name} must not contain duplicate provider names: {duplicate_names}."
-        raise ValueError(msg)
-
-
 def validate_rate_limit_config(rate_limit_config: object) -> None:
     """Validate rate-limit backend settings (trusted-proxy flags).
 
@@ -573,61 +456,3 @@ def validate_cookie_auth_config[UP: UserProtocol[Any], ID](config: LitestarAuthC
         "or set allow_insecure_cookie_auth=True only for controlled non-browser scenarios."
     )
     raise ConfigurationError(msg)
-
-
-def validate_totp_config[UP: UserProtocol[Any], ID](config: LitestarAuthConfig[UP, ID]) -> None:
-    """Validate TOTP-specific configuration knobs."""
-    if config.totp_config is None:
-        return
-    validate_totp_sub_config(
-        config.totp_config,
-        user_manager_class=config.user_manager_class,
-        unsafe_testing=config.unsafe_testing,
-    )
-    if not config.unsafe_testing:
-        cookie_transports = get_cookie_transports(config.resolve_startup_backends())
-        if cookie_transports and not all(t.secure for t in cookie_transports):
-            warnings.warn(
-                "TOTP is enabled but CookieTransport.secure=False; TOTP secrets returned by "
-                "/2fa/enable may be transmitted over unencrypted connections.",
-                SecurityWarning,
-                stacklevel=2,
-            )
-
-
-def validate_totp_sub_config[UP: UserProtocol[Any]](
-    totp_config: TotpConfig,
-    *,
-    user_manager_class: type[object] | None,
-    unsafe_testing: bool = False,
-) -> None:
-    """Validate a concrete ``TotpConfig`` payload.
-
-    Raises:
-        ValueError: If required TOTP configuration is missing or incompatible.
-    """
-    if not totp_config.totp_pending_secret:
-        msg = "totp_config requires totp_pending_secret."
-        raise ValueError(msg)
-    pending_jti_store = getattr(totp_config, "totp_pending_jti_store", None)
-    if pending_jti_store is None and not unsafe_testing:
-        msg = "totp_pending_jti_store is required unless unsafe_testing=True."
-        raise ValueError(msg)
-    enrollment_store = getattr(totp_config, "totp_enrollment_store", None)
-    if enrollment_store is None and not unsafe_testing:
-        msg = "totp_enrollment_store is required unless unsafe_testing=True."
-        raise ValueError(msg)
-    require_replay_protection = bool(getattr(totp_config, "totp_require_replay_protection", False))
-    used_tokens_store = getattr(totp_config, "totp_used_tokens_store", None)
-    if require_replay_protection and used_tokens_store is None and not unsafe_testing:
-        msg = "totp_require_replay_protection=True requires totp_used_tokens_store to be configured."
-        raise ValueError(msg)
-    if totp_config.totp_enable_requires_password and not callable(
-        getattr(user_manager_class, "authenticate", None),
-    ):
-        msg = (
-            "TOTP step-up enrollment is enabled by default. "
-            "Configure user_manager_class.authenticate(identifier, password) or set "
-            "totp_enable_requires_password=False explicitly (not recommended)."
-        )
-        raise ValueError(msg)

@@ -22,14 +22,16 @@ from litestar_auth.authentication.strategy.jwt import JWTStrategy
 from litestar_auth.authentication.transport.bearer import BearerTransport
 from litestar_auth.config import OAuthProviderConfig
 from litestar_auth.controllers import create_oauth_associate_controller
-from litestar_auth.controllers.oauth import _decode_oauth_flow_cookie, _OAuthFlowCookieCipher
+from litestar_auth.controllers.oauth import _decode_oauth_flow_cookie
+from litestar_auth.db import OAuthAccountData
 from litestar_auth.db.sqlalchemy import SQLAlchemyUserDatabase
 from litestar_auth.exceptions import ErrorCode, InactiveUserError, UnverifiedUserError
 from litestar_auth.guards import is_authenticated
 from litestar_auth.manager import BaseUserManager, UserManagerSecurity
 from litestar_auth.models import OAuthAccount, User
 from litestar_auth.oauth import create_provider_oauth_controller
-from litestar_auth.oauth.service import _build_pkce_code_challenge
+from litestar_auth.oauth._flow_cookie import _OAuthFlowCookieCipher
+from litestar_auth.oauth._pkce import _build_pkce_code_challenge
 from litestar_auth.oauth_encryption import OAuthTokenEncryption, bind_oauth_token_encryption
 from litestar_auth.password import PasswordHelper
 from litestar_auth.plugin import LitestarAuth, LitestarAuthConfig
@@ -109,16 +111,11 @@ class OAuthUserDatabaseProxy:
                 oauth_token_encryption=self._oauth_token_encryption,
             ).get_by_oauth_account(oauth_name, account_id)
 
-    async def upsert_oauth_account(  # noqa: PLR0913
+    async def upsert_oauth_account(
         self,
         user: User,
         *,
-        oauth_name: str,
-        account_id: str,
-        account_email: str,
-        access_token: str,
-        expires_at: int | None,
-        refresh_token: str | None,
+        account: OAuthAccountData,
     ) -> None:
         """Create or update a persisted OAuth account."""
         async with self._session_maker() as session:
@@ -132,12 +129,7 @@ class OAuthUserDatabaseProxy:
             assert persistent_user is not None
             await user_db.upsert_oauth_account(
                 persistent_user,
-                oauth_name=oauth_name,
-                account_id=account_id,
-                account_email=account_email,
-                access_token=access_token,
-                expires_at=expires_at,
-                refresh_token=refresh_token,
+                account=account,
             )
 
 
@@ -747,12 +739,14 @@ async def test_oauth_callback_returns_existing_user_when_provider_identity_alrea
         )
         await user_db.upsert_oauth_account(
             user_a,
-            oauth_name="github",
-            account_id="shared-provider-id",
-            account_email="first@example.com",
-            access_token="stored-token",
-            expires_at=0,
-            refresh_token=None,
+            account=OAuthAccountData(
+                oauth_name="github",
+                account_id="shared-provider-id",
+                account_email="first@example.com",
+                access_token="stored-token",
+                expires_at=0,
+                refresh_token=None,
+            ),
         )
 
     async with AsyncTestClient(app=app, base_url="https://testserver.local") as client:

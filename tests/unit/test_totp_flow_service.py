@@ -7,6 +7,7 @@ import hashlib
 import importlib
 import logging
 from datetime import UTC, datetime, timedelta, tzinfo
+from typing import Any, cast
 from unittest.mock import AsyncMock
 from uuid import UUID, uuid4
 
@@ -21,6 +22,7 @@ from litestar_auth.totp_flow import (
     TOTP_PENDING_AUDIENCE,
     PendingTotpClientBinding,
     PendingTotpLogin,
+    TotpLoginFlowConfig,
     TotpLoginFlowService,
     _fingerprint_client_binding_value,
 )
@@ -33,6 +35,26 @@ CLIENT_BINDING = PendingTotpClientBinding(
     client_ip_fingerprint="client-ip-fingerprint",
     user_agent_fingerprint="user-agent-fingerprint",
 )
+
+
+def _service(
+    user_manager: object,
+    **config_kwargs: Any,  # noqa: ANN401
+) -> TotpLoginFlowService[ExampleUser, UUID]:
+    return TotpLoginFlowService[ExampleUser, UUID](
+        user_manager=cast("Any", user_manager),
+        config=TotpLoginFlowConfig[UUID](**config_kwargs),
+    )
+
+
+def _service_str(
+    user_manager: object,
+    **config_kwargs: Any,  # noqa: ANN401
+) -> TotpLoginFlowService[ExampleUser, str]:
+    return TotpLoginFlowService[ExampleUser, str](
+        user_manager=cast("Any", user_manager),
+        config=TotpLoginFlowConfig[str](**config_kwargs),
+    )
 
 
 def test_totp_flow_module_executes_under_coverage() -> None:
@@ -109,8 +131,8 @@ async def test_issue_pending_token_returns_none_when_totp_is_not_enabled() -> No
     """Users without a stored TOTP secret do not receive pending-login tokens."""
     user = ExampleUser(id=uuid4(), email="user@example.com", totp_secret=None)
     manager = _build_manager(user=user, read_secret=None)
-    service = TotpLoginFlowService[ExampleUser, UUID](
-        user_manager=manager,
+    service = _service(
+        manager,
         totp_pending_secret=TOTP_PENDING_SECRET,
     )
 
@@ -123,8 +145,8 @@ async def test_issue_pending_token_mints_expected_jwt_claims() -> None:
     """Issued pending-login tokens keep the stable audience and subject contract."""
     user = ExampleUser(id=uuid4(), email="user@example.com")
     manager = _build_manager(user=user)
-    service = TotpLoginFlowService[ExampleUser, UUID](
-        user_manager=manager,
+    service = _service(
+        manager,
         totp_pending_secret=TOTP_PENDING_SECRET,
     )
 
@@ -147,8 +169,8 @@ async def test_issue_pending_token_omits_binding_claims_when_disabled() -> None:
     """The opt-out mode does not write empty binding claims into pending tokens."""
     user = ExampleUser(id=uuid4(), email="user@example.com")
     manager = _build_manager(user=user)
-    service = TotpLoginFlowService[ExampleUser, UUID](
-        user_manager=manager,
+    service = _service(
+        manager,
         totp_pending_secret=TOTP_PENDING_SECRET,
         require_client_binding=False,
     )
@@ -165,8 +187,8 @@ async def test_issue_pending_token_requires_client_binding_by_default() -> None:
     """The service fails closed if the caller omits required client-binding evidence."""
     user = ExampleUser(id=uuid4(), email="user@example.com")
     manager = _build_manager(user=user)
-    service = TotpLoginFlowService[ExampleUser, UUID](
-        user_manager=manager,
+    service = _service(
+        manager,
         totp_pending_secret=TOTP_PENDING_SECRET,
     )
 
@@ -178,8 +200,8 @@ async def test_authenticate_pending_login_rejects_mismatched_client_binding() ->
     """Pending-token client-binding mismatches use the invalid pending-token signal."""
     user = ExampleUser(id=uuid4(), email="user@example.com")
     manager = _build_manager(user=user)
-    service = TotpLoginFlowService[ExampleUser, UUID](
-        user_manager=manager,
+    service = _service(
+        manager,
         totp_pending_secret=TOTP_PENDING_SECRET,
         id_parser=UUID,
     )
@@ -203,8 +225,8 @@ async def test_resolve_pending_login_rejects_missing_current_client_binding() ->
     """A bound pending token cannot be resolved without current client-binding evidence."""
     user = ExampleUser(id=uuid4(), email="user@example.com")
     manager = _build_manager(user=user)
-    service = TotpLoginFlowService[ExampleUser, UUID](
-        user_manager=manager,
+    service = _service(
+        manager,
         totp_pending_secret=TOTP_PENDING_SECRET,
         id_parser=UUID,
     )
@@ -225,8 +247,8 @@ async def test_authenticate_pending_login_returns_user_and_denies_verified_jti()
     pending_jti_store = AsyncMock()
     pending_jti_store.is_denied.return_value = False
     pending_jti_store.deny.return_value = True
-    service = TotpLoginFlowService[ExampleUser, UUID](
-        user_manager=manager,
+    service = _service(
+        manager,
         totp_pending_secret=TOTP_PENDING_SECRET,
         used_tokens_store=used_tokens_store,
         pending_jti_store=pending_jti_store,
@@ -253,11 +275,13 @@ async def test_authenticate_pending_login_returns_user_and_denies_verified_jti()
     verify_totp_with_store.assert_awaited_once_with(
         "plain-secret",
         "123456",
-        user_id=user.id,
-        used_tokens_store=used_tokens_store,
+        replay=totp_flow_module.TotpReplayProtection(
+            user_id=user.id,
+            used_tokens_store=used_tokens_store,
+            require_replay_protection=True,
+            unsafe_testing=False,
+        ),
         algorithm="SHA256",
-        require_replay_protection=True,
-        unsafe_testing=False,
     )
     pending_jti_store.is_denied.assert_awaited_once()
     pending_jti_store.deny.assert_awaited_once()
@@ -271,8 +295,8 @@ async def test_authenticate_pending_login_rejects_replayed_jti() -> None:
     manager = _build_manager(user=user)
     pending_jti_store = AsyncMock()
     pending_jti_store.is_denied.return_value = True
-    service = TotpLoginFlowService[ExampleUser, UUID](
-        user_manager=manager,
+    service = _service(
+        manager,
         totp_pending_secret=TOTP_PENDING_SECRET,
         pending_jti_store=pending_jti_store,
         id_parser=UUID,
@@ -292,8 +316,8 @@ async def test_authenticate_pending_login_rejects_invalid_totp_code() -> None:
     """Failed TOTP verification preserves the dedicated invalid-code signal."""
     user = ExampleUser(id=uuid4(), email="user@example.com")
     manager = _build_manager(user=user)
-    service = TotpLoginFlowService[ExampleUser, UUID](
-        user_manager=manager,
+    service = _service(
+        manager,
         totp_pending_secret=TOTP_PENDING_SECRET,
         id_parser=UUID,
     )
@@ -317,8 +341,8 @@ async def test_authenticate_pending_login_accepts_matching_recovery_code_after_t
     pending_jti_store = AsyncMock()
     pending_jti_store.is_denied.return_value = False
     pending_jti_store.deny.return_value = True
-    service = TotpLoginFlowService[ExampleUser, UUID](
-        user_manager=manager,
+    service = _service(
+        manager,
         totp_pending_secret=TOTP_PENDING_SECRET,
         pending_jti_store=pending_jti_store,
         id_parser=UUID,
@@ -347,8 +371,8 @@ async def test_authenticate_pending_login_rejects_consumed_matching_recovery_cod
     user = ExampleUser(id=uuid4(), email="user@example.com")
     manager = _build_manager(user=user, recovery_code_hashes=("hash-1",))
     manager.consume_recovery_code_hash.return_value = False
-    service = TotpLoginFlowService[ExampleUser, UUID](
-        user_manager=manager,
+    service = _service(
+        manager,
         totp_pending_secret=TOTP_PENDING_SECRET,
         id_parser=UUID,
     )
@@ -372,8 +396,8 @@ async def test_authenticate_pending_login_traverses_every_recovery_hash_before_c
     """Recovery-code lookup does not short-circuit when an earlier hash matches."""
     user = ExampleUser(id=uuid4(), email="user@example.com")
     manager = _build_manager(user=user, recovery_code_hashes=("hash-1", "hash-2", "hash-3", "hash-4"))
-    service = TotpLoginFlowService[ExampleUser, UUID](
-        user_manager=manager,
+    service = _service(
+        manager,
         totp_pending_secret=TOTP_PENDING_SECRET,
         id_parser=UUID,
         unsafe_testing=True,
@@ -400,8 +424,8 @@ async def test_authenticate_pending_login_rejects_missing_secret_after_pending_t
     user = ExampleUser(id=uuid4(), email="user@example.com")
     manager = _build_manager(user=user)
     manager.read_totp_secret.side_effect = ["plain-secret", None]
-    service = TotpLoginFlowService[ExampleUser, UUID](
-        user_manager=manager,
+    service = _service(
+        manager,
         totp_pending_secret=TOTP_PENDING_SECRET,
         id_parser=UUID,
     )
@@ -430,8 +454,8 @@ async def test_resolve_pending_login_wraps_jwt_decode_errors(
 ) -> None:
     """JWT decode failures are normalized to the pending-token domain error."""
     user = ExampleUser(id=uuid4(), email="user@example.com")
-    service = TotpLoginFlowService[ExampleUser, UUID](
-        user_manager=_build_manager(user=user),
+    service = _service(
+        _build_manager(user=user),
         totp_pending_secret=TOTP_PENDING_SECRET,
         id_parser=UUID,
     )
@@ -464,8 +488,8 @@ async def test_resolve_pending_login_rejects_invalid_payload_shapes(
     """Malformed decoded payload values are rejected before user lookup."""
     user = ExampleUser(id=uuid4(), email="user@example.com")
     manager = _build_manager(user=user)
-    service = TotpLoginFlowService[ExampleUser, UUID](
-        user_manager=manager,
+    service = _service(
+        manager,
         totp_pending_secret=TOTP_PENDING_SECRET,
         id_parser=UUID,
     )
@@ -484,8 +508,8 @@ async def test_resolve_pending_login_rejects_missing_user() -> None:
     """Pending tokens fail closed when their subject no longer resolves to a user."""
     user = ExampleUser(id=uuid4(), email="user@example.com")
     manager = _build_manager(user=None)
-    service = TotpLoginFlowService[ExampleUser, UUID](
-        user_manager=manager,
+    service = _service(
+        manager,
         totp_pending_secret=TOTP_PENDING_SECRET,
         id_parser=UUID,
     )
@@ -499,8 +523,8 @@ async def test_authenticate_pending_login_rejects_unparseable_expiration(monkeyp
     """A decoded payload with an invalid expiration shape is rejected."""
     user = ExampleUser(id=uuid4(), email="user@example.com")
     manager = _build_manager(user=user)
-    service = TotpLoginFlowService[ExampleUser, UUID](
-        user_manager=manager,
+    service = _service(
+        manager,
         totp_pending_secret=TOTP_PENDING_SECRET,
         id_parser=UUID,
     )
@@ -524,8 +548,8 @@ async def test_deny_pending_login_records_pending_jti_with_remaining_ttl(monkeyp
     """Pending JTIs are denylisted for the remaining token lifetime."""
     user = ExampleUser(id=uuid4(), email="user@example.com")
     pending_jti_store = AsyncMock()
-    service = TotpLoginFlowService[ExampleUser, UUID](
-        user_manager=_build_manager(user=user),
+    service = _service(
+        _build_manager(user=user),
         totp_pending_secret=TOTP_PENDING_SECRET,
         pending_jti_store=pending_jti_store,
     )
@@ -554,8 +578,8 @@ async def test_deny_pending_login_raises_token_error_when_denylist_returns_false
     user = ExampleUser(id=uuid4(), email="user@example.com")
     pending_jti_store = AsyncMock()
     pending_jti_store.deny.return_value = False
-    service = TotpLoginFlowService[ExampleUser, UUID](
-        user_manager=_build_manager(user=user),
+    service = _service(
+        _build_manager(user=user),
         totp_pending_secret=TOTP_PENDING_SECRET,
         pending_jti_store=pending_jti_store,
     )
@@ -573,26 +597,51 @@ async def test_deny_pending_login_raises_token_error_when_denylist_returns_false
 async def test_deny_pending_login_warns_in_unsafe_testing_without_denylist_store(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """Unsafe testing allows pending-login verification without a denylist backend."""
+    """Unsafe testing logs the missing denylist backend once per service instance."""
     user = ExampleUser(id=uuid4(), email="user@example.com")
-    service = TotpLoginFlowService[ExampleUser, UUID](
-        user_manager=_build_manager(user=user),
+    service = _service(
+        _build_manager(user=user),
         totp_pending_secret=TOTP_PENDING_SECRET,
         unsafe_testing=True,
     )
-    totp_flow_module._pending_jti_disabled_logged = False
+    service._reset_pending_jti_warning_state()
+    caplog.set_level(logging.CRITICAL, logger=totp_flow_module.logger.name)
 
-    with (
-        caplog.at_level(logging.CRITICAL, logger=totp_flow_module.logger.name),
-        pytest.warns(
-            SecurityWarning,
-            match="unsafe_testing=True",
-        ),
-    ):
+    with pytest.warns(SecurityWarning, match="unsafe_testing=True"):
         await service._deny_pending_login(
             PendingTotpLogin(
                 user=user,
                 pending_jti="c" * 32,
+                expires_at=datetime.now(tz=UTC) + timedelta(seconds=30),
+            ),
+        )
+    with pytest.warns(SecurityWarning, match="unsafe_testing=True"):
+        await service._deny_pending_login(
+            PendingTotpLogin(
+                user=user,
+                pending_jti="f" * 32,
+                expires_at=datetime.now(tz=UTC) + timedelta(seconds=30),
+            ),
+        )
+
+    warning_records = [
+        record
+        for record in caplog.records
+        if (
+            getattr(record, "event", None) == "totp_pending_jti_dedup_disabled"
+            and getattr(record, "unsafe_testing", None) is True
+        )
+    ]
+    assert len(warning_records) == 1
+
+    service._reset_pending_jti_warning_state()
+    caplog.clear()
+
+    with pytest.warns(SecurityWarning, match="unsafe_testing=True"):
+        await service._deny_pending_login(
+            PendingTotpLogin(
+                user=user,
+                pending_jti="a" * 32,
                 expires_at=datetime.now(tz=UTC) + timedelta(seconds=30),
             ),
         )
@@ -602,14 +651,13 @@ async def test_deny_pending_login_warns_in_unsafe_testing_without_denylist_store
         and getattr(record, "unsafe_testing", None) is True
         for record in caplog.records
     )
-    totp_flow_module._pending_jti_disabled_logged = False
 
 
 async def test_deny_pending_login_raises_without_store_outside_unsafe_testing() -> None:
     """Production mode requires a pending-token denylist store."""
     user = ExampleUser(id=uuid4(), email="user@example.com")
-    service = TotpLoginFlowService[ExampleUser, UUID](
-        user_manager=_build_manager(user=user),
+    service = _service(
+        _build_manager(user=user),
         totp_pending_secret=TOTP_PENDING_SECRET,
     )
 
@@ -625,8 +673,8 @@ async def test_deny_pending_login_raises_without_store_outside_unsafe_testing() 
 
 def test_parse_user_id_uses_configured_parser_when_present() -> None:
     """Configured ID parsers are applied to JWT subjects."""
-    service = TotpLoginFlowService[ExampleUser, UUID](
-        user_manager=_build_manager(),
+    service = _service(
+        _build_manager(),
         totp_pending_secret=TOTP_PENDING_SECRET,
         id_parser=UUID,
     )
@@ -639,8 +687,8 @@ def test_parse_user_id_uses_configured_parser_when_present() -> None:
 
 def test_parse_user_id_returns_subject_without_parser() -> None:
     """Without an ID parser, the subject is forwarded as-is."""
-    service = TotpLoginFlowService[ExampleUser, str](
-        user_manager=_build_manager(),
+    service = _service_str(
+        _build_manager(),
         totp_pending_secret=TOTP_PENDING_SECRET,
     )
 

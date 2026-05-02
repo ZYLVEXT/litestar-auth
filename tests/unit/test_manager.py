@@ -15,8 +15,12 @@ import jwt
 import pytest
 from cryptography.fernet import Fernet
 
+import litestar_auth._optional_deps as optional_deps_module
 import litestar_auth.manager as manager_module
+from litestar_auth._manager import hooks as manager_hooks_module
+from litestar_auth._manager import security as manager_security_module
 from litestar_auth._manager._coercions import _account_state_user, _as_dict, _managed_user, _require_str
+from litestar_auth._manager.security import _SecretValue
 from litestar_auth._manager.user_lifecycle import PRIVILEGED_FIELDS
 from litestar_auth._manager.user_policy import UserPolicy
 from litestar_auth.authentication.strategy.base import TokenInvalidationCapable
@@ -35,9 +39,10 @@ from litestar_auth.exceptions import (
 from litestar_auth.manager import (
     RESET_PASSWORD_TOKEN_AUDIENCE,
     BaseUserManager,
+    BaseUserManagerConfig,
     FernetKeyringConfig,
+    UserManagerHooks,
     UserManagerSecurity,
-    _SecretValue,
 )
 from litestar_auth.manager import logger as manager_logger
 from litestar_auth.password import PasswordHelper
@@ -47,6 +52,8 @@ from tests._helpers import ExampleUser
 
 if TYPE_CHECKING:
     from collections.abc import Callable
+
+    from litestar_auth.db import OAuthAccountData
 
 JTI_HEX_LENGTH = 32
 # ``secrets.token_hex(32)`` is 64 lowercase hex characters.
@@ -68,7 +75,83 @@ def test_manager_module_executes_under_coverage() -> None:
     reloaded_module = importlib.reload(manager_module)
 
     assert reloaded_module.BaseUserManager.__name__ == BaseUserManager.__name__
-    assert reloaded_module._SecretValue.__name__ == _SecretValue.__name__
+    assert _SecretValue.__name__ == "_SecretValue"
+
+
+def test_manager_security_module_executes_under_coverage() -> None:
+    """Reload and exercise relocated manager-security helpers under coverage."""
+    reloaded_module = importlib.reload(manager_security_module)
+    current_key = _fernet_key()
+    old_key = _fernet_key()
+
+    keyring = reloaded_module.FernetKeyringConfig(
+        active_key_id="current",
+        keys=(("current", current_key), ("old", old_key.encode())),
+    )
+    security = reloaded_module.UserManagerSecurity[UUID](
+        verification_token_secret="verify-secret-1234567890-1234567890",
+        reset_password_token_secret="reset-secret-1234567890-1234567890",
+        login_identifier_telemetry_secret=None,
+        totp_secret_keyring=keyring,
+        id_parser=UUID,
+    )
+    secret = reloaded_module._SecretValue("raw-secret")
+
+    assert keyring.active_key_id == "current"
+    assert str(keyring) == repr(keyring)
+    assert current_key not in repr(keyring)
+    assert old_key not in repr(keyring)
+    assert "verify-secret-1234567890-1234567890" not in repr(security)
+    assert "login_identifier_telemetry_secret=None" in repr(security)
+    assert secret.get_secret_value() == "raw-secret"
+    assert repr(secret) == "_SecretValue('**********')"
+    assert str(secret) == "**********"
+    assert reloaded_module._mask_optional_secret(None) is None
+    assert reloaded_module._mask_optional_secret("raw-secret") == "**********"
+    assert reloaded_module._coerce_fernet_key_secret_role_value(old_key.encode()) == old_key
+    assert reloaded_module._coerce_fernet_key_secret_role_value(current_key) == current_key
+    assert reloaded_module._iter_totp_secret_role_values(reloaded_module.UserManagerSecurity[UUID]()) == ()
+    assert reloaded_module._iter_totp_secret_role_values(
+        reloaded_module.UserManagerSecurity[UUID](totp_secret_key="t" * 32),
+    ) == ("t" * 32,)
+    reloaded_module.validate_user_manager_security_secret_roles_are_distinct(
+        reloaded_module.UserManagerSecurity[UUID](
+            verification_token_secret="v" * 32,
+            reset_password_token_secret="r" * 32,
+        ),
+        totp_pending_secret="p" * 32,
+        oauth_flow_cookie_secret="o" * 32,
+    )
+    reloaded_module.validate_user_manager_security_secret_roles_are_distinct(
+        security,
+        totp_pending_secret="p" * 32,
+        oauth_flow_cookie_secret="o" * 32,
+    )
+
+    with pytest.raises(ConfigurationError, match="totp_secret_key or totp_secret_keyring"):
+        reloaded_module.UserManagerSecurity[UUID](totp_secret_key="t" * 32, totp_secret_keyring=keyring)
+
+    invalid_keyring_inputs = [
+        ("current", object(), "mapping or a sequence"),
+        ("current", ["current"], "key-id/key pairs"),
+        ("current", [(1, current_key)], "key ids must be strings"),
+        ("bad key", {"bad key": current_key}, "Fernet key ids"),
+        ("current", [("current", current_key), ("current", old_key)], "unique"),
+        ("current", [("current", object())], "key material is invalid"),
+        ("current", {"current": "invalid-fernet-key"}, "key material is invalid"),
+    ]
+    for active_key_id, keys, match in invalid_keyring_inputs:
+        with pytest.raises(ConfigurationError, match=match):
+            reloaded_module.FernetKeyringConfig(active_key_id=active_key_id, keys=cast("Any", keys))
+
+
+def test_manager_hooks_module_executes_under_coverage() -> None:
+    """Reload relocated manager hooks and preserve the historical manager export."""
+    reloaded_module = importlib.reload(manager_hooks_module)
+
+    assert reloaded_module.UserManagerHooks.__name__ == UserManagerHooks.__name__
+    assert issubclass(BaseUserManager, manager_module.UserManagerHooks)
+    assert manager_module.UserManagerHooks is UserManagerHooks
 
 
 def test_manager_does_not_reexport_lifecycle_constants() -> None:
@@ -361,6 +444,60 @@ def test_manager_init_accepts_typed_security_contract() -> None:
     assert manager.login_identifier_telemetry_secret.get_secret_value() == security.login_identifier_telemetry_secret
     assert manager.totp_secret_key == security.totp_secret_key
     assert manager.id_parser is UUID
+
+
+def test_manager_init_accepts_config_object() -> None:
+    """BaseUserManager can receive its constructor settings as one typed config."""
+    user_db = AsyncMock()
+    password_helper = PasswordHelper()
+    security = UserManagerSecurity[UUID](
+        verification_token_secret="verify-secret-1234567890-1234567890",
+        reset_password_token_secret="reset-secret-1234567890-1234567890",
+        login_identifier_telemetry_secret=LOGIN_IDENTIFIER_TELEMETRY_SECRET,
+        id_parser=UUID,
+    )
+
+    manager = BaseUserManager(
+        config=BaseUserManagerConfig(
+            user_db=user_db,
+            password_helper=password_helper,
+            security=security,
+            login_identifier="username",
+        ),
+    )
+
+    assert manager.user_db is user_db
+    assert manager.password_helper is password_helper
+    assert manager.login_identifier == "username"
+    assert manager.id_parser is UUID
+
+
+def test_manager_init_rejects_config_combined_with_user_db_or_options() -> None:
+    """BaseUserManager accepts either a config object or the keyword constructor surface."""
+    user_db = AsyncMock()
+    config = BaseUserManagerConfig(
+        user_db=user_db,
+        security=UserManagerSecurity[UUID](
+            verification_token_secret="verify-secret-1234567890-1234567890",
+            reset_password_token_secret="reset-secret-1234567890-1234567890",
+        ),
+    )
+
+    loose_ctor = cast("Any", BaseUserManager)
+
+    with pytest.raises(ValueError, match="BaseUserManagerConfig or user_db plus keyword options"):
+        loose_ctor(user_db, config=config)
+
+    with pytest.raises(ValueError, match="BaseUserManagerConfig or user_db plus keyword options"):
+        loose_ctor(config=config, password_helper=PasswordHelper())
+
+
+def test_manager_init_requires_user_db_or_config() -> None:
+    """BaseUserManager fails loudly when no persistence boundary is provided."""
+    loose_ctor = cast("Any", BaseUserManager)
+
+    with pytest.raises(TypeError, match="requires user_db or config"):
+        loose_ctor()
 
 
 def test_user_manager_security_rejects_ambiguous_totp_key_inputs() -> None:
@@ -752,26 +889,13 @@ def test_resolve_oauth_account_store_returns_matching_protocol_instance() -> Non
             del oauth_name, account_id
             return None
 
-        async def upsert_oauth_account(  # noqa: PLR0913
+        async def upsert_oauth_account(
             self,
             user: ExampleUser,
             *,
-            oauth_name: str,
-            account_id: str,
-            account_email: str,
-            access_token: str,
-            expires_at: int | None,
-            refresh_token: str | None,
+            account: OAuthAccountData,
         ) -> None:
-            del (
-                user,
-                oauth_name,
-                account_id,
-                account_email,
-                access_token,
-                expires_at,
-                refresh_token,
-            )
+            del user, account
 
     store = DummyOAuthAccountStore()
 
@@ -801,24 +925,14 @@ def test_manager_init_wires_services_and_configuration() -> None:
             del account_id
             return None
 
-        async def upsert_oauth_account(  # noqa: PLR0913
+        async def upsert_oauth_account(
             self,
             user: ExampleUser,
             *,
-            oauth_name: str,
-            account_id: str,
-            account_email: str,
-            access_token: str,
-            expires_at: int | None,
-            refresh_token: str | None,
+            account: OAuthAccountData,
         ) -> None:
             del user
-            del oauth_name
-            del account_id
-            del account_email
-            del access_token
-            del expires_at
-            del refresh_token
+            del account
 
     oauth_account_store = DummyOAuthAccountStore()
 
@@ -884,8 +998,10 @@ def test_manager_init_wires_services_and_configuration() -> None:
     )
     account_tokens.assert_called_once_with(
         manager,
-        verify_token_audience=manager_module.VERIFY_TOKEN_AUDIENCE,
-        reset_password_token_audience=RESET_PASSWORD_TOKEN_AUDIENCE,
+        audiences=manager_module.AccountTokenAudiences(
+            verify=manager_module.VERIFY_TOKEN_AUDIENCE,
+            reset_password=RESET_PASSWORD_TOKEN_AUDIENCE,
+        ),
         token_security=token_security_service,
         logger=manager_logger,
         policy=manager.policy,
@@ -2324,7 +2440,7 @@ def test_prepare_totp_secret_encrypts_and_prefixes_when_key_set(monkeypatch: pyt
 def test_load_cryptography_fernet_raises_with_install_hint(monkeypatch: pytest.MonkeyPatch) -> None:
     """Optional TOTP encryption import errors include an extras install hint."""
     monkeypatch.setattr(
-        manager_module.importlib,
+        optional_deps_module.importlib,
         "import_module",
         lambda *_args, **_kwargs: (_ for _ in ()).throw(ImportError),
     )

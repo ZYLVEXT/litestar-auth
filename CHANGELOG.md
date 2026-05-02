@@ -1,3 +1,44 @@
+## Unreleased
+
+### Added
+- **`CookieTransportConfig`** — typed cookie transport settings object for
+  callers that prefer passing the whole cookie configuration as one value.
+- **`BaseUserManagerConfig`** — typed user-manager settings object for direct
+  manager construction; existing `BaseUserManager(user_db, ..., security=...)`
+  calls remain supported.
+- **`AuthControllerConfig`** — typed settings object for direct
+  `create_auth_controller(...)` assembly; existing keyword options remain
+  supported.
+- **`OAuthControllerConfig`** — typed settings object for direct
+  `create_oauth_controller(...)` assembly; existing keyword options remain
+  supported.
+- **`OAuthAssociateControllerConfig`** — typed settings object for direct
+  `create_oauth_associate_controller(...)` assembly; existing keyword options
+  remain supported.
+- **`ProviderOAuthControllerConfig`** — typed settings object for direct
+  `create_provider_oauth_controller(...)` assembly; existing keyword options
+  remain supported.
+- **`RoleAdminControllerConfig`** — typed settings object for direct
+  `create_role_admin_controller(controller_config=...)` assembly; existing
+  keyword options, including the plugin `config=...`, remain supported.
+- **`RegisterControllerConfig`** — typed settings object for direct
+  `create_register_controller(...)` assembly; existing keyword options remain
+  supported.
+- **`UsersControllerConfig`** — typed settings object for direct
+  `create_users_controller(...)` assembly; existing keyword options remain
+  supported.
+- **`DatabaseTokenStrategyConfig` and `JWTStrategyConfig`** — typed strategy
+  settings objects for callers that prefer grouping strategy configuration
+  explicitly; existing constructor keyword options remain supported.
+- **`RedisTokenStrategyConfig`** — typed Redis token strategy settings object;
+  existing constructor keyword options remain supported.
+
+### Changed
+
+- **`LitestarAuthMiddleware` now takes `LitestarAuthMiddlewareConfig(...)`** —
+  Breaking only for direct manual middleware instantiation; the plugin wiring
+  constructs the config internally.
+
 ## 2.2.0 (2026-04-25)
 
 ### Added

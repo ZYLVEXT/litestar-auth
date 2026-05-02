@@ -54,7 +54,8 @@ if TYPE_CHECKING:
 
     from litestar_auth._plugin.config import UserManagerFactory
     from litestar_auth.db.base import BaseUserStore
-    from litestar_auth.types import StrategyProtocol
+    from litestar_auth.password import PasswordHelper
+    from litestar_auth.types import LoginIdentifier, StrategyProtocol
 
 pytestmark = [pytest.mark.integration]
 
@@ -224,15 +225,26 @@ class _AsyncRoleCLIDatabase:
 class _TrackingRoleCLIUserManager[UP: SQLAlchemyUserModelProtocol](_RoleCLIUserManager[UP]):
     """Role CLI test manager that records lifecycle hook payloads."""
 
-    def __init__(
+    def __init__(  # noqa: PLR0913
         self,
         user_db: BaseUserStore[UP, UUID],
         *,
         update_events: list[_RoleLifecycleEvent],
-        **kwargs: object,
+        password_helper: PasswordHelper | None,
+        security: UserManagerSecurity[UUID],
+        backends: tuple[object, ...],
+        login_identifier: LoginIdentifier,
+        unsafe_testing: bool,
     ) -> None:
         """Store the shared lifecycle event log."""
-        super().__init__(user_db, **kwargs)
+        super().__init__(
+            user_db,
+            password_helper=password_helper,
+            security=security,
+            backends=backends,
+            login_identifier=login_identifier,
+            unsafe_testing=unsafe_testing,
+        )
         self._update_events = update_events
 
     async def on_after_update(self, user: UP, update_dict: dict[str, Any]) -> None:

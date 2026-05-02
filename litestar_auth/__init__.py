@@ -9,22 +9,27 @@ submodules.
 Examples:
     Wire the database-backed bearer preset when building a Litestar application::
 
+        import os
         from uuid import UUID
 
         from litestar import Litestar
         from litestar_auth import DatabaseTokenAuthConfig, LitestarAuth, LitestarAuthConfig, UserManagerSecurity
         from litestar_auth.models import User
 
+        database_token_hash_secret = os.environ["LITESTAR_AUTH_DATABASE_TOKEN_HASH_SECRET"]
+        reset_password_token_secret = os.environ["LITESTAR_AUTH_RESET_PASSWORD_TOKEN_SECRET"]
+        verify_token_secret = os.environ["LITESTAR_AUTH_VERIFY_TOKEN_SECRET"]
+
         config = LitestarAuthConfig[User, UUID](
             database_token_auth=DatabaseTokenAuthConfig(
-                token_hash_secret="replace-with-32+-char-db-token-secret",
+                token_hash_secret=database_token_hash_secret,
             ),
             user_model=User,
             user_manager_class=YourUserManager,
             session_maker=session_maker,  # e.g. async_sessionmaker(...)
             user_manager_security=UserManagerSecurity(
-                verification_token_secret="replace-with-32+-char-secret",
-                reset_password_token_secret="replace-with-32+-char-secret",
+                verification_token_secret=verify_token_secret,
+                reset_password_token_secret=reset_password_token_secret,
             ),
         )
         app = Litestar(plugins=[LitestarAuth(config)])
@@ -34,10 +39,10 @@ import logging
 
 from litestar_auth._superuser_role import DEFAULT_SUPERUSER_ROLE_NAME
 from litestar_auth.authentication import AuthenticationBackend, Authenticator
-from litestar_auth.authentication.transport import BearerTransport, CookieTransport
+from litestar_auth.authentication.transport import BearerTransport, CookieTransport, CookieTransportConfig
 from litestar_auth.exceptions import ErrorCode, LitestarAuthError
 from litestar_auth.guards import has_all_roles, has_any_role, is_active, is_authenticated, is_superuser, is_verified
-from litestar_auth.manager import BaseUserManager, UserManagerSecurity
+from litestar_auth.manager import BaseUserManager, BaseUserManagerConfig, UserManagerSecurity
 from litestar_auth.plugin import (
     DatabaseTokenAuthConfig,
     FernetKeyringConfig,
@@ -64,8 +69,10 @@ __all__ = (
     "AuthenticationBackend",
     "Authenticator",
     "BaseUserManager",
+    "BaseUserManagerConfig",
     "BearerTransport",
     "CookieTransport",
+    "CookieTransportConfig",
     "DatabaseTokenAuthConfig",
     "ErrorCode",
     "FernetKeyringConfig",

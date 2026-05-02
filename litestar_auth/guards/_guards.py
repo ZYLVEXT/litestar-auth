@@ -3,20 +3,19 @@
 from __future__ import annotations
 
 import hmac
-from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, TypeVar
 
 from litestar.exceptions import NotAuthorizedException, PermissionDeniedException
 
 from litestar_auth._roles import normalize_role_name as _normalize_role_name
 from litestar_auth._roles import normalize_roles as _normalize_roles
-from litestar_auth._superuser_role import (
-    DEFAULT_SUPERUSER_ROLE_NAME,
-    SUPERUSER_ROLE_NAME_SENTINEL,
-    normalize_superuser_role_name,
-)
+from litestar_auth._superuser_role import read_scope_superuser_role_name
 from litestar_auth.exceptions import InsufficientRolesError
-from litestar_auth.types import GuardedUserProtocol, RoleCapableUserProtocol
+from litestar_auth.guards._protocol_narrowing import (
+    _require_active_guarded_user,
+    _require_role_capable_user,
+    _role_capable_protocol_denial_detail,
+)
 
 if TYPE_CHECKING:
     from litestar.connection import ASGIConnection
@@ -24,66 +23,6 @@ if TYPE_CHECKING:
     from litestar.types import Guard
 
 RoleNameT = TypeVar("RoleNameT", bound=str)
-
-
-def _guarded_protocol_denial_detail(guard_name: str) -> str:
-    """Build a 403 detail for users that do not implement :class:`GuardedUserProtocol`.
-
-    Returns:
-        Human-readable denial message including ``guard_name`` and protocol requirements.
-    """
-    return (
-        f"{guard_name} guard requires GuardedUserProtocol (is_active, is_verified). "
-        "The authenticated user does not expose account state required by this guard."
-    )
-
-
-def _role_capable_protocol_denial_detail(guard_name: str) -> str:
-    """Build a 403 detail for users that do not implement :class:`RoleCapableUserProtocol`.
-
-    Returns:
-        Human-readable denial message including ``guard_name`` and protocol requirements.
-    """
-    return (
-        f"{guard_name} guard requires RoleCapableUserProtocol (roles: Sequence[str]). "
-        "The authenticated user does not expose role membership required by this guard."
-    )
-
-
-def _require_guarded_user(user: object, *, guard_name: str = "guard") -> GuardedUserProtocol[Any]:
-    """Narrow ``user`` to :class:`GuardedUserProtocol` or raise 403.
-
-    Args:
-        user: Connection user object.
-        guard_name: Label for the guard or check (included in the denial detail).
-
-    Returns:
-        The same instance, narrowed for typed account-state access.
-
-    Raises:
-        PermissionDeniedException: When the user is not a guarded-user protocol instance.
-    """
-    if not isinstance(user, GuardedUserProtocol):
-        raise PermissionDeniedException(detail=_guarded_protocol_denial_detail(guard_name))
-    return user
-
-
-def _require_role_capable_user(user: object, *, guard_name: str = "guard") -> RoleCapableUserProtocol[Any]:
-    """Narrow ``user`` to :class:`RoleCapableUserProtocol` or raise 403.
-
-    Args:
-        user: Connection user object.
-        guard_name: Label for the guard or check (included in the denial detail).
-
-    Returns:
-        The same instance, narrowed for typed role access.
-
-    Raises:
-        PermissionDeniedException: When the user is not a role-capable protocol instance.
-    """
-    if not isinstance(user, RoleCapableUserProtocol):
-        raise PermissionDeniedException(detail=_role_capable_protocol_denial_detail(guard_name))
-    return user
 
 
 def _normalize_required_roles(roles: tuple[object, ...]) -> tuple[str, ...]:
@@ -158,67 +97,6 @@ def _roles_include_all_fixed_work(user_roles: frozenset[str], required_roles: tu
             role_is_present = bool(int(role_is_present) + int(role_matches))
         includes_all_roles = bool(int(includes_all_roles) * int(role_is_present))
     return includes_all_roles
-
-
-def _connection_superuser_role_name(connection: ASGIConnection[Any, Any, Any, Any]) -> str:
-    """Return the normalized superuser role name from request scope state.
-
-    Plugin-managed requests store the configured value in ``scope["state"]``. Direct
-    guard usage outside the plugin falls back to the canonical default.
-
-    Raises:
-        PermissionDeniedException: When plugin state contains an invalid role name.
-    """
-    scope_state = connection.scope.get("state")
-    if not isinstance(scope_state, Mapping):
-        return DEFAULT_SUPERUSER_ROLE_NAME
-
-    raw_role_name = scope_state.get(SUPERUSER_ROLE_NAME_SENTINEL, DEFAULT_SUPERUSER_ROLE_NAME)
-    if not isinstance(raw_role_name, str):
-        msg = "The configured superuser role name is invalid."
-        raise PermissionDeniedException(detail=msg)
-
-    try:
-        return normalize_superuser_role_name(raw_role_name)
-    except ValueError as exc:
-        msg = "The configured superuser role name is invalid."
-        raise PermissionDeniedException(detail=msg) from exc
-
-
-def _require_active_guarded_user(
-    connection: ASGIConnection[Any, Any, Any, Any],
-    *,
-    guard_name: str = "guard",
-) -> GuardedUserProtocol[Any]:
-    """Enforce authenticated, guard-protocol, and active-user contract.
-
-    Centralizes the logic shared by :func:`is_active`, :func:`is_verified`,
-    :func:`is_superuser`, and role guards: require ``connection.user``, narrow to
-    :class:`GuardedUserProtocol`, and assert ``is_active``.
-
-    Args:
-        connection: Incoming ASGI connection (Litestar request scope).
-        guard_name: Label for the guard (included when the user lacks :class:`GuardedUserProtocol`).
-
-    Returns:
-        The connection user narrowed to an active :class:`GuardedUserProtocol`.
-
-    Raises:
-        NotAuthorizedException: When no authenticated user is attached to the connection.
-        PermissionDeniedException: When the user does not expose guard account state, or is
-            inactive.
-    """
-    user = connection.user
-    if user is None:
-        msg = "Authentication credentials were not provided."
-        raise NotAuthorizedException(detail=msg)
-
-    guarded = _require_guarded_user(user, guard_name=guard_name)
-    if guarded.is_active:
-        return guarded
-
-    msg = "The authenticated user is inactive."
-    raise PermissionDeniedException(detail=msg)
 
 
 def _build_role_guard(
@@ -356,7 +234,7 @@ def is_superuser(
     """
     guarded = _require_active_guarded_user(connection, guard_name="is_superuser")
     user_roles = _normalized_user_roles(guarded, guard_name="is_superuser")
-    superuser_role_name = _connection_superuser_role_name(connection)
+    superuser_role_name = read_scope_superuser_role_name(connection)
     if _roles_intersect_fixed_work(user_roles, (superuser_role_name,)):
         return
 

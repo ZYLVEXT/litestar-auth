@@ -362,6 +362,37 @@ def _make_backends_dependency_provider[UP: UserProtocol[Any], ID](
     return cast("Callable[..., Sequence[AuthenticationBackend[UP, ID]]]", _provide_backends)
 
 
+def _resolve_builtin_db_session_provider_factory[UP: UserProtocol[Any], ID](
+    config: LitestarAuthConfig[UP, ID],
+) -> SessionFactory | None:
+    """Return the plugin-owned session factory when it should register a DB session dependency."""
+    if config.db_session_dependency_provided_externally:
+        return None
+    return config.session_maker
+
+
+def _wrap_registered_dependency[UP: UserProtocol[Any], ID](
+    key: str,
+    provider: object,
+    *,
+    config: LitestarAuthConfig[UP, ID],
+) -> Provide:
+    """Wrap one dependency provider with the required Litestar DI settings.
+
+    Returns:
+        Litestar provider configured for the dependency key being registered.
+    """
+    if key == config.db_session_dependency_key and _resolve_builtin_db_session_provider_factory(config) is not None:
+        return Provide(
+            cast("Any", provider),
+            sync_to_thread=False,
+            use_cache=False,
+        )
+    if key == DEFAULT_BACKENDS_DEPENDENCY_KEY:
+        return _to_dependency_provider(provider, use_cache=False)
+    return _to_dependency_provider(provider)
+
+
 def register_dependencies[UP: UserProtocol[Any], ID](
     app_config: AppConfig,
     config: LitestarAuthConfig[UP, ID],
@@ -379,8 +410,9 @@ def register_dependencies[UP: UserProtocol[Any], ID](
         DEFAULT_BACKENDS_DEPENDENCY_KEY: providers.backends,
         DEFAULT_USER_MODEL_DEPENDENCY_KEY: providers.user_model,
     }
-    if config.session_maker is not None and not config.db_session_dependency_provided_externally:
-        dependency_providers[config.db_session_dependency_key] = _make_db_session_provide(config.session_maker)
+    session_maker = _resolve_builtin_db_session_provider_factory(config)
+    if session_maker is not None:
+        dependency_providers[config.db_session_dependency_key] = _make_db_session_provide(session_maker)
     oauth_contract = _build_oauth_route_registration_contract(
         auth_path=config.auth_path,
         oauth_config=config.oauth_config,
@@ -393,22 +425,9 @@ def register_dependencies[UP: UserProtocol[Any], ID](
         raise ValueError(msg)
 
     for key, provider in dependency_providers.items():
-        if (
-            key == config.db_session_dependency_key
-            and config.session_maker is not None
-            and not config.db_session_dependency_provided_externally
-        ):
-            app_config.dependencies[key] = Provide(
-                cast("Any", provider),
-                sync_to_thread=False,
-                use_cache=False,
-            )
-        elif key == DEFAULT_BACKENDS_DEPENDENCY_KEY:
-            app_config.dependencies[key] = _to_dependency_provider(provider, use_cache=False)
-        else:
-            app_config.dependencies[key] = _to_dependency_provider(provider)
+        app_config.dependencies[key] = _wrap_registered_dependency(key, provider, config=config)
 
-    if config.session_maker is not None and not config.db_session_dependency_provided_externally:
+    if session_maker is not None:
         app_config.before_send.append(async_autocommit_handler_maker())
 
 

@@ -80,6 +80,7 @@ class _StartupOnlyDatabaseTokenStrategyMixin[UP: UserProtocol[Any], ID]:
         return _raise_startup_only_database_token_runtime_error()
 
     def with_session(self, session: AsyncSession) -> StrategyProtocol[UP, ID]:
+        """Return a request-bound strategy for ``session``."""
         settings = self._runtime_strategy_settings
         return cast(
             "StrategyProtocol[UP, ID]",
@@ -95,20 +96,36 @@ class _StartupOnlyDatabaseTokenStrategyMixin[UP: UserProtocol[Any], ID]:
         )
 
     async def read_token(self, token: str | None, user_manager: object) -> UP | None:
+        """Reject token reads until a request ``AsyncSession`` is bound.
+
+        Returns:
+            Never returns; raises the shared startup-only runtime error.
+        """
         del token
         del user_manager
         return self._raise_startup_only_runtime_error()
 
     async def write_token(self, user: UP) -> str:
+        """Reject token writes until a request ``AsyncSession`` is bound.
+
+        Returns:
+            Never returns; raises the shared startup-only runtime error.
+        """
         del user
         return self._raise_startup_only_runtime_error()
 
     async def destroy_token(self, token: str, user: UP) -> None:
+        """Reject token destruction until a request ``AsyncSession`` is bound."""
         del token
         del user
         return self._raise_startup_only_runtime_error()
 
     async def write_refresh_token(self, user: UP) -> str:
+        """Reject refresh-token writes until a request ``AsyncSession`` is bound.
+
+        Returns:
+            Never returns; raises the shared startup-only runtime error.
+        """
         del user
         return self._raise_startup_only_runtime_error()
 
@@ -117,15 +134,26 @@ class _StartupOnlyDatabaseTokenStrategyMixin[UP: UserProtocol[Any], ID]:
         refresh_token: str,
         user_manager: object,
     ) -> tuple[UP, str] | None:
+        """Reject refresh-token rotation until a request ``AsyncSession`` is bound.
+
+        Returns:
+            Never returns; raises the shared startup-only runtime error.
+        """
         del refresh_token
         del user_manager
         return self._raise_startup_only_runtime_error()
 
     async def invalidate_all_tokens(self, user: UP) -> None:
+        """Reject token invalidation until a request ``AsyncSession`` is bound."""
         del user
         return self._raise_startup_only_runtime_error()
 
     async def cleanup_expired_tokens(self, session: AsyncSession) -> int:
+        """Reject token cleanup on the startup-only strategy.
+
+        Returns:
+            Never returns; raises the shared startup-only runtime error.
+        """
         del session
         return self._raise_startup_only_runtime_error()
 

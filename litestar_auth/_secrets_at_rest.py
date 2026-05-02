@@ -2,18 +2,21 @@
 
 from __future__ import annotations
 
-import importlib
 import re
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
+from functools import partial
 from types import MappingProxyType
 from typing import Protocol, cast
+
+from litestar_auth._optional_deps import require_cryptography_fernet
 
 FERNET_STORAGE_PREFIX = "fernet"
 FERNET_STORAGE_VERSION = "v1"
 _STORAGE_SEPARATOR = ":"
 _VERSIONED_FERNET_PARTS = 4
 _FERNET_KEY_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$", re.ASCII)
+_FERNET_INSTALL_HINT = "Install litestar-auth[oauth,totp] to use Fernet secret-at-rest encryption."
 
 type FernetKey = str | bytes
 
@@ -45,20 +48,10 @@ class _FernetModule(Protocol):
 type FernetModuleLoader = Callable[[], _FernetModule]
 
 
-def _load_cryptography_fernet() -> _FernetModule:
-    """Import the optional cryptography Fernet module on demand.
-
-    Returns:
-        The imported ``cryptography.fernet`` module surface.
-
-    Raises:
-        ImportError: If cryptography is not installed.
-    """
-    try:
-        return cast("_FernetModule", importlib.import_module("cryptography.fernet"))
-    except ImportError as exc:
-        msg = "Install litestar-auth[oauth,totp] to use Fernet secret-at-rest encryption."
-        raise ImportError(msg) from exc
+_load_cryptography_fernet = cast(
+    "FernetModuleLoader",
+    partial(require_cryptography_fernet, install_hint=_FERNET_INSTALL_HINT),
+)
 
 
 class SecretAtRestError(RuntimeError):

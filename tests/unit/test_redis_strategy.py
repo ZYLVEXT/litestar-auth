@@ -9,6 +9,7 @@ from uuid import UUID, uuid4
 
 import pytest
 
+from litestar_auth.authentication.strategy import _opaque_tokens as opaque_tokens_module
 from litestar_auth.authentication.strategy import redis as redis_strategy_module
 from litestar_auth.authentication.strategy._opaque_tokens import build_opaque_token_key
 from litestar_auth.authentication.strategy.redis import (
@@ -16,6 +17,7 @@ from litestar_auth.authentication.strategy.redis import (
     DEFAULT_TOKEN_BYTES,
     RedisClientProtocol,
     RedisTokenStrategy,
+    RedisTokenStrategyConfig,
 )
 from litestar_auth.exceptions import ConfigurationError
 from litestar_auth.ratelimit._helpers import _safe_key_part
@@ -113,7 +115,25 @@ def test_redis_strategy_rejects_short_token_hash_secret(
     _disable_optional_import(monkeypatch)
 
     with pytest.raises(ConfigurationError, match="RedisTokenStrategy token_hash_secret must be at least 32 characters"):
-        RedisTokenStrategy(redis=cast_fakeredis(async_fakeredis, RedisClientProtocol), token_hash_secret="short")
+        RedisTokenStrategy(
+            config=RedisTokenStrategyConfig(
+                redis=cast_fakeredis(async_fakeredis, RedisClientProtocol),
+                token_hash_secret="short",
+            ),
+        )
+
+
+def test_redis_strategy_rejects_config_combined_with_keyword_options(async_fakeredis: AsyncFakeRedis) -> None:
+    """RedisTokenStrategy accepts either a config object or keyword options."""
+    with pytest.raises(ValueError, match="RedisTokenStrategyConfig or keyword options"):
+        RedisTokenStrategy(
+            config=RedisTokenStrategyConfig(
+                redis=cast_fakeredis(async_fakeredis, RedisClientProtocol),
+                token_hash_secret=TOKEN_HASH_SECRET,
+            ),
+            redis=cast_fakeredis(async_fakeredis, RedisClientProtocol),
+            token_hash_secret=TOKEN_HASH_SECRET,
+        )
 
 
 def test_redis_strategy_initializes_custom_configuration(
@@ -124,12 +144,14 @@ def test_redis_strategy_initializes_custom_configuration(
     _disable_optional_import(monkeypatch)
     lifetime = timedelta(seconds=0)
     strategy = RedisTokenStrategy[ExampleUser, UUID](
-        redis=cast_fakeredis(async_fakeredis, RedisClientProtocol),
-        token_hash_secret=TOKEN_HASH_SECRET,
-        lifetime=lifetime,
-        token_bytes=CUSTOM_TOKEN_BYTES,
-        key_prefix="custom-prefix:",
-        subject_decoder=UUID,
+        config=RedisTokenStrategyConfig(
+            redis=cast_fakeredis(async_fakeredis, RedisClientProtocol),
+            token_hash_secret=TOKEN_HASH_SECRET,
+            lifetime=lifetime,
+            token_bytes=CUSTOM_TOKEN_BYTES,
+            key_prefix="custom-prefix:",
+            subject_decoder=UUID,
+        ),
     )
 
     assert strategy.redis is async_fakeredis
@@ -155,8 +177,10 @@ def test_redis_strategy_user_index_key_hashes_subject_text(
     """Per-user index keys hash raw subjects so delimiters cannot shape Redis keys."""
     _disable_optional_import(monkeypatch)
     strategy = RedisTokenStrategy[ExampleUser, UUID](
-        redis=cast_fakeredis(async_fakeredis, RedisClientProtocol),
-        token_hash_secret=TOKEN_HASH_SECRET,
+        config=RedisTokenStrategyConfig(
+            redis=cast_fakeredis(async_fakeredis, RedisClientProtocol),
+            token_hash_secret=TOKEN_HASH_SECRET,
+        ),
     )
 
     index_key = strategy._user_index_key("tenant:admin")
@@ -171,13 +195,15 @@ async def test_redis_strategy_write_token_persists_token_and_updates_user_index(
 ) -> None:
     """write_token() should write the token key and maintain the per-user index."""
     _disable_optional_import(monkeypatch)
-    monkeypatch.setattr(redis_strategy_module.secrets, "token_urlsafe", lambda _: "token-write")
+    monkeypatch.setattr(opaque_tokens_module.secrets, "token_urlsafe", lambda _: "token-write")
     user = ExampleUser(id=uuid4())
     strategy = RedisTokenStrategy[ExampleUser, UUID](
-        redis=cast_fakeredis(async_fakeredis, RedisClientProtocol),
-        token_hash_secret=TOKEN_HASH_SECRET,
-        lifetime=timedelta(minutes=5),
-        token_bytes=16,
+        config=RedisTokenStrategyConfig(
+            redis=cast_fakeredis(async_fakeredis, RedisClientProtocol),
+            token_hash_secret=TOKEN_HASH_SECRET,
+            lifetime=timedelta(minutes=5),
+            token_bytes=16,
+        ),
     )
 
     token = await strategy.write_token(user)
@@ -198,13 +224,15 @@ async def test_redis_strategy_write_token_enforces_minimum_ttl(
 ) -> None:
     """write_token() should clamp non-positive lifetimes to a one-second TTL."""
     _disable_optional_import(monkeypatch)
-    monkeypatch.setattr(redis_strategy_module.secrets, "token_urlsafe", lambda _: "token-min-ttl")
+    monkeypatch.setattr(opaque_tokens_module.secrets, "token_urlsafe", lambda _: "token-min-ttl")
     user = ExampleUser(id=uuid4())
     recording_redis = _RecordingRedisClient(async_fakeredis)
     strategy = RedisTokenStrategy[ExampleUser, UUID](
-        redis=cast("RedisClientProtocol", recording_redis),
-        token_hash_secret=TOKEN_HASH_SECRET,
-        lifetime=timedelta(seconds=0),
+        config=RedisTokenStrategyConfig(
+            redis=cast("RedisClientProtocol", recording_redis),
+            token_hash_secret=TOKEN_HASH_SECRET,
+            lifetime=timedelta(seconds=0),
+        ),
     )
 
     await strategy.write_token(user)
@@ -229,9 +257,11 @@ async def test_redis_strategy_read_token_returns_user_from_stored_subject(
     token_key = _token_key("token-read")
     assert await redis.set(token_key, str(user.id)) is True
     strategy = RedisTokenStrategy[ExampleUser, UUID](
-        redis=cast_fakeredis(redis, RedisClientProtocol),
-        token_hash_secret=TOKEN_HASH_SECRET,
-        subject_decoder=UUID,
+        config=RedisTokenStrategyConfig(
+            redis=cast_fakeredis(redis, RedisClientProtocol),
+            token_hash_secret=TOKEN_HASH_SECRET,
+            subject_decoder=UUID,
+        ),
     )
 
     resolved_user = await strategy.read_token("token-read", user_manager)
@@ -249,8 +279,10 @@ async def test_redis_strategy_read_token_returns_none_for_missing_or_empty_input
     user = ExampleUser(id=uuid4())
     user_manager = ExampleUserManager(user)
     strategy = RedisTokenStrategy[ExampleUser, UUID](
-        redis=cast_fakeredis(async_fakeredis, RedisClientProtocol),
-        token_hash_secret=TOKEN_HASH_SECRET,
+        config=RedisTokenStrategyConfig(
+            redis=cast_fakeredis(async_fakeredis, RedisClientProtocol),
+            token_hash_secret=TOKEN_HASH_SECRET,
+        ),
     )
 
     assert await strategy.read_token(None, user_manager) is None
@@ -268,9 +300,11 @@ async def test_redis_strategy_read_token_returns_none_when_subject_decoder_fails
     token_key = _token_key("token-invalid-subject")
     assert await redis.set(token_key, "not-a-uuid") is True
     strategy = RedisTokenStrategy[ExampleUser, UUID](
-        redis=cast_fakeredis(redis, RedisClientProtocol),
-        token_hash_secret=TOKEN_HASH_SECRET,
-        subject_decoder=UUID,
+        config=RedisTokenStrategyConfig(
+            redis=cast_fakeredis(redis, RedisClientProtocol),
+            token_hash_secret=TOKEN_HASH_SECRET,
+            subject_decoder=UUID,
+        ),
     )
 
     class ShouldNotBeCalledUserManager:
@@ -294,8 +328,10 @@ async def test_redis_strategy_destroy_token_removes_token_key_and_user_index_ent
     token = "token-destroy"
     token_key = _token_key(token)
     strategy = RedisTokenStrategy[ExampleUser, UUID](
-        redis=cast_fakeredis(async_fakeredis, RedisClientProtocol),
-        token_hash_secret=TOKEN_HASH_SECRET,
+        config=RedisTokenStrategyConfig(
+            redis=cast_fakeredis(async_fakeredis, RedisClientProtocol),
+            token_hash_secret=TOKEN_HASH_SECRET,
+        ),
     )
     index_key = strategy._user_index_key(str(user.id))
     assert await async_fakeredis.set(token_key, str(user.id)) is True
@@ -317,8 +353,10 @@ async def test_redis_strategy_invalidate_all_tokens_returns_after_index_delete(
     token_key = _token_key("token-index-only")
     extra_key = _token_key("token-outside-index")
     strategy = RedisTokenStrategy[ExampleUser, UUID](
-        redis=cast_fakeredis(async_fakeredis, RedisClientProtocol),
-        token_hash_secret=TOKEN_HASH_SECRET,
+        config=RedisTokenStrategyConfig(
+            redis=cast_fakeredis(async_fakeredis, RedisClientProtocol),
+            token_hash_secret=TOKEN_HASH_SECRET,
+        ),
     )
     index_key = strategy._user_index_key(str(user.id))
     assert await async_fakeredis.set(token_key, str(user.id)) is True
@@ -340,13 +378,15 @@ async def test_redis_strategy_invalidate_all_tokens_uses_per_user_index(
     _disable_optional_import(monkeypatch)
     token_values = iter(["token-a", "token-b", "token-other"])
     monkeypatch.setattr(
-        redis_strategy_module.secrets,
+        opaque_tokens_module.secrets,
         "token_urlsafe",
         lambda _nbytes: next(token_values),
     )
     strategy = RedisTokenStrategy[ExampleUser, UUID](
-        redis=cast_fakeredis(async_fakeredis, RedisClientProtocol),
-        token_hash_secret=TOKEN_HASH_SECRET,
+        config=RedisTokenStrategyConfig(
+            redis=cast_fakeredis(async_fakeredis, RedisClientProtocol),
+            token_hash_secret=TOKEN_HASH_SECRET,
+        ),
     )
     user = ExampleUser(id=uuid4())
     other_user = ExampleUser(id=uuid4())
@@ -375,8 +415,10 @@ async def test_redis_strategy_invalidate_all_tokens_without_index_leaves_orphane
     _disable_optional_import(monkeypatch)
     redis = async_fakeredis_factory(decode_responses=True)
     strategy = RedisTokenStrategy[ExampleUser, UUID](
-        redis=cast_fakeredis(redis, RedisClientProtocol),
-        token_hash_secret=TOKEN_HASH_SECRET,
+        config=RedisTokenStrategyConfig(
+            redis=cast_fakeredis(redis, RedisClientProtocol),
+            token_hash_secret=TOKEN_HASH_SECRET,
+        ),
     )
     user = ExampleUser(id=uuid4())
     other_user = ExampleUser(id=uuid4())
@@ -414,13 +456,15 @@ async def test_redis_strategy_module_reload_preserves_public_behavior(
         return object()
 
     monkeypatch.setattr(reloaded_module, "_load_redis_asyncio", load_redis)
-    monkeypatch.setattr(reloaded_module.secrets, "token_urlsafe", lambda _: "reloaded-token")
+    monkeypatch.setattr(opaque_tokens_module.secrets, "token_urlsafe", lambda _: "reloaded-token")
 
     user = ExampleUser(id=uuid4())
     strategy = reloaded_module.RedisTokenStrategy[ExampleUser, UUID](
-        redis=cast_fakeredis(async_fakeredis, RedisClientProtocol),
-        token_hash_secret=TOKEN_HASH_SECRET,
-        subject_decoder=UUID,
+        config=reloaded_module.RedisTokenStrategyConfig(
+            redis=cast_fakeredis(async_fakeredis, RedisClientProtocol),
+            token_hash_secret=TOKEN_HASH_SECRET,
+            subject_decoder=UUID,
+        ),
     )
 
     token = await strategy.write_token(user)

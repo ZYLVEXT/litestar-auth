@@ -26,6 +26,8 @@ if TYPE_CHECKING:
     from litestar.types import ControllerRouterHandler, Middleware, Scope
     from sqlalchemy.ext.asyncio import AsyncSession
 
+    from litestar_auth._plugin.scoped_session import SessionFactory
+
 type FakeRedisVersion = tuple[int, ...]
 type FakeRedisServerType = Literal["redis", "dragonfly", "valkey"]
 
@@ -314,7 +316,7 @@ def cast_fakeredis[T](redis: AsyncFakeRedis, protocol: type[T]) -> T:
     return cast("T", redis)
 
 
-def auth_middleware_get_request_session(session_maker: object) -> Callable[[State, Scope], AsyncSession]:
+def auth_middleware_get_request_session(session_maker: SessionFactory) -> Callable[[State, Scope], AsyncSession]:
     """Build ``get_request_session`` for :class:`LitestarAuthMiddleware` in tests.
 
     Returns:

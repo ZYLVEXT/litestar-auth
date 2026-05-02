@@ -9,16 +9,19 @@ mixin-composed token ORM classes. The explicit bundled-token bootstrap helper li
 """
 
 from litestar_auth.authentication.strategy.base import RefreshableStrategy, Strategy, UserManagerProtocol
-from litestar_auth.authentication.strategy.db import DatabaseTokenStrategy
+from litestar_auth.authentication.strategy.db import DatabaseTokenStrategy, DatabaseTokenStrategyConfig
 from litestar_auth.authentication.strategy.db_models import DatabaseTokenModels
-from litestar_auth.authentication.strategy.jwt import JWTStrategy
-from litestar_auth.authentication.strategy.redis import RedisTokenStrategy
+from litestar_auth.authentication.strategy.jwt import JWTStrategy, JWTStrategyConfig
+from litestar_auth.authentication.strategy.redis import RedisTokenStrategy, RedisTokenStrategyConfig
 
 __all__ = (
     "DatabaseTokenModels",
     "DatabaseTokenStrategy",
+    "DatabaseTokenStrategyConfig",
     "JWTStrategy",
+    "JWTStrategyConfig",
     "RedisTokenStrategy",
+    "RedisTokenStrategyConfig",
     "RefreshableStrategy",
     "Strategy",
     "UserManagerProtocol",

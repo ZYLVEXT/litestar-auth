@@ -5,236 +5,36 @@ from __future__ import annotations
 from collections.abc import Iterable, Mapping  # noqa: TC003
 from dataclasses import dataclass, fields
 from enum import StrEnum
-from types import MappingProxyType
-from typing import Any, Literal, Self, cast
+from typing import Any, ClassVar, Self, cast
 
-from litestar.connection import Request  # noqa: TC002
-from litestar.exceptions import TooManyRequestsException
-
-from ._helpers import _DEFAULT_TRUSTED_HEADERS, _client_host, _extract_email, _safe_key_part, logger
+from ._endpoint import _DEFAULT_IDENTITY_FIELDS, EndpointRateLimit, RateLimitScope  # noqa: F401
+from ._helpers import _DEFAULT_TRUSTED_HEADERS
 from ._memory import InMemoryRateLimiter
 from ._protocol import RateLimiterBackend  # noqa: TC001
 from ._redis import RedisRateLimiter
-
-type RateLimitScope = Literal["ip", "ip_email"]
-type AuthRateLimitEndpointGroup = Literal["login", "password_reset", "refresh", "register", "totp", "verification"]
-
-_DEFAULT_IDENTITY_FIELDS = ("identifier", "username", "email")
-_AUTH_RATE_LIMIT_NAMESPACE_STYLES = frozenset({"route", "snake_case"})
-_MISSING_OVERRIDE = object()
-
-
-class AuthRateLimitSlot(StrEnum):
-    """IDE-friendly enum of supported auth rate-limit endpoint slots."""
-
-    LOGIN = "login"
-    # Dedicated credential-rotation slot so operators can tune stolen-session re-verification separately from login.
-    CHANGE_PASSWORD = "change_password"  # noqa: S105
-    REFRESH = "refresh"
-    REGISTER = "register"
-    FORGOT_PASSWORD = "forgot_password"  # noqa: S105
-    RESET_PASSWORD = "reset_password"  # noqa: S105
-    TOTP_ENABLE = "totp_enable"
-    TOTP_CONFIRM_ENABLE = "totp_confirm_enable"
-    TOTP_VERIFY = "totp_verify"
-    TOTP_DISABLE = "totp_disable"
-    TOTP_REGENERATE_RECOVERY_CODES = "totp_regenerate_recovery_codes"
-    VERIFY_TOKEN = "verify_token"  # noqa: S105
-    REQUEST_VERIFY_TOKEN = "request_verify_token"  # noqa: S105
-
-
-@dataclass(slots=True, frozen=True)
-class _AuthRateLimitEndpointRecipe:
-    """Package-owned metadata for a supported auth rate-limit slot."""
-
-    slot: AuthRateLimitSlot
-    default_scope: RateLimitScope
-    default_namespace: str
-    group: AuthRateLimitEndpointGroup
-
-
-_AUTH_RATE_LIMIT_ENDPOINT_RECIPES: tuple[_AuthRateLimitEndpointRecipe, ...] = (
-    _AuthRateLimitEndpointRecipe(
-        slot=AuthRateLimitSlot.LOGIN,
-        default_scope="ip_email",
-        default_namespace="login",
-        group="login",
-    ),
-    _AuthRateLimitEndpointRecipe(
-        slot=AuthRateLimitSlot.CHANGE_PASSWORD,
-        default_scope="ip_email",
-        default_namespace="change-password",
-        group="login",
-    ),
-    _AuthRateLimitEndpointRecipe(
-        slot=AuthRateLimitSlot.REFRESH,
-        default_scope="ip",
-        default_namespace="refresh",
-        group="refresh",
-    ),
-    _AuthRateLimitEndpointRecipe(
-        slot=AuthRateLimitSlot.REGISTER,
-        default_scope="ip",
-        default_namespace="register",
-        group="register",
-    ),
-    _AuthRateLimitEndpointRecipe(
-        slot=AuthRateLimitSlot.FORGOT_PASSWORD,
-        default_scope="ip_email",
-        default_namespace="forgot-password",
-        group="password_reset",
-    ),
-    _AuthRateLimitEndpointRecipe(
-        slot=AuthRateLimitSlot.RESET_PASSWORD,
-        default_scope="ip",
-        default_namespace="reset-password",
-        group="password_reset",
-    ),
-    _AuthRateLimitEndpointRecipe(
-        slot=AuthRateLimitSlot.TOTP_ENABLE,
-        default_scope="ip",
-        default_namespace="totp-enable",
-        group="totp",
-    ),
-    _AuthRateLimitEndpointRecipe(
-        slot=AuthRateLimitSlot.TOTP_CONFIRM_ENABLE,
-        default_scope="ip",
-        default_namespace="totp-confirm-enable",
-        group="totp",
-    ),
-    _AuthRateLimitEndpointRecipe(
-        slot=AuthRateLimitSlot.TOTP_VERIFY,
-        default_scope="ip",
-        default_namespace="totp-verify",
-        group="totp",
-    ),
-    _AuthRateLimitEndpointRecipe(
-        slot=AuthRateLimitSlot.TOTP_DISABLE,
-        default_scope="ip",
-        default_namespace="totp-disable",
-        group="totp",
-    ),
-    _AuthRateLimitEndpointRecipe(
-        slot=AuthRateLimitSlot.TOTP_REGENERATE_RECOVERY_CODES,
-        default_scope="ip",
-        default_namespace="totp-regenerate-recovery-codes",
-        group="totp",
-    ),
-    _AuthRateLimitEndpointRecipe(
-        slot=AuthRateLimitSlot.VERIFY_TOKEN,
-        default_scope="ip",
-        default_namespace="verify-token",
-        group="verification",
-    ),
-    _AuthRateLimitEndpointRecipe(
-        slot=AuthRateLimitSlot.REQUEST_VERIFY_TOKEN,
-        default_scope="ip_email",
-        default_namespace="request-verify-token",
-        group="verification",
-    ),
+from ._slot_catalog import (
+    _AUTH_RATE_LIMIT_ENDPOINT_CATALOG as _SLOT_CATALOG,
 )
-
-
-def _build_auth_rate_limit_recipe_index() -> MappingProxyType[AuthRateLimitSlot, _AuthRateLimitEndpointRecipe]:
-    """Build a read-only lookup table for the private auth endpoint recipes.
-
-    Returns:
-        Immutable mapping keyed by ``AuthRateLimitConfig`` slot name.
-
-    Raises:
-        RuntimeError: If the private catalog accidentally defines duplicate slots.
-    """
-    recipe_index = {recipe.slot: recipe for recipe in _AUTH_RATE_LIMIT_ENDPOINT_RECIPES}
-    if len(recipe_index) == len(_AUTH_RATE_LIMIT_ENDPOINT_RECIPES):
-        return MappingProxyType(recipe_index)
-
-    msg = "Auth rate-limit endpoint recipes must not contain duplicate slots."
-    raise RuntimeError(msg)
-
-
-@dataclass(slots=True, frozen=True)
-class _AuthRateLimitEndpointCatalog:
-    """Read-only query surface for the private auth endpoint recipe catalog."""
-
-    recipes: tuple[_AuthRateLimitEndpointRecipe, ...]
-    recipes_by_slot: MappingProxyType[AuthRateLimitSlot, _AuthRateLimitEndpointRecipe]
-    slots: tuple[AuthRateLimitSlot, ...]
-    slot_set: frozenset[AuthRateLimitSlot]
-    slots_by_group: MappingProxyType[AuthRateLimitEndpointGroup, frozenset[AuthRateLimitSlot]]
-    groups: frozenset[AuthRateLimitEndpointGroup]
-
-    def resolve_enabled_slots(
-        self,
-        enabled: Iterable[AuthRateLimitSlot] | None,
-    ) -> frozenset[AuthRateLimitSlot]:
-        """Return the enabled slot set, defaulting to the full supported catalog."""
-        return self.slot_set if enabled is None else frozenset(enabled)
-
-    def iter_enabled_recipes(
-        self,
-        *,
-        enabled_slots: frozenset[AuthRateLimitSlot],
-        disabled_slots: frozenset[AuthRateLimitSlot],
-    ) -> Iterable[_AuthRateLimitEndpointRecipe]:
-        """Yield catalog entries that remain enabled after disablement is applied."""
-        for recipe in self.recipes:
-            if recipe.slot in enabled_slots and recipe.slot not in disabled_slots:
-                yield recipe
-
-    def validate_slot_names(self, names: Iterable[AuthRateLimitSlot], *, parameter_name: str) -> None:
-        """Validate slot-keyed builder inputs against the private catalog."""
-        _validate_builder_names(
-            names,
-            allowed=self.slot_set,
-            parameter_name=parameter_name,
-            item_name="auth rate-limit slots",
-        )
-
-    def validate_group_names(self, names: Iterable[str], *, parameter_name: str) -> None:
-        """Validate group-keyed builder inputs against the private catalog."""
-        _validate_builder_names(
-            names,
-            allowed=self.groups,
-            parameter_name=parameter_name,
-            item_name="auth rate-limit groups",
-        )
-
-
-def _build_auth_rate_limit_endpoint_catalog() -> _AuthRateLimitEndpointCatalog:
-    """Build the private auth rate-limit catalog query surface.
-
-    Returns:
-        Read-only catalog metadata keyed by the supported auth endpoint slots.
-    """
-    recipes_by_slot = _build_auth_rate_limit_recipe_index()
-    slots = tuple(recipes_by_slot)
-    slots_by_group: dict[AuthRateLimitEndpointGroup, set[AuthRateLimitSlot]] = {}
-    for recipe in _AUTH_RATE_LIMIT_ENDPOINT_RECIPES:
-        slots_by_group.setdefault(recipe.group, set()).add(recipe.slot)
-
-    return _AuthRateLimitEndpointCatalog(
-        recipes=_AUTH_RATE_LIMIT_ENDPOINT_RECIPES,
-        recipes_by_slot=recipes_by_slot,
-        slots=slots,
-        slot_set=frozenset(slots),
-        slots_by_group=MappingProxyType(
-            {group: frozenset(group_slots) for group, group_slots in slots_by_group.items()},
-        ),
-        groups=frozenset(recipe.group for recipe in _AUTH_RATE_LIMIT_ENDPOINT_RECIPES),
-    )
-
-
-_AUTH_RATE_LIMIT_ENDPOINT_CATALOG = _build_auth_rate_limit_endpoint_catalog()
-_AUTH_RATE_LIMIT_ENDPOINT_RECIPES_BY_SLOT: MappingProxyType[AuthRateLimitSlot, _AuthRateLimitEndpointRecipe] = (
-    _AUTH_RATE_LIMIT_ENDPOINT_CATALOG.recipes_by_slot
+from ._slot_catalog import (
+    _AUTH_RATE_LIMIT_ENDPOINT_RECIPES as _SLOT_RECIPES,
 )
-_AUTH_RATE_LIMIT_ENDPOINT_SLOTS: tuple[AuthRateLimitSlot, ...] = _AUTH_RATE_LIMIT_ENDPOINT_CATALOG.slots
-_AUTH_RATE_LIMIT_ENDPOINT_SLOT_SET: frozenset[AuthRateLimitSlot] = _AUTH_RATE_LIMIT_ENDPOINT_CATALOG.slot_set
-_AUTH_RATE_LIMIT_ENDPOINT_SLOTS_BY_GROUP: MappingProxyType[
+from ._slot_catalog import (
+    _AUTH_RATE_LIMIT_ENDPOINT_SLOTS as _SLOT_ORDER,
+)
+from ._slot_catalog import (
+    _MISSING_OVERRIDE as _SLOT_MISSING_OVERRIDE,
+)
+from ._slot_catalog import (
     AuthRateLimitEndpointGroup,
-    frozenset[AuthRateLimitSlot],
-] = _AUTH_RATE_LIMIT_ENDPOINT_CATALOG.slots_by_group
-_AUTH_RATE_LIMIT_ENDPOINT_GROUPS: frozenset[AuthRateLimitEndpointGroup] = _AUTH_RATE_LIMIT_ENDPOINT_CATALOG.groups
+    AuthRateLimitSlot,
+)
+from ._slot_catalog import (
+    _AuthRateLimitEndpointCatalog as _SlotCatalog,
+)
+from ._slot_catalog import (
+    _AuthRateLimitEndpointRecipe as _SlotRecipe,
+)
+
 _STRICT_AUTH_RATE_LIMIT_PRESET_SLOTS: frozenset[AuthRateLimitSlot] = frozenset(
     {
         AuthRateLimitSlot.LOGIN,
@@ -253,9 +53,71 @@ _LENIENT_AUTH_RATE_LIMIT_SHARED_SLOTS: frozenset[AuthRateLimitSlot] = frozenset(
     },
 )
 _LENIENT_AUTH_RATE_LIMIT_STRICT_SLOTS: frozenset[AuthRateLimitSlot] = frozenset(
-    slot for slot in _AUTH_RATE_LIMIT_ENDPOINT_SLOTS if slot not in _LENIENT_AUTH_RATE_LIMIT_SHARED_SLOTS
+    slot for slot in _SLOT_ORDER if slot not in _LENIENT_AUTH_RATE_LIMIT_SHARED_SLOTS
 )
 _LENIENT_STRICT_MAX_ATTEMPTS_CAP = 5
+
+
+@dataclass(slots=True, frozen=True)
+class SharedRateLimitConfigOptions:
+    """Shared-backend builder options for auth endpoint rate-limit configs.
+
+    Args:
+        enabled: Optional auth slot enum values to build. Defaults to all supported slots.
+        disabled: Auth slot enum values to leave unset, even when they would otherwise be enabled.
+        group_backends: Optional backend overrides keyed by auth slot group.
+        endpoint_overrides: Optional full per-slot replacements. ``None`` disables a slot.
+        trusted_proxy: Shared trusted-proxy setting applied to generated limiters.
+        identity_fields: Shared request body identity fields applied to generated limiters.
+        trusted_headers: Shared trusted proxy header names applied to generated limiters.
+    """
+
+    enabled: Iterable[AuthRateLimitSlot] | None = None
+    disabled: Iterable[AuthRateLimitSlot] = ()
+    group_backends: Mapping[AuthRateLimitEndpointGroup, RateLimiterBackend] | None = None
+    endpoint_overrides: Mapping[AuthRateLimitSlot, EndpointRateLimit | None] | None = None
+    trusted_proxy: bool = False
+    identity_fields: tuple[str, ...] = _DEFAULT_IDENTITY_FIELDS
+    trusted_headers: tuple[str, ...] = _DEFAULT_TRUSTED_HEADERS
+
+
+@dataclass(slots=True, frozen=True)
+class _EndpointBuildSettings:
+    """Shared endpoint limiter settings resolved from builder inputs."""
+
+    endpoint_type: type[EndpointRateLimit]
+    backend: RateLimiterBackend
+    group_backends: Mapping[AuthRateLimitEndpointGroup, RateLimiterBackend]
+    trusted_proxy: bool
+    identity_fields: tuple[str, ...]
+    trusted_headers: tuple[str, ...]
+
+
+@dataclass(slots=True, frozen=True)
+class _ResolvedEndpointItems:
+    """Validated slot filters and endpoint materialization inputs."""
+
+    recipes: tuple[_SlotRecipe, ...]
+    endpoint_overrides: Mapping[AuthRateLimitSlot, EndpointRateLimit | None]
+    enabled_slots: frozenset[AuthRateLimitSlot]
+    disabled_slots: frozenset[AuthRateLimitSlot]
+    endpoint_settings: _EndpointBuildSettings
+
+
+@dataclass(slots=True, frozen=True)
+class _AuthRateLimitConfigItems:
+    """Raw shared-backend builder inputs before validation."""
+
+    catalog: _SlotCatalog
+    backend: RateLimiterBackend
+    enabled: Iterable[AuthRateLimitSlot] | None
+    disabled: Iterable[AuthRateLimitSlot]
+    group_backends: Mapping[AuthRateLimitEndpointGroup, RateLimiterBackend]
+    endpoint_overrides: Mapping[AuthRateLimitSlot, EndpointRateLimit | None]
+    endpoint_type: type[EndpointRateLimit]
+    trusted_proxy: bool
+    identity_fields: tuple[str, ...]
+    trusted_headers: tuple[str, ...]
 
 
 def _validate_builder_names[NameT: str](
@@ -319,171 +181,167 @@ def _clone_backend_with_capped_attempts(backend: RateLimiterBackend, *, max_atte
         TypeError: If ``backend`` is not a built-in limiter that the preset can
             safely clone.
     """
-    if isinstance(backend, InMemoryRateLimiter):
-        return InMemoryRateLimiter(
-            max_attempts=min(backend.max_attempts, max_attempts_cap),
-            window_seconds=backend.window_seconds,
-            max_keys=backend.max_keys,
-            sweep_interval=backend.sweep_interval,
+    backend_value = cast("Any", backend)
+    backend_type = cast("Any", type(backend))
+    if (
+        backend_type.__module__ == InMemoryRateLimiter.__module__
+        and backend_type.__name__ == InMemoryRateLimiter.__name__
+    ):
+        return backend_type(
+            max_attempts=min(backend_value.max_attempts, max_attempts_cap),
+            window_seconds=backend_value.window_seconds,
+            max_keys=backend_value.max_keys,
+            sweep_interval=backend_value.sweep_interval,
         )
-    if isinstance(backend, RedisRateLimiter):
-        return RedisRateLimiter(
-            redis=backend.redis,
-            max_attempts=min(backend.max_attempts, max_attempts_cap),
-            window_seconds=backend.window_seconds,
-            key_prefix=backend.key_prefix,
+    if backend_type.__module__ == RedisRateLimiter.__module__ and backend_type.__name__ == RedisRateLimiter.__name__:
+        return backend_type(
+            redis=backend_value.redis,
+            max_attempts=min(backend_value.max_attempts, max_attempts_cap),
+            window_seconds=backend_value.window_seconds,
+            key_prefix=backend_value.key_prefix,
         )
 
     msg = "AuthRateLimitConfig.lenient() only supports built-in InMemoryRateLimiter or RedisRateLimiter backends."
     raise TypeError(msg)
 
 
-def _build_auth_rate_limit_endpoint(  # noqa: PLR0913
-    recipe: _AuthRateLimitEndpointRecipe,
-    *,
-    backend: RateLimiterBackend,
-    group_backends: Mapping[AuthRateLimitEndpointGroup, RateLimiterBackend],
-    trusted_proxy: bool,
-    identity_fields: tuple[str, ...],
-    trusted_headers: tuple[str, ...],
+def _build_auth_rate_limit_endpoint(
+    recipe: _SlotRecipe,
+    settings: _EndpointBuildSettings,
 ) -> EndpointRateLimit:
     """Materialize one endpoint limiter from catalog metadata plus builder overrides.
 
     Returns:
         Endpoint limiter with the resolved backend, scope, and namespace.
     """
-    return EndpointRateLimit(
-        backend=group_backends.get(recipe.group, backend),
+    return settings.endpoint_type(
+        backend=settings.group_backends.get(recipe.group, settings.backend),
         scope=recipe.default_scope,
         namespace=recipe.default_namespace,
-        trusted_proxy=trusted_proxy,
-        identity_fields=identity_fields,
-        trusted_headers=trusted_headers,
+        trusted_proxy=settings.trusted_proxy,
+        identity_fields=settings.identity_fields,
+        trusted_headers=settings.trusted_headers,
     )
 
 
-def _iter_auth_rate_limit_config_items(  # noqa: PLR0913
+def _validate_shared_backend_slot_types(
     *,
-    catalog: _AuthRateLimitEndpointCatalog,
-    backend: RateLimiterBackend,
-    enabled: Iterable[AuthRateLimitSlot] | None,
-    disabled: Iterable[AuthRateLimitSlot],
-    group_backends: Mapping[AuthRateLimitEndpointGroup, RateLimiterBackend],
-    endpoint_overrides: Mapping[AuthRateLimitSlot, EndpointRateLimit | None],
-    trusted_proxy: bool,
-    identity_fields: tuple[str, ...],
-    trusted_headers: tuple[str, ...],
-) -> Iterable[tuple[str, EndpointRateLimit | None]]:
-    """Yield dataclass kwargs for the shared-backend builder in stable slot order."""
-    enabled_values = None if enabled is None else tuple(enabled)
-    disabled_values = tuple(disabled)
-    endpoint_override_slots = tuple(endpoint_overrides)
-
+    enabled_values: tuple[AuthRateLimitSlot, ...] | None,
+    disabled_values: tuple[AuthRateLimitSlot, ...],
+    endpoint_override_slots: tuple[AuthRateLimitSlot, ...],
+) -> None:
+    """Validate shared-backend slot inputs before catalog membership checks."""
     if enabled_values is not None:
         _validate_auth_rate_limit_slots(enabled_values, parameter_name="enabled")
     _validate_auth_rate_limit_slots(disabled_values, parameter_name="disabled")
     _validate_auth_rate_limit_slots(endpoint_override_slots, parameter_name="endpoint_overrides")
 
+
+def _resolve_enabled_and_disabled_slot_sets(
+    catalog: _SlotCatalog,
+    *,
+    enabled_values: tuple[AuthRateLimitSlot, ...] | None,
+    disabled_values: tuple[AuthRateLimitSlot, ...],
+) -> tuple[frozenset[AuthRateLimitSlot], frozenset[AuthRateLimitSlot]]:
+    """Resolve shared-backend enablement inputs into immutable slot sets.
+
+    Returns:
+        Enabled and disabled slot sets in that order.
+    """
     enabled_slots = catalog.resolve_enabled_slots(cast("Iterable[AuthRateLimitSlot] | None", enabled_values))
     disabled_slots = frozenset(cast("Iterable[AuthRateLimitSlot]", disabled_values))
+    return enabled_slots, disabled_slots
 
-    catalog.validate_slot_names(enabled_slots, parameter_name="enabled")
-    catalog.validate_slot_names(disabled_slots, parameter_name="disabled")
-    catalog.validate_group_names(group_backends, parameter_name="group_backends")
-    catalog.validate_slot_names(endpoint_overrides, parameter_name="endpoint_overrides")
 
-    for recipe in catalog.recipes:
-        slot_override = endpoint_overrides.get(recipe.slot, _MISSING_OVERRIDE)
-        if slot_override is not _MISSING_OVERRIDE:
+def _validate_shared_backend_inputs(
+    catalog: _SlotCatalog,
+    *,
+    enabled_slots: frozenset[AuthRateLimitSlot],
+    disabled_slots: frozenset[AuthRateLimitSlot],
+    group_backends: Mapping[AuthRateLimitEndpointGroup, RateLimiterBackend],
+    endpoint_override_slots: tuple[AuthRateLimitSlot, ...],
+) -> None:
+    """Validate resolved shared-backend builder inputs against the private catalog."""
+    catalog.validate_slot_names(enabled_slots, parameter_name="enabled", validator=_validate_builder_names)
+    catalog.validate_slot_names(disabled_slots, parameter_name="disabled", validator=_validate_builder_names)
+    catalog.validate_group_names(group_backends, parameter_name="group_backends", validator=_validate_builder_names)
+    catalog.validate_slot_names(
+        endpoint_override_slots,
+        parameter_name="endpoint_overrides",
+        validator=_validate_builder_names,
+    )
+
+
+def _iter_resolved_endpoint_items(
+    settings: _ResolvedEndpointItems,
+) -> Iterable[tuple[str, EndpointRateLimit | None]]:
+    """Yield resolved endpoint config items after validation and slot filtering."""
+    for recipe in settings.recipes:
+        slot_override = settings.endpoint_overrides.get(recipe.slot, _SLOT_MISSING_OVERRIDE)
+        if slot_override is not _SLOT_MISSING_OVERRIDE:
             yield recipe.slot.value, cast("EndpointRateLimit | None", slot_override)
             continue
 
-        if recipe.slot not in enabled_slots or recipe.slot in disabled_slots:
+        if recipe.slot not in settings.enabled_slots or recipe.slot in settings.disabled_slots:
             continue
 
         yield (
             recipe.slot.value,
             _build_auth_rate_limit_endpoint(
                 recipe,
-                backend=backend,
-                group_backends=group_backends,
-                trusted_proxy=trusted_proxy,
-                identity_fields=identity_fields,
-                trusted_headers=trusted_headers,
+                settings.endpoint_settings,
             ),
         )
 
 
-@dataclass(slots=True, frozen=True)
-class EndpointRateLimit:
-    """Per-endpoint rate-limit settings and request hook."""
+def _iter_auth_rate_limit_config_items(
+    settings: _AuthRateLimitConfigItems,
+) -> Iterable[tuple[str, EndpointRateLimit | None]]:
+    """Yield dataclass kwargs for the shared-backend builder in stable slot order."""
+    enabled_values = None if settings.enabled is None else tuple(settings.enabled)
+    disabled_values = tuple(settings.disabled)
+    endpoint_override_slots = tuple(settings.endpoint_overrides)
 
-    backend: RateLimiterBackend
-    scope: RateLimitScope
-    namespace: str
-    trusted_proxy: bool = False
-    identity_fields: tuple[str, ...] = _DEFAULT_IDENTITY_FIELDS
-    trusted_headers: tuple[str, ...] = _DEFAULT_TRUSTED_HEADERS
-
-    async def before_request(self, request: Request[Any, Any, Any]) -> None:
-        """Reject the request with 429 when its key is over the configured limit.
-
-        Security:
-            Only set ``trusted_proxy=True`` when this service is behind a trusted
-            proxy or load balancer that overwrites client IP headers. Otherwise,
-            attackers can spoof headers like ``X-Forwarded-For`` and evade or
-            poison rate-limiting keys.
-
-        Raises:
-            TooManyRequestsException: If the request exceeded the configured limit.
-        """
-        key = await self.build_key(request)
-        if await self.backend.check(key):
-            return
-
-        retry_after = await self.backend.retry_after(key)
-        logger.warning(
-            "Rate limit exceeded",
-            extra={
-                "event": "rate_limit_triggered",
-                "namespace": self.namespace,
-                "scope": self.scope,
-                "trusted_proxy": self.trusted_proxy,
-            },
-        )
-        msg = "Too many requests."
-        raise TooManyRequestsException(
-            detail=msg,
-            headers={"Retry-After": str(max(retry_after, 1))},
-        )
-
-    async def increment(self, request: Request[Any, Any, Any]) -> None:
-        """Record a failed or rate-limited attempt for the current request."""
-        await self.backend.increment(await self.build_key(request))
-
-    async def reset(self, request: Request[Any, Any, Any]) -> None:
-        """Clear stored attempts for the current request key."""
-        await self.backend.reset(await self.build_key(request))
-
-    async def build_key(self, request: Request[Any, Any, Any]) -> str:
-        """Build the backend key for the given request.
-
-        Returns:
-            Namespaced rate-limit key for the request.
-        """
-        host = _client_host(request, trusted_proxy=self.trusted_proxy, trusted_headers=self.trusted_headers)
-        parts = [self.namespace, _safe_key_part(host)]
-        if self.scope == "ip_email":
-            email = await _extract_email(request, identity_fields=self.identity_fields)
-            if email:
-                parts.append(_safe_key_part(email.strip().casefold()))
-
-        return ":".join(parts)
+    _validate_shared_backend_slot_types(
+        enabled_values=enabled_values,
+        disabled_values=disabled_values,
+        endpoint_override_slots=endpoint_override_slots,
+    )
+    enabled_slots, disabled_slots = _resolve_enabled_and_disabled_slot_sets(
+        settings.catalog,
+        enabled_values=enabled_values,
+        disabled_values=disabled_values,
+    )
+    _validate_shared_backend_inputs(
+        settings.catalog,
+        enabled_slots=enabled_slots,
+        disabled_slots=disabled_slots,
+        group_backends=settings.group_backends,
+        endpoint_override_slots=endpoint_override_slots,
+    )
+    yield from _iter_resolved_endpoint_items(
+        _ResolvedEndpointItems(
+            recipes=settings.catalog.recipes,
+            endpoint_overrides=settings.endpoint_overrides,
+            enabled_slots=enabled_slots,
+            disabled_slots=disabled_slots,
+            endpoint_settings=_EndpointBuildSettings(
+                endpoint_type=settings.endpoint_type,
+                backend=settings.backend,
+                group_backends=settings.group_backends,
+                trusted_proxy=settings.trusted_proxy,
+                identity_fields=settings.identity_fields,
+                trusted_headers=settings.trusted_headers,
+            ),
+        ),
+    )
 
 
 @dataclass(slots=True, frozen=True)
 class AuthRateLimitConfig:
     """Optional rate-limit rules for auth-related endpoints."""
+
+    _endpoint_rate_limit_type: ClassVar[type[EndpointRateLimit]] = EndpointRateLimit
 
     login: EndpointRateLimit | None = None
     change_password: EndpointRateLimit | None = None
@@ -524,12 +382,12 @@ class AuthRateLimitConfig:
             New config with only the strict preset slots enabled.
         """
         config_kwargs = {
-            recipe.slot.value: EndpointRateLimit(
+            recipe.slot.value: cls._endpoint_rate_limit_type(
                 backend=backend,
                 scope=recipe.default_scope,
                 namespace=recipe.default_namespace,
             )
-            for recipe in _AUTH_RATE_LIMIT_ENDPOINT_RECIPES
+            for recipe in _SLOT_RECIPES
             if recipe.slot in _STRICT_AUTH_RATE_LIMIT_PRESET_SLOTS
         }
         return cls(**cast("Any", config_kwargs))
@@ -555,27 +413,21 @@ class AuthRateLimitConfig:
             max_attempts_cap=_LENIENT_STRICT_MAX_ATTEMPTS_CAP,
         )
         config_kwargs = {
-            recipe.slot.value: EndpointRateLimit(
+            recipe.slot.value: cls._endpoint_rate_limit_type(
                 backend=backend if recipe.slot in _LENIENT_AUTH_RATE_LIMIT_SHARED_SLOTS else strict_backend,
                 scope=recipe.default_scope,
                 namespace=recipe.default_namespace,
             )
-            for recipe in _AUTH_RATE_LIMIT_ENDPOINT_RECIPES
+            for recipe in _SLOT_RECIPES
         }
         return cls(**cast("Any", config_kwargs))
 
     @classmethod
-    def from_shared_backend(  # noqa: PLR0913
+    def from_shared_backend(
         cls,
         backend: RateLimiterBackend,
         *,
-        enabled: Iterable[AuthRateLimitSlot] | None = None,
-        disabled: Iterable[AuthRateLimitSlot] = (),
-        group_backends: Mapping[AuthRateLimitEndpointGroup, RateLimiterBackend] | None = None,
-        endpoint_overrides: Mapping[AuthRateLimitSlot, EndpointRateLimit | None] | None = None,
-        trusted_proxy: bool = False,
-        identity_fields: tuple[str, ...] = _DEFAULT_IDENTITY_FIELDS,
-        trusted_headers: tuple[str, ...] = _DEFAULT_TRUSTED_HEADERS,
+        options: SharedRateLimitConfigOptions | None = None,
     ) -> Self:
         """Build endpoint-specific limiters from the package-owned shared-backend recipe.
 
@@ -588,42 +440,36 @@ class AuthRateLimitConfig:
 
         Args:
             backend: Default limiter backend for enabled auth slots.
-            enabled: Optional auth slot enum values to build. Defaults to all supported slots. Use
-                ``tuple(AuthRateLimitSlot)`` for the ordered full inventory.
-            disabled: Auth slot enum values to leave unset, even when they would otherwise be enabled.
-                Use ``{AuthRateLimitSlot.VERIFY_TOKEN, AuthRateLimitSlot.REQUEST_VERIFY_TOKEN}`` to leave
-                the built-in verification routes disabled.
-            group_backends: Optional backend overrides keyed by auth slot group:
-                ``login``, ``refresh``, ``register``, ``password_reset``, ``totp``, or
-                ``verification``.
-            endpoint_overrides: Optional full per-slot replacements. ``None`` disables a slot.
-            trusted_proxy: Shared trusted-proxy setting applied to generated limiters.
-            identity_fields: Shared request body identity fields applied to generated limiters.
-            trusted_headers: Shared trusted proxy header names applied to generated limiters.
+            options: Optional shared builder options. Use
+                ``SharedRateLimitConfigOptions(disabled={...})`` to leave built-in verification routes disabled.
 
         Returns:
             New config populated from the shared-backend builder inputs.
         """
-        group_backend_map: dict[AuthRateLimitEndpointGroup, RateLimiterBackend] = dict(group_backends or {})
-        endpoint_override_map = dict(endpoint_overrides or {})
+        resolved_options = options or SharedRateLimitConfigOptions()
+        group_backend_map: dict[AuthRateLimitEndpointGroup, RateLimiterBackend] = dict(
+            resolved_options.group_backends or {},
+        )
+        endpoint_override_map = dict(resolved_options.endpoint_overrides or {})
         config_kwargs = dict(
             _iter_auth_rate_limit_config_items(
-                catalog=_AUTH_RATE_LIMIT_ENDPOINT_CATALOG,
-                backend=backend,
-                enabled=enabled,
-                disabled=disabled,
-                group_backends=group_backend_map,
-                endpoint_overrides=endpoint_override_map,
-                trusted_proxy=trusted_proxy,
-                identity_fields=identity_fields,
-                trusted_headers=trusted_headers,
+                _AuthRateLimitConfigItems(
+                    catalog=_SLOT_CATALOG,
+                    backend=backend,
+                    enabled=resolved_options.enabled,
+                    disabled=resolved_options.disabled,
+                    group_backends=group_backend_map,
+                    endpoint_overrides=endpoint_override_map,
+                    endpoint_type=cls._endpoint_rate_limit_type,
+                    trusted_proxy=resolved_options.trusted_proxy,
+                    identity_fields=resolved_options.identity_fields,
+                    trusted_headers=resolved_options.trusted_headers,
+                ),
             ),
         )
         return cls(**cast("Any", config_kwargs))
 
 
-if tuple(field.name for field in fields(AuthRateLimitConfig)) != tuple(
-    slot.value for slot in _AUTH_RATE_LIMIT_ENDPOINT_SLOTS
-):
+if tuple(field.name for field in fields(AuthRateLimitConfig)) != tuple(slot.value for slot in _SLOT_ORDER):
     msg = "AuthRateLimitConfig fields must stay aligned with the private auth rate-limit endpoint catalog."
     raise RuntimeError(msg)

@@ -2,12 +2,25 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
 from litestar_auth.types import LoginIdentifier, UserProtocol
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
+
+
+@dataclass(frozen=True, slots=True)
+class OAuthAccountData:
+    """Provider account identity and token fields for OAuth-account persistence."""
+
+    oauth_name: str
+    account_id: str
+    account_email: str
+    access_token: str
+    expires_at: int | None
+    refresh_token: str | None
 
 
 @runtime_checkable
@@ -57,15 +70,10 @@ class BaseOAuthAccountStore[UP: UserProtocol[Any], ID](Protocol):
     async def get_by_oauth_account(self, oauth_name: str, account_id: str) -> UP | None:
         """Return a user linked to the given provider account, if present."""
 
-    async def upsert_oauth_account(  # noqa: PLR0913
+    async def upsert_oauth_account(
         self,
         user: UP,
         *,
-        oauth_name: str,
-        account_id: str,
-        account_email: str,
-        access_token: str,
-        expires_at: int | None,
-        refresh_token: str | None,
+        account: OAuthAccountData,
     ) -> None:
         """Create or update the linked OAuth account for ``user``."""

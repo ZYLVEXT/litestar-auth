@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pytest
 
+import litestar_auth._error_codes as error_codes_module
 import litestar_auth.exceptions as exceptions_module
 from litestar_auth.exceptions import (
     AuthenticationError,
@@ -152,6 +153,23 @@ def _error_code_members() -> dict[str, str]:
     return {member.name: member.value for member in ErrorCode}
 
 
+def test_error_code_module_reload_preserves_error_code_and_identifier_contract(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Reload coverage keeps relocated error-code contracts stable."""
+    assert error_codes_module.__file__ is not None
+    reloaded_module = load_reloaded_test_alias(
+        alias_name="_coverage_alias_error_codes",
+        source_path=Path(error_codes_module.__file__).resolve(),
+        monkeypatch=monkeypatch,
+    )
+
+    assert reloaded_module.ErrorCode is not ErrorCode
+    assert reloaded_module.UserIdentifier is not UserIdentifier
+    assert {member.name: member.value for member in reloaded_module.ErrorCode} == EXPECTED_ERROR_CODES
+    assert reloaded_module.UserIdentifier(identifier_type="email", identifier_value="user@example.com") == (
+        reloaded_module.UserIdentifier(identifier_type="email", identifier_value="user@example.com")
+    )
+
+
 def test_exception_module_reload_preserves_default_message_and_code_contract(monkeypatch: pytest.MonkeyPatch) -> None:
     """Reload coverage keeps exception defaults stable even when class identity changes."""
     assert exceptions_module.__file__ is not None
@@ -180,9 +198,10 @@ def test_exception_module_reload_preserves_default_message_and_code_contract(mon
     )
 
     assert reloaded_module.LitestarAuthError.default_code == LitestarAuthError.default_code
+    assert reloaded_module.ErrorCode is ErrorCode
     assert reloaded_module.ConfigurationError is not ConfigurationError
     assert reloaded_module.UserAlreadyExistsError is not UserAlreadyExistsError
-    assert reloaded_module.UserIdentifier is not UserIdentifier
+    assert reloaded_module.UserIdentifier is UserIdentifier
     assert reloaded_module.InvalidPasswordError is not InvalidPasswordError
     assert reloaded_module.InsufficientRolesError is not InsufficientRolesError
     assert reloaded_module.OAuthAccountAlreadyLinkedError is not OAuthAccountAlreadyLinkedError

@@ -8,9 +8,9 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from collections.abc import Callable
 
-    from litestar_auth.contrib.role_admin._controller import create_role_admin_controller
+    from litestar_auth.contrib.role_admin._controller import RoleAdminControllerConfig, create_role_admin_controller
 
-__all__ = ("create_role_admin_controller",)
+__all__ = ("RoleAdminControllerConfig", "create_role_admin_controller")
 
 
 def __getattr__(name: str) -> Callable[..., object]:
@@ -22,6 +22,9 @@ def __getattr__(name: str) -> Callable[..., object]:
     Raises:
         AttributeError: If ``name`` is not part of the public package surface.
     """
+    if name == "RoleAdminControllerConfig":
+        controller_module = import_module("litestar_auth.contrib.role_admin._controller")
+        return controller_module.RoleAdminControllerConfig
     if name == "create_role_admin_controller":
         controller_module = import_module("litestar_auth.contrib.role_admin._controller")
         return controller_module.create_role_admin_controller

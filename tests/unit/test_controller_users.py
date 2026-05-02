@@ -17,6 +17,7 @@ import litestar_auth.controllers.users as users_module
 from litestar_auth.controllers._utils import _require_account_state
 from litestar_auth.controllers.auth import INVALID_CREDENTIALS_DETAIL
 from litestar_auth.controllers.users import (
+    UsersControllerConfig,
     _build_change_password_rate_limit_key,
     _build_safe_self_update,
     _reject_blocked_self_update_fields,
@@ -609,6 +610,20 @@ def test_create_users_controller_uses_requested_path() -> None:
 
     assert controller.path == "/admin-users"
     assert controller.__module__ == "litestar_auth.controllers.users"
+
+
+def test_create_users_controller_accepts_config_object() -> None:
+    """The public users controller factory can receive settings as one typed config."""
+    controller = create_users_controller(config=UsersControllerConfig[UUID](path="/profile-users"))
+
+    assert controller.path == "/profile-users"
+    assert controller.__module__ == "litestar_auth.controllers.users"
+
+
+def test_create_users_controller_rejects_config_combined_with_keyword_options() -> None:
+    """The users controller factory accepts either config or keyword options."""
+    with pytest.raises(ValueError, match="UsersControllerConfig or keyword options"):
+        create_users_controller(config=UsersControllerConfig[UUID](), path="/admin-users")
 
 
 def test_create_users_controller_rejects_permissive_admin_update_schema() -> None:

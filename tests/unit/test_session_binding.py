@@ -11,6 +11,7 @@ import pytest
 
 import litestar_auth._plugin.session_binding as session_binding_module
 from litestar_auth._plugin.session_binding import _ScopedUserDatabaseProxy
+from litestar_auth.db import OAuthAccountData
 from litestar_auth.oauth_encryption import OAuthTokenEncryption
 from tests._helpers import ExampleUser
 
@@ -124,26 +125,16 @@ class _DummyUserStore:
         """
         return await self.get_by_oauth_account_mock(oauth_name, account_id)
 
-    async def upsert_oauth_account(  # noqa: PLR0913
+    async def upsert_oauth_account(
         self,
         user: ExampleUser,
         *,
-        oauth_name: str,
-        account_id: str,
-        account_email: str,
-        access_token: str,
-        expires_at: int | None,
-        refresh_token: str | None,
+        account: OAuthAccountData,
     ) -> None:
         """Delegate OAuth-account upsert to the tracked async mock."""
         await self.upsert_oauth_account_mock(
             user,
-            oauth_name=oauth_name,
-            account_id=account_id,
-            account_email=account_email,
-            access_token=access_token,
-            expires_at=expires_at,
-            refresh_token=refresh_token,
+            account=account,
         )
 
 
@@ -328,20 +319,24 @@ async def test_scoped_user_database_proxy_delegates_oauth_upsert() -> None:
     user = _build_user()
     await proxy.upsert_oauth_account(
         user,
-        oauth_name="github",
-        account_id="account-123",
-        account_email="oauth@example.com",
-        access_token="access-token",
-        expires_at=12345,
-        refresh_token="refresh-token",
+        account=OAuthAccountData(
+            oauth_name="github",
+            account_id="account-123",
+            account_email="oauth@example.com",
+            access_token="access-token",
+            expires_at=12345,
+            refresh_token="refresh-token",
+        ),
     )
 
     user_store.upsert_oauth_account_mock.assert_awaited_once_with(
         user,
-        oauth_name="github",
-        account_id="account-123",
-        account_email="oauth@example.com",
-        access_token="access-token",
-        expires_at=12345,
-        refresh_token="refresh-token",
+        account=OAuthAccountData(
+            oauth_name="github",
+            account_id="account-123",
+            account_email="oauth@example.com",
+            access_token="access-token",
+            expires_at=12345,
+            refresh_token="refresh-token",
+        ),
     )

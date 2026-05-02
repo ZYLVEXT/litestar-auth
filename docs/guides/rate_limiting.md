@@ -79,26 +79,29 @@ from litestar_auth.ratelimit import (
     AuthRateLimitSlot,
     EndpointRateLimit,
     InMemoryRateLimiter,
+    SharedRateLimitConfigOptions,
 )
 
 shared_backend = InMemoryRateLimiter(max_attempts=10, window_seconds=60)
 
 rate_limit_config = AuthRateLimitConfig.from_shared_backend(
     shared_backend,
-    endpoint_overrides={
-        AuthRateLimitSlot.TOTP_VERIFY: EndpointRateLimit(
-            backend=shared_backend,
-            scope="ip",
-            namespace="totp-verify",
-        ),
-    },
+    options=SharedRateLimitConfigOptions(
+        endpoint_overrides={
+            AuthRateLimitSlot.TOTP_VERIFY: EndpointRateLimit(
+                backend=shared_backend,
+                scope="ip",
+                namespace="totp-verify",
+            ),
+        },
+    ),
 )
 ```
 
-`enabled` and `disabled` remain the underlying builder inputs. When app code needs the supported
+`enabled` and `disabled` live on `SharedRateLimitConfigOptions`. When app code needs the supported
 slot inventory directly, iterate `AuthRateLimitSlot`. Use `tuple(AuthRateLimitSlot)` for explicit
-`enabled=...` calls, and use `{AuthRateLimitSlot.VERIFY_TOKEN, AuthRateLimitSlot.REQUEST_VERIFY_TOKEN}`
-for `disabled=...` when the built-in verification routes stay off.
+`enabled=...` options, and use `{AuthRateLimitSlot.VERIFY_TOKEN, AuthRateLimitSlot.REQUEST_VERIFY_TOKEN}`
+for `disabled=...` options when the built-in verification routes stay off.
 
 ## `AuthRateLimitSlot`
 
@@ -167,22 +170,25 @@ from litestar_auth.ratelimit import (
     AuthRateLimitConfig,
     AuthRateLimitSlot,
     EndpointRateLimit,
+    SharedRateLimitConfigOptions,
 )
 
 rate_limit_config = AuthRateLimitConfig.from_shared_backend(
     backend,
-    endpoint_overrides={
-        AuthRateLimitSlot.FORGOT_PASSWORD: EndpointRateLimit(
-            backend=backend,
-            scope="ip_email",
-            namespace="forgot_password",
-        ),
-        AuthRateLimitSlot.RESET_PASSWORD: EndpointRateLimit(
-            backend=backend,
-            scope="ip",
-            namespace="reset_password",
-        ),
-    },
+    options=SharedRateLimitConfigOptions(
+        endpoint_overrides={
+            AuthRateLimitSlot.FORGOT_PASSWORD: EndpointRateLimit(
+                backend=backend,
+                scope="ip_email",
+                namespace="forgot_password",
+            ),
+            AuthRateLimitSlot.RESET_PASSWORD: EndpointRateLimit(
+                backend=backend,
+                scope="ip",
+                namespace="reset_password",
+            ),
+        },
+    ),
 )
 ```
 

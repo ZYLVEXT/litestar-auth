@@ -21,19 +21,26 @@ import litestar_auth.ratelimit as ratelimit_module
 from litestar_auth._plugin.role_admin import RoleAdminRoleNotFoundError, RoleAdminUserNotFoundError
 from litestar_auth.authentication.backend import AuthenticationBackend
 from litestar_auth.authentication.strategy.redis import RedisTokenStrategy as BaseRedisTokenStrategy
+from litestar_auth.authentication.strategy.redis import RedisTokenStrategyConfig as BaseRedisTokenStrategyConfig
 from litestar_auth.authentication.transport.bearer import BearerTransport
 from litestar_auth.contrib.redis import (
     RedisAuthClientProtocol,
     RedisAuthPreset,
+    RedisAuthRateLimitConfigOptions,
     RedisAuthRateLimitTier,
     RedisTokenStrategy,
+    RedisTokenStrategyConfig,
     RedisTotpEnrollmentStore,
     RedisUsedTotpCodeStore,
 )
 from litestar_auth.contrib.redis import __all__ as redis_all
+from litestar_auth.contrib.role_admin import RoleAdminControllerConfig, create_role_admin_controller
 from litestar_auth.contrib.role_admin import __all__ as role_admin_all
 from litestar_auth.contrib.role_admin import _controller as role_admin_controller_module
-from litestar_auth.contrib.role_admin import create_role_admin_controller
+from litestar_auth.contrib.role_admin import _controller_handler_utils as role_admin_controller_handler_utils_module
+from litestar_auth.contrib.role_admin import _controller_handlers as role_admin_controller_handlers_module
+from litestar_auth.contrib.role_admin import _error_responses as role_admin_error_responses_module
+from litestar_auth.contrib.role_admin import _session_wiring as role_admin_session_wiring_module
 from litestar_auth.contrib.role_admin._schemas import RoleCreate, RoleRead, RoleUpdate, UserBrief
 from litestar_auth.controllers.oauth import OAuthControllerUserManagerProtocol
 from litestar_auth.exceptions import ConfigurationError, ErrorCode
@@ -124,6 +131,7 @@ class ExampleUserManager(OAuthControllerUserManagerProtocol[ExampleUser, str]):
 def test_contrib_packages_reexport_public_symbols() -> None:
     """Contrib packages expose the documented convenience imports."""
     assert RedisTokenStrategy is BaseRedisTokenStrategy
+    assert RedisTokenStrategyConfig is BaseRedisTokenStrategyConfig
     assert RedisTotpEnrollmentStore is BaseRedisTotpEnrollmentStore
     assert RedisUsedTotpCodeStore is BaseRedisUsedTotpCodeStore
 
@@ -133,12 +141,14 @@ def test_contrib_packages_define_all() -> None:
     assert redis_all == (
         "RedisAuthClientProtocol",
         "RedisAuthPreset",
+        "RedisAuthRateLimitConfigOptions",
         "RedisAuthRateLimitTier",
         "RedisTokenStrategy",
+        "RedisTokenStrategyConfig",
         "RedisTotpEnrollmentStore",
         "RedisUsedTotpCodeStore",
     )
-    assert role_admin_all == ("create_role_admin_controller",)
+    assert role_admin_all == ("RoleAdminControllerConfig", "create_role_admin_controller")
 
 
 def test_contrib_role_admin_factory_builds_controller_from_explicit_models() -> None:
@@ -154,6 +164,24 @@ def test_contrib_role_admin_factory_builds_controller_from_explicit_models() -> 
     assert issubclass(controller, Controller)
     assert controller.path == "/admin/roles"
     assert controller.guards == [is_superuser]
+    assert context.model_family.user_model is User
+    assert context.model_family.role_model is Role
+    assert context.model_family.user_role_model is UserRole
+
+
+def test_contrib_role_admin_factory_accepts_controller_config_object() -> None:
+    """The opt-in role-admin factory accepts settings as one typed controller config."""
+    controller = create_role_admin_controller(
+        controller_config=RoleAdminControllerConfig(
+            user_model=User,
+            role_model=Role,
+            user_role_model=UserRole,
+            route_prefix="admin/roles",
+        ),
+    )
+    context = cast("Any", controller).role_admin_context
+
+    assert controller.path == "/admin/roles"
     assert context.model_family.user_model is User
     assert context.model_family.role_model is Role
     assert context.model_family.user_role_model is UserRole
@@ -292,31 +320,34 @@ async def test_contrib_role_admin_internal_request_session_helpers_cover_request
     """Internal request-session helpers fail closed and preserve the response contract."""
     session = TrackingAsyncSession()
     manager = object()
-    context_manager = role_admin_controller_module._RequestSessionContextManager(cast("Any", session))
+    context_manager = role_admin_session_wiring_module._RequestSessionContextManager(cast("Any", session))
     async with context_manager as entered_session:
         assert entered_session is session
     await context_manager.__aexit__(None, None, None)
 
-    session_maker = role_admin_controller_module._RequestSessionMaker(cast("Any", session))
+    session_maker = role_admin_session_wiring_module._RequestSessionMaker(cast("Any", session))
     async with session_maker() as session_from_maker:
         assert session_from_maker is session
 
     with pytest.raises(AssertionError, match="force operation"):
-        role_admin_controller_module._UnusedRoleLifecycleUpdater.build_manager(cast("Any", session))
+        role_admin_session_wiring_module._UnusedRoleLifecycleUpdater.build_manager(cast("Any", session))
 
     controller = create_role_admin_controller(user_model=User, role_model=Role, user_role_model=UserRole)
     context = cast("Any", controller).role_admin_context
 
-    request_bound_admin = role_admin_controller_module._resolve_role_admin(context, db_session=cast("Any", session))
+    request_bound_admin = role_admin_controller_handler_utils_module._resolve_role_admin(
+        context,
+        db_session=cast("Any", session),
+    )
     async with request_bound_admin.session() as session_from_helper:
         assert session_from_helper is session
     with pytest.raises(ConfigurationError, match="litestar_auth_user_manager"):
         request_bound_admin._role_lifecycle_updater.build_manager(cast("Any", session))
 
     with pytest.raises(ConfigurationError, match="request-scoped AsyncSession"):
-        role_admin_controller_module._resolve_role_admin(context)
+        role_admin_controller_handler_utils_module._resolve_role_admin(context)
 
-    provided_manager_request_bound_admin = role_admin_controller_module._resolve_role_admin(
+    provided_manager_request_bound_admin = role_admin_controller_handler_utils_module._resolve_role_admin(
         context,
         db_session=cast("Any", session),
         request_user_manager=manager,
@@ -328,20 +359,20 @@ async def test_contrib_role_admin_internal_request_session_helpers_cover_request
     config_without_session.user_manager_factory = cast("Any", lambda **_: manager)
     config_without_session_controller = create_role_admin_controller(config=config_without_session)
     config_without_session_context = cast("Any", config_without_session_controller).role_admin_context
-    config_request_bound_admin = role_admin_controller_module._resolve_role_admin(
+    config_request_bound_admin = role_admin_controller_handler_utils_module._resolve_role_admin(
         config_without_session_context,
         db_session=cast("Any", session),
     )
     assert config_request_bound_admin._role_lifecycle_updater.build_manager(cast("Any", session)) is manager
 
     with pytest.raises(ClientException) as invalid_exc:
-        role_admin_controller_module._normalize_input_role_name(" \t ")
+        role_admin_error_responses_module._normalize_input_role_name(" \t ")
     assert invalid_exc.value.extra == {"code": ErrorCode.ROLE_NAME_INVALID}
 
-    assert role_admin_controller_module._to_role_read(
+    assert role_admin_controller_handler_utils_module._to_role_read(
         SimpleNamespace(name="billing", description="Docs"),
     ) == RoleRead(name="billing", description="Docs")
-    assert role_admin_controller_module._to_user_brief(
+    assert role_admin_controller_handler_utils_module._to_user_brief(
         SimpleNamespace(
             id="user-1",
             email="member@example.com",
@@ -361,14 +392,14 @@ async def test_contrib_role_admin_internal_request_session_helpers_cover_request
 
     rename_request = cast("Any", SimpleNamespace(body=_rename_body))
     with pytest.raises(ClientException, match="immutable"):
-        await role_admin_controller_module._reject_role_name_mutation(rename_request)
+        await role_admin_controller_handler_utils_module._reject_role_name_mutation(rename_request)
 
     async def _safe_body() -> bytes:
         await asyncio.sleep(0)
         return msgspec.json.encode({"description": "updated"})
 
     safe_request = cast("Any", SimpleNamespace(body=_safe_body))
-    await role_admin_controller_module._reject_role_name_mutation(safe_request)
+    await role_admin_controller_handler_utils_module._reject_role_name_mutation(safe_request)
 
 
 async def test_contrib_role_admin_internal_helpers_cover_listing_loading_and_signature_rename() -> None:
@@ -402,19 +433,19 @@ async def test_contrib_role_admin_internal_helpers_cover_listing_loading_and_sig
         [("items", list[RoleRead]), ("total", int), ("limit", int), ("offset", int)],
     )
 
-    paged = await role_admin_controller_module._list_role_page(
+    paged = await role_admin_controller_handler_utils_module._list_role_page(
         cast("Any", role_admin),
         page_schema_type=page_schema_type,
         limit=2,
         offset=0,
     )
-    empty_page = await role_admin_controller_module._list_role_page(
+    empty_page = await role_admin_controller_handler_utils_module._list_role_page(
         cast("Any", role_admin),
         page_schema_type=page_schema_type,
         limit=2,
         offset=10,
     )
-    loaded = await role_admin_controller_module._load_role_row(
+    loaded = await role_admin_controller_handler_utils_module._load_role_row(
         cast("Any", role_admin),
         normalized_role_name="billing",
     )
@@ -442,7 +473,7 @@ async def test_contrib_role_admin_internal_helpers_cover_listing_loading_and_sig
             yield MissingSessionStub()
 
     with pytest.raises(ClientException, match="not found") as exc_info:
-        await role_admin_controller_module._load_role_row(
+        await role_admin_controller_handler_utils_module._load_role_row(
             cast("Any", MissingRoleAdminStub()),
             normalized_role_name="missing",
         )
@@ -517,9 +548,9 @@ async def test_contrib_role_admin_assignment_helpers_cover_success_and_paging(  
         del role_admin
         return SimpleNamespace(name=normalized_role_name, description="Docs")
 
-    monkeypatch.setattr(role_admin_controller_module, "_load_role_row", _load_role_row_stub)
+    monkeypatch.setattr(role_admin_controller_handler_utils_module, "_load_role_row", _load_role_row_stub)
 
-    assign_result = await role_admin_controller_module._assign_role_user(
+    assign_result = await role_admin_controller_handler_utils_module._assign_role_user(
         cast("Any", role_admin),
         role_name=" Billing ",
         user_id="user-1",
@@ -528,14 +559,14 @@ async def test_contrib_role_admin_assignment_helpers_cover_success_and_paging(  
         "RoleUserPageCoverageSchema",
         [("items", list[UserBrief]), ("total", int), ("limit", int), ("offset", int)],
     )
-    user_page = await role_admin_controller_module._list_role_user_page(
+    user_page = await role_admin_controller_handler_utils_module._list_role_user_page(
         cast("Any", role_admin),
         page_schema_type=user_page_schema_type,
         role_name="billing",
         limit=1,
         offset=1,
     )
-    await role_admin_controller_module._unassign_role_user(
+    await role_admin_controller_handler_utils_module._unassign_role_user(
         cast("Any", role_admin),
         role_name="billing",
         user_id="user-1",
@@ -603,14 +634,14 @@ async def test_contrib_role_admin_assignment_helpers_cover_error_mapping(
         del role_admin, normalized_role_name
         return SimpleNamespace(name="billing", description="Docs")
 
-    monkeypatch.setattr(role_admin_controller_module, "_load_role_row", _load_role_row_stub)
+    monkeypatch.setattr(role_admin_controller_handler_utils_module, "_load_role_row", _load_role_row_stub)
     user_page_schema_type = msgspec.defstruct(
         "RoleUserPageCoverageErrorSchema",
         [("items", list[UserBrief]), ("total", int), ("limit", int), ("offset", int)],
     )
 
     with pytest.raises(ClientException, match="configured catalog") as missing_role_exc:
-        await role_admin_controller_module._assign_role_user(
+        await role_admin_controller_handler_utils_module._assign_role_user(
             cast("Any", role_admin),
             role_name="missing",
             user_id="user-1",
@@ -618,7 +649,7 @@ async def test_contrib_role_admin_assignment_helpers_cover_error_mapping(
     assert missing_role_exc.value.extra == {"code": ErrorCode.ROLE_NOT_FOUND}
 
     with pytest.raises(ClientException, match="could not find a user") as missing_user_exc:
-        await role_admin_controller_module._assign_role_user(
+        await role_admin_controller_handler_utils_module._assign_role_user(
             cast("Any", role_admin),
             role_name="billing",
             user_id="missing-user",
@@ -626,7 +657,7 @@ async def test_contrib_role_admin_assignment_helpers_cover_error_mapping(
     assert missing_user_exc.value.extra == {"code": ErrorCode.ROLE_ASSIGNMENT_USER_NOT_FOUND}
 
     with pytest.raises(ClientException, match="could not find a user") as missing_unassign_user_exc:
-        await role_admin_controller_module._unassign_role_user(
+        await role_admin_controller_handler_utils_module._unassign_role_user(
             cast("Any", role_admin),
             role_name="billing",
             user_id="missing-user",
@@ -634,7 +665,7 @@ async def test_contrib_role_admin_assignment_helpers_cover_error_mapping(
     assert missing_unassign_user_exc.value.extra == {"code": ErrorCode.ROLE_ASSIGNMENT_USER_NOT_FOUND}
 
     with pytest.raises(ClientException, match="configured catalog") as missing_page_role_exc:
-        await role_admin_controller_module._list_role_user_page(
+        await role_admin_controller_handler_utils_module._list_role_user_page(
             cast("Any", role_admin),
             page_schema_type=user_page_schema_type,
             role_name="missing",
@@ -666,7 +697,7 @@ async def test_contrib_role_admin_controller_handlers_cover_config_and_request_b
         return RuntimeFailureRoleAdmin()
 
     monkeypatch.setattr(
-        role_admin_controller_module,
+        role_admin_controller_handlers_module,
         "_resolve_role_admin",
         _runtime_failure_resolver,
     )
@@ -719,7 +750,7 @@ async def test_contrib_role_admin_controller_handlers_cover_config_and_request_b
         del context, db_session, request_user_manager
         return config_branch_role_admin
 
-    monkeypatch.setattr(role_admin_controller_module, "_resolve_role_admin", _config_branch_resolver)
+    monkeypatch.setattr(role_admin_controller_handlers_module, "_resolve_role_admin", _config_branch_resolver)
 
     with pytest.raises(ClientException, match="not found") as config_update_missing_exc:
         await config_controller.update_role.fn(
@@ -860,27 +891,28 @@ async def test_contrib_role_admin_controller_handlers_cover_config_and_request_b
         del context, db_session, request_user_manager
         return role_admin_stub
 
-    monkeypatch.setattr(role_admin_controller_module, "_resolve_role_admin", _role_admin_resolver)
+    monkeypatch.setattr(role_admin_controller_handlers_module, "_resolve_role_admin", _role_admin_resolver)
 
     async def _load_role_row_stub(role_admin: object, normalized_role_name: str) -> object:
         await asyncio.sleep(0)
         del role_admin
         return SimpleNamespace(name=normalized_role_name, description="Docs")
 
-    monkeypatch.setattr(role_admin_controller_module, "_load_role_row", _load_role_row_stub)
+    monkeypatch.setattr(role_admin_controller_handlers_module, "_load_role_row", _load_role_row_stub)
+    monkeypatch.setattr(role_admin_controller_handler_utils_module, "_load_role_row", _load_role_row_stub)
 
     list_result = await no_config_controller.list_roles.fn(
         no_config_instance,
-        cast("Any", TrackingAsyncSession()),
-        2,
-        0,
+        db_session=cast("Any", TrackingAsyncSession()),
+        limit=2,
+        offset=0,
     )
     assert msgspec.to_builtins(list_result) == {"items": [], "total": 0, "limit": 2, "offset": 0}
 
     create_result = await no_config_controller.create_role.fn(
         no_config_instance,
-        cast("Any", TrackingAsyncSession()),
-        RoleCreate(name=" Support ", description="Docs"),
+        data=RoleCreate(name=" Support ", description="Docs"),
+        db_session=cast("Any", TrackingAsyncSession()),
     )
     assert create_result == RoleRead(name="support", description="Docs")
 
@@ -897,28 +929,32 @@ async def test_contrib_role_admin_controller_handlers_cover_config_and_request_b
         del context, db_session, request_user_manager
         return NoConfigRuntimeFailureRoleAdmin()
 
-    monkeypatch.setattr(role_admin_controller_module, "_resolve_role_admin", _no_config_runtime_failure_resolver)
+    monkeypatch.setattr(
+        role_admin_controller_handlers_module,
+        "_resolve_role_admin",
+        _no_config_runtime_failure_resolver,
+    )
     with pytest.raises(RuntimeError, match="boom"):
         await no_config_controller.create_role.fn(
             no_config_instance,
-            cast("Any", TrackingAsyncSession()),
-            RoleCreate(name="boom", description="Docs"),
+            data=RoleCreate(name="boom", description="Docs"),
+            db_session=cast("Any", TrackingAsyncSession()),
         )
 
-    monkeypatch.setattr(role_admin_controller_module, "_resolve_role_admin", _role_admin_resolver)
+    monkeypatch.setattr(role_admin_controller_handlers_module, "_resolve_role_admin", _role_admin_resolver)
 
     with pytest.raises(ClientException, match="already exists") as duplicate_exc:
         await no_config_controller.create_role.fn(
             no_config_instance,
-            cast("Any", TrackingAsyncSession()),
-            RoleCreate(name="duplicate", description="Docs"),
+            data=RoleCreate(name="duplicate", description="Docs"),
+            db_session=cast("Any", TrackingAsyncSession()),
         )
     assert duplicate_exc.value.extra == {"code": ErrorCode.ROLE_ALREADY_EXISTS}
 
     get_result = await no_config_controller.get_role.fn(
         no_config_instance,
-        cast("Any", TrackingAsyncSession()),
-        "admin",
+        role_name="admin",
+        db_session=cast("Any", TrackingAsyncSession()),
     )
     assert get_result == RoleRead(name="admin", description="Docs")
 
@@ -930,9 +966,9 @@ async def test_contrib_role_admin_controller_handlers_cover_config_and_request_b
     update_result = await no_config_controller.update_role.fn(
         no_config_instance,
         request,
-        cast("Any", TrackingAsyncSession()),
-        "admin",
-        RoleUpdate(description="Updated docs"),
+        role_name="admin",
+        data=RoleUpdate(description="Updated docs"),
+        db_session=cast("Any", TrackingAsyncSession()),
     )
     assert update_result == RoleRead(name="admin", description="Updated docs")
 
@@ -941,9 +977,9 @@ async def test_contrib_role_admin_controller_handlers_cover_config_and_request_b
         await no_config_controller.update_role.fn(
             no_config_instance,
             request,
-            cast("Any", TrackingAsyncSession()),
-            "missing",
-            RoleUpdate(description="Updated docs"),
+            role_name="missing",
+            data=RoleUpdate(description="Updated docs"),
+            db_session=cast("Any", TrackingAsyncSession()),
         )
     assert update_missing_exc.value.extra == {"code": ErrorCode.ROLE_NOT_FOUND}
 
@@ -952,55 +988,55 @@ async def test_contrib_role_admin_controller_handlers_cover_config_and_request_b
         await no_config_controller.update_role.fn(
             no_config_instance,
             request,
-            cast("Any", TrackingAsyncSession()),
-            "admin",
-            RoleUpdate(description="Updated docs"),
+            role_name="admin",
+            data=RoleUpdate(description="Updated docs"),
+            db_session=cast("Any", TrackingAsyncSession()),
         )
 
     await no_config_controller.update_role.fn(
         no_config_instance,
         request,
-        cast("Any", TrackingAsyncSession()),
-        "admin",
-        RoleUpdate(),
+        role_name="admin",
+        data=RoleUpdate(),
+        db_session=cast("Any", TrackingAsyncSession()),
     )
 
     with pytest.raises(ClientException, match="not found") as delete_missing_exc:
         await no_config_controller.delete_role.fn(
             no_config_instance,
-            cast("Any", TrackingAsyncSession()),
-            "missing",
+            role_name="missing",
+            db_session=cast("Any", TrackingAsyncSession()),
         )
     assert delete_missing_exc.value.extra == {"code": ErrorCode.ROLE_NOT_FOUND}
 
     with pytest.raises(ClientException, match="assigned") as delete_assigned_exc:
         await no_config_controller.delete_role.fn(
             no_config_instance,
-            cast("Any", TrackingAsyncSession()),
-            "admin",
+            role_name="admin",
+            db_session=cast("Any", TrackingAsyncSession()),
         )
     assert delete_assigned_exc.value.extra == {"code": ErrorCode.ROLE_STILL_ASSIGNED}
 
     assign_result = await no_config_controller.assign_role.fn(
         no_config_instance,
-        cast("Any", TrackingAsyncSession()),
-        "admin",
-        "user-1",
-        object(),
+        role_name="admin",
+        user_id="user-1",
+        db_session=cast("Any", TrackingAsyncSession()),
+        litestar_auth_user_manager=object(),
     )
     list_role_users_result = await no_config_controller.list_role_users.fn(
         no_config_instance,
-        cast("Any", TrackingAsyncSession()),
-        "admin",
-        1,
-        0,
+        role_name="admin",
+        db_session=cast("Any", TrackingAsyncSession()),
+        limit=1,
+        offset=0,
     )
     await no_config_controller.unassign_role.fn(
         no_config_instance,
-        cast("Any", TrackingAsyncSession()),
-        "admin",
-        "user-1",
-        object(),
+        role_name="admin",
+        user_id="user-1",
+        db_session=cast("Any", TrackingAsyncSession()),
+        litestar_auth_user_manager=object(),
     )
 
     assert assign_result == RoleRead(name="admin", description="Docs")
@@ -1034,40 +1070,40 @@ async def test_contrib_role_admin_controller_handlers_cover_config_and_request_b
     with pytest.raises(ClientException, match="configured catalog") as missing_assign_role_exc:
         await no_config_controller.assign_role.fn(
             no_config_instance,
-            cast("Any", TrackingAsyncSession()),
-            "missing",
-            "user-1",
-            object(),
+            role_name="missing",
+            user_id="user-1",
+            db_session=cast("Any", TrackingAsyncSession()),
+            litestar_auth_user_manager=object(),
         )
     assert missing_assign_role_exc.value.extra == {"code": ErrorCode.ROLE_NOT_FOUND}
 
     with pytest.raises(ClientException, match="could not find a user") as missing_assign_user_exc:
         await no_config_controller.assign_role.fn(
             no_config_instance,
-            cast("Any", TrackingAsyncSession()),
-            "admin",
-            "missing-user",
-            object(),
+            role_name="admin",
+            user_id="missing-user",
+            db_session=cast("Any", TrackingAsyncSession()),
+            litestar_auth_user_manager=object(),
         )
     assert missing_assign_user_exc.value.extra == {"code": ErrorCode.ROLE_ASSIGNMENT_USER_NOT_FOUND}
 
     with pytest.raises(ClientException, match="configured catalog") as missing_list_role_users_exc:
         await no_config_controller.list_role_users.fn(
             no_config_instance,
-            cast("Any", TrackingAsyncSession()),
-            "missing",
-            1,
-            0,
+            role_name="missing",
+            db_session=cast("Any", TrackingAsyncSession()),
+            limit=1,
+            offset=0,
         )
     assert missing_list_role_users_exc.value.extra == {"code": ErrorCode.ROLE_NOT_FOUND}
 
     with pytest.raises(ClientException, match="could not find a user") as missing_unassign_user_exc:
         await no_config_controller.unassign_role.fn(
             no_config_instance,
-            cast("Any", TrackingAsyncSession()),
-            "admin",
-            "missing-user",
-            object(),
+            role_name="admin",
+            user_id="missing-user",
+            db_session=cast("Any", TrackingAsyncSession()),
+            litestar_auth_user_manager=object(),
         )
     assert missing_unassign_user_exc.value.extra == {"code": ErrorCode.ROLE_ASSIGNMENT_USER_NOT_FOUND}
 
@@ -1077,9 +1113,11 @@ def test_contrib_redis_public_boundary_tracks_internal_surface() -> None:
     """The public Redis contrib package re-exports the dedicated internal surface."""
     assert redis_module.RedisAuthClientProtocol is redis_surface_module.RedisAuthClientProtocol
     assert redis_module.RedisAuthPreset is redis_surface_module.RedisAuthPreset
+    assert redis_module.RedisAuthRateLimitConfigOptions is redis_surface_module.RedisAuthRateLimitConfigOptions
     assert redis_module.RedisAuthRateLimitTier is redis_surface_module.RedisAuthRateLimitTier
     assert redis_module.RedisTotpEnrollmentStore is redis_surface_module.RedisTotpEnrollmentStore
     assert redis_module.RedisTokenStrategy is redis_surface_module.RedisTokenStrategy
+    assert redis_module.RedisTokenStrategyConfig is redis_surface_module.RedisTokenStrategyConfig
     assert redis_module.RedisUsedTotpCodeStore is redis_surface_module.RedisUsedTotpCodeStore
     assert redis_module.__all__ == redis_surface_module.__all__
 
@@ -1131,9 +1169,9 @@ async def test_contrib_redis_preset_builds_shared_client_auth_components(
         return object()
 
     monkeypatch.setattr("litestar_auth.ratelimit._helpers._load_redis_asyncio", load_optional_redis)
-    monkeypatch.setattr("litestar_auth.totp._load_used_totp_redis_asyncio", load_optional_redis)
-    monkeypatch.setattr("litestar_auth.totp._load_enrollment_redis_asyncio", load_optional_redis)
-    monkeypatch.setattr("litestar_auth.authentication.strategy.jwt._load_redis_asyncio", load_optional_redis)
+    monkeypatch.setattr("litestar_auth._totp_stores._load_used_totp_redis_asyncio", load_optional_redis)
+    monkeypatch.setattr("litestar_auth._totp_stores._load_enrollment_redis_asyncio", load_optional_redis)
+    monkeypatch.setattr("litestar_auth.authentication.strategy._jwt_denylist._load_redis_asyncio", load_optional_redis)
     redis_client = cast_fakeredis(async_fakeredis, RedisAuthClientProtocol)
     assert isinstance(redis_client, RedisAuthClientProtocol)
     preset = RedisAuthPreset(
@@ -1160,9 +1198,11 @@ async def test_contrib_redis_preset_builds_shared_client_auth_components(
     )
 
     config = preset.build_rate_limit_config(
-        disabled=AUTH_RATE_LIMIT_VERIFICATION_SLOT_IDENTIFIERS,
-        identity_fields=("username", "email"),
-        trusted_headers=("X-Real-IP",),
+        options=RedisAuthRateLimitConfigOptions(
+            disabled=AUTH_RATE_LIMIT_VERIFICATION_SLOT_IDENTIFIERS,
+            identity_fields=("username", "email"),
+            trusted_headers=("X-Real-IP",),
+        ),
     )
     store = preset.build_totp_used_tokens_store()
     enrollment_store = preset.build_totp_enrollment_store()
@@ -1218,8 +1258,12 @@ def test_contrib_redis_preset_covers_optional_identity_and_proxy_header_branches
     monkeypatch.setattr("litestar_auth.ratelimit._helpers._load_redis_asyncio", load_optional_redis)
     preset = RedisAuthPreset(redis=cast_fakeredis(async_fakeredis, RedisAuthClientProtocol))
 
-    config_with_headers = preset.build_rate_limit_config(trusted_headers=("X-Real-IP",))
-    config_with_identity_fields = preset.build_rate_limit_config(identity_fields=("email",))
+    config_with_headers = preset.build_rate_limit_config(
+        options=RedisAuthRateLimitConfigOptions(trusted_headers=("X-Real-IP",)),
+    )
+    config_with_identity_fields = preset.build_rate_limit_config(
+        options=RedisAuthRateLimitConfigOptions(identity_fields=("email",)),
+    )
 
     assert config_with_headers.login is not None
     assert config_with_headers.login.identity_fields == ("identifier", "username", "email")
@@ -1240,7 +1284,9 @@ def test_contrib_redis_preserves_lazy_dependency_error(monkeypatch: pytest.Monke
 
     redis_client_sentinel = cast("Any", object())
     with pytest.raises(ImportError, match="Install litestar-auth\\[redis\\] to use RedisTokenStrategy"):
-        RedisTokenStrategy(redis=redis_client_sentinel, token_hash_secret=REDIS_TOKEN_HASH_SECRET)
+        RedisTokenStrategy(
+            config=RedisTokenStrategyConfig(redis=redis_client_sentinel, token_hash_secret=REDIS_TOKEN_HASH_SECRET),
+        )
 
 
 def test_contrib_redis_preset_preserves_rate_limit_lazy_dependency_error(
@@ -1270,7 +1316,7 @@ def test_contrib_redis_preset_preserves_totp_lazy_dependency_error(
         msg = "Install litestar-auth[redis] to use RedisUsedTotpCodeStore"
         raise ImportError(msg)
 
-    monkeypatch.setattr("litestar_auth.totp._load_used_totp_redis_asyncio", fail_load_redis)
+    monkeypatch.setattr("litestar_auth._totp_stores._load_used_totp_redis_asyncio", fail_load_redis)
     preset = RedisAuthPreset(redis=cast_fakeredis(async_fakeredis, RedisAuthClientProtocol))
 
     with pytest.raises(ImportError, match="Install litestar-auth\\[redis\\] to use RedisUsedTotpCodeStore"):
@@ -1287,7 +1333,7 @@ def test_contrib_redis_preset_preserves_pending_jti_lazy_dependency_error(
         msg = "Install litestar-auth[redis] to use RedisJWTDenylistStore"
         raise ImportError(msg)
 
-    monkeypatch.setattr("litestar_auth.authentication.strategy.jwt._load_redis_asyncio", fail_load_redis)
+    monkeypatch.setattr("litestar_auth.authentication.strategy._jwt_denylist._load_redis_asyncio", fail_load_redis)
     preset = RedisAuthPreset(redis=cast_fakeredis(async_fakeredis, RedisAuthClientProtocol))
 
     with pytest.raises(ImportError, match="Install litestar-auth\\[redis\\] to use RedisJWTDenylistStore"):
@@ -1304,7 +1350,7 @@ def test_contrib_redis_preset_preserves_enrollment_lazy_dependency_error(
         msg = "Install litestar-auth[redis] to use RedisTotpEnrollmentStore"
         raise ImportError(msg)
 
-    monkeypatch.setattr("litestar_auth.totp._load_enrollment_redis_asyncio", fail_load_redis)
+    monkeypatch.setattr("litestar_auth._totp_stores._load_enrollment_redis_asyncio", fail_load_redis)
     preset = RedisAuthPreset(redis=cast_fakeredis(async_fakeredis, RedisAuthClientProtocol))
 
     with pytest.raises(ImportError, match="Install litestar-auth\\[redis\\] to use RedisTotpEnrollmentStore"):

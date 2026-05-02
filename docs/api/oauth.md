@@ -7,6 +7,8 @@ implements the helpers re-exported from the package.
 
 These helpers cover the supported manual OAuth client contract used by `create_provider_oauth_controller()`,
 `create_oauth_controller()`, and `OAuthClientAdapter`.
+For direct provider-login assembly, `ProviderOAuthControllerConfig(...)` carries the same settings accepted by
+`create_provider_oauth_controller(...)` as keyword arguments.
 
 - Typed contract: `litestar_auth.oauth.client_adapter.OAuthClientProtocol` with the narrower
   `OAuthDirectIdentityClientProtocol`, `OAuthProfileClientProtocol`, and optional

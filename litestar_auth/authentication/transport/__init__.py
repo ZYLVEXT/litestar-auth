@@ -6,6 +6,6 @@ inside an :class:`~litestar_auth.authentication.backend.AuthenticationBackend`.
 
 from litestar_auth.authentication.transport.base import Transport
 from litestar_auth.authentication.transport.bearer import BearerTransport
-from litestar_auth.authentication.transport.cookie import CookieTransport
+from litestar_auth.authentication.transport.cookie import CookieTransport, CookieTransportConfig
 
-__all__ = ["BearerTransport", "CookieTransport", "Transport"]
+__all__ = ["BearerTransport", "CookieTransport", "CookieTransportConfig", "Transport"]

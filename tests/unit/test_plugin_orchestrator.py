@@ -311,11 +311,12 @@ def test_on_app_init_registers_middleware_controllers_dependencies_and_exception
     middleware = result.middleware[0]
     assert isinstance(middleware, DefineMiddleware)
     assert getattr(middleware.middleware, "__name__", "") == LitestarAuthMiddleware.__name__
-    assert middleware.kwargs["authenticator_factory"] == plugin._build_authenticator
-    assert middleware.kwargs["auth_cookie_names"] == frozenset({b"authcookie", b"authcookie_refresh"})
-    assert middleware.kwargs["superuser_role_name"] == "superuser"
+    middleware_config = middleware.kwargs["config"]
+    assert middleware_config.authenticator_factory == plugin._build_authenticator
+    assert middleware_config.auth_cookie_names == frozenset({b"authcookie", b"authcookie_refresh"})
+    assert middleware_config.superuser_role_name == "superuser"
 
-    session_getter = middleware.kwargs["get_request_session"]
+    session_getter = middleware_config.get_request_session
     assert isinstance(session_getter, partial)
     assert session_getter.func.__name__ == "get_or_create_scoped_session"
 
@@ -1420,8 +1421,9 @@ def test_register_middleware_without_cookie_transports_skips_csrf_registration()
     assert app_config.csrf_config is None
     middleware = app_config.middleware[0]
     assert isinstance(middleware, DefineMiddleware)
-    assert middleware.kwargs["auth_cookie_names"] == frozenset()
-    assert middleware.kwargs["superuser_role_name"] == "superuser"
+    middleware_config = middleware.kwargs["config"]
+    assert middleware_config.auth_cookie_names == frozenset()
+    assert middleware_config.superuser_role_name == "superuser"
 
 
 def test_resolve_account_state_validator_delegates_to_shared_validation_helper(

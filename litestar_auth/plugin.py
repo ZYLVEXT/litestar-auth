@@ -39,7 +39,7 @@ from litestar_auth._plugin.validation import (
     resolve_user_manager_account_state_validator,
     validate_config,
 )
-from litestar_auth.authentication import Authenticator, LitestarAuthMiddleware
+from litestar_auth.authentication import Authenticator, LitestarAuthMiddleware, LitestarAuthMiddlewareConfig
 from litestar_auth.config import OAuthProviderConfig
 from litestar_auth.oauth_encryption import (
     OAuthTokenEncryption,
@@ -68,8 +68,11 @@ if TYPE_CHECKING:
     _ScopedUserDatabaseProxy = ScopedUserDatabaseProxyImpl
 
 DatabaseTokenAuthConfig = _plugin_config.DatabaseTokenAuthConfig
+ControllerHook = _plugin_config.ControllerHook
+ExceptionResponseHook = _plugin_config.ExceptionResponseHook
 FernetKeyringConfig = _plugin_config.FernetKeyringConfig
 LitestarAuthConfig = _plugin_config.LitestarAuthConfig
+MiddlewareHook = _plugin_config.MiddlewareHook
 OAuthConfig = _plugin_config.OAuthConfig
 StartupBackendTemplate = _plugin_config.StartupBackendTemplate
 TotpConfig = _plugin_config.TotpConfig
@@ -234,10 +237,12 @@ class LitestarAuth[UP: UserProtocol[Any], ID](InitPlugin, CLIPlugin):
         )
         middleware = DefineMiddleware(
             LitestarAuthMiddleware[UP, ID],
-            get_request_session=partial(get_or_create_scoped_session, session_maker=self._session_maker),
-            authenticator_factory=self._build_authenticator,
-            auth_cookie_names=auth_cookie_names,
-            superuser_role_name=self.config.superuser_role_name,
+            config=LitestarAuthMiddlewareConfig[UP, ID](
+                get_request_session=partial(get_or_create_scoped_session, session_maker=self._session_maker),
+                authenticator_factory=self._build_authenticator,
+                auth_cookie_names=auth_cookie_names,
+                superuser_role_name=self.config.superuser_role_name,
+            ),
         )
         if self.config.middleware_hook is not None:
             middleware = self.config.middleware_hook(middleware)

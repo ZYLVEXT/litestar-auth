@@ -7,7 +7,7 @@ setup all live there. This page focuses on the public rate-limit types themselve
 
 The higher-level one-client Redis preset lives in `litestar_auth.contrib.redis.RedisAuthPreset`.
 This module owns the lower-level shared builder plus the `AuthRateLimitSlot` enum accepted by
-`enabled=...` and `disabled=...`.
+`SharedRateLimitConfigOptions.enabled` and `SharedRateLimitConfigOptions.disabled`.
 
 For a smaller public-entry-point preset, `AuthRateLimitConfig.strict(backend=...)` wires a shared
 backend to `login`, `register`, and `totp_verify` using the package default scopes and route-style
@@ -30,16 +30,23 @@ or reuses the shared-backend inventory:
 from litestar_auth.ratelimit import (
     AuthRateLimitEndpointGroup,
     AuthRateLimitSlot,
+    SharedRateLimitConfigOptions,
 )
 
-all_slots = tuple(AuthRateLimitSlot)
-verification_slots = {AuthRateLimitSlot.VERIFY_TOKEN, AuthRateLimitSlot.REQUEST_VERIFY_TOKEN}
+shared_options = SharedRateLimitConfigOptions(
+    enabled=tuple(AuthRateLimitSlot),
+    disabled={AuthRateLimitSlot.VERIFY_TOKEN, AuthRateLimitSlot.REQUEST_VERIFY_TOKEN},
+)
 ```
 
-- `AuthRateLimitSlot` names the per-endpoint enum keys accepted by `enabled`, `disabled`, and `endpoint_overrides`.
-- `AuthRateLimitEndpointGroup` names the shared-backend keys accepted by `group_backends`.
-- Iterate `AuthRateLimitSlot` directly when you need every supported slot for `enabled=...`.
-- Use `{AuthRateLimitSlot.VERIFY_TOKEN, AuthRateLimitSlot.REQUEST_VERIFY_TOKEN}` for `disabled=...` when verification routes stay off.
+- `AuthRateLimitSlot` names the per-endpoint enum keys accepted by `SharedRateLimitConfigOptions.enabled`,
+  `SharedRateLimitConfigOptions.disabled`, and `SharedRateLimitConfigOptions.endpoint_overrides`.
+- `AuthRateLimitEndpointGroup` names the shared-backend keys accepted by
+  `SharedRateLimitConfigOptions.group_backends`.
+- Iterate `AuthRateLimitSlot` directly when you need every supported slot for an explicit
+  `SharedRateLimitConfigOptions.enabled` value.
+- Use `{AuthRateLimitSlot.VERIFY_TOKEN, AuthRateLimitSlot.REQUEST_VERIFY_TOKEN}` for
+  `SharedRateLimitConfigOptions.disabled` when verification routes stay off.
 
 ::: litestar_auth.ratelimit
     options:
@@ -49,6 +56,7 @@ verification_slots = {AuthRateLimitSlot.VERIFY_TOKEN, AuthRateLimitSlot.REQUEST_
         - AuthRateLimitSlot
         - EndpointRateLimit
         - RateLimitScope
+        - SharedRateLimitConfigOptions
         - InMemoryRateLimiter
         - RedisRateLimiter
         - RateLimiterBackend

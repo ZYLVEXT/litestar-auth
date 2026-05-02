@@ -6,12 +6,13 @@ from __future__ import annotations
 import hashlib
 import hmac
 import secrets
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any, Protocol, cast
 
 import jwt
 
-from litestar_auth._jwt_headers import jwt_encode_headers, validate_jwt_type_header
+from litestar_auth._jwt_headers import JwtDecodeConfig, decode_signed_jwt, jwt_encode_headers
 from litestar_auth._manager._coercions import _managed_user
 from litestar_auth._manager._protocols import UserDatabaseManagerProtocol, UserManagerHooksProtocol
 from litestar_auth.exceptions import InvalidResetPasswordTokenError, InvalidVerifyTokenError, UserNotExistsError
@@ -21,6 +22,14 @@ if TYPE_CHECKING:
     from litestar_auth._manager.user_policy import UserPolicy
 
 type _InvalidTokenError = type[InvalidVerifyTokenError | InvalidResetPasswordTokenError]
+
+
+@dataclass(frozen=True, slots=True)
+class AccountTokenAudiences:
+    """JWT audiences used by account verification and reset-password tokens."""
+
+    verify: str
+    reset_password: str
 
 
 class _AccountTokenSecurityManagerProtocol[ID](Protocol):
@@ -118,13 +127,14 @@ class AccountTokenSecurityService[UP, ID]:
     ) -> dict[str, Any]:
         """Decode and validate a manager token payload."""
         try:
-            validate_jwt_type_header(token)
-            payload = jwt.decode(
+            payload = decode_signed_jwt(
                 token,
-                secret,
-                algorithms=["HS256"],
-                audience=audience,
-                options={"require": ["exp", "aud", "iat", "nbf", "jti", "sub"]},
+                config=JwtDecodeConfig(
+                    key=secret,
+                    algorithms=["HS256"],
+                    audience=audience,
+                    options={"require": ["exp", "aud", "iat", "nbf", "jti", "sub"]},
+                ),
             )
         except (jwt.ExpiredSignatureError, jwt.InvalidTokenError) as exc:
             self._logger.warning("Manager token validation failed", extra={"event": "token_validation_failed"})
@@ -219,20 +229,18 @@ class AccountTokenSecurityService[UP, ID]:
 class AccountTokensService[UP, ID]:
     """Handle verify and reset token flows for the manager facade."""
 
-    def __init__(  # noqa: PLR0913
+    def __init__(
         self,
         manager: _AccountTokensManagerProtocol[UP, ID],
         *,
-        verify_token_audience: str,
-        reset_password_token_audience: str,
+        audiences: AccountTokenAudiences,
         token_security: AccountTokenSecurityService[UP, ID],
         logger: Any,
         policy: UserPolicy,
     ) -> None:
         """Bind service dependencies."""
         self._manager = manager
-        self._verify_token_audience = verify_token_audience
-        self._reset_password_token_audience = reset_password_token_audience
+        self._audiences = audiences
         self._token_security = token_security
         self._logger = logger
         self._policy = policy
@@ -248,7 +256,7 @@ class AccountTokensService[UP, ID]:
             token,
             user_db=self._manager.user_db,
             secret=self._manager.account_token_secrets.verification_token_secret.get_secret_value(),
-            audience=self._verify_token_audience,
+            audience=self._audiences.verify,
             invalid_token_error=InvalidVerifyTokenError,
         )
         managed_user = _managed_user(user)
@@ -271,7 +279,7 @@ class AccountTokensService[UP, ID]:
             else self._token_security.write_token(
                 subject="verification-placeholder",
                 secret=self._manager.account_token_secrets.verification_token_secret.get_secret_value(),
-                audience=self._verify_token_audience,
+                audience=self._audiences.verify,
                 lifetime=self._manager.verification_token_lifetime,
             )
         )
@@ -333,7 +341,7 @@ class AccountTokensService[UP, ID]:
         return self.write_user_token(
             user,
             secret=self._manager.account_token_secrets.verification_token_secret.get_secret_value(),
-            audience=self._verify_token_audience,
+            audience=self._audiences.verify,
             lifetime=self._manager.verification_token_lifetime,
         )
 
@@ -350,7 +358,7 @@ class AccountTokensService[UP, ID]:
         return self._token_security.write_token(
             subject=subject,
             secret=self._manager.account_token_secrets.reset_password_token_secret.get_secret_value(),
-            audience=self._reset_password_token_audience,
+            audience=self._audiences.reset_password,
             lifetime=self._manager.reset_password_token_lifetime,
             extra_claims=extra_claims,
         )
@@ -370,7 +378,7 @@ class AccountTokensService[UP, ID]:
     ) -> str:
         """Sign a short-lived JWT for a user."""
         token_claims = dict(extra_claims or {})
-        if audience == self._reset_password_token_audience and "password_fingerprint" not in token_claims:
+        if audience == self._audiences.reset_password and "password_fingerprint" not in token_claims:
             token_claims["password_fingerprint"] = self.password_fingerprint(
                 _managed_user(user).hashed_password,
             )

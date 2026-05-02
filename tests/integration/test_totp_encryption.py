@@ -14,7 +14,7 @@ from litestar import Request, get
 from litestar.middleware import DefineMiddleware
 from litestar.testing import AsyncTestClient
 
-import litestar_auth.manager as manager_module
+import litestar_auth._optional_deps as optional_deps_module
 from litestar_auth._plugin.config import DEFAULT_USER_MANAGER_DEPENDENCY_KEY
 from litestar_auth.authentication.authenticator import Authenticator
 from litestar_auth.authentication.backend import AuthenticationBackend
@@ -100,7 +100,7 @@ def _install_fake_cryptography(monkeypatch: pytest.MonkeyPatch) -> None:
         msg = name
         raise ImportError(msg)
 
-    monkeypatch.setattr(manager_module.importlib, "import_module", fake_import_module)
+    monkeypatch.setattr(optional_deps_module.importlib, "import_module", fake_import_module)
 
 
 def _build_manager(
@@ -274,7 +274,7 @@ async def test_set_totp_secret_raises_readable_error_when_cryptography_missing(
         msg = name
         raise ImportError(msg)
 
-    monkeypatch.setattr(manager_module.importlib, "import_module", fake_import_module)
+    monkeypatch.setattr(optional_deps_module.importlib, "import_module", fake_import_module)
 
     with pytest.raises(ImportError, match="Install litestar-auth\\[totp\\] to use TOTP secret encryption\\."):
         await manager.set_totp_secret(user, "JBSWY3DPEHPK3PXP")

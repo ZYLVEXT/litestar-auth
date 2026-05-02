@@ -10,7 +10,11 @@ import pytest
 
 from litestar_auth.authentication.strategy.base import SessionBindable
 from litestar_auth.authentication.strategy.db import DatabaseTokenStrategy
-from litestar_auth.authentication.strategy.redis import RedisClientProtocol, RedisTokenStrategy
+from litestar_auth.authentication.strategy.redis import (
+    RedisClientProtocol,
+    RedisTokenStrategy,
+    RedisTokenStrategyConfig,
+)
 from litestar_auth.models import User
 from tests._helpers import cast_fakeredis
 
@@ -127,8 +131,10 @@ async def test_redis_token_strategy_read_token_none_and_invalidate_all_tokens(
 ) -> None:
     """RedisTokenStrategy.read_token(None) and missing-index invalidation should cover remaining branches."""
     strategy = RedisTokenStrategy(
-        redis=cast_fakeredis(async_fakeredis, RedisClientProtocol),
-        token_hash_secret=REDIS_TOKEN_HASH_SECRET,
+        config=RedisTokenStrategyConfig(
+            redis=cast_fakeredis(async_fakeredis, RedisClientProtocol),
+            token_hash_secret=REDIS_TOKEN_HASH_SECRET,
+        ),
     )
     user_manager = _DummyUserManager()
 
@@ -149,8 +155,10 @@ async def test_redis_token_strategy_invalidate_all_tokens_uses_index_when_presen
 ) -> None:
     """invalidate_all_tokens() should prefer the per-user index when it exists."""
     strategy = RedisTokenStrategy(
-        redis=cast_fakeredis(async_fakeredis, RedisClientProtocol),
-        token_hash_secret=REDIS_TOKEN_HASH_SECRET,
+        config=RedisTokenStrategyConfig(
+            redis=cast_fakeredis(async_fakeredis, RedisClientProtocol),
+            token_hash_secret=REDIS_TOKEN_HASH_SECRET,
+        ),
     )
     user = _DummyUser(uuid4())
     token = await strategy.write_token(user)
@@ -166,8 +174,10 @@ async def test_redis_token_strategy_invalidate_all_tokens_without_index_leaves_f
 ) -> None:
     """Index-only invalidation should not inspect unrelated token keys."""
     strategy = RedisTokenStrategy(
-        redis=cast_fakeredis(async_fakeredis, RedisClientProtocol),
-        token_hash_secret=REDIS_TOKEN_HASH_SECRET,
+        config=RedisTokenStrategyConfig(
+            redis=cast_fakeredis(async_fakeredis, RedisClientProtocol),
+            token_hash_secret=REDIS_TOKEN_HASH_SECRET,
+        ),
     )
     user = _DummyUser(uuid4())
     other_user = _DummyUser(uuid4())

@@ -14,6 +14,7 @@ import pytest
 from litestar.exceptions import ClientException
 from litestar.status_codes import HTTP_400_BAD_REQUEST
 
+from litestar_auth.oauth import _client_features
 from litestar_auth.oauth import client_adapter as client_adapter_module
 
 pytestmark = pytest.mark.unit
@@ -31,6 +32,7 @@ def _build_adapter(oauth_client: object) -> client_adapter_module.OAuthClientAda
 
 def test_client_adapter_module_executes_under_coverage() -> None:
     """Reload the module in-test so definition lines count toward coverage."""
+    importlib.reload(_client_features)
     importlib.reload(client_adapter_module)
 
 

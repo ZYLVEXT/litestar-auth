@@ -13,9 +13,13 @@ import pytest
 from litestar.exceptions import ClientException, NotAuthorizedException, PermissionDeniedException, ValidationException
 
 import litestar_auth._account_state as account_state_module
+import litestar_auth.controllers._error_responses as error_responses_module
+import litestar_auth.controllers._request_body as request_body_module
+import litestar_auth.controllers._user_schema as user_schema_module
 import litestar_auth.oauth.service as oauth_service_module
 from litestar_auth.controllers import _utils
 from litestar_auth.controllers._utils import (
+    RequestBodyErrorConfig,
     _build_controller_name,
     _configure_request_body_handler,
     _create_before_request_handler,
@@ -139,11 +143,41 @@ async def _raise_runtime_error_in_mapped_context() -> None:
 def test_module_reload_executes_controller_utils_module_body() -> None:
     """Reloading the module executes its top-level definitions under coverage."""
     for name in ("ConfigurationError", "ErrorCode", "InactiveUserError", "UnverifiedUserError"):
-        delattr(_utils, name)
+        if hasattr(_utils, name):
+            delattr(_utils, name)
     reloaded_module = importlib.reload(_utils)
 
-    assert frozenset({"hashed_password", "totp_secret", "password"}) == reloaded_module._SENSITIVE_FIELD_BLOCKLIST
+    assert reloaded_module._to_user_schema is user_schema_module._to_user_schema
+    assert reloaded_module._require_msgspec_struct is user_schema_module._require_msgspec_struct
     assert reloaded_module._build_controller_name("oauth_google-provider") == "OauthGoogleProvider"
+
+
+def test_module_reload_executes_request_body_module_body() -> None:
+    """Reloading the module executes its top-level definitions under coverage."""
+    reloaded_module = importlib.reload(request_body_module)
+
+    assert reloaded_module._HTTP_BAD_REQUEST == STATUS_BAD_REQUEST
+    assert reloaded_module.RequestBodyRouteHandler.__name__ == "RequestBodyRouteHandler"
+
+
+def test_module_reload_executes_error_responses_module_body() -> None:
+    """Reloading the module executes its top-level definitions under coverage."""
+    reloaded_module = importlib.reload(error_responses_module)
+
+    assert reloaded_module.DomainErrorMap.__name__ == "DomainErrorMap"
+    assert reloaded_module._domain_error_public_detail(RuntimeError("boom")) == "boom"
+
+
+def test_module_reload_executes_user_schema_module_body() -> None:
+    """Reloading the module records the user-schema helper module under coverage."""
+    reloaded_module = importlib.reload(user_schema_module)
+
+    assert frozenset({"hashed_password", "totp_secret", "password"}) == reloaded_module._SENSITIVE_FIELD_BLOCKLIST
+    assert reloaded_module._to_user_schema(_DummyUser(), _UserReadSchema) == _UserReadSchema(
+        id="user-id",
+        email="user@example.com",
+        roles=["member"],
+    )
 
 
 def test_account_state_module_executes_under_coverage() -> None:
@@ -180,7 +214,7 @@ async def test_decode_request_body_returns_decoded_struct() -> None:
     """Valid JSON is decoded into the configured struct."""
     request: Any = _MockRequest(b'{"value": 3}')
 
-    decoded = await _decode_request_body(cast("Any", request), schema=_MinimalStruct)
+    decoded = await _decode_request_body(request, schema=_MinimalStruct)
 
     assert decoded == _MinimalStruct(value=3)
 
@@ -191,7 +225,7 @@ async def test_decode_request_body_malformed_json() -> None:
     request: Any = _MockRequest(b"not-json")
 
     with pytest.raises(ClientException) as exc_info:
-        await _decode_request_body(cast("Any", request), schema=_MinimalStruct)
+        await _decode_request_body(request, schema=_MinimalStruct)
 
     exc = exc_info.value
     assert exc.status_code == STATUS_BAD_REQUEST
@@ -204,7 +238,7 @@ async def test_decode_request_body_schema_mismatch() -> None:
     request: Any = _MockRequest(b'{"value": "not-an-int"}')
 
     with pytest.raises(ClientException) as exc_info:
-        await _decode_request_body(cast("Any", request), schema=_MinimalStruct)
+        await _decode_request_body(request, schema=_MinimalStruct)
 
     exc = exc_info.value
     assert exc.status_code == STATUS_UNPROCESSABLE_ENTITY
@@ -218,10 +252,12 @@ async def test_decode_request_body_uses_custom_validation_metadata() -> None:
 
     with pytest.raises(ClientException) as exc_info:
         await _decode_request_body(
-            cast("Any", request),
+            request,
             schema=_MinimalStruct,
-            validation_detail="Invalid login payload.",
-            validation_code=ErrorCode.LOGIN_PAYLOAD_INVALID,
+            error_config=RequestBodyErrorConfig(
+                validation_detail="Invalid login payload.",
+                validation_code=ErrorCode.LOGIN_PAYLOAD_INVALID,
+            ),
         )
 
     exc = exc_info.value
@@ -237,7 +273,11 @@ async def test_decode_request_body_calls_error_callback_for_decode_errors() -> N
     on_error = AsyncMock()
 
     with pytest.raises(ClientException):
-        await _decode_request_body(cast("Any", request), schema=_MinimalStruct, on_error=on_error)
+        await _decode_request_body(
+            request,
+            schema=_MinimalStruct,
+            error_config=RequestBodyErrorConfig(on_decode_error=on_error),
+        )
 
     on_error.assert_awaited_once_with(request)
 
@@ -249,7 +289,11 @@ async def test_decode_request_body_calls_error_callback_for_validation_errors() 
     on_error = AsyncMock()
 
     with pytest.raises(ClientException):
-        await _decode_request_body(cast("Any", request), schema=_MinimalStruct, on_error=on_error)
+        await _decode_request_body(
+            request,
+            schema=_MinimalStruct,
+            error_config=RequestBodyErrorConfig(on_validation_error=on_error),
+        )
 
     on_error.assert_awaited_once_with(request)
 
@@ -261,10 +305,12 @@ async def test_decode_request_body_uses_custom_decode_metadata() -> None:
 
     with pytest.raises(ClientException) as exc_info:
         await _decode_request_body(
-            cast("Any", request),
+            request,
             schema=_MinimalStruct,
-            decode_detail="Body parsing failed.",
-            decode_code=ErrorCode.LOGIN_PAYLOAD_INVALID,
+            error_config=RequestBodyErrorConfig(
+                decode_detail="Body parsing failed.",
+                decode_code=ErrorCode.LOGIN_PAYLOAD_INVALID,
+            ),
         )
 
     exc = exc_info.value
@@ -330,6 +376,21 @@ def test_request_body_exception_handlers_preserve_non_decode_headers() -> None:
 
     assert response.status_code == STATUS_TOO_MANY_REQUESTS
     assert response.headers["Retry-After"] == "2"
+
+
+def test_create_error_response_preserves_extra_payload() -> None:
+    """Error responses include copied extra metadata when configured."""
+    response = _utils._create_error_response(
+        status_code=STATUS_BAD_REQUEST,
+        detail="Invalid request body.",
+        extra={"code": ErrorCode.REQUEST_BODY_INVALID},
+    )
+
+    assert response.content == {
+        "status_code": STATUS_BAD_REQUEST,
+        "detail": "Invalid request body.",
+        "extra": {"code": ErrorCode.REQUEST_BODY_INVALID},
+    }
 
 
 @pytest.mark.asyncio
@@ -536,8 +597,8 @@ async def test_create_rate_limit_handlers_are_noops_without_rate_limit() -> None
     increment, reset = _create_rate_limit_handlers(None)
     request: Any = object()
 
-    await increment(cast("Any", request))
-    await reset(cast("Any", request))
+    await increment(request)
+    await reset(request)
 
 
 @pytest.mark.asyncio
@@ -547,8 +608,8 @@ async def test_create_rate_limit_handlers_delegate_to_rate_limit() -> None:
     request: Any = object()
     increment, reset = _create_rate_limit_handlers(cast("Any", rate_limit))
 
-    await increment(cast("Any", request))
-    await reset(cast("Any", request))
+    await increment(request)
+    await reset(request)
 
     rate_limit.increment.assert_awaited_once_with(request)
     rate_limit.reset.assert_awaited_once_with(request)
@@ -567,7 +628,7 @@ async def test_create_before_request_handler_delegates_to_rate_limit() -> None:
     before_request = _create_before_request_handler(cast("Any", rate_limit))
 
     assert before_request is not None
-    await before_request(cast("Any", request))
+    await before_request(request)
 
     rate_limit.before_request.assert_awaited_once_with(request)
 

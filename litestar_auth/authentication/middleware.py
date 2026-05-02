@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Callable, Sequence
-from typing import TYPE_CHECKING, Any, override
+from dataclasses import dataclass
+from typing import TYPE_CHECKING, Any, NotRequired, Required, TypedDict, Unpack, overload, override
 
 from litestar.datastructures.state import State
 from litestar.middleware.authentication import AbstractAuthenticationMiddleware, AuthenticationResult
@@ -31,47 +32,79 @@ type RequestSessionProvider = Callable[[State, Scope], AsyncSession]
 logger = logging.getLogger(__name__)
 
 
+@dataclass(frozen=True, slots=True)
+class LitestarAuthMiddlewareConfig[UP: UserProtocol[Any], ID]:
+    """Configuration for :class:`LitestarAuthMiddleware`."""
+
+    get_request_session: RequestSessionProvider
+    authenticator_factory: AuthenticatorFactory[UP, ID]
+    auth_cookie_names: frozenset[bytes] = frozenset()
+    superuser_role_name: str = DEFAULT_SUPERUSER_ROLE_NAME
+    exclude: str | list[str] | None = None
+    exclude_from_auth_key: str = "exclude_from_auth"
+    exclude_http_methods: Sequence[Method] | None = None
+    scopes: Scopes | None = None
+
+
+class LitestarAuthMiddlewareOptions[UP: UserProtocol[Any], ID](TypedDict):
+    """Keyword options accepted by :class:`LitestarAuthMiddleware`."""
+
+    get_request_session: Required[RequestSessionProvider]
+    authenticator_factory: Required[AuthenticatorFactory[UP, ID]]
+    auth_cookie_names: NotRequired[frozenset[bytes]]
+    superuser_role_name: NotRequired[str]
+    exclude: NotRequired[str | list[str] | None]
+    exclude_from_auth_key: NotRequired[str]
+    exclude_http_methods: NotRequired[Sequence[Method] | None]
+    scopes: NotRequired[Scopes | None]
+
+
 class LitestarAuthMiddleware[UP: UserProtocol[Any], ID](AbstractAuthenticationMiddleware):
     """Resolve request users through an authenticator built with the request-scoped DB session."""
 
-    def __init__(  # noqa: PLR0913
+    @overload
+    def __init__(self, app: ASGIApp, *, config: LitestarAuthMiddlewareConfig[UP, ID]) -> None: ...  # pragma: no cover
+
+    @overload
+    def __init__(  # pragma: no cover
+        self,
+        app: ASGIApp,
+        **options: Unpack[LitestarAuthMiddlewareOptions[UP, ID]],
+    ) -> None: ...
+
+    def __init__(
         self,
         app: ASGIApp,
         *,
-        get_request_session: RequestSessionProvider,
-        authenticator_factory: AuthenticatorFactory[UP, ID],
-        auth_cookie_names: frozenset[bytes] = frozenset(),
-        superuser_role_name: str = DEFAULT_SUPERUSER_ROLE_NAME,
-        exclude: str | list[str] | None = None,
-        exclude_from_auth_key: str = "exclude_from_auth",
-        exclude_http_methods: Sequence[Method] | None = None,
-        scopes: Scopes | None = None,
+        config: LitestarAuthMiddlewareConfig[UP, ID] | None = None,
+        **options: Unpack[LitestarAuthMiddlewareOptions[UP, ID]],
     ) -> None:
         """Initialize the middleware.
 
         Args:
             app: ASGI app to wrap.
-            get_request_session: Returns the shared request ``AsyncSession`` (Advanced Alchemy
-                ``provide_session`` semantics); must not close the session.
-            authenticator_factory: Factory that binds the request-local session into an authenticator.
-            auth_cookie_names: Cookie names that should count as auth credentials when present.
-            superuser_role_name: Normalized role name used by superuser guards.
-            exclude: Optional route patterns excluded from middleware processing.
-            exclude_from_auth_key: Route opt key used to bypass auth.
-            exclude_http_methods: Optional HTTP methods excluded from auth.
-            scopes: Optional ASGI scope types handled by the middleware.
+            config: Middleware runtime configuration.
+            **options: Individual middleware settings. Do not combine with
+                ``config``.
+
+        Raises:
+            ValueError: If ``config`` and keyword options are combined.
         """
+        if config is not None and options:
+            msg = "Pass either LitestarAuthMiddlewareConfig or keyword options, not both."
+            raise ValueError(msg)
+        settings = LitestarAuthMiddlewareConfig(**options) if config is None else config
         super().__init__(
             app=app,
-            exclude=exclude,
-            exclude_from_auth_key=exclude_from_auth_key,
-            exclude_http_methods=exclude_http_methods,
-            scopes=scopes,
+            exclude=settings.exclude,
+            exclude_from_auth_key=settings.exclude_from_auth_key,
+            exclude_http_methods=settings.exclude_http_methods,
+            scopes=settings.scopes,
         )
-        self.get_request_session = get_request_session
-        self.authenticator_factory = authenticator_factory
-        self.auth_cookie_names = auth_cookie_names
-        self.superuser_role_name = normalize_superuser_role_name(superuser_role_name)
+        self.get_request_session = settings.get_request_session
+        self.authenticator_factory = settings.authenticator_factory
+        self.auth_cookie_names = settings.auth_cookie_names
+        self.superuser_role_name = normalize_superuser_role_name(settings.superuser_role_name)
 
     @override
     async def authenticate_request(

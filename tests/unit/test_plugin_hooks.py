@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, ClassVar, cast
+import importlib
+import inspect
+from typing import TYPE_CHECKING, Any, cast
 from uuid import UUID
 
 import pytest
@@ -13,6 +15,9 @@ from litestar.exceptions import ClientException
 from litestar.middleware import DefineMiddleware
 from litestar.response import Response
 
+from litestar_auth import plugin as plugin_module
+from litestar_auth._plugin import _hooks as plugin_hooks
+from litestar_auth._plugin import config as plugin_config
 from litestar_auth._plugin.dependencies import client_exception_handler
 from litestar_auth.authentication import LitestarAuthMiddleware
 from litestar_auth.authentication.backend import AuthenticationBackend
@@ -43,6 +48,43 @@ pytestmark = pytest.mark.unit
 HTTP_BAD_REQUEST = 400
 HTTP_FORBIDDEN = 403
 HTTP_TOO_MANY_REQUESTS = 429
+
+
+def test_hook_protocols_are_reexported_from_plugin_config() -> None:
+    """Hook protocols keep the historical config-module import path."""
+    reloaded_hooks = importlib.reload(plugin_hooks)
+    reloaded_config = importlib.reload(plugin_config)
+    reloaded_plugin_module = importlib.reload(plugin_module)
+
+    assert reloaded_config.ExceptionResponseHook is reloaded_hooks.ExceptionResponseHook
+    assert reloaded_config.MiddlewareHook is reloaded_hooks.MiddlewareHook
+    assert reloaded_config.ControllerHook is reloaded_hooks.ControllerHook
+    assert reloaded_config.ExceptionResponseHook.__module__ == "litestar_auth._plugin._hooks"
+    assert reloaded_config.MiddlewareHook.__module__ == "litestar_auth._plugin._hooks"
+    assert reloaded_config.ControllerHook.__module__ == "litestar_auth._plugin._hooks"
+    assert reloaded_plugin_module.ExceptionResponseHook is reloaded_hooks.ExceptionResponseHook
+    assert reloaded_plugin_module.MiddlewareHook is reloaded_hooks.MiddlewareHook
+    assert reloaded_plugin_module.ControllerHook is reloaded_hooks.ControllerHook
+
+
+def test_hook_protocol_call_signatures_stay_positional_only() -> None:
+    """Relocated protocols preserve the operator hook structural-typing contract."""
+    assert tuple(inspect.signature(plugin_hooks.ExceptionResponseHook.__call__).parameters) == (
+        "self",
+        "exc",
+        "request",
+    )
+    assert tuple(inspect.signature(plugin_hooks.MiddlewareHook.__call__).parameters) == ("self", "middleware")
+    assert tuple(inspect.signature(plugin_hooks.ControllerHook.__call__).parameters) == ("self", "controllers")
+    assert inspect.signature(plugin_hooks.ExceptionResponseHook.__call__).parameters["request"].kind is (
+        inspect.Parameter.POSITIONAL_ONLY
+    )
+    assert inspect.signature(plugin_hooks.MiddlewareHook.__call__).parameters["middleware"].kind is (
+        inspect.Parameter.POSITIONAL_ONLY
+    )
+    assert inspect.signature(plugin_hooks.ControllerHook.__call__).parameters["controllers"].kind is (
+        inspect.Parameter.POSITIONAL_ONLY
+    )
 
 
 def _minimal_config(
@@ -92,7 +134,7 @@ def test_register_exception_handlers_without_custom_hook_keeps_default_handler()
 
     @_mark_litestar_auth_route_handler
     class PluginOwnedController(Controller):
-        exception_handlers: ClassVar[dict[type[Exception], object] | None] = None
+        exception_handlers: dict[type[Exception], object] | None = None
         path = "/auth"
 
     plugin = LitestarAuth(_minimal_config())
@@ -139,7 +181,7 @@ def test_register_exception_handlers_with_custom_hook_uses_hook_response() -> No
 
     @_mark_litestar_auth_route_handler
     class PluginOwnedController(Controller):
-        exception_handlers: ClassVar[dict[type[Exception], object] | None] = None
+        exception_handlers: dict[type[Exception], object] | None = None
         path = "/auth"
 
     plugin._register_exception_handlers([PluginOwnedController])
@@ -193,7 +235,7 @@ def test_register_exception_handlers_custom_hook_wraps_client_exceptions_without
 
     @_mark_litestar_auth_route_handler
     class PluginOwnedController(Controller):
-        exception_handlers: ClassVar[dict[type[Exception], object] | None] = None
+        exception_handlers: dict[type[Exception], object] | None = None
         path = "/auth"
 
     plugin._register_exception_handlers([PluginOwnedController])
@@ -242,7 +284,7 @@ def test_register_exception_handlers_custom_hook_wraps_authorization_errors_with
 
     @_mark_litestar_auth_route_handler
     class PluginOwnedController(Controller):
-        exception_handlers: ClassVar[dict[type[Exception], object] | None] = None
+        exception_handlers: dict[type[Exception], object] | None = None
         path = "/auth"
 
     plugin._register_exception_handlers([PluginOwnedController])

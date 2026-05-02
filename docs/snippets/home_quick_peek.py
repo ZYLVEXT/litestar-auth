@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from uuid import UUID
 
 from litestar import Litestar
@@ -16,6 +17,9 @@ from litestar_auth import (
 )
 from litestar_auth.models import User
 
+DATABASE_TOKEN_HASH_SECRET = os.environ["LITESTAR_AUTH_DATABASE_TOKEN_HASH_SECRET"]
+RESET_PASSWORD_TOKEN_SECRET = os.environ["LITESTAR_AUTH_RESET_PASSWORD_TOKEN_SECRET"]
+VERIFY_TOKEN_SECRET = os.environ["LITESTAR_AUTH_VERIFY_TOKEN_SECRET"]
 
 session_maker = async_sessionmaker[AsyncSession](
     class_=AsyncSession,
@@ -29,14 +33,14 @@ class UserManager(BaseUserManager[User, UUID]):
 
 config = LitestarAuthConfig[User, UUID](
     database_token_auth=DatabaseTokenAuthConfig(
-        token_hash_secret="replace-with-32+-char-db-token-secret",
+        token_hash_secret=DATABASE_TOKEN_HASH_SECRET,
     ),
     user_model=User,
     user_manager_class=UserManager,
     session_maker=session_maker,
     user_manager_security=UserManagerSecurity(
-        verification_token_secret="replace-with-32+-char-secret-for-verify",
-        reset_password_token_secret="replace-with-32+-char-secret-for-reset",
+        verification_token_secret=VERIFY_TOKEN_SECRET,
+        reset_password_token_secret=RESET_PASSWORD_TOKEN_SECRET,
     ),
 )
 app = Litestar(plugins=[LitestarAuth(config)])

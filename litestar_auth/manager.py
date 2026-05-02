@@ -2,26 +2,38 @@
 
 from __future__ import annotations
 
-import dataclasses
-import hashlib
-import importlib
 import logging
-import re
-import secrets
-from collections.abc import Mapping as MappingABC
-from collections.abc import Sequence as SequenceABC
-from datetime import timedelta
-from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, cast
+from functools import partial
+from typing import TYPE_CHECKING, Any, Unpack, cast, overload
 
-from litestar_auth import config as _config
-from litestar_auth._manager import _protocols as _manager_protocols
+from litestar_auth._manager import security as _manager_security
 from litestar_auth._manager.account_tokens import (
+    AccountTokenAudiences,
     AccountTokenSecurityService,
     AccountTokensService,
     _AccountTokensManagerProtocol,
 )
-from litestar_auth._manager.construction import AccountTokenSecrets, SecretFactory, resolve_account_token_secrets
+from litestar_auth._manager.construction import (
+    DEFAULT_RESET_PASSWORD_TOKEN_LIFETIME as _DEFAULT_RESET_PASSWORD_TOKEN_LIFETIME,
+)
+from litestar_auth._manager.construction import (
+    DEFAULT_VERIFY_TOKEN_LIFETIME as _DEFAULT_VERIFY_TOKEN_LIFETIME,
+)
+from litestar_auth._manager.construction import (
+    AccountTokenSecrets,
+    BaseUserManagerConfig,
+    BaseUserManagerOptions,
+    ConstructorAttributes,
+    get_dummy_hash,
+    login_identifier_digest,
+    resolve_oauth_account_store,
+    resolve_secret_inputs,
+    validate_secret_distinctness,
+)
+from litestar_auth._manager.hooks import UserManagerHooks
+from litestar_auth._manager.security import (
+    _SecretValue,
+)
 from litestar_auth._manager.totp_secrets import (
     TotpSecretsService,
     TotpSecretStoragePosture,
@@ -32,11 +44,9 @@ from litestar_auth._manager.user_lifecycle import (
     _UserLifecycleManagerProtocol,
 )
 from litestar_auth._manager.user_policy import UserPolicy
-from litestar_auth._secrets_at_rest import FernetKey, FernetKeyring, SecretAtRestError, validate_fernet_key_id
-from litestar_auth._superuser_role import DEFAULT_SUPERUSER_ROLE_NAME, normalize_superuser_role_name
-from litestar_auth.config import RESET_PASSWORD_TOKEN_AUDIENCE, VERIFY_TOKEN_AUDIENCE, validate_secret_length
-from litestar_auth.db.base import BaseOAuthAccountStore
-from litestar_auth.exceptions import ConfigurationError
+from litestar_auth._optional_deps import require_cryptography_fernet
+from litestar_auth._superuser_role import normalize_superuser_role_name
+from litestar_auth.config import RESET_PASSWORD_TOKEN_AUDIENCE, VERIFY_TOKEN_AUDIENCE
 from litestar_auth.password import PasswordHelper
 from litestar_auth.types import LoginIdentifier, UserProtocol
 
@@ -48,321 +58,20 @@ if TYPE_CHECKING:
 
     from litestar_auth.db.base import BaseUserStore
 
-DEFAULT_VERIFY_TOKEN_LIFETIME = timedelta(hours=1)
-DEFAULT_RESET_PASSWORD_TOKEN_LIFETIME = timedelta(hours=1)
 ENCRYPTED_TOTP_SECRET_PREFIX = "fernet:"  # noqa: S105
-_MASKED = "**********"
-_LOGIN_IDENTIFIER_DIGEST_SIZE = 16
-_FERNET_KEYRING_PAIR_SIZE = 2
-
-type FernetKeyringConfigKeys = MappingABC[str, FernetKey]
-
-
-@dataclasses.dataclass(frozen=True, slots=True)
-class FernetKeyringConfig:
-    """Public configuration contract for versioned Fernet keyrings."""
-
-    active_key_id: str
-    keys: FernetKeyringConfigKeys = dataclasses.field(repr=False)
-
-    def __post_init__(self) -> None:
-        """Validate the keyring shape and configured Fernet key material.
-
-        Raises:
-            ConfigurationError: If the keyring shape or key material is invalid.
-        """
-        normalized_keys = _normalize_fernet_keyring_config_keys(self.keys)
-        try:
-            keyring = FernetKeyring(active_key_id=self.active_key_id, keys=normalized_keys)
-        except SecretAtRestError as exc:
-            raise ConfigurationError(str(exc)) from exc
-        object.__setattr__(self, "active_key_id", keyring.active_key_id)
-        object.__setattr__(self, "keys", MappingProxyType(dict(keyring.keys)))
-
-    def __repr__(self) -> str:
-        """Return a representation that masks every configured Fernet key."""
-        masked_keys = dict.fromkeys(self.keys, "***")
-        return f"{type(self).__name__}(active_key_id={self.active_key_id!r}, keys={masked_keys!r})"
-
-    __str__ = __repr__
+DEFAULT_VERIFY_TOKEN_LIFETIME = _DEFAULT_VERIFY_TOKEN_LIFETIME
+DEFAULT_RESET_PASSWORD_TOKEN_LIFETIME = _DEFAULT_RESET_PASSWORD_TOKEN_LIFETIME
+FernetKeyringConfig = _manager_security.FernetKeyringConfig
+UserManagerSecurity = _manager_security.UserManagerSecurity
 
 
-@dataclasses.dataclass(frozen=True, slots=True)
-class UserManagerSecurity[ID]:
-    """Typed public contract for manager secrets and related security inputs.
-
-    Production deployments should keep verification, reset-password, login
-    telemetry, and TOTP secret roles separate even though distinct JWT audiences
-    already scope each token flow independently. Password helper and validator
-    fields belong in this security bundle when a deployment needs to override
-    those defaults.
-    """
-
-    verification_token_secret: str | None = dataclasses.field(default=None, repr=False)
-    reset_password_token_secret: str | None = dataclasses.field(default=None, repr=False)
-    login_identifier_telemetry_secret: str | None = dataclasses.field(default=None, repr=False)
-    totp_secret_key: str | None = dataclasses.field(default=None, repr=False)
-    totp_secret_keyring: FernetKeyringConfig | None = dataclasses.field(default=None, repr=False)
-    id_parser: Callable[[str], ID] | None = dataclasses.field(default=None, repr=False)
-    password_helper: PasswordHelper | None = dataclasses.field(default=None, repr=False)
-    password_validator: Callable[[str], None] | None = dataclasses.field(default=None, repr=False)
-
-    def __post_init__(self) -> None:
-        """Reject ambiguous TOTP secret-at-rest key inputs.
-
-        Raises:
-            ConfigurationError: If both one-key and keyring inputs are configured.
-        """
-        if self.totp_secret_key is None or self.totp_secret_keyring is None:
-            return
-        msg = "Configure TOTP secret encryption with totp_secret_key or totp_secret_keyring, not both."
-        raise ConfigurationError(msg)
-
-    def __repr__(self) -> str:
-        """Return a repr that masks configured secret material."""
-        return (
-            "UserManagerSecurity("
-            f"verification_token_secret={_mask_optional_secret(self.verification_token_secret)!r}, "
-            f"reset_password_token_secret={_mask_optional_secret(self.reset_password_token_secret)!r}, "
-            f"login_identifier_telemetry_secret="
-            f"{_mask_optional_secret(self.login_identifier_telemetry_secret)!r}, "
-            f"totp_secret_key={_mask_optional_secret(self.totp_secret_key)!r}, "
-            f"totp_secret_keyring={self.totp_secret_keyring!r}, "
-            f"id_parser={self.id_parser!r}, "
-            f"password_helper={self.password_helper!r}, "
-            f"password_validator={self.password_validator!r})"
-        )
-
-
-@dataclasses.dataclass(frozen=True, eq=False)
-class _SecretValue:
-    """Wraps a secret string so it is masked in repr/str output."""
-
-    _value: str = dataclasses.field(repr=False)
-
-    def get_secret_value(self) -> str:
-        """Return the raw secret string."""
-        return self._value
-
-    def __repr__(self) -> str:
-        return f"_SecretValue('{_MASKED}')"
-
-    def __str__(self) -> str:
-        return _MASKED
-
-
-EMAIL_MAX_LENGTH = 320
-_EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 logger = logging.getLogger(__name__)
-UserManagerUserProtocol = _manager_protocols.ManagedUserProtocol
-AccountStateUserProtocol = _manager_protocols.AccountStateUserProtocol
+_TOTP_SECRET_FERNET_INSTALL_HINT = "Install litestar-auth[totp] to use TOTP secret encryption."  # noqa: S105
 
 
-def _normalize_fernet_keyring_config_keys(keys: object) -> dict[str, FernetKey]:
-    """Return a validated key-id mapping for public keyring configuration.
-
-    Raises:
-        ConfigurationError: If key ids are malformed, duplicated, or not provided as pairs.
-    """
-    if isinstance(keys, MappingABC):
-        items = tuple(keys.items())
-    elif isinstance(keys, SequenceABC) and not isinstance(keys, (str, bytes, bytearray)):
-        items = tuple(keys)
-    else:
-        msg = "FernetKeyringConfig keys must be a mapping or a sequence of key-id/key pairs."
-        raise ConfigurationError(msg)
-
-    normalized: dict[str, FernetKey] = {}
-    for item in items:
-        if (
-            not isinstance(item, SequenceABC)
-            or isinstance(item, (str, bytes, bytearray))
-            or len(item) != _FERNET_KEYRING_PAIR_SIZE
-        ):
-            msg = "FernetKeyringConfig keys must contain key-id/key pairs."
-            raise ConfigurationError(msg)
-        key_id = item[0]
-        key = item[1]
-        if not isinstance(key_id, str):
-            msg = "Fernet key ids must be strings."
-            raise ConfigurationError(msg)
-        try:
-            validated_key_id = validate_fernet_key_id(key_id)
-        except SecretAtRestError as exc:
-            raise ConfigurationError(str(exc)) from exc
-        if validated_key_id in normalized:
-            msg = "Fernet keyring key ids must be unique."
-            raise ConfigurationError(msg)
-        if not isinstance(key, (str, bytes)):
-            msg = "Configured Fernet key material is invalid."
-            raise ConfigurationError(msg)
-        normalized[validated_key_id] = key
-    return normalized
-
-
-def validate_user_manager_security_secret_roles_are_distinct(
-    security: UserManagerSecurity[Any],
-    *,
-    totp_pending_secret: str | None = None,
-    oauth_flow_cookie_secret: str | None = None,
-) -> None:
-    """Validate that manager-owned secret roles do not reuse unrelated key material."""
-    totp_secret_values = _iter_totp_secret_role_values(security)
-    if not totp_secret_values:
-        _config.validate_secret_roles_are_distinct(
-            _config.SecretRoleValues(
-                verification_token_secret=security.verification_token_secret,
-                reset_password_token_secret=security.reset_password_token_secret,
-                login_identifier_telemetry_secret=security.login_identifier_telemetry_secret,
-                totp_secret_key=None,
-                totp_pending_secret=totp_pending_secret,
-                oauth_flow_cookie_secret=oauth_flow_cookie_secret,
-            ),
-        )
-        return
-
-    for totp_secret_value in totp_secret_values:
-        _config.validate_secret_roles_are_distinct(
-            _config.SecretRoleValues(
-                verification_token_secret=security.verification_token_secret,
-                reset_password_token_secret=security.reset_password_token_secret,
-                login_identifier_telemetry_secret=security.login_identifier_telemetry_secret,
-                totp_secret_key=totp_secret_value,
-                totp_pending_secret=totp_pending_secret,
-                oauth_flow_cookie_secret=oauth_flow_cookie_secret,
-            ),
-        )
-
-
-def _iter_totp_secret_role_values(security: UserManagerSecurity[Any]) -> tuple[str, ...]:
-    """Return configured raw TOTP at-rest key material for distinct-role validation."""
-    values: list[str] = []
-    if security.totp_secret_key:
-        values.append(security.totp_secret_key)
-    if security.totp_secret_keyring is not None:
-        values.extend(_coerce_fernet_key_secret_role_value(key) for key in security.totp_secret_keyring.keys.values())
-    return tuple(values)
-
-
-def _coerce_fernet_key_secret_role_value(key: FernetKey) -> str:
-    """Return Fernet key material as text for existing distinct-secret validation."""
-    return key.decode("utf-8") if isinstance(key, bytes) else key
-
-
-def _get_dummy_hash(password_helper: PasswordHelper) -> str:
-    """Return a freshly computed dummy password hash for the provided helper.
-
-    ``BaseUserManager`` caches this value per instance so the same helper pipeline is
-    reused for unknown-account timing equalization without depending on module-global
-    mutable state.
-    """
-    return password_helper.hash(secrets.token_urlsafe(32))
-
-
-def _mask_optional_secret(secret: str | None) -> str | None:
-    """Return the standard masked placeholder when a secret is configured."""
-    return _MASKED if secret is not None else None
-
-
-def _login_identifier_digest(identifier: str, *, key: str) -> str:
-    """Return a keyed, non-reversible digest for login-failure correlation."""
-    normalized_identifier = identifier.strip().casefold()
-    digest_key = hashlib.sha256(key.encode()).digest()
-    return hashlib.blake2b(
-        normalized_identifier.encode(),
-        digest_size=_LOGIN_IDENTIFIER_DIGEST_SIZE,
-        key=digest_key,
-    ).hexdigest()
-
-
-def _resolve_oauth_account_store[UP: UserProtocol[Any], ID](
-    user_db: object,
-) -> BaseOAuthAccountStore[UP, ID] | None:
-    """Return an OAuth-account store when the user store also exposes that boundary."""
-    if isinstance(user_db, BaseOAuthAccountStore):
-        return user_db
-
-    return None
-
-
-class UserManagerHooks[UP]:
-    """Default lifecycle-hook no-ops inherited by ``BaseUserManager``."""
-
-    async def on_after_register(self, user: UP, token: str) -> None:
-        """Hook invoked after a new user is created."""
-        del self
-        del user
-        del token
-
-    async def on_after_register_duplicate(self, user: UP) -> None:
-        """Hook invoked after a duplicate registration attempt is detected.
-
-        SECURITY: This hook receives the existing account so your application can
-        enqueue an out-of-band notification to the real owner. Keep external I/O
-        off the request path (e.g. use a queue or background task). Blocking here
-        can reintroduce a timing oracle even though the HTTP response shape stays
-        enumeration-resistant.
-        """
-        del self
-        del user
-
-    async def on_after_login(self, user: UP) -> None:
-        """Hook invoked after a user authenticates successfully."""
-        del self
-        del user
-
-    async def on_after_verify(self, user: UP) -> None:
-        """Hook invoked after a user verifies their email."""
-        del self
-        del user
-
-    async def on_after_request_verify_token(self, user: UP | None, token: str | None) -> None:
-        """Hook invoked after a verify-token request is processed.
-
-        SECURITY: When ``user`` is ``None``, the email either did not match any
-        account or already belongs to a verified user. To prevent user
-        enumeration via timing, your implementation MUST perform equivalent I/O
-        in both cases (e.g. always enqueue a background task, whether or not an
-        email will actually be sent). Do NOT conditionally skip work based on
-        whether ``user`` is ``None``.
-        """
-        del self
-        del user
-        del token
-
-    async def on_after_forgot_password(self, user: UP | None, token: str | None) -> None:
-        """Hook invoked after a forgot-password request is processed.
-
-        SECURITY: When ``user`` is ``None``, the email did not match any account.
-        To prevent user enumeration via timing, your implementation MUST perform
-        equivalent I/O in both cases (e.g., always enqueue a background task,
-        whether or not an email will actually be sent). Do NOT conditionally
-        skip work based on whether ``user`` is ``None``.
-        """
-        del self
-        del user
-        del token
-
-    async def on_after_reset_password(self, user: UP) -> None:
-        """Hook invoked after a password reset completes."""
-        del self
-        del user
-
-    async def on_after_update(self, user: UP, update_dict: dict[str, Any]) -> None:
-        """Hook invoked after a user is updated successfully."""
-        del self
-        del user
-        del update_dict
-
-    async def on_before_delete(self, user: UP) -> None:
-        """Hook invoked before a user is deleted. Raise to cancel deletion."""
-        del self
-        del user
-
-    async def on_after_delete(self, user: UP) -> None:
-        """Hook invoked after a user is deleted permanently."""
-        del self
-        del user
+_get_dummy_hash = get_dummy_hash
+_login_identifier_digest = login_identifier_digest
+_resolve_oauth_account_store = resolve_oauth_account_store
 
 
 class BaseUserManager[UP: UserProtocol[Any], ID](  # noqa: PLR0904
@@ -378,95 +87,109 @@ class BaseUserManager[UP: UserProtocol[Any], ID](  # noqa: PLR0904
     decomposed internal services directly.
     """
 
-    def __init__(  # noqa: PLR0913
-        self: BaseUserManager[UP, ID],
+    @overload
+    def __init__(self, *, config: BaseUserManagerConfig[UP, ID]) -> None: ...  # pragma: no cover
+
+    @overload
+    def __init__(  # pragma: no cover
+        self,
         user_db: BaseUserStore[UP, ID],
+        **options: Unpack[BaseUserManagerOptions[UP, ID]],
+    ) -> None: ...
+
+    @overload
+    def __init__(  # pragma: no cover
+        self,
         *,
-        oauth_account_store: BaseOAuthAccountStore[UP, ID] | None = None,
-        password_helper: PasswordHelper | None = None,
-        security: UserManagerSecurity[ID] | None = None,
-        verification_token_lifetime: timedelta = DEFAULT_VERIFY_TOKEN_LIFETIME,
-        reset_password_token_lifetime: timedelta = DEFAULT_RESET_PASSWORD_TOKEN_LIFETIME,
-        password_validator: Callable[[str], None] | None = None,
-        reset_verification_on_email_change: bool = True,
-        backends: tuple[object, ...] = (),
-        login_identifier: LoginIdentifier = "email",
-        superuser_role_name: str = DEFAULT_SUPERUSER_ROLE_NAME,
-        unsafe_testing: bool = False,
+        user_db: BaseUserStore[UP, ID],
+        **options: Unpack[BaseUserManagerOptions[UP, ID]],
+    ) -> None: ...
+
+    def __init__(
+        self: BaseUserManager[UP, ID],
+        user_db: BaseUserStore[UP, ID] | None = None,
+        *,
+        config: BaseUserManagerConfig[UP, ID] | None = None,
+        **options: Unpack[BaseUserManagerOptions[UP, ID]],
     ) -> None:
         """Initialize the user manager.
 
         Args:
             user_db: Persistence backend used to load and update users.
-            oauth_account_store: Optional persistence backend used for linked OAuth accounts.
-            password_helper: Password hasher/verifier implementation. When omitted,
-                :meth:`PasswordHelper.from_defaults` provides the library's Argon2-only
-                default. Pass an explicit helper only when your application needs a
-                non-default pwdlib policy.
-            security: Typed bundle for verification/reset secrets, optional TOTP encryption key,
-                and optional JWT ``sub`` parsing. Omitted fields default to ``None``. In
-                production, use distinct values per secret role instead of reusing one value
-                across verification, reset-password, and TOTP flows.
-            verification_token_lifetime: Lifetime applied to verification tokens.
-            reset_password_token_lifetime: Lifetime applied to password-reset tokens.
-            password_validator: Optional callable used to validate plain-text passwords.
-            reset_verification_on_email_change: Whether email changes should clear ``is_verified`` and
-                trigger a new verification token hook.
-            backends: Session-bound auth backends when constructed via ``LitestarAuth``;
-                keeps credential updates aligned with the same backends used for request auth.
-            login_identifier: Which field ``authenticate`` uses for credential lookup by default
-                when ``login_identifier`` is not passed explicitly to ``authenticate``.
-            superuser_role_name: Normalized role name that represents superuser privileges
-                for plugin-managed guards.
-            unsafe_testing: Explicit per-instance test-only override for flows that need
-                generated fallback secrets or other single-process shortcuts. Do not
-                enable this for production traffic.
+            config: User-manager configuration object. Do not combine with
+                ``user_db`` or keyword options.
+            **options: Individual user-manager settings. Do not combine with
+                ``config``.
 
+        Raises:
+            TypeError: If neither ``user_db`` nor ``config`` is provided.
+            ValueError: If ``config`` is combined with ``user_db`` or keyword options.
         """
-        resolved_security = security if security is not None else UserManagerSecurity()
-        account_token_secrets = resolve_account_token_secrets(
-            resolved_security,
-            secret_factory=cast("SecretFactory", _SecretValue),
-            warning_stacklevel=4,
-            unsafe_testing=unsafe_testing,
+        if config is not None:
+            if user_db is not None or options:
+                msg = "Pass either BaseUserManagerConfig or user_db plus keyword options, not both."
+                raise ValueError(msg)
+            settings = config
+        else:
+            if user_db is None:
+                msg = "BaseUserManager requires user_db or config."
+                raise TypeError(msg)
+            settings = BaseUserManagerConfig(user_db=user_db, **options)
+
+        resolved_secret_inputs = resolve_secret_inputs(
+            settings.security,
+            secret_factory=cast("type[_SecretValue]", _SecretValue),
+            unsafe_testing=settings.unsafe_testing,
         )
-        resolved_verification_token_secret = account_token_secrets.verification_token_secret.get_secret_value()
-        resolved_reset_password_token_secret = account_token_secrets.reset_password_token_secret.get_secret_value()
-        resolved_login_identifier_telemetry_secret = resolved_security.login_identifier_telemetry_secret
-        if resolved_login_identifier_telemetry_secret is not None and not unsafe_testing:
-            validate_secret_length(
-                resolved_login_identifier_telemetry_secret,
-                label="login_identifier_telemetry_secret",
-            )
-        if not unsafe_testing:
-            validate_user_manager_security_secret_roles_are_distinct(
-                dataclasses.replace(
-                    resolved_security,
-                    verification_token_secret=resolved_verification_token_secret,
-                    reset_password_token_secret=resolved_reset_password_token_secret,
-                ),
-            )
-        self.user_db = user_db
-        self.oauth_account_store = oauth_account_store or _resolve_oauth_account_store(user_db)
-        self._account_token_secrets = account_token_secrets
+        validate_secret_distinctness(resolved_secret_inputs, unsafe_testing=settings.unsafe_testing)
+        self._assign_constructor_attributes(
+            ConstructorAttributes(
+                user_db=settings.user_db,
+                oauth_account_store=settings.oauth_account_store,
+                resolved_secret_inputs=resolved_secret_inputs,
+                verification_token_lifetime=settings.verification_token_lifetime,
+                reset_password_token_lifetime=settings.reset_password_token_lifetime,
+                password_validator=settings.password_validator,
+                reset_verification_on_email_change=settings.reset_verification_on_email_change,
+                backends=settings.backends,
+                login_identifier=settings.login_identifier,
+                superuser_role_name=settings.superuser_role_name,
+                unsafe_testing=settings.unsafe_testing,
+            ),
+        )
+        self._build_internal_services(settings.password_helper)
+
+    def _assign_constructor_attributes(
+        self,
+        settings: ConstructorAttributes[UP, ID],
+    ) -> None:
+        """Assign constructor-provided dependencies and resolved configuration."""
+        resolved_secret_inputs = settings.resolved_secret_inputs
+        resolved_security = resolved_secret_inputs.security
+        self.user_db = settings.user_db
+        self.oauth_account_store = settings.oauth_account_store or resolve_oauth_account_store(settings.user_db)
+        self._account_token_secrets = resolved_secret_inputs.account_token_secrets
         self.verification_token_secret = self._account_token_secrets.verification_token_secret
         self.reset_password_token_secret = self._account_token_secrets.reset_password_token_secret
         self.login_identifier_telemetry_secret = (
-            _SecretValue(resolved_login_identifier_telemetry_secret)
-            if resolved_login_identifier_telemetry_secret is not None
+            _SecretValue(resolved_secret_inputs.login_identifier_telemetry_secret)
+            if resolved_secret_inputs.login_identifier_telemetry_secret is not None
             else None
         )
-        self.verification_token_lifetime = verification_token_lifetime
-        self.reset_password_token_lifetime = reset_password_token_lifetime
+        self.verification_token_lifetime = settings.verification_token_lifetime
+        self.reset_password_token_lifetime = settings.reset_password_token_lifetime
         self.id_parser = resolved_security.id_parser
-        self.password_validator = password_validator
-        self.reset_verification_on_email_change = reset_verification_on_email_change
+        self.password_validator = settings.password_validator
+        self.reset_verification_on_email_change = settings.reset_verification_on_email_change
         self.totp_secret_key = resolved_security.totp_secret_key
-        self.backends: tuple[object, ...] = backends
-        self.login_identifier: LoginIdentifier = login_identifier
-        self.superuser_role_name = normalize_superuser_role_name(superuser_role_name)
-        self.unsafe_testing = unsafe_testing
+        self.backends: tuple[object, ...] = settings.backends
+        self.login_identifier: LoginIdentifier = settings.login_identifier
+        self.superuser_role_name = normalize_superuser_role_name(settings.superuser_role_name)
+        self.unsafe_testing = settings.unsafe_testing
         self.totp_secret_keyring = resolved_security.totp_secret_keyring
+
+    def _build_internal_services(self, password_helper: PasswordHelper | None) -> None:
+        """Instantiate the services backing the manager facade."""
         resolved_password_helper = password_helper or PasswordHelper.from_defaults()
         self.policy = UserPolicy(
             password_helper=resolved_password_helper,
@@ -483,8 +206,10 @@ class BaseUserManager[UP: UserProtocol[Any], ID](  # noqa: PLR0904
         )
         self._account_tokens = AccountTokensService(
             self,
-            verify_token_audience=VERIFY_TOKEN_AUDIENCE,
-            reset_password_token_audience=RESET_PASSWORD_TOKEN_AUDIENCE,
+            audiences=AccountTokenAudiences(
+                verify=VERIFY_TOKEN_AUDIENCE,
+                reset_password=RESET_PASSWORD_TOKEN_AUDIENCE,
+            ),
             token_security=self._account_token_security,
             logger=logger,
             policy=self.policy,
@@ -747,27 +472,7 @@ class BaseUserManager[UP: UserProtocol[Any], ID](  # noqa: PLR0904
         """
         return self._account_tokens.write_verify_token(user)
 
-    @staticmethod
-    def _write_token_subject(
-        *,
-        subject: str,
-        secret: str,
-        audience: str,
-        lifetime: timedelta,
-        extra_claims: dict[str, Any] | None = None,
-    ) -> str:
-        """Sign a short-lived JWT bound to an arbitrary subject string.
-
-        Returns:
-            The encoded token.
-        """
-        return AccountTokenSecurityService.write_token_subject(
-            subject=subject,
-            secret=secret,
-            audience=audience,
-            lifetime=lifetime,
-            extra_claims=extra_claims,
-        )
+    _write_token_subject = staticmethod(AccountTokenSecurityService.write_token_subject)
 
     async def _invalidate_all_tokens(self, user: UP) -> None:
         """Invalidate all authentication tokens for a user when supported.
@@ -780,17 +485,7 @@ class BaseUserManager[UP: UserProtocol[Any], ID](  # noqa: PLR0904
         await self._user_lifecycle.invalidate_all_tokens(user)
 
 
-def _load_cryptography_fernet() -> ModuleType:
-    """Import the optional cryptography Fernet module on demand.
-
-    Returns:
-        The imported ``cryptography.fernet`` module.
-
-    Raises:
-        ImportError: If cryptography is not installed.
-    """
-    try:
-        return importlib.import_module("cryptography.fernet")
-    except ImportError as exc:
-        msg = "Install litestar-auth[totp] to use TOTP secret encryption."
-        raise ImportError(msg) from exc
+_load_cryptography_fernet = cast(
+    "Callable[[], ModuleType]",
+    partial(require_cryptography_fernet, install_hint=_TOTP_SECRET_FERNET_INSTALL_HINT),
+)

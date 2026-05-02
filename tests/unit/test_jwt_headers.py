@@ -7,7 +7,13 @@ from datetime import UTC, datetime, timedelta
 import jwt
 import pytest
 
-from litestar_auth._jwt_headers import EXPECTED_JWT_TYPE, jwt_encode_headers, validate_jwt_type_header
+from litestar_auth._jwt_headers import (
+    EXPECTED_JWT_TYPE,
+    JwtDecodeConfig,
+    decode_signed_jwt,
+    jwt_encode_headers,
+    validate_jwt_type_header,
+)
 
 pytestmark = pytest.mark.unit
 
@@ -70,3 +76,36 @@ def test_validate_jwt_type_header_rejects_malformed_token() -> None:
     """Malformed input keeps PyJWT's invalid-token exception surface."""
     with pytest.raises(jwt.InvalidTokenError):
         validate_jwt_type_header("not-a-jwt")
+
+
+def test_decode_signed_jwt_accepts_expected_typ() -> None:
+    """Signed decode validates ``typ=JWT`` before returning claims."""
+    token = _token_with_headers({"typ": EXPECTED_JWT_TYPE})
+
+    payload = decode_signed_jwt(
+        token,
+        config=JwtDecodeConfig(
+            key=_SECRET,
+            algorithms=["HS256"],
+            audience="litestar-auth:test",
+            options={"require": ["exp", "aud", "iat", "nbf", "jti"]},
+        ),
+    )
+
+    assert payload["sub"] == "user-1"
+
+
+def test_decode_signed_jwt_rejects_missing_typ_before_claim_decode() -> None:
+    """The combined helper preserves the fail-closed missing-``typ`` branch."""
+    token = _token_with_headers({"typ": None})
+
+    with pytest.raises(jwt.InvalidTokenError, match="Invalid JWT type header"):
+        decode_signed_jwt(
+            token,
+            config=JwtDecodeConfig(
+                key=_SECRET,
+                algorithms=["HS256"],
+                audience="wrong-audience",
+                options={"require": ["exp", "aud", "iat", "nbf", "jti"]},
+            ),
+        )

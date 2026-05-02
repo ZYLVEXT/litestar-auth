@@ -9,13 +9,14 @@ from uuid import UUID, uuid4
 import pytest
 from litestar.exceptions import ClientException, PermissionDeniedException
 
+import litestar_auth.oauth._pkce as pkce_module
 import litestar_auth.oauth.service as oauth_service_module
+from litestar_auth.db import OAuthAccountData
 from litestar_auth.exceptions import AuthenticationError, ErrorCode
+from litestar_auth.oauth._pkce import PkceMaterial, _build_pkce_code_challenge, _generate_pkce_code_verifier
 from litestar_auth.oauth.client_adapter import OAuthClientAdapter
 from litestar_auth.oauth.service import (
     OAuthService,
-    _build_pkce_code_challenge,
-    _generate_pkce_code_verifier,
     _require_account_state,
     _require_oauth_account_store,
     _resolve_account_state_validator,
@@ -120,6 +121,24 @@ def test_oauth_service_module_reload_preserves_behavioral_error_contract(monkeyp
     assert client_exc_info.value.detail == reloaded_module.InactiveUserError.default_message
 
 
+def test_pkce_module_reload_preserves_generation_contract(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Reload coverage keeps the extracted PKCE primitives exercised under coverage."""
+    assert pkce_module.__file__ is not None
+    reloaded_module = load_reloaded_test_alias(
+        alias_name="_coverage_alias_oauth_pkce",
+        source_path=Path(pkce_module.__file__).resolve(),
+        monkeypatch=monkeypatch,
+    )
+    monkeypatch.setattr(reloaded_module.secrets, "token_urlsafe", lambda _size: _FIXED_PKCE_VERIFIER)
+
+    pkce = reloaded_module._generate_pkce_material()
+
+    assert pkce.__class__.__name__ == "PkceMaterial"
+    assert pkce.code_verifier == _FIXED_PKCE_VERIFIER
+    assert pkce.code_challenge == "1T7aemN8mcx_tWbZbp-hCb8VxHhBCj9etNTE4mzQgfY"
+    assert pkce.code_challenge_method == "S256"
+
+
 def test_generate_pkce_code_verifier_uses_unreserved_alphabet() -> None:
     """Generated PKCE verifiers use the RFC 7636 unreserved URI alphabet."""
     code_verifier = _generate_pkce_code_verifier()
@@ -130,7 +149,7 @@ def test_generate_pkce_code_verifier_uses_unreserved_alphabet() -> None:
 
 def test_generate_pkce_code_verifier_rejects_invalid_entropy(monkeypatch: pytest.MonkeyPatch) -> None:
     """Verifier generation fails closed if the entropy source returns invalid material."""
-    monkeypatch.setattr("litestar_auth.oauth.service.secrets.token_urlsafe", lambda _size: "!")
+    monkeypatch.setattr("litestar_auth.oauth._pkce.secrets.token_urlsafe", lambda _size: "!")
 
     with pytest.raises(RuntimeError, match="PKCE code verifier"):
         _generate_pkce_code_verifier()
@@ -158,7 +177,15 @@ async def test_authorize_returns_state_verifier_and_provider_url(monkeypatch: py
     )
     monkeypatch.setattr(
         "litestar_auth.oauth.service.secrets.token_urlsafe",
-        lambda size: "fixed-state" if size == _STATE_TOKEN_BYTES else _FIXED_PKCE_VERIFIER,
+        lambda _size: "fixed-state",
+    )
+    monkeypatch.setattr(
+        "litestar_auth.oauth.service._generate_pkce_material",
+        lambda: PkceMaterial(
+            code_verifier=_FIXED_PKCE_VERIFIER,
+            code_challenge="1T7aemN8mcx_tWbZbp-hCb8VxHhBCj9etNTE4mzQgfY",
+            code_challenge_method="S256",
+        ),
     )
 
     authorization = await service.authorize(
@@ -243,12 +270,14 @@ async def test_complete_login_bootstraps_user_and_links_account(monkeypatch: pyt
     manager.require_account_state.assert_called_once_with(verified_user, require_verified=False)
     manager.oauth_account_store.upsert_oauth_account.assert_awaited_once_with(
         verified_user,
-        oauth_name="github",
-        account_id="provider-user",
-        account_email="oauth@example.com",
-        access_token="provider-access-token",
-        expires_at=123,
-        refresh_token="provider-refresh-token",
+        account=OAuthAccountData(
+            oauth_name="github",
+            account_id="provider-user",
+            account_email="oauth@example.com",
+            access_token="provider-access-token",
+            expires_at=123,
+            refresh_token="provider-refresh-token",
+        ),
     )
 
 
@@ -612,12 +641,14 @@ async def test_associate_account_links_provider_for_current_user() -> None:
     )
     manager.oauth_account_store.upsert_oauth_account.assert_awaited_once_with(
         user,
-        oauth_name="github",
-        account_id="provider-user",
-        account_email="user@example.com",
-        access_token="provider-access-token",
-        expires_at=456,
-        refresh_token="provider-refresh-token",
+        account=OAuthAccountData(
+            oauth_name="github",
+            account_id="provider-user",
+            account_email="user@example.com",
+            access_token="provider-access-token",
+            expires_at=456,
+            refresh_token="provider-refresh-token",
+        ),
     )
 
 

@@ -16,13 +16,14 @@ from typing import Protocol, runtime_checkable
 import litestar_auth._redis_protocols as redis_protocols_module
 import litestar_auth.ratelimit as ratelimit_module
 from litestar_auth.authentication.strategy.jwt import RedisJWTDenylistStore
-from litestar_auth.authentication.strategy.redis import RedisTokenStrategy
+from litestar_auth.authentication.strategy.redis import RedisTokenStrategy, RedisTokenStrategyConfig
 from litestar_auth.ratelimit import (
     AuthRateLimitConfig,
     AuthRateLimitEndpointGroup,
     AuthRateLimitSlot,
     EndpointRateLimit,
     RateLimiterBackend,
+    SharedRateLimitConfigOptions,
 )
 from litestar_auth.totp import (
     DEFAULT_TOTP_ENROLLMENT_KEY_PREFIX,
@@ -56,6 +57,36 @@ def _default_rate_limit_tier() -> RedisAuthRateLimitTier:
 def _empty_group_rate_limit_tiers() -> MappingProxyType[AuthRateLimitEndpointGroup, RedisAuthRateLimitTier]:
     """Return an empty read-only group-tier mapping for the preset default."""
     return MappingProxyType({})
+
+
+@dataclass(slots=True, frozen=True)
+class RedisAuthRateLimitConfigOptions:
+    """Builder options for :meth:`RedisAuthPreset.build_rate_limit_config`.
+
+    Args:
+        enabled: Optional auth slot enum values to build.
+        disabled: Auth slot enum values to leave unset.
+        group_backends: Optional explicit backend overrides keyed by auth slot
+            group. These win over ``RedisAuthPreset.group_rate_limit_tiers``.
+        endpoint_overrides: Optional full per-slot replacements or explicit
+            ``None`` disablement.
+        trusted_proxy: Shared trusted-proxy setting applied to generated
+            limiters.
+        identity_fields: Optional shared request body identity fields. When
+            omitted, ``AuthRateLimitConfig.from_shared_backend()`` keeps its
+            current default.
+        trusted_headers: Optional shared trusted proxy header names. When
+            omitted, ``AuthRateLimitConfig.from_shared_backend()`` keeps its
+            current default.
+    """
+
+    enabled: typing.Iterable[AuthRateLimitSlot] | None = None
+    disabled: typing.Iterable[AuthRateLimitSlot] = ()
+    group_backends: typing.Mapping[AuthRateLimitEndpointGroup, RateLimiterBackend] | None = None
+    endpoint_overrides: typing.Mapping[AuthRateLimitSlot, EndpointRateLimit | None] | None = None
+    trusted_proxy: bool = False
+    identity_fields: tuple[str, ...] | None = None
+    trusted_headers: tuple[str, ...] | None = None
 
 
 @runtime_checkable
@@ -119,59 +150,49 @@ class RedisAuthPreset:
             key_prefix=key_prefix,
         )
 
-    def build_rate_limit_config(  # noqa: PLR0913
+    def build_rate_limit_config(
         self,
         *,
-        enabled: typing.Iterable[AuthRateLimitSlot] | None = None,
-        disabled: typing.Iterable[AuthRateLimitSlot] = (),
-        group_backends: typing.Mapping[AuthRateLimitEndpointGroup, RateLimiterBackend] | None = None,
-        endpoint_overrides: typing.Mapping[AuthRateLimitSlot, EndpointRateLimit | None] | None = None,
-        trusted_proxy: bool = False,
-        identity_fields: tuple[str, ...] | None = None,
-        trusted_headers: tuple[str, ...] | None = None,
+        options: RedisAuthRateLimitConfigOptions | None = None,
     ) -> AuthRateLimitConfig:
         """Build ``AuthRateLimitConfig`` from the preset's shared Redis client.
 
         Args:
-            enabled: Optional auth slot enum values to build.
-            disabled: Auth slot enum values to leave unset.
-            group_backends: Optional explicit backend overrides keyed by auth
-                slot group. These win over ``group_rate_limit_tiers``.
-            endpoint_overrides: Optional full per-slot replacements or explicit
-                ``None`` disablement.
-            trusted_proxy: Shared trusted-proxy setting applied to generated
-                limiters.
-            identity_fields: Optional shared request body identity fields. When
-                omitted, ``AuthRateLimitConfig.from_shared_backend()`` keeps its
-                current default.
-            trusted_headers: Optional shared trusted proxy header names. When
-                omitted, ``AuthRateLimitConfig.from_shared_backend()`` keeps its
-                current default.
+            options: Optional shared builder options. When omitted, every
+                supported auth slot uses the preset's default tier.
 
         Returns:
             The auth rate-limit config built from the preset's shared client and
             tier settings.
         """
+        resolved_options = options or RedisAuthRateLimitConfigOptions()
         derived_group_backends: dict[AuthRateLimitEndpointGroup, RateLimiterBackend] = {
             group: self._build_rate_limit_backend(tier) for group, tier in self.group_rate_limit_tiers.items()
         }
-        if group_backends is not None:
-            derived_group_backends.update(group_backends)
+        if resolved_options.group_backends is not None:
+            derived_group_backends.update(resolved_options.group_backends)
         shared_backend: RateLimiterBackend = self._build_rate_limit_backend(self.rate_limit_tier)
         resolved_group_backends = derived_group_backends or None
+        default_shared_options = SharedRateLimitConfigOptions()
 
-        kwargs: dict[str, typing.Any] = {
-            "enabled": enabled,
-            "disabled": disabled,
-            "group_backends": resolved_group_backends,
-            "endpoint_overrides": endpoint_overrides,
-            "trusted_proxy": trusted_proxy,
-        }
-        if identity_fields is not None:
-            kwargs["identity_fields"] = identity_fields
-        if trusted_headers is not None:
-            kwargs["trusted_headers"] = trusted_headers
-        return AuthRateLimitConfig.from_shared_backend(shared_backend, **kwargs)
+        shared_options = SharedRateLimitConfigOptions(
+            enabled=resolved_options.enabled,
+            disabled=resolved_options.disabled,
+            group_backends=resolved_group_backends,
+            endpoint_overrides=resolved_options.endpoint_overrides,
+            trusted_proxy=resolved_options.trusted_proxy,
+            identity_fields=(
+                resolved_options.identity_fields
+                if resolved_options.identity_fields is not None
+                else default_shared_options.identity_fields
+            ),
+            trusted_headers=(
+                resolved_options.trusted_headers
+                if resolved_options.trusted_headers is not None
+                else default_shared_options.trusted_headers
+            ),
+        )
+        return AuthRateLimitConfig.from_shared_backend(shared_backend, options=shared_options)
 
     def build_totp_used_tokens_store(self, *, key_prefix: str | None = None) -> RedisUsedTotpCodeStore:
         """Build ``RedisUsedTotpCodeStore`` from the preset's shared Redis client.
@@ -229,8 +250,10 @@ class RedisAuthPreset:
 __all__ = (
     "RedisAuthClientProtocol",
     "RedisAuthPreset",
+    "RedisAuthRateLimitConfigOptions",
     "RedisAuthRateLimitTier",
     "RedisTokenStrategy",
+    "RedisTokenStrategyConfig",
     "RedisTotpEnrollmentStore",
     "RedisUsedTotpCodeStore",
 )

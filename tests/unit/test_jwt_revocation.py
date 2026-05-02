@@ -13,6 +13,7 @@ import pytest
 from litestar_auth._redis_protocols import RedisExpiringValueStoreClient
 from litestar_auth.authentication.strategy.jwt import (
     InMemoryJWTDenylistStore,
+    JWTRevocationPosture,
     JWTStrategy,
     RedisJWTDenylistStore,
 )
@@ -172,7 +173,7 @@ async def test_in_memory_jwt_denylist_honors_ttl(monkeypatch: pytest.MonkeyPatch
     def fake_time() -> float:
         return fake_now
 
-    monkeypatch.setattr("litestar_auth.authentication.strategy.jwt.time.time", fake_time)
+    monkeypatch.setattr("litestar_auth.authentication.strategy._jwt_denylist.time.time", fake_time)
     store = InMemoryJWTDenylistStore()
     await store.deny("jti-1", ttl_seconds=2)
     assert await store.is_denied("jti-1") is True
@@ -187,7 +188,7 @@ async def test_in_memory_jwt_denylist_refresh_same_jti_at_capacity_succeeds(
 ) -> None:
     """Re-denylisting an existing JTI refreshes TTL without requiring a free slot."""
     fake_now = 5_000.0
-    monkeypatch.setattr("litestar_auth.authentication.strategy.jwt.time.time", lambda: fake_now)
+    monkeypatch.setattr("litestar_auth.authentication.strategy._jwt_denylist.time.time", lambda: fake_now)
     store = InMemoryJWTDenylistStore(max_entries=DENYLIST_CAP)
     await store.deny("jti-1", ttl_seconds=60)
     await store.deny("jti-2", ttl_seconds=60)
@@ -252,7 +253,7 @@ async def test_in_memory_jwt_denylist_prunes_expired_entries_before_cap_fail_clo
     def fake_time() -> float:
         return fake_now
 
-    monkeypatch.setattr("litestar_auth.authentication.strategy.jwt.time.time", fake_time)
+    monkeypatch.setattr("litestar_auth.authentication.strategy._jwt_denylist.time.time", fake_time)
     store = InMemoryJWTDenylistStore(max_entries=DENYLIST_CAP)
 
     await store.deny("expired", ttl_seconds=1)
@@ -380,6 +381,33 @@ async def test_jwt_strategy_read_token_returns_none_for_missing_input() -> None:
     strategy = JWTStrategy(secret="secret-1234567890-1234567890-1234567890", allow_inmemory_denylist=True)
 
     assert await strategy.read_token(None, cast("Any", _UserManager(user))) is None
+
+
+@pytest.mark.unit
+def test_jwt_revocation_posture_factory_describes_inmemory_store() -> None:
+    """The canonical posture factory identifies process-local revocation."""
+    posture = JWTRevocationPosture.from_denylist_store(InMemoryJWTDenylistStore())
+
+    assert posture.key == "in_memory"
+    assert posture.denylist_store_type == "InMemoryJWTDenylistStore"
+    assert posture.revocation_is_durable is False
+    assert posture.requires_explicit_production_opt_in is False
+    assert posture.production_validation_error is None
+    assert posture.startup_warning is not None
+
+
+@pytest.mark.unit
+def test_jwt_revocation_posture_factory_describes_shared_store(async_fakeredis: AsyncFakeRedis) -> None:
+    """The canonical posture factory identifies shared revocation stores."""
+    store = RedisJWTDenylistStore(redis=cast_fakeredis(async_fakeredis, RedisExpiringValueStoreClient))
+    posture = JWTRevocationPosture.from_denylist_store(store)
+
+    assert posture.key == "shared_store"
+    assert posture.denylist_store_type == "RedisJWTDenylistStore"
+    assert posture.revocation_is_durable is True
+    assert posture.requires_explicit_production_opt_in is False
+    assert posture.production_validation_error is None
+    assert posture.startup_warning is None
 
 
 @pytest.mark.unit

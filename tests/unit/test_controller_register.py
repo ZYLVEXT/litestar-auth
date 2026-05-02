@@ -16,6 +16,7 @@ from litestar.testing import AsyncTestClient
 import litestar_auth.controllers.register as register_module
 from litestar_auth.controllers.register import (
     DEFAULT_REGISTER_MINIMUM_RESPONSE_SECONDS,
+    RegisterControllerConfig,
     _await_register_minimum_response,
     create_register_controller,
 )
@@ -121,6 +122,21 @@ def _assert_register_failed_payload(payload: dict[str, Any] | None) -> None:
 def test_register_controller_default_minimum_response_seconds_is_enumeration_resistant() -> None:
     """The direct controller factory keeps the same default timing envelope as plugin config."""
     assert pytest.approx(EXPECTED_REGISTER_MINIMUM_RESPONSE_SECONDS) == DEFAULT_REGISTER_MINIMUM_RESPONSE_SECONDS
+
+
+def test_register_controller_accepts_config_object() -> None:
+    """The public controller factory can receive settings as one typed config."""
+    controller = create_register_controller(
+        config=RegisterControllerConfig(path="/signup", register_minimum_response_seconds=0),
+    )
+
+    assert controller.path == "/signup"
+
+
+def test_register_controller_rejects_config_combined_with_keyword_options() -> None:
+    """The register controller factory accepts either config or keyword options."""
+    with pytest.raises(ValueError, match="RegisterControllerConfig or keyword options"):
+        create_register_controller(config=RegisterControllerConfig(), path="/signup")
 
 
 def test_register_controller_rejects_negative_minimum_response_seconds() -> None:

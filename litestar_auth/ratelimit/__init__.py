@@ -12,11 +12,18 @@ advanced cases that need fully custom per-endpoint wiring.
 Examples:
     Build the shared-backend recipe::
 
-        from litestar_auth.ratelimit import AuthRateLimitConfig, AuthRateLimitSlot, RedisRateLimiter
+        from litestar_auth.ratelimit import (
+            AuthRateLimitConfig,
+            AuthRateLimitSlot,
+            RedisRateLimiter,
+            SharedRateLimitConfigOptions,
+        )
 
         rate_limit_config = AuthRateLimitConfig.from_shared_backend(
             RedisRateLimiter(redis=redis_client, max_attempts=5, window_seconds=60),
-            disabled={AuthRateLimitSlot.VERIFY_TOKEN, AuthRateLimitSlot.REQUEST_VERIFY_TOKEN},
+            options=SharedRateLimitConfigOptions(
+                disabled={AuthRateLimitSlot.VERIFY_TOKEN, AuthRateLimitSlot.REQUEST_VERIFY_TOKEN},
+            ),
         )
 """
 
@@ -28,6 +35,7 @@ from ._config import (
     AuthRateLimitSlot,
     EndpointRateLimit,
     RateLimitScope,
+    SharedRateLimitConfigOptions,
 )
 from ._helpers import DEFAULT_KEY_PREFIX, RedisScriptResult, SlidingWindow
 from ._memory import InMemoryRateLimiter
@@ -48,6 +56,7 @@ __all__ = (
     "RedisPipelineProtocol",
     "RedisRateLimiter",
     "RedisScriptResult",
+    "SharedRateLimitConfigOptions",
     "SlidingWindow",
     "TotpRateLimitOrchestrator",
     "TotpSensitiveEndpoint",

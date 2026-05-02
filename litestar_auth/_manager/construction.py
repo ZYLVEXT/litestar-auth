@@ -2,23 +2,36 @@
 
 from __future__ import annotations
 
+import hashlib
+import secrets
 from collections.abc import Callable
 from dataclasses import dataclass, replace
-from typing import TYPE_CHECKING, Any, Protocol
+from datetime import timedelta
+from typing import TYPE_CHECKING, Any, Protocol, TypedDict
 
-from litestar_auth.config import _resolve_token_secret
+from litestar_auth._manager.security import validate_user_manager_security_secret_roles_are_distinct
+from litestar_auth._superuser_role import DEFAULT_SUPERUSER_ROLE_NAME
+from litestar_auth.config import _resolve_token_secret, validate_secret_length
+from litestar_auth.db.base import BaseOAuthAccountStore
+from litestar_auth.types import LoginIdentifier, UserProtocol
 
 if TYPE_CHECKING:
-    from litestar_auth.manager import UserManagerSecurity
-    from litestar_auth.types import LoginIdentifier
+    from litestar_auth._manager.security import UserManagerSecurity
+    from litestar_auth.db.base import BaseUserStore
+    from litestar_auth.password import PasswordHelper
 
 type PasswordValidator = Callable[[str], None]
+
+DEFAULT_VERIFY_TOKEN_LIFETIME = timedelta(hours=1)
+DEFAULT_RESET_PASSWORD_TOKEN_LIFETIME = timedelta(hours=1)
+LOGIN_IDENTIFIER_DIGEST_SIZE = 16
 
 
 class SecretValueProtocol(Protocol):
     """Structural contract for masked secret wrappers."""
 
-    def get_secret_value(self) -> str: ...  # pragma: no cover
+    def get_secret_value(self) -> str:  # pragma: no cover
+        """Return the underlying plaintext secret for cryptographic use."""
 
 
 type SecretFactory = Callable[[str], SecretValueProtocol]
@@ -32,6 +45,92 @@ class AccountTokenSecrets:
     reset_password_token_secret: SecretValueProtocol
 
 
+@dataclass(frozen=True, slots=True)
+class ResolvedSecretInputs[ID]:
+    """Resolved user-manager secret inputs used during construction."""
+
+    security: UserManagerSecurity[ID]
+    account_token_secrets: AccountTokenSecrets
+    login_identifier_telemetry_secret: str | None
+
+
+@dataclass(frozen=True, slots=True)
+class ConstructorAttributes[UP: UserProtocol[Any], ID]:
+    """Constructor values assigned directly to manager instance attributes."""
+
+    user_db: BaseUserStore[UP, ID]
+    oauth_account_store: BaseOAuthAccountStore[UP, ID] | None
+    resolved_secret_inputs: ResolvedSecretInputs[ID]
+    verification_token_lifetime: timedelta
+    reset_password_token_lifetime: timedelta
+    password_validator: Callable[[str], None] | None
+    reset_verification_on_email_change: bool
+    backends: tuple[object, ...]
+    login_identifier: LoginIdentifier
+    superuser_role_name: str
+    unsafe_testing: bool
+
+
+@dataclass(frozen=True, slots=True)
+class BaseUserManagerConfig[UP: UserProtocol[Any], ID]:
+    """Configuration for :class:`~litestar_auth.manager.BaseUserManager`."""
+
+    user_db: BaseUserStore[UP, ID]
+    oauth_account_store: BaseOAuthAccountStore[UP, ID] | None = None
+    password_helper: PasswordHelper | None = None
+    security: UserManagerSecurity[ID] | None = None
+    verification_token_lifetime: timedelta = DEFAULT_VERIFY_TOKEN_LIFETIME
+    reset_password_token_lifetime: timedelta = DEFAULT_RESET_PASSWORD_TOKEN_LIFETIME
+    password_validator: Callable[[str], None] | None = None
+    reset_verification_on_email_change: bool = True
+    backends: tuple[object, ...] = ()
+    login_identifier: LoginIdentifier = "email"
+    superuser_role_name: str = DEFAULT_SUPERUSER_ROLE_NAME
+    unsafe_testing: bool = False
+
+
+class BaseUserManagerOptions[UP: UserProtocol[Any], ID](TypedDict, total=False):
+    """Keyword options accepted by :class:`~litestar_auth.manager.BaseUserManager`."""
+
+    oauth_account_store: BaseOAuthAccountStore[UP, ID] | None
+    password_helper: PasswordHelper | None
+    security: UserManagerSecurity[ID] | None
+    verification_token_lifetime: timedelta
+    reset_password_token_lifetime: timedelta
+    password_validator: Callable[[str], None] | None
+    reset_verification_on_email_change: bool
+    backends: tuple[object, ...]
+    login_identifier: LoginIdentifier
+    superuser_role_name: str
+    unsafe_testing: bool
+
+
+def resolve_oauth_account_store[UP: UserProtocol[Any], ID](
+    user_db: object,
+) -> BaseOAuthAccountStore[UP, ID] | None:
+    """Return an OAuth-account store when the user store also exposes that boundary."""
+    if isinstance(user_db, BaseOAuthAccountStore):
+        return user_db
+
+    return None
+
+
+def get_dummy_hash(password_helper: PasswordHelper) -> str:
+    """Return a freshly computed dummy password hash for the provided helper."""
+    return password_helper.hash(secrets.token_urlsafe(32))
+
+
+def login_identifier_digest(identifier: str, *, key: str) -> str:
+    """Return a keyed, non-reversible digest for login-failure correlation."""
+    normalized_identifier = identifier.strip().casefold()
+    digest_key = hashlib.sha256(key.encode()).digest()
+    return hashlib.blake2b(
+        normalized_identifier.encode(),
+        digest_size=LOGIN_IDENTIFIER_DIGEST_SIZE,
+        key=digest_key,
+    ).hexdigest()
+
+
 def _build_user_manager_security[ID](
     *,
     verification_token_secret: str | None = None,
@@ -40,7 +139,7 @@ def _build_user_manager_security[ID](
     id_parser: Callable[[str], ID] | None = None,
 ) -> UserManagerSecurity[ID]:
     """Return the concrete manager-security bundle."""
-    from litestar_auth.manager import UserManagerSecurity  # noqa: PLC0415
+    from litestar_auth._manager.security import UserManagerSecurity  # noqa: PLC0415
 
     return UserManagerSecurity(
         verification_token_secret=verification_token_secret,
@@ -77,6 +176,62 @@ def resolve_account_token_secrets[ID](
     return AccountTokenSecrets(
         verification_token_secret=secret_factory(verification_token_secret),
         reset_password_token_secret=secret_factory(reset_password_token_secret),
+    )
+
+
+def resolve_secret_inputs[ID](
+    security: UserManagerSecurity[ID] | None,
+    *,
+    secret_factory: SecretFactory,
+    unsafe_testing: bool,
+) -> ResolvedSecretInputs[ID]:
+    """Resolve secret inputs and validate standalone secret lengths.
+
+    Returns:
+        The resolved security bundle, account-token secrets, and telemetry secret.
+    """
+    from litestar_auth._manager.security import UserManagerSecurity  # noqa: PLC0415
+
+    resolved_security = security if security is not None else UserManagerSecurity()
+    account_token_secrets = resolve_account_token_secrets(
+        resolved_security,
+        secret_factory=secret_factory,
+        warning_stacklevel=5,
+        unsafe_testing=unsafe_testing,
+    )
+    resolved_login_identifier_telemetry_secret = resolved_security.login_identifier_telemetry_secret
+    if resolved_login_identifier_telemetry_secret is not None and not unsafe_testing:
+        validate_secret_length(
+            resolved_login_identifier_telemetry_secret,
+            label="login_identifier_telemetry_secret",
+        )
+
+    return ResolvedSecretInputs(
+        security=resolved_security,
+        account_token_secrets=account_token_secrets,
+        login_identifier_telemetry_secret=resolved_login_identifier_telemetry_secret,
+    )
+
+
+def validate_secret_distinctness[ID](
+    resolved_secret_inputs: ResolvedSecretInputs[ID],
+    *,
+    unsafe_testing: bool,
+) -> None:
+    """Validate that manager secret roles do not reuse secret values."""
+    if unsafe_testing:
+        return
+
+    resolved_security = resolved_secret_inputs.security
+    account_token_secrets = resolved_secret_inputs.account_token_secrets
+    resolved_verification_token_secret = account_token_secrets.verification_token_secret.get_secret_value()
+    resolved_reset_password_token_secret = account_token_secrets.reset_password_token_secret.get_secret_value()
+    validate_user_manager_security_secret_roles_are_distinct(
+        replace(
+            resolved_security,
+            verification_token_secret=resolved_verification_token_secret,
+            reset_password_token_secret=resolved_reset_password_token_secret,
+        ),
     )
 
 

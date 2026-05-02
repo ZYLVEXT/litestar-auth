@@ -57,6 +57,10 @@ That `config=` path keeps the HTTP controller aligned with the plugin-owned
 session factory, `db_session_dependency_key`, role-model family resolution, and
 manager construction used by the CLI and the rest of the auth stack.
 
+For direct grouped settings, pass `RoleAdminControllerConfig(...)` as
+`controller_config=...`. The existing `config=...` keyword remains the
+`LitestarAuthConfig` input for plugin-backed model resolution.
+
 ## What the factory does
 
 - Resolves the relational role model family from `config.user_model` by

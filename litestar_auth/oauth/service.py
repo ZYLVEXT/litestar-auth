@@ -7,15 +7,14 @@ provider token exchange proceeds.
 
 from __future__ import annotations
 
-import base64
-import hashlib
 import secrets
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Literal, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
 from litestar.exceptions import ClientException
 
 import litestar_auth._account_state as _shared_account_state
+from litestar_auth.db import OAuthAccountData
 from litestar_auth.exceptions import (
     AuthenticationError,
     ConfigurationError,
@@ -24,6 +23,7 @@ from litestar_auth.exceptions import (
     OAuthAccountAlreadyLinkedError,
     UnverifiedUserError,
 )
+from litestar_auth.oauth._pkce import _generate_pkce_material
 from litestar_auth.types import UserProtocol
 
 if TYPE_CHECKING:
@@ -37,9 +37,6 @@ _ACCOUNT_STATE_ERROR_TYPES = _shared_account_state.AccountStateErrorTypes(
     unverified_error=UnverifiedUserError,
 )
 _resolve_account_state_validator = _shared_account_state.resolve_account_state_validator
-_PKCE_CODE_VERIFIER_LENGTH = 64
-_PKCE_CODE_CHALLENGE_METHOD: Literal["S256"] = "S256"
-_PKCE_UNRESERVED_ALPHABET = frozenset("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~")
 
 
 class OAuthServiceUserStoreProtocol[UP: UserProtocol[Any], ID](Protocol):
@@ -55,16 +52,11 @@ class OAuthAccountStoreProtocol[UP: UserProtocol[Any], ID](Protocol):
     async def get_by_oauth_account(self, oauth_name: str, account_id: str) -> UP | None:
         """Return a user linked to the given provider account."""
 
-    async def upsert_oauth_account(  # noqa: PLR0913
+    async def upsert_oauth_account(
         self,
         user: UP,
         *,
-        oauth_name: str,
-        account_id: str,
-        account_email: str,
-        access_token: str,
-        expires_at: int | None,
-        refresh_token: str | None,
+        account: OAuthAccountData,
     ) -> None:
         """Create or update the linked OAuth account."""
 
@@ -108,55 +100,6 @@ class OAuthAuthorization:
     authorization_url: str
     state: str
     code_verifier: str
-
-
-@dataclass(frozen=True, slots=True)
-class PkceMaterial:
-    """PKCE S256 material generated for one OAuth authorization-code flow."""
-
-    code_verifier: str
-    code_challenge: str
-    code_challenge_method: Literal["S256"]
-
-
-def _generate_pkce_material() -> PkceMaterial:
-    """Generate PKCE S256 material for one authorization-code flow.
-
-    Returns:
-        Verifier, challenge, and S256 method marker for provider authorization.
-    """
-    code_verifier = _generate_pkce_code_verifier()
-    return PkceMaterial(
-        code_verifier=code_verifier,
-        code_challenge=_build_pkce_code_challenge(code_verifier),
-        code_challenge_method=_PKCE_CODE_CHALLENGE_METHOD,
-    )
-
-
-def _generate_pkce_code_verifier() -> str:
-    """Generate an RFC 7636 code verifier from the unreserved URI alphabet.
-
-    Returns:
-        A 64-character verifier suitable for S256 PKCE.
-
-    Raises:
-        RuntimeError: If the generated verifier violates the PKCE alphabet or length contract.
-    """
-    code_verifier = secrets.token_urlsafe(64)[:_PKCE_CODE_VERIFIER_LENGTH]
-    if len(code_verifier) != _PKCE_CODE_VERIFIER_LENGTH or not set(code_verifier) <= _PKCE_UNRESERVED_ALPHABET:
-        msg = "Generated PKCE code verifier is invalid."
-        raise RuntimeError(msg)
-    return code_verifier
-
-
-def _build_pkce_code_challenge(code_verifier: str) -> str:
-    """Return the unpadded base64url SHA-256 challenge for a PKCE verifier.
-
-    Returns:
-        RFC 7636 S256 code challenge.
-    """
-    digest = hashlib.sha256(code_verifier.encode("ascii")).digest()
-    return base64.urlsafe_b64encode(digest).rstrip(b"=").decode("ascii")
 
 
 class OAuthService[UP: UserProtocol[Any], ID]:
@@ -406,12 +349,14 @@ class OAuthService[UP: UserProtocol[Any], ID]:
         try:
             await oauth_account_store.upsert_oauth_account(
                 user,
-                oauth_name=self._provider_name,
-                account_id=account_id,
-                account_email=account_email,
-                access_token=token_payload["access_token"],
-                expires_at=token_payload["expires_at"],
-                refresh_token=token_payload["refresh_token"],
+                account=OAuthAccountData(
+                    oauth_name=self._provider_name,
+                    account_id=account_id,
+                    account_email=account_email,
+                    access_token=token_payload["access_token"],
+                    expires_at=token_payload["expires_at"],
+                    refresh_token=token_payload["refresh_token"],
+                ),
             )
         except OAuthAccountAlreadyLinkedError:
             _raise_account_already_linked()

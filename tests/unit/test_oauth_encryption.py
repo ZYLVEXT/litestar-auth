@@ -12,7 +12,8 @@ from advanced_alchemy.base import UUIDPrimaryKey, create_registry
 from sqlalchemy import event
 from sqlalchemy.orm import DeclarativeBase
 
-import litestar_auth._secrets_at_rest as secrets_at_rest
+import litestar_auth._oauth_mapper_events as oauth_mapper_events
+import litestar_auth._optional_deps as optional_deps_module
 from litestar_auth import oauth_encryption
 from litestar_auth.models import OAuthAccountMixin, UserAuthRelationshipMixin, UserModelMixin
 from litestar_auth.oauth_encryption import (
@@ -123,6 +124,19 @@ def test_oauth_encryption_module_executes_under_coverage(monkeypatch: pytest.Mon
     assert reloaded_module.OAuthTokenEncryption.__name__ == OAuthTokenEncryption.__name__
     assert reloaded_module.OAuthTokenEncryption is not OAuthTokenEncryption
     assert reloaded_module.require_oauth_token_encryption.__name__ == require_oauth_token_encryption.__name__
+
+
+def test_oauth_mapper_events_module_executes_under_coverage(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Reload the mapper-event module under an isolated alias so coverage records module-body execution."""
+    assert oauth_mapper_events.__file__ is not None
+    reloaded_module = load_reloaded_test_alias(
+        alias_name="_coverage_alias_oauth_mapper_events",
+        source_path=Path(oauth_mapper_events.__file__).resolve(),
+        monkeypatch=monkeypatch,
+    )
+
+    assert reloaded_module._decrypt_loaded_oauth_tokens.__name__ == "_decrypt_loaded_oauth_tokens"
+    assert reloaded_module._encrypt_oauth_tokens_before_insert.__name__ == "_encrypt_oauth_tokens_before_insert"
 
 
 def test_oauth_token_encryption_plaintext_policy_round_trips() -> None:
@@ -406,7 +420,7 @@ def test_mount_vault_fernet_missing_raises_install_hint(monkeypatch: pytest.Monk
         msg = "missing cryptography"
         raise ImportError(msg)
 
-    monkeypatch.setattr(secrets_at_rest.importlib, "import_module", import_module)
+    monkeypatch.setattr(optional_deps_module.importlib, "import_module", import_module)
 
     with pytest.raises(ImportError, match=r"litestar-auth\[oauth,totp\]"):
         backend.mount_vault(base64.urlsafe_b64encode(b"0" * 32).decode())
@@ -540,9 +554,9 @@ def test_oauth_account_mixin_registers_encryption_events_for_direct_subclasses()
         auth_user_model = "_OAuthUser"
         auth_user_table = "oauth_event_user"
 
-    assert event.contains(_OAuthAccount, "load", oauth_encryption._decrypt_loaded_oauth_tokens)
-    assert event.contains(_OAuthAccount, "before_insert", oauth_encryption._encrypt_oauth_tokens_before_insert)
-    assert event.contains(_OAuthAccount, "after_update", oauth_encryption._restore_oauth_tokens_after_write)
+    assert event.contains(_OAuthAccount, "load", oauth_mapper_events._decrypt_loaded_oauth_tokens)
+    assert event.contains(_OAuthAccount, "before_insert", oauth_mapper_events._encrypt_oauth_tokens_before_insert)
+    assert event.contains(_OAuthAccount, "after_update", oauth_mapper_events._restore_oauth_tokens_after_write)
     assert _OAuthUser.auth_oauth_account_model == "_OAuthAccount"
 
 
@@ -601,9 +615,9 @@ def test_resolve_instance_oauth_token_encryption_uses_cached_policy(monkeypatch:
     key_str = _fernet_key_string()
     policy = OAuthTokenEncryption(key=key_str)
     target._litestar_auth_oauth_token_encryption = policy
-    monkeypatch.setattr(oauth_encryption, "object_session", lambda _target: _SessionInfoTarget())
+    monkeypatch.setattr(oauth_mapper_events, "object_session", lambda _target: _SessionInfoTarget())
 
-    resolved = oauth_encryption._resolve_instance_oauth_token_encryption(target)
+    resolved = oauth_mapper_events._resolve_instance_oauth_token_encryption(target)
 
     assert resolved is policy
 
@@ -620,9 +634,9 @@ def test_resolve_instance_oauth_token_encryption_ignores_reload_stale_cached_pol
         monkeypatch=monkeypatch,
     )
     target._litestar_auth_oauth_token_encryption = stale_module.OAuthTokenEncryption(key=_fernet_key_string())
-    monkeypatch.setattr(oauth_encryption, "object_session", lambda _target: None)
+    monkeypatch.setattr(oauth_mapper_events, "object_session", lambda _target: None)
 
-    assert oauth_encryption._resolve_instance_oauth_token_encryption(target) is None
+    assert oauth_mapper_events._resolve_instance_oauth_token_encryption(target) is None
 
 
 def test_resolve_instance_oauth_token_encryption_ignores_structurally_compatible_cached_policy(
@@ -630,22 +644,22 @@ def test_resolve_instance_oauth_token_encryption_ignores_structurally_compatible
 ) -> None:
     """Cached policy-shaped objects are ignored instead of normalized."""
     target = _TokenTarget(_litestar_auth_oauth_token_encryption=_StructurallyCompatiblePolicy())
-    monkeypatch.setattr(oauth_encryption, "object_session", lambda _target: None)
+    monkeypatch.setattr(oauth_mapper_events, "object_session", lambda _target: None)
 
-    assert oauth_encryption._resolve_instance_oauth_token_encryption(target) is None
+    assert oauth_mapper_events._resolve_instance_oauth_token_encryption(target) is None
 
 
 def test_decrypt_loaded_oauth_tokens_returns_early_without_policy(monkeypatch: pytest.MonkeyPatch) -> None:
     """Load-time decryption is skipped when no explicit policy was bound."""
     calls: list[str] = []
-    monkeypatch.setattr(oauth_encryption, "object_session", lambda _target: None)
+    monkeypatch.setattr(oauth_mapper_events, "object_session", lambda _target: None)
     monkeypatch.setattr(
-        oauth_encryption.attributes,
+        oauth_mapper_events.attributes,
         "set_committed_value",
         lambda *_args, **_kwargs: calls.append("set"),
     )
 
-    oauth_encryption._decrypt_loaded_oauth_tokens(_TokenTarget(access_token="encrypted"), object())
+    oauth_mapper_events._decrypt_loaded_oauth_tokens(_TokenTarget(access_token="encrypted"), object())
 
     assert calls == []
 
@@ -657,17 +671,17 @@ def test_decrypt_loaded_oauth_tokens_skips_changed_fields(monkeypatch: pytest.Mo
     bind_oauth_token_encryption(session, OAuthTokenEncryption(key=None, unsafe_testing=True))
     committed_values: list[tuple[str, str | None]] = []
     monkeypatch.setattr(
-        oauth_encryption,
+        oauth_mapper_events,
         "sa_inspect",
         lambda _target: _InspectState(access_changed=True, refresh_changed=False),
     )
     monkeypatch.setattr(
-        oauth_encryption.attributes,
+        oauth_mapper_events.attributes,
         "set_committed_value",
         lambda _target, field_name, value: committed_values.append((field_name, value)),
     )
 
-    oauth_encryption._decrypt_loaded_oauth_tokens(target, type("Ctx", (), {"session": session})())
+    oauth_mapper_events._decrypt_loaded_oauth_tokens(target, type("Ctx", (), {"session": session})())
 
     assert committed_values == [("refresh_token", "stored-refresh")]
 
@@ -676,12 +690,12 @@ def test_encrypt_oauth_tokens_before_update_skips_when_no_fields_changed(monkeyp
     """Update-time encryption is a no-op when neither token field changed."""
     target = _TokenTarget(access_token="stored-access", refresh_token="stored-refresh")
     monkeypatch.setattr(
-        oauth_encryption,
+        oauth_mapper_events,
         "sa_inspect",
         lambda _target: _InspectState(access_changed=False, refresh_changed=False),
     )
 
-    oauth_encryption._encrypt_oauth_tokens_before_update(object(), object(), target)
+    oauth_mapper_events._encrypt_oauth_tokens_before_update(object(), object(), target)
 
     assert not hasattr(target, "_litestar_auth_oauth_token_snapshot")
 
@@ -692,30 +706,30 @@ def test_track_oauth_token_snapshot_target_tolerates_unmapped_and_unbound_target
     """Tracking helper is a no-op for unmapped instances or targets without a session."""
     target = _TokenTarget(access_token="stored-access", refresh_token="stored-refresh")
     monkeypatch.setattr(
-        oauth_encryption,
+        oauth_mapper_events,
         "object_session",
-        lambda _target: (_ for _ in ()).throw(oauth_encryption.UnmappedInstanceError(_target)),
+        lambda _target: (_ for _ in ()).throw(oauth_mapper_events.UnmappedInstanceError(_target)),
     )
 
-    oauth_encryption._track_oauth_token_snapshot_target(target)
-    oauth_encryption._untrack_oauth_token_snapshot_target(target)
+    oauth_mapper_events._track_oauth_token_snapshot_target(target)
+    oauth_mapper_events._untrack_oauth_token_snapshot_target(target)
 
-    monkeypatch.setattr(oauth_encryption, "object_session", lambda _target: None)
+    monkeypatch.setattr(oauth_mapper_events, "object_session", lambda _target: None)
 
-    oauth_encryption._track_oauth_token_snapshot_target(target)
-    oauth_encryption._untrack_oauth_token_snapshot_target(target)
+    oauth_mapper_events._track_oauth_token_snapshot_target(target)
+    oauth_mapper_events._untrack_oauth_token_snapshot_target(target)
 
 
 def test_track_oauth_token_snapshot_target_skips_duplicate_entries(monkeypatch: pytest.MonkeyPatch) -> None:
     """Tracking helper records a target only once per session."""
     session = _SessionInfoTarget()
     target = _TokenTarget(access_token="stored-access", refresh_token="stored-refresh")
-    session.info[oauth_encryption._OAUTH_TOKEN_ENCRYPTION_TRACKED_TARGETS_KEY] = [target]
-    monkeypatch.setattr(oauth_encryption, "object_session", lambda _target: session)
+    session.info[oauth_mapper_events._OAUTH_TOKEN_ENCRYPTION_TRACKED_TARGETS_KEY] = [target]
+    monkeypatch.setattr(oauth_mapper_events, "object_session", lambda _target: session)
 
-    oauth_encryption._track_oauth_token_snapshot_target(target)
+    oauth_mapper_events._track_oauth_token_snapshot_target(target)
 
-    assert session.info[oauth_encryption._OAUTH_TOKEN_ENCRYPTION_TRACKED_TARGETS_KEY] == [target]
+    assert session.info[oauth_mapper_events._OAUTH_TOKEN_ENCRYPTION_TRACKED_TARGETS_KEY] == [target]
 
 
 def test_untrack_oauth_token_snapshot_target_preserves_other_tracked_targets(
@@ -725,12 +739,12 @@ def test_untrack_oauth_token_snapshot_target_preserves_other_tracked_targets(
     session = _SessionInfoTarget()
     target = _TokenTarget(access_token="stored-access", refresh_token="stored-refresh")
     other = _TokenTarget(access_token="other-access", refresh_token="other-refresh")
-    session.info[oauth_encryption._OAUTH_TOKEN_ENCRYPTION_TRACKED_TARGETS_KEY] = [target, other]
-    monkeypatch.setattr(oauth_encryption, "object_session", lambda _target: session)
+    session.info[oauth_mapper_events._OAUTH_TOKEN_ENCRYPTION_TRACKED_TARGETS_KEY] = [target, other]
+    monkeypatch.setattr(oauth_mapper_events, "object_session", lambda _target: session)
 
-    oauth_encryption._untrack_oauth_token_snapshot_target(target)
+    oauth_mapper_events._untrack_oauth_token_snapshot_target(target)
 
-    assert session.info[oauth_encryption._OAUTH_TOKEN_ENCRYPTION_TRACKED_TARGETS_KEY] == [other]
+    assert session.info[oauth_mapper_events._OAUTH_TOKEN_ENCRYPTION_TRACKED_TARGETS_KEY] == [other]
 
 
 def test_restore_oauth_token_snapshot_without_snapshot_only_clears_tracking(
@@ -739,12 +753,12 @@ def test_restore_oauth_token_snapshot_without_snapshot_only_clears_tracking(
     """Targets without a snapshot still clear the session-local tracking marker."""
     session = _SessionInfoTarget()
     target = _TokenTarget(access_token="stored-access", refresh_token="stored-refresh")
-    session.info[oauth_encryption._OAUTH_TOKEN_ENCRYPTION_TRACKED_TARGETS_KEY] = [target]
-    monkeypatch.setattr(oauth_encryption, "object_session", lambda _target: session)
+    session.info[oauth_mapper_events._OAUTH_TOKEN_ENCRYPTION_TRACKED_TARGETS_KEY] = [target]
+    monkeypatch.setattr(oauth_mapper_events, "object_session", lambda _target: session)
 
-    oauth_encryption._restore_oauth_token_snapshot(target)
+    oauth_mapper_events._restore_oauth_token_snapshot(target)
 
-    assert oauth_encryption._OAUTH_TOKEN_ENCRYPTION_TRACKED_TARGETS_KEY not in session.info
+    assert oauth_mapper_events._OAUTH_TOKEN_ENCRYPTION_TRACKED_TARGETS_KEY not in session.info
 
 
 def test_encrypt_oauth_tokens_before_insert_restores_plaintext_when_encryption_fails(
@@ -765,25 +779,25 @@ def test_encrypt_oauth_tokens_before_insert_restores_plaintext_when_encryption_f
         setattr(current_target, field_name, value)
 
     monkeypatch.setattr(
-        oauth_encryption,
+        oauth_mapper_events,
         "_require_instance_oauth_token_encryption",
         lambda _target: _ExplodingPolicy(),
     )
-    monkeypatch.setattr(oauth_encryption, "object_session", lambda _target: session)
-    monkeypatch.setattr(oauth_encryption.attributes, "set_committed_value", _set_committed_value)
+    monkeypatch.setattr(oauth_mapper_events, "object_session", lambda _target: session)
+    monkeypatch.setattr(oauth_mapper_events.attributes, "set_committed_value", _set_committed_value)
 
     with pytest.raises(RuntimeError, match="cannot encrypt refresh token"):
-        oauth_encryption._encrypt_oauth_tokens_before_insert(object(), object(), target)
+        oauth_mapper_events._encrypt_oauth_tokens_before_insert(object(), object(), target)
 
     assert target.access_token == "stored-access"
     assert target.refresh_token == "stored-refresh"
-    assert not hasattr(target, oauth_encryption._OAUTH_TOKEN_ENCRYPTION_SNAPSHOT_KEY)
-    assert oauth_encryption._OAUTH_TOKEN_ENCRYPTION_TRACKED_TARGETS_KEY not in session.info
+    assert not hasattr(target, oauth_mapper_events._OAUTH_TOKEN_ENCRYPTION_SNAPSHOT_KEY)
+    assert oauth_mapper_events._OAUTH_TOKEN_ENCRYPTION_TRACKED_TARGETS_KEY not in session.info
 
 
 def test_restore_oauth_token_snapshots_after_rollback_ignores_non_session_objects() -> None:
     """Rollback cleanup returns early when the event target does not expose session info."""
-    oauth_encryption._restore_oauth_token_snapshots_after_rollback(object())
+    oauth_mapper_events._restore_oauth_token_snapshots_after_rollback(object())
 
 
 def test_restore_oauth_token_snapshots_after_rollback_restores_plaintext_and_clears_tracking(
@@ -800,22 +814,22 @@ def test_restore_oauth_token_snapshots_after_rollback_restores_plaintext_and_cle
     def _set_committed_value(current_target: _TokenTarget, field_name: str, value: str | None) -> None:
         setattr(current_target, field_name, value)
 
-    monkeypatch.setattr(oauth_encryption, "_require_instance_oauth_token_encryption", lambda _target: _Policy())
-    monkeypatch.setattr(oauth_encryption, "object_session", lambda _target: session)
-    monkeypatch.setattr(oauth_encryption.attributes, "set_committed_value", _set_committed_value)
+    monkeypatch.setattr(oauth_mapper_events, "_require_instance_oauth_token_encryption", lambda _target: _Policy())
+    monkeypatch.setattr(oauth_mapper_events, "object_session", lambda _target: session)
+    monkeypatch.setattr(oauth_mapper_events.attributes, "set_committed_value", _set_committed_value)
 
-    oauth_encryption._encrypt_oauth_tokens_before_insert(object(), object(), target)
+    oauth_mapper_events._encrypt_oauth_tokens_before_insert(object(), object(), target)
 
     assert target.access_token == "encrypted:stored-access"
     assert target.refresh_token == "encrypted:stored-refresh"
-    assert session.info[oauth_encryption._OAUTH_TOKEN_ENCRYPTION_TRACKED_TARGETS_KEY] == [target]
+    assert session.info[oauth_mapper_events._OAUTH_TOKEN_ENCRYPTION_TRACKED_TARGETS_KEY] == [target]
 
-    oauth_encryption._restore_oauth_token_snapshots_after_rollback(cast("object", session))
+    oauth_mapper_events._restore_oauth_token_snapshots_after_rollback(cast("object", session))
 
     assert target.access_token == "stored-access"
     assert target.refresh_token == "stored-refresh"
-    assert not hasattr(target, oauth_encryption._OAUTH_TOKEN_ENCRYPTION_SNAPSHOT_KEY)
-    assert oauth_encryption._OAUTH_TOKEN_ENCRYPTION_TRACKED_TARGETS_KEY not in session.info
+    assert not hasattr(target, oauth_mapper_events._OAUTH_TOKEN_ENCRYPTION_SNAPSHOT_KEY)
+    assert oauth_mapper_events._OAUTH_TOKEN_ENCRYPTION_TRACKED_TARGETS_KEY not in session.info
 
 
 def test_restore_oauth_token_snapshots_after_rollback_skips_duplicate_targets(
@@ -826,23 +840,23 @@ def test_restore_oauth_token_snapshots_after_rollback_skips_duplicate_targets(
     target = _TokenTarget(access_token="stored-access", refresh_token="stored-refresh")
     setattr(
         target,
-        oauth_encryption._OAUTH_TOKEN_ENCRYPTION_SNAPSHOT_KEY,
+        oauth_mapper_events._OAUTH_TOKEN_ENCRYPTION_SNAPSHOT_KEY,
         {
             "access_token": "stored-access",
             "refresh_token": "stored-refresh",
         },
     )
-    session.info[oauth_encryption._OAUTH_TOKEN_ENCRYPTION_TRACKED_TARGETS_KEY] = [target, target]
+    session.info[oauth_mapper_events._OAUTH_TOKEN_ENCRYPTION_TRACKED_TARGETS_KEY] = [target, target]
     committed_values: list[tuple[str, str | None]] = []
 
     def _set_committed_value(current_target: _TokenTarget, field_name: str, value: str | None) -> None:
         committed_values.append((field_name, value))
         setattr(current_target, field_name, value)
 
-    monkeypatch.setattr(oauth_encryption, "object_session", lambda _target: session)
-    monkeypatch.setattr(oauth_encryption.attributes, "set_committed_value", _set_committed_value)
+    monkeypatch.setattr(oauth_mapper_events, "object_session", lambda _target: session)
+    monkeypatch.setattr(oauth_mapper_events.attributes, "set_committed_value", _set_committed_value)
 
-    oauth_encryption._restore_oauth_token_snapshots_after_rollback(cast("object", session))
+    oauth_mapper_events._restore_oauth_token_snapshots_after_rollback(cast("object", session))
 
     assert committed_values == [
         ("access_token", "stored-access"),
@@ -854,7 +868,7 @@ def test_restore_oauth_tokens_after_write_skips_when_no_snapshot() -> None:
     """Restore-time hooks do nothing when no write snapshot is present."""
     target = _TokenTarget(access_token="stored-access", refresh_token="stored-refresh")
 
-    oauth_encryption._restore_oauth_tokens_after_write(object(), object(), target)
+    oauth_mapper_events._restore_oauth_tokens_after_write(object(), object(), target)
 
     assert target.access_token == "stored-access"
     assert target.refresh_token == "stored-refresh"
@@ -866,18 +880,18 @@ def test_restore_oauth_tokens_after_write_clears_session_tracking(monkeypatch: p
     target = _TokenTarget(access_token="encrypted:stored-access", refresh_token="stored-refresh")
     setattr(
         target,
-        oauth_encryption._OAUTH_TOKEN_ENCRYPTION_SNAPSHOT_KEY,
+        oauth_mapper_events._OAUTH_TOKEN_ENCRYPTION_SNAPSHOT_KEY,
         {"access_token": "stored-access"},
     )
-    session.info[oauth_encryption._OAUTH_TOKEN_ENCRYPTION_TRACKED_TARGETS_KEY] = [target]
+    session.info[oauth_mapper_events._OAUTH_TOKEN_ENCRYPTION_TRACKED_TARGETS_KEY] = [target]
 
     def _set_committed_value(current_target: _TokenTarget, field_name: str, value: str | None) -> None:
         setattr(current_target, field_name, value)
 
-    monkeypatch.setattr(oauth_encryption, "object_session", lambda _target: session)
-    monkeypatch.setattr(oauth_encryption.attributes, "set_committed_value", _set_committed_value)
+    monkeypatch.setattr(oauth_mapper_events, "object_session", lambda _target: session)
+    monkeypatch.setattr(oauth_mapper_events.attributes, "set_committed_value", _set_committed_value)
 
-    oauth_encryption._restore_oauth_tokens_after_write(object(), object(), target)
+    oauth_mapper_events._restore_oauth_tokens_after_write(object(), object(), target)
 
     assert target.access_token == "stored-access"
-    assert oauth_encryption._OAUTH_TOKEN_ENCRYPTION_TRACKED_TARGETS_KEY not in session.info
+    assert oauth_mapper_events._OAUTH_TOKEN_ENCRYPTION_TRACKED_TARGETS_KEY not in session.info

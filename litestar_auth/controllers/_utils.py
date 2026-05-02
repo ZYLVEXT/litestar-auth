@@ -2,27 +2,23 @@
 
 from __future__ import annotations
 
-import inspect
 import logging
-from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
-from contextlib import asynccontextmanager
-from typing import TYPE_CHECKING, Any, Protocol, cast
+from collections.abc import Awaitable, Callable
+from typing import TYPE_CHECKING, Any, Protocol
 
-import msgspec
 from litestar import Request
-from litestar.background_tasks import BackgroundTask
-from litestar.enums import MediaType
-from litestar.exceptions import ClientException, ValidationException
-from litestar.response import Response
+from litestar.exceptions import ClientException
 
 import litestar_auth._account_state as _shared_account_state
-from litestar_auth.exceptions import (
-    ConfigurationError,
-    ErrorCode,
-    InactiveUserError,
-    UnverifiedUserError,
-    UserAlreadyExistsError,
+from litestar_auth.controllers._error_responses import (
+    AccountStateFailureCallback,
+    DomainErrorMap,
+    _create_error_response,
+    _domain_error_public_detail,
+    _map_domain_exceptions,
+    _resolve_domain_error_response,
 )
+from litestar_auth.exceptions import ErrorCode, InactiveUserError, UnverifiedUserError
 
 logger = logging.getLogger(__name__)
 _ACCOUNT_STATE_ERROR_TYPES = _shared_account_state.AccountStateErrorTypes(
@@ -31,24 +27,11 @@ _ACCOUNT_STATE_ERROR_TYPES = _shared_account_state.AccountStateErrorTypes(
 )
 
 if TYPE_CHECKING:
-    from litestar.types import ExceptionHandlersMap
-
     from litestar_auth.ratelimit import EndpointRateLimit
 
-_HTTP_BAD_REQUEST = 400
 _LITESTAR_AUTH_ROUTE_HANDLER_ATTR = "__litestar_auth_route_handler__"
 
 type RequestHandler = Callable[[Request[Any, Any, Any]], Awaitable[None]]
-type ErrorCallback = Callable[[Request[Any, Any, Any]], Awaitable[None]]
-type AccountStateFailureCallback = Callable[[], Awaitable[None]]
-type DomainErrorMap = Mapping[type[Exception], tuple[int, str]]
-
-
-class RequestBodyRouteHandler(Protocol):
-    """Minimal route-handler surface needed for request-body signature adaptation."""
-
-    fn: Callable[..., Any]
-    exception_handlers: ExceptionHandlersMap | None
 
 
 class AccountStateValidatorProvider[UP](Protocol):
@@ -90,283 +73,47 @@ def _is_litestar_auth_route_handler(route_handler: object) -> bool:
     return bool(getattr(route_handler, _LITESTAR_AUTH_ROUTE_HANDLER_ATTR, False))
 
 
-async def _decode_request_body(  # noqa: PLR0913
-    request: Request[Any, Any, Any],
-    *,
-    schema: type[msgspec.Struct],
-    on_error: ErrorCallback | None = None,
-    validation_detail: str = "Invalid request payload.",
-    validation_code: str = ErrorCode.REQUEST_BODY_INVALID,
-    decode_detail: str = "Invalid request body.",
-    decode_code: str = ErrorCode.REQUEST_BODY_INVALID,
-) -> msgspec.Struct:
-    """Decode a JSON request body into the configured msgspec schema.
-
-    Returns:
-        The decoded request-body struct.
-
-    Raises:
-        ClientException: If the request body cannot be decoded into ``schema``.
-    """
-    try:
-        return msgspec.json.decode(await request.body(), type=cast("Any", schema))
-    except msgspec.ValidationError as exc:
-        if on_error is not None:
-            await on_error(request)
-        raise ClientException(
-            status_code=422,
-            detail=validation_detail,
-            extra={"code": validation_code},
-        ) from exc
-    except msgspec.DecodeError as exc:
-        if on_error is not None:
-            await on_error(request)
-        raise ClientException(status_code=400, detail=decode_detail, extra={"code": decode_code}) from exc
-
-
-def _create_error_response(
-    *,
-    status_code: int,
-    detail: str,
-    extra: Mapping[str, Any] | None = None,
-    background: BackgroundTask | None = None,
-    headers: Mapping[str, str] | None = None,
-) -> Response[dict[str, object]]:
-    """Return the JSON error payload shape used by controller request-body failures."""
-    payload: dict[str, object] = {
-        "status_code": status_code,
-        "detail": detail,
-    }
-    if extra is not None:
-        payload["extra"] = dict(extra)
-    return Response(
-        content=payload,
-        status_code=status_code,
-        media_type=MediaType.JSON,
-        background=background,
-        headers=dict(headers) if headers is not None else None,
-    )
-
-
-def _create_request_body_exception_handlers(  # noqa: PLR0913
-    *,
-    validation_detail: str = "Invalid request payload.",
-    validation_code: str = ErrorCode.REQUEST_BODY_INVALID,
-    decode_detail: str = "Invalid request body.",
-    decode_code: str = ErrorCode.REQUEST_BODY_INVALID,
-    on_validation_error: ErrorCallback | None = None,
-    on_decode_error: ErrorCallback | None = None,
-) -> ExceptionHandlersMap:
-    """Create route-local handlers that preserve the controller body-error contract for typed ``data`` params.
-
-    Returns:
-        Mapping of body-related exceptions to route-local response adapters.
-    """
-
-    def _background(callback: ErrorCallback | None, request: Request[Any, Any, Any]) -> BackgroundTask | None:
-        return BackgroundTask(callback, request) if callback is not None else None
-
-    def handle_validation(
-        request: Request[Any, Any, Any],
-        exc: ValidationException,
-    ) -> Response[dict[str, object]]:
-        del exc
-        return _create_error_response(
-            status_code=422,
-            detail=validation_detail,
-            extra={"code": validation_code},
-            background=_background(on_validation_error, request),
-        )
-
-    def handle_client(
-        request: Request[Any, Any, Any],
-        exc: ClientException,
-    ) -> Response[dict[str, object]]:
-        if exc.extra is None and exc.status_code == _HTTP_BAD_REQUEST:
-            return _create_error_response(
-                status_code=_HTTP_BAD_REQUEST,
-                detail=decode_detail,
-                extra={"code": decode_code},
-                background=_background(on_decode_error, request),
-            )
-
-        return _create_error_response(
-            status_code=exc.status_code,
-            detail=exc.detail,
-            extra=cast("Mapping[str, Any] | None", exc.extra),
-            headers=cast("Mapping[str, str] | None", getattr(exc, "headers", None)),
-        )
-
-    return cast(
-        "ExceptionHandlersMap",
-        {
-            ValidationException: handle_validation,
-            ClientException: handle_client,
-        },
-    )
-
-
-def _configure_request_body_handler(  # noqa: PLR0913
-    route_handler: RequestBodyRouteHandler,
-    *,
-    schema: type[msgspec.Struct],
-    validation_detail: str = "Invalid request payload.",
-    validation_code: str = ErrorCode.REQUEST_BODY_INVALID,
-    decode_detail: str = "Invalid request body.",
-    decode_code: str = ErrorCode.REQUEST_BODY_INVALID,
-    on_validation_error: ErrorCallback | None = None,
-    on_decode_error: ErrorCallback | None = None,
-) -> None:
-    """Attach a typed ``data`` signature and controller body-error handlers to a route handler."""
-    _set_data_parameter_annotation(route_handler.fn, schema=schema)
-    route_handler.exception_handlers = {
-        **(route_handler.exception_handlers or {}),
-        **_create_request_body_exception_handlers(
-            validation_detail=validation_detail,
-            validation_code=validation_code,
-            decode_detail=decode_detail,
-            decode_code=decode_code,
-            on_validation_error=on_validation_error,
-            on_decode_error=on_decode_error,
-        ),
-    }
-
-
-def _set_data_parameter_annotation(
-    handler_fn: Callable[..., Any],
-    *,
-    schema: type[msgspec.Struct],
-) -> None:
-    """Replace the ``data`` parameter annotation used by Litestar request-body discovery.
-
-    Raises:
-        TypeError: If the handler does not declare a ``data`` parameter.
-    """
-    signature = inspect.signature(handler_fn)
-    parameters: list[inspect.Parameter] = []
-    has_data_parameter = False
-
-    for parameter in signature.parameters.values():
-        if parameter.name == "data":
-            parameters.append(parameter.replace(annotation=schema))
-            has_data_parameter = True
-            continue
-        parameters.append(parameter)
-
-    if not has_data_parameter:
-        msg = "Request-body handlers must declare a `data` parameter."
-        raise TypeError(msg)
-
-    adapted_handler = cast("Any", handler_fn)
-    adapted_handler.__signature__ = inspect.Signature(
-        parameters=parameters,
-        return_annotation=signature.return_annotation,
-    )
-    adapted_handler.__annotations__ = {
-        **getattr(handler_fn, "__annotations__", {}),
-        "data": schema,
-    }
-
-
-@asynccontextmanager
-async def _map_domain_exceptions(
-    mapping: DomainErrorMap,
-    *,
-    on_error: AccountStateFailureCallback | None = None,
-    detail: str | None = None,
-) -> AsyncIterator[None]:
-    """Map configured domain exceptions into ``ClientException`` responses.
-
-    Raises:
-        ClientException: If a configured domain exception is raised in the context.
-    """
-    try:
-        yield
-    except tuple(mapping) as exc:
-        if on_error is not None:
-            await on_error()
-        status_code, error_code = _resolve_domain_error_response(exc, mapping)
-        raise ClientException(
-            status_code=status_code,
-            detail=detail if detail is not None else _domain_error_public_detail(exc),
-            extra={"code": error_code},
-        ) from exc
-
-
-def _domain_error_public_detail(exc: Exception) -> str:
-    """Return the client-facing detail for a mapped domain exception."""
-    if isinstance(exc, UserAlreadyExistsError):
-        return UserAlreadyExistsError.default_message
-    return str(exc)
-
-
-def _require_msgspec_struct(
-    schema: type[object],
-    *,
-    parameter_name: str,
-    require_forbid_unknown_fields: bool = False,
-) -> None:
-    """Validate that a configurable schema is a msgspec struct type.
-
-    Raises:
-        TypeError: If ``schema`` is not a ``msgspec.Struct`` subclass or does not
-            satisfy request-body strictness requirements.
-    """
-    if not issubclass(schema, msgspec.Struct):
-        msg = f"{parameter_name} must be a msgspec.Struct subclass."
-        raise TypeError(msg)
-
-    if require_forbid_unknown_fields and not schema.__struct_config__.forbid_unknown_fields:
-        msg = f"{parameter_name} must set forbid_unknown_fields=True so unknown request fields are rejected."
-        raise TypeError(msg)
-
-
-_SENSITIVE_FIELD_BLOCKLIST: frozenset[str] = frozenset(
-    {
-        "hashed_password",
-        "totp_secret",
-        "password",
-    },
+from litestar_auth.controllers._request_body import (  # noqa: E402
+    _HTTP_BAD_REQUEST,
+    ErrorCallback,
+    RequestBodyErrorConfig,
+    RequestBodyRouteHandler,
+    _configure_request_body_handler,
+    _create_request_body_exception_handlers,
+    _decode_request_body,
+    _set_data_parameter_annotation,
 )
+from litestar_auth.controllers._user_schema import _require_msgspec_struct, _to_user_schema  # noqa: E402
 
-
-def _to_user_schema(
-    user: object,
-    schema: type[msgspec.Struct],
-    *,
-    unsafe_testing: bool = False,
-) -> msgspec.Struct:
-    """Build the configured public response struct from a user object.
-
-    Returns:
-        The configured response struct populated from ``user`` attributes.
-
-    Raises:
-        ConfigurationError: If the schema includes sensitive fields in production.
-    """
-    leaked = _SENSITIVE_FIELD_BLOCKLIST & frozenset(schema.__struct_fields__)
-    if leaked:
-        if not unsafe_testing:
-            msg = (
-                f"UserRead schema includes sensitive fields {sorted(leaked)}; "
-                "remove them from the response schema to prevent data leakage."
-            )
-            raise ConfigurationError(msg)
-        logger.warning(
-            "UserRead schema includes sensitive fields %s; these will appear in API responses",
-            sorted(leaked),
-        )
-    payload: dict[str, object] = {}
-    for field_name in schema.__struct_fields__:
-        if not hasattr(user, field_name):
-            msg = (
-                f"User schema {schema.__name__!r} requires field {field_name!r}, but "
-                f"{type(user).__name__!r} does not define it. Align your public user schema "
-                "with the configured user model."
-            )
-            raise ConfigurationError(msg)
-        payload[field_name] = getattr(user, field_name)
-    return schema(**payload)
+__all__ = (
+    "_HTTP_BAD_REQUEST",
+    "AccountStateFailureCallback",
+    "AccountStateValidatorProvider",
+    "DomainErrorMap",
+    "ErrorCallback",
+    "ErrorCode",
+    "RequestBodyErrorConfig",
+    "RequestBodyRouteHandler",
+    "RequestHandler",
+    "_build_controller_name",
+    "_configure_request_body_handler",
+    "_create_before_request_handler",
+    "_create_error_response",
+    "_create_rate_limit_handlers",
+    "_create_request_body_exception_handlers",
+    "_decode_request_body",
+    "_domain_error_public_detail",
+    "_is_litestar_auth_route_handler",
+    "_map_domain_exceptions",
+    "_mark_litestar_auth_route_handler",
+    "_require_account_state",
+    "_require_account_state_from_attributes",
+    "_require_msgspec_struct",
+    "_resolve_account_state_validator",
+    "_resolve_domain_error_response",
+    "_set_data_parameter_annotation",
+    "_to_user_schema",
+)
 
 
 def _build_controller_name(name: str) -> str:
@@ -377,23 +124,6 @@ def _build_controller_name(name: str) -> str:
     """
     normalized_name = "".join(part.capitalize() for part in name.replace("_", "-").split("-") if part)
     return normalized_name or "Generated"
-
-
-def _resolve_domain_error_response(
-    exc: Exception,
-    mapping: DomainErrorMap,
-) -> tuple[int, str]:
-    """Return the first mapped client response for the raised domain exception.
-
-    Raises:
-        LookupError: If ``exc`` does not match any configured exception type.
-    """
-    for exception_type, response in mapping.items():
-        if isinstance(exc, exception_type):
-            return response
-
-    msg = f"Unmapped domain exception: {type(exc).__name__}"
-    raise LookupError(msg)
 
 
 def _create_rate_limit_handlers(rate_limit: EndpointRateLimit | None) -> tuple[RequestHandler, RequestHandler]:

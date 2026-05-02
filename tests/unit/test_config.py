@@ -8,6 +8,7 @@ import warnings
 
 import pytest
 
+import litestar_auth._secret_roles as secret_roles_module
 import litestar_auth.authentication.strategy.jwt as jwt_strategy_module
 import litestar_auth.config as config_module
 import litestar_auth.controllers.totp as totp_controller_module
@@ -46,6 +47,33 @@ def test_config_defines_canonical_token_audiences() -> None:
     assert JWT_ACCESS_TOKEN_AUDIENCE == "litestar-auth:access"
     assert TOTP_PENDING_AUDIENCE == "litestar-auth:2fa-pending"
     assert TOTP_ENROLL_AUDIENCE == "litestar-auth:2fa-enroll"
+
+
+def test_config_reexports_secret_role_catalog_helpers() -> None:
+    """Secret-role helpers remain available through the historical config module path."""
+    reloaded_secret_roles = importlib.reload(secret_roles_module)
+    reloaded_config = importlib.reload(config_module)
+    role_values = reloaded_config.SecretRoleValues(
+        verification_token_secret="verify",
+        reset_password_token_secret="reset",
+        login_identifier_telemetry_secret="telemetry",
+        totp_secret_key="totp-key",
+        totp_pending_secret="totp-pending",
+        oauth_flow_cookie_secret="oauth-flow",
+    )
+
+    assert reloaded_config.SecretRoleValues is reloaded_secret_roles.SecretRoleValues
+    assert (
+        reloaded_config.validate_secret_roles_are_distinct is reloaded_secret_roles.validate_secret_roles_are_distinct
+    )
+    assert [role.setting_name for role, _secret in role_values.as_role_pairs()] == [
+        "verification_token_secret",
+        "reset_password_token_secret",
+        "login_identifier_telemetry_secret",
+        "totp_secret_key",
+        "totp_pending_secret",
+        "oauth_flow_cookie_secret",
+    ]
 
 
 @pytest.mark.parametrize(

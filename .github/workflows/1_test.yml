@@ -88,7 +88,7 @@ jobs:
           key: venv-precommit-${{ env.VENV_PRECOMMIT_CACHE_VERSION }}-${{ runner.os }}-3.12-${{ github.run_id }}-${{ github.run_attempt }}
 
       - name: Run prek
-        uses: j178/prek-action@cbc2f23eb5539cf20d82d1aabd0d0ecbcc56f4e3 # v2.0.2
+        uses: j178/prek-action@6ad80277337ad479fe43bd70701c3f7f8aa74db3 # v2.0.3
         with:
           cache: true
 
@@ -157,7 +157,7 @@ jobs:
 
       # Codecov flags: ^[\w.\-]{1,45}$ (alphanumeric, _, -, .); see https://docs.codecov.com/docs/flags
       - name: Upload coverage to Codecov
-        uses: codecov/codecov-action@3f20e214133d0983f9a10f3d63b0faf9241a3daa # v6.0.0
+        uses: codecov/codecov-action@57e3a136b779b570ffcdbf80b3bdc90e7fab3de2 # v6.0.0
         with:
           fail_ci_if_error: true
           files: coverage.xml

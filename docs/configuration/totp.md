@@ -29,7 +29,8 @@ fail, the shared account-state policy reports inactive users before unverified u
 record **and** before writing the short-lived pending-enrollment secret to
 `totp_enrollment_store`. The enrollment JWT returned by `/2fa/enable` carries only lookup claims,
 not the secret. The plugin forwards the configured keyring into
-`create_totp_controller(..., totp_secret_keyring=...)` automatically. In production,
+`create_totp_controller(..., totp_secret_keyring=...)` automatically. Manual controller wiring keeps
+the same keyword names, typed by `TotpControllerOptions`. In production,
 `totp_secret_keyring` or the one-key `totp_secret_key` shortcut is required —
 `create_totp_controller` fails closed with `ConfigurationError` when both are omitted and
 `unsafe_testing=False`. Persisted user-row TOTP secrets are stored as
