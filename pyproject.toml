@@ -166,6 +166,9 @@ markers = """
 [tool.coverage.run]
 source = ["litestar_auth"]
 branch = true
+parallel = true
+concurrency = ["multiprocessing", "thread"]
+sigterm = true
 
 [tool.coverage.report]
 precision = 1

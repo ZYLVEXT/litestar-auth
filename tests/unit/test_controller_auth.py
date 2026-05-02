@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import importlib
 from datetime import timedelta
 from types import CellType, FunctionType
 from typing import Any, cast
@@ -41,15 +40,6 @@ pytestmark = pytest.mark.unit
 HTTP_ACCEPTED = 202
 HTTP_BAD_REQUEST = 400
 STATUS_UNPROCESSABLE_ENTITY = 422
-
-
-def test_auth_controller_module_reload_executes_module_body() -> None:
-    """Reload the auth controller module so coverage records its module-level definitions."""
-    reloaded = importlib.reload(auth_controller_module)
-
-    assert reloaded.LoginCredentials is not None
-    assert reloaded.RefreshTokenRequest is not None
-    assert reloaded.TOTP_PENDING_AUDIENCE == auth_controller_module.TOTP_PENDING_AUDIENCE
 
 
 def test_get_refresh_strategy_raises_when_strategy_not_refreshable() -> None:

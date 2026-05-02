@@ -142,10 +142,25 @@ jobs:
       - name: Install the project
         run: uv sync --frozen --all-extras --group dev
 
+      # Install the coverage subprocess startup hook so pytest-cov measures
+      # import-time class/function definitions in modules that pytest-cov
+      # imports during plugin discovery (otherwise instrumentation starts
+      # after those modules are already in sys.modules).
+      # See: https://coverage.readthedocs.io/en/latest/subprocess.html
+      - name: Install coverage subprocess hook
+        run: >-
+          uv run python -c
+          "import sysconfig, pathlib;
+          p = pathlib.Path(sysconfig.get_paths()['purelib']) / 'coverage_subprocess.pth';
+          p.write_text('import coverage; coverage.process_startup()\n');
+          print(f'Installed {p}')"
+
       - name: Detect dead fixtures
         run: uv run pytest --dead-fixtures
 
       - name: Run tests (coverage + XML for Codecov)
+        env:
+          COVERAGE_PROCESS_START: pyproject.toml
         run: >-
           uv run pytest
           --cov=litestar_auth

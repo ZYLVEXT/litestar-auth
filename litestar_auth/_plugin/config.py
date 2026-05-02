@@ -1,20 +1,10 @@
 """Configuration contracts for the plugin facade."""
 
-# Test-suite reload-coverage pattern note:
-# Several helpers below keep cross-module class identity coherent after tests
-# call `importlib.reload(...)`. The reload pattern is load-bearing for the 100%
-# coverage gate; removing these helpers requires first replacing the
-# coverage-startup mechanism. See the investigation outcome at
-# refactoring-test-reload-investigation.json (REFAC-001): a naive
-# `coverage.run.parallel = true` configuration drops import-time coverage of
-# `_plugin/oauth_contract.py` from 100% to 70.8%.
-
 from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from functools import partial
-from importlib import import_module
 from typing import TYPE_CHECKING, Any, Protocol, cast, get_args
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -31,6 +21,7 @@ from litestar_auth._plugin.security_policy import (
 from litestar_auth._superuser_role import DEFAULT_SUPERUSER_ROLE_NAME, normalize_superuser_role_name
 from litestar_auth.db.base import BaseUserStore
 from litestar_auth.exceptions import ConfigurationError
+from litestar_auth.password import PasswordHelper
 from litestar_auth.types import (
     DbSessionDependencyKey,
     LoginIdentifier,
@@ -45,14 +36,11 @@ if TYPE_CHECKING:
     from litestar.openapi.spec import SecurityRequirement, SecurityScheme
 
     from litestar_auth.authentication.backend import AuthenticationBackend
-    from litestar_auth.manager import BaseUserManager, FernetKeyringConfig, UserManagerSecurity
-    from litestar_auth.password import PasswordHelper
+    from litestar_auth.manager import BaseUserManager, UserManagerSecurity
     from litestar_auth.ratelimit import AuthRateLimitConfig
 
 type UserDatabaseFactory[UP: UserProtocol[Any], ID] = Callable[[AsyncSession], BaseUserStore[UP, ID]]
 _SESSION_FACTORY_CONTRACT = SessionFactory
-PasswordHelper = cast("Any", import_module("litestar_auth.password").PasswordHelper)
-FernetKeyringConfig = cast("Any", import_module("litestar_auth.manager").FernetKeyringConfig)
 
 DEFAULT_CONFIG_DEPENDENCY_KEY = "litestar_auth_config"
 DEFAULT_USER_MANAGER_DEPENDENCY_KEY = "litestar_auth_user_manager"
@@ -76,48 +64,11 @@ StartupBackendInventory = _backend_inventory.StartupBackendInventory
 StartupBackendTemplate = _backend_inventory.StartupBackendTemplate
 
 
-def _resync_after_test_reload() -> None:
-    """Resync backend-inventory aliases after a test reloads the source module.
-
-    Without this, cross-module ``isinstance`` and class-identity checks would see
-    stale ``StartupBackendInventory`` and ``StartupBackendTemplate`` class
-    objects after ``importlib.reload(_backend_inventory)``. Test-infrastructure
-    helper -- see the module-level note above.
-    """
-    global StartupBackendInventory, StartupBackendTemplate  # noqa: PLW0603
-    StartupBackendInventory = _backend_inventory.StartupBackendInventory
-    StartupBackendTemplate = _backend_inventory.StartupBackendTemplate
-    StartupBackendInventory.__module__ = __name__
-    StartupBackendTemplate.__module__ = __name__
-
-
-_resync_after_test_reload()
-
-
 def resolve_backend_inventory[UP: UserProtocol[Any], ID](
     config: LitestarAuthConfig[UP, ID],
 ) -> StartupBackendInventory[UP, ID]:
-    """Refresh test-reload-safe aliases and return the resolved backend inventory.
-
-    Returns:
-        The current startup backend inventory for ``config``.
-    """
-    _resync_after_test_reload()
+    """Return the resolved backend inventory for ``config``."""
     return _backend_inventory.resolve_backend_inventory(config)
-
-
-def _current_password_helper_type() -> type[PasswordHelper]:
-    """Resolve ``PasswordHelper`` lazily for the memoized default helper.
-
-    This lets ``LitestarAuthConfig._memoized_default_password_helper`` pick up
-    the post-reload class identity if a test calls
-    ``importlib.reload(litestar_auth.password)``. Test-infrastructure helper --
-    see the module-level note above.
-
-    Returns:
-        The current PasswordHelper type from ``litestar_auth.password``.
-    """
-    return cast("type[PasswordHelper]", import_module("litestar_auth.password").PasswordHelper)
 
 
 def _build_default_user_db(session: AsyncSession, *, user_model: type[Any]) -> BaseUserStore[Any, Any]:
@@ -392,7 +343,7 @@ class LitestarAuthConfig[UP: UserProtocol[Any], ID]:
         if self.user_manager_security is not None and self.user_manager_security.password_helper is not None:
             return self.user_manager_security.password_helper
         if self._memoized_default_password_helper is None:
-            self._memoized_default_password_helper = _current_password_helper_type().from_defaults()
+            self._memoized_default_password_helper = PasswordHelper.from_defaults()
         return self._memoized_default_password_helper
 
     def get_default_password_helper(self) -> PasswordHelper | None:

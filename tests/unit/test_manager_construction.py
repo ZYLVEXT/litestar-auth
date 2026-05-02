@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import importlib
 from dataclasses import dataclass
 from typing import cast
 from uuid import UUID
@@ -10,7 +9,6 @@ from uuid import UUID
 import pytest
 from cryptography.fernet import Fernet
 
-import litestar_auth._manager.construction as construction_module
 from litestar_auth._manager.construction import (
     ManagerConstructorInputs,
     SecretFactory,
@@ -35,13 +33,6 @@ class SecretWrapper:
     def get_secret_value(self) -> str:
         """Return the wrapped secret value."""
         return self.value
-
-
-def test_manager_construction_module_executes_under_coverage() -> None:
-    """Reload the module in-test so coverage records helper and dataclass execution."""
-    reloaded_module = importlib.reload(construction_module)
-
-    assert reloaded_module.ManagerConstructorInputs.__name__ == ManagerConstructorInputs.__name__
 
 
 def test_resolve_account_token_secrets_wraps_account_token_secrets() -> None:

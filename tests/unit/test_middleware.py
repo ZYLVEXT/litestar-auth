@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import importlib
 import logging
 from functools import partial
 from typing import TYPE_CHECKING, Any, Self, cast
@@ -14,7 +13,6 @@ import pytest
 from litestar.connection import ASGIConnection
 from litestar.datastructures.state import State
 
-import litestar_auth.authentication.middleware as middleware_module
 from litestar_auth._plugin.scoped_session import get_or_create_scoped_session
 from litestar_auth._superuser_role import SUPERUSER_ROLE_NAME_SENTINEL
 from litestar_auth.authentication.middleware import (
@@ -414,14 +412,4 @@ def test_cookie_header_contains_any_cookie_name_strips_whitespace() -> None:
     assert not _cookie_header_contains_any_cookie_name(
         b"sessionid=abc123; theme=dark",
         frozenset({b"litestar_auth", b"litestar_auth_refresh"}),
-    )
-
-
-def test_middleware_module_reload_preserves_public_behavior() -> None:
-    """Reloading the module preserves helper behavior while covering import-time definitions."""
-    reloaded_module = importlib.reload(middleware_module)
-
-    assert reloaded_module._cookie_header_contains_any_cookie_name(
-        b"litestar_auth=token",
-        frozenset({b"litestar_auth"}),
     )

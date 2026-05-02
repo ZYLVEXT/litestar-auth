@@ -13,11 +13,8 @@ from uuid import UUID, uuid4
 import jwt
 import pytest
 
-from litestar_auth import _jwt_headers as jwt_headers_module
 from litestar_auth._jwt_headers import jwt_encode_headers
 from litestar_auth._redis_protocols import RedisExpiringValueStoreClient
-from litestar_auth.authentication.strategy import _jwt_denylist as jwt_denylist_module
-from litestar_auth.authentication.strategy import jwt as jwt_strategy_module
 from litestar_auth.authentication.strategy.jwt import (
     JWT_ACCESS_TOKEN_AUDIENCE,
     InMemoryJWTDenylistStore,
@@ -110,18 +107,6 @@ def _make_token(
         Signed JWT string.
     """
     return jwt.encode(dict(payload), secret, algorithm=algorithm, headers=dict(headers or jwt_encode_headers()))
-
-
-def test_jwt_module_executes_under_coverage() -> None:
-    """Reload the JWT strategy module in-test so coverage records class-body execution."""
-    reloaded_headers_module = importlib.reload(jwt_headers_module)
-    reloaded_denylist_module = importlib.reload(jwt_denylist_module)
-    reloaded_module = importlib.reload(jwt_strategy_module)
-
-    assert reloaded_headers_module.jwt_encode_headers() == jwt_encode_headers()
-    assert reloaded_module.JWTStrategy is _jwt_module().JWTStrategy
-    assert reloaded_module.InMemoryJWTDenylistStore is reloaded_denylist_module.InMemoryJWTDenylistStore
-    assert reloaded_module.RedisJWTDenylistStore is reloaded_denylist_module.RedisJWTDenylistStore
 
 
 def test_in_memory_jwt_denylist_store_rejects_invalid_capacity() -> None:

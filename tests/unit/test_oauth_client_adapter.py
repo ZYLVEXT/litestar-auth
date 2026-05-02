@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import importlib
 import inspect
 import threading
 from types import SimpleNamespace
@@ -28,12 +27,6 @@ def _make_oauth_client(**kwargs: object) -> SimpleNamespace:
 def _build_adapter(oauth_client: object) -> client_adapter_module.OAuthClientAdapter:
     """Return an adapter over a runtime OAuth client double."""
     return client_adapter_module.OAuthClientAdapter(cast("client_adapter_module.OAuthClientProtocol", oauth_client))
-
-
-def test_client_adapter_module_executes_under_coverage() -> None:
-    """Reload the module in-test so definition lines count toward coverage."""
-    importlib.reload(_client_features)
-    importlib.reload(client_adapter_module)
 
 
 def test_oauth_client_adapter_exposes_typed_client_contract_annotation() -> None:

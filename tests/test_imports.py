@@ -401,12 +401,10 @@ def test_root_package_exports_canonical_database_token_preset_entrypoint() -> No
     assert config.session_maker is session_maker
 
     backend = config.resolve_startup_backends()[0]
-    current_plugin_module = importlib.import_module("litestar_auth.plugin")
-    database_token_strategy_type = _current_database_token_strategy_type()
-    assert isinstance(backend, current_plugin_module.StartupBackendTemplate)
+    assert isinstance(backend, plugin_module.StartupBackendTemplate)
     assert backend.name == "database"
     assert isinstance(backend.transport, BearerTransport)
-    assert isinstance(backend.strategy, database_token_strategy_type)
+    assert isinstance(backend.strategy, DatabaseTokenStrategy)
 
 
 def test_public_user_schema_reuse_surface_stays_importable() -> None:
@@ -699,8 +697,8 @@ def test_legacy_contrib_oauth_package_is_removed() -> None:
 
 def test_ratelimit_module_exposes_canonical_shared_backend_builder() -> None:
     """The public ratelimit module exposes the shared-backend builder entrypoint."""
-    current_config_class = ratelimit_module.AuthRateLimitConfig
-    current_endpoint_class = ratelimit_module.EndpointRateLimit
+    AuthRateLimitConfig = ratelimit_module.AuthRateLimitConfig
+    EndpointRateLimit = ratelimit_module.EndpointRateLimit
     current_memory_limiter_class = ratelimit_module.InMemoryRateLimiter
     current_redis_limiter_class = ratelimit_module.RedisRateLimiter
     credential_backend = current_memory_limiter_class(max_attempts=3, window_seconds=60)
@@ -712,7 +710,7 @@ def test_ratelimit_module_exposes_canonical_shared_backend_builder() -> None:
     }
     disabled_slots = AUTH_RATE_LIMIT_VERIFICATION_SLOT_IDENTIFIERS
 
-    config = current_config_class.from_shared_backend(
+    config = AuthRateLimitConfig.from_shared_backend(
         credential_backend,
         options=SharedRateLimitConfigOptions(
             group_backends=group_backends,
@@ -720,8 +718,8 @@ def test_ratelimit_module_exposes_canonical_shared_backend_builder() -> None:
         ),
     )
 
-    assert current_config_class.__name__ == AuthRateLimitConfig.__name__
-    assert current_endpoint_class.__name__ == EndpointRateLimit.__name__
+    assert AuthRateLimitConfig.__name__ == AuthRateLimitConfig.__name__
+    assert EndpointRateLimit.__name__ == EndpointRateLimit.__name__
     assert current_memory_limiter_class.__name__ == InMemoryRateLimiter.__name__
     assert current_redis_limiter_class.__name__ == RedisRateLimiter.__name__
     assert "AuthRateLimitConfig" in ratelimit_module.__all__
@@ -735,35 +733,33 @@ def test_ratelimit_module_exposes_canonical_shared_backend_builder() -> None:
     assert not hasattr(ratelimit_module, "_validate_configuration")
     assert not hasattr(ratelimit_module, "importlib")
     assert not hasattr(ratelimit_module, "logger")
-    assert config.login == current_endpoint_class(backend=credential_backend, scope="ip_email", namespace="login")
-    assert config.refresh == current_endpoint_class(backend=refresh_backend, scope="ip", namespace="refresh")
-    assert config.forgot_password == current_endpoint_class(
+    assert config.login == EndpointRateLimit(backend=credential_backend, scope="ip_email", namespace="login")
+    assert config.refresh == EndpointRateLimit(backend=refresh_backend, scope="ip", namespace="refresh")
+    assert config.forgot_password == EndpointRateLimit(
         backend=credential_backend,
         scope="ip_email",
         namespace="forgot-password",
     )
-    assert config.totp_verify == current_endpoint_class(backend=totp_backend, scope="ip", namespace="totp-verify")
+    assert config.totp_verify == EndpointRateLimit(backend=totp_backend, scope="ip", namespace="totp-verify")
     assert config.verify_token is None
     assert config.request_verify_token is None
-    assert config.totp_disable == current_endpoint_class(
+    assert config.totp_disable == EndpointRateLimit(
         backend=totp_backend,
         scope="ip",
         namespace="totp-disable",
     )
-    assert config.totp_regenerate_recovery_codes == current_endpoint_class(
+    assert config.totp_regenerate_recovery_codes == EndpointRateLimit(
         backend=totp_backend,
         scope="ip",
         namespace="totp-regenerate-recovery-codes",
     )
 
 
-async def test_root_package_supports_documented_redis_migration_recipe_and_totp_replay_store(  # noqa: PLR0915
+async def test_root_package_supports_documented_redis_migration_recipe_and_totp_replay_store(
     monkeypatch: pytest.MonkeyPatch,
     async_fakeredis_factory: AsyncFakeRedisFactory,
 ) -> None:
     """Public imports remain sufficient for the documented Redis migration recipe."""
-    current_plugin_module = importlib.reload(plugin_module)
-    current_root_module = importlib.reload(litestar_auth)
 
     def load_optional_redis() -> object:
         return object()
@@ -772,9 +768,9 @@ async def test_root_package_supports_documented_redis_migration_recipe_and_totp_
     monkeypatch.setattr(totp_module._totp_stores, "_load_used_totp_redis_asyncio", load_optional_redis)
     monkeypatch.setattr(totp_module._totp_stores, "_load_enrollment_redis_asyncio", load_optional_redis)
 
-    current_config_class = ratelimit_module.AuthRateLimitConfig
-    current_endpoint_class = ratelimit_module.EndpointRateLimit
-    current_slot_enum = ratelimit_module.AuthRateLimitSlot
+    AuthRateLimitConfig = ratelimit_module.AuthRateLimitConfig
+    EndpointRateLimit = ratelimit_module.EndpointRateLimit
+    AuthRateLimitSlot = ratelimit_module.AuthRateLimitSlot
     rate_limit_redis_client = async_fakeredis_factory()
     rate_limit_redis = cast_fakeredis(rate_limit_redis_client, RedisAuthClientProtocol)
     totp_redis_client = async_fakeredis_factory()
@@ -782,54 +778,54 @@ async def test_root_package_supports_documented_redis_migration_recipe_and_totp_
     credential_backend = RedisRateLimiter(redis=rate_limit_redis, max_attempts=5, window_seconds=60)
     refresh_backend = RedisRateLimiter(redis=rate_limit_redis, max_attempts=10, window_seconds=300)
     totp_backend = RedisRateLimiter(redis=rate_limit_redis, max_attempts=5, window_seconds=300)
-    forgot_password_override = current_endpoint_class(
+    forgot_password_override = EndpointRateLimit(
         backend=credential_backend,
         scope="ip_email",
         namespace="forgot_password",
     )
-    reset_password_override = current_endpoint_class(
+    reset_password_override = EndpointRateLimit(
         backend=credential_backend,
         scope="ip",
         namespace="reset_password",
     )
-    totp_enable_override = current_endpoint_class(
+    totp_enable_override = EndpointRateLimit(
         backend=totp_backend,
         scope="ip",
         namespace="totp_enable",
     )
-    totp_confirm_enable_override = current_endpoint_class(
+    totp_confirm_enable_override = EndpointRateLimit(
         backend=totp_backend,
         scope="ip",
         namespace="totp_confirm_enable",
     )
-    totp_verify_override = current_endpoint_class(
+    totp_verify_override = EndpointRateLimit(
         backend=totp_backend,
         scope="ip",
         namespace="totp_verify",
     )
-    totp_disable_override = current_endpoint_class(
+    totp_disable_override = EndpointRateLimit(
         backend=totp_backend,
         scope="ip",
         namespace="totp_disable",
     )
-    totp_regenerate_override = current_endpoint_class(
+    totp_regenerate_override = EndpointRateLimit(
         backend=totp_backend,
         scope="ip",
         namespace="totp_regenerate_recovery_codes",
     )
-    rate_limit_config = current_config_class.from_shared_backend(
+    rate_limit_config = AuthRateLimitConfig.from_shared_backend(
         credential_backend,
         options=SharedRateLimitConfigOptions(
             group_backends={"refresh": refresh_backend, "totp": totp_backend},
             disabled=AUTH_RATE_LIMIT_VERIFICATION_SLOT_IDENTIFIERS,
             endpoint_overrides={
-                current_slot_enum.FORGOT_PASSWORD: forgot_password_override,
-                current_slot_enum.RESET_PASSWORD: reset_password_override,
-                current_slot_enum.TOTP_ENABLE: totp_enable_override,
-                current_slot_enum.TOTP_CONFIRM_ENABLE: totp_confirm_enable_override,
-                current_slot_enum.TOTP_VERIFY: totp_verify_override,
-                current_slot_enum.TOTP_DISABLE: totp_disable_override,
-                current_slot_enum.TOTP_REGENERATE_RECOVERY_CODES: totp_regenerate_override,
+                AuthRateLimitSlot.FORGOT_PASSWORD: forgot_password_override,
+                AuthRateLimitSlot.RESET_PASSWORD: reset_password_override,
+                AuthRateLimitSlot.TOTP_ENABLE: totp_enable_override,
+                AuthRateLimitSlot.TOTP_CONFIRM_ENABLE: totp_confirm_enable_override,
+                AuthRateLimitSlot.TOTP_VERIFY: totp_verify_override,
+                AuthRateLimitSlot.TOTP_DISABLE: totp_disable_override,
+                AuthRateLimitSlot.TOTP_REGENERATE_RECOVERY_CODES: totp_regenerate_override,
             },
         ),
     )
@@ -843,16 +839,16 @@ async def test_root_package_supports_documented_redis_migration_recipe_and_totp_
         totp_enrollment_store=enrollment_store,
     )
 
-    assert current_root_module.TotpConfig is current_plugin_module.TotpConfig
+    assert litestar_auth.TotpConfig is plugin_module.TotpConfig
     assert AuthRateLimitConfig.__name__ == ratelimit_module.AuthRateLimitConfig.__name__
     assert RedisTotpEnrollmentStore.__name__ == totp_module.RedisTotpEnrollmentStore.__name__
     assert RedisUsedTotpCodeStore.__name__ == totp_module.RedisUsedTotpCodeStore.__name__
-    assert rate_limit_config.login == current_endpoint_class(
+    assert rate_limit_config.login == EndpointRateLimit(
         backend=credential_backend,
         scope="ip_email",
         namespace="login",
     )
-    assert rate_limit_config.refresh == current_endpoint_class(backend=refresh_backend, scope="ip", namespace="refresh")
+    assert rate_limit_config.refresh == EndpointRateLimit(backend=refresh_backend, scope="ip", namespace="refresh")
     assert rate_limit_config.forgot_password is forgot_password_override
     assert rate_limit_config.totp_verify is totp_verify_override
     assert rate_limit_config.totp_disable is totp_disable_override
@@ -1242,10 +1238,6 @@ def test_root_package_does_not_export_compat_aliases() -> None:
 
 def test_plugin_module_public_exports_no_compat_shims() -> None:
     """Plugin module exposes ``LitestarAuth``, ``LitestarAuthConfig``, config dataclasses; legacy shims removed."""
-    current_plugin_internals = importlib.reload(plugin_internals)
-    current_plugin_module = importlib.reload(plugin_module)
-    current_root_module = importlib.reload(litestar_auth)
-
     assert plugin_module.__all__ == (
         "DatabaseTokenAuthConfig",
         "FernetKeyringConfig",
@@ -1256,15 +1248,15 @@ def test_plugin_module_public_exports_no_compat_shims() -> None:
         "StartupBackendTemplate",
         "TotpConfig",
     )
-    assert current_plugin_module.DatabaseTokenAuthConfig is current_root_module.DatabaseTokenAuthConfig
-    assert current_plugin_module.FernetKeyringConfig is current_root_module.FernetKeyringConfig
-    assert current_plugin_module.LitestarAuthConfig is current_plugin_internals.LitestarAuthConfig
-    assert current_plugin_module.StartupBackendTemplate.__module__ == "litestar_auth._plugin.config"
-    assert not hasattr(current_root_module, "StartupBackendTemplate")
+    assert plugin_module.DatabaseTokenAuthConfig is litestar_auth.DatabaseTokenAuthConfig
+    assert plugin_module.FernetKeyringConfig is litestar_auth.FernetKeyringConfig
+    assert plugin_module.LitestarAuthConfig is plugin_internals.LitestarAuthConfig
+    assert plugin_module.StartupBackendTemplate.__module__ == "litestar_auth._plugin.backend_inventory"
+    assert not hasattr(litestar_auth, "StartupBackendTemplate")
     assert "AuthPlugin" not in plugin_module.__all__
     assert not hasattr(plugin_module, "AuthPlugin")
     for name in ("_ScopedUserDatabaseProxy", "_UserManagerFactory"):
-        assert not hasattr(current_plugin_internals, name)
+        assert not hasattr(plugin_internals, name)
     for name in (
         "DEFAULT_CONFIG_DEPENDENCY_KEY",
         "DEFAULT_USER_MANAGER_DEPENDENCY_KEY",

@@ -17,12 +17,9 @@ from litestar.config.app import AppConfig
 
 import litestar_auth._plugin._redirect_validation as redirect_validation_module
 import litestar_auth._plugin.config as plugin_config_module
-import litestar_auth._plugin.middleware as middleware_module
-import litestar_auth._plugin.oauth_validation as oauth_validation_module
 import litestar_auth._plugin.rate_limit as rate_limit_module
 import litestar_auth._plugin.security_policy as plugin_security_policy_module
 import litestar_auth._plugin.startup as startup_module
-import litestar_auth._plugin.totp_validation as totp_validation_module
 import litestar_auth._plugin.user_manager_builder as user_manager_builder_module
 import litestar_auth._plugin.validation as validation_module
 from litestar_auth._plugin.config import (
@@ -244,43 +241,6 @@ class _ProcessLocalRateLimitBackend:
         return 0
 
 
-def test_plugin_validation_module_executes_under_coverage() -> None:
-    """Reload the module in-test so coverage records module-body execution."""
-    reloaded_oauth_module = importlib.reload(oauth_validation_module)
-    reloaded_totp_module = importlib.reload(totp_validation_module)
-    reloaded_module = importlib.reload(validation_module)
-
-    assert reloaded_oauth_module.validate_oauth_route_registration_config.__name__ == (
-        "validate_oauth_route_registration_config"
-    )
-    assert reloaded_totp_module.validate_totp_config.__name__ == "validate_totp_config"
-    assert reloaded_module.validate_config.__name__ == validation_module.validate_config.__name__
-
-
-def test_plugin_middleware_module_executes_under_coverage() -> None:
-    """Reload the middleware helper module in-test so coverage records module-body execution."""
-    reloaded_module = importlib.reload(middleware_module)
-
-    assert reloaded_module.build_csrf_config.__name__ == build_csrf_config.__name__
-    assert reloaded_module.get_cookie_transports.__name__ == get_cookie_transports.__name__
-
-
-def test_plugin_rate_limit_module_executes_under_coverage() -> None:
-    """Reload the shared rate-limit helper module in-test so coverage records module-body execution."""
-    reloaded_module = importlib.reload(rate_limit_module)
-
-    assert reloaded_module.iter_rate_limit_endpoints.__name__ == iter_rate_limit_endpoints.__name__
-
-
-def test_security_policy_module_executes_under_coverage() -> None:
-    """Reload the security policy module so coverage records module-level execution."""
-    reloaded_module = importlib.reload(plugin_security_policy_module)
-
-    assert reloaded_module._iter_plugin_security_policies.__name__ == (
-        plugin_security_policy_module._iter_plugin_security_policies.__name__
-    )
-
-
 def test_plugin_security_policy_docs_snippet_matches_shared_policy_wording() -> None:
     """The shared docs snippet stays aligned with the plugin-owned security policy source."""
     snippet = Path("docs/snippets/plugin_security_tradeoffs.md").read_text(encoding="utf-8")
@@ -384,31 +344,6 @@ def test_resolve_plugin_managed_totp_secret_storage_policy_skips_factory_owned_w
     notice = plugin_config_module._resolve_plugin_managed_totp_secret_storage_policy(config)
 
     assert notice is None
-
-
-def test_plugin_startup_module_executes_under_coverage() -> None:
-    """Reload the startup helper module in-test so coverage records module-body execution."""
-    reloaded_module = importlib.reload(startup_module)
-
-    assert reloaded_module.warn_insecure_plugin_startup_defaults.__name__ == (
-        startup_module.warn_insecure_plugin_startup_defaults.__name__
-    )
-    assert reloaded_module.require_oauth_token_encryption_for_configured_providers.__name__ == (
-        require_oauth_token_encryption_for_configured_providers.__name__
-    )
-    assert reloaded_module.require_secure_oauth_redirect_in_production.__name__ == (
-        require_secure_oauth_redirect_in_production.__name__
-    )
-    assert reloaded_module.require_shared_rate_limit_backends_for_multiworker.__name__ == (
-        startup_module.require_shared_rate_limit_backends_for_multiworker.__name__
-    )
-
-
-def test_plugin_redirect_validation_module_executes_under_coverage() -> None:
-    """Reload the redirect validation module in-test so coverage records module-body execution."""
-    reloaded_module = importlib.reload(redirect_validation_module)
-
-    assert reloaded_module._is_loopback_host.__name__ == redirect_validation_module._is_loopback_host.__name__
 
 
 @pytest.mark.parametrize(

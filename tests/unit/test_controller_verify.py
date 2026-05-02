@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import importlib
 from types import CellType, FunctionType
 from typing import TYPE_CHECKING, Any, cast
 from unittest.mock import AsyncMock, MagicMock
@@ -12,7 +11,6 @@ import pytest
 from litestar.status_codes import HTTP_200_OK, HTTP_400_BAD_REQUEST
 from litestar.testing import AsyncTestClient
 
-import litestar_auth.controllers.verify as verify_module
 from litestar_auth.controllers.verify import create_verify_controller
 from litestar_auth.exceptions import ErrorCode, InvalidVerifyTokenError
 from litestar_auth.ratelimit import AuthRateLimitConfig, EndpointRateLimit
@@ -26,14 +24,6 @@ else:
     from uuid import uuid4
 
 pytestmark = pytest.mark.unit
-
-
-def test_verify_module_executes_under_coverage() -> None:
-    """Reload the module in-test so coverage records module and protocol execution."""
-    reloaded_module = importlib.reload(verify_module)
-
-    assert reloaded_module.VerifyToken.__name__ == verify_module.VerifyToken.__name__
-    assert reloaded_module.VerifyControllerUserManagerProtocol.__name__.endswith("Protocol")
 
 
 class DummyUser(msgspec.Struct):

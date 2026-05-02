@@ -2,14 +2,12 @@
 
 from __future__ import annotations
 
-import importlib
 from typing import TYPE_CHECKING, Any, cast
 from unittest.mock import AsyncMock
 from uuid import UUID, uuid4
 
 import pytest
 
-import litestar_auth._plugin.session_binding as session_binding_module
 from litestar_auth._plugin.session_binding import _ScopedUserDatabaseProxy
 from litestar_auth.db import OAuthAccountData
 from litestar_auth.oauth_encryption import OAuthTokenEncryption
@@ -182,14 +180,6 @@ def _build_proxy(
         cast("Any", user_store),
         oauth_token_encryption=oauth_token_encryption,
     )
-
-
-def test_session_binding_module_executes_under_coverage() -> None:
-    """Reload the module in-test so coverage records class-body execution."""
-    reloaded_module = importlib.reload(session_binding_module)
-
-    assert reloaded_module._ScopedUserDatabaseProxy is not None
-    assert reloaded_module._ScopedUserDatabaseProxy.__name__ == _ScopedUserDatabaseProxy.__name__
 
 
 @pytest.mark.parametrize(

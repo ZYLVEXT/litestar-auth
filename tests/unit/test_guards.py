@@ -19,7 +19,6 @@ from litestar.exceptions import NotAuthorizedException, PermissionDeniedExceptio
 from litestar.handlers.base import BaseRouteHandler
 
 import litestar_auth.guards._guards as guards_module
-import litestar_auth.guards._protocol_narrowing as protocol_narrowing_module
 from litestar_auth._superuser_role import DEFAULT_SUPERUSER_ROLE_NAME, SUPERUSER_ROLE_NAME_SENTINEL
 from litestar_auth.exceptions import ErrorCode, InsufficientRolesError
 from litestar_auth.guards import (
@@ -165,27 +164,6 @@ class _TypedRole(StrEnum):
 
 
 _LITERAL_ADMIN_ROLE: Literal["admin"] = "admin"
-
-
-def test_guards_module_executes_under_coverage() -> None:
-    """Reload the guard module in-test so coverage records module execution."""
-    reloaded_module = importlib.reload(guards_module)
-
-    assert reloaded_module.has_any_role is _guards.has_any_role
-    assert reloaded_module.has_all_roles is _guards.has_all_roles
-    assert reloaded_module.is_authenticated is _guards.is_authenticated
-    assert reloaded_module.is_active is _guards.is_active
-    assert reloaded_module.is_verified is _guards.is_verified
-    assert reloaded_module.is_superuser is _guards.is_superuser
-
-
-def test_protocol_narrowing_module_executes_under_coverage() -> None:
-    """Reload the protocol-narrowing module in-test so coverage records module execution."""
-    reloaded_module = importlib.reload(protocol_narrowing_module)
-
-    assert reloaded_module._require_active_guarded_user is protocol_narrowing_module._require_active_guarded_user
-    assert reloaded_module._require_guarded_user is protocol_narrowing_module._require_guarded_user
-    assert reloaded_module._require_role_capable_user is protocol_narrowing_module._require_role_capable_user
 
 
 @pytest.mark.parametrize(

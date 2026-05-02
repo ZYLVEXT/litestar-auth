@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import importlib
 from typing import TYPE_CHECKING, Any, Literal, cast
 from uuid import UUID
 
@@ -15,6 +14,7 @@ from litestar_auth.authentication.backend import AuthenticationBackend
 from litestar_auth.authentication.transport.bearer import BearerTransport
 from litestar_auth.config import DEFAULT_MINIMUM_PASSWORD_LENGTH, require_password_length
 from litestar_auth.manager import FernetKeyringConfig, UserManagerSecurity
+from litestar_auth.password import PasswordHelper
 from litestar_auth.plugin import LitestarAuthConfig
 from tests.e2e.conftest import assert_structural_session_factory
 from tests.integration.test_orchestrator import (
@@ -42,16 +42,6 @@ def _generate_fernet_key() -> str:
         A valid Fernet key.
     """
     return Fernet.generate_key().decode()
-
-
-def _current_password_helper_type() -> type[Any]:
-    """Resolve the current PasswordHelper class to survive cross-test module reloads.
-
-    Returns:
-        The current PasswordHelper type.
-    """
-    module = importlib.import_module("litestar_auth.password")
-    return cast("type[Any]", module.PasswordHelper)
 
 
 def _minimal_config(
@@ -242,7 +232,7 @@ def test_build_user_manager_passes_only_canonical_kwargs() -> None:
     }
     assert isinstance(
         typed_manager.received_manager_kwargs["password_helper"],
-        _current_password_helper_type(),
+        PasswordHelper,
     )
     assert typed_manager.received_manager_kwargs["password_validator"] is not None
     assert typed_manager.received_manager_kwargs["backends"] == ("bound-backend",)

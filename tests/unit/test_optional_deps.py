@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import importlib
 from types import ModuleType
 
 import pytest
@@ -11,14 +10,6 @@ import litestar_auth._optional_deps as optional_deps_module
 from litestar_auth._optional_deps import _require_redis_asyncio, require_cryptography_fernet
 
 pytestmark = pytest.mark.unit
-
-
-def test_optional_deps_module_executes_under_coverage() -> None:
-    """Reload the module in-test so coverage records module-body execution."""
-    reloaded_module = importlib.reload(optional_deps_module)
-
-    assert reloaded_module._require_redis_asyncio.__name__ == _require_redis_asyncio.__name__
-    assert reloaded_module.require_cryptography_fernet.__name__ == require_cryptography_fernet.__name__
 
 
 def test_require_redis_asyncio_uses_importlib_loader(monkeypatch: pytest.MonkeyPatch) -> None:

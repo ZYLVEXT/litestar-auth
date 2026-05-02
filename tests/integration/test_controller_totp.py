@@ -26,11 +26,7 @@ from litestar.testing import AsyncTestClient
 import litestar_auth._optional_deps as optional_deps_module
 import litestar_auth._totp_enrollment as totp_enrollment_module
 import litestar_auth.controllers.totp as totp_controller_module
-import litestar_auth.controllers.totp_context as totp_context_module
-import litestar_auth.controllers.totp_contracts as totp_contracts_module
 import litestar_auth.controllers.totp_handlers as totp_handlers_module
-import litestar_auth.controllers.totp_routes as totp_routes_module
-import litestar_auth.controllers.totp_session_handlers as totp_session_handlers_module
 import litestar_auth.totp as _totp_mod
 from litestar_auth._plugin.config import DEFAULT_USER_MANAGER_DEPENDENCY_KEY, TotpConfig
 from litestar_auth._secrets_at_rest import decode_versioned_fernet_value
@@ -325,33 +321,6 @@ def app() -> tuple[Litestar, InMemoryUserDatabase]:
     """
     litestar_app, user_db, _, _ = build_app()
     return litestar_app, user_db
-
-
-def test_totp_controller_module_executes_under_coverage() -> None:
-    """Reload the TOTP controller module so coverage records its module body."""
-    reloaded_contracts = importlib.reload(totp_contracts_module)
-    reloaded_context = importlib.reload(totp_context_module)
-    reloaded_handlers = importlib.reload(totp_handlers_module)
-    reloaded_session_handlers = importlib.reload(totp_session_handlers_module)
-    reloaded_routes = importlib.reload(totp_routes_module)
-    reloaded_module = importlib.reload(totp_controller_module)
-
-    assert reloaded_contracts.TOTP_ENROLL_AUDIENCE == TOTP_ENROLL_AUDIENCE
-    assert reloaded_context._TotpControllerContext.__name__.endswith("Context")
-    assert reloaded_handlers._totp_handle_enable.__name__ == "_totp_handle_enable"
-    assert reloaded_session_handlers._totp_handle_verify.__name__ == "_totp_handle_verify"
-    assert reloaded_routes._create_totp_controller_type.__name__ == "_create_totp_controller_type"
-    assert reloaded_module.TOTP_ENROLL_AUDIENCE == TOTP_ENROLL_AUDIENCE
-    assert reloaded_module.TotpEnableRequest.__name__ == totp_controller_module.TotpEnableRequest.__name__
-    assert reloaded_module.TotpUserManagerProtocol.__name__.endswith("Protocol")
-
-
-def test_totp_enrollment_module_executes_under_coverage() -> None:
-    """Reload the TOTP enrollment module so coverage records its module body."""
-    reloaded_module = importlib.reload(totp_enrollment_module)
-
-    assert reloaded_module._DEFAULT_TOTP_FERNET_KEY_ID == _DEFAULT_TOTP_FERNET_KEY_ID
-    assert reloaded_module._EnrollmentTokenCipher.__name__ == _EnrollmentTokenCipher.__name__
 
 
 def test_validate_replay_and_password_requires_replay_store_outside_testing() -> None:

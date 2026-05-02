@@ -17,8 +17,6 @@ from cryptography.fernet import Fernet
 
 import litestar_auth._optional_deps as optional_deps_module
 import litestar_auth.manager as manager_module
-from litestar_auth._manager import hooks as manager_hooks_module
-from litestar_auth._manager import security as manager_security_module
 from litestar_auth._manager._coercions import _account_state_user, _as_dict, _managed_user, _require_str
 from litestar_auth._manager.security import _SecretValue
 from litestar_auth._manager.user_lifecycle import PRIVILEGED_FIELDS
@@ -41,7 +39,6 @@ from litestar_auth.manager import (
     BaseUserManager,
     BaseUserManagerConfig,
     FernetKeyringConfig,
-    UserManagerHooks,
     UserManagerSecurity,
 )
 from litestar_auth.manager import logger as manager_logger
@@ -68,90 +65,6 @@ pytestmark = pytest.mark.unit
 def _fernet_key() -> str:
     """Return a valid Fernet key for manager keyring tests."""
     return Fernet.generate_key().decode()
-
-
-def test_manager_module_executes_under_coverage() -> None:
-    """Reload the module in-test so coverage records module and class execution."""
-    reloaded_module = importlib.reload(manager_module)
-
-    assert reloaded_module.BaseUserManager.__name__ == BaseUserManager.__name__
-    assert _SecretValue.__name__ == "_SecretValue"
-
-
-def test_manager_security_module_executes_under_coverage() -> None:
-    """Reload and exercise relocated manager-security helpers under coverage."""
-    reloaded_module = importlib.reload(manager_security_module)
-    current_key = _fernet_key()
-    old_key = _fernet_key()
-
-    keyring = reloaded_module.FernetKeyringConfig(
-        active_key_id="current",
-        keys=(("current", current_key), ("old", old_key.encode())),
-    )
-    security = reloaded_module.UserManagerSecurity[UUID](
-        verification_token_secret="verify-secret-1234567890-1234567890",
-        reset_password_token_secret="reset-secret-1234567890-1234567890",
-        login_identifier_telemetry_secret=None,
-        totp_secret_keyring=keyring,
-        id_parser=UUID,
-    )
-    secret = reloaded_module._SecretValue("raw-secret")
-
-    assert keyring.active_key_id == "current"
-    assert str(keyring) == repr(keyring)
-    assert current_key not in repr(keyring)
-    assert old_key not in repr(keyring)
-    assert "verify-secret-1234567890-1234567890" not in repr(security)
-    assert "login_identifier_telemetry_secret=None" in repr(security)
-    assert secret.get_secret_value() == "raw-secret"
-    assert repr(secret) == "_SecretValue('**********')"
-    assert str(secret) == "**********"
-    assert reloaded_module._mask_optional_secret(None) is None
-    assert reloaded_module._mask_optional_secret("raw-secret") == "**********"
-    assert reloaded_module._coerce_fernet_key_secret_role_value(old_key.encode()) == old_key
-    assert reloaded_module._coerce_fernet_key_secret_role_value(current_key) == current_key
-    assert reloaded_module._iter_totp_secret_role_values(reloaded_module.UserManagerSecurity[UUID]()) == ()
-    assert reloaded_module._iter_totp_secret_role_values(
-        reloaded_module.UserManagerSecurity[UUID](totp_secret_key="t" * 32),
-    ) == ("t" * 32,)
-    reloaded_module.validate_user_manager_security_secret_roles_are_distinct(
-        reloaded_module.UserManagerSecurity[UUID](
-            verification_token_secret="v" * 32,
-            reset_password_token_secret="r" * 32,
-        ),
-        totp_pending_secret="p" * 32,
-        oauth_flow_cookie_secret="o" * 32,
-    )
-    reloaded_module.validate_user_manager_security_secret_roles_are_distinct(
-        security,
-        totp_pending_secret="p" * 32,
-        oauth_flow_cookie_secret="o" * 32,
-    )
-
-    with pytest.raises(ConfigurationError, match="totp_secret_key or totp_secret_keyring"):
-        reloaded_module.UserManagerSecurity[UUID](totp_secret_key="t" * 32, totp_secret_keyring=keyring)
-
-    invalid_keyring_inputs = [
-        ("current", object(), "mapping or a sequence"),
-        ("current", ["current"], "key-id/key pairs"),
-        ("current", [(1, current_key)], "key ids must be strings"),
-        ("bad key", {"bad key": current_key}, "Fernet key ids"),
-        ("current", [("current", current_key), ("current", old_key)], "unique"),
-        ("current", [("current", object())], "key material is invalid"),
-        ("current", {"current": "invalid-fernet-key"}, "key material is invalid"),
-    ]
-    for active_key_id, keys, match in invalid_keyring_inputs:
-        with pytest.raises(ConfigurationError, match=match):
-            reloaded_module.FernetKeyringConfig(active_key_id=active_key_id, keys=cast("Any", keys))
-
-
-def test_manager_hooks_module_executes_under_coverage() -> None:
-    """Reload relocated manager hooks and preserve the historical manager export."""
-    reloaded_module = importlib.reload(manager_hooks_module)
-
-    assert reloaded_module.UserManagerHooks.__name__ == UserManagerHooks.__name__
-    assert issubclass(BaseUserManager, manager_module.UserManagerHooks)
-    assert manager_module.UserManagerHooks is UserManagerHooks
 
 
 def test_manager_does_not_reexport_lifecycle_constants() -> None:

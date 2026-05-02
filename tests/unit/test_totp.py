@@ -5,7 +5,6 @@ from __future__ import annotations
 import binascii
 import hashlib
 import hmac
-import importlib
 import logging
 import warnings
 from typing import TYPE_CHECKING, cast
@@ -13,7 +12,7 @@ from urllib.parse import parse_qs, urlparse
 
 import pytest
 
-from litestar_auth import _totp_stores, totp
+from litestar_auth import totp
 from litestar_auth.contrib.redis import RedisAuthClientProtocol, RedisAuthPreset
 from litestar_auth.password import PasswordHelper
 from tests._helpers import cast_fakeredis
@@ -46,30 +45,6 @@ def _replay(
         require_replay_protection=require_replay_protection,
         unsafe_testing=unsafe_testing,
     )
-
-
-def test_totp_module_executes_under_coverage() -> None:
-    """Reload the module in-test so coverage records module and class execution."""
-    original_security_warning = totp.SecurityWarning
-    original_configuration_error = totp.ConfigurationError
-    reloaded_module = importlib.reload(totp)
-    reloaded_module.__dict__["SecurityWarning"] = original_security_warning
-    reloaded_module.__dict__["ConfigurationError"] = original_configuration_error
-
-    assert reloaded_module.InMemoryUsedTotpCodeStore.__name__ == totp.InMemoryUsedTotpCodeStore.__name__
-    assert reloaded_module.InMemoryTotpEnrollmentStore.__name__ == totp.InMemoryTotpEnrollmentStore.__name__
-    assert reloaded_module.RedisUsedTotpCodeStore.__name__ == totp.RedisUsedTotpCodeStore.__name__
-    assert reloaded_module.RedisTotpEnrollmentStore.__name__ == totp.RedisTotpEnrollmentStore.__name__
-
-
-def test_totp_stores_module_executes_under_coverage() -> None:
-    """Reload the private store module so coverage records module and class execution."""
-    reloaded_module = importlib.reload(_totp_stores)
-
-    assert reloaded_module.InMemoryUsedTotpCodeStore.__name__ == _totp_stores.InMemoryUsedTotpCodeStore.__name__
-    assert reloaded_module.InMemoryTotpEnrollmentStore.__name__ == _totp_stores.InMemoryTotpEnrollmentStore.__name__
-    assert reloaded_module.RedisUsedTotpCodeStore.__name__ == _totp_stores.RedisUsedTotpCodeStore.__name__
-    assert reloaded_module.RedisTotpEnrollmentStore.__name__ == _totp_stores.RedisTotpEnrollmentStore.__name__
 
 
 def test_generate_totp_secret_returns_base32_secret() -> None:

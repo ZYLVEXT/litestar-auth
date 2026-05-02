@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import importlib
 import logging
 from dataclasses import dataclass, replace
 from unittest.mock import AsyncMock, Mock, patch
@@ -10,7 +9,6 @@ from uuid import uuid4
 
 import pytest
 
-import litestar_auth._manager.user_lifecycle as user_lifecycle_module
 from litestar_auth._manager.user_lifecycle import UserLifecycleService
 from litestar_auth._manager.user_policy import UserPolicy
 from litestar_auth.exceptions import (
@@ -27,13 +25,6 @@ from tests._helpers import ExampleUser
 from tests.unit.test_manager import TrackingUserManager
 
 pytestmark = pytest.mark.unit
-
-
-def test_user_lifecycle_module_executes_under_coverage() -> None:
-    """Reload the module in-test so coverage records module and class definitions."""
-    reloaded_module = importlib.reload(user_lifecycle_module)
-
-    assert reloaded_module.UserLifecycleService.__name__ == UserLifecycleService.__name__
 
 
 def _build_user(

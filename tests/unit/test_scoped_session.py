@@ -2,13 +2,11 @@
 
 from __future__ import annotations
 
-import importlib
 from typing import TYPE_CHECKING, Any, cast
 
 import pytest
 from litestar.datastructures.state import State
 
-import litestar_auth._plugin.scoped_session as scoped_session_module
 from litestar_auth._plugin.scoped_session import (
     _AA_SCOPE_NAMESPACE,
     SESSION_SCOPE_KEY,
@@ -119,11 +117,3 @@ def test_get_aa_namespace_returns_existing_namespace() -> None:
     resolved_namespace = _get_aa_namespace(scope)
 
     assert resolved_namespace is namespace
-
-
-def test_scoped_session_module_reload_preserves_scope_constants() -> None:
-    """It reloads cleanly with the expected Advanced Alchemy scope keys."""
-    reloaded_module = importlib.reload(scoped_session_module)
-
-    assert reloaded_module._AA_SCOPE_NAMESPACE == _AA_SCOPE_NAMESPACE
-    assert reloaded_module.SESSION_SCOPE_KEY == SESSION_SCOPE_KEY

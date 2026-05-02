@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import importlib
 from datetime import UTC, datetime, timedelta, timezone, tzinfo
 from typing import TYPE_CHECKING, Any
 
@@ -306,19 +305,6 @@ def _create_password_hash_column_user(session: Session, *, email: str) -> Passwo
 def _strategy_session(session: Session) -> AsyncSession:
     """Return an async-compatible adapter for the sync test session."""
     return AsyncSessionAdapter(session)  # ty: ignore[invalid-return-type]
-
-
-def test_database_token_strategy_module_reload_executes_definition_paths(session: Session) -> None:
-    """Reloading the module exercises definition-time paths for coverage."""
-    reloaded_module = importlib.reload(db_strategy_module)
-    strategy = reloaded_module.DatabaseTokenStrategy(
-        session=_strategy_session(session),
-        token_hash_secret=_TOKEN_HASH_SECRET,
-    )
-
-    assert reloaded_module.AccessTokenRepository.model_type is AccessToken
-    assert reloaded_module.RefreshTokenRepository.model_type is RefreshToken
-    assert isinstance(strategy, reloaded_module.DatabaseTokenStrategy)
 
 
 async def test_database_token_strategy_writes_and_reads_tokens(session: Session) -> None:

@@ -14,6 +14,7 @@ if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
 from litestar_auth._plugin.config import DatabaseTokenAuthConfig
 from litestar_auth.authentication.backend import AuthenticationBackend
+from litestar_auth.authentication.strategy.db import DatabaseTokenStrategy
 from litestar_auth.authentication.strategy.db_models import AccessToken
 from litestar_auth.authentication.transport.bearer import BearerTransport
 from litestar_auth.manager import UserManagerSecurity
@@ -22,7 +23,6 @@ from tests.e2e.conftest import assert_structural_session_factory
 from tests.integration.test_orchestrator import DummySession, DummySessionMaker, ExampleUser, InMemoryUserDatabase
 from tests.unit.test_plugin_config import (
     PluginUserManager,
-    _current_database_token_strategy_type,
     _minimal_config,
 )
 
@@ -74,7 +74,6 @@ def test_build_database_token_backend_template_and_internal_builder() -> None:
         unsafe_testing=True,
     )
     assert startup_backend.name == "dbtok"
-    DatabaseTokenStrategy = _current_database_token_strategy_type()
     assert isinstance(startup_backend.strategy, DatabaseTokenStrategy)
 
     bound = database_token_module._build_database_token_backend(
@@ -132,7 +131,6 @@ def test_startup_only_strategy_with_session_returns_runtime_strategy() -> None:
 
 def test_lazy_introspection_helpers() -> None:
     """Bundled-model and isinstance helpers match the lazy-import contract."""
-    DatabaseTokenStrategy = _current_database_token_strategy_type()
     strategy = DatabaseTokenStrategy(
         session=cast("Any", DummySession()),
         token_hash_secret="q" * 40,
@@ -143,7 +141,7 @@ def test_lazy_introspection_helpers() -> None:
     backend = AuthenticationBackend[ExampleUser, UUID](
         name="database",
         transport=BearerTransport(),
-        strategy=strategy,
+        strategy=cast("Any", strategy),
     )
     assert database_token_module._backend_uses_bundled_database_token_models(backend) is True
 

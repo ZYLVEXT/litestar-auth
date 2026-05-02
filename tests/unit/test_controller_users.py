@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import importlib
 from collections.abc import Awaitable, Callable, Mapping
 from typing import Any, cast
 from unittest.mock import AsyncMock
@@ -40,14 +39,6 @@ pytestmark = pytest.mark.unit
 HTTP_FORBIDDEN = 403
 _UNSET_AUTHENTICATED_USER = object()
 type RequestHandlerStub = Callable[[object], Awaitable[None]]
-
-
-def test_users_module_executes_under_coverage() -> None:
-    """Reload the module in-test so coverage records module and controller-class setup."""
-    reloaded_module = importlib.reload(users_module)
-
-    assert reloaded_module.create_users_controller.__name__ == create_users_controller.__name__
-    assert reloaded_module._UsersControllerContext.__name__ == _UsersControllerContext.__name__
 
 
 def test_self_update_forbidden_fields_cover_only_live_privileged_state() -> None:

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import importlib
 import inspect
 from typing import TYPE_CHECKING, Any, cast
 from unittest.mock import AsyncMock
@@ -140,54 +139,32 @@ async def _raise_runtime_error_in_mapped_context() -> None:
         raise RuntimeError(msg)
 
 
-def test_module_reload_executes_controller_utils_module_body() -> None:
-    """Reloading the module executes its top-level definitions under coverage."""
-    for name in ("ConfigurationError", "ErrorCode", "InactiveUserError", "UnverifiedUserError"):
-        if hasattr(_utils, name):
-            delattr(_utils, name)
-    reloaded_module = importlib.reload(_utils)
-
-    assert reloaded_module._to_user_schema is user_schema_module._to_user_schema
-    assert reloaded_module._require_msgspec_struct is user_schema_module._require_msgspec_struct
-    assert reloaded_module._build_controller_name("oauth_google-provider") == "OauthGoogleProvider"
+def test_controller_utils_exports_canonical_helpers() -> None:
+    """Controller utils re-export canonical helpers from their owning modules."""
+    assert _utils._to_user_schema is user_schema_module._to_user_schema
+    assert _utils._require_msgspec_struct is user_schema_module._require_msgspec_struct
+    assert _utils._build_controller_name("oauth_google-provider") == "OauthGoogleProvider"
 
 
-def test_module_reload_executes_request_body_module_body() -> None:
-    """Reloading the module executes its top-level definitions under coverage."""
-    reloaded_module = importlib.reload(request_body_module)
-
-    assert reloaded_module._HTTP_BAD_REQUEST == STATUS_BAD_REQUEST
-    assert reloaded_module.RequestBodyRouteHandler.__name__ == "RequestBodyRouteHandler"
+def test_request_body_module_exports_documented_constants_and_protocols() -> None:
+    """Request-body helpers expose the documented status constant and protocol."""
+    assert request_body_module._HTTP_BAD_REQUEST == STATUS_BAD_REQUEST
+    assert request_body_module.RequestBodyRouteHandler.__name__ == "RequestBodyRouteHandler"
 
 
-def test_module_reload_executes_error_responses_module_body() -> None:
-    """Reloading the module executes its top-level definitions under coverage."""
-    reloaded_module = importlib.reload(error_responses_module)
-
-    assert reloaded_module.DomainErrorMap.__name__ == "DomainErrorMap"
-    assert reloaded_module._domain_error_public_detail(RuntimeError("boom")) == "boom"
+def test_error_responses_module_exports_domain_error_helpers() -> None:
+    """Error-response helpers expose the documented domain-error utilities."""
+    assert error_responses_module.DomainErrorMap.__name__ == "DomainErrorMap"
+    assert error_responses_module._domain_error_public_detail(RuntimeError("boom")) == "boom"
 
 
-def test_module_reload_executes_user_schema_module_body() -> None:
-    """Reloading the module records the user-schema helper module under coverage."""
-    reloaded_module = importlib.reload(user_schema_module)
-
-    assert frozenset({"hashed_password", "totp_secret", "password"}) == reloaded_module._SENSITIVE_FIELD_BLOCKLIST
-    assert reloaded_module._to_user_schema(_DummyUser(), _UserReadSchema) == _UserReadSchema(
+def test_user_schema_module_strips_sensitive_fields_when_serializing() -> None:
+    """The user-schema helper drops sensitive fields when materializing user reads."""
+    assert frozenset({"hashed_password", "totp_secret", "password"}) == user_schema_module._SENSITIVE_FIELD_BLOCKLIST
+    assert user_schema_module._to_user_schema(_DummyUser(), _UserReadSchema) == _UserReadSchema(
         id="user-id",
         email="user@example.com",
         roles=["member"],
-    )
-
-
-def test_account_state_module_executes_under_coverage() -> None:
-    """Reload the shared account-state module so coverage records its top-level definitions."""
-    reloaded_module = importlib.reload(account_state_module)
-
-    assert reloaded_module.AccountStateErrorTypes.__name__ == "AccountStateErrorTypes"
-    assert reloaded_module.resolve_account_state_client_error("inactive") == (
-        STATUS_BAD_REQUEST,
-        ErrorCode.LOGIN_USER_INACTIVE,
     )
 
 
@@ -640,13 +617,8 @@ def test_resolve_account_state_validator_returns_none_for_missing_manager() -> N
 
 def test_account_state_helper_aliases_point_to_shared_core() -> None:
     """Controllers and OAuth service share the same resolver core."""
-    reloaded_utils = importlib.reload(_utils)
-    reloaded_oauth_service = importlib.reload(oauth_service_module)
-
-    assert reloaded_utils._resolve_account_state_validator is account_state_module.resolve_account_state_validator
-    assert (
-        reloaded_oauth_service._resolve_account_state_validator is account_state_module.resolve_account_state_validator
-    )
+    assert _utils._resolve_account_state_validator is account_state_module.resolve_account_state_validator
+    assert oauth_service_module._resolve_account_state_validator is account_state_module.resolve_account_state_validator
 
 
 def test_resolve_account_state_validator_returns_none_for_non_callable_attribute() -> None:

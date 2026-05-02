@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 import base64
-import importlib
 from typing import TYPE_CHECKING, Any, cast
 from uuid import uuid4
 
@@ -332,14 +331,14 @@ def test_custom_user_relationship_option_overrides_keep_mapper_contract_stable()
     assert inspect(ConfiguredOAuthAccount).relationships["user"].mapper.class_ is ConfiguredUser
 
 
-def test_sqlalchemy_module_reload_preserves_repository_factory_contract() -> None:
-    """Reloading the module preserves the dynamic repository factory behavior."""
-    repository_module = importlib.import_module("litestar_auth.db._repositories")
-    reloaded_module = importlib.reload(repository_module)
-    reloaded_repository = reloaded_module._build_user_repository(User)
+def test_repositories_factory_caches_per_user_model() -> None:
+    """The dynamic repository factory returns the same repository class for a given user model."""
+    from litestar_auth.db import _repositories  # noqa: PLC0415
 
-    assert reloaded_repository is reloaded_module._build_user_repository(User)
-    assert reloaded_repository.model_type is User
+    repository = _repositories._build_user_repository(User)
+
+    assert repository is _repositories._build_user_repository(User)
+    assert repository.model_type is User
 
 
 async def test_sqlalchemy_user_database_crud(session: SASession) -> None:

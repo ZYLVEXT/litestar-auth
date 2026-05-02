@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import importlib
 from typing import TYPE_CHECKING, Any, cast
 
 import pytest
@@ -11,7 +10,6 @@ from litestar.enums import MediaType
 from litestar.response import Response
 
 import litestar_auth.authentication.transport.bearer as bearer_module
-import litestar_auth.authentication.transport.cookie as cookie_module
 from litestar_auth.authentication.transport.base import LogoutTokenReadable, Transport
 from litestar_auth.authentication.transport.cookie import CookieTransport, CookieTransportConfig
 
@@ -116,23 +114,6 @@ def test_bearer_transport_clears_response_body_on_logout() -> None:
     assert response.content is None
 
 
-async def test_bearer_transport_module_reload_preserves_public_class() -> None:
-    """Reloading the bearer module preserves the public transport behavior under coverage."""
-    reloaded_module = importlib.reload(bearer_module)
-    transport = reloaded_module.BearerTransport()
-    response = Response({"stale": "value"})
-
-    assert reloaded_module.BearerTransport.__name__ == "BearerTransport"
-    assert await transport.read_token(_build_connection("Bearer reloaded-token")) == "reloaded-token"
-    assert await transport.read_token(_build_connection("Basic rejected")) is None
-    assert await transport.read_token(_build_connection("Bearer \t")) is None
-    assert transport.set_login_token(response, "reloaded-issued-token") is response
-    assert response.content == {"access_token": "reloaded-issued-token", "token_type": "bearer"}
-    assert response.media_type == MediaType.JSON
-    assert transport.set_logout(response) is response
-    assert response.content is None
-
-
 async def test_cookie_transport_reads_token_from_named_cookie() -> None:
     """CookieTransport reads the configured cookie value from the request."""
     transport = CookieTransport(cookie_name="session")
@@ -210,13 +191,6 @@ def test_cookie_transport_exposes_refresh_cookie_name_from_cookie_name() -> None
     transport = CookieTransport(cookie_name="custom-auth")
 
     assert transport.refresh_cookie_name == "custom-auth_refresh"
-
-
-def test_cookie_transport_module_reload_preserves_public_class() -> None:
-    """Reloading the module preserves the public transport class definition."""
-    reloaded_module = importlib.reload(cookie_module)
-
-    assert reloaded_module.CookieTransport.__name__ == "CookieTransport"
 
 
 def test_cookie_transport_rejects_insecure_samesite_none_without_secure() -> None:

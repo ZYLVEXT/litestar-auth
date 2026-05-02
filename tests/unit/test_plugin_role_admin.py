@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import importlib
 from contextlib import nullcontext
 from types import SimpleNamespace
 from typing import TYPE_CHECKING, Any, ClassVar, Self, cast
@@ -17,8 +16,6 @@ from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 from sqlalchemy.orm import Session as SASession
 
 import litestar_auth._plugin.role_admin as role_admin_module
-import litestar_auth._plugin.role_lifecycle as role_lifecycle_module
-import litestar_auth._plugin.role_model_family as role_model_family_module
 from litestar_auth._plugin.role_admin import (
     SQLAlchemyRoleAdmin,
     _ManagerLifecycleRoleUpdater,
@@ -45,17 +42,6 @@ if TYPE_CHECKING:
     from types import TracebackType
 
 pytestmark = pytest.mark.unit
-
-
-def test_role_admin_modules_execute_under_coverage() -> None:
-    """Reload relocated role-admin modules so coverage records module-body execution."""
-    reloaded_lifecycle_module = importlib.reload(role_lifecycle_module)
-    reloaded_model_family_module = importlib.reload(role_model_family_module)
-    reloaded_role_admin_module = importlib.reload(role_admin_module)
-
-    assert reloaded_lifecycle_module._ManagerLifecycleRoleUpdater.__name__ == "_ManagerLifecycleRoleUpdater"
-    assert reloaded_model_family_module.resolve_role_model_family.__name__ == "resolve_role_model_family"
-    assert reloaded_role_admin_module.SQLAlchemyRoleAdmin.__name__ == "SQLAlchemyRoleAdmin"
 
 
 class TrackingAsyncSession:

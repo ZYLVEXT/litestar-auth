@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import importlib
 import re
 import sys
 from collections.abc import Callable, Sequence
@@ -23,8 +22,8 @@ from litestar_auth import DEFAULT_SUPERUSER_ROLE_NAME
 from litestar_auth._plugin.config import (
     DEFAULT_REGISTER_MINIMUM_RESPONSE_SECONDS,
     DatabaseTokenAuthConfig,
-    FernetKeyringConfig,
     OAuthConfig,
+    StartupBackendTemplate,
     TotpConfig,
     require_session_maker,
 )
@@ -38,12 +37,13 @@ from litestar_auth._plugin.user_manager_builder import (
     resolve_user_manager_factory,
 )
 from litestar_auth.authentication.backend import AuthenticationBackend
+from litestar_auth.authentication.strategy.db import DatabaseTokenStrategy
 from litestar_auth.authentication.strategy.db_models import AccessToken, RefreshToken
 from litestar_auth.authentication.transport.bearer import BearerTransport
 from litestar_auth.authentication.transport.cookie import CookieTransport
-from litestar_auth.config import DEFAULT_MINIMUM_PASSWORD_LENGTH, require_password_length
+from litestar_auth.config import DEFAULT_MINIMUM_PASSWORD_LENGTH, OAuthProviderConfig, require_password_length
 from litestar_auth.exceptions import ConfigurationError, InvalidPasswordError
-from litestar_auth.manager import BaseUserManager, UserManagerSecurity
+from litestar_auth.manager import BaseUserManager, FernetKeyringConfig, UserManagerSecurity
 from litestar_auth.password import PasswordHelper
 from litestar_auth.plugin import LitestarAuth, LitestarAuthConfig
 from litestar_auth.ratelimit import AuthRateLimitConfig
@@ -65,7 +65,6 @@ _DB_TOKEN_STARTUP_ONLY_FAIL_CLOSED = re.escape("LitestarAuthConfig.resolve_backe
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-    from litestar_auth.config import OAuthProviderConfig
     from litestar_auth.db.base import BaseUserStore
 
 pytestmark = pytest.mark.unit
@@ -77,69 +76,13 @@ def _fernet_key() -> str:
     return Fernet.generate_key().decode()
 
 
-def _current_startup_backend_template_type() -> type[Any]:
-    """Resolve the current StartupBackendTemplate class to survive cross-test module reloads.
-
-    Returns:
-        The current StartupBackendTemplate type.
-    """
-    return cast("type[Any]", importlib.import_module("litestar_auth._plugin.config").StartupBackendTemplate)
-
-
-def _current_authentication_backend_type() -> type[Any]:
-    """Resolve the current AuthenticationBackend class to survive cross-test module reloads.
-
-    Returns:
-        The current AuthenticationBackend type.
-    """
-    return cast("type[Any]", importlib.import_module("litestar_auth.authentication.backend").AuthenticationBackend)
-
-
-def _current_database_token_strategy_type() -> type[Any]:
-    """Resolve the current DB-token strategy class to survive cross-test module reloads.
-
-    Returns:
-        The current DatabaseTokenStrategy type.
-    """
-    return cast("type[Any]", importlib.import_module("litestar_auth.authentication.strategy.db").DatabaseTokenStrategy)
-
-
-def _current_password_helper_type() -> type[Any]:
-    """Resolve the current PasswordHelper class to survive cross-test module reloads.
-
-    Returns:
-        The current PasswordHelper type.
-    """
-    return cast("type[Any]", importlib.import_module("litestar_auth.password").PasswordHelper)
-
-
-def _current_oauth_provider_config_type() -> type[Any]:
-    """Resolve the current OAuthProviderConfig class to survive cross-test module reloads.
-
-    Returns:
-        The current OAuthProviderConfig type.
-    """
-    return cast("type[Any]", importlib.import_module("litestar_auth.config").OAuthProviderConfig)
-
-
 def _oauth_provider(*, name: str, client: object) -> OAuthProviderConfig:
-    """Build an OAuthProviderConfig using the current runtime class.
+    """Build an OAuthProviderConfig.
 
     Returns:
-        The current-runtime OAuthProviderConfig instance.
+        The OAuthProviderConfig instance.
     """
-    oauth_provider_config_type = _current_oauth_provider_config_type()
-    return oauth_provider_config_type(name=name, client=client)
-
-
-def test_plugin_config_module_executes_under_coverage() -> None:
-    """Reload the module in-test so coverage records module and dataclass execution."""
-    reloaded_module = importlib.reload(plugin_config_module)
-
-    assert reloaded_module.LitestarAuthConfig.__name__ == LitestarAuthConfig.__name__
-    assert reloaded_module.DatabaseTokenAuthConfig.__name__ == DatabaseTokenAuthConfig.__name__
-    assert reloaded_module.FernetKeyringConfig.__name__ == FernetKeyringConfig.__name__
-    assert reloaded_module.OAuthConfig.__name__ == OAuthConfig.__name__
+    return OAuthProviderConfig(name=name, client=client)
 
 
 def test_plugin_config_reexports_feature_config_contracts() -> None:
@@ -149,15 +92,14 @@ def test_plugin_config_reexports_feature_config_contracts() -> None:
     assert plugin_config_module.TotpConfig is feature_configs_module.TotpConfig
 
 
-def test_backend_inventory_module_executes_under_coverage() -> None:
-    """Reload the backend-inventory module so coverage records relocated definitions."""
-    reloaded_module = importlib.reload(backend_inventory_module)
+def test_backend_inventory_resolve_returns_consistent_inventory() -> None:
+    """The backend-inventory facade returns a usable inventory with isinstance-stable rows."""
     config = _minimal_config()
-    inventory = reloaded_module.resolve_backend_inventory(config)
+    inventory = backend_inventory_module.resolve_backend_inventory(config)
     startup_backend = inventory.startup_backends()[0]
 
-    assert reloaded_module.StartupBackendTemplate.__name__ == "StartupBackendTemplate"
-    assert reloaded_module.StartupBackendInventory.__name__ == "StartupBackendInventory"
+    assert backend_inventory_module.StartupBackendTemplate.__name__ == "StartupBackendTemplate"
+    assert backend_inventory_module.StartupBackendInventory.__name__ == "StartupBackendInventory"
     same_backend = startup_backend
     assert startup_backend == same_backend
     assert startup_backend != object()
@@ -188,12 +130,11 @@ def test_backend_inventory_module_executes_under_coverage() -> None:
         )
 
 
-def test_feature_configs_module_executes_under_coverage() -> None:
-    """Reload the relocated feature-config module so coverage records its definitions."""
-    reloaded_module = importlib.reload(feature_configs_module)
-    totp_config_type = reloaded_module.TotpConfig
-    oauth_config_type = reloaded_module.OAuthConfig
-    database_token_config_type = reloaded_module.DatabaseTokenAuthConfig
+def test_feature_configs_module_constructors_apply_documented_defaults() -> None:
+    """Feature config constructors apply documented defaults and reject conflicting OAuth keys."""
+    totp_config_type = feature_configs_module.TotpConfig
+    oauth_config_type = feature_configs_module.OAuthConfig
+    database_token_config_type = feature_configs_module.DatabaseTokenAuthConfig
 
     assert totp_config_type(totp_pending_secret="p" * 32).totp_algorithm == "SHA256"
     assert oauth_config_type().has_oauth_token_encryption is False
@@ -215,12 +156,6 @@ def test_plugin_config_module_does_not_reexport_database_token_helpers() -> None
         "build_database_token_backend",
     ):
         assert not hasattr(plugin_config_module, name)
-
-
-def test_oauth_contract_module_executes_under_coverage() -> None:
-    """Reload the OAuth route contract module so coverage records module-level execution."""
-    oauth_contract_module = importlib.import_module("litestar_auth._plugin.oauth_contract")
-    importlib.reload(oauth_contract_module)
 
 
 def test_default_builder_constructor_mismatch_diagnostic_matches_security_bundle_contract() -> None:
@@ -859,17 +794,6 @@ def test_litestar_auth_config_resolve_password_helper_memoizes_default_helper() 
     assert first.password_hash.hashers[0].__class__.__name__ == "Argon2Hasher"
 
 
-def test_litestar_auth_config_resolve_password_helper_survives_password_module_reload() -> None:
-    """Default helper resolution should use the current PasswordHelper after a module reload."""
-    config = _minimal_config()
-    password_module = importlib.import_module("litestar_auth.password")
-
-    importlib.reload(password_module)
-    helper = config.resolve_password_helper()
-
-    assert isinstance(helper, _current_password_helper_type())
-
-
 def test_litestar_auth_config_resolve_password_helper_preserves_explicit_helper_override() -> None:
     """Config-level helper resolution keeps deliberate typed helper injection unchanged."""
     explicit_password_helper = PasswordHelper()
@@ -1071,7 +995,7 @@ def test_oauth_config_accepts_keyring_and_rejects_ambiguous_encryption_inputs() 
 def test_oauth_provider_config_constructed_with_keywords() -> None:
     """OAuthProviderConfig supports keyword construction for IDE-friendly wiring."""
     client = object()
-    oauth_provider_config_type = _current_oauth_provider_config_type()
+    oauth_provider_config_type = OAuthProviderConfig
     entry = oauth_provider_config_type(name="github", client=client)
     assert entry.name == "github"
     assert entry.client is client
@@ -1080,7 +1004,7 @@ def test_oauth_provider_config_constructed_with_keywords() -> None:
 @pytest.mark.parametrize("provider_name", ["github", "github-enterprise", "github_enterprise", "g1"])
 def test_oauth_provider_config_accepts_slug_names(provider_name: str) -> None:
     """Provider names are restricted to route/cookie/callback-safe slugs."""
-    oauth_provider_config_type = _current_oauth_provider_config_type()
+    oauth_provider_config_type = OAuthProviderConfig
     entry = oauth_provider_config_type(name=provider_name, client=object())
 
     assert entry.name == provider_name
@@ -1089,7 +1013,7 @@ def test_oauth_provider_config_accepts_slug_names(provider_name: str) -> None:
 @pytest.mark.parametrize("provider_name", ["", "-github", "github-", "../github", "git hub", "github.example"])
 def test_oauth_provider_config_rejects_route_unsafe_names(provider_name: str) -> None:
     """Provider names reject path, cookie, and callback-URL unsafe characters."""
-    oauth_provider_config_type = _current_oauth_provider_config_type()
+    oauth_provider_config_type = OAuthProviderConfig
 
     with pytest.raises(ConfigurationError, match="OAuth provider name must match"):
         oauth_provider_config_type(name=provider_name, client=object())
@@ -1097,35 +1021,21 @@ def test_oauth_provider_config_rejects_route_unsafe_names(provider_name: str) ->
 
 def test_oauth_provider_config_coerce_is_idempotent() -> None:
     """Coercing an already-normalized entry returns the same instance."""
-    oauth_provider_config_type = _current_oauth_provider_config_type()
+    oauth_provider_config_type = OAuthProviderConfig
     original = oauth_provider_config_type(name="x", client=object())
     assert oauth_provider_config_type.coerce(original) is original
 
 
-def test_oauth_provider_config_coerce_rejects_reload_stale_instance() -> None:
-    """Reloaded config modules reject provider entries built before the reload."""
-    config_module = importlib.import_module("litestar_auth.config")
-    stale_provider_type = cast("type[Any]", config_module.OAuthProviderConfig)
-    client = object()
-    stale_entry = stale_provider_type(name="github", client=client)
-
-    reloaded_module = importlib.reload(config_module)
-    current_provider_type = cast("type[Any]", reloaded_module.OAuthProviderConfig)
-
-    with pytest.raises(TypeError, match="OAuth provider entries must be"):
-        current_provider_type.coerce(stale_entry)
-
-
 def test_oauth_provider_config_coerce_rejects_invalid_shape() -> None:
     """Invalid provider inventory items raise a clear TypeError."""
-    oauth_provider_config_type = _current_oauth_provider_config_type()
+    oauth_provider_config_type = OAuthProviderConfig
     with pytest.raises(TypeError, match="OAuth provider entries must be"):
         oauth_provider_config_type.coerce(cast("Any", ("only-one",)))
 
 
 def test_oauth_provider_config_coerce_rejects_non_instance() -> None:
     """Only real OAuthProviderConfig instances are accepted."""
-    oauth_provider_config_type = _current_oauth_provider_config_type()
+    oauth_provider_config_type = OAuthProviderConfig
     with pytest.raises(TypeError, match="OAuth provider entries must be"):
         oauth_provider_config_type.coerce(object())
 
@@ -1133,7 +1043,7 @@ def test_oauth_provider_config_coerce_rejects_non_instance() -> None:
 def test_oauth_route_registration_contract_accepts_explicit_provider_entries() -> None:
     """Plugin boundary keeps explicit OAuthProviderConfig entries intact."""
     gh = object()
-    oauth_provider_config_type = _current_oauth_provider_config_type()
+    oauth_provider_config_type = OAuthProviderConfig
     contract = _build_oauth_route_registration_contract(
         auth_path="/auth/",
         oauth_config=OAuthConfig(
@@ -1317,8 +1227,8 @@ def test_database_token_auth_field_builds_canonical_db_bearer_backend() -> None:
     assert preset.token_bytes == configured_token_bytes
 
     backend = config.resolve_startup_backends()[0]
-    database_token_strategy_type = _current_database_token_strategy_type()
-    assert isinstance(backend, _current_startup_backend_template_type())
+    database_token_strategy_type = DatabaseTokenStrategy
+    assert isinstance(backend, StartupBackendTemplate)
     assert backend.name == "database"
     assert isinstance(backend.transport, BearerTransport)
     assert isinstance(backend.strategy, database_token_strategy_type)
@@ -1339,7 +1249,7 @@ def test_resolve_startup_backends_wrap_manual_backends_in_startup_templates() ->
 
     startup_backend = config.resolve_startup_backends()[0]
 
-    assert isinstance(startup_backend, _current_startup_backend_template_type())
+    assert isinstance(startup_backend, StartupBackendTemplate)
     assert startup_backend.name == backend.name
     assert startup_backend.transport is backend.transport
     assert startup_backend.strategy is backend.strategy
@@ -1504,7 +1414,7 @@ def test_build_database_token_backend_binds_the_explicit_runtime_session() -> No
         session=cast("Any", active_session),
         unsafe_testing=True,
     )
-    database_token_strategy_type = _current_database_token_strategy_type()
+    database_token_strategy_type = DatabaseTokenStrategy
 
     assert backend.name == "opaque-db"
     assert isinstance(backend.strategy, database_token_strategy_type)
@@ -1586,13 +1496,13 @@ def test_resolve_backends_realizes_database_token_preset_from_request_session() 
         ),
     )
     active_session = DummySession()
-    authentication_backend_type = _current_authentication_backend_type()
-    database_token_strategy_type = _current_database_token_strategy_type()
+    authentication_backend_type = AuthenticationBackend
+    database_token_strategy_type = DatabaseTokenStrategy
 
     startup_backend = config.resolve_startup_backends()[0]
     runtime_backends = config.resolve_backends(cast("Any", active_session))
 
-    assert isinstance(startup_backend, _current_startup_backend_template_type())
+    assert isinstance(startup_backend, StartupBackendTemplate)
     assert len(runtime_backends) == 1
     assert isinstance(runtime_backends[0], authentication_backend_type)
     assert runtime_backends[0].name == "database"
@@ -1658,13 +1568,13 @@ def test_resolve_backends_preserves_database_token_runtime_contract_details() ->
         enable_refresh=True,
     )
     active_session = DummySession()
-    authentication_backend_type = _current_authentication_backend_type()
-    database_token_strategy_type = _current_database_token_strategy_type()
+    authentication_backend_type = AuthenticationBackend
+    database_token_strategy_type = DatabaseTokenStrategy
 
     startup_backend = config.resolve_startup_backends()[0]
     runtime_backends = config.resolve_backends(cast("Any", active_session))
 
-    assert isinstance(startup_backend, _current_startup_backend_template_type())
+    assert isinstance(startup_backend, StartupBackendTemplate)
     assert len(runtime_backends) == 1
     assert isinstance(runtime_backends[0], authentication_backend_type)
     assert runtime_backends[0].name == "opaque-db"

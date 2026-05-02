@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import importlib
 from datetime import timedelta
 from typing import TYPE_CHECKING, cast
 from uuid import UUID, uuid4
@@ -14,7 +13,6 @@ from litestar_auth.authentication.strategy import redis as redis_strategy_module
 from litestar_auth.authentication.strategy._opaque_tokens import build_opaque_token_key
 from litestar_auth.authentication.strategy.redis import (
     DEFAULT_KEY_PREFIX,
-    DEFAULT_TOKEN_BYTES,
     RedisClientProtocol,
     RedisTokenStrategy,
     RedisTokenStrategyConfig,
@@ -438,41 +436,3 @@ async def test_redis_strategy_invalidate_all_tokens_without_index_leaves_orphane
     assert await redis.get(matching_key_two) == str(user.id)
     assert await redis.get(foreign_key) == str(other_user.id)
     assert await redis.get(ignored_prefix_key) == str(user.id)
-
-
-async def test_redis_strategy_module_reload_preserves_public_behavior(
-    monkeypatch: pytest.MonkeyPatch,
-    async_fakeredis: AsyncFakeRedis,
-) -> None:
-    """Reloading the module under coverage preserves strategy behavior."""
-    reloaded_module = importlib.reload(redis_strategy_module)
-
-    def load_redis() -> object:
-        """Bypass the optional Redis import during the reload smoke test.
-
-        Returns:
-            Placeholder object standing in for the Redis module.
-        """
-        return object()
-
-    monkeypatch.setattr(reloaded_module, "_load_redis_asyncio", load_redis)
-    monkeypatch.setattr(opaque_tokens_module.secrets, "token_urlsafe", lambda _: "reloaded-token")
-
-    user = ExampleUser(id=uuid4())
-    strategy = reloaded_module.RedisTokenStrategy[ExampleUser, UUID](
-        config=reloaded_module.RedisTokenStrategyConfig(
-            redis=cast_fakeredis(async_fakeredis, RedisClientProtocol),
-            token_hash_secret=TOKEN_HASH_SECRET,
-            subject_decoder=UUID,
-        ),
-    )
-
-    token = await strategy.write_token(user)
-    resolved_user = await strategy.read_token(token, ExampleUserManager(user))
-    await strategy.destroy_token(token, user)
-
-    assert reloaded_module.DEFAULT_KEY_PREFIX == DEFAULT_KEY_PREFIX
-    assert reloaded_module.DEFAULT_TOKEN_BYTES == DEFAULT_TOKEN_BYTES
-    assert token == "reloaded-token"
-    assert resolved_user == user
-    assert await async_fakeredis.get(strategy._key(token)) is None

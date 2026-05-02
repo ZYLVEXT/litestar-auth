@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import importlib
 import importlib.machinery
 import importlib.util
 import sys
@@ -53,18 +52,6 @@ pytestmark = [pytest.mark.unit, pytest.mark.imports]
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
-def _reload_module(module: ModuleType) -> ModuleType:
-    """Reload a module so coverage records its module body.
-
-    Returns:
-        The reloaded module object.
-    """
-    reloaded_module = importlib.reload(module)
-
-    assert reloaded_module is module
-    return reloaded_module
-
-
 def load_reloaded_test_alias(
     *,
     alias_name: str,
@@ -102,7 +89,7 @@ def load_reloaded_test_alias(
     spec.loader.exec_module(alias_module)
     if after_exec is not None:
         after_exec(alias_module)
-    return _reload_module(alias_module)
+    return alias_module
 
 
 def _load_reloaded_alias(
@@ -156,50 +143,46 @@ def _load_reloaded_alias(
         )
 
 
-def test_types_module_reload_preserves_protocol_exports() -> None:
-    """Reload the shared typing module and verify its public protocols remain usable."""
-    reloaded_module = _reload_module(types_module)
+def test_types_module_preserves_protocol_exports() -> None:
+    """Shared typing module still exposes its public protocols remain usable."""
 
     class _RoleCapableUser:
         id = uuid4()
         roles = ("admin",)
 
-    assert reloaded_module.UserProtocol.__name__ == "UserProtocol"
-    assert reloaded_module.GuardedUserProtocol.__name__ == "GuardedUserProtocol"
-    assert reloaded_module.RoleCapableUserProtocol.__name__ == "RoleCapableUserProtocol"
-    assert reloaded_module.TotpUserProtocol.__name__ == "TotpUserProtocol"
-    assert reloaded_module.TransportProtocol.__name__ == "TransportProtocol"
-    assert reloaded_module.StrategyProtocol.__name__ == "StrategyProtocol"
-    assert get_args(reloaded_module.LoginIdentifier.__value__) == ("email", "username")
-    assert isinstance(ExampleUser(id=uuid4()), reloaded_module.GuardedUserProtocol)
-    assert isinstance(_RoleCapableUser(), reloaded_module.RoleCapableUserProtocol)
+    assert types_module.UserProtocol.__name__ == "UserProtocol"
+    assert types_module.GuardedUserProtocol.__name__ == "GuardedUserProtocol"
+    assert types_module.RoleCapableUserProtocol.__name__ == "RoleCapableUserProtocol"
+    assert types_module.TotpUserProtocol.__name__ == "TotpUserProtocol"
+    assert types_module.TransportProtocol.__name__ == "TransportProtocol"
+    assert types_module.StrategyProtocol.__name__ == "StrategyProtocol"
+    assert get_args(types_module.LoginIdentifier.__value__) == ("email", "username")
+    assert isinstance(ExampleUser(id=uuid4()), types_module.GuardedUserProtocol)
+    assert isinstance(_RoleCapableUser(), types_module.RoleCapableUserProtocol)
 
 
-def test_roles_module_reload_preserves_normalized_roles_contract() -> None:
-    """Reload the roles helper module and exercise its public normalization surface."""
-    reloaded_module = _reload_module(roles_module)
-
-    assert reloaded_module.normalize_roles([" Billing ", "admin", "ADMIN"]) == ["admin", "billing"]
-    assert reloaded_module.normalize_roles((" Support ", "ADMIN")) == ["admin", "support"]
-    assert reloaded_module.normalize_roles(None) == []
-    assert reloaded_module.normalize_role_name(" Support ") == "support"
+def test_roles_module_preserves_normalized_roles_contract() -> None:
+    """The roles helper module still exercises its public normalization surface."""
+    assert roles_module.normalize_roles([" Billing ", "admin", "ADMIN"]) == ["admin", "billing"]
+    assert roles_module.normalize_roles((" Support ", "ADMIN")) == ["admin", "support"]
+    assert roles_module.normalize_roles(None) == []
+    assert roles_module.normalize_role_name(" Support ") == "support"
 
 
-def test_schemas_module_reload_preserves_struct_definitions() -> None:
-    """Reload msgspec schema definitions and verify their fields remain stable."""
-    reloaded_module = _reload_module(schemas_module)
-    user_read_hints = get_type_hints(reloaded_module.UserRead, include_extras=True)
-    user_update_hints = get_type_hints(reloaded_module.UserUpdate, include_extras=True)
+def test_schemas_module_preserves_struct_definitions() -> None:
+    """Msgspec schema definitions still expose their fields remain stable."""
+    user_read_hints = get_type_hints(schemas_module.UserRead, include_extras=True)
+    user_update_hints = get_type_hints(schemas_module.UserUpdate, include_extras=True)
 
-    assert reloaded_module.UserRead.__struct_fields__ == (
+    assert schemas_module.UserRead.__struct_fields__ == (
         "id",
         "email",
         "is_active",
         "is_verified",
         "roles",
     )
-    assert reloaded_module.UserCreate.__struct_fields__ == ("email", "password")
-    assert reloaded_module.UserUpdate.__struct_fields__ == (
+    assert schemas_module.UserCreate.__struct_fields__ == ("email", "password")
+    assert schemas_module.UserUpdate.__struct_fields__ == (
         "email",
         "is_active",
         "is_verified",
@@ -210,31 +193,25 @@ def test_schemas_module_reload_preserves_struct_definitions() -> None:
     assert get_args(user_update_hints["roles"])[1] is type(None)
 
 
-def test_strategy_base_module_reload_preserves_abstract_contracts() -> None:
-    """Reload strategy base definitions and verify the contract surfaces remain exported."""
-    reloaded_module = _reload_module(strategy_base_module)
-
-    assert reloaded_module.UserManagerProtocol.__name__ == "UserManagerProtocol"
-    assert reloaded_module.Strategy.__abstractmethods__ == {"destroy_token", "read_token", "write_token"}
-    assert "with_session" in reloaded_module.SessionBindable.__dict__
-    assert "write_refresh_token" in reloaded_module.RefreshableStrategy.__dict__
-    assert "rotate_refresh_token" in reloaded_module.RefreshableStrategy.__dict__
-    assert "invalidate_all_tokens" in reloaded_module.TokenInvalidationCapable.__dict__
+def test_strategy_base_module_preserves_abstract_contracts() -> None:
+    """Strategy base definitions still exposes the contract surfaces remain exported."""
+    assert strategy_base_module.UserManagerProtocol.__name__ == "UserManagerProtocol"
+    assert strategy_base_module.Strategy.__abstractmethods__ == {"destroy_token", "read_token", "write_token"}
+    assert "with_session" in strategy_base_module.SessionBindable.__dict__
+    assert "write_refresh_token" in strategy_base_module.RefreshableStrategy.__dict__
+    assert "rotate_refresh_token" in strategy_base_module.RefreshableStrategy.__dict__
+    assert "invalidate_all_tokens" in strategy_base_module.TokenInvalidationCapable.__dict__
 
 
-def test_transport_base_module_reload_preserves_abstract_contracts() -> None:
-    """Reload transport base definitions and verify the abstract API remains stable."""
-    reloaded_module = _reload_module(transport_base_module)
-
-    assert reloaded_module.LogoutTokenReadable.__name__ == "LogoutTokenReadable"
-    assert reloaded_module.Transport.__abstractmethods__ == {"read_token", "set_login_token", "set_logout"}
+def test_transport_base_module_preserves_abstract_contracts() -> None:
+    """Transport base definitions still exposes the abstract API remains stable."""
+    assert transport_base_module.LogoutTokenReadable.__name__ == "LogoutTokenReadable"
+    assert transport_base_module.Transport.__abstractmethods__ == {"read_token", "set_login_token", "set_logout"}
 
 
-def test_db_base_module_reload_preserves_store_contracts() -> None:
-    """Reload persistence contracts and verify the expected methods remain exposed."""
-    reloaded_module = _reload_module(db_base_module)
-
-    assert reloaded_module.BaseUserStore.__dict__.keys() >= {
+def test_db_base_module_preserves_store_contracts() -> None:
+    """Persistence contracts still exposes the expected methods remain exposed."""
+    assert db_base_module.BaseUserStore.__dict__.keys() >= {
         "create",
         "delete",
         "get",
@@ -243,28 +220,27 @@ def test_db_base_module_reload_preserves_store_contracts() -> None:
         "list_users",
         "update",
     }
-    assert "get_by_oauth_account" in reloaded_module.BaseOAuthAccountStore.__dict__
-    assert "upsert_oauth_account" in reloaded_module.BaseOAuthAccountStore.__dict__
+    assert "get_by_oauth_account" in db_base_module.BaseOAuthAccountStore.__dict__
+    assert "upsert_oauth_account" in db_base_module.BaseOAuthAccountStore.__dict__
 
 
 async def test_db_base_protocol_method_stubs_execute_under_coverage() -> None:
     """Execute protocol stub bodies so coverage records the structural contract surface."""
-    reloaded_module = _reload_module(db_base_module)
     dummy_self = cast("Any", object())
 
-    assert await reloaded_module.BaseUserStore.get(dummy_self, uuid4()) is None
-    assert await reloaded_module.BaseUserStore.get_by_email(dummy_self, "user@example.com") is None
-    assert await reloaded_module.BaseUserStore.get_by_field(dummy_self, "email", "user@example.com") is None
-    assert await reloaded_module.BaseUserStore.create(dummy_self, {"email": "user@example.com"}) is None
-    assert await reloaded_module.BaseUserStore.list_users(dummy_self, offset=0, limit=10) is None
-    assert await reloaded_module.BaseUserStore.update(dummy_self, cast("Any", object()), {"email": "updated"}) is None
-    assert await reloaded_module.BaseUserStore.delete(dummy_self, uuid4()) is None
-    assert await reloaded_module.BaseOAuthAccountStore.get_by_oauth_account(dummy_self, "provider", "account") is None
+    assert await db_base_module.BaseUserStore.get(dummy_self, uuid4()) is None
+    assert await db_base_module.BaseUserStore.get_by_email(dummy_self, "user@example.com") is None
+    assert await db_base_module.BaseUserStore.get_by_field(dummy_self, "email", "user@example.com") is None
+    assert await db_base_module.BaseUserStore.create(dummy_self, {"email": "user@example.com"}) is None
+    assert await db_base_module.BaseUserStore.list_users(dummy_self, offset=0, limit=10) is None
+    assert await db_base_module.BaseUserStore.update(dummy_self, cast("Any", object()), {"email": "updated"}) is None
+    assert await db_base_module.BaseUserStore.delete(dummy_self, uuid4()) is None
+    assert await db_base_module.BaseOAuthAccountStore.get_by_oauth_account(dummy_self, "provider", "account") is None
     assert (
-        await reloaded_module.BaseOAuthAccountStore.upsert_oauth_account(
+        await db_base_module.BaseOAuthAccountStore.upsert_oauth_account(
             dummy_self,
             cast("Any", object()),
-            account=reloaded_module.OAuthAccountData(
+            account=db_base_module.OAuthAccountData(
                 oauth_name="provider",
                 account_id="account",
                 account_email="user@example.com",
@@ -277,75 +253,16 @@ async def test_db_base_protocol_method_stubs_execute_under_coverage() -> None:
     )
 
 
-def test_manager_protocols_module_reload_preserves_internal_protocols() -> None:
-    """Reload internal manager protocols and verify their required attributes remain defined."""
-    reloaded_module = _reload_module(manager_protocols_module)
-
-    assert reloaded_module.ManagedUserProtocol.__annotations__ == {"email": "str", "hashed_password": "str"}
-    assert reloaded_module.AccountStateUserProtocol.__name__ == "AccountStateUserProtocol"
-    assert reloaded_module.UserDatabaseManagerProtocol.__annotations__ == {"user_db": "Any"}
+def test_manager_protocols_module_preserves_internal_protocols() -> None:
+    """Internal manager protocols still exposes their required attributes remain defined."""
+    assert manager_protocols_module.ManagedUserProtocol.__annotations__ == {"email": "str", "hashed_password": "str"}
+    assert manager_protocols_module.AccountStateUserProtocol.__name__ == "AccountStateUserProtocol"
+    assert manager_protocols_module.UserDatabaseManagerProtocol.__annotations__ == {"user_db": "Any"}
 
 
-def test_models_oauth_module_reload_executes_under_coverage(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Reload ``models/oauth.py`` in isolation (fake UUID base) and verify OAuth table metadata."""
-    reloaded_module = _load_reloaded_alias(
-        alias_name="_coverage_alias_models_oauth",
-        source_path=REPO_ROOT / "litestar_auth" / "models" / "oauth.py",
-        monkeypatch=monkeypatch,
-    )
-
-    assert reloaded_module.OAuthAccount.__name__ == "OAuthAccount"
-    assert reloaded_module.OAuthAccount.__tablename__ == "oauth_account"
-    assert set(reloaded_module.OAuthAccount.__table__.c.keys()).issuperset(
-        {"access_token", "account_email", "account_id", "expires_at", "id", "oauth_name", "refresh_token", "user_id"},
-    )
-    assert issubclass(reloaded_module.OAuthAccount, OAuthAccountMixin)
-    assert sorted(
-        name for name in reloaded_module.OAuthAccountMixin.__annotations__ if not name.startswith("auth_")
-    ) == [
-        "access_token",
-        "account_email",
-        "account_id",
-        "expires_at",
-        "oauth_name",
-        "refresh_token",
-        "user",
-        "user_id",
-    ]
-    assert {
-        constraint.name
-        for constraint in reloaded_module.OAuthAccount.__table__.constraints
-        if constraint.name is not None
-    } == {"uq_oauth_account_provider_identity"}
-    assert reloaded_module.OAuthAccount.__table__.c.user_id.foreign_keys
-
-
-def test_models_role_module_reload_executes_under_coverage(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Reload ``models/role.py`` in isolation and verify the bundled role tables."""
-    reloaded_module = _load_reloaded_alias(
-        alias_name="_coverage_alias_models_role",
-        source_path=REPO_ROOT / "litestar_auth" / "models" / "role.py",
-        monkeypatch=monkeypatch,
-    )
-
-    assert reloaded_module.Role.__name__ == "Role"
-    assert reloaded_module.UserRole.__name__ == "UserRole"
-    assert reloaded_module.Role.__tablename__ == "role"
-    assert reloaded_module.UserRole.__tablename__ == "user_role"
-    assert set(reloaded_module.Role.__table__.c.keys()) == {"description", "name"}
-    assert reloaded_module.Role.__table__.c.description.nullable is True
-    assert set(reloaded_module.UserRole.__table__.c.keys()) == {"role_name", "user_id"}
-    assert issubclass(reloaded_module.Role, RoleMixin)
-    assert issubclass(reloaded_module.UserRole, UserRoleAssociationMixin)
-    assert next(iter(reloaded_module.UserRole.__table__.c.user_id.foreign_keys)).target_fullname == "user.id"
-    assert next(iter(reloaded_module.UserRole.__table__.c.role_name.foreign_keys)).target_fullname == "role.name"
-
-
-def test_models_mixins_module_reload_preserves_contract_exports() -> None:
-    """Reload the side-effect-free auth mixin module and verify its export surface."""
-    reloaded_module = _reload_module(model_mixins_module)
-
-    assert reloaded_module.__all__ == (
+def test_models_mixins_module_preserves_contract_exports() -> None:
+    """side-effect-free auth mixin module still exposes its export surface."""
+    assert model_mixins_module.__all__ == (
         "AccessTokenMixin",
         "OAuthAccountMixin",
         "RefreshTokenMixin",
@@ -355,11 +272,11 @@ def test_models_mixins_module_reload_preserves_contract_exports() -> None:
         "UserRoleAssociationMixin",
         "UserRoleRelationshipMixin",
     )
-    assert hasattr(reloaded_module.UserModelMixin, "email")
-    assert hasattr(reloaded_module.OAuthAccountMixin, "access_token")
-    assert hasattr(reloaded_module.RoleMixin, "name")
-    assert hasattr(reloaded_module.UserRoleRelationshipMixin, "roles")
-    assert not hasattr(reloaded_module, "_TokenModelMixin")
+    assert hasattr(model_mixins_module.UserModelMixin, "email")
+    assert hasattr(model_mixins_module.OAuthAccountMixin, "access_token")
+    assert hasattr(model_mixins_module.RoleMixin, "name")
+    assert hasattr(model_mixins_module.UserRoleRelationshipMixin, "roles")
+    assert not hasattr(model_mixins_module, "_TokenModelMixin")
     assert issubclass(ModelsUser, UserModelMixin)
     assert issubclass(ModelsOAuthAccount, OAuthAccountMixin)
     assert issubclass(ModelsRole, RoleMixin)
@@ -368,10 +285,10 @@ def test_models_mixins_module_reload_preserves_contract_exports() -> None:
     assert issubclass(ModelsRefreshToken, RefreshTokenMixin)
 
 
-def test_internal_auth_model_mixins_module_reload_preserves_contract_exports(
+def test_internal_auth_model_mixins_module_preserves_contract_exports(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Reload the internal auth mixin module and verify its reusable contracts stay stable."""
+    """Internal auth mixin module still exposes its reusable contracts stay stable."""
     reloaded_module = _load_reloaded_alias(
         alias_name="_coverage_alias_auth_model_mixins",
         source_path=REPO_ROOT / "litestar_auth" / "_auth_model_mixins.py",
@@ -659,25 +576,3 @@ def test_models_user_module_columns_and_relationships() -> None:
     assert user_relationships["role_assignments"].back_populates == "user"
     assert inspect(ModelsUserRole).relationships["role"].mapper.class_ is ModelsRole
     assert inspect(ModelsRole).relationships["user_assignments"].mapper.class_ is ModelsUserRole
-
-
-def test_db_models_module_reload_executes_under_coverage(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Reload token ORM definitions in isolation and verify their mapped columns remain intact."""
-    reloaded_module = _load_reloaded_alias(
-        alias_name="_coverage_alias_db_models",
-        source_path=REPO_ROOT / "litestar_auth" / "authentication" / "strategy" / "db_models.py",
-        monkeypatch=monkeypatch,
-    )
-
-    assert reloaded_module.AccessToken.__name__ == "AccessToken"
-    assert reloaded_module.RefreshToken.__name__ == "RefreshToken"
-    assert reloaded_module.AccessToken.__tablename__ == "access_token"
-    assert reloaded_module.RefreshToken.__tablename__ == "refresh_token"
-    assert set(reloaded_module.AccessToken.__table__.c.keys()).issuperset({"created_at", "token", "user_id"})
-    assert set(reloaded_module.RefreshToken.__table__.c.keys()).issuperset({"created_at", "token", "user_id"})
-    assert issubclass(reloaded_module.AccessToken, AccessTokenMixin)
-    assert issubclass(reloaded_module.RefreshToken, RefreshTokenMixin)
-    assert reloaded_module.import_token_orm_models() == (
-        reloaded_module.AccessToken,
-        reloaded_module.RefreshToken,
-    )

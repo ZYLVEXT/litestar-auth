@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import importlib
 import sys
 import types
 from typing import TYPE_CHECKING, Any, cast
@@ -15,8 +14,6 @@ from litestar_auth.authentication.backend import AuthenticationBackend
 from litestar_auth.oauth import router
 from litestar_auth.oauth.router import (
     ProviderOAuthControllerConfig,
-    create_provider_oauth_controller,
-    load_httpx_oauth_client,
 )
 from litestar_auth.types import UserProtocol
 
@@ -89,16 +86,6 @@ def _make_backend() -> AuthenticationBackend[_RouterTestUser, object]:
 def _make_user_manager() -> OAuthControllerUserManagerProtocol[_RouterTestUser, object]:
     """Return a typed user-manager stub for router contract tests."""
     return cast("OAuthControllerUserManagerProtocol[_RouterTestUser, object]", object())
-
-
-def test_oauth_router_module_executes_under_coverage() -> None:
-    """Reload the module in-test so coverage records its module-level definitions."""
-    reloaded_module = importlib.reload(router_module)
-
-    assert reloaded_module is router_module
-    assert reloaded_module.ProviderOAuthControllerConfig.__name__ == ProviderOAuthControllerConfig.__name__
-    assert reloaded_module.create_provider_oauth_controller.__name__ == create_provider_oauth_controller.__name__
-    assert reloaded_module.load_httpx_oauth_client.__name__ == load_httpx_oauth_client.__name__
 
 
 def test_create_provider_oauth_controller_exposes_typed_client_annotations() -> None:

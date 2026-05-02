@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import importlib
 import inspect
 from typing import TYPE_CHECKING, Any, cast
 from uuid import UUID
@@ -52,19 +51,15 @@ HTTP_TOO_MANY_REQUESTS = 429
 
 def test_hook_protocols_are_reexported_from_plugin_config() -> None:
     """Hook protocols keep the historical config-module import path."""
-    reloaded_hooks = importlib.reload(plugin_hooks)
-    reloaded_config = importlib.reload(plugin_config)
-    reloaded_plugin_module = importlib.reload(plugin_module)
-
-    assert reloaded_config.ExceptionResponseHook is reloaded_hooks.ExceptionResponseHook
-    assert reloaded_config.MiddlewareHook is reloaded_hooks.MiddlewareHook
-    assert reloaded_config.ControllerHook is reloaded_hooks.ControllerHook
-    assert reloaded_config.ExceptionResponseHook.__module__ == "litestar_auth._plugin._hooks"
-    assert reloaded_config.MiddlewareHook.__module__ == "litestar_auth._plugin._hooks"
-    assert reloaded_config.ControllerHook.__module__ == "litestar_auth._plugin._hooks"
-    assert reloaded_plugin_module.ExceptionResponseHook is reloaded_hooks.ExceptionResponseHook
-    assert reloaded_plugin_module.MiddlewareHook is reloaded_hooks.MiddlewareHook
-    assert reloaded_plugin_module.ControllerHook is reloaded_hooks.ControllerHook
+    assert plugin_config.ExceptionResponseHook is plugin_hooks.ExceptionResponseHook
+    assert plugin_config.MiddlewareHook is plugin_hooks.MiddlewareHook
+    assert plugin_config.ControllerHook is plugin_hooks.ControllerHook
+    assert plugin_config.ExceptionResponseHook.__module__ == "litestar_auth._plugin._hooks"
+    assert plugin_config.MiddlewareHook.__module__ == "litestar_auth._plugin._hooks"
+    assert plugin_config.ControllerHook.__module__ == "litestar_auth._plugin._hooks"
+    assert plugin_module.ExceptionResponseHook is plugin_hooks.ExceptionResponseHook
+    assert plugin_module.MiddlewareHook is plugin_hooks.MiddlewareHook
+    assert plugin_module.ControllerHook is plugin_hooks.ControllerHook
 
 
 def test_hook_protocol_call_signatures_stay_positional_only() -> None:

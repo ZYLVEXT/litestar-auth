@@ -1,9 +1,8 @@
-"""Coverage regression tests for private controller partition modules."""
+"""Import-only coverage for private controller partition modules."""
 
 from __future__ import annotations
 
 import importlib
-from types import ModuleType
 
 import pytest
 
@@ -21,8 +20,6 @@ import pytest
         "litestar_auth.controllers._users_routes",
     ],
 )
-def test_controller_partition_module_reload(module_name: str) -> None:
+def test_controller_partition_module_imports(module_name: str) -> None:
     """Private controller partitions remain importable after collection-time imports."""
-    module = importlib.import_module(module_name)
-
-    assert isinstance(importlib.reload(module), ModuleType)
+    assert importlib.import_module(module_name).__name__ == module_name

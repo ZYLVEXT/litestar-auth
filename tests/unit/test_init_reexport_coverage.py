@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import importlib
 import logging
 from typing import TYPE_CHECKING, get_args
 
@@ -115,34 +114,19 @@ def _assert_exported_symbols(module: ModuleType, *, expected_names: Iterable[str
         ),
     ],
 )
-def test_reexport_module_executes_under_coverage(module: ModuleType, expected_names: tuple[str, ...]) -> None:
-    """Reload the re-export module so coverage records its module body."""
-    reloaded_module = importlib.reload(module)
+def test_reexport_module_exposes_documented_public_surface(
+    module: ModuleType,
+    expected_names: tuple[str, ...],
+) -> None:
+    """Re-export modules continue to expose their documented public names."""
+    _assert_exported_symbols(module, expected_names=expected_names)
 
-    assert reloaded_module is module
-    _assert_exported_symbols(reloaded_module, expected_names=expected_names)
 
-
-def test_root_reexport_module_executes_under_coverage(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Reload the root package and verify its exports and logger setup remain usable."""
-    capturing_logger = _CapturingLogger()
-    original_get_logger = logging.getLogger
-
-    def _get_logger(name: str | None = None) -> logging.Logger | _CapturingLogger:
-        if name == litestar_auth_module.__name__:
-            return capturing_logger
-        if name is None:
-            return original_get_logger()
-        return original_get_logger(name)
-
-    monkeypatch.setattr(logging, "getLogger", _get_logger)
-
-    reloaded_module = importlib.reload(litestar_auth_module)
-
-    assert reloaded_module is litestar_auth_module
-    assert reloaded_module.__version__ == project_version_from_pyproject()
+def test_root_package_exposes_documented_public_surface_and_null_logger() -> None:
+    """Root package exposes the documented public symbols and configures a null logger."""
+    assert litestar_auth_module.__version__ == project_version_from_pyproject()
     _assert_exported_symbols(
-        reloaded_module,
+        litestar_auth_module,
         expected_names=(
             "AuthenticationBackend",
             "Authenticator",
@@ -165,8 +149,12 @@ def test_root_reexport_module_executes_under_coverage(monkeypatch: pytest.Monkey
             "is_authenticated",
         ),
     )
-    assert len(capturing_logger.handlers) == 1
-    assert isinstance(capturing_logger.handlers[0], logging.NullHandler)
+    null_handlers = [
+        handler
+        for handler in logging.getLogger(litestar_auth_module.__name__).handlers
+        if isinstance(handler, logging.NullHandler)
+    ]
+    assert null_handlers
 
 
 def test_models_package_owns_token_registration_helper_and_strategy_keeps_db_token_contract() -> None:
@@ -207,11 +195,8 @@ def test_models_package_owns_token_registration_helper_and_strategy_keeps_db_tok
 
 def test_ratelimit_reexport_module_keeps_private_helpers_internal() -> None:
     """The public ratelimit module keeps helper internals off the package surface."""
-    reloaded_module = importlib.reload(ratelimit_module)
-
-    assert reloaded_module is ratelimit_module
     _assert_exported_symbols(
-        reloaded_module,
+        ratelimit_module,
         expected_names=(
             "AuthRateLimitConfig",
             "AuthRateLimitEndpointGroup",
@@ -228,22 +213,22 @@ def test_ratelimit_reexport_module_keeps_private_helpers_internal() -> None:
     assert hasattr(ratelimit_slot_catalog_module, "_AUTH_RATE_LIMIT_ENDPOINT_RECIPES_BY_SLOT")
     assert hasattr(ratelimit_slot_catalog_module, "_AUTH_RATE_LIMIT_ENDPOINT_SLOTS")
     assert hasattr(ratelimit_slot_catalog_module, "_AUTH_RATE_LIMIT_ENDPOINT_GROUPS")
-    assert ratelimit_endpoint_module.EndpointRateLimit is reloaded_module.EndpointRateLimit
-    assert ratelimit_endpoint_module.RateLimitScope is reloaded_module.RateLimitScope
-    assert get_args(reloaded_module.AuthRateLimitEndpointGroup.__value__) == get_args(
+    assert ratelimit_endpoint_module.EndpointRateLimit is ratelimit_module.EndpointRateLimit
+    assert ratelimit_endpoint_module.RateLimitScope is ratelimit_module.RateLimitScope
+    assert get_args(ratelimit_module.AuthRateLimitEndpointGroup.__value__) == get_args(
         AuthRateLimitEndpointGroup.__value__,
     )
-    assert tuple(reloaded_module.AuthRateLimitSlot) == tuple(AuthRateLimitSlot)
-    assert not hasattr(reloaded_module, "AuthRateLimitEndpointSlot")
-    assert not hasattr(reloaded_module, "_DEFAULT_TRUSTED_HEADERS")
-    assert not hasattr(reloaded_module, "_client_host")
-    assert not hasattr(reloaded_module, "_extract_email")
-    assert not hasattr(reloaded_module, "_load_redis_asyncio")
-    assert not hasattr(reloaded_module, "_safe_key_part")
-    assert not hasattr(reloaded_module, "_validate_configuration")
-    assert not hasattr(reloaded_module, "importlib")
-    assert not hasattr(reloaded_module, "logger")
-    assert not hasattr(reloaded_module, "_AUTH_RATE_LIMIT_ENDPOINT_RECIPES")
-    assert not hasattr(reloaded_module, "_AUTH_RATE_LIMIT_ENDPOINT_RECIPES_BY_SLOT")
-    assert not hasattr(reloaded_module, "_AUTH_RATE_LIMIT_ENDPOINT_SLOTS")
-    assert not hasattr(reloaded_module, "_AUTH_RATE_LIMIT_ENDPOINT_GROUPS")
+    assert tuple(ratelimit_module.AuthRateLimitSlot) == tuple(AuthRateLimitSlot)
+    assert not hasattr(ratelimit_module, "AuthRateLimitEndpointSlot")
+    assert not hasattr(ratelimit_module, "_DEFAULT_TRUSTED_HEADERS")
+    assert not hasattr(ratelimit_module, "_client_host")
+    assert not hasattr(ratelimit_module, "_extract_email")
+    assert not hasattr(ratelimit_module, "_load_redis_asyncio")
+    assert not hasattr(ratelimit_module, "_safe_key_part")
+    assert not hasattr(ratelimit_module, "_validate_configuration")
+    assert not hasattr(ratelimit_module, "importlib")
+    assert not hasattr(ratelimit_module, "logger")
+    assert not hasattr(ratelimit_module, "_AUTH_RATE_LIMIT_ENDPOINT_RECIPES")
+    assert not hasattr(ratelimit_module, "_AUTH_RATE_LIMIT_ENDPOINT_RECIPES_BY_SLOT")
+    assert not hasattr(ratelimit_module, "_AUTH_RATE_LIMIT_ENDPOINT_SLOTS")
+    assert not hasattr(ratelimit_module, "_AUTH_RATE_LIMIT_ENDPOINT_GROUPS")

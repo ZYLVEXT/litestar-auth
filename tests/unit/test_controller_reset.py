@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import importlib
 from types import CellType, FunctionType
 from typing import TYPE_CHECKING, Any, cast
 from unittest.mock import AsyncMock, MagicMock
@@ -13,9 +12,7 @@ import pytest
 from litestar.status_codes import HTTP_200_OK, HTTP_202_ACCEPTED, HTTP_400_BAD_REQUEST
 from litestar.testing import AsyncTestClient
 
-import litestar_auth.controllers.reset as reset_module
 from litestar_auth.controllers.reset import (
-    ResetPassword,
     create_reset_password_controller,
 )
 from litestar_auth.exceptions import ErrorCode, InvalidPasswordError, InvalidResetPasswordTokenError
@@ -26,14 +23,6 @@ if TYPE_CHECKING:
     from litestar import Controller
 
 pytestmark = pytest.mark.unit
-
-
-def test_reset_module_executes_under_coverage() -> None:
-    """Reload the module in-test so coverage records module and protocol execution."""
-    reloaded_module = importlib.reload(reset_module)
-
-    assert reloaded_module.ResetPassword.__name__ == ResetPassword.__name__
-    assert reloaded_module.ResetPasswordControllerUserManagerProtocol.__name__.endswith("Protocol")
 
 
 class DummyUser(msgspec.Struct):

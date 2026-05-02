@@ -9,7 +9,6 @@ from typing import TYPE_CHECKING
 import pytest
 
 import litestar_auth._manager.user_policy as user_policy_module
-import litestar_auth.config as config_module
 from litestar_auth.password import PasswordHelper
 
 if TYPE_CHECKING:
@@ -57,14 +56,6 @@ def _make_policy(
         password_helper=PasswordHelper(),
         password_validator=password_validator,
     )
-
-
-def test_user_policy_module_executes_under_coverage() -> None:
-    """Reload the module in-test so coverage records class and helper definitions."""
-    reloaded_module = importlib.reload(user_policy_module)
-
-    assert reloaded_module.UserPolicy.__name__ == _user_policy_cls().__name__
-    assert reloaded_module.require_password_length is config_module.require_password_length
 
 
 def test_normalize_email_strips_and_lowercases() -> None:

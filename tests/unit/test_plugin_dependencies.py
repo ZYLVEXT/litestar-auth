@@ -76,14 +76,6 @@ HTTP_FORBIDDEN = 403
 HTTP_IM_A_TEAPOT = 418
 
 
-def test_plugin_dependencies_module_executes_under_coverage() -> None:
-    """Reload the module in-test so coverage records the module body."""
-    reloaded_module = importlib.reload(dependencies_module)
-
-    assert reloaded_module.DependencyProviders.__name__ == DependencyProviders.__name__
-    assert reloaded_module.client_exception_handler.__name__ == client_exception_handler.__name__
-
-
 def _minimal_config() -> LitestarAuthConfig[ExampleUser, UUID]:
     """Build a minimal plugin config for dependency-registration tests.
 

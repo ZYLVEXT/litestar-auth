@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import importlib
-
 import pytest
 
 import litestar_auth._optional_deps as optional_deps_module
@@ -249,10 +247,3 @@ def test_fernet_keyring_repr_and_str_mask_all_configured_keys() -> None:
         assert "***" in rendered
         assert "active-key-material" not in rendered
         assert "old-key-material" not in rendered
-
-
-def test_secrets_at_rest_module_executes_under_coverage() -> None:
-    """Reload the module in-test so coverage records module and class execution."""
-    reloaded_module = importlib.reload(secrets_at_rest)
-
-    assert reloaded_module.FernetKeyring.__name__ == FernetKeyring.__name__

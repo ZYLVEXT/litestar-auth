@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import importlib
 from types import SimpleNamespace
 from typing import TYPE_CHECKING, Any, cast
 from uuid import uuid4
@@ -11,7 +10,6 @@ import pytest
 from litestar.connection import ASGIConnection
 from litestar.exceptions import PermissionDeniedException
 
-import litestar_auth._superuser_role as superuser_role_module
 from litestar_auth._superuser_role import (
     DEFAULT_SUPERUSER_ROLE_NAME,
     SUPERUSER_ROLE_NAME_SENTINEL,
@@ -53,13 +51,6 @@ def _build_connection(
     if state is not None:
         scope["state"] = state
     return ASGIConnection(scope=cast("HTTPScope", scope))
-
-
-def test_superuser_role_module_executes_under_coverage() -> None:
-    """Reload the module in-test so coverage records module-body execution."""
-    reloaded_module = importlib.reload(superuser_role_module)
-
-    assert reloaded_module.DEFAULT_SUPERUSER_ROLE_NAME == DEFAULT_SUPERUSER_ROLE_NAME
 
 
 def test_default_superuser_role_name_is_normalized() -> None:

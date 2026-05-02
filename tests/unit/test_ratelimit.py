@@ -51,8 +51,6 @@ from tests._helpers import cast_fakeredis
 pytestmark = pytest.mark.unit
 
 if TYPE_CHECKING:
-    from types import ModuleType
-
     import fakeredis
     from litestar.types import HTTPScope
 
@@ -125,15 +123,6 @@ AUTH_RATE_LIMIT_VERIFICATION_SLOT_IDENTIFIERS = AUTH_RATE_LIMIT_SLOT_IDENTIFIERS
 KEY_CAP = 2
 
 
-def _reload_module(module_path: str) -> ModuleType:
-    """Import and reload a module so coverage records its module body.
-
-    Returns:
-        The reloaded module object.
-    """
-    return importlib.reload(importlib.import_module(module_path))
-
-
 def _unwrap_optional(annotation: object) -> object:
     """Return the non-``None`` member of an optional annotation."""
     args = get_args(annotation)
@@ -180,11 +169,10 @@ class JsonRequestStub:
         return self.payload
 
 
-async def test_ratelimit_module_reload_preserves_public_api() -> None:
-    """Reloading the module preserves the public limiter API under coverage."""
-    reloaded_module = importlib.reload(ratelimit_module)
+async def test_ratelimit_module_exposes_public_limiter_api() -> None:
+    """The public limiter API stays accessible through the ratelimit package."""
     clock = FakeClock()
-    backend = reloaded_module.InMemoryRateLimiter(max_attempts=2, window_seconds=10, clock=clock)
+    backend = ratelimit_module.InMemoryRateLimiter(max_attempts=2, window_seconds=10, clock=clock)
     request = cast(
         "Request[Any, Any, Any]",
         JsonRequestStub(
@@ -192,17 +180,17 @@ async def test_ratelimit_module_reload_preserves_public_api() -> None:
             client=ClientStub(host="127.0.0.1"),
         ),
     )
-    limiter = reloaded_module.EndpointRateLimit(
+    limiter = ratelimit_module.EndpointRateLimit(
         backend=backend,
         scope="ip_email",
         namespace="login",
     )
-    config = reloaded_module.AuthRateLimitConfig(login=limiter)
-    orchestrator = reloaded_module.TotpRateLimitOrchestrator(verify=limiter)
+    config = ratelimit_module.AuthRateLimitConfig(login=limiter)
+    orchestrator = ratelimit_module.TotpRateLimitOrchestrator(verify=limiter)
 
-    assert reloaded_module.DEFAULT_KEY_PREFIX == DEFAULT_KEY_PREFIX
-    assert reloaded_module.InMemoryRateLimiter.__name__ == "InMemoryRateLimiter"
-    assert isinstance(backend, reloaded_module.RateLimiterBackend)
+    assert ratelimit_module.DEFAULT_KEY_PREFIX == DEFAULT_KEY_PREFIX
+    assert ratelimit_module.InMemoryRateLimiter.__name__ == "InMemoryRateLimiter"
+    assert isinstance(backend, ratelimit_module.RateLimiterBackend)
     assert config.login is limiter
     assert orchestrator._limiters == {"verify": limiter}
 
@@ -1385,7 +1373,7 @@ def test_ratelimit_submodules_expose_stable_import_paths(
     expected_symbols: tuple[str, ...],
 ) -> None:
     """Each ratelimit submodule remains directly importable after decomposition."""
-    module = _reload_module(module_path)
+    module = importlib.import_module(module_path)
 
     assert module.__name__ == module_path
     missing_symbols = [symbol for symbol in expected_symbols if not hasattr(module, symbol)]
@@ -1411,11 +1399,11 @@ def test_public_ratelimit_all_lists_only_documented_exports() -> None:
 
 async def test_ratelimit_protocol_stubs_behave_as_type_contracts() -> None:
     """Protocol stubs remain directly callable without adding runtime behavior."""
-    protocol_module = _reload_module("litestar_auth.ratelimit._protocol")
+    protocol_module = importlib.import_module("litestar_auth.ratelimit._protocol")
     pipeline_protocol = protocol_module.RedisPipelineProtocol
     client_protocol = protocol_module.RedisClientProtocol
     backend_protocol = protocol_module.RateLimiterBackend
-    dummy = object()
+    dummy = cast("Any", object())
     property_getter = backend_protocol.is_shared_across_workers.fget
     enter = pipeline_protocol.__dict__["__aenter__"]
     exit_ = pipeline_protocol.__dict__["__aexit__"]

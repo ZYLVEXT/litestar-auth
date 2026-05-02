@@ -47,7 +47,6 @@ from litestar_auth.exceptions import ConfigurationError
 from litestar_auth.manager import UserManagerSecurity
 from litestar_auth.password import PasswordHelper
 from litestar_auth.plugin import (
-    DatabaseTokenAuthConfig,
     FernetKeyringConfig,
     LitestarAuth,
     LitestarAuthConfig,
@@ -138,26 +137,6 @@ def _current_inmemory_totp_enrollment_store() -> object:
     totp_module = importlib.import_module("litestar_auth.totp")
     store_type = cast("type[Any]", totp_module.InMemoryTotpEnrollmentStore)
     return store_type()
-
-
-def test_plugin_module_executes_under_coverage() -> None:
-    """Reload the module in-test so coverage records the module body."""
-    reloaded_module = importlib.reload(plugin_module)
-
-    assert reloaded_module.DatabaseTokenAuthConfig.__name__ == DatabaseTokenAuthConfig.__name__
-    assert reloaded_module.FernetKeyringConfig.__name__ == FernetKeyringConfig.__name__
-    assert reloaded_module.LitestarAuth.__name__ == LitestarAuth.__name__
-    assert reloaded_module.LitestarAuthConfig.__name__ == LitestarAuthConfig.__name__
-    assert reloaded_module.__all__ == (
-        "DatabaseTokenAuthConfig",
-        "FernetKeyringConfig",
-        "LitestarAuth",
-        "LitestarAuthConfig",
-        "OAuthConfig",
-        "OAuthProviderConfig",
-        "StartupBackendTemplate",
-        "TotpConfig",
-    )
 
 
 def _minimal_config(

@@ -94,21 +94,6 @@ def _oauth_provider(*, name: str, client: object) -> OAuthProviderConfig:
     return oauth_provider_config_type(name=name, client=client)
 
 
-def test_plugin_controllers_module_executes_under_coverage() -> None:
-    """Reload the module in-test so coverage records module-body execution."""
-    reloaded_module = importlib.reload(controllers_module)
-    reloaded_oauth_module = importlib.reload(oauth_controllers_module)
-    reloaded_totp_route_handlers_module = importlib.reload(totp_route_handlers_module)
-    reloaded_totp_module = importlib.reload(totp_controllers_module)
-
-    assert reloaded_module.build_controllers.__name__ == build_controllers.__name__
-    assert reloaded_oauth_module.create_oauth_login_controller.__name__ == "create_oauth_login_controller"
-    assert reloaded_totp_route_handlers_module.define_plugin_totp_controller_class.__name__ == (
-        "define_plugin_totp_controller_class"
-    )
-    assert reloaded_totp_module.build_totp_controller.__name__ == build_totp_controller.__name__
-
-
 def test_build_controllers_combines_auth_and_optional_controllers(monkeypatch: pytest.MonkeyPatch) -> None:
     """build_controllers returns auth controllers plus appended optional controllers."""
     config = _minimal_config()

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import importlib
 from typing import TYPE_CHECKING
 
 import pytest
@@ -23,14 +22,6 @@ def _password_helper_cls() -> type[PasswordHelper]:
         The runtime ``PasswordHelper`` class from ``litestar_auth.password``.
     """
     return password_module.PasswordHelper
-
-
-def test_password_module_executes_under_coverage() -> None:
-    """Reload the module in-test so coverage records class-body execution."""
-    reloaded_module = importlib.reload(password_module)
-
-    assert reloaded_module.PasswordHelper is not None
-    assert reloaded_module.PasswordHelper.__name__ == _password_helper_cls().__name__
 
 
 def test_default_initialization_uses_argon2_only() -> None:

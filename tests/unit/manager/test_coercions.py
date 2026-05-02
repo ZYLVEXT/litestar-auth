@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import importlib
 from unittest.mock import patch
 from uuid import uuid4
 
@@ -21,16 +20,6 @@ class RegistrationPayload(msgspec.Struct):
 
     email: str
     password: str
-
-
-def test_coercions_module_executes_under_coverage() -> None:
-    """Reload the module in-test so coverage records module execution."""
-    reloaded_module = importlib.reload(coercions_module)
-
-    assert reloaded_module._as_dict.__name__ == _as_dict.__name__
-    assert reloaded_module._require_str.__name__ == _require_str.__name__
-    assert reloaded_module._managed_user.__name__ == _managed_user.__name__
-    assert reloaded_module._account_state_user.__name__ == _account_state_user.__name__
 
 
 def test_as_dict_accepts_mapping() -> None:

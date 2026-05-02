@@ -13,7 +13,6 @@ from litestar.enums import MediaType
 from litestar.exceptions import ClientException, NotAuthorizedException
 from litestar.response import Response
 
-from litestar_auth.authentication import backend as backend_module
 from litestar_auth.authentication.backend import AuthenticationBackend, _bind_strategy_session
 from litestar_auth.authentication.strategy.base import SessionBindable
 from litestar_auth.authentication.transport.cookie import CookieTransport
@@ -52,15 +51,6 @@ def _build_connection() -> ASGIConnection[Any, Any, Any, Any]:
         "query_string": b"",
     }
     return ASGIConnection(scope=cast("HTTPScope", scope))
-
-
-def test_backend_module_executes_under_coverage() -> None:
-    """Reload the backend module in-test so coverage records class and helper definitions."""
-    reloaded_module = importlib.reload(backend_module)
-
-    assert reloaded_module.AuthenticationBackend is _backend_module().AuthenticationBackend
-    assert reloaded_module._bind_strategy_session is not None
-    assert reloaded_module._invalidate_refresh_artifacts is not None
 
 
 async def test_backend_login_composes_strategy_and_transport() -> None:

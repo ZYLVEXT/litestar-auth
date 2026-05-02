@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import importlib
 from dataclasses import dataclass
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
@@ -10,7 +9,6 @@ from uuid import uuid4
 
 import pytest
 
-import litestar_auth._manager.totp_secrets as totp_secrets_module
 from litestar_auth._manager.totp_secrets import TotpSecretsService, TotpSecretStoragePosture
 from tests._helpers import ExampleUser
 
@@ -68,13 +66,6 @@ class _Manager:
 def _build_fake_fernet_module() -> SimpleNamespace:
     """Return a fake cryptography module with deterministic Fernet behavior."""
     return SimpleNamespace(Fernet=_FakeFernet, InvalidToken=_FakeInvalidTokenError)
-
-
-def test_totp_secrets_module_executes_under_coverage() -> None:
-    """Reload the module in-test so coverage records module and class execution."""
-    reloaded_module = importlib.reload(totp_secrets_module)
-
-    assert reloaded_module.TotpSecretsService.__name__ == TotpSecretsService.__name__
 
 
 def test_totp_secret_storage_posture_requires_key_without_plaintext_branch() -> None:

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import importlib
 from types import CellType, FunctionType
 from typing import Any, cast
 from unittest.mock import AsyncMock, MagicMock
@@ -28,14 +27,6 @@ pytestmark = pytest.mark.unit
 HTTP_UNPROCESSABLE_ENTITY = 422
 REGISTER_FAILURE_DETAIL = "Registration could not be completed."
 EXPECTED_REGISTER_MINIMUM_RESPONSE_SECONDS = 0.4
-
-
-def test_register_module_executes_under_coverage() -> None:
-    """Reload the module in-test so coverage records module and protocol execution."""
-    reloaded_module = importlib.reload(register_module)
-
-    assert reloaded_module.create_register_controller.__name__ == create_register_controller.__name__
-    assert reloaded_module.RegisterControllerUserManagerProtocol.__name__.endswith("Protocol")
 
 
 class DummyUser(msgspec.Struct):

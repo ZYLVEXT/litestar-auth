@@ -112,33 +112,6 @@ class _InspectState:
         }
 
 
-def test_oauth_encryption_module_executes_under_coverage(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Reload the module under an isolated alias so coverage records module-body execution."""
-    assert oauth_encryption.__file__ is not None
-    reloaded_module = load_reloaded_test_alias(
-        alias_name="_coverage_alias_oauth_encryption",
-        source_path=Path(oauth_encryption.__file__).resolve(),
-        monkeypatch=monkeypatch,
-    )
-
-    assert reloaded_module.OAuthTokenEncryption.__name__ == OAuthTokenEncryption.__name__
-    assert reloaded_module.OAuthTokenEncryption is not OAuthTokenEncryption
-    assert reloaded_module.require_oauth_token_encryption.__name__ == require_oauth_token_encryption.__name__
-
-
-def test_oauth_mapper_events_module_executes_under_coverage(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Reload the mapper-event module under an isolated alias so coverage records module-body execution."""
-    assert oauth_mapper_events.__file__ is not None
-    reloaded_module = load_reloaded_test_alias(
-        alias_name="_coverage_alias_oauth_mapper_events",
-        source_path=Path(oauth_mapper_events.__file__).resolve(),
-        monkeypatch=monkeypatch,
-    )
-
-    assert reloaded_module._decrypt_loaded_oauth_tokens.__name__ == "_decrypt_loaded_oauth_tokens"
-    assert reloaded_module._encrypt_oauth_tokens_before_insert.__name__ == "_encrypt_oauth_tokens_before_insert"
-
-
 def test_oauth_token_encryption_plaintext_policy_round_trips() -> None:
     """An explicit keyless policy preserves plaintext values in testing scenarios."""
     policy = OAuthTokenEncryption(key=None, unsafe_testing=True)

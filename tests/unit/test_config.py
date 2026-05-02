@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import importlib
 import re
 import warnings
 
@@ -31,15 +30,6 @@ pytestmark = pytest.mark.unit
 GENERATED_SECRET_HEX_LENGTH = 64
 
 
-def test_config_module_executes_under_coverage() -> None:
-    """Reload the module in-test so coverage records module-body execution."""
-    reloaded_module = importlib.reload(config_module)
-
-    assert reloaded_module.MINIMUM_SECRET_LENGTH == MINIMUM_SECRET_LENGTH
-    assert reloaded_module._resolve_token_secret is config_module._resolve_token_secret
-    assert not hasattr(reloaded_module, "validate_testing_mode_for_startup")
-
-
 def test_config_defines_canonical_token_audiences() -> None:
     """Shared token audiences are defined once in the config module."""
     assert VERIFY_TOKEN_AUDIENCE == "litestar-auth:verify"
@@ -51,9 +41,7 @@ def test_config_defines_canonical_token_audiences() -> None:
 
 def test_config_reexports_secret_role_catalog_helpers() -> None:
     """Secret-role helpers remain available through the historical config module path."""
-    reloaded_secret_roles = importlib.reload(secret_roles_module)
-    reloaded_config = importlib.reload(config_module)
-    role_values = reloaded_config.SecretRoleValues(
+    role_values = config_module.SecretRoleValues(
         verification_token_secret="verify",
         reset_password_token_secret="reset",
         login_identifier_telemetry_secret="telemetry",
@@ -62,10 +50,8 @@ def test_config_reexports_secret_role_catalog_helpers() -> None:
         oauth_flow_cookie_secret="oauth-flow",
     )
 
-    assert reloaded_config.SecretRoleValues is reloaded_secret_roles.SecretRoleValues
-    assert (
-        reloaded_config.validate_secret_roles_are_distinct is reloaded_secret_roles.validate_secret_roles_are_distinct
-    )
+    assert config_module.SecretRoleValues is secret_roles_module.SecretRoleValues
+    assert config_module.validate_secret_roles_are_distinct is secret_roles_module.validate_secret_roles_are_distinct
     assert [role.setting_name for role, _secret in role_values.as_role_pairs()] == [
         "verification_token_secret",
         "reset_password_token_secret",

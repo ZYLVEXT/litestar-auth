@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
-import importlib
 import logging
 from datetime import UTC, datetime, timedelta, tzinfo
 from typing import Any, cast
@@ -58,14 +57,6 @@ def _service_str(
         user_manager=cast("Any", user_manager),
         config=TotpLoginFlowConfig[str](**config_kwargs),
     )
-
-
-def test_totp_flow_module_executes_under_coverage() -> None:
-    """Reload the module in-test so coverage records module and class execution."""
-    reloaded_module = importlib.reload(totp_flow_module)
-
-    assert reloaded_module.TotpLoginFlowService.__name__ == TotpLoginFlowService.__name__
-    assert reloaded_module.PendingTotpLogin.__name__ == PendingTotpLogin.__name__
 
 
 def _build_manager(

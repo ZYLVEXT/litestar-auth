@@ -67,10 +67,11 @@ if TYPE_CHECKING:
 
     _ScopedUserDatabaseProxy = ScopedUserDatabaseProxyImpl
 
+from litestar_auth.manager import FernetKeyringConfig
+
 DatabaseTokenAuthConfig = _plugin_config.DatabaseTokenAuthConfig
 ControllerHook = _plugin_config.ControllerHook
 ExceptionResponseHook = _plugin_config.ExceptionResponseHook
-FernetKeyringConfig = _plugin_config.FernetKeyringConfig
 LitestarAuthConfig = _plugin_config.LitestarAuthConfig
 MiddlewareHook = _plugin_config.MiddlewareHook
 OAuthConfig = _plugin_config.OAuthConfig

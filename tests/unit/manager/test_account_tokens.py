@@ -3,10 +3,8 @@
 from __future__ import annotations
 
 import logging
-import runpy
 from dataclasses import replace
 from datetime import timedelta
-from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
 import jwt
@@ -24,17 +22,6 @@ from tests.unit.test_manager import TrackingUserManager, _build_user
 pytestmark = pytest.mark.unit
 
 EXPECTED_SHA256_HEX_LENGTH = 64
-
-
-def test_account_tokens_module_executes_under_coverage() -> None:
-    """Execute the module source in-test so coverage records module and class execution."""
-    module_globals = runpy.run_path(str(Path(account_tokens_module.__file__).resolve()))
-
-    assert (
-        module_globals["AccountTokenSecurityService"].__name__
-        == account_tokens_module.AccountTokenSecurityService.__name__
-    )
-    assert module_globals["AccountTokensService"].__name__ == account_tokens_module.AccountTokensService.__name__
 
 
 async def test_forgot_password_nonexistent_user_uses_dummy_hash_and_calls_hook_with_none() -> None:
