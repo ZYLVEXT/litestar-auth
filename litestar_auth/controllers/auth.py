@@ -217,6 +217,7 @@ async def _handle_auth_login[UP: UserProtocol[Any], ID](
         user,
         require_verified=ctx.requires_verification,
         user_manager=user_manager,
+        on_failure=lambda: ctx.login_inc(request),
     )
 
     pending_response = await _maybe_issue_totp_pending_response(
@@ -295,6 +296,7 @@ async def _maybe_issue_totp_pending_response[UP: UserProtocol[Any], ID](
     client_binding = (
         build_pending_totp_client_binding(
             request,
+            pending_secret=cast("str", ctx.totp_pending_secret),
             trusted_proxy=ctx.totp_pending_client_binding_trusted_proxy,
             trusted_headers=ctx.totp_pending_client_binding_trusted_headers,
         )

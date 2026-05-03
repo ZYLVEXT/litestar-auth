@@ -78,6 +78,6 @@ class EndpointRateLimit:
         if self.scope == "ip_email":
             email = await _extract_email(request, identity_fields=self.identity_fields)
             if email:
-                parts.append(_safe_key_part(email.strip().casefold()))
+                parts.append(_safe_key_part(email))
 
         return ":".join(parts)

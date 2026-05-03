@@ -197,6 +197,10 @@ def test_on_app_init_runs_lifecycle_steps_in_order(monkeypatch: pytest.MonkeyPat
         lambda _config: calls.append("require-shared-rate-limit"),
     )
     monkeypatch.setattr(
+        "litestar_auth.plugin.require_refreshable_strategy_when_enable_refresh",
+        lambda _config: calls.append("require-refreshable-strategy"),
+    )
+    monkeypatch.setattr(
         "litestar_auth.plugin.warn_insecure_plugin_startup_defaults",
         lambda _config: calls.append("warn"),
     )
@@ -231,6 +235,7 @@ def test_on_app_init_runs_lifecycle_steps_in_order(monkeypatch: pytest.MonkeyPat
     assert result is app_config
     assert calls == [
         "require-shared-rate-limit",
+        "require-refreshable-strategy",
         "warn",
         "require-oauth-key",
         "require-oauth-redirect",
@@ -444,6 +449,21 @@ def test_on_app_init_rejects_multiworker_inmemory_rate_limiter() -> None:
 
     with pytest.raises(ConfigurationError, match="login"):
         plugin.on_app_init(AppConfig())
+
+
+def test_on_app_init_rejects_enable_refresh_with_non_refreshable_strategy() -> None:
+    """Refresh-enabled app init fails closed when any backend cannot rotate refresh tokens."""
+    config = _minimal_config()
+    config.enable_refresh = True
+    plugin = LitestarAuth(config)
+
+    with pytest.raises(ConfigurationError) as exc_info:
+        plugin.on_app_init(AppConfig())
+
+    message = str(exc_info.value)
+    assert "primary" in message
+    assert "InMemoryTokenStrategy" in message
+    assert "does not implement RefreshableStrategy" in message
 
 
 def test_on_app_init_multiworker_rate_limit_error_names_unsafe_endpoint_slots() -> None:

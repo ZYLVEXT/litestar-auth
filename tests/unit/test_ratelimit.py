@@ -8,7 +8,7 @@ import logging
 import runpy
 import sys
 from collections import deque
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable, Iterator, Mapping
 from dataclasses import dataclass, field, fields
 from pathlib import Path
 from types import ModuleType as RuntimeModuleType
@@ -74,6 +74,7 @@ UUID4_HEX_LENGTH = 32
 LENIENT_STRICT_MAX_ATTEMPTS = 5
 LENIENT_MEMORY_WINDOW_SECONDS = 300
 LENIENT_REDIS_WINDOW_SECONDS = 120
+EXPECTED_DISTINCT_PROXY_WARNINGS = 2
 
 AUTH_RATE_LIMIT_SLOT_IDENTIFIERS: tuple[AuthRateLimitSlot, ...] = (
     AuthRateLimitSlot.LOGIN,
@@ -207,7 +208,7 @@ async def test_ratelimit_module_exposes_public_limiter_api() -> None:
         f"{ratelimit_helpers_module._safe_key_part('127.0.0.1')}:"
         f"{ratelimit_helpers_module._safe_key_part('reloaded@example.com')}"
     )
-    assert await ratelimit_helpers_module._extract_email(request) == "Reloaded@Example.com"
+    assert await ratelimit_helpers_module._extract_email(request) == "reloaded@example.com"
     await orchestrator.on_success("verify", request)
 
 
@@ -1513,6 +1514,14 @@ def patch_redis_loader(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(ratelimit_helpers_module, "_load_redis_asyncio", load_redis)
 
 
+@pytest.fixture(autouse=True)
+def _reset_proxy_header_warning_throttle() -> Iterator[None]:
+    """Keep trusted-proxy warning throttle state isolated per test."""
+    ratelimit_helpers_module._warned_missing_proxy_headers.clear()
+    yield
+    ratelimit_helpers_module._warned_missing_proxy_headers.clear()
+
+
 def _build_request(
     *,
     headers: list[tuple[bytes, bytes]] | None = None,
@@ -1586,8 +1595,10 @@ def test_client_host_returns_unknown_without_client() -> None:
 @pytest.mark.parametrize(
     ("headers", "expected"),
     [
-        ([(b"x-forwarded-for", b"203.0.113.12, 10.0.0.1")], "203.0.113.12"),
-        ([(b"x-forwarded-for", b" , 10.0.0.1")], "127.0.0.1"),
+        # Rightmost entry wins: it is the IP appended by the trusted proxy,
+        # while leftmost entries are client-controlled and may be spoofed.
+        ([(b"x-forwarded-for", b"203.0.113.12, 10.0.0.1")], "10.0.0.1"),
+        ([(b"x-forwarded-for", b" , 10.0.0.1")], "10.0.0.1"),
         ([], "127.0.0.1"),
     ],
 )
@@ -1595,6 +1606,95 @@ def test_client_host_uses_default_trusted_headers(headers: list[tuple[bytes, byt
     """Default trusted_headers only reads X-Forwarded-For."""
     request = _build_request(headers=headers)
     assert ratelimit_helpers_module._client_host(request, trusted_proxy=True) == expected
+
+
+def test_client_host_falls_back_when_xforwarded_for_is_only_separators() -> None:
+    """All-comma XFF values yield no parsable hop and fall back to the direct client host."""
+    request = _build_request(headers=[(b"x-forwarded-for", b",,,")])
+
+    assert ratelimit_helpers_module._client_host(request, trusted_proxy=True) == "127.0.0.1"
+
+
+def test_client_host_does_not_trust_spoofed_leftmost_xforwarded_for_entry() -> None:
+    """Client-supplied leftmost XFF entries must not become rate-limit identities.
+
+    Typical reverse-proxy behavior (e.g. nginx ``$proxy_add_x_forwarded_for``)
+    appends the real client IP after any client-supplied value, so the rightmost
+    entry is the trusted hop. Trusting the leftmost would let an attacker mint
+    arbitrary identities by sending ``X-Forwarded-For: <spoof>``.
+    """
+    request = _build_request(headers=[(b"x-forwarded-for", b"1.1.1.1, 2.2.2.2, 10.0.0.1")])
+
+    assert ratelimit_helpers_module._client_host(request, trusted_proxy=True) == "10.0.0.1"
+
+
+def test_client_host_warns_once_when_trusted_proxy_headers_are_absent(caplog: pytest.LogCaptureFixture) -> None:
+    """Missing trusted proxy headers emit one operator warning while preserving fallback behavior."""
+    caplog.set_level(logging.WARNING, logger="litestar_auth.ratelimit")
+    request = _build_request()
+
+    assert ratelimit_helpers_module._client_host(request, trusted_proxy=True) == "127.0.0.1"
+
+    records = [record for record in caplog.records if record.name == "litestar_auth.ratelimit"]
+    assert len(records) == 1
+    assert records[0].levelno == logging.WARNING
+    assert "trusted_proxy=True" in records[0].message
+    assert "X-Forwarded-For" in records[0].message
+
+
+def test_client_host_does_not_reemit_warning_for_same_trusted_headers(caplog: pytest.LogCaptureFixture) -> None:
+    """The missing-header warning is throttled per trusted_headers tuple."""
+    caplog.set_level(logging.WARNING, logger="litestar_auth.ratelimit")
+    request = _build_request()
+
+    assert ratelimit_helpers_module._client_host(request, trusted_proxy=True) == "127.0.0.1"
+    caplog.clear()
+    assert ratelimit_helpers_module._client_host(_build_request(), trusted_proxy=True) == "127.0.0.1"
+
+    records = [record for record in caplog.records if record.name == "litestar_auth.ratelimit"]
+    assert records == []
+
+
+def test_client_host_does_not_warn_when_trusted_header_is_present_but_unusable(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A present-but-blank proxy header falls back without the missing-header warning."""
+    caplog.set_level(logging.WARNING, logger="litestar_auth.ratelimit")
+    request = _build_request(headers=[(b"x-forwarded-for", b"   ")])
+
+    assert ratelimit_helpers_module._client_host(request, trusted_proxy=True) == "127.0.0.1"
+
+    records = [record for record in caplog.records if record.name == "litestar_auth.ratelimit"]
+    assert records == []
+
+
+def test_client_host_rejects_non_ip_xforwarded_for_value() -> None:
+    """A non-IP rightmost (trusted-hop) value falls back to the direct client host."""
+    request = _build_request(headers=[(b"x-forwarded-for", b"10.0.0.1, not-an-ip")])
+
+    assert ratelimit_helpers_module._client_host(request, trusted_proxy=True) == "127.0.0.1"
+
+
+def test_client_host_warns_independently_for_distinct_trusted_header_tuples(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Each trusted_headers tuple gets its own missing-header warning."""
+    caplog.set_level(logging.WARNING, logger="litestar_auth.ratelimit")
+
+    assert ratelimit_helpers_module._client_host(_build_request(), trusted_proxy=True) == "127.0.0.1"
+    assert (
+        ratelimit_helpers_module._client_host(
+            _build_request(),
+            trusted_proxy=True,
+            trusted_headers=("X-Real-IP", "CF-Connecting-IP"),
+        )
+        == "127.0.0.1"
+    )
+
+    records = [record for record in caplog.records if record.name == "litestar_auth.ratelimit"]
+    assert len(records) == EXPECTED_DISTINCT_PROXY_WARNINGS
+    assert "X-Forwarded-For" in records[0].message
+    assert "X-Real-IP, CF-Connecting-IP" in records[1].message
 
 
 def test_client_host_rejects_non_boolean_trusted_proxy_configuration() -> None:
@@ -2070,6 +2170,21 @@ async def test_extract_email_prefers_identity_fields_and_ignores_invalid_payload
             raise TypeError
 
     assert await ratelimit_helpers_module._extract_email(cast("Request[Any, Any, Any]", BadJsonRequest())) is None
+
+
+async def test_extract_email_returns_nfkc_lowercased_canonical_form() -> None:
+    """Identifiers are NFKC + lowercased so case/Unicode variants share one rate-limit bucket.
+
+    Aligns with ``UserPolicy.normalize_email`` so the rate-limit bucket and the
+    auth lookup converge for equivalent identifiers, removing a linear
+    brute-force bypass via casing or Unicode width variants.
+    """
+    fullwidth_request = cast(
+        "Request[Any, Any, Any]",
+        JsonRequestStub(payload={"identifier": "  Ｖictim@Example.COM  "}),  # noqa: RUF001
+    )
+
+    assert await ratelimit_helpers_module._extract_email(fullwidth_request) == "victim@example.com"
 
 
 async def test_extract_email_skips_blank_identifier_username_and_email_values() -> None:

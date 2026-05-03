@@ -19,6 +19,13 @@
   `UserManagerSecurity.totp_recovery_code_lookup_secret`. This closes V1, the
   recovery-code Argon2 amplification CPU-DoS vector.
 
+### Fixed
+
+- Misconfigured plugins with `enable_refresh=True` and a non-`RefreshableStrategy`
+  backend now fail at app boot via `ConfigurationError` instead of at the first
+  refresh-capable request. The lazy per-request check is preserved as
+  defense-in-depth for callers that bypass plugin startup.
+
 ## 2.3.0 (2026-05-02)
 
 ### Added

@@ -110,6 +110,7 @@ def _totp_pending_client_binding(
         return None
     return build_pending_totp_client_binding(
         request,
+        pending_secret=pending_token.totp_pending_secret,
         trusted_proxy=pending_token.totp_pending_client_binding_trusted_proxy,
         trusted_headers=pending_token.totp_pending_client_binding_trusted_headers,
     )

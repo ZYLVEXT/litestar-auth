@@ -11,7 +11,11 @@ from advanced_alchemy.repository import SQLAlchemyAsyncRepository
 from sqlalchemy import delete
 from sqlalchemy.ext.asyncio import AsyncSession, async_scoped_session
 
-from litestar_auth.authentication.strategy._opaque_tokens import digest_opaque_token, mint_opaque_token
+from litestar_auth.authentication.strategy._opaque_tokens import (
+    digest_opaque_token,
+    mint_opaque_token,
+    validate_token_bytes,
+)
 from litestar_auth.authentication.strategy.base import RefreshableStrategy, Strategy, UserManagerProtocol
 from litestar_auth.authentication.strategy.db_models import AccessToken, DatabaseTokenModels, RefreshToken
 from litestar_auth.config import validate_secret_length
@@ -113,6 +117,7 @@ class DatabaseTokenStrategy[UP: UserProtocol[Any], ID](Strategy[UP, ID], Refresh
             validate_secret_length(settings.token_hash_secret, label="DatabaseTokenStrategy token_hash_secret")
         except ConfigurationError as exc:
             raise ConfigurationError(str(exc)) from exc
+        validate_token_bytes(settings.token_bytes, label="DatabaseTokenStrategy")
 
         self.session = settings.session
         self._token_hash_secret = settings.token_hash_secret.encode()

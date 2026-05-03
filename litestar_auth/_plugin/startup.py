@@ -177,6 +177,35 @@ def require_shared_rate_limit_backends_for_multiworker(config: LitestarAuthConfi
     raise ConfigurationError(msg)
 
 
+def require_refreshable_strategy_when_enable_refresh(config: LitestarAuthConfig[Any, Any]) -> None:
+    """Fail closed when refresh routes are enabled without refresh-capable strategies.
+
+    The lazy per-request check in generated auth controllers remains as defense-in-depth
+    for direct controller construction that bypasses plugin startup.
+
+    Raises:
+        ConfigurationError: If ``enable_refresh=True`` and any configured backend
+            strategy does not implement ``RefreshableStrategy``.
+    """
+    if not config.enable_refresh:
+        return
+
+    from litestar_auth.authentication.strategy.base import RefreshableStrategy  # noqa: PLC0415
+
+    for backend in config.resolve_startup_backends():
+        strategy = backend.strategy
+        if isinstance(strategy, RefreshableStrategy):
+            continue
+
+        msg = (
+            f"enable_refresh=True but backend {backend.name!r} uses strategy {type(strategy).__name__}, "
+            "which does not implement RefreshableStrategy. Configure a refresh-capable strategy "
+            "(e.g. JWTStrategy with refresh_max_age, DatabaseTokenStrategy, RedisTokenStrategy) "
+            "or set enable_refresh=False."
+        )
+        raise ConfigurationError(msg)
+
+
 def has_configured_oauth_providers(config: LitestarAuthConfig[Any, Any]) -> bool:
     """Return whether this plugin config includes any OAuth provider integration."""
     return _build_oauth_route_registration_contract(

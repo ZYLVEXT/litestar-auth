@@ -6,6 +6,25 @@ import hashlib
 import hmac
 import secrets
 
+from litestar_auth.exceptions import ConfigurationError
+
+MIN_TOKEN_BYTES = 16
+
+
+def validate_token_bytes(token_bytes: int, *, label: str) -> None:
+    """Reject opaque-token sizes below the 128-bit security floor.
+
+    Raises:
+        ConfigurationError: If ``token_bytes`` is below :data:`MIN_TOKEN_BYTES`.
+    """
+    if token_bytes < MIN_TOKEN_BYTES:
+        msg = (
+            f"{label} token_bytes={token_bytes} is below the minimum of {MIN_TOKEN_BYTES} "
+            "(128 bits of entropy). Increase token_bytes to at least "
+            f"{MIN_TOKEN_BYTES} to keep opaque tokens unguessable."
+        )
+        raise ConfigurationError(msg)
+
 
 def digest_opaque_token(*, token_hash_secret: bytes, token: str) -> str:
     """Return the keyed digest stored for a raw opaque token."""

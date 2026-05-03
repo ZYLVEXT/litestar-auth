@@ -4,14 +4,16 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import hmac
 import logging
 from datetime import UTC, datetime, timedelta, tzinfo
-from typing import Any, cast
+from typing import TYPE_CHECKING, Any, cast
 from unittest.mock import AsyncMock
 from uuid import UUID, uuid4
 
 import jwt
 import pytest
+from litestar import Request
 
 import litestar_auth.totp_flow as totp_flow_module
 from litestar_auth import totp
@@ -21,12 +23,17 @@ from litestar_auth.password import PasswordHelper
 from litestar_auth.totp import SecurityWarning
 from tests._helpers import ExampleUser
 
+if TYPE_CHECKING:
+    from litestar.types import HTTPScope
+
 TOTP_PENDING_AUDIENCE = totp_flow_module.TOTP_PENDING_AUDIENCE
 PendingTotpClientBinding = totp_flow_module.PendingTotpClientBinding
 PendingTotpLogin = totp_flow_module.PendingTotpLogin
 TotpLoginFlowConfig = totp_flow_module.TotpLoginFlowConfig
 TotpLoginFlowService = totp_flow_module.TotpLoginFlowService
 _fingerprint_client_binding_value = totp_flow_module._fingerprint_client_binding_value
+_USER_AGENT_FINGERPRINT_MAX_BYTES = totp_flow_module._USER_AGENT_FINGERPRINT_MAX_BYTES
+build_pending_totp_client_binding = totp_flow_module.build_pending_totp_client_binding
 
 pytestmark = pytest.mark.unit
 
@@ -156,9 +163,53 @@ async def test_issue_pending_token_mints_expected_jwt_claims() -> None:
     assert payload["uaf"] == CLIENT_BINDING.user_agent_fingerprint
 
 
-def test_fingerprint_client_binding_value_returns_sha256_hex_digest() -> None:
-    """Client-binding values are hashed before being written to pending tokens."""
-    assert _fingerprint_client_binding_value("203.0.113.10") == hashlib.sha256(b"203.0.113.10").hexdigest()
+def test_fingerprint_client_binding_value_returns_keyed_hmac_sha256_hex_digest() -> None:
+    """Client-binding values are HMAC-SHA-256-keyed before being written to pending tokens."""
+    key = TOTP_PENDING_SECRET.encode()
+    expected = hmac.new(key, b"203.0.113.10", hashlib.sha256).hexdigest()
+
+    assert _fingerprint_client_binding_value("203.0.113.10", key=key) == expected
+    assert _fingerprint_client_binding_value("203.0.113.10", key=b"other-key") != expected
+
+
+def _build_binding_request(*, user_agent: bytes) -> Request[Any, Any, Any]:
+    """Construct a minimal request carrying a User-Agent for fingerprint tests.
+
+    Returns:
+        Minimal request whose only inspected header is ``User-Agent``.
+    """
+    scope = cast(
+        "HTTPScope",
+        {
+            "type": "http",
+            "http_version": "1.1",
+            "method": "POST",
+            "scheme": "http",
+            "path": "/auth/login",
+            "raw_path": b"/auth/login",
+            "root_path": "",
+            "query_string": b"",
+            "headers": [(b"user-agent", user_agent)],
+            "client": ("127.0.0.1", 12345),
+            "server": ("testserver", 80),
+            "path_params": {},
+            "app": object(),
+        },
+    )
+    return Request(scope=scope)
+
+
+def test_build_pending_totp_client_binding_caps_user_agent_length() -> None:
+    """Oversized User-Agent values are truncated before keyed fingerprinting to bound CPU cost."""
+    oversized_ua = "A" * (_USER_AGENT_FINGERPRINT_MAX_BYTES * 4)
+    binding = build_pending_totp_client_binding(
+        _build_binding_request(user_agent=oversized_ua.encode()),
+        pending_secret=TOTP_PENDING_SECRET,
+    )
+
+    truncated_ua = oversized_ua[:_USER_AGENT_FINGERPRINT_MAX_BYTES]
+    expected = _fingerprint_client_binding_value(truncated_ua, key=TOTP_PENDING_SECRET.encode())
+    assert binding.user_agent_fingerprint == expected
 
 
 async def test_issue_pending_token_omits_binding_claims_when_disabled() -> None:

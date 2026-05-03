@@ -220,7 +220,7 @@ async def test_verify_rejects_already_verified_user(
     response = await test_client.post("/auth/verify", json={"token": token})
 
     assert response.status_code == HTTP_BAD_REQUEST
-    assert response.json()["detail"] == "The user is already verified."
+    assert response.json()["detail"] == "The email verification token is invalid."
 
 
 async def test_request_verify_token_calls_hook_for_existing_unverified_user(

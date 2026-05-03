@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hmac
 import logging
 import secrets
 import warnings
@@ -39,6 +40,7 @@ _DEFAULT_PENDING_TOKEN_LIFETIME = timedelta(minutes=5)
 _PENDING_JTI_HEX_LENGTH = 32
 _CLIENT_IP_FINGERPRINT_CLAIM = "cip"
 _USER_AGENT_FINGERPRINT_CLAIM = "uaf"
+_USER_AGENT_FINGERPRINT_MAX_BYTES = 512
 logger = logging.getLogger(__name__)
 
 
@@ -62,23 +64,31 @@ class PendingTotpClientBinding:
     user_agent_fingerprint: str
 
 
-def _fingerprint_client_binding_value(value: str) -> str:
-    """Return the stable SHA-256 hex fingerprint for a client-binding value."""
-    return sha256(value.encode()).hexdigest()
+def _fingerprint_client_binding_value(value: str, *, key: bytes) -> str:
+    """Return a keyed HMAC-SHA-256 hex fingerprint for a client-binding value.
+
+    Keying with a server-side secret prevents an attacker who steals a pending
+    token from confirming candidate IP/User-Agent values via offline hashing.
+    """
+    return hmac.new(key, value.encode(), sha256).hexdigest()
 
 
 def build_pending_totp_client_binding(
     request: Request[Any, Any, Any],
     *,
+    pending_secret: str,
     trusted_proxy: bool = False,
     trusted_headers: tuple[str, ...] = ("X-Forwarded-For",),
 ) -> PendingTotpClientBinding:
-    """Return hashed client-IP and User-Agent fingerprints for a TOTP pending token."""
+    """Return keyed client-IP and User-Agent fingerprints for a TOTP pending token."""
     client_ip = _client_host(request, trusted_proxy=trusted_proxy, trusted_headers=trusted_headers)
-    user_agent = request.headers.get("User-Agent") or request.headers.get("user-agent") or ""
+    user_agent = (request.headers.get("User-Agent") or request.headers.get("user-agent") or "")[
+        :_USER_AGENT_FINGERPRINT_MAX_BYTES
+    ]
+    key = pending_secret.encode()
     return PendingTotpClientBinding(
-        client_ip_fingerprint=_fingerprint_client_binding_value(client_ip),
-        user_agent_fingerprint=_fingerprint_client_binding_value(user_agent),
+        client_ip_fingerprint=_fingerprint_client_binding_value(client_ip, key=key),
+        user_agent_fingerprint=_fingerprint_client_binding_value(user_agent, key=key),
     )
 
 

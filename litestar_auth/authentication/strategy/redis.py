@@ -16,7 +16,11 @@ from litestar_auth._redis_protocols import (
     RedisStoredValue,
     RedisValueReadClient,
 )
-from litestar_auth.authentication.strategy._opaque_tokens import build_opaque_token_key, mint_opaque_token
+from litestar_auth.authentication.strategy._opaque_tokens import (
+    build_opaque_token_key,
+    mint_opaque_token,
+    validate_token_bytes,
+)
 from litestar_auth.authentication.strategy.base import Strategy, UserManagerProtocol
 from litestar_auth.config import validate_secret_length
 from litestar_auth.exceptions import ConfigurationError
@@ -104,6 +108,7 @@ class RedisTokenStrategy(Strategy[UP, ID]):
             validate_secret_length(settings.token_hash_secret, label="RedisTokenStrategy token_hash_secret")
         except ConfigurationError as exc:
             raise ConfigurationError(str(exc)) from exc
+        validate_token_bytes(settings.token_bytes, label="RedisTokenStrategy")
 
         self.redis = settings.redis
         self._token_hash_secret = settings.token_hash_secret.encode()

@@ -115,7 +115,7 @@ def _define_verify_controller_class(ctx: _VerifyControllerContext) -> type[Contr
                 await ctx.verify_increment(request)
                 raise ClientException(
                     status_code=400,
-                    detail=str(exc),
+                    detail="The email verification token is invalid.",
                     extra={"code": ErrorCode.VERIFY_USER_BAD_TOKEN},
                 ) from exc
 

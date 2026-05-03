@@ -121,6 +121,23 @@ def test_redis_strategy_rejects_short_token_hash_secret(
         )
 
 
+def test_redis_strategy_rejects_token_bytes_below_minimum(
+    monkeypatch: pytest.MonkeyPatch,
+    async_fakeredis: AsyncFakeRedis,
+) -> None:
+    """RedisTokenStrategy refuses opaque-token sizes below the 128-bit floor."""
+    _disable_optional_import(monkeypatch)
+
+    with pytest.raises(ConfigurationError, match="RedisTokenStrategy token_bytes=8 is below the minimum of 16"):
+        RedisTokenStrategy(
+            config=RedisTokenStrategyConfig(
+                redis=cast_fakeredis(async_fakeredis, RedisClientProtocol),
+                token_hash_secret=TOKEN_HASH_SECRET,
+                token_bytes=8,
+            ),
+        )
+
+
 def test_redis_strategy_rejects_config_combined_with_keyword_options(async_fakeredis: AsyncFakeRedis) -> None:
     """RedisTokenStrategy accepts either a config object or keyword options."""
     with pytest.raises(ValueError, match="RedisTokenStrategyConfig or keyword options"):

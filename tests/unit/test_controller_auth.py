@@ -22,6 +22,7 @@ from litestar_auth.authentication.transport.cookie import CookieTransport
 from litestar_auth.controllers._auth_helpers import _LOGIN_EMAIL_MAX_LENGTH, _LOGIN_USERNAME_MAX_LENGTH
 from litestar_auth.exceptions import ConfigurationError, ErrorCode, InactiveUserError
 from litestar_auth.guards import is_authenticated
+from litestar_auth.ratelimit import AuthRateLimitConfig, EndpointRateLimit
 
 AuthControllerConfig = auth_controller_module.AuthControllerConfig
 LoginCredentials = auth_controller_module.LoginCredentials
@@ -624,6 +625,57 @@ async def test_login_uses_manager_account_state_validator_when_available() -> No
 
     assert isinstance(response, Response)
     user_manager.require_account_state.assert_called_once_with(user, require_verified=True)
+
+
+async def test_login_increments_rate_limit_on_account_state_failure() -> None:
+    """Successful credentials with bad account state still consume login rate-limit budget.
+
+    Closes a credential-stuffing enumeration channel: an attacker with valid
+    credentials would otherwise probe inactive/unverified state through the
+    distinct error codes without burning the per-IP/per-email login limiter.
+    """
+    backend = AuthenticationBackend(
+        name="test",
+        transport=BearerTransport(),
+        strategy=cast("Any", _make_minimal_strategy()),
+    )
+    limiter_backend = MagicMock()
+    limiter_backend.increment = AsyncMock()
+    limiter_backend.reset = AsyncMock()
+    limiter_backend.check = AsyncMock(return_value=True)
+    login_limit = EndpointRateLimit(backend=limiter_backend, scope="ip", namespace="login")
+    ctx = _make_auth_controller_context(
+        _AuthControllerSettings(
+            backend=backend,
+            rate_limit_config=AuthRateLimitConfig(login=login_limit),
+            enable_refresh=False,
+            requires_verification=False,
+            login_identifier="email",
+            totp_pending_secret=None,
+            totp_pending_lifetime=timedelta(minutes=5),
+        ),
+    )
+    request = MagicMock()
+    request.client.host = "127.0.0.1"
+    request.headers = {}
+    data = LoginCredentials(identifier="user@example.com", password="correct-password")
+    user = _MinimalUser()
+    user.is_active = False
+    user_manager = MagicMock()
+    user_manager.authenticate = AsyncMock(return_value=user)
+    user_manager.require_account_state = MagicMock(side_effect=InactiveUserError())
+
+    with pytest.raises(ClientException) as exc_info:
+        await auth_controller_module._handle_auth_login(
+            request,
+            data,
+            ctx=ctx,
+            user_manager=user_manager,
+        )
+
+    assert exc_info.value.extra == {"code": ErrorCode.LOGIN_USER_INACTIVE}
+    limiter_backend.increment.assert_awaited_once()
+    limiter_backend.reset.assert_not_awaited()
 
 
 async def test_login_rejects_invalid_identifier_before_authentication() -> None:

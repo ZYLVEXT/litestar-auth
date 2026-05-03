@@ -331,6 +331,16 @@ def test_database_token_strategy_re_raises_secret_validation_error() -> None:
         DatabaseTokenStrategy(session=_as_any(object()), token_hash_secret="short")
 
 
+def test_database_token_strategy_rejects_token_bytes_below_minimum() -> None:
+    """DatabaseTokenStrategy refuses opaque-token sizes below the 128-bit floor."""
+    with pytest.raises(ConfigurationError, match="DatabaseTokenStrategy token_bytes=8 is below the minimum of 16"):
+        DatabaseTokenStrategy(
+            session=_as_any(object()),
+            token_hash_secret="x" * 40,
+            token_bytes=8,
+        )
+
+
 def test_database_token_strategy_rejects_config_combined_with_keyword_options() -> None:
     """DatabaseTokenStrategy accepts either a config object or keyword options."""
     with pytest.raises(ValueError, match="DatabaseTokenStrategyConfig or keyword options"):

@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import hashlib
 import importlib as _importlib
+import ipaddress
 import logging
+import unicodedata
 from collections import deque
 from typing import TYPE_CHECKING, Any
 
@@ -23,6 +25,52 @@ logger = logging.getLogger("litestar_auth.ratelimit")
 importlib = _importlib
 
 _DEFAULT_TRUSTED_HEADERS: tuple[str, ...] = ("X-Forwarded-For",)
+_warned_missing_proxy_headers: set[tuple[str, ...]] = set()
+
+
+def _warn_missing_proxy_headers_once(trusted_headers: tuple[str, ...]) -> None:
+    """Warn at most once per process when configured proxy headers are all absent."""
+    if trusted_headers in _warned_missing_proxy_headers:
+        return
+
+    _warned_missing_proxy_headers.add(trusted_headers)
+    logger.warning(
+        "trusted_proxy=True but none of the configured headers (%s) were present on the request; "
+        "rate-limit identity is falling back to the direct client host. Verify the reverse proxy "
+        "is actually setting one of these headers, or set trusted_proxy=False.",
+        ", ".join(trusted_headers),
+    )
+
+
+def _usable_trusted_header_value(header_name: str, raw_value: str) -> str | None:
+    """Return a trusted proxy header value when it carries a usable host.
+
+    For ``X-Forwarded-For``, take the rightmost entry: that is the IP appended
+    by the immediately upstream trusted proxy, while the leftmost entries are
+    client-controlled and may be spoofed. Trusting the leftmost would let an
+    attacker forge arbitrary identities by sending ``X-Forwarded-For: <spoof>``
+    which the proxy then appends the real client IP to (typical
+    ``proxy_add_x_forwarded_for`` behavior).
+
+    Operators with a multi-proxy chain (e.g. CDN -> LB -> app) where the real
+    client IP is N hops from the right must terminate spoofed XFF at the edge
+    proxy or strip the header before this layer.
+    """
+    value = raw_value.strip()
+    if not value:
+        return None
+
+    if header_name.lower() == "x-forwarded-for":
+        parts = [part.strip() for part in value.split(",") if part.strip()]
+        if not parts:
+            return None
+        value = parts[-1]
+
+    try:
+        ipaddress.ip_address(value)
+    except ValueError:
+        return None
+    return value
 
 
 def _load_redis_asyncio() -> object:
@@ -86,22 +134,19 @@ def _client_host(
         return fallback_host()
 
     headers = request.headers
+    all_headers_absent = True
     for header_name in trusted_headers:
         raw_value = headers.get(header_name) or headers.get(header_name.lower())
+        if raw_value is not None:
+            all_headers_absent = False
         if not raw_value:
             continue
 
-        value = raw_value.strip()
-        if not value:
-            continue
+        if value := _usable_trusted_header_value(header_name=header_name, raw_value=raw_value):
+            return value
 
-        if header_name.lower() == "x-forwarded-for":
-            value = value.split(",", 1)[0].strip()
-            if not value:
-                continue
-
-        return value
-
+    if all_headers_absent:
+        _warn_missing_proxy_headers_once(trusted_headers)
     return fallback_host()
 
 
@@ -117,7 +162,10 @@ async def _extract_email(
     ``identifier`` / ``username`` / ``email`` keys.
 
     Returns:
-        The raw string value when present, otherwise ``None``.
+        The identifier in NFKC + lowercase canonical form so that case and
+        Unicode-equivalent variants share a rate-limit bucket with the auth
+        lookup performed by ``UserPolicy.normalize_email``. ``None`` when no
+        non-empty identifier is found.
     """
     try:
         payload = await request.json()
@@ -129,6 +177,6 @@ async def _extract_email(
 
     for field_name in identity_fields:
         value = payload.get(field_name)
-        if isinstance(value, str) and value:
-            return value
+        if isinstance(value, str) and value.strip():
+            return unicodedata.normalize("NFKC", value.strip()).lower()
     return None

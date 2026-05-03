@@ -31,6 +31,7 @@ from litestar_auth._plugin.session_binding import (
 from litestar_auth._plugin.startup import (
     bootstrap_bundled_token_orm_models,
     require_oauth_token_encryption_for_configured_providers,
+    require_refreshable_strategy_when_enable_refresh,
     require_secure_oauth_redirect_in_production,
     require_shared_rate_limit_backends_for_multiworker,
     warn_insecure_plugin_startup_defaults,
@@ -117,6 +118,7 @@ class LitestarAuth[UP: UserProtocol[Any], ID](InitPlugin, CLIPlugin):
             The updated application config.
         """
         require_shared_rate_limit_backends_for_multiworker(self.config)
+        require_refreshable_strategy_when_enable_refresh(self.config)
         warn_insecure_plugin_startup_defaults(self.config)
         require_oauth_token_encryption_for_configured_providers(
             config=self.config,

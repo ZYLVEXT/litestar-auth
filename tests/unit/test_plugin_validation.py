@@ -43,6 +43,7 @@ from litestar_auth.totp import InMemoryUsedTotpCodeStore
 from tests.integration.test_orchestrator import (
     DummySessionMaker,
     ExampleUser,
+    InMemoryRefreshTokenStrategy,
     InMemoryTokenStrategy,
     InMemoryUserDatabase,
     PluginUserManager,
@@ -1229,6 +1230,52 @@ def test_require_shared_rate_limit_backends_for_multiworker_accepts_shared_backe
     )
 
     startup_module.require_shared_rate_limit_backends_for_multiworker(config)
+
+
+def test_require_refreshable_strategy_when_enable_refresh_skips_when_refresh_disabled() -> None:
+    """Refresh-capability startup validation is inactive when refresh routes are disabled."""
+    config = _minimal_config()
+
+    startup_module.require_refreshable_strategy_when_enable_refresh(config)
+
+
+def test_require_refreshable_strategy_when_enable_refresh_accepts_refreshable_strategy() -> None:
+    """Refresh-enabled configs require each backend to expose refresh-token operations."""
+    config = _minimal_config(
+        backends=[
+            AuthenticationBackend[ExampleUser, UUID](
+                name="refreshable",
+                transport=BearerTransport(),
+                strategy=cast("Any", InMemoryRefreshTokenStrategy(token_prefix="refreshable")),
+            ),
+        ],
+    )
+    config.enable_refresh = True
+
+    startup_module.require_refreshable_strategy_when_enable_refresh(config)
+
+
+def test_require_refreshable_strategy_when_enable_refresh_rejects_non_refreshable_strategy() -> None:
+    """Refresh-enabled configs fail at startup when a backend cannot issue refresh tokens."""
+    config = _minimal_config(
+        backends=[
+            AuthenticationBackend[ExampleUser, UUID](
+                name="primary",
+                transport=BearerTransport(),
+                strategy=cast("Any", InMemoryTokenStrategy(token_prefix="primary")),
+            ),
+        ],
+    )
+    config.enable_refresh = True
+
+    with pytest.raises(ConfigurationError) as exc_info:
+        startup_module.require_refreshable_strategy_when_enable_refresh(config)
+
+    message = str(exc_info.value)
+    assert "primary" in message
+    assert "InMemoryTokenStrategy" in message
+    assert "does not implement RefreshableStrategy" in message
+    assert "enable_refresh=False" in message
 
 
 def test_warn_insecure_plugin_startup_defaults_warns_for_request_verify_token_inmemory_backend(

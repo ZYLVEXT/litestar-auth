@@ -6,10 +6,13 @@ import pytest
 
 from litestar_auth.authentication.strategy import _opaque_tokens as opaque_tokens_module
 from litestar_auth.authentication.strategy._opaque_tokens import (
+    MIN_TOKEN_BYTES,
     build_opaque_token_key,
     digest_opaque_token,
     mint_opaque_token,
+    validate_token_bytes,
 )
+from litestar_auth.exceptions import ConfigurationError
 
 pytestmark = pytest.mark.unit
 SHA256_HEX_DIGEST_LENGTH = 64
@@ -52,3 +55,14 @@ def test_mint_opaque_token_returns_raw_token_and_existing_digest(monkeypatch: py
         token="raw-32",
     )
     assert len(token_digest) == SHA256_HEX_DIGEST_LENGTH
+
+
+def test_validate_token_bytes_accepts_minimum_value() -> None:
+    """At-or-above the floor passes silently."""
+    validate_token_bytes(MIN_TOKEN_BYTES, label="DatabaseTokenStrategy")
+
+
+def test_validate_token_bytes_rejects_below_minimum() -> None:
+    """Below the 128-bit floor must surface an actionable ConfigurationError."""
+    with pytest.raises(ConfigurationError, match="token_bytes=8 is below the minimum of 16"):
+        validate_token_bytes(MIN_TOKEN_BYTES - 8, label="DatabaseTokenStrategy")
