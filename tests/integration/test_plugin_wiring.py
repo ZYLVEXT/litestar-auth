@@ -509,7 +509,10 @@ def test_plugin_oauth_associate_callback_is_marked_protected_in_openapi() -> Non
     )
     paths = cast("Any", app.openapi_schema.paths)
 
-    assert paths["/auth/associate/github/authorize"].get.security == [{"primary": []}]
+    # Associate authorize is POST so Litestar CSRF middleware can enforce a
+    # token check on cookie-transport deployments; the callback stays GET
+    # because OAuth providers redirect there with GET.
+    assert paths["/auth/associate/github/authorize"].post.security == [{"primary": []}]
     assert paths["/auth/associate/github/callback"].get.security == [{"primary": []}]
 
 

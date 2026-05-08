@@ -1,5 +1,35 @@
 ## Unreleased
 
+### Security (breaking)
+
+- **OAuth associate authorize is now `POST` and protected by Litestar's CSRF
+  middleware.** Previously the authenticated associate flow lived behind a
+  `GET` endpoint, which could be triggered by a cross-site top-level
+  navigation while a victim held a `SameSite=Lax` session cookie. An
+  attacker who induced the victim to follow `https://target/auth/associate/{provider}/authorize`
+  while signed into an attacker-controlled provider account could force the
+  callback to link that attacker account onto the victim's local user, then
+  log in as the victim via the linked provider identity. The route is now
+  POST, so cookie-transport deployments fail closed at Litestar's CSRF
+  middleware before the body runs (cross-site requests cannot mirror the
+  Strict/Lax CSRF cookie into the configured `csrf_header_name`), and
+  bearer-only deployments rely on the cross-origin attachment of
+  `Authorization` being impossible. The login authorize route stays GET
+  because anonymous OAuth login has no victim session to abuse.
+
+  **Migration.** Plain `<a href="/auth/associate/{provider}/authorize">`
+  links no longer trigger the associate flow. Cookie-transport deployments
+  must POST and forward the plugin-managed CSRF token in the configured
+  header (default `X-CSRF-Token`); see
+  [Cookbook: OAuth associate](docs/cookbook/oauth_associate.md) for a
+  ready-to-use JavaScript fetch recipe. Bearer-only deployments must POST
+  with the existing `Authorization` header but do not need a CSRF token.
+  Server-rendered apps can still drive associate from a button: render a
+  `<form method="post">` and post via JavaScript that adds the CSRF
+  header. Manual `create_oauth_associate_controller` and plugin-managed
+  associate controllers share the same POST contract; no factory
+  parameters changed.
+
 ### Security
 
 - **OAuth `redirect_base_url` hostname validation now resolves DNS at

@@ -818,7 +818,7 @@ async def test_oauth_associate_links_provider_to_authenticated_user() -> None:
         assert login_response.status_code == HTTP_CREATED
         access_token = login_response.json()["access_token"]
 
-        authorize_response = await client.get(
+        authorize_response = await client.post(
             "/auth/associate/github/authorize",
             headers={"Authorization": f"Bearer {access_token}"},
             follow_redirects=False,
@@ -879,7 +879,7 @@ async def test_plugin_managed_oauth_associate_routes_link_provider_to_authentica
         assert login_response.status_code == HTTP_CREATED
         access_token = login_response.json()["access_token"]
 
-        authorize_response = await client.get(
+        authorize_response = await client.post(
             "/auth/associate/github/authorize",
             headers={"Authorization": f"Bearer {access_token}"},
             follow_redirects=False,
@@ -923,7 +923,11 @@ async def test_plugin_oauth_provider_inventory_auto_mounts_login_routes_and_keep
         assert login_state_cookie is not None
         login_state = _oauth_state_from_cookie(login_state_cookie)
 
-        missing_associate_route = await client.get(
+        # POST mirrors the production-shaped contract: even when the
+        # associate routes are not mounted, the same method the live route
+        # would expose is exercised here so a future regression that
+        # accidentally mounts only a GET handler cannot pass this assertion.
+        missing_associate_route = await client.post(
             "/auth/associate/github/authorize",
             follow_redirects=False,
         )

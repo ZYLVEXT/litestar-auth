@@ -92,8 +92,8 @@ When `oauth_config.include_oauth_associate=True`, the plugin auto-mounts associa
 
 | Method | Path pattern | Description |
 | ------ | ------------ | ----------- |
-| GET | `{auth}/associate/{provider}/authorize` | Authenticated user starts linking. |
-| GET | `{auth}/associate/{provider}/callback` | Completes linking for `request.user`. |
+| POST | `{auth}/associate/{provider}/authorize` | Authenticated user starts linking. CSRF-protected: cookie-transport deployments must mirror the plugin-managed CSRF cookie into the configured `csrf_header_name` (defaults to `X-CSRF-Token`); bearer-only deployments rely on the cross-origin attachment of `Authorization` to be impossible. The route is **POST** (not GET) so Litestar's CSRF middleware can enforce that token check before the body runs and forced-association attacks fail closed. |
+| GET | `{auth}/associate/{provider}/callback` | Completes linking for `request.user`. Stays GET because OAuth providers redirect there with GET. |
 
 ## Users CRUD
 

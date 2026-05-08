@@ -1201,7 +1201,10 @@ def test_create_oauth_associate_controller_applies_openapi_security_to_both_prot
     )
     paths = cast("Any", app.openapi_schema.paths)
 
-    assert paths["/auth/associate/github/authorize"].get.security == [{"BearerToken": []}]
+    # Associate authorize is POST to enable Litestar's CSRF middleware to
+    # enforce a token check and defeat forced-association CSRF; the callback
+    # remains GET because OAuth providers redirect there with GET.
+    assert paths["/auth/associate/github/authorize"].post.security == [{"BearerToken": []}]
     assert paths["/auth/associate/github/callback"].get.security == [{"BearerToken": []}]
 
 

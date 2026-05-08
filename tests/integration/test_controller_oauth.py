@@ -10,6 +10,7 @@ from uuid import UUID, uuid4
 
 import pytest
 from litestar import Litestar
+from litestar.config.csrf import CSRFConfig
 from litestar.di import Provide
 from litestar.exceptions import ClientException
 from litestar.middleware import DefineMiddleware
@@ -53,6 +54,8 @@ HTTP_FOUND = 302
 HTTP_BAD_REQUEST = 400
 HTTP_OK = 200
 HTTP_UNAUTHORIZED = 401
+HTTP_FORBIDDEN = 403
+HTTP_METHOD_NOT_ALLOWED = 405
 HTTP_INTERNAL_SERVER_ERROR = 500
 MANUAL_LOGIN_REDIRECT_BASE_URL = "https://app.example/auth/oauth"
 MANUAL_ASSOCIATE_REDIRECT_BASE_URL = "https://app.example/auth/associate"
@@ -1593,7 +1596,11 @@ async def test_associate_authenticated_user_links_oauth() -> None:
         assert created_user is not None
         assert strategy.tokens == {token: created_user.id}
 
-        associate_authorize = await client.get(
+        # POST authorize: forced-association CSRF defense (Litestar CSRF
+        # middleware enforces a token check on unsafe methods; bearer-only
+        # deployments do not wire CSRF middleware so the POST itself plus the
+        # Authorization header is the cross-origin gate).
+        associate_authorize = await client.post(
             "/auth/associate/github/authorize",
             headers={"Authorization": f"Bearer {token}"},
             follow_redirects=False,
@@ -1658,7 +1665,7 @@ async def test_associate_rejects_flow_cookie_with_mismatched_code_verifier() -> 
         assert created_user is not None
         user_db.oauth_accounts.clear()
 
-        associate_authorize = await client.get(
+        associate_authorize = await client.post(
             "/auth/associate/github/authorize",
             headers={"Authorization": f"Bearer {token}"},
             follow_redirects=False,
@@ -1706,7 +1713,7 @@ async def test_associate_rejects_inactive_authenticated_user() -> None:
     strategy.tokens["bearer-token"] = user.id
 
     async with AsyncTestClient(app=app) as client:
-        authorize_response = await client.get(
+        authorize_response = await client.post(
             "/auth/associate/github/authorize",
             headers={"Authorization": "Bearer bearer-token"},
             follow_redirects=False,
@@ -1737,11 +1744,45 @@ async def test_associate_unauthenticated_returns_401() -> None:
     """Unauthenticated request to associate authorize returns 401."""
     app, _, _, _, _ = build_app_with_associate()
     async with AsyncTestClient(app=app) as client:
-        response = await client.get(
+        response = await client.post(
             "/auth/associate/github/authorize",
             follow_redirects=False,
         )
         assert response.status_code == HTTP_UNAUTHORIZED
+
+
+async def test_associate_authorize_rejects_get_after_csrf_hardening() -> None:
+    """GET against the associate authorize route returns 405 after the POST migration.
+
+    The route is intentionally POST-only so that Litestar's CSRF middleware
+    can enforce a token check on cookie-transport deployments and a
+    cross-origin GET cannot trigger a forced association via top-level
+    navigation. A regression that re-introduces a GET handler would silently
+    re-open the forced-association vector this fix closes.
+    """
+    app, _, _, _, _ = build_app_with_associate()
+    async with AsyncTestClient(app=app) as client:
+        response = await client.get(
+            "/auth/associate/github/authorize",
+            headers={"Authorization": "Bearer any-token"},
+            follow_redirects=False,
+        )
+        assert response.status_code == HTTP_METHOD_NOT_ALLOWED
+
+
+async def test_login_authorize_remains_get_after_csrf_hardening() -> None:
+    """The login authorize route stays GET because it has no victim session to abuse.
+
+    Anonymous OAuth login does not pre-authenticate the user and binds the
+    redirect to a fresh state cookie that the attacker cannot read or
+    spoof, so CSRF does not apply. Switching the login route to POST would
+    break ``<a href>`` entry points without any security benefit, so the
+    method is intentionally preserved.
+    """
+    app, _, _, _, _ = build_app_with_associate()
+    async with AsyncTestClient(app=app) as client:
+        response = await client.get("/auth/oauth/github/authorize", follow_redirects=False)
+        assert response.status_code == HTTP_FOUND
 
 
 async def test_associate_re_link_updates_tokens() -> None:
@@ -1769,7 +1810,7 @@ async def test_associate_re_link_updates_tokens() -> None:
 
     async with AsyncTestClient(app=app) as client:
         auth_headers = {"Authorization": "Bearer bearer-token"}
-        auth_resp = await client.get(
+        auth_resp = await client.post(
             "/auth/associate/github/authorize",
             headers=auth_headers,
             follow_redirects=False,
@@ -1826,7 +1867,7 @@ async def test_associate_rejects_when_provider_identity_already_linked_to_anothe
 
     async with AsyncTestClient(app=app) as client:
         auth_headers = {"Authorization": "Bearer bearer-for-b"}
-        auth_resp = await client.get(
+        auth_resp = await client.post(
             "/auth/associate/github/authorize",
             headers=auth_headers,
             follow_redirects=False,
@@ -1886,7 +1927,7 @@ async def test_associate_maps_oauth_account_already_linked_error_from_upsert() -
 
     async with AsyncTestClient(app=app) as client:
         auth_headers = {"Authorization": "Bearer bearer-token"}
-        auth_resp = await client.get(
+        auth_resp = await client.post(
             "/auth/associate/github/authorize",
             headers=auth_headers,
             follow_redirects=False,
@@ -2020,7 +2061,7 @@ async def test_associate_di_key_variant_links_oauth_via_litestar_dependency_inje
 
     async with AsyncTestClient(app=app) as client:
         auth_headers = {"Authorization": "Bearer bearer-token"}
-        authorize_response = await client.get(
+        authorize_response = await client.post(
             "/auth/associate/github/authorize",
             headers=auth_headers,
             follow_redirects=False,
@@ -2047,3 +2088,138 @@ async def test_associate_di_key_variant_links_oauth_via_litestar_dependency_inje
     record = user_db.oauth_accounts.get(("github", "provider-user-99"))
     assert record is not None
     assert record.user_id == user.id
+
+
+# --- CSRF middleware integration on the POST associate authorize route ---
+
+
+_CSRF_COOKIE_NAME = "__litestar_auth_csrf"
+_CSRF_HEADER_NAME = "X-CSRF-Token"
+_CSRF_SECRET = "csrf-secret-32-characters-long-aaaa"
+
+
+def _build_app_with_associate_and_csrf(
+    *,
+    users: list[ExampleUser] | None = None,
+) -> tuple[Litestar, InMemoryTokenStrategy]:
+    """Build the manual associate flow with Litestar's CSRF middleware in front.
+
+    Reproduces ``build_app_with_associate`` with a ``csrf_config`` attached to
+    the app so the POST associate authorize route is exercised against
+    Litestar's CSRF middleware end-to-end. The login controller is included
+    so the test client can hit a safe-method endpoint to seed the CSRF
+    cookie before the protected POST.
+
+    Returns:
+        App configured with associate + login OAuth controllers under CSRF
+        middleware plus the in-memory token strategy used to mint the
+        bearer token for the test user.
+    """
+    password_helper = PasswordHelper()
+    user_db = InMemoryOAuthUserDatabase(users)
+    user_manager = TrackingUserManager(user_db, password_helper)
+    strategy = InMemoryTokenStrategy()
+    backend = AuthenticationBackend[ExampleUser, UUID](
+        name="oauth-bearer",
+        transport=BearerTransport(),
+        strategy=cast("Any", strategy),
+    )
+    oauth_client = FakeOAuthClient()
+    login_controller = create_oauth_controller(
+        provider_name="github",
+        backend=backend,
+        user_manager=cast("Any", user_manager),
+        oauth_client=oauth_client,
+        redirect_base_url=MANUAL_LOGIN_REDIRECT_BASE_URL,
+        oauth_flow_cookie_secret=OAUTH_FLOW_COOKIE_SECRET,
+        path="/auth/oauth",
+        cookie_secure=False,
+    )
+    associate_controller = create_oauth_associate_controller(
+        provider_name="github",
+        user_manager=cast("Any", user_manager),
+        oauth_client=oauth_client,
+        redirect_base_url=MANUAL_ASSOCIATE_REDIRECT_BASE_URL,
+        oauth_flow_cookie_secret=OAUTH_FLOW_COOKIE_SECRET,
+        path="/auth/associate",
+        cookie_secure=False,
+    )
+    middleware = DefineMiddleware(
+        LitestarAuthMiddleware[ExampleUser, UUID],
+        get_request_session=auth_middleware_get_request_session(cast("Any", _DummySessionMaker())),
+        authenticator_factory=lambda _session: Authenticator([backend], user_manager),
+    )
+    app = Litestar(
+        route_handlers=[login_controller, associate_controller],
+        middleware=[middleware],
+        csrf_config=CSRFConfig(
+            secret=_CSRF_SECRET,
+            cookie_name=_CSRF_COOKIE_NAME,
+            header_name=_CSRF_HEADER_NAME,
+            cookie_secure=False,
+        ),
+    )
+    return app, strategy
+
+
+async def test_associate_authorize_under_csrf_middleware_rejects_request_without_token() -> None:
+    """POST /associate/authorize is refused by Litestar's CSRF middleware when no token is supplied.
+
+    This is the headline guarantee of the forced-association fix: a
+    cross-site GET cannot reach the route at all (it is POST-only), and a
+    cross-site POST cannot mirror the Strict/Lax CSRF cookie into the
+    required header, so the middleware fails the request before the
+    authorize body runs and no provider state cookie is issued to the
+    victim's session.
+    """
+    user = ExampleUser(
+        id=uuid4(),
+        email="csrf-target@example.com",
+        hashed_password=PasswordHelper().hash("pw"),
+    )
+    app, strategy = _build_app_with_associate_and_csrf(users=[user])
+    strategy.tokens["bearer-token"] = user.id
+
+    async with AsyncTestClient(app=app) as client:
+        # Seed the CSRF cookie so the middleware has a value to compare
+        # against, then deliberately omit the matching header on the POST.
+        await client.get("/auth/oauth/github/authorize")
+
+        response = await client.post(
+            "/auth/associate/github/authorize",
+            headers={"Authorization": "Bearer bearer-token"},
+            follow_redirects=False,
+        )
+
+    assert response.status_code == HTTP_FORBIDDEN
+    assert "__oauth_associate_state_github" not in response.cookies
+
+
+async def test_associate_authorize_under_csrf_middleware_accepts_request_with_matching_token() -> None:
+    """POST /associate/authorize succeeds when the request mirrors the seeded CSRF cookie.
+
+    Same-origin clients can read the CSRF cookie and forward its value as
+    the configured header, so the legitimate flow continues to redirect to
+    the provider authorization URL with the encrypted flow cookie set.
+    """
+    user = ExampleUser(
+        id=uuid4(),
+        email="csrf-ok@example.com",
+        hashed_password=PasswordHelper().hash("pw"),
+    )
+    app, strategy = _build_app_with_associate_and_csrf(users=[user])
+    strategy.tokens["bearer-token"] = user.id
+
+    async with AsyncTestClient(app=app) as client:
+        seed_response = await client.get("/auth/oauth/github/authorize", follow_redirects=False)
+        csrf_token = seed_response.cookies.get(_CSRF_COOKIE_NAME)
+        assert csrf_token is not None
+
+        response = await client.post(
+            "/auth/associate/github/authorize",
+            headers={"Authorization": "Bearer bearer-token", _CSRF_HEADER_NAME: csrf_token},
+            follow_redirects=False,
+        )
+
+    assert response.status_code == HTTP_FOUND
+    assert response.cookies.get("__oauth_associate_state_github") is not None
