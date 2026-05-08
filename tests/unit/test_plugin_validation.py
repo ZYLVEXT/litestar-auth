@@ -458,6 +458,81 @@ def test_warn_insecure_plugin_startup_defaults_warns_for_current_jwt_strategy(
     assert strategy.revocation_posture.startup_warning in messages
 
 
+class _PasskeyOnlyUser:
+    """User-model stub mirroring passkey/OAuth-only models that omit `hashed_password`.
+
+    The startup warner only inspects the class — never instantiates it — so a
+    minimal stub is enough to exercise the gap-detection branch. ``id`` and
+    ``email`` are declared as type-only annotations to mirror real Protocol/
+    dataclass user contracts and to confirm the annotation walk does not pick
+    up `hashed_password` from elsewhere in the MRO.
+    """
+
+    id: UUID
+    email: str
+
+
+class _UserModelWithHashedPasswordAttribute:
+    """User-model stub that declares `hashed_password` only via class annotation."""
+
+    id: UUID
+    email: str
+    hashed_password: str
+
+
+def test_warn_insecure_plugin_startup_defaults_warns_for_default_jwt_fingerprint_when_user_model_lacks_hashed_password() -> (
+    None
+):
+    """Default JWT fingerprint silently degrades for passkey-only models — surface it."""
+    config = _minimal_config(backends=[_jwt_backend(denylist_store=_DurableDenylistStore())])
+    config.user_model = cast("Any", _PasskeyOnlyUser)
+
+    with pytest.warns(startup_module.SecurityWarning, match="does not expose 'hashed_password'"):
+        warn_insecure_plugin_startup_defaults(config)
+
+
+def test_warn_insecure_plugin_startup_defaults_skips_default_fingerprint_warning_for_user_model_with_hashed_password() -> (
+    None
+):
+    """Annotation-only `hashed_password` is enough to keep the default fingerprint usable."""
+    config = _minimal_config(backends=[_jwt_backend(denylist_store=_DurableDenylistStore())])
+    config.user_model = cast("Any", _UserModelWithHashedPasswordAttribute)
+
+    with warnings.catch_warnings(record=True) as records:
+        warnings.simplefilter("always")
+        warn_insecure_plugin_startup_defaults(config)
+
+    messages = [str(record.message) for record in records]
+    assert not any("does not expose 'hashed_password'" in message for message in messages)
+
+
+def test_warn_insecure_plugin_startup_defaults_skips_default_fingerprint_warning_when_custom_getter_is_configured() -> (
+    None
+):
+    """A custom session_fingerprint_getter is the caller's contract — no warning."""
+    jwt_module = importlib.import_module("litestar_auth.authentication.strategy.jwt")
+    strategy_type = cast("type[JWTStrategy[Any, Any]]", jwt_module.JWTStrategy)
+    strategy = strategy_type(
+        secret=JWT_SECRET,
+        denylist_store=cast("Any", _DurableDenylistStore()),
+        session_fingerprint_getter=lambda _user: "custom-fingerprint",
+    )
+    backend = AuthenticationBackend[ExampleUser, UUID](
+        name="jwt-custom-fingerprint",
+        transport=BearerTransport(),
+        strategy=cast("Any", strategy),
+    )
+    config = _minimal_config(backends=[backend])
+    config.user_model = cast("Any", _PasskeyOnlyUser)
+
+    with warnings.catch_warnings(record=True) as records:
+        warnings.simplefilter("always")
+        warn_insecure_plugin_startup_defaults(config)
+
+    messages = [str(record.message) for record in records]
+    assert not any("does not expose 'hashed_password'" in message for message in messages)
+
+
 def test_warn_insecure_plugin_startup_defaults_is_silent_in_testing(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

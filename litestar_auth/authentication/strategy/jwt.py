@@ -69,6 +69,13 @@ def _default_session_fingerprint(key: bytes) -> Callable[[object], str | None]:
         material = f"{user_id}\x1f{email.casefold()}\x1f{hashed_password}".encode()
         return hmac.new(key, material, hashlib.sha256).hexdigest()
 
+    # Internal marker so plugin startup can detect the library default getter and
+    # warn when the configured user model would silently disable token rotation
+    # (i.e. the model lacks the ``hashed_password`` attribute this default needs).
+    # Custom getters supplied by callers do not carry this attribute. Bound via
+    # setattr so the dynamic attribute does not bleed into the function's public
+    # type and trigger attribute-resolution diagnostics.
+    setattr(getter, "_is_default_session_fingerprint", True)  # noqa: B010
     return getter
 
 

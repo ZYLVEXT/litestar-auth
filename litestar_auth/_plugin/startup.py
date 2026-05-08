@@ -54,6 +54,7 @@ def warn_insecure_plugin_startup_defaults(config: LitestarAuthConfig[Any, Any]) 
 
     _warn_plaintext_oauth_token_storage(config)
     _warn_jwt_revocation_policy(config)
+    _warn_jwt_default_fingerprint_user_model_gap(config)
     _warn_process_local_rate_limit_backend(config)
     _warn_process_local_totp_stores(config)
     _warn_refresh_cookie_max_age_mismatch(config)
@@ -88,6 +89,53 @@ def _warn_jwt_revocation_policy(config: LitestarAuthConfig[Any, Any]) -> None:
                 stacklevel=2,
             )
             break
+
+
+def _user_model_exposes_hashed_password(user_model: type[Any]) -> bool:
+    """Return whether the configured user model declares a ``hashed_password`` attribute.
+
+    Walks both class-level attributes (SQLAlchemy column descriptors, dataclass slots,
+    explicit assignments) and per-class ``__annotations__`` (msgspec/Pydantic-style
+    declarations and ``Protocol`` user contracts) so the check works across the
+    persistence and contract shapes the library supports.
+    """
+    sentinel = object()
+    if getattr(user_model, "hashed_password", sentinel) is not sentinel:
+        return True
+    for cls in getattr(user_model, "__mro__", (user_model,)):
+        if "hashed_password" in getattr(cls, "__annotations__", {}):
+            return True
+    return False
+
+
+def _warn_jwt_default_fingerprint_user_model_gap(config: LitestarAuthConfig[Any, Any]) -> None:
+    """Warn when the default JWT session fingerprint will silently degrade for the user model.
+
+    The default ``session_fingerprint_getter`` requires (id, email, hashed_password)
+    on the authenticated user so JWTs implicitly rotate on credential changes.
+    Passkey-only or OAuth-only models that omit ``hashed_password`` cause the default
+    getter to return ``None`` for every user, disabling the binding without a
+    visible signal. This warner converts that silent degradation into a startup
+    notice; callers using a custom ``session_fingerprint_getter`` are unaffected.
+    """
+    if _user_model_exposes_hashed_password(config.user_model):
+        return
+
+    for backend in config.resolve_startup_backends():
+        strategy = getattr(backend, "strategy", None)
+        getter = getattr(strategy, "session_fingerprint_getter", None)
+        if getter is None or not getattr(getter, "_is_default_session_fingerprint", False):
+            continue
+        warnings.warn(
+            f"Backend {backend.name!r} uses JWTStrategy with the default session "
+            f"fingerprint, but {config.user_model.__name__!r} does not expose "
+            "'hashed_password'. JWTs minted by this strategy will not rotate when "
+            "credentials change. Provide an explicit session_fingerprint_getter when "
+            "using passkey-only or OAuth-only user models.",
+            SecurityWarning,
+            stacklevel=2,
+        )
+        return
 
 
 def _warn_process_local_rate_limit_backend(config: LitestarAuthConfig[Any, Any]) -> None:
