@@ -37,6 +37,26 @@ if TYPE_CHECKING:
 type AsyncSessionT = AsyncSession | async_scoped_session[AsyncSession]
 
 
+def _collect_writable_user_fields(user_model: type[Any]) -> frozenset[str]:
+    """Return the persistence-side write allow-list for a user model.
+
+    Combines SQLAlchemy mapper attributes (columns + relationships) with any
+    class-level Python properties whose setters would have a real effect, so
+    that custom user models with extra columns or computed setter properties
+    (e.g. ``roles`` delegating to a relationship) all stay writable while
+    arbitrary unmapped names are rejected up front.
+    """
+    mapper = inspect(user_model)
+    mapped_attrs: set[str] = {attr.key for attr in mapper.attrs}
+    property_setters: set[str] = {
+        attribute_name
+        for klass in user_model.__mro__
+        for attribute_name, member in vars(klass).items()
+        if isinstance(member, property) and member.fset is not None
+    }
+    return frozenset(mapped_attrs | property_setters)
+
+
 class _OAuthAccountRow(ModelProtocol, Protocol):
     """Structural fields used by the SQLAlchemy OAuth account upsert flow."""
 
@@ -83,6 +103,14 @@ class SQLAlchemyUserDatabase[UP: SQLAlchemyUserModelProtocol](BaseUserStore[UP, 
         self._oauth_token_encryption = oauth_token_encryption
         self._user_repository_type = _build_user_repository(self.user_model)
         self._user_load = _build_user_load(self.user_model)
+        # Defense-in-depth: ``update`` consults a write allow-list derived from
+        # the user model's actual write surface (mapped columns + relationships
+        # + setter properties), so manager-level filters are not the only line
+        # between caller payload and ``setattr``. Computation is deferred until
+        # the first ``update`` call so constructing the adapter with a not-yet-
+        # mapped placeholder class (used for lazy-import tests, deferred ORM
+        # configuration, etc.) does not eagerly invoke the SQLAlchemy mapper.
+        self._user_model_writable_fields_cache: frozenset[str] | None = None
         if oauth_token_encryption is not None:
             self.bind_oauth_token_encryption(oauth_token_encryption)
 
@@ -95,6 +123,17 @@ class SQLAlchemyUserDatabase[UP: SQLAlchemyUserModelProtocol](BaseUserStore[UP, 
         self._oauth_token_encryption = oauth_token_encryption
         bind_oauth_token_encryption(self.session, oauth_token_encryption)
         return self
+
+    def _writable_user_fields(self) -> frozenset[str]:
+        """Return the cached write allow-list for the configured user model.
+
+        Computed on first call so the adapter can be constructed with a
+        not-yet-mapped placeholder class without triggering the SQLAlchemy
+        inspector eagerly. Subsequent calls return the cached value.
+        """
+        if self._user_model_writable_fields_cache is None:
+            self._user_model_writable_fields_cache = _collect_writable_user_fields(self.user_model)
+        return self._user_model_writable_fields_cache
 
     def _require_oauth_token_encryption(self) -> OAuthTokenEncryption:
         """Return the explicit OAuth token encryption policy or fail closed.
@@ -309,9 +348,27 @@ class SQLAlchemyUserDatabase[UP: SQLAlchemyUserModelProtocol](BaseUserStore[UP, 
     async def update(self, user: UP, update_dict: Mapping[str, Any]) -> UP:
         """Persist and return updates for an existing user.
 
+        Manager-level callers already filter privileged and unknown fields, but
+        this layer enforces a defense-in-depth check against the user model's
+        actual write surface so that any caller bypassing the manager (custom
+        code wired straight to the persistence adapter) cannot smuggle
+        arbitrary attribute writes through ``setattr``.
+
         Returns:
             Updated user instance.
+
+        Raises:
+            ValueError: If ``update_dict`` references fields that are neither
+                mapped attributes (columns or relationships) nor settable
+                Python properties on the configured user model.
         """
+        unknown_fields = update_dict.keys() - self._writable_user_fields()
+        if unknown_fields:
+            msg = (
+                f"SQLAlchemyUserDatabase.update rejected fields not on "
+                f"{self.user_model.__name__!r}: {sorted(unknown_fields)!r}."
+            )
+            raise ValueError(msg)
         persistent_user = await self.session.merge(user)
         for field_name, value in update_dict.items():
             setattr(persistent_user, field_name, value)

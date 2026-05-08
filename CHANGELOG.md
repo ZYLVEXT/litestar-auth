@@ -1,5 +1,20 @@
 ## Unreleased
 
+### Security
+
+- **`SQLAlchemyUserDatabase.update` now rejects fields that are not mapped
+  attributes (columns or relationships) or settable Python properties on the
+  configured user model.** Previously the persistence layer trusted callers
+  to filter privileged or unknown fields, relying on the manager's
+  ``SAFE_FIELDS`` / ``PRIVILEGED_FIELDS`` allow-lists upstream. Any
+  application code wired straight to the persistence adapter could smuggle
+  arbitrary attribute writes through ``setattr`` and either silently no-op
+  or quietly mutate state. The new defense-in-depth check is derived from
+  the user model itself, so custom models with extra columns, custom
+  relationships, or computed setter properties (e.g. ``roles`` delegating
+  into ``role_assignments``) keep working out of the box; only truly
+  unmapped names are rejected with ``ValueError``.
+
 ### Added
 
 - **`litestar_auth.config.validate_secret_strength()` — opt-in production
