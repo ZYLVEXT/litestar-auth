@@ -169,9 +169,14 @@ def test_roles_module_preserves_normalized_roles_contract() -> None:
 
 
 def test_schemas_module_preserves_struct_definitions() -> None:
-    """Msgspec schema definitions still expose their fields remain stable."""
+    """Msgspec schema definitions still expose their fields remain stable.
+
+    Privileged fields live exclusively on AdminUserUpdate; the self-service
+    UserUpdate is intentionally email-only so a forgotten field on the
+    runtime deny-list cannot escalate self-update into a privilege change.
+    """
     user_read_hints = get_type_hints(schemas_module.UserRead, include_extras=True)
-    user_update_hints = get_type_hints(schemas_module.UserUpdate, include_extras=True)
+    admin_update_hints = get_type_hints(schemas_module.AdminUserUpdate, include_extras=True)
 
     assert schemas_module.UserRead.__struct_fields__ == (
         "id",
@@ -181,15 +186,17 @@ def test_schemas_module_preserves_struct_definitions() -> None:
         "roles",
     )
     assert schemas_module.UserCreate.__struct_fields__ == ("email", "password")
-    assert schemas_module.UserUpdate.__struct_fields__ == (
+    assert schemas_module.UserUpdate.__struct_fields__ == ("email",)
+    assert schemas_module.AdminUserUpdate.__struct_fields__ == (
+        "password",
         "email",
         "is_active",
         "is_verified",
         "roles",
     )
     assert user_read_hints["roles"] == list[str]
-    assert get_args(user_update_hints["roles"])[0] == list[str]
-    assert get_args(user_update_hints["roles"])[1] is type(None)
+    assert get_args(admin_update_hints["roles"])[0] == list[str]
+    assert get_args(admin_update_hints["roles"])[1] is type(None)
 
 
 def test_strategy_base_module_preserves_abstract_contracts() -> None:

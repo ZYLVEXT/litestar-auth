@@ -14,12 +14,13 @@ lookup digests to Argon2 recovery-code hashes. `SQLAlchemyUserDatabase` exposes 
 set/find/consume helpers that later recovery-code flows use; custom stores should keep the same
 lookup-index contract and make consumption single-use.
 
-The built-in `UserRead` / `UserUpdate` schemas now also assume that same `roles` attribute. Apps
-that keep the default register/verify/reset/users controllers should either expose
-`roles: Sequence[str]` on the user model or provide custom `user_read_schema` / `user_update_schema`
-types that intentionally omit role fields. Plugin validation fails fast when an enabled built-in
-route surface still uses a schema with `roles` against a `user_model` that does not expose that
-attribute.
+The built-in `UserRead` and `AdminUserUpdate` schemas assume that same `roles` attribute (the
+self-service `UserUpdate` is intentionally email-only — privileged fields live on
+`AdminUserUpdate`). Apps that keep the default register/verify/reset/users controllers should
+either expose `roles: Sequence[str]` on the user model or provide custom `user_read_schema` /
+`admin_user_update_schema` types that intentionally omit role fields. Plugin validation fails
+fast when an enabled built-in route surface still uses a schema with `roles` against a
+`user_model` that does not expose that attribute.
 
 This section is the main ORM integration guide for bundled token bootstrap, mixin-composed
 custom model families, relational role composition, `SQLAlchemyUserDatabase`, and

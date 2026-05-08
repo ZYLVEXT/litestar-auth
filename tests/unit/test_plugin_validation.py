@@ -904,7 +904,16 @@ def test_validate_config_allows_roleless_user_model_with_roleless_custom_schemas
 
 
 def test_validate_config_rejects_roleless_user_model_for_users_surface_with_role_aware_schemas() -> None:
-    """The users controller also fails fast when its effective schemas still require roles."""
+    """The users controller also fails fast when its effective schemas still require roles.
+
+    With the self-service ``UserUpdate`` closed to email-only, the default
+    ``UserRead`` is the only schema in the users surface that still requires
+    a ``roles`` attribute — so the validator's diagnostic now points at
+    "users responses" alone. ``AdminUserUpdate`` keeps ``roles`` for
+    privileged writes; that path is still rejected when the model lacks
+    the attribute, but is exercised by a separate validator call that does
+    not collapse into the same diagnostic.
+    """
 
     class _RolelessUserModel:
         id = UUID(int=0)
@@ -920,7 +929,49 @@ def test_validate_config_rejects_roleless_user_model_for_users_surface_with_role
     config.include_reset_password = False
     config.include_users = True
 
-    with pytest.raises(validation_module.ConfigurationError, match=r"users responses, users update requests"):
+    with pytest.raises(validation_module.ConfigurationError, match=r"users responses"):
+        validate_config(config)
+
+
+def test_validate_config_rejects_roleless_user_model_when_custom_update_schema_requires_roles() -> None:
+    """A custom ``user_update_schema`` that re-introduces ``roles`` still triggers the validator.
+
+    The library default ``UserUpdate`` is email-only, but apps may legitimately provide a
+    custom schema that restores the privileged shape. The validator must keep flagging the
+    "users update requests" surface for any such custom schema, otherwise a roleless user
+    model paired with a roles-bearing custom update schema would slip past startup
+    validation and surface as a runtime ``AttributeError`` on the first PATCH.
+    """
+
+    class _RolelessUserModel:
+        id = UUID(int=0)
+        email = "roleless@example.com"
+        hashed_password = "hashed-password"
+        is_active = True
+        is_verified = False
+
+    class _RolesBearingUpdate(msgspec.Struct, omit_defaults=True, forbid_unknown_fields=True):
+        email: str | None = None
+        roles: list[str] | None = None
+
+    class _RolelessUserRead(msgspec.Struct):
+        id: UUID
+        email: str
+        is_active: bool
+        is_verified: bool
+
+    config = _minimal_config()
+    config.user_model = cast("type[ExampleUser]", _RolelessUserModel)
+    # The user_read_schema is roleless so this test isolates the update-side
+    # diagnostic that the email-only default UserUpdate would otherwise hide.
+    config.user_read_schema = _RolelessUserRead
+    config.user_update_schema = cast("type[msgspec.Struct]", _RolesBearingUpdate)
+    config.include_register = False
+    config.include_verify = False
+    config.include_reset_password = False
+    config.include_users = True
+
+    with pytest.raises(validation_module.ConfigurationError, match=r"users update requests"):
         validate_config(config)
 
 

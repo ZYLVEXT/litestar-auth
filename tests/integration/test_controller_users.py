@@ -324,8 +324,13 @@ def test_users_mutation_routes_publish_request_body_and_response_contracts_in_op
         == "#/components/schemas/ChangePasswordRequest"
     )
     assert next(iter(admin_request_body.content.values())).schema.ref == "#/components/schemas/AdminUserUpdate"
+    # Self-service UserUpdate is intentionally email-only; privileged fields
+    # live on AdminUserUpdate so the OpenAPI surface for ``/users/me`` does
+    # not advertise mutable account-state fields that would never persist.
     assert "email" in (update_schema.properties or {})
-    assert "roles" in (update_schema.properties or {})
+    assert "roles" not in (update_schema.properties or {})
+    assert "is_active" not in (update_schema.properties or {})
+    assert "is_verified" not in (update_schema.properties or {})
     assert "password" not in (update_schema.properties or {})
     assert set(change_password_schema.required or []) == {"current_password", "new_password"}
     assert "email" in (admin_update_schema.properties or {})

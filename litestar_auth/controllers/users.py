@@ -287,7 +287,9 @@ async def _users_handle_delete_user[UP: UsersControllerUserProtocol[Any], ID](
     if ctx.hard_delete:
         await user_manager.delete(user.id)
         return _to_user_schema(user, ctx.user_read_schema_type, unsafe_testing=ctx.unsafe_testing)
-    updated_user = await user_manager.update(UserUpdate(is_active=False), user, allow_privileged=True)
+    # Soft-delete is an admin path: ``is_active`` is a privileged field that
+    # belongs on AdminUserUpdate, not on the self-service UserUpdate contract.
+    updated_user = await user_manager.update(AdminUserUpdate(is_active=False), user, allow_privileged=True)
     return _to_user_schema(updated_user, ctx.user_read_schema_type, unsafe_testing=ctx.unsafe_testing)
 
 

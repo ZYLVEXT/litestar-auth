@@ -299,7 +299,8 @@ policy.
 For app-owned registration, admin-update, or password-rotation structs, import `UserEmailField`
 and `UserPasswordField` from `litestar_auth.schemas` instead of copying the built-in email regex
 or raw `12` / `128` bounds. `UserPasswordField` is not for self-service profile update DTOs:
-`UserUpdate` intentionally excludes `password`, and authenticated users rotate their own password
-through `ChangePasswordRequest`. Those aliases keep schema metadata aligned with the built-in
-credential-bearing structs; runtime password validation still happens in the manager through
-`password_validator_factory` or the manager's default validator.
+`UserUpdate` intentionally excludes `password` (and every privileged field — `is_active`,
+`is_verified`, `roles` — which live on `AdminUserUpdate`), and authenticated users rotate their
+own password through `ChangePasswordRequest`. Those aliases keep schema metadata aligned with the
+built-in credential-bearing structs; runtime password validation still happens in the manager
+through `password_validator_factory` or the manager's default validator.

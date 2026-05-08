@@ -37,6 +37,30 @@ Wrong current passwords return the login-shaped `LOGIN_BAD_CREDENTIALS` contract
 replacement passwords return `UPDATE_USER_INVALID_PASSWORD`. Admin-initiated password rotation
 continues through `AdminUserUpdate` on the privileged users update path.
 
+## Self-service `UserUpdate` is email-only
+
+The built-in self-service profile-update schema no longer accepts `is_active`, `is_verified`, or
+`roles`. Privileged fields live exclusively on `AdminUserUpdate` for the privileged
+`PATCH /users/{id}` route, and self-service requests that include them are rejected at msgspec
+decode (`forbid_unknown_fields=True`) before the controller's runtime deny-list ever runs. This
+closes a defense-in-depth gap where a regression in the runtime deny-list could silently turn
+self-update into a privilege change.
+
+Update clients accordingly:
+
+- Self-service `PATCH /users/me` now accepts only `{ "email": "new@example.com" }`. Send
+  privileged updates through admin `PATCH /users/{user_id}` with `AdminUserUpdate` instead.
+- Programmatic callers that constructed `UserUpdate(is_active=...)`, `UserUpdate(roles=...)`, or
+  similar must switch to `AdminUserUpdate(...)` plus `manager.update(..., allow_privileged=True)`.
+- The library's bundled soft-delete path on the privileged `DELETE /users/{user_id}` route was
+  migrated to `AdminUserUpdate(is_active=False)` in this release; no application changes needed
+  for the built-in users controller.
+
+If you previously customised `user_update_schema=...` to add app-specific safe fields, you can
+keep doing that — the runtime `_build_safe_self_update` deny-list still rejects the privileged
+field names as defense-in-depth for custom schemas. The change here only narrows the **library
+default**.
+
 ## Superuser boolean to role membership
 
 Superuser status is now derived from role membership. The public

@@ -2,6 +2,33 @@
 
 ### Security (breaking)
 
+- **Self-service ``UserUpdate`` is now email-only.** ``is_active``,
+  ``is_verified``, and ``roles`` were previously accepted as ``Optional``
+  fields on the self-service profile-update schema and rejected at runtime
+  by ``_build_safe_self_update`` plus a request-body preflight. The
+  OpenAPI surface still advertised them as mutable on ``/users/me``, and
+  any regression in the runtime deny-list (a misnamed comparison, a
+  custom controller bypassing the helper, an extra middleware reordering
+  payload validation) silently re-opened privilege escalation. Privileged
+  fields now live exclusively on ``AdminUserUpdate``, and ``UserUpdate``
+  rejects them at msgspec decode via ``forbid_unknown_fields=True`` before
+  the controller layer ever runs. The bundled soft-delete path on
+  ``DELETE /users/{user_id}`` was migrated from
+  ``UserUpdate(is_active=False)`` to ``AdminUserUpdate(is_active=False)``
+  in the same change.
+
+  **Migration.** Self-service ``PATCH /users/me`` now accepts only
+  ``{ "email": "new@example.com" }``; send privileged updates through
+  admin ``PATCH /users/{user_id}`` with ``AdminUserUpdate``. Programmatic
+  callers that constructed ``UserUpdate(is_active=...)`` or
+  ``UserUpdate(roles=...)`` must switch to ``AdminUserUpdate(...)`` plus
+  ``manager.update(..., allow_privileged=True)``. Apps that previously
+  customised ``user_update_schema=...`` to add app-specific safe fields
+  keep working — the runtime ``_build_safe_self_update`` deny-list still
+  rejects the privileged field names as defense-in-depth for custom
+  schemas. See [docs/migration.md](docs/migration.md) for the full
+  upgrade recipe.
+
 - **OAuth associate authorize is now `POST` and protected by Litestar's CSRF
   middleware.** Previously the authenticated associate flow lived behind a
   `GET` endpoint, which could be triggered by a cross-site top-level

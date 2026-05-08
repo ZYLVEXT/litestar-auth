@@ -70,10 +70,13 @@ policy still comes from `password_validator_factory` or the manager's default
 `require_password_length` validator.
 
 When you keep the built-in register/verify/reset/users controllers but replace `user_read_schema`
-or `user_update_schema`, keep the default role-aware contract in mind: built-in `UserRead` includes
-`roles`, built-in `UserUpdate` accepts optional `roles`, `/users/me` strips them from self-service
-updates, and admin `PATCH /users/{id}` can persist them. Outside the built-in controllers,
-direct `BaseUserManager.update(...)` calls must pass `allow_privileged=True` before mutating
+or `user_update_schema`, keep the default role-aware contract in mind: built-in `UserRead`
+includes `roles`, built-in `AdminUserUpdate` accepts optional `roles`, and the self-service
+`UserUpdate` is intentionally email-only — privileged fields (`is_active`, `is_verified`,
+`roles`) are rejected at msgspec decode on `/users/me` so the persistence layer never sees a
+self-service body that tries to escalate. Admin `PATCH /users/{id}` continues to persist those
+fields through `AdminUserUpdate`. Outside the built-in controllers, direct
+`BaseUserManager.update(...)` calls must pass `allow_privileged=True` before mutating
 `is_active`, `is_verified`, or `roles`.
 
 ## Related

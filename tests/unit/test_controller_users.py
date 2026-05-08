@@ -529,7 +529,10 @@ async def test_users_handle_delete_user_soft_deletes_by_disabling_user() -> None
     assert len(manager.update_calls) == 1
     assert manager.delete_calls == []
     payload, updated_user, allow_privileged = manager.update_calls[0]
-    assert isinstance(payload, UserUpdate)
+    # Soft-delete is admin-only: ``is_active`` is a privileged field, so the
+    # controller forwards an AdminUserUpdate body, not the email-only
+    # self-service UserUpdate.
+    assert isinstance(payload, AdminUserUpdate)
     assert payload.is_active is False
     assert updated_user is user
     assert allow_privileged is True

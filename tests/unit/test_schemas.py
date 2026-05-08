@@ -86,7 +86,7 @@ def test_user_read_field_order_uses_roles_as_authorization_surface() -> None:
 
 def test_user_update_field_order_uses_roles_as_authorization_surface() -> None:
     """UserUpdate keeps the public update fields for the role-based API surface."""
-    assert UserUpdate.__struct_fields__ == ("email", "is_active", "is_verified", "roles")
+    assert UserUpdate.__struct_fields__ == ("email",)
 
 
 def test_admin_user_update_field_order_matches_user_update_surface() -> None:
@@ -306,11 +306,50 @@ def test_public_email_alias_reuses_internal_metadata_source() -> None:
 
 
 def test_user_update_omits_unset_optional_fields() -> None:
-    """UserUpdate excludes defaulted optional fields from serialized output."""
-    payload = UserUpdate(email="updated@example.com", is_verified=True, roles=["admin"])
+    """UserUpdate excludes defaulted optional fields from serialized output.
+
+    The self-service self-update schema is intentionally email-only (privileged
+    fields belong on AdminUserUpdate); ``omit_defaults=True`` plus the empty
+    payload below proves no defaulted fields leak into encoded output.
+    """
+    payload = UserUpdate(email="updated@example.com")
 
     encoded = msgspec.json.encode(payload)
     decoded = msgspec.json.decode(encoded, type=UserUpdate)
+
+    assert decoded == payload
+    assert encoded == b'{"email":"updated@example.com"}'
+
+    empty_payload = UserUpdate()
+    assert msgspec.json.encode(empty_payload) == b"{}"
+
+
+@pytest.mark.parametrize(
+    "field_name",
+    ["is_active", "is_verified", "roles", "password", "hashed_password"],
+)
+def test_user_update_rejects_privileged_or_credential_fields_at_decode(field_name: str) -> None:
+    """UserUpdate fails closed at msgspec decode for any privileged/credential field.
+
+    ``forbid_unknown_fields=True`` rejects the body before the persistence
+    layer's defense-in-depth deny-list ever runs. A regression that
+    re-introduces ``is_active`` / ``is_verified`` / ``roles`` (or password
+    fields) on the self-service contract would cause this test to fail and
+    the privilege-escalation surface would be visible in CI.
+    """
+    privileged_value: object = False if field_name in {"is_active", "is_verified"} else "value"
+    body = msgspec.json.encode({"email": "user@example.com", field_name: privileged_value})
+
+    with pytest.raises(msgspec.ValidationError):
+        msgspec.json.decode(body, type=UserUpdate)
+
+
+def test_admin_user_update_serializes_privileged_fields() -> None:
+    """AdminUserUpdate is the privileged contract that legitimately carries those fields."""
+    payload = AdminUserUpdate(email="updated@example.com", is_verified=True, roles=["admin"])
+
+    encoded = msgspec.json.encode(payload)
+    decoded = msgspec.json.decode(encoded, type=AdminUserUpdate)
 
     assert decoded == payload
     assert encoded == b'{"email":"updated@example.com","is_verified":true,"roles":["admin"]}'

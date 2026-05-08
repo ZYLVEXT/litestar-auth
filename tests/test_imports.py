@@ -399,12 +399,17 @@ def test_root_package_exports_canonical_database_token_preset_entrypoint() -> No
 
 
 def test_public_user_schema_reuse_surface_stays_importable() -> None:
-    """Custom-schema email/password helpers stay on the dedicated public schemas module."""
+    """Custom-schema email/password helpers stay on the dedicated public schemas module.
+
+    The self-service ``UserUpdate`` is intentionally email-only — privileged
+    fields (``is_active`` / ``is_verified`` / ``roles``) live exclusively on
+    :class:`AdminUserUpdate`, so this contract no longer exposes a ``roles``
+    or any other privileged annotation.
+    """
     user_create_email_meta = _field_meta(UserCreate, "email")
     user_update_email_meta = _field_meta(UserUpdate, "email")
     user_create_meta = _field_meta(UserCreate, "password")
     user_read_roles_annotation = get_type_hints(UserRead, include_extras=True)["roles"]
-    user_update_roles_annotation = get_type_hints(UserUpdate, include_extras=True)["roles"]
     user_create_email_annotation = get_type_hints(UserCreate, include_extras=True)["email"]
     user_update_email_annotation = get_type_hints(UserUpdate, include_extras=True)["email"]
     user_create_annotation = get_type_hints(UserCreate, include_extras=True)["password"]
@@ -439,9 +444,11 @@ def test_public_user_schema_reuse_surface_stays_importable() -> None:
     assert get_args(user_update_email_annotation)[1] is type(None)
     assert getattr(user_create_annotation, "__value__", user_create_annotation) == password_field_value
     assert "password" not in user_update_hints
+    # Privileged fields live exclusively on AdminUserUpdate now.
+    assert "is_active" not in user_update_hints
+    assert "is_verified" not in user_update_hints
+    assert "roles" not in user_update_hints
     assert user_read_roles_annotation == list[str]
-    assert get_args(user_update_roles_annotation)[0] == list[str]
-    assert get_args(user_update_roles_annotation)[1] is type(None)
     assert user_create_email_meta.max_length == EMAIL_MAX_LENGTH
     assert user_update_email_meta.max_length == EMAIL_MAX_LENGTH
     assert user_create_email_meta.pattern == EMAIL_PATTERN
@@ -1201,7 +1208,7 @@ def test_root_package_does_not_reexport_secondary_surfaces() -> None:
     assert UserCreate.__struct_fields__ == ("email", "password")
     assert AdminUserUpdate.__struct_fields__ == ("password", "email", "is_active", "is_verified", "roles")
     assert ChangePasswordRequest.__struct_fields__ == ("current_password", "new_password")
-    assert UserUpdate.__struct_fields__ == ("email", "is_active", "is_verified", "roles")
+    assert UserUpdate.__struct_fields__ == ("email",)
     assert callable(create_provider_oauth_controller)
     assert callable(create_oauth_associate_controller)
     assert callable(load_httpx_oauth_client)

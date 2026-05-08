@@ -1828,7 +1828,7 @@ async def test_update_calls_on_after_update_with_correct_arguments() -> None:
     updated_user = replace(user, is_active=False)
     user_db.update.return_value = updated_user
 
-    result = await manager.update(UserUpdate(is_active=False), user, allow_privileged=True)
+    result = await manager.update(AdminUserUpdate(is_active=False), user, allow_privileged=True)
 
     assert result is updated_user
     assert len(manager.after_update_events) == 1
@@ -1845,7 +1845,7 @@ async def test_update_rejects_privileged_fields_without_explicit_opt_in() -> Non
     user = _build_user(password_helper)
 
     with pytest.raises(AuthorizationError, match="allow_privileged=True"):
-        await manager.update(UserUpdate(is_active=False), user)
+        await manager.update(AdminUserUpdate(is_active=False), user)
 
     user_db.update.assert_not_awaited()
     assert manager.after_update_events == []
@@ -1881,7 +1881,7 @@ async def test_update_normalizes_roles_from_builtin_update_schema() -> None:
     user_db.update.return_value = updated_user
 
     result = await manager.update(
-        UserUpdate(roles=[" Support ", "admin", "ADMIN"]),
+        AdminUserUpdate(roles=[" Support ", "admin", "ADMIN"]),
         user,
         allow_privileged=True,
     )
