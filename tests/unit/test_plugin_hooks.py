@@ -107,8 +107,8 @@ def _minimal_config(
         user_manager_class=PluginUserManager,
         user_db_factory=lambda _session: user_db,
         user_manager_security=UserManagerSecurity[UUID](
-            verification_token_secret="verify-secret-12345678901234567890",
-            reset_password_token_secret="reset-secret-123456789012345678901",
+            verification_token_secret="0123456789abcdef" * 4,
+            reset_password_token_secret="fedcba9876543210" * 4,
             id_parser=UUID,
         ),
         include_users=False,
@@ -318,7 +318,7 @@ def test_register_middleware_without_hook_keeps_default_definition() -> None:
         strategy=cast("Any", InMemoryTokenStrategy(token_prefix="plugin-hooks-cookie")),
     )
     config = _minimal_config(backend=cookie_backend)
-    config.csrf_secret = "c" * 32
+    config.csrf_secret = "0123456789abcdef" * 4
     plugin = LitestarAuth(config)
     app_config = AppConfig()
 

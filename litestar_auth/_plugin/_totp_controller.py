@@ -14,7 +14,7 @@ from litestar_auth._plugin.config import (
 )
 from litestar_auth._plugin.totp_route_handlers import define_plugin_totp_controller_class
 from litestar_auth._totp_enrollment import _resolve_enrollment_token_cipher
-from litestar_auth.config import validate_secret_length
+from litestar_auth.config import validate_production_secret
 from litestar_auth.controllers.totp import (
     _build_totp_controller_context,
     _totp_resolve_enrollment_store,
@@ -130,8 +130,11 @@ def _validate_plugin_totp_controller_settings[UP: UserProtocol[Any], ID](
     settings: _PluginTotpControllerSettings[UP, ID],
 ) -> None:
     """Validate plugin TOTP controller factory settings."""
-    if not settings.unsafe_testing:
-        validate_secret_length(settings.totp_pending_secret, label="totp_pending_secret")
+    validate_production_secret(
+        settings.totp_pending_secret,
+        label="totp_pending_secret",
+        unsafe_testing=settings.unsafe_testing,
+    )
     if not settings.totp_pending_require_client_binding:
         _warn_totp_pending_client_binding_disabled()
     _totp_validate_replay_and_password(

@@ -958,23 +958,24 @@ async def test_refresh_success_returns_rotated_tokens_and_resets_rate_limit() ->
 def test_create_auth_controller_validates_totp_pending_secret_outside_testing(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """The factory validates the TOTP pending secret length unless unsafe testing is enabled."""
+    """The factory validates TOTP pending-secret strength unless unsafe testing is enabled."""
     backend = AuthenticationBackend(
         name="test",
         transport=BearerTransport(),
         strategy=cast("Any", _make_minimal_strategy()),
     )
-    validate_secret_length = MagicMock()
-    monkeypatch.setattr(auth_controller_module, "validate_secret_length", validate_secret_length)
+    validate_production_secret = MagicMock()
+    monkeypatch.setattr(auth_controller_module, "validate_production_secret", validate_production_secret)
 
     create_auth_controller(
         backend=backend,
         totp_pending_secret="pending-secret-for-unit-tests-1234",
     )
 
-    validate_secret_length.assert_called_once_with(
+    validate_production_secret.assert_called_once_with(
         "pending-secret-for-unit-tests-1234",
         label="totp_pending_secret",
+        unsafe_testing=False,
     )
 
 

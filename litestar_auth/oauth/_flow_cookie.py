@@ -9,7 +9,7 @@ from typing import Any, NoReturn
 import msgspec
 from litestar.exceptions import ClientException
 
-from litestar_auth.config import validate_secret_length
+from litestar_auth.config import validate_production_secret
 from litestar_auth.exceptions import ErrorCode
 
 _OAUTH_FLOW_COOKIE_VERSION = "v2"
@@ -51,7 +51,7 @@ class _OAuthFlowCookieCipher:
         Raises:
             ImportError: If the optional OAuth crypto dependency is not installed.
         """
-        validate_secret_length(secret, label="oauth_flow_cookie_secret")
+        validate_production_secret(secret, label="oauth_flow_cookie_secret")
         try:
             from cryptography.fernet import Fernet, InvalidToken  # noqa: PLC0415
             from cryptography.hazmat.primitives import hashes  # noqa: PLC0415

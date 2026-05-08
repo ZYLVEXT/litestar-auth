@@ -11,7 +11,7 @@ from typing import TYPE_CHECKING, Any, Protocol, TypedDict
 
 from litestar_auth._manager.security import validate_user_manager_security_secret_roles_are_distinct
 from litestar_auth._superuser_role import DEFAULT_SUPERUSER_ROLE_NAME
-from litestar_auth.config import _resolve_token_secret, validate_secret_length
+from litestar_auth.config import _resolve_token_secret, validate_production_secret
 from litestar_auth.db.base import BaseOAuthAccountStore
 from litestar_auth.types import LoginIdentifier, UserProtocol
 
@@ -203,14 +203,16 @@ def resolve_secret_inputs[ID](
     )
     resolved_login_identifier_telemetry_secret = resolved_security.login_identifier_telemetry_secret
     if resolved_login_identifier_telemetry_secret is not None and not unsafe_testing:
-        validate_secret_length(
+        validate_production_secret(
             resolved_login_identifier_telemetry_secret,
             label="login_identifier_telemetry_secret",
+            unsafe_testing=unsafe_testing,
         )
     if resolved_security.totp_recovery_code_lookup_secret is not None and not unsafe_testing:
-        validate_secret_length(
+        validate_production_secret(
             resolved_security.totp_recovery_code_lookup_secret,
             label="totp_recovery_code_lookup_secret",
+            unsafe_testing=unsafe_testing,
         )
 
     return ResolvedSecretInputs(

@@ -18,7 +18,7 @@ from litestar_auth.authentication.strategy._opaque_tokens import (
 )
 from litestar_auth.authentication.strategy.base import RefreshableStrategy, Strategy, UserManagerProtocol
 from litestar_auth.authentication.strategy.db_models import AccessToken, DatabaseTokenModels, RefreshToken
-from litestar_auth.config import validate_secret_length
+from litestar_auth.config import validate_production_secret
 from litestar_auth.exceptions import ConfigurationError
 from litestar_auth.types import UserProtocol
 
@@ -114,7 +114,7 @@ class DatabaseTokenStrategy[UP: UserProtocol[Any], ID](Strategy[UP, ID], Refresh
             raise ValueError(msg)
         settings = DatabaseTokenStrategyConfig(**options) if config is None else config
         try:
-            validate_secret_length(settings.token_hash_secret, label="DatabaseTokenStrategy token_hash_secret")
+            validate_production_secret(settings.token_hash_secret, label="DatabaseTokenStrategy token_hash_secret")
         except ConfigurationError as exc:
             raise ConfigurationError(str(exc)) from exc
         validate_token_bytes(settings.token_bytes, label="DatabaseTokenStrategy")

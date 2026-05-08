@@ -281,8 +281,8 @@ def build_app() -> tuple[
         is_verified=True,
     )
     user_db = InMemoryUserDatabase([admin_user, regular_user])
-    verify_secret = "verify-secret-12345678901234567890"
-    reset_secret = "reset-secret-123456789012345678901"
+    verify_secret = "0123456789abcdef" * 4
+    reset_secret = "fedcba9876543210" * 4
     primary_strategy = InMemoryTokenStrategy(token_prefix="primary")
     secondary_strategy = InMemoryTokenStrategy(token_prefix="secondary")
     backends = [
@@ -340,8 +340,8 @@ def build_app_with_security_overrides(
         is_verified=True,
     )
     user_db = InMemoryUserDatabase([admin_user, regular_user])
-    verify_secret = "verify-secret-12345678901234567890"
-    reset_secret = "reset-secret-123456789012345678901"
+    verify_secret = "0123456789abcdef" * 4
+    reset_secret = "fedcba9876543210" * 4
     primary_strategy = InMemoryTokenStrategy(token_prefix="primary")
     secondary_strategy = InMemoryTokenStrategy(token_prefix="secondary")
     backends = [
@@ -443,8 +443,8 @@ def build_advanced_app() -> tuple[
         user_manager_class=PluginUserManager,
         user_db_factory=lambda _session: user_db,
         user_manager_security=UserManagerSecurity[UUID](
-            verification_token_secret="verify-secret-12345678901234567890",
-            reset_password_token_secret="reset-secret-123456789012345678901",
+            verification_token_secret="0123456789abcdef" * 4,
+            reset_password_token_secret="fedcba9876543210" * 4,
             totp_secret_key=Fernet.generate_key().decode(),
             totp_recovery_code_lookup_secret=TOTP_RECOVERY_CODE_LOOKUP_SECRET,
             id_parser=UUID,
@@ -655,8 +655,8 @@ async def test_plugin_passes_advanced_controller_options_through_config(monkeypa
     helper_manager = TokenCaptureUserManager(
         user_db,
         password_helper=PasswordHelper(),
-        verification_token_secret="verify-secret-12345678901234567890",
-        reset_password_token_secret="reset-secret-123456789012345678901",
+        verification_token_secret="0123456789abcdef" * 4,
+        reset_password_token_secret="fedcba9876543210" * 4,
         id_parser=UUID,
     )
 

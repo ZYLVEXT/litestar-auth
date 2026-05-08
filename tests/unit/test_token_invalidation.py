@@ -58,8 +58,8 @@ async def test_manager_reset_password_invalidates_tokens_when_supported() -> Non
         user_db,
         password_helper=password_helper,
         security=UserManagerSecurity[UUID](
-            verification_token_secret="verify-secret-1234567890-1234567890",
-            reset_password_token_secret="reset-secret-1234567890-1234567890",
+            verification_token_secret="0123456789abcdef" * 4,
+            reset_password_token_secret="fedcba9876543210" * 4,
             id_parser=UUID,
         ),
     )
@@ -89,8 +89,8 @@ async def test_manager_update_invalidates_tokens_only_on_email_or_password_chang
         user_db,
         password_helper=password_helper,
         security=UserManagerSecurity[UUID](
-            verification_token_secret="verify-secret-1234567890-1234567890",
-            reset_password_token_secret="reset-secret-1234567890-1234567890",
+            verification_token_secret="0123456789abcdef" * 4,
+            reset_password_token_secret="fedcba9876543210" * 4,
             id_parser=UUID,
         ),
     )

@@ -73,8 +73,8 @@ def _minimal_config(
         user_db_factory=lambda _session: InMemoryUserDatabase([]),
         user_manager_security=user_manager_security
         or UserManagerSecurity[UUID](
-            verification_token_secret="v" * 32,
-            reset_password_token_secret="r" * 32,
+            verification_token_secret="0123456789abcdef" * 4,
+            reset_password_token_secret="fedcba9876543210" * 4,
         ),
         id_parser=id_parser,
         login_identifier=login_identifier,
@@ -109,8 +109,8 @@ def test_default_builder_contract_materializes_canonical_kwargs() -> None:
     totp_keyring = FernetKeyringConfig(active_key_id="current", keys={"current": _generate_fernet_key()})
     config = _minimal_config(
         user_manager_security=UserManagerSecurity[UUID](
-            verification_token_secret="v" * 32,
-            reset_password_token_secret="r" * 32,
+            verification_token_secret="0123456789abcdef" * 4,
+            reset_password_token_secret="fedcba9876543210" * 4,
             totp_secret_keyring=totp_keyring,
         ),
         id_parser=UUID,
@@ -140,8 +140,8 @@ def test_default_builder_contract_materializes_canonical_kwargs() -> None:
     assert kwargs["login_identifier"] == "username"
     assert kwargs["superuser_role_name"] == "superuser"
     assert kwargs["unsafe_testing"] is False
-    assert kwargs["security"].verification_token_secret == "v" * 32
-    assert kwargs["security"].reset_password_token_secret == "r" * 32
+    assert kwargs["security"].verification_token_secret == "0123456789abcdef" * 4
+    assert kwargs["security"].reset_password_token_secret == "fedcba9876543210" * 4
     assert kwargs["security"].totp_secret_keyring is totp_keyring
     assert kwargs["security"].id_parser is UUID
 
@@ -204,8 +204,8 @@ def test_build_user_manager_passes_only_canonical_kwargs() -> None:
     config = _minimal_config(
         user_manager_class=_KwargsWrapperManager,
         user_manager_security=UserManagerSecurity[UUID](
-            verification_token_secret="v" * 32,
-            reset_password_token_secret="r" * 32,
+            verification_token_secret="0123456789abcdef" * 4,
+            reset_password_token_secret="fedcba9876543210" * 4,
             totp_secret_keyring=totp_keyring,
         ),
         id_parser=UUID,

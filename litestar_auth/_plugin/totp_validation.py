@@ -10,7 +10,7 @@ from litestar_auth._plugin.config import (
     _resolve_plugin_managed_totp_secret_storage_policy,
 )
 from litestar_auth._plugin.middleware import get_cookie_transports
-from litestar_auth.config import MINIMUM_SECRET_LENGTH, validate_secret_length
+from litestar_auth.config import MINIMUM_SECRET_LENGTH, validate_production_secret
 from litestar_auth.exceptions import ConfigurationError
 from litestar_auth.totp import SecurityWarning
 
@@ -42,9 +42,10 @@ def _validate_totp_pending_secret_config[UP: UserProtocol[Any], ID](config: Lite
         return
     totp_config = config.totp_config
 
-    validate_secret_length(
+    validate_production_secret(
         totp_config.totp_pending_secret,
         label="totp_pending_secret",
+        unsafe_testing=config.unsafe_testing,
         minimum_length=MINIMUM_SECRET_LENGTH,
     )
     if not getattr(totp_config, "totp_algorithm", None):
@@ -61,12 +62,12 @@ def _validate_totp_pending_secret_config[UP: UserProtocol[Any], ID](config: Lite
     if not lookup_secret:
         msg = "totp_recovery_code_lookup_secret is required when totp_config is set."
         raise ConfigurationError(msg)
-    if not config.unsafe_testing:
-        validate_secret_length(
-            lookup_secret,
-            label="totp_recovery_code_lookup_secret",
-            minimum_length=MINIMUM_SECRET_LENGTH,
-        )
+    validate_production_secret(
+        lookup_secret,
+        label="totp_recovery_code_lookup_secret",
+        unsafe_testing=config.unsafe_testing,
+        minimum_length=MINIMUM_SECRET_LENGTH,
+    )
 
 
 def _validate_totp_encryption_key[UP: UserProtocol[Any], ID](config: LitestarAuthConfig[UP, ID]) -> None:

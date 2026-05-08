@@ -32,8 +32,8 @@ a process-local backend such as `InMemoryRateLimiter`. Use `RedisRateLimiter` or
   `LitestarAuthConfig.user_manager_security`.
 - **JWT signing secret** (or private key) — high entropy; rotation plan.
 - **`verification_token_secret`** and **`reset_password_token_secret`** — configure both through
-  `user_manager_security`; each must satisfy the production minimum enforced by
-  `validate_secret_length` (32+ characters by default).
+  `user_manager_security`; each must satisfy the production strength gate enforced by
+  `validate_production_secret` (32+ characters plus the default entropy floor).
 - **`login_identifier_telemetry_secret`** — optional dedicated key for failed-login
   `identifier_digest` log correlation. Configure it through `user_manager_security` only when you
   want stable cross-request digests; otherwise the digest field is omitted.

@@ -22,7 +22,7 @@ from litestar_auth.authentication.strategy._opaque_tokens import (
     validate_token_bytes,
 )
 from litestar_auth.authentication.strategy.base import Strategy, UserManagerProtocol
-from litestar_auth.config import validate_secret_length
+from litestar_auth.config import validate_production_secret
 from litestar_auth.exceptions import ConfigurationError
 from litestar_auth.ratelimit._helpers import _safe_key_part
 from litestar_auth.types import ID, UP
@@ -105,7 +105,7 @@ class RedisTokenStrategy(Strategy[UP, ID]):
         settings = RedisTokenStrategyConfig(**options) if config is None else config
         _load_redis_asyncio()
         try:
-            validate_secret_length(settings.token_hash_secret, label="RedisTokenStrategy token_hash_secret")
+            validate_production_secret(settings.token_hash_secret, label="RedisTokenStrategy token_hash_secret")
         except ConfigurationError as exc:
             raise ConfigurationError(str(exc)) from exc
         validate_token_bytes(settings.token_bytes, label="RedisTokenStrategy")

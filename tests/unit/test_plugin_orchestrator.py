@@ -78,7 +78,12 @@ if TYPE_CHECKING:
 
 pytestmark = pytest.mark.unit
 OAUTH_FLOW_COOKIE_SECRET = "oauth-flow-cookie-secret-1234567890"
-TOTP_RECOVERY_CODE_LOOKUP_SECRET = "test-recovery-code-lookup-secret-123"
+TOKEN_HASH_SECRET = "0123456789abcdef" * 4
+VERIFICATION_SECRET = "89abcdef01234567" * 4
+RESET_PASSWORD_SECRET = "fedcba9876543210" * 4
+TOTP_PENDING_SECRET = "76543210fedcba98" * 4
+CSRF_SECRET = "456789abcdef0123" * 4
+TOTP_RECOVERY_CODE_LOOKUP_SECRET = "13579bdf02468ace" * 4
 
 
 def _current_startup_backend_template_type() -> type[Any]:
@@ -121,7 +126,7 @@ def _current_jwt_strategy() -> object:
     """Return a JWT strategy instance from the current strategy module."""
     jwt_module = importlib.import_module("litestar_auth.authentication.strategy.jwt")
     strategy_type = cast("type[Any]", jwt_module.JWTStrategy)
-    return strategy_type(secret="a" * 32, algorithm="HS256", allow_inmemory_denylist=True)
+    return strategy_type(secret=TOKEN_HASH_SECRET, algorithm="HS256", allow_inmemory_denylist=True)
 
 
 def _current_inmemory_used_totp_code_store() -> object:
@@ -166,8 +171,8 @@ def _minimal_config(
         user_manager_class=user_manager_class or PluginUserManager,
         user_db_factory=lambda _session: user_db,
         user_manager_security=UserManagerSecurity[UUID](
-            verification_token_secret="verify-secret-12345678901234567890",
-            reset_password_token_secret="reset-secret-123456789012345678901",
+            verification_token_secret=VERIFICATION_SECRET,
+            reset_password_token_secret=RESET_PASSWORD_SECRET,
             id_parser=UUID,
         ),
         include_users=include_users,
@@ -268,7 +273,7 @@ def test_on_app_init_registers_middleware_controllers_dependencies_and_exception
         strategy=cast("Any", InMemoryTokenStrategy(token_prefix="cookie-plugin")),
     )
     config = _minimal_config(backends=[backend], include_users=True)
-    config.csrf_secret = "c" * 32
+    config.csrf_secret = CSRF_SECRET
     plugin = LitestarAuth(config)
     app_config = AppConfig()
 
@@ -311,15 +316,15 @@ def test_on_app_init_bootstraps_bundled_token_models_for_db_token_preset(
     """App init uses the models-layer token bootstrap hook for the canonical DB-token preset."""
     config = LitestarAuthConfig[ExampleUser, UUID](
         database_token_auth=plugin_module._plugin_config.DatabaseTokenAuthConfig(
-            token_hash_secret="a" * 40,
+            token_hash_secret=TOKEN_HASH_SECRET,
         ),
         user_model=ExampleUser,
         user_manager_class=PluginUserManager,
         session_maker=cast("Any", DummySessionMaker()),
         user_db_factory=lambda _session: InMemoryUserDatabase([]),
         user_manager_security=UserManagerSecurity[UUID](
-            verification_token_secret="x" * 32,
-            reset_password_token_secret="y" * 32,
+            verification_token_secret=VERIFICATION_SECRET,
+            reset_password_token_secret=RESET_PASSWORD_SECRET,
         ),
     )
     plugin = LitestarAuth(config)
@@ -382,7 +387,7 @@ def test_bundled_token_bootstrap_detection_skips_custom_token_models() -> None:
 
     custom_strategy = DatabaseTokenStrategy(
         session=cast("Any", object()),
-        token_hash_secret="x" * 40,
+        token_hash_secret=TOKEN_HASH_SECRET,
         token_models=DatabaseTokenModels(
             access_token_model=AppAccessToken,
             refresh_token_model=AppRefreshToken,
@@ -411,7 +416,7 @@ def test_on_app_init_warns_for_explicit_inmemory_jwt_strategy() -> None:
         strategy=cast("Any", _current_jwt_strategy()),
     )
     config = _minimal_config(backends=[backend])
-    config.csrf_secret = "c" * 32
+    config.csrf_secret = CSRF_SECRET
     plugin = LitestarAuth(config)
 
     with pytest.warns(SecurityWarning, match="process-local in-memory denylist"):
@@ -580,7 +585,7 @@ def test_on_app_init_rejects_mismatched_cookie_transport_settings() -> None:
         strategy=cast("Any", InMemoryTokenStrategy(token_prefix="cookie-secondary")),
     )
     config = _minimal_config(backends=[first_backend, second_backend])
-    config.csrf_secret = "c" * 32
+    config.csrf_secret = CSRF_SECRET
     plugin = LitestarAuth(config)
 
     with pytest.raises(ValueError, match="must share path, domain, secure, and samesite"):
@@ -598,7 +603,7 @@ def test_on_app_init_accepts_multiple_matching_cookie_transports() -> None:
         for index in range(3)
     ]
     config = _minimal_config(backends=backends)
-    config.csrf_secret = "c" * 32
+    config.csrf_secret = CSRF_SECRET
     plugin = LitestarAuth(config)
 
     result = plugin.on_app_init(AppConfig())
@@ -726,14 +731,14 @@ def test_on_app_init_warns_security_warning_for_inmemory_totp_used_store(
     """Production startup warns when the TOTP replay store is process-local."""
     config = _minimal_config()
     config.totp_config = TotpConfig(
-        totp_pending_secret="x" * 32,
+        totp_pending_secret=TOTP_PENDING_SECRET,
         totp_pending_jti_store=cast("Any", _current_inmemory_jwt_denylist_store()),
         totp_used_tokens_store=cast("Any", _current_inmemory_used_totp_code_store()),
         totp_enrollment_store=cast("Any", _current_inmemory_totp_enrollment_store()),
     )
     config.user_manager_security = UserManagerSecurity[UUID](
-        verification_token_secret="verify-secret-12345678901234567890",
-        reset_password_token_secret="reset-secret-123456789012345678901",
+        verification_token_secret=VERIFICATION_SECRET,
+        reset_password_token_secret=RESET_PASSWORD_SECRET,
         totp_secret_key=Fernet.generate_key().decode(),
         totp_recovery_code_lookup_secret=TOTP_RECOVERY_CODE_LOOKUP_SECRET,
         id_parser=UUID,
@@ -763,7 +768,7 @@ def test_warn_insecure_plugin_startup_defaults_ignores_reload_stale_inmemory_tot
     )()
     config = _minimal_config()
     config.totp_config = TotpConfig(
-        totp_pending_secret="x" * 32,
+        totp_pending_secret=TOTP_PENDING_SECRET,
         totp_pending_jti_store=cast("Any", stale_pending_jti_store),
         totp_used_tokens_store=cast("Any", stale_used_store),
         totp_enrollment_store=cast("Any", stale_enrollment_store),
@@ -816,7 +821,7 @@ def test_on_app_init_testing_recipe_suppresses_single_process_security_warnings(
         ],
     )
     config.unsafe_testing = True
-    config.csrf_secret = "c" * 32
+    config.csrf_secret = CSRF_SECRET
     config.oauth_config = OAuthConfig(
         oauth_providers=[_oauth_provider(name="github", client=object())],
         oauth_redirect_base_url="https://app.example.com/auth",
@@ -830,14 +835,14 @@ def test_on_app_init_testing_recipe_suppresses_single_process_security_warnings(
         ),
     )
     config.totp_config = TotpConfig(
-        totp_pending_secret="x" * 32,
+        totp_pending_secret=TOTP_PENDING_SECRET,
         totp_pending_jti_store=cast("Any", _current_inmemory_jwt_denylist_store()),
         totp_used_tokens_store=InMemoryUsedTotpCodeStore(),
         totp_enrollment_store=InMemoryTotpEnrollmentStore(),
     )
     config.user_manager_security = UserManagerSecurity[UUID](
-        verification_token_secret="verify-secret-12345678901234567890",
-        reset_password_token_secret="reset-secret-123456789012345678901",
+        verification_token_secret=VERIFICATION_SECRET,
+        reset_password_token_secret=RESET_PASSWORD_SECRET,
         totp_secret_key=Fernet.generate_key().decode(),
         totp_recovery_code_lookup_secret=TOTP_RECOVERY_CODE_LOOKUP_SECRET,
         id_parser=UUID,
@@ -1139,8 +1144,8 @@ def test_build_user_manager_passes_typed_security_to_security_only_manager() -> 
         user_manager_class=_SecurityOnlyManager,
         user_db_factory=lambda _session: InMemoryUserDatabase([]),
         user_manager_security=UserManagerSecurity[UUID](
-            verification_token_secret="verify-secret-12345678901234567890",
-            reset_password_token_secret="reset-secret-123456789012345678901",
+            verification_token_secret=VERIFICATION_SECRET,
+            reset_password_token_secret=RESET_PASSWORD_SECRET,
             password_helper=PasswordHelper(),
         ),
         id_parser=UUID,
@@ -1152,8 +1157,8 @@ def test_build_user_manager_passes_typed_security_to_security_only_manager() -> 
     manager = plugin._build_user_manager(cast("Any", session))
     typed_manager = cast("Any", manager)
 
-    assert typed_manager.received_security.verification_token_secret == "verify-secret-12345678901234567890"
-    assert typed_manager.received_security.reset_password_token_secret == "reset-secret-123456789012345678901"
+    assert typed_manager.received_security.verification_token_secret == VERIFICATION_SECRET
+    assert typed_manager.received_security.reset_password_token_secret == RESET_PASSWORD_SECRET
     assert typed_manager.received_security.id_parser is UUID
     assert manager.id_parser is UUID
     assert manager.login_identifier == "username"
@@ -1253,8 +1258,8 @@ async def test_session_bound_user_manager_update_triggers_strategy_invalidation_
         session_maker=cast("Any", DummySessionMaker()),
         user_db_factory=lambda _session: user_db,
         user_manager_security=UserManagerSecurity[UUID](
-            verification_token_secret="x" * 32,
-            reset_password_token_secret="y" * 32,
+            verification_token_secret=VERIFICATION_SECRET,
+            reset_password_token_secret=RESET_PASSWORD_SECRET,
         ),
     )
     plugin = LitestarAuth(config)
@@ -1322,13 +1327,13 @@ def test_session_bound_backends_rebinds_database_token_backends_in_order_and_pre
         transport=BearerTransport(),
         strategy=database_token_strategy_type(
             session=cast("Any", object()),
-            token_hash_secret="a" * 40,
+            token_hash_secret=TOKEN_HASH_SECRET,
             max_age=timedelta(minutes=10),
         ),
     )
     second_strategy = database_token_strategy_type(
         session=cast("Any", object()),
-        token_hash_secret="b" * 40,
+        token_hash_secret=TOKEN_HASH_SECRET,
         refresh_max_age=timedelta(days=14),
     )
     second_backend = authentication_backend_type(
@@ -1360,7 +1365,7 @@ def test_session_bound_backends_realizes_database_token_preset_from_request_sess
     """The DB bearer preset resolves request-scoped backends without a startup session template."""
     config = LitestarAuthConfig[ExampleUser, UUID](
         database_token_auth=plugin_module._plugin_config.DatabaseTokenAuthConfig(
-            token_hash_secret="a" * 40,
+            token_hash_secret=TOKEN_HASH_SECRET,
             max_age=timedelta(minutes=10),
             refresh_max_age=timedelta(days=14),
         ),
@@ -1369,8 +1374,8 @@ def test_session_bound_backends_realizes_database_token_preset_from_request_sess
         session_maker=cast("Any", DummySessionMaker()),
         user_db_factory=lambda _session: InMemoryUserDatabase([]),
         user_manager_security=UserManagerSecurity[UUID](
-            verification_token_secret="x" * 32,
-            reset_password_token_secret="y" * 32,
+            verification_token_secret=VERIFICATION_SECRET,
+            reset_password_token_secret=RESET_PASSWORD_SECRET,
         ),
         enable_refresh=True,
     )
@@ -1531,7 +1536,7 @@ def test_provider_helpers_return_startup_templates_for_database_token_preset() -
     """Provider helpers expose startup-only templates for the canonical DB-token preset."""
     config = LitestarAuthConfig[ExampleUser, UUID](
         database_token_auth=plugin_module._plugin_config.DatabaseTokenAuthConfig(
-            token_hash_secret="a" * 40,
+            token_hash_secret=TOKEN_HASH_SECRET,
             backend_name="opaque-db",
         ),
         user_model=ExampleUser,
@@ -1539,8 +1544,8 @@ def test_provider_helpers_return_startup_templates_for_database_token_preset() -
         session_maker=cast("Any", DummySessionMaker()),
         user_db_factory=lambda _session: InMemoryUserDatabase([]),
         user_manager_security=UserManagerSecurity[UUID](
-            verification_token_secret="x" * 32,
-            reset_password_token_secret="y" * 32,
+            verification_token_secret=VERIFICATION_SECRET,
+            reset_password_token_secret=RESET_PASSWORD_SECRET,
         ),
     )
     plugin = LitestarAuth(config)
@@ -1643,7 +1648,7 @@ def test_provide_request_backends_realizes_database_token_preset_from_request_se
     """Preset backends DI returns a backend bound to the active request-local session."""
     config = LitestarAuthConfig[ExampleUser, UUID](
         database_token_auth=plugin_module._plugin_config.DatabaseTokenAuthConfig(
-            token_hash_secret="a" * 40,
+            token_hash_secret=TOKEN_HASH_SECRET,
             max_age=timedelta(minutes=10),
             refresh_max_age=timedelta(days=14),
         ),
@@ -1652,8 +1657,8 @@ def test_provide_request_backends_realizes_database_token_preset_from_request_se
         session_maker=cast("Any", DummySessionMaker()),
         user_db_factory=lambda _session: InMemoryUserDatabase([]),
         user_manager_security=UserManagerSecurity[UUID](
-            verification_token_secret="x" * 32,
-            reset_password_token_secret="y" * 32,
+            verification_token_secret=VERIFICATION_SECRET,
+            reset_password_token_secret=RESET_PASSWORD_SECRET,
         ),
         enable_refresh=True,
     )
@@ -1722,7 +1727,7 @@ def test_totp_backend_returns_configured_named_backend() -> None:
         ),
     )
     plugin.config.totp_config = TotpConfig(
-        totp_pending_secret="p" * 32,
+        totp_pending_secret=TOTP_PENDING_SECRET,
         totp_backend_name="secondary",
         totp_pending_jti_store=cast("Any", _current_inmemory_jwt_denylist_store()),
         totp_enrollment_store=InMemoryTotpEnrollmentStore(),

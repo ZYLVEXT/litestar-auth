@@ -39,8 +39,8 @@ def _make_config(
         A config that exercises the current typed password-helper contract.
     """
     security = user_manager_security or UserManagerSecurity[UUID](
-        verification_token_secret="x" * 32,
-        reset_password_token_secret="y" * 32,
+        verification_token_secret="0123456789abcdef" * 4,
+        reset_password_token_secret="fedcba9876543210" * 4,
     )
     backend = AuthenticationBackend[ExampleUser, UUID](
         name="primary",
@@ -78,8 +78,8 @@ def test_resolve_password_helper_uses_typed_security_helper() -> None:
     explicit_password_helper = PasswordHelper()
     config = _make_config(
         user_manager_security=UserManagerSecurity[UUID](
-            verification_token_secret="x" * 32,
-            reset_password_token_secret="y" * 32,
+            verification_token_secret="0123456789abcdef" * 4,
+            reset_password_token_secret="fedcba9876543210" * 4,
             password_helper=explicit_password_helper,
         ),
     )

@@ -119,8 +119,8 @@ def _build_manager(
         user_db,
         password_helper=password_helper,
         security=UserManagerSecurity[UUID](
-            verification_token_secret="verify-secret-1234567890-1234567890",
-            reset_password_token_secret="reset-secret-1234567890-1234567890",
+            verification_token_secret="0123456789abcdef" * 4,
+            reset_password_token_secret="fedcba9876543210" * 4,
             totp_secret_key=totp_secret_key,
             totp_recovery_code_lookup_secret=TOTP_RECOVERY_CODE_LOOKUP_SECRET,
             id_parser=UUID,
@@ -146,8 +146,8 @@ def _build_app() -> tuple[Litestar, InMemoryUserDatabase]:
         user_db,
         password_helper=password_helper,
         security=UserManagerSecurity[UUID](
-            verification_token_secret="verify-secret-1234567890-1234567890",
-            reset_password_token_secret="reset-secret-1234567890-1234567890",
+            verification_token_secret="0123456789abcdef" * 4,
+            reset_password_token_secret="fedcba9876543210" * 4,
             totp_secret_key=TOTP_SECRET_KEY,
             totp_recovery_code_lookup_secret=TOTP_RECOVERY_CODE_LOOKUP_SECRET,
             id_parser=UUID,

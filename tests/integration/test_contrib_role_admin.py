@@ -399,8 +399,8 @@ def app() -> Iterator[tuple[Litestar, Engine, LitestarAuthConfig[User, UUID]]]:
         user_model=User,
         user_manager_class=RoleAdminTestUserManager,
         user_manager_security=UserManagerSecurity[UUID](
-            verification_token_secret="verify-secret-12345678901234567890",
-            reset_password_token_secret="reset-secret-123456789012345678901",
+            verification_token_secret="0123456789abcdef" * 4,
+            reset_password_token_secret="fedcba9876543210" * 4,
             id_parser=UUID,
             password_helper=password_helper,
         ),
@@ -470,8 +470,8 @@ def integer_role_admin_app() -> Iterator[tuple[Litestar, Engine]]:
         user_model=IntegerRoleAdminUser,
         user_manager_class=IntegerRoleAdminTestUserManager,
         user_manager_security=UserManagerSecurity[int](
-            verification_token_secret="integer-verify-secret-12345678901234567890",
-            reset_password_token_secret="integer-reset-secret-123456789012345678901",
+            verification_token_secret="0123456789abcdef" * 4,
+            reset_password_token_secret="fedcba9876543210" * 4,
             id_parser=int,
             password_helper=PasswordHelper(),
         ),

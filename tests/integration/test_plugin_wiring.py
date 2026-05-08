@@ -115,8 +115,8 @@ def _minimal_litestar_auth_config(
         user_manager_class=PluginUserManager,
         user_db_factory=lambda _session: user_db,
         user_manager_security=UserManagerSecurity[UUID](
-            verification_token_secret="verify-secret-12345678901234567890",
-            reset_password_token_secret="reset-secret-123456789012345678901",
+            verification_token_secret="0123456789abcdef" * 4,
+            reset_password_token_secret="fedcba9876543210" * 4,
             id_parser=UUID,
         ),
         include_users=False,
@@ -161,7 +161,7 @@ def test_cookie_transport_registers_litestar_csrf_config() -> None:
         strategy=cast("Any", InMemoryTokenStrategy(token_prefix="csrf-wiring")),
     )
     config = _minimal_litestar_auth_config(backends=[backend])
-    config.csrf_secret = "c" * 32
+    config.csrf_secret = "0123456789abcdef" * 4
     plugin = LitestarAuth(config)
     app_config = AppConfig()
 
@@ -235,8 +235,8 @@ async def test_plugin_propagates_login_identifier_username_to_auth_login() -> No
         user_manager_class=PluginUserManager,
         user_db_factory=lambda _session: user_db,
         user_manager_security=UserManagerSecurity[UUID](
-            verification_token_secret="verify-secret-12345678901234567890",
-            reset_password_token_secret="reset-secret-123456789012345678901",
+            verification_token_secret="0123456789abcdef" * 4,
+            reset_password_token_secret="fedcba9876543210" * 4,
             id_parser=UUID,
             password_helper=password_helper,
         ),
@@ -592,8 +592,8 @@ async def test_plugin_respects_public_mount_paths_and_dependency_keys() -> None:
         user_manager_class=PluginUserManager,
         user_db_factory=lambda _session: user_db,
         user_manager_security=UserManagerSecurity[UUID](
-            verification_token_secret="verify-secret-12345678901234567890",
-            reset_password_token_secret="reset-secret-123456789012345678901",
+            verification_token_secret="0123456789abcdef" * 4,
+            reset_password_token_secret="fedcba9876543210" * 4,
             id_parser=UUID,
             password_helper=password_helper,
         ),
@@ -742,8 +742,8 @@ def test_totp_backend_resolves_named_backend() -> None:
         totp_enrollment_store=InMemoryTotpEnrollmentStore(),
     )
     config.user_manager_security = UserManagerSecurity[UUID](
-        verification_token_secret="verify-secret-12345678901234567890",
-        reset_password_token_secret="reset-secret-123456789012345678901",
+        verification_token_secret="0123456789abcdef" * 4,
+        reset_password_token_secret="fedcba9876543210" * 4,
         totp_secret_key=Fernet.generate_key().decode(),
         totp_recovery_code_lookup_secret=TOTP_RECOVERY_CODE_LOOKUP_SECRET,
         id_parser=UUID,
@@ -774,8 +774,8 @@ def test_totp_backend_unknown_name_raises_value_error() -> None:
         totp_enrollment_store=InMemoryTotpEnrollmentStore(),
     )
     config.user_manager_security = UserManagerSecurity[UUID](
-        verification_token_secret="verify-secret-12345678901234567890",
-        reset_password_token_secret="reset-secret-123456789012345678901",
+        verification_token_secret="0123456789abcdef" * 4,
+        reset_password_token_secret="fedcba9876543210" * 4,
         totp_secret_key=Fernet.generate_key().decode(),
         totp_recovery_code_lookup_secret=TOTP_RECOVERY_CODE_LOOKUP_SECRET,
         id_parser=UUID,
@@ -827,8 +827,8 @@ def test_plugin_totp_routes_include_recovery_code_regeneration() -> None:
         totp_enrollment_store=InMemoryTotpEnrollmentStore(),
     )
     config.user_manager_security = UserManagerSecurity[UUID](
-        verification_token_secret="verify-secret-12345678901234567890",
-        reset_password_token_secret="reset-secret-123456789012345678901",
+        verification_token_secret="0123456789abcdef" * 4,
+        reset_password_token_secret="fedcba9876543210" * 4,
         totp_secret_key=Fernet.generate_key().decode(),
         totp_recovery_code_lookup_secret=TOTP_RECOVERY_CODE_LOOKUP_SECRET,
         id_parser=UUID,
@@ -845,7 +845,7 @@ def test_database_token_preset_mounts_primary_auth_routes_without_startup_sessio
     session_maker = assert_structural_session_factory(DummySessionMaker())
     config = LitestarAuthConfig[ExampleUser, UUID](
         database_token_auth=DatabaseTokenAuthConfig(
-            token_hash_secret="x" * 40,
+            token_hash_secret="0123456789abcdef" * 4,
             backend_name="opaque-db",
         ),
         user_model=ExampleUser,
@@ -853,8 +853,8 @@ def test_database_token_preset_mounts_primary_auth_routes_without_startup_sessio
         session_maker=cast("Any", session_maker),
         user_db_factory=lambda _session: InMemoryUserDatabase([]),
         user_manager_security=UserManagerSecurity[UUID](
-            verification_token_secret="verify-secret-12345678901234567890",
-            reset_password_token_secret="reset-secret-123456789012345678901",
+            verification_token_secret="0123456789abcdef" * 4,
+            reset_password_token_secret="fedcba9876543210" * 4,
             id_parser=UUID,
         ),
         enable_refresh=True,
@@ -897,7 +897,7 @@ async def test_database_token_preset_backends_dependency_uses_request_session() 
         session_maker = assert_structural_session_factory(E2ESessionMaker(engine))
         config = LitestarAuthConfig[ExampleUser, UUID](
             database_token_auth=DatabaseTokenAuthConfig(
-                token_hash_secret="x" * 40,
+                token_hash_secret="0123456789abcdef" * 4,
                 backend_name="opaque-db",
             ),
             user_model=ExampleUser,
@@ -905,8 +905,8 @@ async def test_database_token_preset_backends_dependency_uses_request_session() 
             session_maker=session_maker,
             user_db_factory=lambda _session: InMemoryUserDatabase([]),
             user_manager_security=UserManagerSecurity[UUID](
-                verification_token_secret="verify-secret-12345678901234567890",
-                reset_password_token_secret="reset-secret-123456789012345678901",
+                verification_token_secret="0123456789abcdef" * 4,
+                reset_password_token_secret="fedcba9876543210" * 4,
                 id_parser=UUID,
             ),
             enable_refresh=True,
@@ -955,7 +955,7 @@ async def test_database_token_preset_accepts_advanced_alchemy_session_maker() ->
 
         config = LitestarAuthConfig[ExampleUser, UUID](
             database_token_auth=DatabaseTokenAuthConfig(
-                token_hash_secret="x" * 40,
+                token_hash_secret="0123456789abcdef" * 4,
                 backend_name="opaque-db",
             ),
             user_model=ExampleUser,
@@ -963,8 +963,8 @@ async def test_database_token_preset_accepts_advanced_alchemy_session_maker() ->
             session_maker=session_maker,
             user_db_factory=lambda _session: InMemoryUserDatabase([]),
             user_manager_security=UserManagerSecurity[UUID](
-                verification_token_secret="verify-secret-12345678901234567890",
-                reset_password_token_secret="reset-secret-123456789012345678901",
+                verification_token_secret="0123456789abcdef" * 4,
+                reset_password_token_secret="fedcba9876543210" * 4,
                 id_parser=UUID,
             ),
             enable_refresh=True,

@@ -23,9 +23,9 @@ from litestar_auth.exceptions import ConfigurationError
 from tests._helpers import ExampleUser
 
 pytestmark = pytest.mark.unit
-DEFAULT_SECRET = "a" * 32
+DEFAULT_SECRET = "0123456789abcdef" * 4
 REDIS_TOKEN_HASH_SECRET = "redis-token-hash-secret-1234567890"
-HS512_SECRET = "b" * 64
+HS512_SECRET = "fedcba9876543210" * 4
 JTI_HEX_LENGTH = 32
 
 
@@ -325,6 +325,12 @@ def test_validate_secret_length_raises_for_short_secret() -> None:
         validate_secret_length("short", label="test secret", minimum_length=10)
 
 
+def test_jwt_strategy_rejects_low_entropy_hmac_secret() -> None:
+    """JWTStrategy rejects repeated production HMAC secrets even when long enough."""
+    with pytest.raises(ConfigurationError, match="insufficient entropy"):
+        JWTStrategy(secret="a" * 32, allow_inmemory_denylist=True)
+
+
 def test_database_token_strategy_re_raises_secret_validation_error() -> None:
     """DatabaseTokenStrategy re-raises secret validation failures as ConfigurationError."""
     with pytest.raises(ConfigurationError, match="DatabaseTokenStrategy token_hash_secret"):
@@ -336,7 +342,7 @@ def test_database_token_strategy_rejects_token_bytes_below_minimum() -> None:
     with pytest.raises(ConfigurationError, match="DatabaseTokenStrategy token_bytes=8 is below the minimum of 16"):
         DatabaseTokenStrategy(
             session=_as_any(object()),
-            token_hash_secret="x" * 40,
+            token_hash_secret=DEFAULT_SECRET,
             token_bytes=8,
         )
 
@@ -345,9 +351,9 @@ def test_database_token_strategy_rejects_config_combined_with_keyword_options() 
     """DatabaseTokenStrategy accepts either a config object or keyword options."""
     with pytest.raises(ValueError, match="DatabaseTokenStrategyConfig or keyword options"):
         DatabaseTokenStrategy(
-            config=DatabaseTokenStrategyConfig(session=cast("Any", object()), token_hash_secret="x" * 40),
+            config=DatabaseTokenStrategyConfig(session=cast("Any", object()), token_hash_secret=DEFAULT_SECRET),
             session=cast("Any", object()),
-            token_hash_secret="y" * 40,
+            token_hash_secret="fedcba9876543210" * 4,
         )
 
 

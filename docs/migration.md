@@ -219,8 +219,8 @@ active hash.
 
 Migration steps:
 
-1. Add a distinct 32+ character
-   `UserManagerSecurity.totp_recovery_code_lookup_secret`.
+1. Add a distinct CSPRNG-generated
+   `UserManagerSecurity.totp_recovery_code_lookup_secret` that clears the production secret-strength gate.
 2. Run your application migration to remove or null `recovery_codes_hashes` and
    add nullable JSON `recovery_codes`.
 3. Deploy the library/application change.

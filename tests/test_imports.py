@@ -374,20 +374,20 @@ def test_root_package_exports_canonical_database_token_preset_entrypoint() -> No
     """The root package exposes the documented DB bearer preset entrypoint."""
     session_maker = _RootImportCoverageSessionFactory()
     config = LitestarAuthConfig[ExampleUser, UUID](
-        database_token_auth=DatabaseTokenAuthConfig(token_hash_secret="x" * 40),
+        database_token_auth=DatabaseTokenAuthConfig(token_hash_secret="0123456789abcdef" * 4),
         user_model=ExampleUser,
         user_manager_class=_RootImportCoverageUserManager,
         session_maker=session_maker,
         user_db_factory=lambda _session: cast("Any", object()),
         user_manager_security=UserManagerSecurity[UUID](
-            verification_token_secret="x" * 32,
-            reset_password_token_secret="y" * 32,
+            verification_token_secret="0123456789abcdef" * 4,
+            reset_password_token_secret="fedcba9876543210" * 4,
         ),
     )
 
     preset = config.database_token_auth
     assert preset is not None
-    assert preset.token_hash_secret == "x" * 40
+    assert preset.token_hash_secret == "0123456789abcdef" * 4
     assert config.session_maker is session_maker
 
     backend = config.resolve_startup_backends()[0]
@@ -831,7 +831,7 @@ async def test_root_package_supports_documented_redis_migration_recipe_and_totp_
     enrollment_store = RedisTotpEnrollmentStore(redis=totp_redis)
     pending_jti_store = RedisJWTDenylistStore(redis=totp_redis)
     totp_config = TotpConfig(
-        totp_pending_secret="p" * 32,
+        totp_pending_secret="76543210fedcba98" * 4,
         totp_pending_jti_store=pending_jti_store,
         totp_used_tokens_store=used_tokens_store,
         totp_enrollment_store=enrollment_store,
@@ -945,7 +945,7 @@ async def test_contrib_redis_preset_supports_documented_shared_client_recipe(
     pending_jti_store = preset.build_totp_pending_jti_store()
     enrollment_store = preset.build_totp_enrollment_store()
     totp_config = TotpConfig(
-        totp_pending_secret="p" * 32,
+        totp_pending_secret="76543210fedcba98" * 4,
         totp_pending_jti_store=pending_jti_store,
         totp_used_tokens_store=used_tokens_store,
         totp_enrollment_store=enrollment_store,

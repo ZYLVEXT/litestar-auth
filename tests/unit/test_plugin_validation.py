@@ -86,10 +86,13 @@ if TYPE_CHECKING:
 pytestmark = pytest.mark.unit
 OAUTH_FLOW_COOKIE_SECRET = "oauth-flow-cookie-secret-1234567890"
 
-JWT_SECRET = "s" * 32
-TOKEN_HASH_SECRET = "t" * 32
-TOTP_SECRET_KEY = "u" * 32
-TOTP_RECOVERY_CODE_LOOKUP_SECRET = "lookup-secret-for-recovery-codes"
+JWT_SECRET = "0123456789abcdef" * 4
+TOKEN_HASH_SECRET = "fedcba9876543210" * 4
+VERIFICATION_SECRET = "89abcdef01234567" * 4
+RESET_PASSWORD_SECRET = "76543210fedcba98" * 4
+TOTP_SECRET_KEY = "456789abcdef0123" * 4
+TOTP_PENDING_SECRET = "3210fedcba987654" * 4
+TOTP_RECOVERY_CODE_LOOKUP_SECRET = "13579bdf02468ace" * 4
 
 
 def _fernet_key() -> str:
@@ -175,7 +178,7 @@ class _DurableEnrollmentStore:
 
 def _configured_totp_config(
     *,
-    totp_pending_secret: str = "p" * 32,
+    totp_pending_secret: str = TOTP_PENDING_SECRET,
     totp_algorithm: str = "SHA256",
     totp_used_tokens_store: object | None = None,
     totp_require_replay_protection: bool = True,
@@ -300,8 +303,8 @@ def _build_direct_manager(*, totp_secret_key: str | None = None) -> BaseUserMana
         InMemoryUserDatabase([]),
         password_helper=PasswordHelper(),
         security=UserManagerSecurity[UUID](
-            verification_token_secret="v" * 32,
-            reset_password_token_secret="r" * 32,
+            verification_token_secret=VERIFICATION_SECRET,
+            reset_password_token_secret=RESET_PASSWORD_SECRET,
             totp_secret_key=totp_secret_key,
             id_parser=UUID,
         ),
@@ -310,7 +313,7 @@ def _build_direct_manager(*, totp_secret_key: str | None = None) -> BaseUserMana
 
 def test_resolve_plugin_managed_totp_secret_storage_policy_matches_missing_key_posture() -> None:
     """Plugin-owned TOTP wiring reuses the same direct-manager missing-key posture contract."""
-    config = _minimal_config(totp_config=TotpConfig(totp_pending_secret="p" * 32))
+    config = _minimal_config(totp_config=TotpConfig(totp_pending_secret=TOTP_PENDING_SECRET))
     posture = _build_direct_manager().totp_secret_storage_posture
 
     notice = plugin_config_module._resolve_plugin_managed_totp_secret_storage_policy(config)
@@ -333,7 +336,7 @@ def test_resolve_plugin_managed_totp_secret_storage_policy_returns_none_without_
 def test_resolve_plugin_managed_totp_secret_storage_policy_skips_factory_owned_wiring() -> None:
     """Custom manager factories can own TOTP-secret storage without plugin validation interference."""
     config = _minimal_config(
-        totp_config=TotpConfig(totp_pending_secret="p" * 32),
+        totp_config=TotpConfig(totp_pending_secret=TOTP_PENDING_SECRET),
         user_manager_security=None,
     )
     config.user_manager_security = None
@@ -495,7 +498,7 @@ def test_warn_insecure_plugin_startup_defaults_emits_all_expected_security_warni
         ),
         rate_limit_config=_rate_limit_config(backend=InMemoryRateLimiter(max_attempts=5, window_seconds=60)),
         totp_config=TotpConfig(
-            totp_pending_secret="p" * 32,
+            totp_pending_secret=TOTP_PENDING_SECRET,
             totp_pending_jti_store=cast("Any", _current_inmemory_jwt_denylist_store()),
             totp_enrollment_store=cast("Any", _current_inmemory_totp_enrollment_store()),
             totp_used_tokens_store=cast("Any", _current_inmemory_used_totp_code_store()),
@@ -628,7 +631,7 @@ def test_warn_insecure_plugin_startup_defaults_is_silent_in_testing(
         ),
         rate_limit_config=_rate_limit_config(backend=InMemoryRateLimiter(max_attempts=5, window_seconds=60)),
         totp_config=TotpConfig(
-            totp_pending_secret="p" * 32,
+            totp_pending_secret=TOTP_PENDING_SECRET,
             totp_pending_jti_store=cast("Any", _current_inmemory_jwt_denylist_store()),
             totp_used_tokens_store=cast("Any", InMemoryUsedTotpCodeStore()),
         ),
@@ -662,7 +665,7 @@ def test_warn_insecure_plugin_startup_defaults_is_silent_for_safe_production_con
             totp_used_tokens_store=cast("Any", object()),
         ),
     )
-    config.csrf_secret = "c" * 32
+    config.csrf_secret = JWT_SECRET
     config.enable_refresh = True
 
     with warnings.catch_warnings(record=True) as records:
@@ -677,7 +680,7 @@ def test_warn_insecure_plugin_startup_defaults_warns_for_missing_refresh_cookie_
 ) -> None:
     """Refresh-cookie startup warnings stay with the startup helper owner."""
     config = _minimal_config(backends=[_cookie_backend()])
-    config.csrf_secret = "c" * 32
+    config.csrf_secret = JWT_SECRET
     config.enable_refresh = True
 
     with pytest.warns(startup_module.SecurityWarning, match="refresh_max_age is not set"):
@@ -689,7 +692,7 @@ def test_warn_insecure_plugin_startup_defaults_skips_refresh_warning_when_cookie
 ) -> None:
     """Explicit refresh-cookie lifetimes suppress the startup helper warning."""
     config = _minimal_config(backends=[_cookie_backend(refresh_max_age=604800)])
-    config.csrf_secret = "c" * 32
+    config.csrf_secret = JWT_SECRET
     config.enable_refresh = True
 
     with warnings.catch_warnings(record=True) as records:
@@ -704,7 +707,7 @@ def test_warn_insecure_plugin_startup_defaults_skips_refresh_warning_when_refres
 ) -> None:
     """Disable-refresh configs do not warn about refresh-cookie max age."""
     config = _minimal_config(backends=[_cookie_backend()])
-    config.csrf_secret = "c" * 32
+    config.csrf_secret = JWT_SECRET
     config.enable_refresh = False
 
     with warnings.catch_warnings(record=True) as records:
@@ -1193,8 +1196,8 @@ def test_validate_config_rejects_non_canonical_default_user_manager_constructor(
                 cast("Any", user_db),
                 password_helper=password_helper,
                 security=UserManagerSecurity[UUID](
-                    verification_token_secret="v" * 32,
-                    reset_password_token_secret="r" * 32,
+                    verification_token_secret=VERIFICATION_SECRET,
+                    reset_password_token_secret=RESET_PASSWORD_SECRET,
                 ),
                 password_validator=cast("Any", password_validator),
                 backends=backends,
@@ -1604,7 +1607,10 @@ def test_validate_totp_pending_secret_config_rejects_unsupported_algorithm() -> 
 def test_validate_totp_pending_secret_config_requires_algorithm() -> None:
     """A configured TOTP block still needs an explicit algorithm."""
     config = _minimal_config()
-    config.totp_config = cast("Any", type("Config", (), {"totp_pending_secret": "p" * 32, "totp_algorithm": ""})())
+    config.totp_config = cast(
+        "Any",
+        type("Config", (), {"totp_pending_secret": "0123456789abcdef" * 4, "totp_algorithm": ""})(),
+    )
 
     with pytest.raises(ValueError, match="totp_algorithm must be configured"):
         _validate_totp_pending_secret_config(config)
@@ -1630,8 +1636,8 @@ def test_validate_totp_pending_secret_config_requires_recovery_code_lookup_secre
     config = _minimal_config(
         totp_config=_configured_totp_config(),
         user_manager_security=UserManagerSecurity[UUID](
-            verification_token_secret="v" * 32,
-            reset_password_token_secret="r" * 32,
+            verification_token_secret=VERIFICATION_SECRET,
+            reset_password_token_secret=RESET_PASSWORD_SECRET,
         ),
     )
 
@@ -1660,8 +1666,8 @@ def test_validate_config_rejects_totp_enabled_user_model_without_totp_fields() -
     config = _minimal_config(
         totp_config=_configured_totp_config(totp_used_tokens_store=cast("Any", InMemoryUsedTotpCodeStore())),
         user_manager_security=UserManagerSecurity[UUID](
-            verification_token_secret="v" * 32,
-            reset_password_token_secret="r" * 32,
+            verification_token_secret=VERIFICATION_SECRET,
+            reset_password_token_secret=RESET_PASSWORD_SECRET,
             totp_secret_key=TOTP_SECRET_KEY,
             totp_recovery_code_lookup_secret=TOTP_RECOVERY_CODE_LOOKUP_SECRET,
             id_parser=UUID,
@@ -1697,7 +1703,7 @@ def test_validate_totp_encryption_key_requires_secret_in_production(
 ) -> None:
     """Production TOTP validation requires an at-rest encryption key."""
     del monkeypatch
-    config = _minimal_config(totp_config=TotpConfig(totp_pending_secret="p" * 32))
+    config = _minimal_config(totp_config=TotpConfig(totp_pending_secret=TOTP_PENDING_SECRET))
 
     with pytest.raises(
         validation_module.ConfigurationError,
@@ -1717,10 +1723,10 @@ def test_validate_totp_encryption_key_allows_configured_secret_in_production(
 ) -> None:
     """Providing the encryption key satisfies the production-only TOTP requirement."""
     config = _minimal_config(
-        totp_config=TotpConfig(totp_pending_secret="p" * 32),
+        totp_config=TotpConfig(totp_pending_secret=TOTP_PENDING_SECRET),
         user_manager_security=UserManagerSecurity[UUID](
-            verification_token_secret="v" * 32,
-            reset_password_token_secret="r" * 32,
+            verification_token_secret=VERIFICATION_SECRET,
+            reset_password_token_secret=RESET_PASSWORD_SECRET,
             totp_secret_key=TOTP_SECRET_KEY,
             totp_recovery_code_lookup_secret=TOTP_RECOVERY_CODE_LOOKUP_SECRET,
         ),
@@ -1733,10 +1739,10 @@ def test_validate_totp_encryption_key_allows_configured_keyring_in_production() 
     """Providing a TOTP Fernet keyring satisfies the production encryption requirement."""
     keyring = FernetKeyringConfig(active_key_id="current", keys={"current": _fernet_key(), "old": _fernet_key()})
     config = _minimal_config(
-        totp_config=TotpConfig(totp_pending_secret="p" * 32),
+        totp_config=TotpConfig(totp_pending_secret=TOTP_PENDING_SECRET),
         user_manager_security=UserManagerSecurity[UUID](
-            verification_token_secret="v" * 32,
-            reset_password_token_secret="r" * 32,
+            verification_token_secret=VERIFICATION_SECRET,
+            reset_password_token_secret=RESET_PASSWORD_SECRET,
             totp_secret_keyring=keyring,
         ),
     )
@@ -1749,7 +1755,7 @@ def test_validate_totp_encryption_key_allows_typed_security_secret_in_production
 ) -> None:
     """The canonical typed security bundle satisfies the production TOTP requirement."""
     config = _minimal_config(
-        totp_config=TotpConfig(totp_pending_secret="p" * 32),
+        totp_config=TotpConfig(totp_pending_secret=TOTP_PENDING_SECRET),
         user_manager_security=UserManagerSecurity[UUID](
             totp_secret_key=TOTP_SECRET_KEY,
             totp_recovery_code_lookup_secret=TOTP_RECOVERY_CODE_LOOKUP_SECRET,
@@ -1764,7 +1770,7 @@ def test_validate_totp_encryption_key_allows_factory_owned_totp_secret_in_produc
 ) -> None:
     """Custom factories own TOTP encryption wiring when the typed contract is omitted."""
     config = _minimal_config(
-        totp_config=TotpConfig(totp_pending_secret="p" * 32),
+        totp_config=TotpConfig(totp_pending_secret=TOTP_PENDING_SECRET),
         user_manager_security=None,
     )
     config.user_manager_security = None
@@ -1779,10 +1785,10 @@ def test_validate_totp_encryption_key_rejects_empty_secret_in_production(
     """An empty typed TOTP secret still fails the production encryption check."""
     del monkeypatch
     config = _minimal_config(
-        totp_config=TotpConfig(totp_pending_secret="p" * 32),
+        totp_config=TotpConfig(totp_pending_secret=TOTP_PENDING_SECRET),
         user_manager_security=UserManagerSecurity[UUID](
-            verification_token_secret="v" * 32,
-            reset_password_token_secret="r" * 32,
+            verification_token_secret=VERIFICATION_SECRET,
+            reset_password_token_secret=RESET_PASSWORD_SECRET,
             totp_secret_key="",
         ),
     )
@@ -1828,8 +1834,8 @@ def test_validate_config_accepts_typed_user_manager_security_contract() -> None:
     """Plugin validation accepts the canonical typed security path without legacy overlap."""
     config = _minimal_config(
         user_manager_security=UserManagerSecurity[UUID](
-            verification_token_secret="s" * 32,
-            reset_password_token_secret="r" * 32,
+            verification_token_secret=VERIFICATION_SECRET,
+            reset_password_token_secret=RESET_PASSWORD_SECRET,
             totp_secret_key=TOTP_SECRET_KEY,
             totp_recovery_code_lookup_secret=TOTP_RECOVERY_CODE_LOOKUP_SECRET,
             id_parser=UUID,
@@ -1879,8 +1885,8 @@ def test_validate_user_manager_security_config_rejects_short_login_telemetry_sec
     """Plugin validation catches short failed-login telemetry secrets before manager construction."""
     config = _minimal_config(
         user_manager_security=UserManagerSecurity[UUID](
-            verification_token_secret="s" * 32,
-            reset_password_token_secret="r" * 32,
+            verification_token_secret=VERIFICATION_SECRET,
+            reset_password_token_secret=RESET_PASSWORD_SECRET,
             login_identifier_telemetry_secret="short",
         ),
     )
@@ -1895,7 +1901,7 @@ def test_validate_user_manager_security_config_rejects_keyring_secret_role_reuse
     config = _minimal_config(
         user_manager_security=UserManagerSecurity[UUID](
             verification_token_secret=shared_secret,
-            reset_password_token_secret="r" * 32,
+            reset_password_token_secret=RESET_PASSWORD_SECRET,
             totp_secret_keyring=FernetKeyringConfig(active_key_id="current", keys={"current": shared_secret}),
         ),
     )
@@ -1964,7 +1970,7 @@ def test_validate_totp_sub_config_rejects_missing_pending_jti_store_in_productio
     """Pending-token replay protection requires a configured denylist outside explicit unsafe testing."""
     with pytest.raises(ValueError, match="totp_pending_jti_store is required"):
         validate_totp_sub_config(
-            TotpConfig(totp_pending_secret="p" * 32),
+            TotpConfig(totp_pending_secret=TOTP_PENDING_SECRET),
             user_manager_class=PluginUserManager,
         )
 
@@ -1977,7 +1983,7 @@ def test_validate_totp_sub_config_rejects_missing_enrollment_store_in_production
     with pytest.raises(ValueError, match="totp_enrollment_store is required"):
         validate_totp_sub_config(
             TotpConfig(
-                totp_pending_secret="p" * 32,
+                totp_pending_secret=TOTP_PENDING_SECRET,
                 totp_pending_jti_store=cast("Any", _DurableDenylistStore()),
             ),
             user_manager_class=PluginUserManager,
@@ -2058,7 +2064,7 @@ def test_get_cookie_transports_returns_only_cookie_backends() -> None:
 def test_build_csrf_config_rejects_heterogeneous_cookie_transports() -> None:
     """Plugin-managed CSRF setup requires homogeneous cookie transport settings."""
     config = _minimal_config(backends=[_cookie_backend()])
-    config.csrf_secret = "c" * 32
+    config.csrf_secret = JWT_SECRET
     cookie_transports = [
         CookieTransport(path="/auth", secure=False, samesite="strict"),
         CookieTransport(path="/other-auth", secure=False, samesite="strict"),
@@ -2071,7 +2077,7 @@ def test_build_csrf_config_rejects_heterogeneous_cookie_transports() -> None:
 def test_build_csrf_config_returns_expected_cookie_settings() -> None:
     """A homogeneous cookie transport set produces the shared CSRF config."""
     config = _minimal_config(backends=[_cookie_backend()])
-    config.csrf_secret = "c" * 32
+    config.csrf_secret = JWT_SECRET
     cookie_transports = [
         CookieTransport(path="/auth", domain="example.com", secure=False, samesite="strict"),
         CookieTransport(path="/auth", domain="example.com", secure=False, samesite="strict"),
@@ -2373,8 +2379,8 @@ def test_validate_config_runs_happy_path_for_database_token_preset(
         session_maker=cast("Any", DummySessionMaker()),
         user_db_factory=lambda _session: InMemoryUserDatabase([]),
         user_manager_security=UserManagerSecurity[UUID](
-            verification_token_secret="v" * 32,
-            reset_password_token_secret="r" * 32,
+            verification_token_secret=VERIFICATION_SECRET,
+            reset_password_token_secret=RESET_PASSWORD_SECRET,
         ),
     )
 
@@ -2387,7 +2393,7 @@ def test_validate_config_allows_explicit_unsafe_testing_recipe(
     """Explicit unsafe testing, not runtime globals, controls relaxed validation."""
     config = _minimal_config(
         backends=[_cookie_backend(), _jwt_backend()],
-        totp_config=TotpConfig(totp_pending_secret="p" * 32),
+        totp_config=TotpConfig(totp_pending_secret=TOTP_PENDING_SECRET),
     )
     config.unsafe_testing = True
 
@@ -2404,7 +2410,7 @@ def test_validate_config_keeps_unsafe_testing_instance_scoped(
     )
     relaxed_config = _minimal_config(
         backends=[_cookie_backend(), _jwt_backend()],
-        totp_config=TotpConfig(totp_pending_secret="p" * 32),
+        totp_config=TotpConfig(totp_pending_secret=TOTP_PENDING_SECRET),
     )
     relaxed_config.unsafe_testing = True
 
@@ -2441,8 +2447,8 @@ def test_validate_config_preserves_session_prerequisite_for_database_token_prese
         user_model=ExampleUser,
         user_manager_class=PluginUserManager,
         user_manager_security=UserManagerSecurity[UUID](
-            verification_token_secret="v" * 32,
-            reset_password_token_secret="r" * 32,
+            verification_token_secret=VERIFICATION_SECRET,
+            reset_password_token_secret=RESET_PASSWORD_SECRET,
         ),
     )
 
@@ -2477,7 +2483,7 @@ def test_validate_config_reports_totp_shape_errors_before_encryption_key_errors(
             "InvalidTotpConfig",
             (),
             {
-                "totp_pending_secret": "p" * 32,
+                "totp_pending_secret": "0123456789abcdef" * 4,
                 "totp_algorithm": "",
                 "totp_used_tokens_store": object(),
                 "totp_require_replay_protection": True,
@@ -2547,8 +2553,8 @@ def _minimal_config(  # noqa: PLR0913
         Minimal config object with overridable backends and optional nested auth settings.
     """
     resolved_manager_security = user_manager_security or UserManagerSecurity[UUID](
-        verification_token_secret="v" * 32,
-        reset_password_token_secret="r" * 32,
+        verification_token_secret=VERIFICATION_SECRET,
+        reset_password_token_secret=RESET_PASSWORD_SECRET,
         totp_recovery_code_lookup_secret=TOTP_RECOVERY_CODE_LOOKUP_SECRET if totp_config is not None else None,
     )
     user_db = InMemoryUserDatabase([])

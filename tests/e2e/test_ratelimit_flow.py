@@ -206,8 +206,8 @@ def _build_app_with_trusted_proxy(
         user_model=User,
         user_manager_class=RateLimitUserManager,
         user_manager_security=UserManagerSecurity[UUID](
-            verification_token_secret="verify-secret-1234567890-1234567890",
-            reset_password_token_secret="reset-secret-1234567890-1234567890",
+            verification_token_secret="0123456789abcdef" * 4,
+            reset_password_token_secret="fedcba9876543210" * 4,
             totp_secret_key=Fernet.generate_key().decode(),
             totp_recovery_code_lookup_secret=TOTP_RECOVERY_CODE_LOOKUP_SECRET,
             id_parser=UUID,

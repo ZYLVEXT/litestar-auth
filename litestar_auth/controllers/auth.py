@@ -26,7 +26,7 @@ from litestar_auth.authentication.strategy.base import (
     TokenInvalidationCapable,
     UserManagerProtocol,
 )
-from litestar_auth.config import validate_secret_length
+from litestar_auth.config import validate_production_secret
 from litestar_auth.controllers._auth_helpers import (
     _attach_refresh_token,
     _get_refresh_strategy,
@@ -457,8 +457,12 @@ def create_auth_controller[UP: UserProtocol[Any], ID](
         csrf_protection_managed_externally=settings.csrf_protection_managed_externally,
         unsafe_testing=settings.unsafe_testing,
     )
-    if settings.totp_pending_secret is not None and not settings.unsafe_testing:
-        validate_secret_length(settings.totp_pending_secret, label="totp_pending_secret")
+    if settings.totp_pending_secret is not None:
+        validate_production_secret(
+            settings.totp_pending_secret,
+            label="totp_pending_secret",
+            unsafe_testing=settings.unsafe_testing,
+        )
     ctx = _make_auth_controller_context(
         _AuthControllerSettings(
             backend=settings.backend,

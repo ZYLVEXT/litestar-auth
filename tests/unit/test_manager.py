@@ -102,8 +102,8 @@ class TrackingUserManager(BaseUserManager[ExampleUser, UUID]):
             user_db,
             password_helper=password_helper,
             security=UserManagerSecurity[UUID](
-                verification_token_secret="verify-secret-1234567890-1234567890",
-                reset_password_token_secret="reset-secret-1234567890-1234567890",
+                verification_token_secret="0123456789abcdef" * 4,
+                reset_password_token_secret="fedcba9876543210" * 4,
                 login_identifier_telemetry_secret=login_identifier_telemetry_secret,
                 id_parser=UUID,
             ),
@@ -301,19 +301,19 @@ def test_manager_init_requires_explicit_secrets_outside_testing() -> None:
 def test_user_manager_security_masks_secret_repr() -> None:
     """The typed security contract must not leak secrets in repr/str output."""
     security = UserManagerSecurity[UUID](
-        verification_token_secret="verify-secret-1234567890-1234567890",
-        reset_password_token_secret="reset-secret-1234567890-1234567890",
+        verification_token_secret="0123456789abcdef" * 4,
+        reset_password_token_secret="fedcba9876543210" * 4,
         login_identifier_telemetry_secret=LOGIN_IDENTIFIER_TELEMETRY_SECRET,
-        totp_secret_key="a" * 32,
+        totp_secret_key="89abcdef01234567" * 4,
         id_parser=UUID,
     )
 
     rendered = repr(security)
 
-    assert "verify-secret-1234567890-1234567890" not in rendered
-    assert "reset-secret-1234567890-1234567890" not in rendered
+    assert "0123456789abcdef" * 4 not in rendered
+    assert "fedcba9876543210" * 4 not in rendered
     assert LOGIN_IDENTIFIER_TELEMETRY_SECRET not in rendered
-    assert "a" * 32 not in rendered
+    assert "0123456789abcdef" * 4 not in rendered
     assert "**********" in rendered
     assert "UUID" in rendered
     assert str(security) == rendered
@@ -324,8 +324,8 @@ def test_user_manager_security_masks_totp_keyring_repr() -> None:
     current_key = _fernet_key()
     old_key = _fernet_key()
     security = UserManagerSecurity[UUID](
-        verification_token_secret="verify-secret-1234567890-1234567890",
-        reset_password_token_secret="reset-secret-1234567890-1234567890",
+        verification_token_secret="0123456789abcdef" * 4,
+        reset_password_token_secret="fedcba9876543210" * 4,
         totp_secret_keyring=FernetKeyringConfig(active_key_id="current", keys={"current": current_key, "old": old_key}),
         id_parser=UUID,
     )
@@ -343,10 +343,10 @@ def test_manager_init_accepts_typed_security_contract() -> None:
     user_db = AsyncMock()
     password_helper = PasswordHelper()
     security = UserManagerSecurity[UUID](
-        verification_token_secret="verify-secret-1234567890-1234567890",
-        reset_password_token_secret="reset-secret-1234567890-1234567890",
+        verification_token_secret="0123456789abcdef" * 4,
+        reset_password_token_secret="fedcba9876543210" * 4,
         login_identifier_telemetry_secret=LOGIN_IDENTIFIER_TELEMETRY_SECRET,
-        totp_secret_key="a" * 32,
+        totp_secret_key="89abcdef01234567" * 4,
         id_parser=UUID,
     )
 
@@ -369,8 +369,8 @@ def test_manager_init_accepts_config_object() -> None:
     user_db = AsyncMock()
     password_helper = PasswordHelper()
     security = UserManagerSecurity[UUID](
-        verification_token_secret="verify-secret-1234567890-1234567890",
-        reset_password_token_secret="reset-secret-1234567890-1234567890",
+        verification_token_secret="0123456789abcdef" * 4,
+        reset_password_token_secret="fedcba9876543210" * 4,
         login_identifier_telemetry_secret=LOGIN_IDENTIFIER_TELEMETRY_SECRET,
         id_parser=UUID,
     )
@@ -396,8 +396,8 @@ def test_manager_init_rejects_config_combined_with_user_db_or_options() -> None:
     config = BaseUserManagerConfig(
         user_db=user_db,
         security=UserManagerSecurity[UUID](
-            verification_token_secret="verify-secret-1234567890-1234567890",
-            reset_password_token_secret="reset-secret-1234567890-1234567890",
+            verification_token_secret="0123456789abcdef" * 4,
+            reset_password_token_secret="fedcba9876543210" * 4,
         ),
     )
 
@@ -424,8 +424,8 @@ def test_user_manager_security_rejects_ambiguous_totp_key_inputs() -> None:
 
     with pytest.raises(ConfigurationError, match="totp_secret_key or totp_secret_keyring"):
         UserManagerSecurity[UUID](
-            verification_token_secret="verify-secret-1234567890-1234567890",
-            reset_password_token_secret="reset-secret-1234567890-1234567890",
+            verification_token_secret="0123456789abcdef" * 4,
+            reset_password_token_secret="fedcba9876543210" * 4,
             totp_secret_key=_fernet_key(),
             totp_secret_keyring=keyring,
         )
@@ -440,8 +440,8 @@ def test_manager_init_accepts_totp_keyring_contract() -> None:
         user_db,
         password_helper=password_helper,
         security=UserManagerSecurity[UUID](
-            verification_token_secret="verify-secret-1234567890-1234567890",
-            reset_password_token_secret="reset-secret-1234567890-1234567890",
+            verification_token_secret="0123456789abcdef" * 4,
+            reset_password_token_secret="fedcba9876543210" * 4,
             totp_secret_keyring=keyring,
             id_parser=UUID,
         ),
@@ -459,8 +459,8 @@ def test_manager_init_stores_normalized_superuser_role_name() -> None:
     user_db = AsyncMock()
     password_helper = PasswordHelper()
     security = UserManagerSecurity[UUID](
-        verification_token_secret="verify-secret-1234567890-1234567890",
-        reset_password_token_secret="reset-secret-1234567890-1234567890",
+        verification_token_secret="0123456789abcdef" * 4,
+        reset_password_token_secret="fedcba9876543210" * 4,
     )
 
     default_manager = BaseUserManager(
@@ -488,8 +488,8 @@ def test_manager_init_rejects_legacy_secret_keyword_arguments() -> None:
         loose_ctor(
             user_db,
             password_helper=password_helper,
-            verification_token_secret="verify-secret-1234567890-1234567890",
-            reset_password_token_secret="reset-secret-1234567890-1234567890",
+            verification_token_secret="0123456789abcdef" * 4,
+            reset_password_token_secret="fedcba9876543210" * 4,
         )
 
 
@@ -502,7 +502,7 @@ def test_manager_init_rejects_legacy_totp_and_id_parser_keyword_arguments() -> N
         loose_ctor(
             user_db,
             password_helper=password_helper,
-            totp_secret_key="t" * 32,
+            totp_secret_key="0123456789abcdef" * 4,
             unsafe_testing=True,
         )
     with pytest.raises(TypeError, match="unexpected keyword argument 'id_parser'"):
@@ -570,7 +570,7 @@ def test_manager_init_rejects_reused_login_telemetry_secret_in_production() -> N
             user_db,
             password_helper=password_helper,
             security=UserManagerSecurity[UUID](
-                verification_token_secret="verify-secret-1234567890-1234567890",
+                verification_token_secret="0123456789abcdef" * 4,
                 reset_password_token_secret=shared_secret,
                 login_identifier_telemetry_secret=shared_secret,
             ),
@@ -592,8 +592,8 @@ def test_manager_init_rejects_short_login_telemetry_secret_in_production() -> No
             user_db,
             password_helper=password_helper,
             security=UserManagerSecurity[UUID](
-                verification_token_secret="verify-secret-1234567890-1234567890",
-                reset_password_token_secret="reset-secret-1234567890-1234567890",
+                verification_token_secret="0123456789abcdef" * 4,
+                reset_password_token_secret="fedcba9876543210" * 4,
                 login_identifier_telemetry_secret="short",
             ),
         )
@@ -611,7 +611,7 @@ def test_manager_init_rejects_reused_totp_keyring_secret_roles_in_production() -
             password_helper=password_helper,
             security=UserManagerSecurity[UUID](
                 verification_token_secret=shared_secret,
-                reset_password_token_secret="reset-secret-1234567890-1234567890",
+                reset_password_token_secret="fedcba9876543210" * 4,
                 totp_secret_keyring=FernetKeyringConfig(active_key_id="current", keys={"current": shared_secret}),
             ),
         )
@@ -658,10 +658,10 @@ def test_manager_init_rejects_mixed_typed_security_and_legacy_secret_kwargs() ->
             user_db,
             password_helper=password_helper,
             security=UserManagerSecurity[UUID](
-                verification_token_secret="verify-secret-1234567890-1234567890",
-                reset_password_token_secret="reset-secret-1234567890-1234567890",
+                verification_token_secret="0123456789abcdef" * 4,
+                reset_password_token_secret="fedcba9876543210" * 4,
             ),
-            verification_token_secret="other-verify-secret-1234567890",
+            verification_token_secret="89abcdef01234567" * 4,
         )
 
 
@@ -756,12 +756,12 @@ def test_manager_unsafe_testing_generates_distinct_hex_secrets_when_omitted() ->
 
 def test_secret_value_masks_repr_and_str() -> None:
     """Secret wrapper should never expose the underlying value in text output."""
-    secret = _SecretValue("verify-secret-1234567890-1234567890")
+    secret = _SecretValue("0123456789abcdef" * 4)
 
-    assert secret.get_secret_value() == "verify-secret-1234567890-1234567890"
+    assert secret.get_secret_value() == "0123456789abcdef" * 4
     assert str(secret) == "**********"
     assert repr(secret) == "_SecretValue('**********')"
-    assert "verify-secret-1234567890-1234567890" not in repr(secret)
+    assert "0123456789abcdef" * 4 not in repr(secret)
 
 
 def test_manager_repr_does_not_expose_token_secrets() -> None:
@@ -772,15 +772,15 @@ def test_manager_repr_does_not_expose_token_secrets() -> None:
         user_db,
         password_helper=password_helper,
         security=UserManagerSecurity[UUID](
-            verification_token_secret="verify-secret-1234567890-1234567890",
-            reset_password_token_secret="reset-secret-1234567890-1234567890",
+            verification_token_secret="0123456789abcdef" * 4,
+            reset_password_token_secret="fedcba9876543210" * 4,
         ),
     )
 
-    assert "verify-secret-1234567890-1234567890" not in repr(manager)
-    assert "reset-secret-1234567890-1234567890" not in repr(manager)
-    assert "verify-secret-1234567890-1234567890" not in str(manager)
-    assert "reset-secret-1234567890-1234567890" not in str(manager)
+    assert "0123456789abcdef" * 4 not in repr(manager)
+    assert "fedcba9876543210" * 4 not in repr(manager)
+    assert "0123456789abcdef" * 4 not in str(manager)
+    assert "fedcba9876543210" * 4 not in str(manager)
 
 
 def test_manager_init_requires_reset_password_secret_when_verification_secret_present() -> None:
@@ -793,7 +793,7 @@ def test_manager_init_requires_reset_password_secret_when_verification_secret_pr
             user_db,
             password_helper=password_helper,
             security=UserManagerSecurity[UUID](
-                verification_token_secret="verify-secret-1234567890-1234567890",
+                verification_token_secret="0123456789abcdef" * 4,
                 reset_password_token_secret=None,
             ),
         )
@@ -825,8 +825,8 @@ def test_manager_init_wires_services_and_configuration() -> None:
     """Manager initialization should preserve config and wire service collaborators once."""
     user_db = AsyncMock()
     password_helper = PasswordHelper()
-    verification_secret = "verify-secret-1234567890-1234567890"
-    reset_secret = "reset-secret-1234567890-1234567890"
+    verification_secret = "0123456789abcdef" * 4
+    reset_secret = "fedcba9876543210" * 4
     verification_lifetime = manager_module.DEFAULT_VERIFY_TOKEN_LIFETIME * 2
     reset_lifetime = manager_module.DEFAULT_RESET_PASSWORD_TOKEN_LIFETIME * 3
     password_validator = require_password_length
@@ -937,8 +937,8 @@ def test_manager_init_without_explicit_password_helper_uses_current_default_help
     manager = BaseUserManager(
         AsyncMock(),
         security=UserManagerSecurity[UUID](
-            verification_token_secret="verify-secret-1234567890-1234567890",
-            reset_password_token_secret="reset-secret-1234567890-1234567890",
+            verification_token_secret="0123456789abcdef" * 4,
+            reset_password_token_secret="fedcba9876543210" * 4,
         ),
     )
 
@@ -966,8 +966,8 @@ def test_manager_init_without_explicit_password_helper_uses_named_default_factor
     manager = BaseUserManager(
         AsyncMock(),
         security=UserManagerSecurity[UUID](
-            verification_token_secret="verify-secret-1234567890-1234567890",
-            reset_password_token_secret="reset-secret-1234567890-1234567890",
+            verification_token_secret="0123456789abcdef" * 4,
+            reset_password_token_secret="fedcba9876543210" * 4,
         ),
     )
 
@@ -2309,7 +2309,7 @@ async def test_read_totp_secret_rejects_unprefixed_plaintext_value() -> None:
     user_db = AsyncMock()
     password_helper = PasswordHelper()
     manager = TrackingUserManager(user_db, password_helper)
-    manager.totp_secret_key = "a" * 32
+    manager.totp_secret_key = "89abcdef01234567" * 4
 
     with pytest.raises(RuntimeError, match="encrypted at rest"):
         await manager.read_totp_secret("plain")
@@ -2320,7 +2320,7 @@ async def test_read_totp_secret_raises_when_decryption_fails(monkeypatch: pytest
     user_db = AsyncMock()
     password_helper = PasswordHelper()
     manager = TrackingUserManager(user_db, password_helper)
-    manager.totp_secret_key = "a" * 32
+    manager.totp_secret_key = "89abcdef01234567" * 4
 
     class FakeInvalidTokenError(Exception):
         pass
@@ -2344,7 +2344,7 @@ def test_prepare_totp_secret_encrypts_and_prefixes_when_key_set(monkeypatch: pyt
     user_db = AsyncMock()
     password_helper = PasswordHelper()
     manager = TrackingUserManager(user_db, password_helper)
-    manager.totp_secret_key = "a" * 32
+    manager.totp_secret_key = "89abcdef01234567" * 4
 
     class FakeFernet:
         def __init__(self, _: bytes) -> None:
@@ -2385,8 +2385,8 @@ async def test_base_hooks_are_noops() -> None:
         user_db,
         password_helper=password_helper,
         security=UserManagerSecurity[UUID](
-            verification_token_secret="verify-secret-1234567890-1234567890",
-            reset_password_token_secret="reset-secret-1234567890-1234567890",
+            verification_token_secret="0123456789abcdef" * 4,
+            reset_password_token_secret="fedcba9876543210" * 4,
             id_parser=UUID,
         ),
     )

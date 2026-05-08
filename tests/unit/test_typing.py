@@ -79,8 +79,8 @@ async def test_public_typing_contracts_preserve_user_and_id_types() -> None:
         user_model=ExampleUser,
         user_manager_class=_TypingUserManager,
         user_manager_security=UserManagerSecurity[UUID](
-            verification_token_secret="x" * 32,
-            reset_password_token_secret="y" * 32,
+            verification_token_secret="0123456789abcdef" * 4,
+            reset_password_token_secret="fedcba9876543210" * 4,
         ),
     )
 
@@ -92,8 +92,8 @@ async def test_public_typing_contracts_preserve_user_and_id_types() -> None:
     manager = _TypingUserManager(
         _TypingUserStore(user),
         security=UserManagerSecurity[UUID](
-            verification_token_secret="x" * 32,
-            reset_password_token_secret="y" * 32,
+            verification_token_secret="0123456789abcdef" * 4,
+            reset_password_token_secret="fedcba9876543210" * 4,
         ),
     )
 

@@ -1,7 +1,43 @@
 ## Unreleased
 
+### Added
+
+- **`litestar_auth.config.validate_secret_strength()` — opt-in production
+  gate for token / cookie / Fernet secrets.** Combines the existing length
+  floor with an approximate Shannon-entropy floor (default
+  `MINIMUM_SECRET_ENTROPY_BITS = 128.0`) so that degenerate misconfig like
+  `"a" * 32` is rejected before reaching JWT signing or Fernet key
+  derivation. The internal callsites still apply the chars-count floor only,
+  to keep test fixtures interchangeable with production config; operators
+  should wire `validate_secret_strength` into the application's startup hook
+  (or a custom `LitestarAuthConfig` bootstrap) to enforce the entropy floor
+  on user-supplied secrets. Pass `minimum_entropy_bits=0` to disable the
+  entropy gate while keeping length validation.
+
+### Changed
+
+- **PKCE code-verifier generation no longer truncates `secrets.token_urlsafe`
+  output or runs a runtime alphabet check.** Verifier length (64 characters)
+  and entropy (≥384 bits) are unchanged; the implementation now relies on
+  `secrets.token_urlsafe(48)` returning exactly 64 unpadded base64url
+  characters by construction. No behavioral change for callers.
+
 ### Security (breaking)
 
+- **Production secrets now require an entropy floor, not only a length
+  floor.** JWT HMAC signing secrets, database/Redis token hash secrets,
+  manager reset/verify secrets, CSRF secrets, OAuth flow-cookie secrets,
+  TOTP pending secrets, and recovery/telemetry HMAC keys now use
+  `validate_production_secret(...)` outside explicit `unsafe_testing=True`
+  paths. Repeated or low-alphabet strings such as `"a" * 32` previously
+  satisfied the 32-character minimum while providing little real key
+  strength; they now fail closed with a `ConfigurationError`.
+
+  **Migration.** Generate each production secret with a CSPRNG, for example
+  `python -c "import secrets; print(secrets.token_hex(32))"` or
+  `python -c "import secrets; print(secrets.token_urlsafe(32))"`. Test-only
+  repeated strings must either move behind `unsafe_testing=True` or be
+  replaced with realistic fixture secrets.
 - **Self-service ``UserUpdate`` is now email-only.** ``is_active``,
   ``is_verified``, and ``roles`` were previously accepted as ``Optional``
   fields on the self-service profile-update schema and rejected at runtime
@@ -16,7 +52,6 @@
   ``DELETE /users/{user_id}`` was migrated from
   ``UserUpdate(is_active=False)`` to ``AdminUserUpdate(is_active=False)``
   in the same change.
-
   **Migration.** Self-service ``PATCH /users/me`` now accepts only
   ``{ "email": "new@example.com" }``; send privileged updates through
   admin ``PATCH /users/{user_id}`` with ``AdminUserUpdate``. Programmatic
@@ -28,7 +63,6 @@
   rejects the privileged field names as defense-in-depth for custom
   schemas. See [docs/migration.md](docs/migration.md) for the full
   upgrade recipe.
-
 - **OAuth associate authorize is now `POST` and protected by Litestar's CSRF
   middleware.** Previously the authenticated associate flow lived behind a
   `GET` endpoint, which could be triggered by a cross-site top-level
@@ -56,9 +90,6 @@
   header. Manual `create_oauth_associate_controller` and plugin-managed
   associate controllers share the same POST contract; no factory
   parameters changed.
-
-### Security
-
 - **OAuth `redirect_base_url` hostname validation now resolves DNS at
   validation time and rejects hostnames whose A/AAAA records point at
   non-routable addresses.** Previously the predicate only inspected IP
@@ -82,23 +113,6 @@
   relationships, or computed setter properties (e.g. ``roles`` delegating
   into ``role_assignments``) keep working out of the box; only truly
   unmapped names are rejected with ``ValueError``.
-
-### Added
-
-- **`litestar_auth.config.validate_secret_strength()` — opt-in production
-  gate for token / cookie / Fernet secrets.** Combines the existing length
-  floor with an approximate Shannon-entropy floor (default
-  `MINIMUM_SECRET_ENTROPY_BITS = 128.0`) so that degenerate misconfig like
-  `"a" * 32` is rejected before reaching JWT signing or Fernet key
-  derivation. The internal callsites still apply the chars-count floor only,
-  to keep test fixtures interchangeable with production config; operators
-  should wire `validate_secret_strength` into the application's startup hook
-  (or a custom `LitestarAuthConfig` bootstrap) to enforce the entropy floor
-  on user-supplied secrets. Pass `minimum_entropy_bits=0` to disable the
-  entropy gate while keeping length validation.
-
-### Security
-
 - **TOTP recovery-code verification now performs exactly one Argon2 verify
   per call.** The hit-and-mismatch branch previously ran a second dummy
   Argon2 verify on top of the candidate-hash verify, leaking the underlying
@@ -138,14 +152,6 @@
   on the user model to bind JWTs to credential state; passkey-only or
   OAuth-only models that omit this attribute previously degraded silently.
   Callers that supply a custom `session_fingerprint_getter` are unaffected.
-
-### Changed
-
-- **PKCE code-verifier generation no longer truncates `secrets.token_urlsafe`
-  output or runs a runtime alphabet check.** Verifier length (64 characters)
-  and entropy (≥384 bits) are unchanged; the implementation now relies on
-  `secrets.token_urlsafe(48)` returning exactly 64 unpadded base64url
-  characters by construction. No behavioral change for callers.
 
 ## 2.4.0 (2026-05-03)
 

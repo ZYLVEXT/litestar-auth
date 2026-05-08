@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, NotRequired, Required, TypedDict, Unpack
 
 from litestar_auth._totp_enrollment import _resolve_enrollment_token_cipher
-from litestar_auth.config import validate_secret_length
+from litestar_auth.config import validate_production_secret
 from litestar_auth.controllers._utils import _mark_litestar_auth_route_handler
 from litestar_auth.controllers.totp_context import (
     _build_totp_controller_context,
@@ -157,8 +157,11 @@ def _validate_totp_factory_settings[UP: UserProtocol[Any], ID](
     settings: _TotpControllerFactorySettings[UP, ID],
 ) -> None:
     """Validate public TOTP controller factory settings."""
-    if not settings.unsafe_testing:
-        validate_secret_length(settings.totp_pending_secret, label="totp_pending_secret")
+    validate_production_secret(
+        settings.totp_pending_secret,
+        label="totp_pending_secret",
+        unsafe_testing=settings.unsafe_testing,
+    )
     if not settings.totp_pending_require_client_binding:
         _warn_totp_pending_client_binding_disabled()
     _totp_validate_replay_and_password(

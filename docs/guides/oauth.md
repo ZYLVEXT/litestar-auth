@@ -51,7 +51,7 @@ Supported provisioning paths:
 
 `create_provider_oauth_controller()` resolves those provisioning options through the same adapter boundary that powers `create_oauth_controller()` and `create_oauth_associate_controller()`, so all manual entry points enforce one normalized runtime contract.
 
-All manual OAuth controller factories require `oauth_flow_cookie_secret`. Use a distinct high-entropy value with at least 32 characters; do not reuse `csrf_secret`, token-encryption keys, TOTP secrets, verification secrets, or reset secrets.
+All manual OAuth controller factories require `oauth_flow_cookie_secret`. Use a distinct CSPRNG-generated value that clears the production strength gate; do not reuse `csrf_secret`, token-encryption keys, TOTP secrets, verification secrets, or reset secrets.
 
 Required client methods:
 

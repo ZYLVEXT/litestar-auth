@@ -56,6 +56,7 @@ __all__ = (
     "require_password_length",
     "resolve_trusted_proxy_setting",
     "validate_oauth_provider_name",
+    "validate_production_secret",
     "validate_secret_length",
     "validate_secret_roles_are_distinct",
     "validate_secret_strength",
@@ -201,6 +202,32 @@ def validate_secret_strength(
         raise ConfigurationError(msg)
 
 
+def validate_production_secret(
+    secret: str,
+    *,
+    label: str,
+    unsafe_testing: bool = False,
+    minimum_length: int = MINIMUM_SECRET_LENGTH,
+    minimum_entropy_bits: float = MINIMUM_SECRET_ENTROPY_BITS,
+) -> None:
+    """Validate production secret material, preserving explicit test shortcuts.
+
+    Production token, HMAC, and encryption secrets need both a length floor and
+    a basic entropy floor. Repeated-character strings such as ``"a" * 32`` pass
+    length-only validation but are not safe signing or encryption material.
+    ``unsafe_testing=True`` keeps fixture-only shortcuts possible while making
+    the weaker posture explicit at the call site.
+    """
+    if unsafe_testing:
+        return
+    validate_secret_strength(
+        secret,
+        label=label,
+        minimum_length=minimum_length,
+        minimum_entropy_bits=minimum_entropy_bits,
+    )
+
+
 def require_password_length(
     password: str,
     minimum_length: int = DEFAULT_MINIMUM_PASSWORD_LENGTH,
@@ -265,8 +292,7 @@ def _resolve_token_secret(
         )
         raise ConfigurationError(msg)
 
-    if not unsafe_testing:
-        validate_secret_length(secret, label=label)
+    validate_production_secret(secret, label=label, unsafe_testing=unsafe_testing)
 
     return secret
 

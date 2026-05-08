@@ -25,6 +25,7 @@ VERIFY_TOKEN_AUDIENCE = config_module.VERIFY_TOKEN_AUDIENCE
 _resolve_token_secret = config_module._resolve_token_secret
 _shannon_entropy_bits = config_module._shannon_entropy_bits
 resolve_trusted_proxy_setting = config_module.resolve_trusted_proxy_setting
+validate_production_secret = config_module.validate_production_secret
 validate_secret_length = config_module.validate_secret_length
 validate_secret_strength = config_module.validate_secret_strength
 
@@ -144,9 +145,15 @@ def test_resolve_token_secret_skips_length_validation_under_explicit_unsafe_test
 
 def test_resolve_token_secret_returns_explicit_secret_in_production() -> None:
     """Configured production secrets are returned unchanged."""
-    secret = "s" * MINIMUM_SECRET_LENGTH
+    secret = "0123456789abcdef" * 4
 
     assert _resolve_token_secret(secret, label="JWT secret") == secret
+
+
+def test_resolve_token_secret_rejects_low_entropy_secret_in_production() -> None:
+    """Production token-secret resolution rejects repeated strings."""
+    with pytest.raises(ConfigurationError, match="insufficient entropy"):
+        _resolve_token_secret("a" * MINIMUM_SECRET_LENGTH, label="JWT secret")
 
 
 def test_shannon_entropy_bits_returns_zero_for_empty_string() -> None:
@@ -208,6 +215,17 @@ def test_validate_secret_strength_exposes_minimum_in_error_message() -> None:
     assert "JWT secret" in message
     assert f"required {MINIMUM_SECRET_ENTROPY_BITS:.0f}" in message
     assert "secrets.token_hex" in message
+
+
+def test_validate_production_secret_rejects_low_entropy_secret() -> None:
+    """Production validation closes the length-only low-entropy gap."""
+    with pytest.raises(ConfigurationError, match="insufficient entropy"):
+        validate_production_secret("a" * MINIMUM_SECRET_LENGTH, label="JWT secret")
+
+
+def test_validate_production_secret_preserves_explicit_unsafe_testing_shortcut() -> None:
+    """Unsafe-testing mode keeps existing short-lived fixture shortcuts explicit."""
+    validate_production_secret("short", label="JWT secret", unsafe_testing=True)
 
 
 @pytest.mark.parametrize("trusted_proxy", [True, False])

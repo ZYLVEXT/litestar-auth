@@ -611,8 +611,8 @@ def _build_config[UP: SQLAlchemyUserModelProtocol](  # noqa: PLR0913
         return SQLAlchemyUserDatabase(session, user_model=user_model)
 
     user_manager_security = UserManagerSecurity[UUID](
-        verification_token_secret="verify-secret-12345678901234567890",
-        reset_password_token_secret="reset-secret-123456789012345678901",
+        verification_token_secret="0123456789abcdef" * 4,
+        reset_password_token_secret="fedcba9876543210" * 4,
         id_parser=UUID,
         **dict(extra_security_overrides or {}),
     )

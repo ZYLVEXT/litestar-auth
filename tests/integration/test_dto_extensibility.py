@@ -36,7 +36,7 @@ HTTP_BAD_REQUEST = 400
 HTTP_CREATED = 201
 HTTP_OK = 200
 HTTP_UNPROCESSABLE_ENTITY = 422
-VERIFICATION_TOKEN_SECRET = "verify-secret-1234567890-1234567890"
+VERIFICATION_TOKEN_SECRET = "0123456789abcdef" * 4
 EMAIL_PATTERN = r"^[^@\s]+@[^@\s]+\.[^@\s]+$"
 EMAIL_MAX_LENGTH = 320
 
@@ -105,7 +105,7 @@ def build_app() -> tuple[
         password_helper=password_helper,
         security=UserManagerSecurity[UUID](
             verification_token_secret=VERIFICATION_TOKEN_SECRET,
-            reset_password_token_secret="reset-secret-1234567890-1234567890",
+            reset_password_token_secret="fedcba9876543210" * 4,
         ),
     )
     strategy = InMemoryTokenStrategy()

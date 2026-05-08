@@ -35,10 +35,10 @@ def _warn_missing_proxy_headers_once(trusted_headers: tuple[str, ...]) -> None:
 
     _warned_missing_proxy_headers.add(trusted_headers)
     logger.warning(
-        "trusted_proxy=True but none of the configured headers (%s) were present on the request; "
+        "trusted_proxy=True but none of the configured trusted headers (count=%d) were present on the request; "
         "rate-limit identity is falling back to the direct client host. Verify the reverse proxy "
         "is actually setting one of these headers, or set trusted_proxy=False.",
-        ", ".join(trusted_headers),
+        len(trusted_headers),
     )
 
 

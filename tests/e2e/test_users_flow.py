@@ -336,8 +336,8 @@ def app() -> Iterator[tuple[Litestar, Engine, PasswordHelper, dict[str, UUID]]]:
         user_model=User,
         user_manager_class=UsersFlowManager,
         user_manager_security=UserManagerSecurity[UUID](
-            verification_token_secret="verify-secret-1234567890-1234567890",
-            reset_password_token_secret="reset-secret-1234567890-1234567890",
+            verification_token_secret="0123456789abcdef" * 4,
+            reset_password_token_secret="fedcba9876543210" * 4,
             id_parser=UUID,
             password_helper=password_helper,
         ),
@@ -424,8 +424,8 @@ def refreshable_app() -> Iterator[tuple[Litestar, Engine, PasswordHelper, dict[s
         user_model=User,
         user_manager_class=UsersFlowManager,
         user_manager_security=UserManagerSecurity[UUID](
-            verification_token_secret="verify-secret-1234567890-1234567890",
-            reset_password_token_secret="reset-secret-1234567890-1234567890",
+            verification_token_secret="0123456789abcdef" * 4,
+            reset_password_token_secret="fedcba9876543210" * 4,
             id_parser=UUID,
             password_helper=password_helper,
         ),

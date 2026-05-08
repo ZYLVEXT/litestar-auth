@@ -37,7 +37,7 @@ build_pending_totp_client_binding = totp_flow_module.build_pending_totp_client_b
 
 pytestmark = pytest.mark.unit
 
-TOTP_PENDING_SECRET = "test-totp-pending-secret-thirty-two!"
+TOTP_PENDING_SECRET = "76543210fedcba98" * 4
 RECOVERY_LOOKUP_SECRET = b"test-recovery-code-lookup-secret"
 CLIENT_BINDING = PendingTotpClientBinding(
     client_ip_fingerprint="client-ip-fingerprint",
@@ -100,7 +100,7 @@ def _pending_payload(
     user: ExampleUser,
     *,
     exp: datetime | int | None = None,
-    jti: str = "a" * 32,
+    jti: str = "0123456789abcdef" * 2,
     sub: str | None = None,
 ) -> dict[str, object]:
     """Build a decoded pending-token payload for targeted negative-path tests.
@@ -542,7 +542,7 @@ async def test_resolve_pending_login_wraps_jwt_decode_errors(
         {"sub": ""},
         {"sub": None},
         {"jti": "short"},
-        {"jti": "g" * 32},
+        {"jti": "0123456789abcdef" * 4},
         {"exp": "not-a-datetime"},
     ],
 )
@@ -640,12 +640,12 @@ async def test_deny_pending_login_records_pending_jti_with_remaining_ttl(monkeyp
     await service._deny_pending_login(
         PendingTotpLogin(
             user=user,
-            pending_jti="b" * 32,
+            pending_jti="0123456789abcdef" * 4,
             expires_at=frozen_now + timedelta(seconds=45),
         ),
     )
 
-    pending_jti_store.deny.assert_awaited_once_with("b" * 32, ttl_seconds=45)
+    pending_jti_store.deny.assert_awaited_once_with("0123456789abcdef" * 4, ttl_seconds=45)
 
 
 async def test_deny_pending_login_raises_token_error_when_denylist_returns_false() -> None:
@@ -663,7 +663,7 @@ async def test_deny_pending_login_raises_token_error_when_denylist_returns_false
         await service._deny_pending_login(
             PendingTotpLogin(
                 user=user,
-                pending_jti="e" * 32,
+                pending_jti="0123456789abcdef" * 4,
                 expires_at=datetime.now(tz=UTC) + timedelta(seconds=30),
             ),
         )
@@ -686,7 +686,7 @@ async def test_deny_pending_login_warns_in_unsafe_testing_without_denylist_store
         await service._deny_pending_login(
             PendingTotpLogin(
                 user=user,
-                pending_jti="c" * 32,
+                pending_jti="0123456789abcdef" * 4,
                 expires_at=datetime.now(tz=UTC) + timedelta(seconds=30),
             ),
         )
@@ -694,7 +694,7 @@ async def test_deny_pending_login_warns_in_unsafe_testing_without_denylist_store
         await service._deny_pending_login(
             PendingTotpLogin(
                 user=user,
-                pending_jti="f" * 32,
+                pending_jti="0123456789abcdef" * 4,
                 expires_at=datetime.now(tz=UTC) + timedelta(seconds=30),
             ),
         )
@@ -716,7 +716,7 @@ async def test_deny_pending_login_warns_in_unsafe_testing_without_denylist_store
         await service._deny_pending_login(
             PendingTotpLogin(
                 user=user,
-                pending_jti="a" * 32,
+                pending_jti="0123456789abcdef" * 4,
                 expires_at=datetime.now(tz=UTC) + timedelta(seconds=30),
             ),
         )
@@ -740,7 +740,7 @@ async def test_deny_pending_login_raises_without_store_outside_unsafe_testing() 
         await service._deny_pending_login(
             PendingTotpLogin(
                 user=user,
-                pending_jti="d" * 32,
+                pending_jti="0123456789abcdef" * 4,
                 expires_at=datetime.now(tz=UTC) + timedelta(seconds=30),
             ),
         )
@@ -773,7 +773,7 @@ def test_parse_user_id_returns_subject_without_parser() -> None:
 @pytest.mark.parametrize(
     ("jti", "is_valid"),
     [
-        ("a" * 32, True),
+        ("0123456789abcdef" * 2, True),
         ("short", False),
         ("g" * 32, False),
         (123, False),

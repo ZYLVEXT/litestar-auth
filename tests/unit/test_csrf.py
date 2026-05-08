@@ -32,7 +32,7 @@ def _build_app() -> Litestar:
     return Litestar(
         route_handlers=[csrf_seed, csrf_protected],
         csrf_config=CSRFConfig(
-            secret="c" * 32,
+            secret="0123456789abcdef" * 4,
             cookie_name=CSRF_COOKIE_NAME,
             header_name=CSRF_HEADER_NAME,
             cookie_secure=False,

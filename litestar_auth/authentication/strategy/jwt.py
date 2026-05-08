@@ -22,7 +22,7 @@ from litestar_auth.authentication.strategy._jwt_denylist import (
     _resolve_jwt_revocation,
 )
 from litestar_auth.authentication.strategy.base import Strategy, UserManagerProtocol
-from litestar_auth.config import JWT_ACCESS_TOKEN_AUDIENCE, validate_secret_length
+from litestar_auth.config import JWT_ACCESS_TOKEN_AUDIENCE, validate_production_secret
 from litestar_auth.exceptions import TokenError
 from litestar_auth.types import ID, UP
 
@@ -179,7 +179,7 @@ class JWTStrategy(Strategy[UP, ID]):
                 )
                 raise ValueError(msg)
         else:
-            validate_secret_length(settings.secret, label="JWT signing secret")
+            validate_production_secret(settings.secret, label="JWT signing secret")
         self.secret = settings.secret
         self.verify_key = settings.verify_key if settings.verify_key is not None else settings.secret
         self.algorithm = settings.algorithm

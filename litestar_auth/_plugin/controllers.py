@@ -30,7 +30,7 @@ from litestar_auth._plugin.config import (
     require_session_maker,
     resolve_backend_inventory,
 )
-from litestar_auth.config import validate_secret_length
+from litestar_auth.config import validate_production_secret
 from litestar_auth.controllers import (
     create_register_controller,
     create_reset_password_controller,
@@ -130,8 +130,12 @@ def create_auth_controller[UP: UserProtocol[Any], ID](
     settings: _PluginAuthControllerSettings[UP, ID],
 ) -> type[Controller]:
     """Return a plugin auth controller bound to request-scoped backends via DI."""
-    if settings.totp_pending_secret is not None and not settings.unsafe_testing:
-        validate_secret_length(settings.totp_pending_secret, label="totp_pending_secret")
+    if settings.totp_pending_secret is not None:
+        validate_production_secret(
+            settings.totp_pending_secret,
+            label="totp_pending_secret",
+            unsafe_testing=settings.unsafe_testing,
+        )
     assembly = _build_plugin_auth_controller_assembly(settings)
     generated_controller = _define_plugin_auth_controller_class(assembly)
     if settings.enable_refresh:

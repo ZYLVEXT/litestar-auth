@@ -65,7 +65,7 @@ Used by the plugin internally; override only if you integrate custom controllers
 
 ## Shared helpers — `litestar_auth.config` {#shared-helpers--litestar_authconfig}
 
-`validate_secret_length`, `_resolve_token_secret`, `MINIMUM_SECRET_LENGTH`, and the secret-role helpers keep token validation and explicit unsafe-testing behavior consistent.
+`validate_production_secret`, `validate_secret_length`, `_resolve_token_secret`, `MINIMUM_SECRET_LENGTH`, and the secret-role helpers keep token validation and explicit unsafe-testing behavior consistent. Production secrets must clear both the length floor and the default entropy floor; repeated fixture strings are accepted only behind explicit `unsafe_testing=True` paths.
 
 ## Related
 

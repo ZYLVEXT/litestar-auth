@@ -1639,7 +1639,7 @@ def test_client_host_warns_once_when_trusted_proxy_headers_are_absent(caplog: py
     assert len(records) == 1
     assert records[0].levelno == logging.WARNING
     assert "trusted_proxy=True" in records[0].message
-    assert "X-Forwarded-For" in records[0].message
+    assert "trusted headers (count=1)" in records[0].message
 
 
 def test_client_host_does_not_reemit_warning_for_same_trusted_headers(caplog: pytest.LogCaptureFixture) -> None:
@@ -1693,8 +1693,8 @@ def test_client_host_warns_independently_for_distinct_trusted_header_tuples(
 
     records = [record for record in caplog.records if record.name == "litestar_auth.ratelimit"]
     assert len(records) == EXPECTED_DISTINCT_PROXY_WARNINGS
-    assert "X-Forwarded-For" in records[0].message
-    assert "X-Real-IP, CF-Connecting-IP" in records[1].message
+    assert "trusted headers (count=1)" in records[0].message
+    assert "trusted headers (count=2)" in records[1].message
 
 
 def test_client_host_rejects_non_boolean_trusted_proxy_configuration() -> None:

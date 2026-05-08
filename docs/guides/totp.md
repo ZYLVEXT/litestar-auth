@@ -69,8 +69,8 @@ pending-token replay; the controller logs that weaker posture at factory time.
 ## Recovery-code lookup secret and schema migration
 
 Production `totp_config` deployments must set
-`UserManagerSecurity.totp_recovery_code_lookup_secret` to a distinct 32+
-character secret. The user table stores recovery codes in `recovery_codes`
+`UserManagerSecurity.totp_recovery_code_lookup_secret` to a distinct
+CSPRNG-generated secret that clears `validate_production_secret`. The user table stores recovery codes in `recovery_codes`
 (`dict[str, str] | None`), where each key is a server-side HMAC-SHA-256 lookup
 digest and each value is the Argon2 hash of the code.
 

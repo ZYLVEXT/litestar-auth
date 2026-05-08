@@ -168,8 +168,8 @@ class OAuthManagerProxy:
             ),
             password_helper=self._password_helper,
             security=UserManagerSecurity[UUID](
-                verification_token_secret="verify-secret-1234567890-1234567890",
-                reset_password_token_secret="reset-secret-1234567890-1234567890",
+                verification_token_secret="0123456789abcdef" * 4,
+                reset_password_token_secret="fedcba9876543210" * 4,
                 id_parser=UUID,
             ),
         )
@@ -407,8 +407,8 @@ def build_app(
             oauth_account_model=OAuthAccount,
         ),
         user_manager_security=UserManagerSecurity[UUID](
-            verification_token_secret="verify-secret-1234567890-1234567890",
-            reset_password_token_secret="reset-secret-1234567890-1234567890",
+            verification_token_secret="0123456789abcdef" * 4,
+            reset_password_token_secret="fedcba9876543210" * 4,
             id_parser=UUID,
             password_helper=password_helper,
         ),
@@ -536,8 +536,8 @@ async def create_local_user(
             ),
             password_helper=state.password_helper,
             security=UserManagerSecurity[UUID](
-                verification_token_secret="verify-secret-1234567890-1234567890",
-                reset_password_token_secret="reset-secret-1234567890-1234567890",
+                verification_token_secret="0123456789abcdef" * 4,
+                reset_password_token_secret="fedcba9876543210" * 4,
                 id_parser=UUID,
             ),
         )

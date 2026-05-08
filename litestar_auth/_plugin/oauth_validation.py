@@ -8,7 +8,7 @@ from litestar_auth._plugin.oauth_contract import (
     _build_oauth_route_registration_contract,
     _OAuthRouteRegistrationContract,
 )
-from litestar_auth.config import MINIMUM_SECRET_LENGTH, OAuthProviderConfig, validate_secret_length
+from litestar_auth.config import MINIMUM_SECRET_LENGTH, OAuthProviderConfig, validate_production_secret
 from litestar_auth.exceptions import ConfigurationError
 
 if TYPE_CHECKING:
@@ -120,9 +120,10 @@ def _validate_oauth_flow_cookie_secret(
         ConfigurationError: If plugin-owned OAuth routes are missing required secret material.
     """
     if oauth_config.oauth_flow_cookie_secret is not None:
-        validate_secret_length(
+        validate_production_secret(
             oauth_config.oauth_flow_cookie_secret,
             label="oauth_flow_cookie_secret",
+            unsafe_testing=False,
             minimum_length=MINIMUM_SECRET_LENGTH,
         )
 

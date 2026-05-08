@@ -97,8 +97,8 @@ class UsersControllerManager(BaseUserManager[ExampleUser, UUID]):
             user_db,
             password_helper=password_helper,
             security=UserManagerSecurity[UUID](
-                verification_token_secret="verify-secret-1234567890-1234567890",
-                reset_password_token_secret="reset-secret-1234567890-1234567890",
+                verification_token_secret="0123456789abcdef" * 4,
+                reset_password_token_secret="fedcba9876543210" * 4,
             ),
             backends=backends,
         )

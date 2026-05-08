@@ -180,8 +180,8 @@ def build_app(
         user_db,
         password_helper=PasswordHelper(),
         security=UserManagerSecurity[UUID](
-            verification_token_secret="test-secret-verification-secret-1234567890",
-            reset_password_token_secret="test-secret-reset-password-secret-12345",
+            verification_token_secret="0123456789abcdef" * 4,
+            reset_password_token_secret="fedcba9876543210" * 4,
         ),
     )
     controller = create_auth_controller(

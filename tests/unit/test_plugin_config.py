@@ -68,6 +68,11 @@ if TYPE_CHECKING:
 
 pytestmark = pytest.mark.unit
 OAUTH_FLOW_COOKIE_SECRET = "oauth-flow-cookie-secret-1234567890"
+VERIFICATION_SECRET = "0123456789abcdef" * 4
+RESET_PASSWORD_SECRET = "fedcba9876543210" * 4
+TOTP_MANAGER_SECRET = "89abcdef01234567" * 4
+TOTP_PENDING_SECRET = "76543210fedcba98" * 4
+CSRF_SECRET = "456789abcdef0123" * 4
 
 
 def _fernet_key() -> str:
@@ -135,9 +140,9 @@ def test_feature_configs_module_constructors_apply_documented_defaults() -> None
     oauth_config_type = feature_configs_module.OAuthConfig
     database_token_config_type = feature_configs_module.DatabaseTokenAuthConfig
 
-    assert totp_config_type(totp_pending_secret="p" * 32).totp_algorithm == "SHA256"
+    assert totp_config_type(totp_pending_secret=TOTP_PENDING_SECRET).totp_algorithm == "SHA256"
     assert oauth_config_type().has_oauth_token_encryption is False
-    assert database_token_config_type(token_hash_secret="t" * 40).backend_name == "database"
+    assert database_token_config_type(token_hash_secret="0123456789abcdef" * 4).backend_name == "database"
     keyring = FernetKeyringConfig(active_key_id="current", keys={"current": _fernet_key()})
     with pytest.raises(ConfigurationError, match="oauth_token_encryption_key or oauth_token_encryption_keyring"):
         oauth_config_type(oauth_token_encryption_key=_fernet_key(), oauth_token_encryption_keyring=keyring)
@@ -186,8 +191,8 @@ def _minimal_config(  # noqa: PLR0913
         LitestarAuthConfig instance for the given options.
     """
     resolved_manager_security = user_manager_security or UserManagerSecurity[UUID](
-        verification_token_secret="x" * 32,
-        reset_password_token_secret="y" * 32,
+        verification_token_secret=VERIFICATION_SECRET,
+        reset_password_token_secret=RESET_PASSWORD_SECRET,
     )
     user_db = InMemoryUserDatabase([])
     default_backend = AuthenticationBackend[ExampleUser, UUID](
@@ -347,7 +352,7 @@ def test_litestar_auth_config_repr_keeps_secret_material_hidden_with_deployment_
     config = LitestarAuthConfig[ExampleUser, UUID](
         user_model=ExampleUser,
         user_manager_class=PluginUserManager,
-        csrf_secret="c" * 32,
+        csrf_secret="0123456789abcdef" * 4,
         deployment_worker_count=2,
     )
 
@@ -373,8 +378,8 @@ def test_litestar_auth_config_direct_construction_preserves_user_and_id_types() 
         strategy=cast("Any", InMemoryTokenStrategy(token_prefix="plugin-config-create")),
     )
     user_manager_security = UserManagerSecurity[UUID](
-        verification_token_secret="x" * 32,
-        reset_password_token_secret="y" * 32,
+        verification_token_secret=VERIFICATION_SECRET,
+        reset_password_token_secret=RESET_PASSWORD_SECRET,
     )
 
     config = LitestarAuthConfig[ExampleUser, UUID](
@@ -399,8 +404,8 @@ def test_litestar_auth_config_direct_default_manager_path_builds_expected_config
         strategy=cast("Any", InMemoryTokenStrategy(token_prefix="plugin-config-default-manager")),
     )
     user_manager_security = UserManagerSecurity[UUID](
-        verification_token_secret="x" * 32,
-        reset_password_token_secret="y" * 32,
+        verification_token_secret=VERIFICATION_SECRET,
+        reset_password_token_secret=RESET_PASSWORD_SECRET,
     )
     session_maker = assert_structural_session_factory(DummySessionMaker())
 
@@ -429,8 +434,8 @@ def test_litestar_auth_config_direct_default_manager_path_builds_expected_config
 def test_litestar_auth_config_direct_default_manager_path_runs_post_init_validation() -> None:
     """Direct construction goes through the normal dataclass validation path."""
     user_manager_security = UserManagerSecurity[UUID](
-        verification_token_secret="x" * 32,
-        reset_password_token_secret="y" * 32,
+        verification_token_secret=VERIFICATION_SECRET,
+        reset_password_token_secret=RESET_PASSWORD_SECRET,
         id_parser=UUID,
     )
 
@@ -456,8 +461,8 @@ def test_litestar_auth_config_direct_default_manager_path_preserves_user_and_id_
         user_model=ExampleUser,
         user_manager_class=PluginUserManager,
         user_manager_security=UserManagerSecurity[UUID](
-            verification_token_secret="x" * 32,
-            reset_password_token_secret="y" * 32,
+            verification_token_secret=VERIFICATION_SECRET,
+            reset_password_token_secret=RESET_PASSWORD_SECRET,
         ),
         id_parser=UUID,
     )
@@ -489,8 +494,8 @@ def test_litestar_auth_config_direct_custom_manager_factory_path_builds_expected
         strategy=cast("Any", InMemoryTokenStrategy(token_prefix="plugin-config-custom-manager-factory")),
     )
     user_manager_security = UserManagerSecurity[UUID](
-        verification_token_secret="x" * 32,
-        reset_password_token_secret="y" * 32,
+        verification_token_secret=VERIFICATION_SECRET,
+        reset_password_token_secret=RESET_PASSWORD_SECRET,
     )
 
     config = LitestarAuthConfig[ExampleUser, UUID](
@@ -550,8 +555,8 @@ def test_litestar_auth_config_direct_custom_manager_factory_invokes_factory_for_
         ),
         user_db_factory=lambda _session: user_db,
         user_manager_security=UserManagerSecurity[UUID](
-            verification_token_secret="x" * 32,
-            reset_password_token_secret="y" * 32,
+            verification_token_secret=VERIFICATION_SECRET,
+            reset_password_token_secret=RESET_PASSWORD_SECRET,
         ),
     )
     plugin = LitestarAuth(config)
@@ -594,8 +599,8 @@ async def test_litestar_auth_config_direct_custom_manager_factory_wrong_return_t
         ),
         user_db_factory=lambda _session: InMemoryUserDatabase([]),
         user_manager_security=UserManagerSecurity[UUID](
-            verification_token_secret="x" * 32,
-            reset_password_token_secret="y" * 32,
+            verification_token_secret=VERIFICATION_SECRET,
+            reset_password_token_secret=RESET_PASSWORD_SECRET,
         ),
     )
     plugin = LitestarAuth(config)
@@ -708,7 +713,7 @@ def test_litestar_auth_config_direct_manager_paths_run_post_init_once(monkeypatc
                         strategy=cast("Any", InMemoryTokenStrategy(token_prefix="post-init-conflict")),
                     ),
                 ],
-                "database_token_auth": DatabaseTokenAuthConfig(token_hash_secret="x" * 40),
+                "database_token_auth": DatabaseTokenAuthConfig(token_hash_secret="0123456789abcdef" * 4),
             },
             ValueError,
             "database_token_auth",
@@ -798,8 +803,8 @@ def test_litestar_auth_config_resolve_password_helper_preserves_explicit_helper_
     explicit_password_helper = PasswordHelper()
     config = _minimal_config(
         user_manager_security=UserManagerSecurity[UUID](
-            verification_token_secret="x" * 32,
-            reset_password_token_secret="y" * 32,
+            verification_token_secret=VERIFICATION_SECRET,
+            reset_password_token_secret=RESET_PASSWORD_SECRET,
             password_helper=explicit_password_helper,
         ),
     )
@@ -821,8 +826,8 @@ def test_litestar_auth_config_resolve_password_helper_uses_typed_security_helper
         ),
         user_db_factory=lambda _session: InMemoryUserDatabase([]),
         user_manager_security=UserManagerSecurity[UUID](
-            verification_token_secret="x" * 32,
-            reset_password_token_secret="y" * 32,
+            verification_token_secret=VERIFICATION_SECRET,
+            reset_password_token_secret=RESET_PASSWORD_SECRET,
             password_helper=typed_password_helper,
         ),
     )
@@ -844,8 +849,8 @@ def test_build_user_manager_uses_typed_password_helper_from_security() -> None:
         ),
         user_db_factory=lambda _session: InMemoryUserDatabase([]),
         user_manager_security=UserManagerSecurity[UUID](
-            verification_token_secret="x" * 32,
-            reset_password_token_secret="y" * 32,
+            verification_token_secret=VERIFICATION_SECRET,
+            reset_password_token_secret=RESET_PASSWORD_SECRET,
             password_helper=typed_password_helper,
         ),
     )
@@ -882,7 +887,7 @@ def test_litestar_auth_config_accepts_login_identifier_username() -> None:
 
 def test_totp_config_defaults_match_expected_values() -> None:
     """TotpConfig exposes stable defaults for optional settings."""
-    config = TotpConfig(totp_pending_secret="x" * 32)
+    config = TotpConfig(totp_pending_secret=TOTP_PENDING_SECRET)
 
     assert config.totp_backend_name is None
     assert config.totp_issuer == "litestar-auth"
@@ -900,25 +905,25 @@ def test_secret_bearing_plugin_config_repr_masks_secret_values() -> None:
     current_key = _fernet_key()
     old_key = _fernet_key()
     keyring = FernetKeyringConfig(active_key_id="current", keys={"current": current_key, "old": old_key})
-    totp_config = TotpConfig(totp_pending_secret="p" * 32)
+    totp_config = TotpConfig(totp_pending_secret=TOTP_PENDING_SECRET)
     oauth_config = OAuthConfig(
         oauth_token_encryption_keyring=keyring,
         oauth_flow_cookie_secret=OAUTH_FLOW_COOKIE_SECRET,
     )
-    token_config = DatabaseTokenAuthConfig(token_hash_secret="t" * 40)
+    token_config = DatabaseTokenAuthConfig(token_hash_secret="0123456789abcdef" * 4)
     plugin_config = _minimal_config(totp_config=totp_config)
     plugin_config.oauth_config = oauth_config
     plugin_config.database_token_auth = token_config
-    plugin_config.csrf_secret = "c" * 32
+    plugin_config.csrf_secret = CSRF_SECRET
 
-    assert "p" * 32 not in repr(totp_config)
+    assert "0123456789abcdef" * 4 not in repr(totp_config)
     assert current_key not in repr(keyring)
     assert old_key not in repr(keyring)
     assert current_key not in repr(oauth_config)
     assert old_key not in repr(oauth_config)
     assert OAUTH_FLOW_COOKIE_SECRET not in repr(oauth_config)
-    assert "t" * 40 not in repr(token_config)
-    assert "c" * 32 not in repr(plugin_config)
+    assert "0123456789abcdef" * 4 not in repr(token_config)
+    assert "0123456789abcdef" * 4 not in repr(plugin_config)
 
 
 def test_fernet_keyring_config_validates_and_masks_key_material() -> None:
@@ -1202,7 +1207,7 @@ def test_database_token_auth_field_builds_canonical_db_bearer_backend() -> None:
     session_maker = assert_structural_session_factory(DummySessionMaker())
     config = LitestarAuthConfig[ExampleUser, UUID](
         database_token_auth=DatabaseTokenAuthConfig(
-            token_hash_secret="x" * 40,
+            token_hash_secret="0123456789abcdef" * 4,
             max_age=timedelta(minutes=5),
             refresh_max_age=timedelta(hours=12),
             token_bytes=configured_token_bytes,
@@ -1212,15 +1217,15 @@ def test_database_token_auth_field_builds_canonical_db_bearer_backend() -> None:
         session_maker=cast("async_sessionmaker[AsyncSession]", session_maker),
         user_db_factory=lambda _session: InMemoryUserDatabase([]),
         user_manager_security=UserManagerSecurity[UUID](
-            verification_token_secret="x" * 32,
-            reset_password_token_secret="y" * 32,
+            verification_token_secret=VERIFICATION_SECRET,
+            reset_password_token_secret=RESET_PASSWORD_SECRET,
         ),
     )
 
     preset = config.database_token_auth
     assert preset is not None
     assert not hasattr(preset, "session")
-    assert preset.token_hash_secret == "x" * 40
+    assert preset.token_hash_secret == "0123456789abcdef" * 4
     assert preset.max_age == timedelta(minutes=5)
     assert preset.refresh_max_age == timedelta(hours=12)
     assert preset.token_bytes == configured_token_bytes
@@ -1288,7 +1293,7 @@ def test_startup_database_token_templates_do_not_embed_a_placeholder_session() -
     """Startup-only DB-token templates carry strategy metadata without a fake session object."""
     config = LitestarAuthConfig[ExampleUser, UUID](
         database_token_auth=DatabaseTokenAuthConfig(
-            token_hash_secret="x" * 40,
+            token_hash_secret="0123456789abcdef" * 4,
         ),
         user_model=ExampleUser,
         user_manager_class=PluginUserManager,
@@ -1298,8 +1303,8 @@ def test_startup_database_token_templates_do_not_embed_a_placeholder_session() -
         ),
         user_db_factory=lambda _session: InMemoryUserDatabase([]),
         user_manager_security=UserManagerSecurity[UUID](
-            verification_token_secret="x" * 32,
-            reset_password_token_secret="y" * 32,
+            verification_token_secret=VERIFICATION_SECRET,
+            reset_password_token_secret=RESET_PASSWORD_SECRET,
         ),
     )
 
@@ -1347,7 +1352,7 @@ async def test_startup_database_token_templates_fail_closed_for_runtime_db_work(
     """Startup-only DB-token templates fail closed if callers skip request-session binding."""
     config = LitestarAuthConfig[ExampleUser, UUID](
         database_token_auth=DatabaseTokenAuthConfig(
-            token_hash_secret="x" * 40,
+            token_hash_secret="0123456789abcdef" * 4,
         ),
         user_model=ExampleUser,
         user_manager_class=PluginUserManager,
@@ -1357,8 +1362,8 @@ async def test_startup_database_token_templates_fail_closed_for_runtime_db_work(
         ),
         user_db_factory=lambda _session: InMemoryUserDatabase([]),
         user_manager_security=UserManagerSecurity[UUID](
-            verification_token_secret="x" * 32,
-            reset_password_token_secret="y" * 32,
+            verification_token_secret=VERIFICATION_SECRET,
+            reset_password_token_secret=RESET_PASSWORD_SECRET,
         ),
     )
     startup_backend = config.resolve_startup_backends()[0]
@@ -1372,7 +1377,7 @@ async def test_startup_database_token_templates_fail_closed_for_remaining_runtim
     """Startup-only DB-token templates reject the full runtime DB-token method surface."""
     config = LitestarAuthConfig[ExampleUser, UUID](
         database_token_auth=DatabaseTokenAuthConfig(
-            token_hash_secret="x" * 40,
+            token_hash_secret="0123456789abcdef" * 4,
         ),
         user_model=ExampleUser,
         user_manager_class=PluginUserManager,
@@ -1382,8 +1387,8 @@ async def test_startup_database_token_templates_fail_closed_for_remaining_runtim
         ),
         user_db_factory=lambda _session: InMemoryUserDatabase([]),
         user_manager_security=UserManagerSecurity[UUID](
-            verification_token_secret="x" * 32,
-            reset_password_token_secret="y" * 32,
+            verification_token_secret=VERIFICATION_SECRET,
+            reset_password_token_secret=RESET_PASSWORD_SECRET,
         ),
         enable_refresh=True,
     )
@@ -1408,7 +1413,7 @@ def test_build_database_token_backend_binds_the_explicit_runtime_session() -> No
     active_session = DummySession()
     backend = database_token_module.build_database_token_backend(
         DatabaseTokenAuthConfig(
-            token_hash_secret="x" * 40,
+            token_hash_secret="0123456789abcdef" * 4,
             backend_name="opaque-db",
             refresh_max_age=timedelta(days=14),
         ),
@@ -1434,7 +1439,7 @@ def test_database_token_auth_rejects_manual_backends() -> None:
     with pytest.raises(ValueError, match=r"database_token_auth=\.\.\. or backends=\.\.\., not both"):
         LitestarAuthConfig[ExampleUser, UUID](
             database_token_auth=DatabaseTokenAuthConfig(
-                token_hash_secret="x" * 40,
+                token_hash_secret="0123456789abcdef" * 4,
             ),
             backends=[backend],
             user_model=ExampleUser,
@@ -1445,8 +1450,8 @@ def test_database_token_auth_rejects_manual_backends() -> None:
             ),
             user_db_factory=lambda _session: InMemoryUserDatabase([]),
             user_manager_security=UserManagerSecurity[UUID](
-                verification_token_secret="x" * 32,
-                reset_password_token_secret="y" * 32,
+                verification_token_secret=VERIFICATION_SECRET,
+                reset_password_token_secret=RESET_PASSWORD_SECRET,
             ),
         )
 
@@ -1482,7 +1487,7 @@ def test_resolve_backends_realizes_database_token_preset_from_request_session() 
     """`resolve_backends(session)` also realizes the canonical DB-token preset."""
     config = LitestarAuthConfig[ExampleUser, UUID](
         database_token_auth=DatabaseTokenAuthConfig(
-            token_hash_secret="x" * 40,
+            token_hash_secret="0123456789abcdef" * 4,
         ),
         user_model=ExampleUser,
         user_manager_class=PluginUserManager,
@@ -1492,8 +1497,8 @@ def test_resolve_backends_realizes_database_token_preset_from_request_session() 
         ),
         user_db_factory=lambda _session: InMemoryUserDatabase([]),
         user_manager_security=UserManagerSecurity[UUID](
-            verification_token_secret="x" * 32,
-            reset_password_token_secret="y" * 32,
+            verification_token_secret=VERIFICATION_SECRET,
+            reset_password_token_secret=RESET_PASSWORD_SECRET,
         ),
     )
     active_session = DummySession()
@@ -1552,7 +1557,7 @@ def test_resolve_backends_preserves_database_token_runtime_contract_details() ->
     """The DB-token preset still exposes startup templates plus request-scoped runtime backends."""
     config = LitestarAuthConfig[ExampleUser, UUID](
         database_token_auth=DatabaseTokenAuthConfig(
-            token_hash_secret="x" * 40,
+            token_hash_secret="0123456789abcdef" * 4,
             backend_name="opaque-db",
             refresh_max_age=timedelta(days=14),
         ),
@@ -1564,8 +1569,8 @@ def test_resolve_backends_preserves_database_token_runtime_contract_details() ->
         ),
         user_db_factory=lambda _session: InMemoryUserDatabase([]),
         user_manager_security=UserManagerSecurity[UUID](
-            verification_token_secret="x" * 32,
-            reset_password_token_secret="y" * 32,
+            verification_token_secret=VERIFICATION_SECRET,
+            reset_password_token_secret=RESET_PASSWORD_SECRET,
         ),
         enable_refresh=True,
     )
@@ -1592,7 +1597,7 @@ def test_resolve_startup_backends_reject_post_init_mixing_of_preset_and_manual_b
     """`resolve_startup_backends()` fails closed if callers mutate the config into an invalid mixed state."""
     config = LitestarAuthConfig[ExampleUser, UUID](
         database_token_auth=DatabaseTokenAuthConfig(
-            token_hash_secret="x" * 40,
+            token_hash_secret="0123456789abcdef" * 4,
         ),
         user_model=ExampleUser,
         user_manager_class=PluginUserManager,
@@ -1602,8 +1607,8 @@ def test_resolve_startup_backends_reject_post_init_mixing_of_preset_and_manual_b
         ),
         user_db_factory=lambda _session: InMemoryUserDatabase([]),
         user_manager_security=UserManagerSecurity[UUID](
-            verification_token_secret="x" * 32,
-            reset_password_token_secret="y" * 32,
+            verification_token_secret=VERIFICATION_SECRET,
+            reset_password_token_secret=RESET_PASSWORD_SECRET,
         ),
     )
     config.backends = [
@@ -1736,8 +1741,8 @@ def test_build_user_manager_injects_default_password_helper_without_prior_materi
 
 async def test_build_user_manager_applies_current_password_surface_from_config() -> None:
     """The default manager builder preserves the documented password-surface inputs."""
-    verification_secret = "v" * 32
-    reset_secret = "r" * 32
+    verification_secret = VERIFICATION_SECRET
+    reset_secret = RESET_PASSWORD_SECRET
     minimum_length = DEFAULT_MINIMUM_PASSWORD_LENGTH + 4
 
     config = _minimal_config(login_identifier="username")
@@ -1790,9 +1795,9 @@ async def test_build_user_manager_applies_current_password_surface_from_config()
 async def test_build_user_manager_prefers_typed_manager_security_contract() -> None:
     """The canonical typed security bundle feeds manager secret and parser wiring."""
     password_helper = PasswordHelper()
-    verification_secret = "v" * 32
-    reset_secret = "r" * 32
-    totp_secret_key = "t" * 32
+    verification_secret = VERIFICATION_SECRET
+    reset_secret = RESET_PASSWORD_SECRET
+    totp_secret_key = TOTP_MANAGER_SECRET
     minimum_length = DEFAULT_MINIMUM_PASSWORD_LENGTH + 4
 
     def factory(config: LitestarAuthConfig[ExampleUser, UUID]) -> Callable[[str], None]:
@@ -1864,9 +1869,9 @@ def test_build_user_manager_passes_canonical_kwargs_through_kwargs_wrapper() -> 
             self.received_manager_kwargs = dict(kwargs)
             super().__init__(cast("Any", user_db), **cast("Any", self.received_manager_kwargs))
 
-    verification_secret = "v" * 32
-    reset_secret = "r" * 32
-    totp_secret_key = "t" * 32
+    verification_secret = VERIFICATION_SECRET
+    reset_secret = RESET_PASSWORD_SECRET
+    totp_secret_key = TOTP_MANAGER_SECRET
     config = LitestarAuthConfig[ExampleUser, UUID](
         backends=_minimal_config().backends,
         user_model=ExampleUser,
@@ -1937,9 +1942,9 @@ def test_build_user_manager_passes_typed_security_to_security_only_manager() -> 
                 unsafe_testing=unsafe_testing,
             )
 
-    verification_secret = "v" * 32
-    reset_secret = "r" * 32
-    totp_secret_key = "t" * 32
+    verification_secret = VERIFICATION_SECRET
+    reset_secret = RESET_PASSWORD_SECRET
+    totp_secret_key = TOTP_MANAGER_SECRET
     config = LitestarAuthConfig[ExampleUser, UUID](
         backends=_minimal_config().backends,
         user_model=ExampleUser,
@@ -2001,9 +2006,9 @@ def test_build_user_manager_requires_canonical_default_constructor_contract() ->
                 backends=backends,
             )
 
-    verification_secret = "v" * 32
-    reset_secret = "r" * 32
-    totp_secret_key = "t" * 32
+    verification_secret = VERIFICATION_SECRET
+    reset_secret = RESET_PASSWORD_SECRET
+    totp_secret_key = TOTP_MANAGER_SECRET
     config = LitestarAuthConfig[ExampleUser, UUID](
         backends=_minimal_config().backends,
         user_model=ExampleUser,
@@ -2166,8 +2171,8 @@ def test_litestar_auth_config_builds_deferred_default_user_db_factory() -> None:
             assert_structural_session_factory(DummySessionMaker()),
         ),
         user_manager_security=UserManagerSecurity[UUID](
-            verification_token_secret="x" * 32,
-            reset_password_token_secret="y" * 32,
+            verification_token_secret=VERIFICATION_SECRET,
+            reset_password_token_secret=RESET_PASSWORD_SECRET,
         ),
     )
 
@@ -2182,7 +2187,7 @@ def test_uses_bundled_database_token_models_detects_manual_db_backend_with_bundl
     """Bundled DB-token models still trigger startup bootstrap for manual backend assembly."""
     from litestar_auth.authentication.strategy.db import DatabaseTokenStrategy  # noqa: PLC0415
 
-    strategy = DatabaseTokenStrategy(session=cast("Any", object()), token_hash_secret="x" * 40)
+    strategy = DatabaseTokenStrategy(session=cast("Any", object()), token_hash_secret="0123456789abcdef" * 4)
     backend = AuthenticationBackend[ExampleUser, UUID](
         name="database",
         transport=BearerTransport(),
@@ -2270,8 +2275,8 @@ def _invalid_db_session_config_kwargs(invalid_db_session_key: str) -> dict[str, 
         ),
         "user_db_factory": lambda _session: user_db,
         "user_manager_security": UserManagerSecurity[UUID](
-            verification_token_secret="x" * 32,
-            reset_password_token_secret="y" * 32,
+            verification_token_secret=VERIFICATION_SECRET,
+            reset_password_token_secret=RESET_PASSWORD_SECRET,
         ),
         "db_session_dependency_key": invalid_db_session_key,
     }
@@ -2308,8 +2313,8 @@ def test_litestar_auth_config_rejects_invalid_login_identifier() -> None:
             ),
             user_db_factory=lambda _session: user_db,
             user_manager_security=UserManagerSecurity[UUID](
-                verification_token_secret="x" * 32,
-                reset_password_token_secret="y" * 32,
+                verification_token_secret=VERIFICATION_SECRET,
+                reset_password_token_secret=RESET_PASSWORD_SECRET,
             ),
             login_identifier=cast("Any", "phone"),
         )

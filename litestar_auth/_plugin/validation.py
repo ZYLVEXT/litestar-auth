@@ -29,7 +29,7 @@ from litestar_auth._plugin.totp_validation import (
 from litestar_auth.config import (
     MINIMUM_SECRET_LENGTH,
     resolve_trusted_proxy_setting,
-    validate_secret_length,
+    validate_production_secret,
 )
 from litestar_auth.exceptions import ConfigurationError
 from litestar_auth.schemas import UserRead, UserUpdate
@@ -314,15 +314,17 @@ def validate_user_manager_security_config[UP: UserProtocol[Any], ID](config: Lit
 
     effective_security = manager_inputs.effective_security
     if effective_security.login_identifier_telemetry_secret is not None:
-        validate_secret_length(
+        validate_production_secret(
             effective_security.login_identifier_telemetry_secret,
             label="login_identifier_telemetry_secret",
+            unsafe_testing=config.unsafe_testing,
             minimum_length=MINIMUM_SECRET_LENGTH,
         )
     if config.totp_config is not None and effective_security.totp_recovery_code_lookup_secret is not None:
-        validate_secret_length(
+        validate_production_secret(
             effective_security.totp_recovery_code_lookup_secret,
             label="totp_recovery_code_lookup_secret",
+            unsafe_testing=config.unsafe_testing,
             minimum_length=MINIMUM_SECRET_LENGTH,
         )
     validate_user_manager_security_secret_roles_are_distinct(
@@ -446,9 +448,10 @@ def validate_cookie_auth_config[UP: UserProtocol[Any], ID](config: LitestarAuthC
         return
 
     if config.csrf_secret is not None:
-        validate_secret_length(
+        validate_production_secret(
             config.csrf_secret,
             label="csrf_secret",
+            unsafe_testing=config.unsafe_testing,
             minimum_length=MINIMUM_SECRET_LENGTH,
         )
 

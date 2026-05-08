@@ -45,6 +45,10 @@ HTTP_UNPROCESSABLE_ENTITY = 422
 _LOGIN_TEST_EMAIL = "user@example.com"
 _LOGIN_TEST_USERNAME = "testuser"
 TOTP_SECRET_KEY = Fernet.generate_key().decode()
+VERIFICATION_SECRET = "0123456789abcdef" * 4
+RESET_PASSWORD_SECRET = "fedcba9876543210" * 4
+TOTP_PENDING_SECRET = "76543210fedcba98" * 4
+CSRF_SECRET = "456789abcdef0123" * 4
 
 
 def _encrypt_test_totp_secret(secret: str) -> str:
@@ -159,8 +163,8 @@ def build_app(  # noqa: PLR0913
     user_manager = TrackingUserManager(
         user_db,
         resolved_password_helper,
-        verification_token_secret="test-secret-12345-verify-secret-12345",
-        reset_password_token_secret="test-secret-12345-reset-secret-12345",
+        verification_token_secret=VERIFICATION_SECRET,
+        reset_password_token_secret=RESET_PASSWORD_SECRET,
         login_identifier=login_identifier,
     )
     strategy: InMemoryTokenStrategy = InMemoryRefreshTokenStrategy() if enable_refresh else InMemoryTokenStrategy()
@@ -210,8 +214,8 @@ def build_cookie_refresh_app() -> tuple[Litestar, InMemoryRefreshTokenStrategy]:
     user_manager = TrackingUserManager(
         user_db,
         password_helper,
-        verification_token_secret="test-secret-12345-verify-secret-12345",
-        reset_password_token_secret="test-secret-12345-reset-secret-12345",
+        verification_token_secret=VERIFICATION_SECRET,
+        reset_password_token_secret=RESET_PASSWORD_SECRET,
     )
     strategy = InMemoryRefreshTokenStrategy()
     backend = AuthenticationBackend[ExampleUser, UUID](
@@ -328,11 +332,11 @@ def build_cookie_plugin_app(*, login_identifier: Literal["email", "username"] = 
         user_manager_factory=_build_user_manager,
         user_db_factory=lambda _session: user_db,
         user_manager_security=UserManagerSecurity[UUID](
-            verification_token_secret="test-secret-12345-verify-secret-12345",
-            reset_password_token_secret="test-secret-12345-reset-secret-12345",
+            verification_token_secret=VERIFICATION_SECRET,
+            reset_password_token_secret=RESET_PASSWORD_SECRET,
             password_helper=password_helper,
         ),
-        csrf_secret="c" * 32,
+        csrf_secret=CSRF_SECRET,
         include_register=False,
         include_verify=False,
         include_reset_password=False,
@@ -449,7 +453,7 @@ async def test_login_error_response_contains_code() -> None:
 async def test_login_returns_pending_token_when_totp_is_enabled() -> None:
     """A user with TOTP configured receives a pending token instead of a full login response."""
     app, strategy, user_manager = build_app(
-        totp_pending_secret="pending-secret-for-integration-tests-123",
+        totp_pending_secret=TOTP_PENDING_SECRET,
         initial_totp_secret="JBSWY3DPEHPK3PXP",
     )
 
