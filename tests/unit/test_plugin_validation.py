@@ -363,6 +363,40 @@ def test_redirect_validation_loopback_host_helper_preserves_startup_contract(
     assert redirect_validation_module._is_loopback_host(host) is expected
 
 
+@pytest.mark.parametrize(
+    ("host", "expected"),
+    [
+        # Loopback — same as the narrow helper.
+        pytest.param("localhost", True, id="lowercase-localhost"),
+        pytest.param("LOCALHOST", True, id="uppercase-localhost-casefolded"),
+        pytest.param("ip6-localhost", True, id="ipv6-localhost-alias"),
+        pytest.param("127.0.0.1", True, id="ipv4-loopback"),
+        pytest.param("::1", True, id="ipv6-loopback"),
+        # RFC 1918 private space.
+        pytest.param("10.0.0.5", True, id="rfc1918-10/8"),
+        pytest.param("172.16.0.1", True, id="rfc1918-172.16/12"),
+        pytest.param("192.168.1.1", True, id="rfc1918-192.168/16"),
+        # RFC 3927 link-local incl. cloud IMDS.
+        pytest.param("169.254.169.254", True, id="link-local-imds"),
+        pytest.param("fe80::1", True, id="ipv6-link-local"),
+        # Multicast / reserved / unspecified.
+        pytest.param("224.0.0.1", True, id="ipv4-multicast"),
+        pytest.param("0.0.0.0", True, id="ipv4-unspecified"),
+        pytest.param("240.0.0.1", True, id="ipv4-reserved"),
+        # Public hosts must pass.
+        pytest.param("8.8.8.8", False, id="public-ipv4"),
+        pytest.param("1.1.1.1", False, id="public-ipv4-cloudflare"),
+        pytest.param("app.example.com", False, id="public-hostname"),
+    ],
+)
+def test_redirect_validation_unsafe_redirect_host_helper_blocks_non_routable_ips(
+    host: str,
+    expected: object,
+) -> None:
+    """The broader SSRF-aware predicate rejects every non-routable IP family."""
+    assert redirect_validation_module._is_unsafe_redirect_host(host) is expected
+
+
 def test_warn_insecure_plugin_startup_defaults_emits_all_expected_security_warnings(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1927,8 +1961,28 @@ def test_require_secure_oauth_redirect_in_production_accepts_public_https_origin
         ),
         pytest.param(
             "https://localhost/auth",
-            "non-loopback public HTTPS origin",
+            "routable public HTTPS origin",
             id="loopback-https-origin",
+        ),
+        pytest.param(
+            "https://10.0.0.5/auth",
+            "routable public HTTPS origin",
+            id="rfc1918-private-ip",
+        ),
+        pytest.param(
+            "https://169.254.169.254/auth",
+            "routable public HTTPS origin",
+            id="link-local-imds",
+        ),
+        pytest.param(
+            "https://[::1]/auth",
+            "routable public HTTPS origin",
+            id="ipv6-loopback",
+        ),
+        pytest.param(
+            "https://[fe80::1]/auth",
+            "routable public HTTPS origin",
+            id="ipv6-link-local",
         ),
     ],
 )
@@ -1936,7 +1990,7 @@ def test_require_secure_oauth_redirect_in_production_rejects_insecure_origins(
     redirect_base_url: str,
     message: str,
 ) -> None:
-    """Production startup fails closed for public HTTP and loopback OAuth redirect bases."""
+    """Production startup fails closed for public HTTP and non-routable OAuth redirect bases."""
     config = _minimal_config(
         oauth_config=OAuthConfig(
             oauth_providers=[_oauth_provider(name="github", client=object())],

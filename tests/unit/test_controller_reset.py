@@ -9,7 +9,12 @@ from uuid import UUID, uuid4
 
 import msgspec
 import pytest
-from litestar.status_codes import HTTP_200_OK, HTTP_202_ACCEPTED, HTTP_400_BAD_REQUEST
+from litestar.status_codes import (
+    HTTP_200_OK,
+    HTTP_202_ACCEPTED,
+    HTTP_400_BAD_REQUEST,
+    HTTP_500_INTERNAL_SERVER_ERROR,
+)
 from litestar.testing import AsyncTestClient
 
 from litestar_auth.controllers.reset import (
@@ -38,15 +43,23 @@ class DummyUser(msgspec.Struct):
 class DummyUserManager:
     """User manager stub that can be configured to raise specific errors."""
 
-    def __init__(self, error: Exception | None = None) -> None:
-        """Initialize the stub with an optional error to raise on reset_password."""
+    def __init__(
+        self,
+        error: Exception | None = None,
+        *,
+        forgot_password_error: Exception | None = None,
+    ) -> None:
+        """Initialize the stub with optional errors to raise on reset/forgot password."""
         self.error = error
+        self.forgot_password_error = forgot_password_error
         self.last_forgot_password_email: str | None = None
         self.last_reset_arguments: dict[str, Any] | None = None
 
     async def forgot_password(self, email: str) -> None:
-        """Record the email used to request a reset token."""
+        """Record the email used to request a reset token, or raise if configured."""
         self.last_forgot_password_email = email
+        if self.forgot_password_error is not None:
+            raise self.forgot_password_error
 
     async def reset_password(self, token: str, password: str) -> DummyUser:
         """Return a dummy user or raise the configured error."""
@@ -164,6 +177,37 @@ async def test_forgot_password_success_increments_rate_limit_and_forwards_email(
     assert manager.last_forgot_password_email == "user@example.com"
     backend.increment.assert_awaited_once()
     backend.reset.assert_not_awaited()
+
+
+async def test_forgot_password_increments_rate_limit_even_when_manager_raises() -> None:
+    """Rate-limit must increment via `finally` so transient manager failures are still counted."""
+    backend = MagicMock()
+    backend.check = AsyncMock(return_value=True)
+    backend.increment = AsyncMock()
+    backend.reset = AsyncMock()
+    manager = DummyUserManager(forgot_password_error=RuntimeError("transient SMTP failure"))
+    controller = create_reset_password_controller(
+        rate_limit_config=AuthRateLimitConfig(
+            forgot_password=EndpointRateLimit(
+                backend=backend,
+                scope="ip_email",
+                namespace="forgot-password",
+            ),
+        ),
+    )
+
+    # The exception bubbles up as a 500 (Litestar default mapping for unhandled exceptions).
+    status_code = await _invoke_forgot_password(
+        controller,
+        email="user@example.com",
+        user_manager=manager,
+    )
+
+    # The exact 5xx code does not matter — the contract is that the limiter still
+    # incremented despite the failure, closing the abuse window.
+    assert status_code >= HTTP_500_INTERNAL_SERVER_ERROR
+    assert manager.last_forgot_password_email == "user@example.com"
+    backend.increment.assert_awaited_once()
 
 
 async def test_forgot_password_rate_limit_before_request_is_a_noop_when_rate_limit_cell_is_none() -> None:

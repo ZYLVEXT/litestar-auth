@@ -1455,8 +1455,10 @@ def test_create_oauth_associate_controller_raises_when_both_or_neither_user_mana
     ("factory_name", "redirect_base_url", "expected_message"),
     [
         ("login", "http://app.example/auth/oauth", "public HTTPS origin"),
-        ("associate", "https://localhost/auth/associate", "non-loopback public HTTPS origin"),
+        ("associate", "https://localhost/auth/associate", "routable public HTTPS origin"),
         ("provider", "http://app.example/auth/oauth", "public HTTPS origin"),
+        ("login", "https://10.0.0.5/auth/oauth", "routable public HTTPS origin"),
+        ("associate", "https://169.254.169.254/auth/associate", "routable public HTTPS origin"),
     ],
 )
 def test_manual_oauth_factories_reject_insecure_redirect_origins(

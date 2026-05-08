@@ -8,7 +8,7 @@ from functools import cache
 from typing import TYPE_CHECKING, Any, cast
 from urllib.parse import urlsplit
 
-from litestar_auth._plugin._redirect_validation import _is_loopback_host
+from litestar_auth._plugin._redirect_validation import _is_unsafe_redirect_host
 from litestar_auth._plugin.middleware import get_cookie_transports
 from litestar_auth._plugin.oauth_contract import _build_oauth_route_registration_contract
 from litestar_auth._plugin.rate_limit import iter_rate_limit_endpoint_items
@@ -261,11 +261,16 @@ def _require_https_oauth_redirect_base_url(redirect_base_url: str, scheme: str) 
 
 
 def _require_public_oauth_redirect_host(redirect_base_url: str, host: str | None) -> None:
-    if host is not None and not _is_loopback_host(host):
+    if host is not None and not _is_unsafe_redirect_host(host):
         return
+    # Security: production OAuth callbacks must reach the app over the public
+    # internet. Reject loopback, RFC 1918 private, RFC 3927 link-local (incl.
+    # 169.254/16 cloud IMDS), multicast, and reserved literals so a misrouted
+    # provider redirect cannot exfiltrate `code`/`state` to internal services.
     msg = (
-        "Plugin-managed OAuth routes require oauth_redirect_base_url to use a non-loopback public HTTPS origin "
-        f"in production. Received {redirect_base_url!r}. Use AppConfig(debug=True) or unsafe_testing=True only "
+        "Plugin-managed OAuth routes require oauth_redirect_base_url to use a routable public HTTPS origin "
+        "(no loopback, private, link-local, multicast, or reserved hosts) in production. "
+        f"Received {redirect_base_url!r}. Use AppConfig(debug=True) or unsafe_testing=True only "
         "for explicit local-development and test recipes."
     )
     raise ConfigurationError(msg)

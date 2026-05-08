@@ -711,15 +711,18 @@ def test_create_oauth_controller_rejects_invalid_configured_scopes(
     ("redirect_base_url", "expected_message"),
     [
         ("http://app.example/auth/oauth", "public HTTPS origin"),
-        ("https://localhost/auth/oauth", "non-loopback public HTTPS origin"),
-        ("https://127.0.0.1/auth/oauth", "non-loopback public HTTPS origin"),
+        ("https://localhost/auth/oauth", "routable public HTTPS origin"),
+        ("https://127.0.0.1/auth/oauth", "routable public HTTPS origin"),
+        ("https://10.0.0.5/auth/oauth", "routable public HTTPS origin"),
+        ("https://169.254.169.254/auth/oauth", "routable public HTTPS origin"),
+        ("https://[fe80::1]/auth/oauth", "routable public HTTPS origin"),
     ],
 )
 def test_create_oauth_controller_rejects_insecure_redirect_base_url(
     redirect_base_url: str,
     expected_message: str,
 ) -> None:
-    """Manual login-controller wiring fails closed for HTTP and loopback redirect origins."""
+    """Manual login-controller wiring fails closed for HTTP and non-routable redirect origins."""
     with pytest.raises(ConfigurationError, match=expected_message):
         create_oauth_controller(
             provider_name="github",
@@ -840,15 +843,17 @@ def test_create_oauth_associate_controller_rejects_invalid_dependency_parameter_
     ("redirect_base_url", "expected_message"),
     [
         ("http://app.example/auth/associate", "public HTTPS origin"),
-        ("https://localhost/auth/associate", "non-loopback public HTTPS origin"),
-        ("https://[::1]/auth/associate", "non-loopback public HTTPS origin"),
+        ("https://localhost/auth/associate", "routable public HTTPS origin"),
+        ("https://[::1]/auth/associate", "routable public HTTPS origin"),
+        ("https://192.168.1.10/auth/associate", "routable public HTTPS origin"),
+        ("https://[fe80::1]/auth/associate", "routable public HTTPS origin"),
     ],
 )
 def test_create_oauth_associate_controller_rejects_insecure_redirect_base_url(
     redirect_base_url: str,
     expected_message: str,
 ) -> None:
-    """Manual associate-controller wiring fails closed for HTTP and loopback redirect origins."""
+    """Manual associate-controller wiring fails closed for HTTP and non-routable redirect origins."""
     with pytest.raises(ConfigurationError, match=expected_message):
         create_oauth_associate_controller(
             provider_name="github",

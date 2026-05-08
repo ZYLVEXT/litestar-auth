@@ -656,8 +656,18 @@ def test_on_app_init_allows_oauth_providers_when_encryption_key_is_configured() 
         ),
         pytest.param(
             "https://localhost/auth",
-            "non-loopback public HTTPS origin",
+            "routable public HTTPS origin",
             id="loopback-https-origin",
+        ),
+        pytest.param(
+            "https://10.0.0.5/auth",
+            "routable public HTTPS origin",
+            id="rfc1918-private-ip",
+        ),
+        pytest.param(
+            "https://169.254.169.254/auth",
+            "routable public HTTPS origin",
+            id="link-local-imds",
         ),
         pytest.param(
             "https://user@app.example.com/auth",

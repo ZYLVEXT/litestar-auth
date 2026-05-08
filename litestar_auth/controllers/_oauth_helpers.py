@@ -4,12 +4,12 @@ from __future__ import annotations
 
 import hmac
 from dataclasses import dataclass
-from ipaddress import ip_address
 from typing import TYPE_CHECKING, Any, NoReturn
 from urllib.parse import urlsplit
 
 from litestar.exceptions import ClientException
 
+from litestar_auth._plugin._redirect_validation import _is_unsafe_redirect_host
 from litestar_auth.exceptions import ConfigurationError, ErrorCode
 from litestar_auth.oauth.service import (
     _require_verified_email_evidence as _service_require_verified_email_evidence,
@@ -61,9 +61,14 @@ def _validate_manual_oauth_redirect_base_url(redirect_base_url: str) -> None:
         raise ConfigurationError(msg)
 
     host = parsed_redirect_base_url.hostname
-    if host is None or _is_loopback_host(host):
+    if host is None or _is_unsafe_redirect_host(host):
+        # Security: reject any host that resolves to a non-routable network so a
+        # misconfigured redirect_base_url cannot send OAuth `code` to internal
+        # services (loopback, RFC 1918 private, RFC 3927 link-local incl. AWS/GCP
+        # IMDS at 169.254.169.254, multicast, or reserved ranges).
         msg = (
-            "Manual/custom OAuth controllers require redirect_base_url to use a non-loopback public HTTPS origin. "
+            "Manual/custom OAuth controllers require redirect_base_url to use a routable public HTTPS origin "
+            "(no loopback, private, link-local, multicast, or reserved hosts). "
             f"Received {redirect_base_url!r}."
         )
         raise ConfigurationError(msg)
@@ -79,16 +84,6 @@ def _validate_manual_oauth_redirect_base_url(redirect_base_url: str) -> None:
             f"Received {redirect_base_url!r}."
         )
         raise ConfigurationError(msg)
-
-
-def _is_loopback_host(host: str) -> bool:
-    """Return whether ``host`` is a localhost or loopback IP literal."""
-    if host.casefold() == "localhost":
-        return True
-    try:
-        return ip_address(host).is_loopback
-    except ValueError:
-        return False
 
 
 def _normalize_oauth_scopes(scopes: Sequence[str] | None) -> tuple[str, ...] | None:

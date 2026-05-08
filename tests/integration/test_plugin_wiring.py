@@ -316,8 +316,13 @@ def test_oauth_plugin_routes_require_encryption_key_at_startup() -> None:
         ),
         pytest.param(
             "https://localhost/auth",
-            "non-loopback public HTTPS origin",
+            "routable public HTTPS origin",
             id="loopback-https-origin",
+        ),
+        pytest.param(
+            "https://192.168.1.10/auth",
+            "routable public HTTPS origin",
+            id="rfc1918-private-ip",
         ),
     ],
 )

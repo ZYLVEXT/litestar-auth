@@ -129,9 +129,13 @@ def _define_verify_controller_class(ctx: _VerifyControllerContext) -> type[Contr
             data: RequestVerifyToken,
             litestar_auth_user_manager: VerifyControllerUserManagerProtocol[Any, Any],
         ) -> None:
-            await litestar_auth_user_manager.request_verify_token(data.email)
-            if ctx.request_verify_rate_limit is not None:
-                await ctx.request_verify_rate_limit.increment(request)
+            # Security: increment in `finally` so transient manager errors do not
+            # bypass the limiter. request_verify_token is enumeration-resistant.
+            try:
+                await litestar_auth_user_manager.request_verify_token(data.email)
+            finally:
+                if ctx.request_verify_rate_limit is not None:
+                    await ctx.request_verify_rate_limit.increment(request)
 
     verify_cls = VerifyController
     verify_cls.__module__ = __name__

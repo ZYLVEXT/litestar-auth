@@ -112,12 +112,16 @@ def _define_reset_password_controller_class(ctx: _ResetPasswordControllerContext
             data: ForgotPassword,
             litestar_auth_user_manager: ResetPasswordControllerUserManagerProtocol[Any, Any],
         ) -> None:
-            await litestar_auth_user_manager.forgot_password(data.email)
-            # Rate limit increments only after successful dispatch — intentional.
-            # Counting failures would let attackers distinguish "email not found"
-            # from "email sent", enabling account enumeration.
-            if ctx.forgot_password_rate_limit is not None:
-                await ctx.forgot_password_rate_limit.increment(request)
+            # Security: increment in `finally` so transient manager errors (e.g.
+            # broken email transport, DB hiccup) cannot yield a free unrate-limited
+            # path. The manager's forgot_password is enumeration-resistant by
+            # construction (same response shape regardless of user existence), so
+            # counting failures does not open an account-enumeration side channel.
+            try:
+                await litestar_auth_user_manager.forgot_password(data.email)
+            finally:
+                if ctx.forgot_password_rate_limit is not None:
+                    await ctx.forgot_password_rate_limit.increment(request)
 
         @post("/reset-password", status_code=HTTP_200_OK, before_request=ctx.reset_password_before_request)
         async def reset_password(  # noqa: PLR6301

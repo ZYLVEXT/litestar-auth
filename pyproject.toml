@@ -38,13 +38,13 @@ tracker = "https://github.com/ZYLVEXT/litestar-auth/issues"
 
 [project.optional-dependencies]
 redis = ["redis>=7.4.0,<8.0.0"]
-oauth = ["httpx-oauth>=0.16.1,<0.17.0", "cryptography>=47.0.0"]
-totp = ["cryptography>=47.0.0"]
+oauth = ["httpx-oauth>=0.16.1,<0.17.0", "cryptography>=48.0.0"]
+totp = ["cryptography>=48.0.0"]
 all = ["litestar-auth[redis,oauth,totp]"]
 
 [dependency-groups]
 dev = [
-    "commitizen>=4.13.10",
+    "commitizen>=4.15.1",
     "pip-audit>=2.10.0",
     "pytest>=9.0.3",
     "pytest-cov>=7.1.0",
@@ -57,13 +57,13 @@ dev = [
     "rust-just>=1.50.0",
     "ty>=0.0.34",
     "deptry>=0.25.1",
-    "prek>=0.3.11",
+    "prek>=0.3.13",
     "fakeredis[lua]>=2.35.1",
 ]
 docs = [
     "mkdocstrings[python]>=1.0.4",
     "pymdown-extensions>=10.21.2",
-    "zensical>=0.0.39",
+    "zensical>=0.0.40",
 ]
 
 [tool.ty.environment]

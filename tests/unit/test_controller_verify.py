@@ -8,7 +8,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import msgspec
 import pytest
-from litestar.status_codes import HTTP_200_OK, HTTP_400_BAD_REQUEST
+from litestar.status_codes import HTTP_200_OK, HTTP_400_BAD_REQUEST, HTTP_500_INTERNAL_SERVER_ERROR
 from litestar.testing import AsyncTestClient
 
 from litestar_auth.controllers.verify import create_verify_controller
@@ -39,9 +39,16 @@ class DummyUser(msgspec.Struct):
 class DummyUserManager:
     """User manager stub satisfying the verify-controller protocol."""
 
-    def __init__(self, error: Exception | None = None) -> None:
-        """Initialize the stub with an optional error to raise on verify."""
+    def __init__(
+        self,
+        error: Exception | None = None,
+        *,
+        request_verify_error: Exception | None = None,
+    ) -> None:
+        """Initialize the stub with optional errors to raise on verify or request_verify_token."""
         self.error = error
+        self.request_verify_error = request_verify_error
+        self.last_request_verify_email: str | None = None
 
     async def verify(self, token: str) -> DummyUser:
         """Return a verified user or raise the configured error."""
@@ -51,8 +58,10 @@ class DummyUserManager:
         return DummyUser(id=uuid4(), email="verified@example.com", is_verified=True)
 
     async def request_verify_token(self, email: str) -> None:
-        """Accept a verify-token request without side effects."""
-        del email
+        """Accept a verify-token request, or raise the configured error."""
+        self.last_request_verify_email = email
+        if self.request_verify_error is not None:
+            raise self.request_verify_error
 
 
 def _make_closure_cell(value: object) -> CellType:
@@ -81,6 +90,53 @@ async def _invoke_verify(
     async with AsyncTestClient(app=app) as client:
         response = await client.post("/auth/verify", json={"token": token})
     return response.status_code, cast("dict[str, Any]", response.json())
+
+
+async def _invoke_request_verify_token(
+    controller: type[Controller],
+    *,
+    email: str,
+    user_manager: object,
+) -> int:
+    """Call the request-verify-token endpoint of a generated controller.
+
+    Returns:
+        Response status code.
+    """
+    app = litestar_app_with_user_manager(user_manager, controller)
+    async with AsyncTestClient(app=app) as client:
+        response = await client.post("/auth/request-verify-token", json={"email": email})
+    return response.status_code
+
+
+async def test_request_verify_token_increments_rate_limit_even_when_manager_raises() -> None:
+    """Rate-limit must increment via `finally` so transient manager failures are still counted."""
+    backend = MagicMock()
+    backend.check = AsyncMock(return_value=True)
+    backend.increment = AsyncMock()
+    backend.reset = AsyncMock()
+    manager = DummyUserManager(request_verify_error=RuntimeError("transient SMTP failure"))
+    controller = create_verify_controller(
+        rate_limit_config=AuthRateLimitConfig(
+            request_verify_token=EndpointRateLimit(
+                backend=backend,
+                scope="ip_email",
+                namespace="verify-request",
+            ),
+        ),
+    )
+
+    status_code = await _invoke_request_verify_token(
+        controller,
+        email="user@example.com",
+        user_manager=manager,
+    )
+
+    # The exact 5xx code does not matter — the contract is that the limiter still
+    # incremented despite the failure, closing the abuse window.
+    assert status_code >= HTTP_500_INTERNAL_SERVER_ERROR
+    assert manager.last_request_verify_email == "user@example.com"
+    backend.increment.assert_awaited_once()
 
 
 async def test_request_verify_rate_limit_before_request_is_a_noop_when_rate_limit_cell_is_none() -> None:
