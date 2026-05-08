@@ -2,6 +2,16 @@
 
 ### Security
 
+- **`JWTStrategy` now fails closed when an asymmetric algorithm
+  (`RS256`/`RS384`/`RS512`/`ES256`/`ES384`/`ES512`) is configured without an
+  explicit `verify_key`.** The previous fallback silently reused the private
+  signing secret as the verify key, leaking private material into any
+  consumer that reads the verify side. Asymmetric strategies must now pass
+  the public-key PEM as `verify_key`. As a side effect, the chars-count
+  `validate_secret_length` check is no longer applied to asymmetric
+  signing material — multi-line PEMs are validated structurally by PyJWT at
+  sign/verify time. HMAC algorithms (`HS256`/`HS384`/`HS512`) keep the
+  existing chars-count secret-length floor unchanged.
 - **OAuth `redirect_base_url` now rejects non-routable hosts at plugin startup
   and across the manual/custom controller factories.** The validator already
   blocked HTTP and loopback origins; it now additionally rejects RFC 1918

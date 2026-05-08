@@ -405,6 +405,36 @@ async def test_jwt_strategy_supports_rs256_with_separate_verify_key() -> None:
     assert user_manager.seen_user_ids == [user.id]
 
 
+@pytest.mark.parametrize("algorithm", ["RS256", "RS384", "RS512", "ES256", "ES384", "ES512"])
+def test_jwt_strategy_rejects_asymmetric_algorithm_without_verify_key(algorithm: str) -> None:
+    """Asymmetric algorithms must fail closed when verify_key is omitted.
+
+    Falling back to the private signing secret as the verify key would leak
+    private material into anywhere the verify side is read or shared.
+    """
+    with pytest.raises(ValueError, match="requires an explicit verify_key"):
+        JWTStrategy[ExampleUser, UUID](
+            secret=RSA_PRIVATE_KEY,
+            algorithm=algorithm,
+            allow_inmemory_denylist=True,
+        )
+
+
+def test_jwt_strategy_skips_secret_length_check_for_asymmetric_algorithm() -> None:
+    """Asymmetric strategies do not run the HMAC chars-count secret-length check.
+
+    PEM material is structurally validated by PyJWT at sign/verify time;
+    counting characters of a multi-line PEM is meaningless. The chars-count
+    check stays in force only for HMAC shared secrets.
+    """
+    JWTStrategy[ExampleUser, UUID](
+        secret=RSA_PRIVATE_KEY,
+        verify_key=RSA_PUBLIC_KEY,
+        algorithm="RS256",
+        allow_inmemory_denylist=True,
+    )
+
+
 async def test_jwt_strategy_uses_secret_key_for_default_session_fingerprint() -> None:
     """Default fingerprints are keyed with the JWT secret for symmetric algorithms."""
     password = "hashed-password"

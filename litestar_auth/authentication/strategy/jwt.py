@@ -48,6 +48,10 @@ _ALLOWED_ALGORITHMS = frozenset(
         "ES512",
     },
 )
+# Asymmetric algorithms require a separate verify_key (public-key PEM).
+# Falling back to the private signing secret as the verify key would leak
+# private material into anywhere the verify side is read or shared.
+_ASYMMETRIC_ALGORITHMS = frozenset({"RS256", "RS384", "RS512", "ES256", "ES384", "ES512"})
 
 
 def _default_session_fingerprint(key: bytes) -> Callable[[object], str | None]:
@@ -161,7 +165,21 @@ class JWTStrategy(Strategy[UP, ID]):
             msg = f"Unsupported JWT algorithm '{settings.algorithm}'. Allowed algorithms: {sorted(_ALLOWED_ALGORITHMS)}"
             raise ValueError(msg)
 
-        validate_secret_length(settings.secret, label="JWT signing secret")
+        # Security: asymmetric algorithms must receive an explicit public-key
+        # verify_key. Silently reusing the private signing secret as the
+        # verify key would leak private material into any consumer that reads
+        # the verify side, and the chars-count secret-length check below is
+        # meaningless against multi-line PEM material.
+        if settings.algorithm in _ASYMMETRIC_ALGORITHMS:
+            if settings.verify_key is None:
+                msg = (
+                    f"JWT algorithm {settings.algorithm!r} is asymmetric and requires an "
+                    "explicit verify_key (public-key PEM). Refusing to fall back to the "
+                    "private signing key."
+                )
+                raise ValueError(msg)
+        else:
+            validate_secret_length(settings.secret, label="JWT signing secret")
         self.secret = settings.secret
         self.verify_key = settings.verify_key if settings.verify_key is not None else settings.secret
         self.algorithm = settings.algorithm
