@@ -16,14 +16,17 @@ import litestar_auth.totp_flow as totp_flow_module
 from litestar_auth.exceptions import ConfigurationError
 
 JWT_ACCESS_TOKEN_AUDIENCE = config_module.JWT_ACCESS_TOKEN_AUDIENCE
+MINIMUM_SECRET_ENTROPY_BITS = config_module.MINIMUM_SECRET_ENTROPY_BITS
 MINIMUM_SECRET_LENGTH = config_module.MINIMUM_SECRET_LENGTH
 RESET_PASSWORD_TOKEN_AUDIENCE = config_module.RESET_PASSWORD_TOKEN_AUDIENCE
 TOTP_ENROLL_AUDIENCE = config_module.TOTP_ENROLL_AUDIENCE
 TOTP_PENDING_AUDIENCE = config_module.TOTP_PENDING_AUDIENCE
 VERIFY_TOKEN_AUDIENCE = config_module.VERIFY_TOKEN_AUDIENCE
 _resolve_token_secret = config_module._resolve_token_secret
+_shannon_entropy_bits = config_module._shannon_entropy_bits
 resolve_trusted_proxy_setting = config_module.resolve_trusted_proxy_setting
 validate_secret_length = config_module.validate_secret_length
+validate_secret_strength = config_module.validate_secret_strength
 
 pytestmark = pytest.mark.unit
 GENERATED_SECRET_HEX_LENGTH = 64
@@ -144,6 +147,67 @@ def test_resolve_token_secret_returns_explicit_secret_in_production() -> None:
     secret = "s" * MINIMUM_SECRET_LENGTH
 
     assert _resolve_token_secret(secret, label="JWT secret") == secret
+
+
+def test_shannon_entropy_bits_returns_zero_for_empty_string() -> None:
+    """The empty string carries no entropy."""
+    assert _shannon_entropy_bits("") == pytest.approx(0.0, abs=0.0)
+
+
+def test_shannon_entropy_bits_returns_zero_for_repeated_character() -> None:
+    """Single-symbol strings collapse to zero bits regardless of length."""
+    assert _shannon_entropy_bits("a" * 32) == pytest.approx(0.0, abs=0.0)
+
+
+def test_shannon_entropy_bits_grows_with_alphabet_size() -> None:
+    """Uniformly drawn high-alphabet strings score near the theoretical maximum."""
+    # ``secrets.token_hex(32)`` yields 64 chars over 16 hex symbols; the
+    # observed-frequency estimate sits comfortably above 128 bits.
+    import secrets as _secrets  # noqa: PLC0415
+
+    assert _shannon_entropy_bits(_secrets.token_hex(32)) > MINIMUM_SECRET_ENTROPY_BITS
+
+
+def test_validate_secret_strength_accepts_high_entropy_secret() -> None:
+    """Cryptographically random secrets clear both length and entropy floors."""
+    import secrets as _secrets  # noqa: PLC0415
+
+    validate_secret_strength(_secrets.token_hex(32), label="JWT secret")
+
+
+def test_validate_secret_strength_rejects_low_entropy_secret() -> None:
+    """Repeated-character secrets are rejected even when long enough.
+
+    Without an entropy gate, ``"a" * MINIMUM_SECRET_LENGTH`` would slip past
+    the chars-count floor and silently weaken JWT signing or Fernet keys.
+    """
+    with pytest.raises(ConfigurationError, match="insufficient entropy"):
+        validate_secret_strength("a" * MINIMUM_SECRET_LENGTH, label="JWT secret")
+
+
+def test_validate_secret_strength_rejects_short_secret_before_entropy_check() -> None:
+    """Length validation runs first so the error wording remains stable."""
+    with pytest.raises(ConfigurationError, match=rf"must be at least {MINIMUM_SECRET_LENGTH} characters"):
+        validate_secret_strength("short", label="JWT secret")
+
+
+def test_validate_secret_strength_skips_entropy_when_floor_is_zero() -> None:
+    """Setting ``minimum_entropy_bits=0`` disables the entropy gate."""
+    validate_secret_strength(
+        "a" * MINIMUM_SECRET_LENGTH,
+        label="JWT secret",
+        minimum_entropy_bits=0,
+    )
+
+
+def test_validate_secret_strength_exposes_minimum_in_error_message() -> None:
+    """Operators get a generation hint and explicit threshold in the failure."""
+    with pytest.raises(ConfigurationError) as exc_info:
+        validate_secret_strength("a" * MINIMUM_SECRET_LENGTH, label="JWT secret")
+    message = str(exc_info.value)
+    assert "JWT secret" in message
+    assert f"required {MINIMUM_SECRET_ENTROPY_BITS:.0f}" in message
+    assert "secrets.token_hex" in message
 
 
 @pytest.mark.parametrize("trusted_proxy", [True, False])

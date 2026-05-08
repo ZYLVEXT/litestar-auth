@@ -1,5 +1,19 @@
 ## Unreleased
 
+### Added
+
+- **`litestar_auth.config.validate_secret_strength()` — opt-in production
+  gate for token / cookie / Fernet secrets.** Combines the existing length
+  floor with an approximate Shannon-entropy floor (default
+  `MINIMUM_SECRET_ENTROPY_BITS = 128.0`) so that degenerate misconfig like
+  `"a" * 32` is rejected before reaching JWT signing or Fernet key
+  derivation. The internal callsites still apply the chars-count floor only,
+  to keep test fixtures interchangeable with production config; operators
+  should wire `validate_secret_strength` into the application's startup hook
+  (or a custom `LitestarAuthConfig` bootstrap) to enforce the entropy floor
+  on user-supplied secrets. Pass `minimum_entropy_bits=0` to disable the
+  entropy gate while keeping length validation.
+
 ### Security
 
 - **TOTP recovery-code verification now performs exactly one Argon2 verify

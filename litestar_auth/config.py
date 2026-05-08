@@ -7,8 +7,10 @@ explicit unsafe-testing overrides.
 
 from __future__ import annotations
 
+import math
 import secrets
 import warnings
+from collections import Counter
 from dataclasses import dataclass
 from re import fullmatch
 
@@ -24,6 +26,12 @@ from litestar_auth._secret_roles import (
 from litestar_auth.exceptions import ConfigurationError
 
 MINIMUM_SECRET_LENGTH = 32
+# Shannon-entropy floor recommended for production-config secrets. 128 bits
+# rejects degenerate misconfig ("a" * 32 ≈ 0 bits) while comfortably accepting
+# ``secrets.token_hex(32)`` (~256 bits) and ``secrets.token_urlsafe(32)``
+# (~256 bits). Operators can pass a stricter floor through
+# :func:`validate_secret_strength`.
+MINIMUM_SECRET_ENTROPY_BITS = 128.0
 # Shared password-length bounds for built-in validation and schema metadata.
 DEFAULT_MINIMUM_PASSWORD_LENGTH = 12
 MAX_PASSWORD_LENGTH = 128
@@ -36,6 +44,7 @@ __all__ = (
     "JWT_ACCESS_TOKEN_AUDIENCE",
     "JWT_TIME_CLAIM_LEEWAY_SECONDS",
     "MAX_PASSWORD_LENGTH",
+    "MINIMUM_SECRET_ENTROPY_BITS",
     "MINIMUM_SECRET_LENGTH",
     "OAUTH_PROVIDER_NAME_PATTERN",
     "RESET_PASSWORD_TOKEN_AUDIENCE",
@@ -49,6 +58,7 @@ __all__ = (
     "validate_oauth_provider_name",
     "validate_secret_length",
     "validate_secret_roles_are_distinct",
+    "validate_secret_strength",
 )
 
 
@@ -124,6 +134,71 @@ def validate_secret_length(secret: str, *, label: str, minimum_length: int = MIN
 
     msg = f"{label} must be at least {minimum_length} characters."
     raise ConfigurationError(msg)
+
+
+def _shannon_entropy_bits(value: str) -> float:
+    """Return an approximate Shannon entropy estimate for ``value`` in bits.
+
+    Uses observed per-character frequencies, so highly repetitive or
+    low-alphabet strings (e.g. ``"a" * 32``) collapse to near-zero bits while
+    uniformly drawn random tokens approach the maximum implied by the
+    alphabet (e.g. ``secrets.token_hex(32)`` reports ≈252 bits over its
+    16-symbol alphabet across 64 characters).
+
+    This is a coarse upper-bound estimator, not a security guarantee:
+    structured but high-alphabet inputs (English passphrases, base64-encoded
+    timestamps) can score well above the configured floor.
+    """
+    if not value:
+        return 0.0
+    counter = Counter(value)
+    length = len(value)
+    return -sum((count / length) * math.log2(count / length) for count in counter.values()) * length
+
+
+def validate_secret_strength(
+    secret: str,
+    *,
+    label: str,
+    minimum_length: int = MINIMUM_SECRET_LENGTH,
+    minimum_entropy_bits: float = MINIMUM_SECRET_ENTROPY_BITS,
+) -> None:
+    """Validate that a configured secret clears length and Shannon-entropy floors.
+
+    The base library checks length only at constructor seams to keep test
+    fixtures interchangeable with production config. ``validate_secret_strength``
+    is the recommended operator-side gate for production deployments: wire it
+    into the application's startup hook (or a custom `LitestarAuthConfig`
+    bootstrap path) to fail closed on degenerate inputs like ``"a" * 32``,
+    keyboard-mashed strings, or other low-entropy material that the chars-count
+    check alone cannot reject.
+
+    Args:
+        secret: Secret value to validate.
+        label: Human-readable label used in error messages.
+        minimum_length: Minimum length in characters (defaults to
+            :data:`MINIMUM_SECRET_LENGTH`).
+        minimum_entropy_bits: Minimum approximate Shannon entropy in bits
+            (defaults to :data:`MINIMUM_SECRET_ENTROPY_BITS`). Pass ``0`` to
+            skip the entropy check while keeping length validation.
+
+    Raises:
+        ConfigurationError: When ``secret`` fails either the length floor or
+            the entropy floor. The same exception type is used as
+            :func:`validate_secret_length` so existing operator handlers stay
+            compatible.
+    """
+    validate_secret_length(secret, label=label, minimum_length=minimum_length)
+    if minimum_entropy_bits <= 0:
+        return
+    bits = _shannon_entropy_bits(secret)
+    if bits < minimum_entropy_bits:
+        msg = (
+            f"{label} has insufficient entropy (~{bits:.0f} bits; required "
+            f"{minimum_entropy_bits:.0f}). Generate via "
+            'python -c "import secrets; print(secrets.token_hex(32))".'
+        )
+        raise ConfigurationError(msg)
 
 
 def require_password_length(
