@@ -63,7 +63,7 @@ Used by the plugin internally; override only if you integrate custom controllers
 
 - `litestar_auth_config`, `litestar_auth_user_manager`, `litestar_auth_backends`, `litestar_auth_user_model` (see `litestar_auth._plugin.config`).
 
-## Shared helpers — `litestar_auth.config`
+## Shared helpers — `litestar_auth.config` {#shared-helpers--litestar_authconfig}
 
 `validate_secret_length`, `_resolve_token_secret`, `MINIMUM_SECRET_LENGTH`, and the secret-role helpers keep token validation and explicit unsafe-testing behavior consistent.
 

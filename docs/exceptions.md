@@ -72,12 +72,16 @@ Typical bundled-controller response shape:
 ```json
 {
   "status_code": 400,
-  "detail": "OAuth account google:acct-123 is already linked to user 42",
+  "detail": "This provider account is already linked to another user. One provider identity can only be linked to a single local account.",
   "extra": {
     "code": "OAUTH_ACCOUNT_ALREADY_LINKED"
   }
 }
 ```
+
+Directly exposing `str(exc)` for this exception can reveal the provider account id and the local
+user id. Keep the structured attributes for trusted operator logs, and map client responses to the
+generic message shown above.
 
 ## `UserAlreadyExistsError`
 

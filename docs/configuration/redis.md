@@ -211,7 +211,7 @@ rate_limit_config = redis_auth.build_rate_limit_config(
 Add `endpoint_overrides` only when an existing deployment needs a fully custom per-slot limiter or
 an explicit `None` disablement beyond the shared `enabled` / `disabled` selection.
 
-### Redis TOTP enrollment, replay protection, and pending-token deduplication
+### Redis TOTP enrollment, replay protection, and pending-token deduplication {#redis-totp-replay-protection-and-pending-token-deduplication}
 
 Use `RedisTotpEnrollmentStore` for `TotpConfig.totp_enrollment_store` when pending enrollment
 state must be visible across workers or restarts, use `RedisUsedTotpCodeStore` for

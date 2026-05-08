@@ -2,7 +2,7 @@
 
 Use this page for `TotpConfig` fields and the plugin-owned TOTP route contract.
 
-## TOTP — `totp_config: TotpConfig | None`
+## TOTP — `totp_config: TotpConfig | None` {#totp--totp_config-totpconfig--none}
 
 | Field | Default | Meaning |
 | ----- | ------- | ------- |

@@ -6,8 +6,9 @@ This page summarizes protections and **conscious trade-offs** shipped by the lib
 
 - **Passwords** — hashing via `pwdlib`; hash upgrade on login when parameters change.
 - **Credential rotation** — self-service password changes use `POST /users/me/change-password`
-  with current-password re-verification. VULN #1 is remediated by keeping passwords out of
-  self-service profile updates; admin-initiated rotation remains privileged through `AdminUserUpdate`.
+  with current-password re-verification. Self-service profile updates do not accept password
+  changes, so stale profile-edit clients cannot rotate credentials without proving the current
+  password; admin-initiated rotation remains privileged through `AdminUserUpdate`.
 - **Reset tokens** — signed JWT-style reset tokens with password fingerprint so tokens die after password change. Library-issued verify and reset tokens include JOSE `typ=JWT`; missing or unexpected `typ` headers are rejected before the normal signed decode.
 - **JWT** — library-issued access tokens include JOSE `typ=JWT`, and access-token decode rejects missing or unexpected `typ` headers before signature, audience, issuer, algorithm, and required-claim validation. This is defense-in-depth against token-class confusion, not a substitute for those primary controls. Access-token validation also enforces `exp` / `iat` / `aud`; optional `iss`; a small `exp` / `nbf` leeway for ordinary clock skew; and `jti` denylist support (`InMemoryJWTDenylistStore`, `RedisJWTDenylistStore`) with an explicit `JWTStrategy.revocation_posture` contract. The in-memory denylist prunes expired JTIs on each revoke and **fails closed** when `max_entries` is reached with no reclaimable slots: it does not insert the new revocation and does not drop active revocations (use `RedisJWTDenylistStore` or raise the cap for high revoke volume). Callers are not misled into thinking logout succeeded: `JWTStrategy.destroy_token` raises `TokenError`, and `AuthenticationBackend.logout` maps that to HTTP **503** with `TOKEN_PROCESSING_FAILED` for API routes using the bundled exception handler.
 - **Session fingerprint** — optional claim on JWT tying tokens to current password/email state.

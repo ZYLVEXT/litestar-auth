@@ -35,7 +35,7 @@ password-column hook.
 | SQLAlchemy user store | `litestar_auth.db.sqlalchemy.SQLAlchemyUserDatabase` | `user_model` is required; `oauth_account_model` is optional unless OAuth methods are used. |
 | Custom password column name | `UserModelMixin.auth_hashed_password_column_name` | Keeps the runtime attribute contract on `user.hashed_password` when only the SQL column name changes. |
 
-### Bundled `AccessToken` / `RefreshToken` lifecycle
+### Bundled `AccessToken` / `RefreshToken` lifecycle {#bundled-accesstoken--refreshtoken-lifecycle}
 
 `litestar_auth.models.import_token_orm_models()` is the explicit mapper-registration entrypoint for the library token models:
 

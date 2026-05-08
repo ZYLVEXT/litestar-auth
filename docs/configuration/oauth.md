@@ -2,7 +2,7 @@
 
 Use this page for `OAuthConfig`, OAuth provider inventory, redirect validation, provider scopes, and token-encryption settings.
 
-## OAuth — `oauth_config: OAuthConfig | None`
+## OAuth — `oauth_config: OAuthConfig | None` {#oauth--oauth_config-oauthconfig--none}
 
 | Field | Default | Meaning |
 | ----- | ------- | ------- |
