@@ -189,8 +189,13 @@ async def test_consume_matching_recovery_code_rejects_missing_lookup_secret() ->
     assert not await totp._consume_matching_recovery_code(manager, object(), "missing")
 
 
-async def test_consume_matching_recovery_code_collision_runs_dummy_verify(monkeypatch: pytest.MonkeyPatch) -> None:
-    """A lookup hit with a non-matching Argon2 hash performs dummy verification."""
+async def test_consume_matching_recovery_code_collision_runs_single_verify(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A lookup hit with a non-matching Argon2 hash performs exactly one verify.
+
+    The hit-and-mismatch branch must not run a second dummy verify: that
+    would leak the lookup-digest collision via a 2x timing skew and would
+    double the Argon2 work an attacker can amortise per submitted code.
+    """
     password_helper = PasswordHelper.from_defaults()
     dummy_hash = password_helper.hash("dummy")
     wrong_hash = password_helper.hash("different-code")
@@ -210,7 +215,7 @@ async def test_consume_matching_recovery_code_collision_runs_dummy_verify(monkey
         "submitted-code",
         password_helper=password_helper,
     )
-    assert verify_calls == [("submitted-code", wrong_hash), ("submitted-code", dummy_hash)]
+    assert verify_calls == [("submitted-code", wrong_hash)]
 
 
 def test_totp_default_algorithm_is_sha256() -> None:

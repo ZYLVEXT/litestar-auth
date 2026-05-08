@@ -2,6 +2,14 @@
 
 ### Security
 
+- **TOTP recovery-code verification now performs exactly one Argon2 verify
+  per call.** The hit-and-mismatch branch previously ran a second dummy
+  Argon2 verify on top of the candidate-hash verify, leaking the underlying
+  lookup-digest collision via a 2x timing skew and doubling the per-request
+  Argon2 work an attacker could amortise. All three paths (no-hit,
+  hit-and-mismatch, hit-and-match) now execute a single verify against
+  either the indexed candidate or the dummy hash, so timing is constant
+  and Argon2 cost is bounded.
 - **`JWTStrategy` now fails closed when an asymmetric algorithm
   (`RS256`/`RS384`/`RS512`/`ES256`/`ES384`/`ES512`) is configured without an
   explicit `verify_key`.** The previous fallback silently reused the private

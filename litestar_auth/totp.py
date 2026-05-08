@@ -173,6 +173,14 @@ async def _consume_matching_recovery_code[UP](
 ) -> bool:
     """Consume ``submitted_code`` when it matches one active TOTP recovery-code hash.
 
+    Performs exactly one Argon2 verify per call, regardless of whether the
+    submitted code's HMAC lookup hits an indexed entry. This both equalises
+    timing across the no-hit / hit-and-mismatch / hit-and-match paths and
+    bounds the per-request Argon2 work, since the previous implementation
+    ran a second dummy verify on the hit-and-mismatch branch and gave
+    attackers a 2x DoS amplification on submitted codes whose lookup digest
+    happened to collide with an indexed entry.
+
     Returns:
         ``True`` when one active hash matched and was consumed.
     """
@@ -184,14 +192,10 @@ async def _consume_matching_recovery_code[UP](
     normalized_code = submitted_code.casefold()
     lookup_hex = _recovery_code_lookup_hex(normalized_code, lookup_secret=lookup_secret)
     candidate_hash = await user_manager.find_recovery_code_hash_by_lookup(user, lookup_hex)
-    if candidate_hash is None:
-        _ = helper.verify(normalized_code, _DUMMY_ARGON2_HASH)
+    target_hash = candidate_hash if candidate_hash is not None else _DUMMY_ARGON2_HASH
+    matched = helper.verify(normalized_code, target_hash)
+    if not matched or candidate_hash is None:
         return False
-
-    if not helper.verify(normalized_code, candidate_hash):
-        _ = helper.verify(normalized_code, _DUMMY_ARGON2_HASH)
-        return False
-
     return await user_manager.consume_recovery_code_by_lookup(user, lookup_hex)
 
 
