@@ -9,8 +9,14 @@ from dataclasses import dataclass
 from typing import Literal
 
 _PKCE_CODE_VERIFIER_LENGTH = 64
+# 48 random bytes encode to exactly 64 unpadded base64url characters
+# (48 == 16 * 3, so base64 needs no padding). 384 bits of entropy comfortably
+# exceed the RFC 7636 §4.1 256-bit recommendation, and ``secrets.token_urlsafe``
+# emits only ``[A-Za-z0-9_-]`` — a strict subset of the PKCE unreserved alphabet
+# ``[A-Za-z0-9-._~]`` — so output is RFC-conformant by construction without any
+# truncation or alphabet filtering at runtime.
+_PKCE_VERIFIER_RANDOM_BYTES = 48
 _PKCE_CODE_CHALLENGE_METHOD: Literal["S256"] = "S256"
-_PKCE_UNRESERVED_ALPHABET = frozenset("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~")
 
 
 @dataclass(frozen=True, slots=True)
@@ -37,17 +43,25 @@ def _generate_pkce_material() -> PkceMaterial:
 
 
 def _generate_pkce_code_verifier() -> str:
-    """Generate an RFC 7636 code verifier from the unreserved URI alphabet.
+    """Generate an RFC 7636 §4.1 code verifier (64 chars, 384 bits of entropy).
+
+    The verifier is drawn directly from ``secrets.token_urlsafe`` — its alphabet
+    ``[A-Za-z0-9_-]`` is a strict subset of the PKCE unreserved alphabet, and 48
+    random bytes encode to exactly 64 unpadded base64url characters, so no
+    truncation or alphabet filtering is needed at runtime.
 
     Returns:
         A 64-character verifier suitable for S256 PKCE.
 
     Raises:
-        RuntimeError: If the generated verifier violates the PKCE alphabet or length contract.
+        RuntimeError: If the platform RNG returned material of unexpected length.
     """
-    code_verifier = secrets.token_urlsafe(64)[:_PKCE_CODE_VERIFIER_LENGTH]
-    if len(code_verifier) != _PKCE_CODE_VERIFIER_LENGTH or not set(code_verifier) <= _PKCE_UNRESERVED_ALPHABET:
-        msg = "Generated PKCE code verifier is invalid."
+    code_verifier = secrets.token_urlsafe(_PKCE_VERIFIER_RANDOM_BYTES)
+    if len(code_verifier) != _PKCE_CODE_VERIFIER_LENGTH:
+        # Defensive: ``token_urlsafe(48)`` is contractually 64 chars on CPython.
+        # Catching a length drift here surfaces interpreter regressions before
+        # the verifier reaches a provider's PKCE validation.
+        msg = "Generated PKCE code verifier has unexpected length."
         raise RuntimeError(msg)
     return code_verifier
 
