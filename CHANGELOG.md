@@ -2,6 +2,17 @@
 
 ### Security
 
+- **OAuth `redirect_base_url` hostname validation now resolves DNS at
+  validation time and rejects hostnames whose A/AAAA records point at
+  non-routable addresses.** Previously the predicate only inspected IP
+  literals, so a misconfigured callback hostname (e.g. an internal CNAME
+  resolving to ``169.254.169.254`` or RFC 1918) silently passed
+  startup-time validation and forwarded OAuth ``code`` to internal
+  infrastructure. Resolution failures (offline CI, sandboxed startup,
+  transient DNS outages) fall through to the historical accept-hostname
+  behaviour so structurally valid configurations still validate; DNS
+  rebinding remains the operator's responsibility to mitigate via egress
+  firewall rules at runtime.
 - **`SQLAlchemyUserDatabase.update` now rejects fields that are not mapped
   attributes (columns or relationships) or settable Python properties on the
   configured user model.** Previously the persistence layer trusted callers

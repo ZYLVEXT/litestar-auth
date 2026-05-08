@@ -386,15 +386,98 @@ def test_redirect_validation_loopback_host_helper_preserves_startup_contract(
         # Public hosts must pass.
         pytest.param("8.8.8.8", False, id="public-ipv4"),
         pytest.param("1.1.1.1", False, id="public-ipv4-cloudflare"),
-        pytest.param("app.example.com", False, id="public-hostname"),
+        # Hostname path with DNS resolution disabled — the predicate falls
+        # through to the historical accept-hostname behaviour when resolution
+        # is unavailable, which ``monkeypatch`` simulates here so the test
+        # stays deterministic regardless of the CI host's DNS posture.
+        pytest.param("app.example.com", False, id="public-hostname-without-dns"),
     ],
 )
 def test_redirect_validation_unsafe_redirect_host_helper_blocks_non_routable_ips(
     host: str,
     expected: object,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """The broader SSRF-aware predicate rejects every non-routable IP family."""
+
+    def _no_dns(*_args: object, **_kwargs: object) -> list[object]:
+        raise redirect_validation_module.socket.gaierror
+
+    monkeypatch.setattr(redirect_validation_module.socket, "getaddrinfo", _no_dns)
     assert redirect_validation_module._is_unsafe_redirect_host(host) is expected
+
+
+def _stub_addrinfo(*resolved_hosts: str) -> list[tuple[object, object, object, object, tuple[str, int]]]:
+    """Build a ``socket.getaddrinfo`` return value matching the indexing the helper uses.
+
+    ``_hostname_resolves_to_unsafe_ip`` only reads ``sockaddr[0]`` so the
+    other tuple slots can be filler.
+
+    Returns:
+        A list of fake ``getaddrinfo`` records carrying ``resolved_hosts`` in
+        the ``sockaddr`` slot.
+    """
+    return [(0, 0, 0, "", (resolved, 0)) for resolved in resolved_hosts]
+
+
+def test_unsafe_redirect_host_resolves_hostname_to_private_ip(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A hostname whose A-record points at a private range is rejected."""
+    monkeypatch.setattr(
+        redirect_validation_module.socket,
+        "getaddrinfo",
+        lambda *_args, **_kwargs: _stub_addrinfo("169.254.169.254"),
+    )
+    assert redirect_validation_module._is_unsafe_redirect_host("metadata.example.com") is True
+
+
+def test_unsafe_redirect_host_accepts_hostname_resolving_to_public_ip(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A hostname whose A-record points at a public address is accepted."""
+    monkeypatch.setattr(
+        redirect_validation_module.socket,
+        "getaddrinfo",
+        lambda *_args, **_kwargs: _stub_addrinfo("8.8.8.8"),
+    )
+    assert redirect_validation_module._is_unsafe_redirect_host("dns.google") is False
+
+
+def test_unsafe_redirect_host_rejects_hostname_with_mixed_routability(monkeypatch: pytest.MonkeyPatch) -> None:
+    """If any resolved address is unsafe, the hostname is rejected.
+
+    Multi-homed hosts that publish both a public and a private record cannot
+    be trusted: the OAuth provider could pick the private address at runtime
+    and leak the ``code`` to internal infrastructure.
+    """
+    monkeypatch.setattr(
+        redirect_validation_module.socket,
+        "getaddrinfo",
+        lambda *_args, **_kwargs: _stub_addrinfo("8.8.8.8", "10.0.0.1"),
+    )
+    assert redirect_validation_module._is_unsafe_redirect_host("dual-homed.example.com") is True
+
+
+def test_unsafe_redirect_host_falls_through_when_dns_unavailable(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Resolution failures fall through to the historical accept-hostname behaviour.
+
+    Operators running offline CI or sandboxed startup paths must still be
+    able to validate hostnames structurally; runtime egress firewalls cover
+    the path the resolver could not.
+    """
+
+    def _gaierror(*_args: object, **_kwargs: object) -> list[object]:
+        raise redirect_validation_module.socket.gaierror
+
+    monkeypatch.setattr(redirect_validation_module.socket, "getaddrinfo", _gaierror)
+    assert redirect_validation_module._is_unsafe_redirect_host("offline.example.com") is False
+
+
+def test_unsafe_redirect_host_skips_unparseable_resolution_entries(monkeypatch: pytest.MonkeyPatch) -> None:
+    """``getaddrinfo`` results that do not parse as IPs are skipped, not raised on."""
+    monkeypatch.setattr(
+        redirect_validation_module.socket,
+        "getaddrinfo",
+        lambda *_args, **_kwargs: [(0, 0, 0, "", ("not-an-ip", 0)), (0, 0, 0, "", ("8.8.8.8", 0))],
+    )
+    assert redirect_validation_module._is_unsafe_redirect_host("partial.example.com") is False
 
 
 def test_warn_insecure_plugin_startup_defaults_emits_all_expected_security_warnings(
