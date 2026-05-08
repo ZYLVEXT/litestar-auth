@@ -1,3 +1,37 @@
+## Unreleased
+
+### Security
+
+- **OAuth `redirect_base_url` now rejects non-routable hosts at plugin startup
+  and across the manual/custom controller factories.** The validator already
+  blocked HTTP and loopback origins; it now additionally rejects RFC 1918
+  private ranges, RFC 3927 link-local addresses (including the
+  `169.254.169.254` cloud IMDS endpoint), multicast, reserved, and unspecified
+  literals. A misconfigured callback URL can no longer point OAuth provider
+  redirects at internal infrastructure. The plugin-managed and manual paths
+  now share a single predicate, and error messages describe the policy as
+  "routable public HTTPS origin".
+- **Auth rate-limit counters for `POST /auth/forgot-password` and
+  `POST /auth/request-verify-token` now increment in a `finally` block.**
+  Transient manager errors (broken email transport, database hiccups) no
+  longer bypass the limiter and yield a free unrate-limited path. Both flows
+  remain enumeration-resistant by construction, so counting failures does not
+  open an account-existence side channel.
+- **Plugin startup now emits a `SecurityWarning` when `JWTStrategy` would
+  silently disable session-fingerprint binding for the configured user
+  model.** The default `session_fingerprint_getter` needs `hashed_password`
+  on the user model to bind JWTs to credential state; passkey-only or
+  OAuth-only models that omit this attribute previously degraded silently.
+  Callers that supply a custom `session_fingerprint_getter` are unaffected.
+
+### Changed
+
+- **PKCE code-verifier generation no longer truncates `secrets.token_urlsafe`
+  output or runs a runtime alphabet check.** Verifier length (64 characters)
+  and entropy (≥384 bits) are unchanged; the implementation now relies on
+  `secrets.token_urlsafe(48)` returning exactly 64 unpadded base64url
+  characters by construction. No behavioral change for callers.
+
 ## 2.4.0 (2026-05-03)
 
 ### Security
