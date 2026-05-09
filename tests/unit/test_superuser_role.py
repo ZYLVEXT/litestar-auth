@@ -32,6 +32,7 @@ class _ConfiguredSource:
 def _build_connection(
     *,
     state: object | None = None,
+    roles: list[str] | None = None,
 ) -> ASGIConnection[Any, Any, Any, Any]:
     """Create a minimal connection with optional request-scope state.
 
@@ -43,7 +44,7 @@ def _build_connection(
         "headers": [],
         "path_params": {},
         "query_string": b"",
-        "user": ExampleUser(id=uuid4(), roles=["admin"]),
+        "user": ExampleUser(id=uuid4(), roles=roles if roles is not None else ["admin"]),
     }
     if state is not None:
         scope["state"] = state
