@@ -1,0 +1,77 @@
+<svg
+  xmlns="http://www.w3.org/2000/svg"
+  role="img"
+  aria-labelledby="title desc"
+  viewBox="0 0 960 280"
+>
+  <title id="title">litestar-auth logo</title>
+  <desc id="desc">
+    A geometric star and shield mark with a keyhole, followed by the litestar-auth wordmark.
+  </desc>
+  <style>
+    :root {
+      --la-ink: #16213e;
+      --la-indigo: #3346d3;
+      --la-cyan: #18b6d9;
+      --la-amber: #f5a524;
+      --la-white: #ffffff;
+    }
+
+    .wordmark {
+      fill: var(--la-ink);
+      font-family:
+        Inter,
+        ui-sans-serif,
+        system-ui,
+        -apple-system,
+        BlinkMacSystemFont,
+        "Segoe UI",
+        sans-serif;
+      font-size: 76px;
+      font-weight: 750;
+      letter-spacing: -1px;
+    }
+
+    .hyphen {
+      fill: var(--la-cyan);
+    }
+  </style>
+  <defs>
+    <linearGradient id="mark-fill" x1="51" y1="43" x2="205" y2="214" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="var(--la-cyan)" />
+      <stop offset="0.58" stop-color="var(--la-indigo)" />
+      <stop offset="1" stop-color="var(--la-ink)" />
+    </linearGradient>
+    <filter id="soft-shadow" x="-20%" y="-20%" width="140%" height="145%" color-interpolation-filters="sRGB">
+      <feDropShadow dx="0" dy="10" stdDeviation="12" flood-color="#16213e" flood-opacity="0.16" />
+    </filter>
+  </defs>
+
+  <g filter="url(#soft-shadow)">
+    <path
+      fill="url(#mark-fill)"
+      d="M128 26.58 155.46 82.2l61.39 8.92-44.42 43.3 10.49 61.14L128 166.68l-54.92 28.88 10.49-61.14-44.42-43.3 61.39-8.92L128 26.58Z"
+    />
+    <path
+      fill="var(--la-white)"
+      fill-opacity="0.95"
+      d="M128 78 174 95.22v38.24c0 36.13-21.13 57.92-46 68.54-24.87-10.62-46-32.41-46-68.54V95.22L128 78Z"
+    />
+    <path
+      fill="var(--la-ink)"
+      d="M128 89.95 162 102.68v30.78c0 27.02-14.32 44.33-34 53.22-19.68-8.89-34-26.2-34-53.22v-30.78l34-12.73Z"
+    />
+    <circle cx="128" cy="127" r="15" fill="var(--la-white)" />
+    <path
+      fill="var(--la-white)"
+      d="M122.5 139h11l6 31h-23l6-31Z"
+    />
+    <circle cx="193" cy="74" r="12" fill="var(--la-amber)" />
+  </g>
+
+  <g aria-label="litestar-auth">
+    <text class="wordmark" x="270" y="165">litestar</text>
+    <text class="wordmark hyphen" x="548" y="165">-</text>
+    <text class="wordmark" x="582" y="165">auth</text>
+  </g>
+</svg>
