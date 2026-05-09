@@ -14,8 +14,7 @@ from litestar import Controller, Request, get, post
 from litestar.openapi.datastructures import ResponseSpec
 from litestar.openapi.spec import Example
 from litestar.params import Parameter
-from litestar.response import Response
-from litestar.response.redirect import Redirect
+from litestar.response import Redirect, Response
 
 from litestar_auth.controllers._oauth_assembly import (
     _build_associate_user_manager_binding,

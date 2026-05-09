@@ -14,8 +14,7 @@ import pytest
 from litestar import Litestar, Router
 from litestar.exceptions import ClientException
 from litestar.openapi.config import OpenAPIConfig
-from litestar.response import Response
-from litestar.response.redirect import Redirect
+from litestar.response import Redirect, Response
 from litestar.status_codes import HTTP_400_BAD_REQUEST
 
 import litestar_auth.controllers._utils as controller_utils_module
