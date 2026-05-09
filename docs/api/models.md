@@ -14,7 +14,7 @@ Names are loaded lazily (PEP 562) when accessed on the package.
 | OAuth table contract **without** loading reference `User` | `from litestar_auth.models.oauth import OAuthAccount` |
 | Reference `User` (and typical tests / quickstarts) | `from litestar_auth.models import User` or `from litestar_auth.models.user import User` |
 
-Use [Configuration](../configuration.md#custom-sqlalchemy-user-and-token-models) as the
+Use [Configuration](../configuration/user_and_manager.md#custom-sqlalchemy-user-and-token-models) as the
 main ORM setup guide for token bootstrap lifecycle, relational role composition, custom model
 families, `SQLAlchemyUserDatabase`, and password-column customization. Use the [Custom user +
 OAuth cookbook](../cookbook/custom_user_oauth.md) when the application owns the `user` table.
@@ -25,7 +25,7 @@ Avoid `from litestar_auth.models import User` (or the `user` submodule) in apps 
 
 For custom SQLAlchemy models, compose the mixins on your own declarative base instead of copying
 columns or relationship wiring from the reference classes.
-[Configuration](../configuration.md#custom-sqlalchemy-user-and-token-models) covers the full
+[Configuration](../configuration/user_and_manager.md#custom-sqlalchemy-user-and-token-models) covers the full
 support matrix and migration notes.
 
 ## Lazy imports and IDE support

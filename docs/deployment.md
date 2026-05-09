@@ -26,7 +26,7 @@ a process-local backend such as `InMemoryRateLimiter`. Use `RedisRateLimiter` or
 - For the full manager/password contract, including `PasswordHelper` sharing,
   `password_validator_factory`, and the `UserEmailField` / `UserPasswordField`
   schema helpers, see
-  [Configuration](configuration.md#manager-password-surface). The checklist below only
+  [Configuration](configuration/manager.md#manager-password-surface). The checklist below only
   calls out production consequences.
 - For plugin-managed apps, configure manager-scoped secrets via
   `LitestarAuthConfig.user_manager_security`.
@@ -140,7 +140,7 @@ Use Redis-backed components when you run multiple workers or need durability:
 - **JWT denylist** — `RedisJWTDenylistStore` instead of in-memory.
 - **Shared auth surface** — use `litestar_auth.contrib.redis.RedisAuthPreset` when one async Redis
   client should back auth rate limiting plus the TOTP stores. The maintained production recipe lives
-  in [Configuration](configuration.md#redis-backed-auth-surface); it wires
+  in [Configuration](configuration/redis.md#redis-backed-auth-surface); it wires
   `build_rate_limit_config()`, `build_totp_enrollment_store()`, `build_totp_pending_jti_store()`, and
   `build_totp_used_tokens_store()` from the public Redis contrib surface.
 - **Distinct TOTP stores** — keep `totp_enrollment_store` for pending enrollment secrets,
@@ -151,7 +151,7 @@ Use Redis-backed components when you run multiple workers or need durability:
   `RedisUsedTotpCodeStore(...)` construction when you intentionally need separate backends or
   bespoke key prefixes.
 
-Use [Configuration](configuration.md#redis-backed-auth-surface) as the maintained source
+Use [Configuration](configuration/redis.md#redis-backed-auth-surface) as the maintained source
 for the `RedisAuthPreset` flow, the `AUTH_RATE_LIMIT_*` helper exports, namespace
 families, migration recipe, fallback low-level builder/store APIs, and the
 `litestar_auth.ratelimit` versus `litestar_auth.contrib.redis` import split. Deployment adds the

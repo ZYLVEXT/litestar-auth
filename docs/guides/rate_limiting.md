@@ -4,7 +4,7 @@ Optional **per-endpoint** limits protect login, registration, token flows, and T
 brute force and abuse. Configure **`AuthRateLimitConfig`** on
 **`LitestarAuthConfig.rate_limit_config`**. For the current Redis-backed contract, including the
 stable slot and group inventory, override patterns, and the paired TOTP Redis-store wiring, use
-[Configuration](../configuration.md#redis-backed-auth-surface) as the maintained source
+[Configuration](../configuration/redis.md#redis-backed-auth-surface) as the maintained source
 of truth. This guide focuses on how the rate-limit surface maps onto the HTTP routes you expose.
 
 ## Start with a preset
@@ -56,7 +56,7 @@ rate_limit_config = AuthRateLimitConfig.disabled()
 
 ## Custom shared-backend setup
 
-Use [Configuration](../configuration.md#redis-backed-auth-surface) for the maintained
+Use [Configuration](../configuration/redis.md#redis-backed-auth-surface) for the maintained
 production Redis/TOTP recipe. That shared-client snippet is the single source of truth for wiring
 `RedisAuthPreset`, `AuthRateLimitSlot`, `TotpConfig.totp_enrollment_store`,
 `TotpConfig.totp_pending_jti_store`, and `TotpConfig.totp_used_tokens_store` from one shared async Redis client.
@@ -193,7 +193,7 @@ rate_limit_config = AuthRateLimitConfig.from_shared_backend(
 ```
 
 Follow the broader Redis override guidance in
-[Configuration](../configuration.md#redis-backed-auth-surface) when an existing
+[Configuration](../configuration/redis.md#redis-backed-auth-surface) when an existing
 deployment also needs group-level backend changes, disabled verification routes, or staged TOTP
 adoption.
 
@@ -214,5 +214,5 @@ rate_limit_config = AuthRateLimitConfig(
 
 - [Python API — Rate limiting](../api/ratelimit.md) — mkdocstrings for the public rate-limit entrypoints and advanced types.
 - [Security guide](security.md) — when to prefer Redis.
-- [Configuration](../configuration.md#redis-backed-auth-surface) — Redis-backed
+- [Configuration](../configuration/redis.md#redis-backed-auth-surface) — Redis-backed
   auth contract, override patterns, and replay-store guidance.

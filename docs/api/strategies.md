@@ -16,6 +16,6 @@ Token **strategies** validate or issue credentials and pair with transports insi
   `RedisTokenStrategyConfig(...)` when you want the Redis client, hash secret, TTL, key prefix,
   token byte count, and optional subject decoder carried as one typed settings object.
 
-For plugin-oriented setup, **`DatabaseTokenAuthConfig`** on `LitestarAuthConfig` is the direct shortcut for wiring opaque database-backed tokens (hash secret, optional backend naming, and related compatibility flags) without hand-assembling the strategy and related pieces in isolation. Full wiring for secrets, ORM mixins, and related options is covered in [Configuration](../configuration.md).
+For plugin-oriented setup, **`DatabaseTokenAuthConfig`** on `LitestarAuthConfig` is the direct shortcut for wiring opaque database-backed tokens (hash secret, optional backend naming, and related compatibility flags) without hand-assembling the strategy and related pieces in isolation. Full wiring for the preset, route flags, and related options is covered in [Backends](../configuration/backends.md#opaque-db-token-preset); ORM mixins, token tables, and `SQLAlchemyUserDatabase` contracts are covered in [User and manager](../configuration/user_and_manager.md).
 
 ::: litestar_auth.authentication.strategy

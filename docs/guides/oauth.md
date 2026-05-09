@@ -181,6 +181,6 @@ The bundled `OAuthAccount` extends `UUIDBase` (no `created_at` / `updated_at`). 
 
 ## Related
 
-- [Configuration](../configuration.md) — `OAuthConfig` fields.
+- [OAuth](../configuration/oauth.md#oauth--oauth_config-oauthconfig--none) — `OAuthConfig` fields.
 - [Custom user + OAuth cookbook](../cookbook/custom_user_oauth.md).
 - [Security](security.md) — CSRF and cookie notes for browser flows.

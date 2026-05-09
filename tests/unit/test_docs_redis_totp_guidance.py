@@ -13,9 +13,9 @@ DOCS_ROOT = Path("docs")
 @pytest.mark.parametrize(
     ("path", "config_link"),
     [
-        ("docs/deployment.md", "configuration.md#redis-backed-auth-surface"),
-        ("docs/guides/totp.md", "../configuration.md#redis-backed-auth-surface"),
-        ("docs/guides/rate_limiting.md", "../configuration.md#redis-backed-auth-surface"),
+        ("docs/deployment.md", "configuration/redis.md#redis-backed-auth-surface"),
+        ("docs/guides/totp.md", "../configuration/redis.md#redis-backed-auth-surface"),
+        ("docs/guides/rate_limiting.md", "../configuration/redis.md#redis-backed-auth-surface"),
     ],
 )
 def test_secondary_redis_totp_docs_link_to_shared_client_recipe(path: str, config_link: str) -> None:

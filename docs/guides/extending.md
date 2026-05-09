@@ -238,7 +238,7 @@ and superuser `PATCH /users/{user_id}` can persist validated role membership thr
 If app-owned services, background jobs, or CLI commands also hash or verify passwords directly, call
 `config.resolve_password_helper()` once after constructing `LitestarAuthConfig(...)` and reuse the returned helper
 instead of building a separate default `PasswordHelper` instance in each call site. See
-[Configuration](../configuration.md#manager-password-surface) for the combined secret/helper/schema contract.
+[Configuration](../configuration/manager.md#manager-password-surface) for the combined secret/helper/schema contract.
 
 `user_create_schema`, `user_update_schema`, and `user_read_schema` do not replace the built-in login, verification, reset-password, refresh, or TOTP request payloads. If you need different field names for those routes, mount or wrap the relevant controller factory instead of expecting `login_identifier` or `user_*_schema` to rename `identifier`, `email`, `token`, `refresh_token`, `pending_token`, or `code`.
 
@@ -252,6 +252,6 @@ Pass `rate_limit_config` to apply throttles to sensitive endpoints without ad ho
 
 ## Related
 
-- [Configuration](../configuration.md)
+- [Manager customization](../configuration/manager.md) — hooks, plugin customization, password/helper contracts
 - [Plugin API](../api/plugin.md)
 - [Hooks](hooks.md)

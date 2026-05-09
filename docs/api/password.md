@@ -1,7 +1,7 @@
 # Password helpers
 
 The plugin-owned password wiring now lives in
-[Configuration](../configuration.md#manager-password-surface). `PasswordHelper` is the
+[Configuration](../configuration/manager.md#manager-password-surface). `PasswordHelper` is the
 hashing boundary itself. Use `PasswordHelper.from_defaults()` when you want the library's default
 pwdlib configuration: Argon2 only for new hashes and verification. Unsupported stored password
 hashes fail closed under that default, so rotate or reset those credentials before rollout. Use

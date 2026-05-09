@@ -39,7 +39,7 @@ flowchart TB
 - Mounts generated controllers (auth, register, verify, reset, users, TOTP, OAuth) according to flags.
 - Registers exception handlers for structured error responses.
 
-Configuration is a single `LitestarAuthConfig` dataclass (see [Configuration](../configuration.md)).
+Configuration is a single `LitestarAuthConfig` dataclass (see the [Configuration index](../configuration.md)).
 
 ## Backend model: transport + strategy
 

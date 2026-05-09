@@ -10,7 +10,20 @@ Use this page for CSRF settings, token downgrade policy, schemas, dependency key
 | `csrf_header_name` | `"X-CSRF-Token"` | Header Litestar expects for CSRF token. |
 | `unsafe_testing` | `False` | Explicit per-config test-only override for generated fallback secrets, single-process validation shortcuts, and startup-warning suppression. Never enable it for production traffic. |
 | `register_minimum_response_seconds` | `0.4` | Minimum wall-clock duration for plugin-owned `POST /auth/register` success and domain-failure responses. This is defense-in-depth against registration timing enumeration and is independent of rate limiting. |
-| `id_parser` | `None` | Parse path/query user ids (e.g. `UUID`). Defaults from `user_manager_security.id_parser` when that typed contract is configured. |
+| `id_parser` | `None` | Parse path/query user ids (e.g. `UUID`). Effective parser: `user_manager_security.id_parser` when set; otherwise `LitestarAuthConfig.id_parser` is applied (including the no-`user_manager_security` default builder path). |
+
+### CSRF cookie name and login telemetry
+
+When `csrf_secret` is set, the plugin wires Litestar CSRF for cookie transports using
+the cookie name **`litestar_auth_csrf`** (same as `DEFAULT_CSRF_COOKIE_NAME` in
+`litestar_auth.plugin` / `litestar_auth._plugin.config`). Frontend code must read that
+cookie to mirror the value into `csrf_header_name` (default `X-CSRF-Token`); see also
+[cookie CSRF cookbook](../cookbook/cookie_csrf.md) and [OAuth associate](../cookbook/oauth_associate.md).
+
+Failed-login **telemetry** is not a `LitestarAuthConfig` field: set optional
+`UserManagerSecurity.login_identifier_telemetry_secret` so structured logs can carry an
+HMAC digest of the identifier on failures (no raw identifier in logs). Details:
+[Manager customization — Login failure telemetry secret](manager.md#login-failure-telemetry-secret).
 
 The plugin-managed JWT/TOTP security surfaces use the same shared posture wording as runtime startup and validation:
 

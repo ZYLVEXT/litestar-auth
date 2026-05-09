@@ -89,7 +89,7 @@ Production deployments should configure **`totp_used_tokens_store`** so codes ca
 
 When the same async Redis client should back auth rate limiting plus the TOTP Redis stores, use
 the shared-client recipe in
-[Configuration](../configuration.md#redis-backed-auth-surface). That is the maintained
+[Configuration](../configuration/redis.md#redis-backed-auth-surface). That is the maintained
 `RedisAuthPreset` flow for `build_rate_limit_config()`,
 `build_totp_enrollment_store()`, `build_totp_pending_jti_store()`, and
 `build_totp_used_tokens_store()` together. Keep manual `totp_enrollment_store` /
@@ -108,9 +108,9 @@ Algorithm defaults to **SHA256** (`totp_algorithm`). Supported algorithms are **
 
 ## Related
 
-- [Configuration](../configuration.md#redis-backed-auth-surface) — Redis-backed
+- [Configuration](../configuration/redis.md#redis-backed-auth-surface) — Redis-backed
   production recipe for rate limiting plus the TOTP Redis stores.
-- [Configuration](../configuration.md) — `TotpConfig`.
+- [TOTP](../configuration/totp.md#totp--totp_config-totpconfig--none) — `TotpConfig`.
 - [TOTP API](../api/totp.md) — helpers and types.
 - [Manager API](../api/manager.md) — manager hooks for secrets and lifecycle.
 - [Testing plugin-backed apps](testing.md) — explicit `unsafe_testing`, request-scoped sessions, and store-isolation boundaries.

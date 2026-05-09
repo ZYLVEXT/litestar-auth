@@ -16,7 +16,7 @@ from litestar_auth.models.role import Role, UserRole
 from litestar_auth.db.sqlalchemy import SQLAlchemyUserDatabase
 ```
 
-For the detailed ORM integration contract, use [Configuration](../configuration.md#custom-sqlalchemy-user-and-token-models) and the [Custom user + OAuth cookbook](../cookbook/custom_user_oauth.md). This page only names the stable import boundaries.
+For the detailed ORM integration contract, use [Configuration](../configuration/user_and_manager.md#custom-sqlalchemy-user-and-token-models) and the [Custom user + OAuth cookbook](../cookbook/custom_user_oauth.md). This page only names the stable import boundaries.
 Import `Role` / `UserRole` from `litestar_auth.models.role` when you need the bundled relational
 role tables without registering the reference `User` mapper.
 Import reusable auth-model mixins from `litestar_auth.models.mixins`.

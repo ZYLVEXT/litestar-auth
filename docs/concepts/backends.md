@@ -55,7 +55,7 @@ config = LitestarAuthConfig(
 `session_maker` here is any callable object compatible with `session_maker() -> AsyncSession`; `async_sessionmaker(...)` is the usual implementation, not the only supported one.
 Manager-scoped secrets, shared `PasswordHelper` injection, runtime password validation, and app-owned
 schema helper reuse still follow the same
-[configuration contract](../configuration.md#manager-password-surface). Keep
+[configuration contract](../configuration/manager.md#manager-password-surface). Keep
 manager secrets on `user_manager_security`; use `user_manager_factory` when a custom manager
 constructor needs custom inputs.
 

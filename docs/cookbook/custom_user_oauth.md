@@ -5,7 +5,7 @@ Use this when your application maps auth tables to **your own** SQLAlchemy model
 This page focuses on the custom user + OAuth pair and adapter wiring. For the bundled token
 bootstrap lifecycle, relational role composition, `DatabaseTokenModels(...)`, and the supported
 password-column customization, use
-[Configuration](../configuration.md#custom-sqlalchemy-user-and-token-models).
+[Configuration](../configuration/user_and_manager.md#custom-sqlalchemy-user-and-token-models).
 
 ## Supported paths
 
@@ -48,7 +48,7 @@ If the same custom user also needs the library-managed role contract, compose
 `UserRoleRelationshipMixin` on `MyUser` and add sibling `RoleMixin` / `UserRoleAssociationMixin`
 classes for your `role` and `user_role` tables. That keeps `user.roles` as the normalized flat
 API while persisting membership relationally. The full pattern lives in
-[Configuration](../configuration.md#custom-sqlalchemy-user-and-token-models).
+[Configuration](../configuration/user_and_manager.md#custom-sqlalchemy-user-and-token-models).
 
 If the same custom user stores password hashes in a differently named SQL column, leave the runtime attribute as `hashed_password` and set the supported hook:
 
@@ -100,7 +100,7 @@ Wire that factory in `LitestarAuthConfig(user_model=MyUser, user_db_factory=user
 
 ## If you later add DB token tables
 
-Keep the same models-owned workflow described in [Configuration](../configuration.md#custom-sqlalchemy-user-and-token-models):
+Keep the same models-owned workflow described in [Configuration](../configuration/user_and_manager.md#custom-sqlalchemy-user-and-token-models):
 
 - Reuse the bundled token tables with `from litestar_auth.models import import_token_orm_models`, keeping that helper for metadata registration and Alembic setup while plugin startup handles the runtime bootstrap path.
 - Map your own token tables with `AccessTokenMixin` / `RefreshTokenMixin`, then pass `DatabaseTokenModels(...)` to `DatabaseTokenStrategy` so login, refresh rotation, logout cleanup, and expired-token cleanup target those classes.
@@ -152,6 +152,6 @@ If the same user later composes custom token tables too, `auth_token_relationshi
 - Set `auth_user_model = "MyUser"` to point `user = relationship(...)` at your mapped class name.
 - Set `auth_user_table = "my_user"` to point `user_id = mapped_column(ForeignKey(...))` at your table.
 
-`UserAuthRelationshipMixin` mirrors the inverse side. Set `auth_oauth_account_model = "MyOAuthAccount"` so `MyUser.oauth_accounts` points back at the custom OAuth class, and set `auth_access_token_model = None` / `auth_refresh_token_model = None` when this custom user does not also compose token-model relationships. Leave the relationship-option hooks unset to keep the bundled default behavior, or set `auth_oauth_account_relationship_lazy` and `auth_oauth_account_relationship_foreign_keys` for the documented OAuth-specific tuning path. If you also customize token model names or tables, replace those `None` hooks with `AccessTokenMixin` / `RefreshTokenMixin` classes as shown in [Configuration](../configuration.md#custom-sqlalchemy-user-and-token-models), then optionally set `auth_token_relationship_lazy` for both token collections. The mixin does not expose arbitrary `relationship()` kwargs beyond those hooks.
+`UserAuthRelationshipMixin` mirrors the inverse side. Set `auth_oauth_account_model = "MyOAuthAccount"` so `MyUser.oauth_accounts` points back at the custom OAuth class, and set `auth_access_token_model = None` / `auth_refresh_token_model = None` when this custom user does not also compose token-model relationships. Leave the relationship-option hooks unset to keep the bundled default behavior, or set `auth_oauth_account_relationship_lazy` and `auth_oauth_account_relationship_foreign_keys` for the documented OAuth-specific tuning path. If you also customize token model names or tables, replace those `None` hooks with `AccessTokenMixin` / `RefreshTokenMixin` classes as shown in [Configuration](../configuration/user_and_manager.md#custom-sqlalchemy-user-and-token-models), then optionally set `auth_token_relationship_lazy` for both token collections. The mixin does not expose arbitrary `relationship()` kwargs beyond those hooks.
 
 See also: the `oauth_account` columns in [Models API](../api/models.md) and the optional audit-column pattern in [OAuth guide](../guides/oauth.md).

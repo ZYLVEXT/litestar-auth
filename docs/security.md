@@ -81,4 +81,4 @@ Additional explicit opt-ins to weaker behavior:
 
 - [Guides — Security](guides/security.md) — CSRF, cookies, headers.
 - [Deployment](deployment.md) — production checklist.
-- [Configuration](configuration.md) — all security-related config fields.
+- [Security and DI](configuration/security.md#security-and-token-policy) — CSRF, JWT/TOTP policy, dependency keys; OAuth token encryption is configured on [OAuth](configuration/oauth.md#oauth--oauth_config-oauthconfig--none).

@@ -3,7 +3,7 @@
 For plugin-managed apps, the authoritative wiring for `user_manager_security`,
 `password_validator_factory`, `PasswordHelper` sharing, and `UserEmailField` /
 `UserPasswordField` reuse lives in
-[Configuration](../configuration.md#manager-password-surface). This page focuses on the
+[Configuration](../configuration/manager.md#manager-password-surface). This page focuses on the
 direct `BaseUserManager` API once those inputs have already been resolved.
 
 The default plugin builder now treats `user_manager_security` as an end-to-end constructor

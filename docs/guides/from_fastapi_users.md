@@ -33,4 +33,4 @@ Where you may be used to choosing **routers** and **backends** separately, lites
 
 - [Architecture](../concepts/architecture.md) — plugin layers.
 - [Backends](../concepts/backends.md) — multiple backends and path prefixes.
-- [Configuration](../configuration.md) — full configuration reference.
+- [Configuration index](../configuration.md) — overview with links to backends, OAuth, TOTP, manager, Redis, security.

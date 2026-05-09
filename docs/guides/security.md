@@ -160,5 +160,5 @@ Treat those as application responsibilities.
 
 ## Related
 
-- [Configuration](../configuration.md) — `csrf_secret`, JWT/TOTP downgrade controls, OAuth encryption key.
+- [Security and DI](../configuration/security.md#security-and-token-policy) — `csrf_secret`, JWT/TOTP downgrade controls (OAuth token encryption lives on [OAuth](../configuration/oauth.md#oauth--oauth_config-oauthconfig--none)).
 - [Exceptions API](../api/exceptions.md) — error types returned to clients.

@@ -79,7 +79,7 @@ Moved to: [Manager customization](configuration/manager.md#plugin-customization-
 
 ## Manager password surface
 
-Moved to: [Manager customization](configuration/manager.md#manager-password-surface).
+Moved to: [Manager customization](configuration/manager.md#manager-password-surface) (maintained).
 
 ## Paths and HTTP feature flags
 

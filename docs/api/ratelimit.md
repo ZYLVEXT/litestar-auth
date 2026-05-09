@@ -1,6 +1,6 @@
 # Rate limiting
 
-Use [Configuration](../configuration.md#redis-backed-auth-surface) as the main guide
+Use [Configuration](../configuration/redis.md#redis-backed-auth-surface) as the main guide
 for the current Redis-backed auth contract: the `RedisAuthPreset` flow, stable slot and
 group names, namespace defaults and override patterns, and the TOTP Redis-store
 setup all live there. This page focuses on the public rate-limit types themselves.

@@ -129,7 +129,7 @@ surfaces only; the CLI is intentionally unavailable for that configuration.
 
 ## Related
 
-- [Configuration](../configuration.md)
+- [Manager customization](../configuration/manager.md#plugin-role-cli) — `litestar-auth roles` and related flags
 - [Extending](extending.md)
 - [HTTP role administration](role_admin_http.md)
 - [HTTP API](../http_api.md)

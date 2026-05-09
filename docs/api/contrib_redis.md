@@ -1,6 +1,6 @@
 # Redis contrib
 
-Use [Configuration](../configuration.md#redis-backed-auth-surface) for the main
+Use [Configuration](../configuration/redis.md#redis-backed-auth-surface) for the main
 Redis-backed auth story: the shared-client preset flow, the `AuthRateLimitSlot` enum,
 namespace families, migration behavior, and TOTP store guidance still live there.
 

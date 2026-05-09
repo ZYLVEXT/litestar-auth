@@ -43,7 +43,7 @@ When you change HTTP routes, **`ErrorCode`** values, or security-sensitive confi
 | Architecture | [Architecture](concepts/architecture.md), [Backends](concepts/backends.md), [Request lifecycle](concepts/request_lifecycle.md) |
 | HTTP routes | [HTTP API](http_api.md) |
 | Flows, errors, operational security | [Security](guides/security.md), [Registration](guides/registration.md), [OAuth](guides/oauth.md), [TOTP](guides/totp.md), [Rate limiting](guides/rate_limiting.md), [Errors](errors.md), [Security overview](security.md) |
-| Configuration | [Configuration](configuration.md), [Plugin API](api/plugin.md) |
+| Configuration | [Configuration index](configuration.md) (topic split: [OAuth](configuration/oauth.md), [Security and DI](configuration/security.md), …), [Plugin API](api/plugin.md) |
 | Hooks / extension | [Hooks](guides/hooks.md), [Extending](guides/extending.md) |
 | Production | [Security](security.md), [Deployment](deployment.md) |
 

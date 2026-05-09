@@ -91,6 +91,16 @@ For plugin-managed apps, keep the manager/password surface on one path:
 3. Call `config.resolve_password_helper()` only when app-owned code outside `BaseUserManager` also hashes or verifies passwords.
 4. Reuse `litestar_auth.schemas.UserEmailField` and `litestar_auth.schemas.UserPasswordField` in app-owned `msgspec.Struct` registration/update schemas.
 
+### Login failure telemetry secret
+
+Optional `UserManagerSecurity.login_identifier_telemetry_secret`. When set, failed
+login attempts include `identifier_digest` in structured logs (HMAC of the submitted
+identifier); raw email or username is never written. When omitted, failed-login logs
+still record `login_identifier_type` only. The value must satisfy the same production
+secret checks as other manager secrets unless `unsafe_testing=True` on the plugin
+config. Pair with [Security and DI](security.md#csrf-cookie-name-and-login-telemetry)
+for CSRF cookie naming on the same deployment.
+
 For non-standard manager construction, keep the plugin-owned security surface on
 `user_manager_security` and set `user_manager_factory` on `LitestarAuthConfig(...)`. The factory
 receives `session`, `user_db`, `config`, and request-bound `backends`; it must opt into any

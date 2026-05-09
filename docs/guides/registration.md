@@ -61,7 +61,7 @@ Reset tokens are tied to a password fingerprint so they invalidate after a succe
 ## User schema helpers
 
 The password-wiring contract now lives in
-[Configuration](../configuration.md#manager-password-surface). For custom registration
+[Configuration](../configuration/manager.md#manager-password-surface). For custom registration
 DTOs, reuse `litestar_auth.schemas.UserEmailField` and `litestar_auth.schemas.UserPasswordField`
 when you want the built-in email/password metadata without copying local constraints. Existing
 `UserPasswordField` imports remain valid; add `UserEmailField` only when you also want the
@@ -81,6 +81,6 @@ fields through `AdminUserUpdate`. Outside the built-in controllers, direct
 
 ## Related
 
-- [Configuration](../configuration.md) — `include_register`, `include_verify`, `include_reset_password`, `login_identifier`.
+- [Backends](../configuration/backends.md#paths-and-http-feature-flags) — `include_register`, `include_verify`, `include_reset_password`, `login_identifier`.
 - [Extending](extending.md) — hooks on `BaseUserManager`.
 - [Payloads and schemas API](../api/schemas.md) — built-in auth lifecycle DTOs from `litestar_auth.payloads` plus the default user CRUD schemas from `litestar_auth.schemas`.

@@ -12,7 +12,7 @@ password-length metadata as the built-in credential-bearing structs without copy
 Existing `UserPasswordField` imports remain supported; add `UserEmailField` when you also want the built-in email
 contract on app-owned schemas. For the full contract between schema metadata, `password_validator_factory`, and
 shared `PasswordHelper` injection, see
-[Configuration](../configuration.md#manager-password-surface).
+[Configuration](../configuration/manager.md#manager-password-surface).
 
 These aliases only describe schema validation and OpenAPI metadata. Runtime password policy still lives on the
 manager side through `password_validator_factory` or the manager's default validator.
