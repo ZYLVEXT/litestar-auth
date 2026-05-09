@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta, timezone, tzinfo
 from typing import TYPE_CHECKING, Any
+from uuid import UUID
 
 import pytest
 from advanced_alchemy.base import UUIDPrimaryKey, create_registry
@@ -13,7 +14,7 @@ from sqlalchemy.orm import DeclarativeBase
 import litestar_auth.authentication.strategy.db as db_strategy_module
 from litestar_auth.authentication.strategy import DatabaseTokenModels
 from litestar_auth.authentication.strategy._opaque_tokens import digest_opaque_token
-from litestar_auth.authentication.strategy.base import RefreshableStrategy, Strategy
+from litestar_auth.authentication.strategy.base import RefreshableStrategy, RefreshSessionManagementStrategy, Strategy
 from litestar_auth.authentication.strategy.db_models import AccessToken, RefreshToken
 from litestar_auth.exceptions import ConfigurationError
 from litestar_auth.models import (
@@ -39,6 +40,7 @@ if TYPE_CHECKING:
 
 pytestmark = pytest.mark.integration
 EXPECTED_CLEANUP_DELETIONS = 2
+EXPECTED_REVOKED_SESSIONS_WITHOUT_CURRENT = 2
 _TOKEN_HASH_SECRET = "test-token-hash-secret-1234567890-1234567890"
 
 
@@ -646,6 +648,18 @@ def test_database_token_strategy_normalize_timestamp_converts_offset_datetimes(s
     assert normalized == datetime(2026, 3, 28, 15, 0, tzinfo=UTC)
 
 
+def test_database_token_strategy_ignores_empty_or_invalid_refresh_client_metadata(session: Session) -> None:
+    """Invalid or empty request metadata is ignored instead of being persisted."""
+    strategy = DatabaseTokenStrategy(
+        session=_strategy_session(session),
+        token_hash_secret=_TOKEN_HASH_SECRET,
+    )
+
+    assert strategy._bounded_client_metadata_value(object()) is None
+    assert strategy._bounded_client_metadata_value(" \n\t ") is None
+    assert strategy._extract_refresh_token_client_metadata(object()) is None
+
+
 async def test_database_token_strategy_cleanup_expired_tokens(session: Session) -> None:
     """Cleanup removes only expired access and refresh tokens and returns the count."""
     user = _create_user(session, email="cleanup@example.com")
@@ -701,6 +715,11 @@ async def test_database_token_strategy_writes_and_rotates_refresh_tokens(session
     )
 
     refresh_token = await strategy.write_refresh_token(user)
+    initial_persisted_token = session.scalar(select(RefreshToken).where(RefreshToken.user_id == user.id))
+    assert initial_persisted_token is not None
+    initial_session_id = initial_persisted_token.session_id
+    initial_created_at = initial_persisted_token.created_at
+
     rotation = await strategy.rotate_refresh_token(refresh_token, UnusedUserManager())
     persisted_tokens = session.scalars(select(RefreshToken).where(RefreshToken.user_id == user.id)).all()
 
@@ -710,6 +729,184 @@ async def test_database_token_strategy_writes_and_rotates_refresh_tokens(session
     assert rotated_refresh_token != refresh_token
     assert len(persisted_tokens) == 1
     assert persisted_tokens[0].token not in {refresh_token, rotated_refresh_token}
+    assert persisted_tokens[0].session_id == initial_session_id
+    assert UUID(persisted_tokens[0].session_id)
+    assert persisted_tokens[0].created_at == initial_created_at
+    assert persisted_tokens[0].last_used_at is not None
+    assert persisted_tokens[0].client_metadata is None
+
+
+async def test_database_token_strategy_lists_only_active_refresh_sessions_for_user(session: Session) -> None:
+    """Refresh-session listing returns only active rows belonging to the requested user."""
+    user = _create_user(session, email="list-sessions@example.com")
+    foreign_user = _create_user(session, email="foreign-list-sessions@example.com")
+    now = datetime.now(tz=UTC)
+    session.add_all(
+        [
+            RefreshToken(
+                token="active-session-token",
+                user_id=user.id,
+                created_at=now - timedelta(days=2),
+                last_used_at=now - timedelta(hours=1),
+                client_metadata={"user_agent": "Session List Test/1.0"},
+            ),
+            RefreshToken(
+                token="expired-session-token",
+                user_id=user.id,
+                created_at=now - timedelta(days=40),
+            ),
+            RefreshToken(
+                token="foreign-session-token",
+                user_id=foreign_user.id,
+                created_at=now - timedelta(days=1),
+            ),
+        ],
+    )
+    session.commit()
+    active_session_id = session.scalar(
+        select(RefreshToken.session_id).where(RefreshToken.token == "active-session-token"),
+    )
+    active_last_used_at = session.scalar(
+        select(RefreshToken.last_used_at).where(RefreshToken.token == "active-session-token"),
+    )
+    foreign_session_id = session.scalar(
+        select(RefreshToken.session_id).where(RefreshToken.token == "foreign-session-token"),
+    )
+    assert active_session_id is not None
+    assert foreign_session_id is not None
+    strategy = DatabaseTokenStrategy(
+        session=_strategy_session(session),
+        token_hash_secret=_TOKEN_HASH_SECRET,
+        refresh_max_age=timedelta(days=30),
+    )
+
+    sessions = await strategy.list_refresh_sessions(user)
+
+    assert isinstance(strategy, RefreshSessionManagementStrategy)
+    assert [refresh_session.session_id for refresh_session in sessions] == [active_session_id]
+    assert sessions[0].client_metadata == {"user_agent": "Session List Test/1.0"}
+    assert sessions[0].last_used_at == active_last_used_at
+    assert session.scalar(select(RefreshToken).where(RefreshToken.token == "expired-session-token")) is None
+    assert session.scalar(select(RefreshToken).where(RefreshToken.session_id == foreign_session_id)) is not None
+    assert await strategy.list_refresh_sessions(user) == sessions
+
+
+async def test_database_token_strategy_revoke_refresh_session_is_user_scoped(session: Session) -> None:
+    """Revoking one refresh session cannot delete another user's row."""
+    user = _create_user(session, email="revoke-session@example.com")
+    foreign_user = _create_user(session, email="foreign-revoke-session@example.com")
+    strategy = DatabaseTokenStrategy(
+        session=_strategy_session(session),
+        token_hash_secret=_TOKEN_HASH_SECRET,
+    )
+    await strategy.write_refresh_token(user)
+    await strategy.write_refresh_token(foreign_user)
+    user_session_id = session.scalar(select(RefreshToken.session_id).where(RefreshToken.user_id == user.id))
+    foreign_session_id = session.scalar(select(RefreshToken.session_id).where(RefreshToken.user_id == foreign_user.id))
+    assert user_session_id is not None
+    assert foreign_session_id is not None
+
+    missing_result = await strategy.revoke_refresh_session(user, "missing-session-id")
+    foreign_result = await strategy.revoke_refresh_session(user, foreign_session_id)
+    revoked_result = await strategy.revoke_refresh_session(user, user_session_id)
+
+    assert missing_result is False
+    assert foreign_result is False
+    assert revoked_result is True
+    assert session.scalar(select(RefreshToken).where(RefreshToken.session_id == user_session_id)) is None
+    assert session.scalar(select(RefreshToken).where(RefreshToken.session_id == foreign_session_id)) is not None
+
+
+async def test_database_token_strategy_revoke_refresh_session_ignores_expired_match(session: Session) -> None:
+    """Revoking an expired refresh session cleans it up and reports not found."""
+    user = _create_user(session, email="expired-revoke-session@example.com")
+    session.add(
+        RefreshToken(
+            token="expired-revoke-session-token",
+            user_id=user.id,
+            created_at=datetime.now(tz=UTC) - timedelta(days=40),
+        ),
+    )
+    session.commit()
+    expired_session_id = session.scalar(
+        select(RefreshToken.session_id).where(RefreshToken.token == "expired-revoke-session-token"),
+    )
+    assert expired_session_id is not None
+    strategy = DatabaseTokenStrategy(
+        session=_strategy_session(session),
+        token_hash_secret=_TOKEN_HASH_SECRET,
+        refresh_max_age=timedelta(days=30),
+    )
+
+    revoked = await strategy.revoke_refresh_session(user, expired_session_id)
+
+    assert revoked is False
+    assert session.scalar(select(RefreshToken).where(RefreshToken.session_id == expired_session_id)) is None
+
+
+async def test_database_token_strategy_revoke_other_refresh_sessions_preserves_current(session: Session) -> None:
+    """Revoking other refresh sessions preserves the supplied current session id."""
+    user = _create_user(session, email="revoke-other-sessions@example.com")
+    foreign_user = _create_user(session, email="foreign-revoke-other-sessions@example.com")
+    now = datetime.now(tz=UTC)
+    session.add_all(
+        [
+            RefreshToken(token="current-refresh-session", user_id=user.id, created_at=now - timedelta(days=1)),
+            RefreshToken(token="other-refresh-session", user_id=user.id, created_at=now - timedelta(hours=1)),
+            RefreshToken(token="expired-other-refresh-session", user_id=user.id, created_at=now - timedelta(days=40)),
+            RefreshToken(token="foreign-refresh-session", user_id=foreign_user.id, created_at=now),
+        ],
+    )
+    session.commit()
+    current_session_id = session.scalar(
+        select(RefreshToken.session_id).where(RefreshToken.token == "current-refresh-session"),
+    )
+    other_session_id = session.scalar(
+        select(RefreshToken.session_id).where(RefreshToken.token == "other-refresh-session"),
+    )
+    expired_session_id = session.scalar(
+        select(RefreshToken.session_id).where(RefreshToken.token == "expired-other-refresh-session"),
+    )
+    foreign_session_id = session.scalar(
+        select(RefreshToken.session_id).where(RefreshToken.token == "foreign-refresh-session"),
+    )
+    assert current_session_id is not None
+    assert other_session_id is not None
+    assert expired_session_id is not None
+    assert foreign_session_id is not None
+    strategy = DatabaseTokenStrategy(
+        session=_strategy_session(session),
+        token_hash_secret=_TOKEN_HASH_SECRET,
+        refresh_max_age=timedelta(days=30),
+    )
+
+    revoked_count = await strategy.revoke_other_refresh_sessions(user, current_session_id)
+
+    assert revoked_count == 1
+    assert session.scalar(select(RefreshToken).where(RefreshToken.session_id == current_session_id)) is not None
+    assert session.scalar(select(RefreshToken).where(RefreshToken.session_id == other_session_id)) is None
+    assert session.scalar(select(RefreshToken).where(RefreshToken.session_id == expired_session_id)) is None
+    assert session.scalar(select(RefreshToken).where(RefreshToken.session_id == foreign_session_id)) is not None
+
+
+async def test_database_token_strategy_revoke_other_refresh_sessions_without_current_deletes_user_sessions(
+    session: Session,
+) -> None:
+    """Without a current session id, revoking other sessions deletes all active user refresh sessions."""
+    user = _create_user(session, email="revoke-all-sessions@example.com")
+    strategy = DatabaseTokenStrategy(
+        session=_strategy_session(session),
+        token_hash_secret=_TOKEN_HASH_SECRET,
+    )
+    await strategy.write_refresh_token(user)
+    await strategy.write_refresh_token(user)
+
+    revoked_count = await strategy.revoke_other_refresh_sessions(user, None)
+    second_revoked_count = await strategy.revoke_other_refresh_sessions(user, None)
+
+    assert revoked_count == EXPECTED_REVOKED_SESSIONS_WITHOUT_CURRENT
+    assert second_revoked_count == 0
+    assert session.scalar(select(RefreshToken).where(RefreshToken.user_id == user.id)) is None
 
 
 async def test_database_token_strategy_rotate_refresh_token_returns_none_when_missing(session: Session) -> None:

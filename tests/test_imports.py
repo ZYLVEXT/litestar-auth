@@ -1045,6 +1045,7 @@ def test_payload_module_is_authoritative_boundary_without_controllers_package_re
         "OAuthAssociateControllerConfig",
         "OAuthControllerConfig",
         "RegisterControllerConfig",
+        "SessionDevicesControllerConfig",
         "TotpControllerOptions",
         "TotpUserManagerProtocol",
         "UsersControllerConfig",
@@ -1053,6 +1054,7 @@ def test_payload_module_is_authoritative_boundary_without_controllers_package_re
         "create_oauth_controller",
         "create_register_controller",
         "create_reset_password_controller",
+        "create_session_devices_controller",
         "create_totp_controller",
         "create_users_controller",
         "create_verify_controller",
@@ -1060,9 +1062,13 @@ def test_payload_module_is_authoritative_boundary_without_controllers_package_re
     assert payloads_module.__all__ == (
         "ForgotPassword",
         "LoginCredentials",
+        "RefreshSessionListResponse",
+        "RefreshSessionRead",
         "RefreshTokenRequest",
         "RequestVerifyToken",
         "ResetPassword",
+        "SessionClientMetadataKey",
+        "SessionClientMetadataValue",
         "TotpConfirmEnableRequest",
         "TotpConfirmEnableResponse",
         "TotpDisableRequest",
@@ -1075,6 +1081,10 @@ def test_payload_module_is_authoritative_boundary_without_controllers_package_re
     )
     assert payloads_module.LoginCredentials is LoginCredentials
     assert payloads_module.LoginCredentials is auth_controller_module.LoginCredentials
+    assert not hasattr(litestar_auth, "RefreshSessionRead")
+    assert not hasattr(litestar_auth, "RefreshSessionListResponse")
+    assert not hasattr(controllers_package, "RefreshSessionRead")
+    assert not hasattr(controllers_package, "RefreshSessionListResponse")
     assert payloads_module.RefreshTokenRequest is auth_controller_module.RefreshTokenRequest
     assert payloads_module.ForgotPassword is reset_controller_module.ForgotPassword
     assert payloads_module.ResetPassword is reset_controller_module.ResetPassword

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import uuid
+from datetime import UTC, datetime
 from typing import Annotated, Any, cast, get_args, get_origin, get_type_hints
 
 import msgspec
@@ -20,6 +21,7 @@ from litestar_auth.controllers.totp import (
     TotpVerifyRequest,
 )
 from litestar_auth.controllers.verify import RequestVerifyToken, VerifyToken
+from litestar_auth.payloads import RefreshSessionListResponse, RefreshSessionRead
 from litestar_auth.schemas import AdminUserUpdate, UserCreate, UserEmailField, UserPasswordField, UserRead, UserUpdate
 
 pytestmark = pytest.mark.unit
@@ -82,6 +84,57 @@ def test_user_read_round_trips_without_sensitive_fields() -> None:
 def test_user_read_field_order_uses_roles_as_authorization_surface() -> None:
     """UserRead keeps the public positional field order for the role-based API surface."""
     assert UserRead.__struct_fields__ == ("id", "email", "is_active", "is_verified", "roles")
+
+
+def test_refresh_session_list_response_round_trips_without_token_details() -> None:
+    """Refresh session responses expose public ids and bounded metadata, never token material."""
+    created_at = datetime(2026, 5, 9, 1, 20, tzinfo=UTC)
+    last_used_at = datetime(2026, 5, 9, 1, 25, tzinfo=UTC)
+    payload = RefreshSessionListResponse(
+        sessions=[
+            RefreshSessionRead(
+                session_id="a4ff5e6a-60f8-4a8e-9684-7239150fd91b",
+                created_at=created_at,
+                last_used_at=last_used_at,
+                is_current=True,
+                client_metadata={"user_agent": "LitestarAuth Test/1.0"},
+            ),
+            RefreshSessionRead(
+                session_id="5f9bbfbf-d2db-4614-a8ea-17df6d66b60d",
+                created_at=created_at,
+            ),
+        ],
+    )
+
+    encoded = msgspec.json.encode(payload)
+    decoded = msgspec.json.decode(encoded, type=RefreshSessionListResponse)
+
+    assert decoded == payload
+    assert b'"session_id":"a4ff5e6a-60f8-4a8e-9684-7239150fd91b"' in encoded
+    assert b'"is_current":true' in encoded
+    assert b'"client_metadata":{"user_agent":"LitestarAuth Test/1.0"}' in encoded
+    assert b"refresh_token" not in encoded
+    assert b"token_digest" not in encoded
+    assert b"access_token" not in encoded
+
+
+def test_refresh_session_metadata_rejects_unbounded_values() -> None:
+    """Session client metadata keeps the documented bounded string contract."""
+    oversized_user_agent = "x" * 256
+    body = msgspec.json.encode(
+        {
+            "sessions": [
+                {
+                    "session_id": "session-id",
+                    "created_at": "2026-05-09T01:20:00Z",
+                    "client_metadata": {"user_agent": oversized_user_agent},
+                },
+            ],
+        },
+    )
+
+    with pytest.raises(msgspec.ValidationError):
+        msgspec.json.decode(body, type=RefreshSessionListResponse)
 
 
 def test_user_update_field_order_uses_roles_as_authorization_surface() -> None:

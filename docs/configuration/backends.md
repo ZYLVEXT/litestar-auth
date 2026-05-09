@@ -65,6 +65,7 @@ Controller selection follows that startup inventory:
 | `include_reset_password` | `True` | Forgot + reset password |
 | `include_users` | `False` | User management routes |
 | `enable_refresh` | `False` | `POST .../refresh` |
+| `include_session_devices` | `False` | `GET .../sessions`, `POST .../sessions`, `DELETE .../sessions/{session_id}`, `POST .../sessions/revoke-others` |
 | `requires_verification` | `True` | Stricter login / TOTP-verify policy |
 | `hard_delete` | `False` | Physical vs soft delete semantics for user delete |
 | `login_identifier` | `"email"` | `"email"` or `"username"` for `POST {auth_path}/login` credential lookup |
@@ -73,6 +74,91 @@ Controller selection follows that startup inventory:
 
 When `requires_verification=True`, the shared account-state policy is consistent across login,
 refresh, and TOTP verification: inactive users fail first, and unverified users fail next.
+
+When refresh is enabled with `CookieTransport`, `include_session_devices=True` routes read the
+dedicated refresh cookie to identify the current refresh session for `is_current` markers and
+revoke-others preservation. Bearer clients do not have a refresh cookie; they may pass the existing
+`RefreshTokenRequest` body to `POST {auth_path}/sessions` and
+`POST {auth_path}/sessions/revoke-others` when they need current-session detection. If no current
+refresh credential can be resolved, revoke-others fails closed; with the built-in DB token strategy,
+that means all active refresh sessions for the current user are revoked.
+
+### Session/device management setup
+
+Use `include_session_devices=True` only with a backend strategy that implements refresh-session
+management. The built-in DB token strategy does; JWT and Redis token strategies do not provide a
+session/device dashboard in this slice and return `SESSION_MANAGEMENT_UNSUPPORTED` if these routes
+are mounted against them.
+
+The plugin-managed bearer DB-token preset is the shortest setup:
+
+```python
+config = LitestarAuthConfig[User, UUID](
+    database_token_auth=DatabaseTokenAuthConfig(
+        token_hash_secret="replace-with-32+-char-db-token-secret",
+    ),
+    user_model=User,
+    user_manager_class=UserManager,
+    session_maker=session_maker,
+    user_manager_security=user_manager_security,
+    enable_refresh=True,
+    include_session_devices=True,
+)
+```
+
+Bearer clients receive refresh tokens in response bodies. To mark the current session in a list
+response, call:
+
+```http
+POST /auth/sessions
+Authorization: Bearer <access-token>
+Content-Type: application/json
+
+{"refresh_token": "<current-refresh-token>"}
+```
+
+For browser refresh sessions, assemble a DB-token backend with `CookieTransport` and the same
+request-scoped session-binding contract. The transport keeps the access token in `cookie_name` and
+the refresh token in the dedicated `<cookie_name>_refresh` HttpOnly cookie:
+
+```python
+from datetime import timedelta
+from uuid import UUID
+
+from litestar_auth import AuthenticationBackend, CookieTransport, LitestarAuthConfig
+from litestar_auth.authentication.strategy import DatabaseTokenStrategy
+from litestar_auth.models import User
+
+cookie_db_backend = AuthenticationBackend[User, UUID](
+    name="database-cookie",
+    transport=CookieTransport(
+        cookie_name="app_auth",
+        max_age=15 * 60,
+        refresh_max_age=30 * 24 * 60 * 60,
+    ),
+    strategy=DatabaseTokenStrategy[User, UUID](
+        session=session_maker(),
+        token_hash_secret="replace-with-32+-char-db-token-secret",
+        max_age=timedelta(minutes=15),
+        refresh_max_age=timedelta(days=30),
+    ),
+)
+
+config = LitestarAuthConfig[User, UUID](
+    backends=(cookie_db_backend,),
+    user_model=User,
+    user_manager_class=UserManager,
+    session_maker=session_maker,
+    user_manager_security=user_manager_security,
+    csrf_secret="replace-with-32+-char-csrf-secret",
+    enable_refresh=True,
+    include_session_devices=True,
+)
+```
+
+`AuthenticationBackend.with_session(...)` rebinds `DatabaseTokenStrategy` for each request when the
+plugin resolves runtime backends. Keep `session_maker` configured so the generated controllers,
+refresh flow, and session/device routes all use the same request-local SQLAlchemy session.
 
 ## Built-in auth payload boundary
 

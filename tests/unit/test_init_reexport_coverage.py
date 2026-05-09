@@ -16,6 +16,7 @@ import litestar_auth.controllers as controllers_module
 import litestar_auth.db as db_module
 import litestar_auth.guards as guards_module
 import litestar_auth.models as models_module
+import litestar_auth.payloads as payloads_module
 import litestar_auth.ratelimit as ratelimit_module
 import litestar_auth.ratelimit._endpoint as ratelimit_endpoint_module
 import litestar_auth.ratelimit._slot_catalog as ratelimit_slot_catalog_module
@@ -157,6 +158,20 @@ def test_root_package_exposes_documented_public_surface_and_null_logger() -> Non
         if isinstance(handler, logging.NullHandler)
     ]
     assert null_handlers
+
+
+def test_session_device_payloads_stay_on_explicit_payloads_surface() -> None:
+    """Session/device DTOs are public via payloads without widening package root exports."""
+    assert set(payloads_module.__all__) >= {
+        "RefreshSessionRead",
+        "RefreshSessionListResponse",
+    }
+    assert hasattr(payloads_module, "RefreshSessionRead")
+    assert hasattr(payloads_module, "RefreshSessionListResponse")
+    assert not hasattr(litestar_auth_module, "RefreshSessionRead")
+    assert not hasattr(litestar_auth_module, "RefreshSessionListResponse")
+    assert not hasattr(controllers_module, "RefreshSessionRead")
+    assert not hasattr(controllers_module, "RefreshSessionListResponse")
 
 
 def test_models_package_owns_token_registration_helper_and_strategy_keeps_db_token_contract() -> None:

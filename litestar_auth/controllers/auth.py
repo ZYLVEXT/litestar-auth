@@ -93,6 +93,14 @@ class AuthControllerUserManagerProtocol[UP: UserProtocol[Any], ID](
         """Return a plain-text TOTP secret from storage."""
 
 
+@runtime_checkable
+class RefreshTokenRequestContextRecorder(Protocol):
+    """Optional strategy hook for bounded refresh-token request metadata."""
+
+    def set_refresh_token_request_context(self, request: object) -> None:
+        """Capture request context for the next refresh-token write or rotation."""
+
+
 @dataclass(slots=True)
 class _AuthControllerContext[UP: UserProtocol[Any], ID]:
     """Runtime dependencies shared by generated auth controller handlers."""
@@ -147,6 +155,15 @@ class AuthControllerOptions[UP: UserProtocol[Any], ID](TypedDict):
     unsafe_testing: NotRequired[bool]
     csrf_protection_managed_externally: NotRequired[bool]
     security: NotRequired[Sequence[SecurityRequirement] | None]
+
+
+def _record_refresh_token_request_context(
+    refresh_strategy: RefreshableStrategy[Any, Any],
+    request: object,
+) -> None:
+    """Record request metadata when the concrete refresh strategy supports it."""
+    if isinstance(refresh_strategy, RefreshTokenRequestContextRecorder):
+        refresh_strategy.set_refresh_token_request_context(request)
 
 
 @dataclass(frozen=True, slots=True)
@@ -332,6 +349,7 @@ async def _build_authenticated_login_response[UP: UserProtocol[Any], ID](
     await user_manager.on_after_login(user)
     if ctx.refresh_strategy is None:
         return response
+    _record_refresh_token_request_context(ctx.refresh_strategy, request)
     cookie_transport = _resolve_cookie_transport(ctx.backend)
     return _attach_refresh_token(
         response,
@@ -381,6 +399,7 @@ async def _handle_auth_refresh[UP: UserProtocol[Any], ID](
         msg = "Refresh is not configured."
         raise ConfigurationError(msg)
 
+    _record_refresh_token_request_context(refresh_strategy, request)
     refreshed = await refresh_strategy.rotate_refresh_token(data.refresh_token, user_manager)
     if refreshed is None:
         await ctx.refresh_inc(request)

@@ -226,6 +226,20 @@ backend = AuthenticationBackend(
 )
 ```
 
+Custom refresh-token classes now have a session-management contract in addition to the shared token
+contract. They must expose mapped `session_id`, `last_used_at`, and `client_metadata` attributes. The
+recommended path is still to compose `RefreshTokenMixin`, which provides:
+
+- a unique public `session_id` UUID string that is not the stored token digest;
+- `last_used_at`, updated on successful refresh rotation;
+- nullable bounded `client_metadata`, currently populated by the built-in auth controller with a
+  normalized `user_agent` value capped at 255 characters.
+
+Refresh rotation preserves `session_id` and the original `created_at` value, updates `last_used_at`,
+and writes a new digest-only `token` value for the rotated refresh token. Existing refresh-token
+tables must be migrated by adding `session_id`, `last_used_at`, and `client_metadata`; backfill
+`session_id` with one unique non-sensitive UUID per row before enabling session/device APIs.
+
 `DatabaseTokenAuthConfig` / `LitestarAuthConfig(..., database_token_auth=...)` remains the direct shortcut for the bundled `AccessToken` / `RefreshToken` tables. The plugin bootstraps those bundled token mappers at `on_app_init()` for runtime use, but that does not replace the explicit helper for metadata bootstrap or Alembic autogenerate. Use the manual backend assembly above only when you intentionally replace the token ORM classes or need another transport/strategy combination.
 
 ### `SQLAlchemyUserDatabase` contract

@@ -273,7 +273,8 @@ async def test_middleware_logs_failed_token_validation_when_credentials_present(
 ) -> None:
     """Requests carrying credentials but resolving no user are logged as token failures."""
     scope = _build_scope()
-    scope["headers"] = [(b"authorization", b"Bearer invalid-token")]
+    leaked_credential_marker = "leaked-bearer-credential-marker"
+    scope["headers"] = [(b"authorization", f"Bearer {leaked_credential_marker}".encode())]
     session = DummySession()
     session_maker = DummySessionMaker(session)
     authenticator = Mock()
@@ -289,6 +290,8 @@ async def test_middleware_logs_failed_token_validation_when_credentials_present(
 
     events = [cast("str | None", getattr(record, "event", None)) for record in caplog.records]
     assert events == ["token_validation_failed"]
+    aggregated = "".join(record.getMessage() for record in caplog.records)
+    assert leaked_credential_marker not in aggregated
 
 
 async def test_authenticate_request_does_not_log_failed_token_validation_when_user_resolves(
@@ -345,7 +348,8 @@ async def test_middleware_logs_failed_token_validation_for_configured_auth_cooki
 ) -> None:
     """Requests carrying configured auth cookies but resolving no user are logged as token failures."""
     scope = _build_scope()
-    scope["headers"] = [(b"cookie", b"litestar_auth=invalid-token")]
+    leaked_cookie_marker = b"leaked-cookie-credential-marker"
+    scope["headers"] = [(b"cookie", b"litestar_auth=" + leaked_cookie_marker)]
     session = DummySession()
     session_maker = DummySessionMaker(session)
     authenticator = Mock()
@@ -362,6 +366,9 @@ async def test_middleware_logs_failed_token_validation_for_configured_auth_cooki
 
     events = [cast("str | None", getattr(record, "event", None)) for record in caplog.records]
     assert events == ["token_validation_failed"]
+    leaked_cookie_text = leaked_cookie_marker.decode()
+    aggregated = "".join(record.getMessage() for record in caplog.records)
+    assert leaked_cookie_text not in aggregated
 
 
 def test_request_supplied_auth_credentials_detects_bearer_header() -> None:

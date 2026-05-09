@@ -9,19 +9,22 @@ from unittest.mock import MagicMock
 from uuid import UUID
 
 import pytest
+from litestar.middleware import DefineMiddleware
 from litestar.testing import AsyncTestClient
 from sqlalchemy import select
 
+from litestar_auth.authentication.authenticator import Authenticator
 from litestar_auth.authentication.backend import AuthenticationBackend
+from litestar_auth.authentication.middleware import LitestarAuthMiddleware
 from litestar_auth.authentication.strategy.db import DatabaseTokenStrategy
 from litestar_auth.authentication.strategy.db_models import AccessToken, RefreshToken
 from litestar_auth.authentication.transport.cookie import CookieTransport
-from litestar_auth.controllers import create_auth_controller
+from litestar_auth.controllers import create_auth_controller, create_session_devices_controller
 from litestar_auth.manager import BaseUserManager, UserManagerSecurity
 from litestar_auth.models import User
 from litestar_auth.password import PasswordHelper
-from tests._helpers import litestar_app_with_user_manager
-from tests.integration.conftest import InMemoryUserDatabase
+from tests._helpers import auth_middleware_get_request_session, litestar_app_with_user_manager
+from tests.integration.conftest import DummySessionMaker, InMemoryUserDatabase
 
 if TYPE_CHECKING:
     from collections.abc import Mapping, Sequence
@@ -37,6 +40,8 @@ if TYPE_CHECKING:
 pytestmark = pytest.mark.integration
 
 HTTP_CREATED = 201
+HTTP_OK = 200
+HTTP_NO_CONTENT = 204
 HTTP_BAD_REQUEST = 400
 _TOKEN_HASH_SECRET = "test-token-hash-secret-1234567890-1234567890"
 
@@ -160,7 +165,7 @@ def build_app(
     )
     backend = AuthenticationBackend[User, UUID](
         name="db-cookie",
-        transport=CookieTransport(cookie_name=cookie_name, path=cookie_path),
+        transport=CookieTransport(cookie_name=cookie_name, path=cookie_path, secure=False),
         strategy=cast("Any", strategy),
     )
     user_manager = BaseUserManager[User, UUID](
@@ -176,7 +181,18 @@ def build_app(
         enable_refresh=True,
         csrf_protection_managed_externally=True,
     )
-    app = litestar_app_with_user_manager(user_manager, controller)
+    session_devices_controller = create_session_devices_controller(backend=backend, path="/auth")
+    middleware = DefineMiddleware(
+        LitestarAuthMiddleware[User, UUID],
+        get_request_session=auth_middleware_get_request_session(cast("Any", DummySessionMaker())),
+        authenticator_factory=lambda _session: Authenticator([backend], user_manager),
+    )
+    app = litestar_app_with_user_manager(
+        user_manager,
+        controller,
+        session_devices_controller,
+        middleware=[middleware],
+    )
     return app, controller, user
 
 
@@ -206,6 +222,11 @@ def _find_set_cookie(headers: list[str], cookie_name: str) -> str:
             return header
     msg = f"Missing Set-Cookie header for {cookie_name!r}"
     raise AssertionError(msg)
+
+
+def _refresh_digest(refresh_token: str) -> str:
+    """Return the stored digest for a raw refresh token."""
+    return hmac.new(_TOKEN_HASH_SECRET.encode(), refresh_token.encode(), hashlib.sha256).hexdigest()
 
 
 @pytest.fixture
@@ -260,6 +281,59 @@ async def test_cookie_transport_sets_refresh_token_cookie(
 
     refresh_set_cookie = _find_set_cookie(_set_cookie_headers(refresh_response), "litestar_auth_refresh").lower()
     assert "httponly" in refresh_set_cookie
+
+
+async def test_cookie_transport_session_devices_mark_current_from_refresh_cookie(
+    client: tuple[AsyncTestClient[Litestar], Session, Any, User],
+) -> None:
+    """Session/device routes use the configured refresh cookie to identify the current session."""
+    test_client, session, _controller_class, user = client
+
+    first_login = await test_client.post(
+        "/auth/login",
+        json={"identifier": "user@example.com", "password": "correct-password"},
+    )
+    first_access_cookie = first_login.cookies.get("litestar_auth")
+    first_refresh_cookie = first_login.cookies.get("litestar_auth_refresh")
+    assert isinstance(first_access_cookie, str)
+    assert isinstance(first_refresh_cookie, str)
+    first_session_id = session.scalar(
+        select(RefreshToken.session_id).where(
+            RefreshToken.token == _refresh_digest(first_refresh_cookie),
+        ),
+    )
+    assert first_session_id is not None
+
+    second_login = await test_client.post(
+        "/auth/login",
+        json={"identifier": "user@example.com", "password": "correct-password"},
+    )
+    second_refresh_cookie = second_login.cookies.get("litestar_auth_refresh")
+    assert isinstance(second_refresh_cookie, str)
+    second_session_id = session.scalar(
+        select(RefreshToken.session_id).where(
+            RefreshToken.token == _refresh_digest(second_refresh_cookie),
+        ),
+    )
+    assert second_session_id is not None
+
+    test_client.cookies.set("litestar_auth", first_access_cookie)
+    test_client.cookies.set("litestar_auth_refresh", first_refresh_cookie)
+    list_response = await test_client.get("/auth/sessions")
+    revoke_response = await test_client.post("/auth/sessions/revoke-others")
+    after_revoke = await test_client.get("/auth/sessions")
+
+    assert list_response.status_code == HTTP_OK
+    sessions_by_id = {item["session_id"]: item for item in list_response.json()["sessions"]}
+    assert sessions_by_id[first_session_id]["is_current"] is True
+    assert sessions_by_id[second_session_id]["is_current"] is False
+    assert revoke_response.status_code == HTTP_NO_CONTENT
+    assert [item["session_id"] for item in after_revoke.json()["sessions"]] == [first_session_id]
+    assert [
+        token.session_id for token in session.scalars(select(RefreshToken).where(RefreshToken.user_id == user.id))
+    ] == [
+        first_session_id,
+    ]
 
 
 async def test_logout_clears_cookie_auth_and_refresh_cookies(

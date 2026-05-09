@@ -71,6 +71,20 @@ class TokenError(LitestarAuthError):
     default_code = ErrorCode.TOKEN_PROCESSING_FAILED
 
 
+class SessionManagementUnsupportedError(TokenError):
+    """Raised when a strategy cannot manage refresh sessions."""
+
+    default_message = "The configured auth strategy does not support refresh-session management."
+    default_code = ErrorCode.SESSION_MANAGEMENT_UNSUPPORTED
+
+
+class RefreshSessionNotFoundError(TokenError):
+    """Raised when a user-scoped refresh session cannot be found."""
+
+    default_message = "Refresh session not found."
+    default_code = ErrorCode.REFRESH_SESSION_NOT_FOUND
+
+
 class ConfigurationError(LitestarAuthError):
     """Raised when the library is configured incorrectly."""
 

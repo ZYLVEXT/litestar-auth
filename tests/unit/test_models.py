@@ -579,6 +579,22 @@ def test_database_token_models_default_to_bundled_token_model_classes() -> None:
             "token",
             id="invalid-refresh-token-model",
         ),
+        pytest.param(
+            "refresh_token_model",
+            AccessToken,
+            type(
+                "IncompleteRefreshToken",
+                (),
+                {
+                    "token": object(),
+                    "created_at": object(),
+                    "user_id": object(),
+                    "user": object(),
+                },
+            ),
+            "session_id",
+            id="refresh-token-model-missing-session-contract",
+        ),
     ],
 )
 def test_database_token_models_reject_invalid_model_contracts(
@@ -1176,8 +1192,14 @@ def test_refresh_token_model_creates_schema_and_relationship() -> None:
 
         assert "refresh_token" in inspector.get_table_names()
         assert primary_key["constrained_columns"] == ["token"]
-        assert set(refresh_token_columns).issuperset({"token", "user_id", "created_at"})
+        assert set(refresh_token_columns).issuperset(
+            {"token", "user_id", "created_at", "session_id", "last_used_at", "client_metadata"},
+        )
         assert refresh_token_columns["created_at"]["default"] is not None
+        assert refresh_token_columns["session_id"]["nullable"] is False
+        assert refresh_token_columns["last_used_at"]["nullable"] is True
+        assert refresh_token_columns["client_metadata"]["nullable"] is True
+        assert any(index["name"] == "ix_refresh_token_session_id" for index in inspector.get_indexes("refresh_token"))
         assert foreign_keys[0]["referred_table"] == "user"
 
         with Session(engine) as session:
@@ -1192,6 +1214,10 @@ def test_refresh_token_model_creates_schema_and_relationship() -> None:
             assert refresh_token.user is user
             assert user.refresh_tokens == [refresh_token]
             assert refresh_token.created_at is not None
+            assert refresh_token.session_id != refresh_token.token
+            assert isinstance(UUID(refresh_token.session_id), UUID)
+            assert refresh_token.last_used_at is None
+            assert refresh_token.client_metadata is None
     finally:
         engine.dispose()
 

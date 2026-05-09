@@ -7,9 +7,18 @@ them from this module so imports stay explicit for readers and tooling.
 
 from __future__ import annotations
 
+from datetime import datetime  # noqa: TC003
+from typing import Annotated
+
 import msgspec
 
 import litestar_auth._schema_fields as schema_fields  # noqa: TC001
+
+type SessionClientMetadataKey = Annotated[
+    str,
+    msgspec.Meta(min_length=1, max_length=64, pattern=r"^[a-z][a-z0-9_]*$"),
+]
+type SessionClientMetadataValue = Annotated[str, msgspec.Meta(min_length=1, max_length=255)]
 
 
 class LoginCredentials(msgspec.Struct):
@@ -23,6 +32,28 @@ class RefreshTokenRequest(msgspec.Struct):
     """Refresh payload accepted by the auth controller."""
 
     refresh_token: schema_fields.RefreshTokenField
+
+
+class RefreshSessionRead(msgspec.Struct):
+    """Safe refresh-session representation returned by session/device APIs.
+
+    The public ``session_id`` is intentionally distinct from stored token
+    digests and raw refresh tokens. ``client_metadata`` is limited to bounded,
+    non-secret client hints such as the normalized ``user_agent`` value stored
+    by the database token strategy.
+    """
+
+    session_id: str
+    created_at: datetime
+    last_used_at: datetime | None = None
+    is_current: bool | None = None
+    client_metadata: dict[SessionClientMetadataKey, SessionClientMetadataValue] | None = None
+
+
+class RefreshSessionListResponse(msgspec.Struct):
+    """Response returned when listing active refresh sessions for a user."""
+
+    sessions: list[RefreshSessionRead]
 
 
 class ForgotPassword(msgspec.Struct):
@@ -128,9 +159,13 @@ class TotpDisableRequest(msgspec.Struct):
 __all__ = (
     "ForgotPassword",
     "LoginCredentials",
+    "RefreshSessionListResponse",
+    "RefreshSessionRead",
     "RefreshTokenRequest",
     "RequestVerifyToken",
     "ResetPassword",
+    "SessionClientMetadataKey",
+    "SessionClientMetadataValue",
     "TotpConfirmEnableRequest",
     "TotpConfirmEnableResponse",
     "TotpDisableRequest",

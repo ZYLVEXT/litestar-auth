@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-import uuid  # noqa: TC003 - SQLAlchemy resolves mapped annotations at runtime.
+import uuid
 from datetime import datetime  # noqa: TC003 - SQLAlchemy resolves mapped annotations at runtime.
 from typing import TYPE_CHECKING, Any, ClassVar, cast
 
@@ -27,6 +27,12 @@ __all__ = (
 _USER_RELATIONSHIP_NAME = "user"
 _ROLE_ASSIGNMENTS_RELATIONSHIP_NAME = "role_assignments"
 _ROLE_NAME_LENGTH = 255
+_SESSION_ID_LENGTH = 36
+
+
+def _new_session_id() -> str:
+    """Return a non-sensitive public identifier for a refresh-token session."""
+    return str(uuid.uuid4())
 
 
 class UserModelMixin:
@@ -431,3 +437,13 @@ class RefreshTokenMixin(_TokenModelMixin):
     """Shared mapped attributes for refresh-token models."""
 
     auth_user_back_populates: ClassVar[str] = "refresh_tokens"
+
+    session_id: Mapped[str] = mapped_column(
+        String(length=_SESSION_ID_LENGTH),
+        default=_new_session_id,
+        unique=True,
+        index=True,
+        nullable=False,
+    )
+    last_used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None, nullable=True)
+    client_metadata: Mapped[dict[str, str] | None] = mapped_column(JSON, default=None, nullable=True)

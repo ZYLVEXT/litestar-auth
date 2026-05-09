@@ -69,6 +69,27 @@ in-progress OAuth handshakes, CSRF secret rotation affects active browser sessio
 telemetry rotation starts a new digest correlation window. Keep token lifetimes short enough that
 planned rotation can happen without a long dual-secret compatibility period.
 
+## DB refresh-session metadata
+
+Session/device management is a DB-backed refresh-token feature. Before enabling
+`include_session_devices=True` in production, verify the active refresh-token table has the required
+metadata columns:
+
+- `session_id` — unique non-sensitive public id for the refresh session;
+- `created_at` — original row creation timestamp;
+- `last_used_at` — nullable timestamp updated on successful refresh rotation;
+- `client_metadata` — nullable bounded JSON for safe hints such as normalized User-Agent.
+
+For bundled models, these fields come from `RefreshTokenMixin`. Existing installations must run an
+application-owned migration before rollout: add missing columns, backfill each existing row with a
+unique UUID-style `session_id`, leave `last_used_at` null for historical sessions, and only store
+bounded non-secret metadata. Custom refresh-token models must expose the same mapped attributes or
+`DatabaseTokenModels` validation fails at startup.
+
+Do not migrate by copying raw token values into public metadata. The API exposes only `session_id`
+and safe metadata; raw access tokens, raw refresh tokens, stored token digests, and keyed token
+digests must remain server-side storage details.
+
 ## Versioned Fernet key rotation
 
 Persisted OAuth provider tokens and TOTP secrets use the same versioned Fernet-at-rest envelope:
@@ -192,6 +213,10 @@ When `rate_limit_config` is set, throttled endpoints return **429** with **`Retr
 ## Observability
 
 - Monitor **429** rates on auth endpoints (brute force / abuse).
+- Monitor `REFRESH_SESSION_NOT_FOUND` rates on session/device revoke routes. Spikes can indicate
+  stale clients, repeated foreign-session guesses, or UI bugs sending the wrong public `session_id`.
+- Monitor `SESSION_MANAGEMENT_UNSUPPORTED` after configuration changes. It means session/device
+  routes were enabled for a strategy that does not implement the DB refresh-session contract.
 - Log authentication failures without storing secrets or raw tokens. Failed-login
   `identifier_digest` is emitted only when `login_identifier_telemetry_secret` is configured; it is
   keyed and non-reversible, but still belongs in your privacy notice if you use it for abuse

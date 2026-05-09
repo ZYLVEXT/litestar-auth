@@ -28,6 +28,27 @@ columns or relationship wiring from the reference classes.
 [Configuration](../configuration/user_and_manager.md#custom-sqlalchemy-user-and-token-models) covers the full
 support matrix and migration notes.
 
+## `refresh_token` session metadata
+
+The bundled `RefreshTokenMixin` stores refresh tokens as keyed digests only. It also adds the DB-backed
+session metadata required by session/device management:
+
+- `session_id` — a generated UUID string used as the stable public session identifier. It is distinct
+  from `token` and must be the only refresh-session identifier exposed by API responses.
+- `created_at` — the original refresh session creation timestamp.
+- `last_used_at` — nullable timestamp set when a refresh token is successfully rotated.
+- `client_metadata` — nullable bounded JSON metadata derived from login/refresh requests. The built-in
+  controller stores only a normalized `user_agent` value capped at 255 characters.
+
+Refresh rotation keeps the same `session_id` and `created_at`, replaces only the token digest, updates
+`last_used_at`, and refreshes `client_metadata` when request metadata is available.
+
+Existing deployments using the bundled `refresh_token` table must add `session_id`, `last_used_at`, and
+`client_metadata` columns before using this version. Backfill `session_id` with a unique non-sensitive UUID
+per existing row. Existing custom refresh-token models passed through `DatabaseTokenModels` must expose
+mapped `session_id`, `last_used_at`, and `client_metadata` attributes; otherwise configuration fails fast
+with `ConfigurationError`.
+
 ## Lazy imports and IDE support
 
 `litestar_auth.models` exposes names such as `User` and `OAuthAccount` through [PEP

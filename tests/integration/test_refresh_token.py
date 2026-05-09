@@ -212,6 +212,7 @@ async def test_login_and_refresh_rotate_refresh_tokens(
     login_response = await test_client.post(
         "/auth/login",
         json={"identifier": "user@example.com", "password": "correct-password"},
+        headers={"User-Agent": "LitestarAuth Login Test/1.0"},
     )
 
     assert login_response.status_code == HTTP_CREATED
@@ -231,7 +232,16 @@ async def test_login_and_refresh_rotate_refresh_tokens(
         login_payload["access_token"].encode(),
         hashlib.sha256,
     ).hexdigest()
-    assert session.scalar(select(RefreshToken).where(RefreshToken.token == first_refresh_digest)) is not None
+    persisted_login_refresh_token = session.scalar(
+        select(RefreshToken).where(RefreshToken.token == first_refresh_digest),
+    )
+    assert persisted_login_refresh_token is not None
+    login_session_id = persisted_login_refresh_token.session_id
+    login_created_at = persisted_login_refresh_token.created_at
+    assert persisted_login_refresh_token.session_id != first_refresh_digest
+    assert UUID(persisted_login_refresh_token.session_id)
+    assert persisted_login_refresh_token.last_used_at is None
+    assert persisted_login_refresh_token.client_metadata == {"user_agent": "LitestarAuth Login Test/1.0"}
     assert session.scalar(select(AccessToken).where(AccessToken.token == access_digest)) is not None
     session.expire_all()
     user_after_login = session.scalar(select(User).where(User.email == "user@example.com"))
@@ -239,7 +249,11 @@ async def test_login_and_refresh_rotate_refresh_tokens(
     assert [token.token for token in user_after_login.access_tokens] == [access_digest]
     assert [token.token for token in user_after_login.refresh_tokens] == [first_refresh_digest]
 
-    refresh_response = await test_client.post("/auth/refresh", json={"refresh_token": first_refresh_token})
+    refresh_response = await test_client.post(
+        "/auth/refresh",
+        json={"refresh_token": first_refresh_token},
+        headers={"User-Agent": "LitestarAuth Refresh Test/2.0"},
+    )
 
     assert refresh_response.status_code == HTTP_CREATED
     refresh_payload = refresh_response.json()
@@ -249,19 +263,21 @@ async def test_login_and_refresh_rotate_refresh_tokens(
     assert refresh_payload["refresh_token"] != first_refresh_token
 
     assert session.scalar(select(RefreshToken).where(RefreshToken.token == first_refresh_digest)) is None
-    assert (
-        session.scalar(
-            select(RefreshToken).where(
-                RefreshToken.token
-                == hmac.new(
-                    _TOKEN_HASH_SECRET.encode(),
-                    refresh_payload["refresh_token"].encode(),
-                    hashlib.sha256,
-                ).hexdigest(),
-            ),
-        )
-        is not None
+    rotated_persisted_refresh_token = session.scalar(
+        select(RefreshToken).where(
+            RefreshToken.token
+            == hmac.new(
+                _TOKEN_HASH_SECRET.encode(),
+                refresh_payload["refresh_token"].encode(),
+                hashlib.sha256,
+            ).hexdigest(),
+        ),
     )
+    assert rotated_persisted_refresh_token is not None
+    assert rotated_persisted_refresh_token.session_id == login_session_id
+    assert rotated_persisted_refresh_token.created_at == login_created_at
+    assert rotated_persisted_refresh_token.last_used_at is not None
+    assert rotated_persisted_refresh_token.client_metadata == {"user_agent": "LitestarAuth Refresh Test/2.0"}
     session.expire_all()
     user_after_refresh = session.scalar(select(User).where(User.email == "user@example.com"))
     assert user_after_refresh is not None

@@ -3,9 +3,24 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from typing import Any, Protocol, runtime_checkable
+from dataclasses import dataclass
+from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
 from litestar_auth.types import ID, UserProtocol
+
+if TYPE_CHECKING:
+    from collections.abc import Mapping, Sequence
+    from datetime import datetime
+
+
+@dataclass(frozen=True, slots=True)
+class RefreshSession:
+    """Public refresh-session metadata exposed by session-management strategies."""
+
+    session_id: str
+    created_at: datetime
+    last_used_at: datetime | None
+    client_metadata: Mapping[str, str] | None
 
 
 class UserManagerProtocol[UP: UserProtocol[Any], ID](Protocol):
@@ -67,3 +82,33 @@ class TokenInvalidationCapable[UP: UserProtocol[Any]](Protocol):
 
     async def invalidate_all_tokens(self, user: UP) -> None:
         """Invalidate all session artifacts for the given user."""
+
+
+@runtime_checkable
+class RefreshSessionManagementStrategy[UP: UserProtocol[Any]](Protocol):
+    """Protocol for strategies that support user-scoped refresh-session management."""
+
+    async def list_refresh_sessions(self, user: UP) -> Sequence[RefreshSession]:
+        """Return active refresh sessions belonging to the given user."""
+
+    async def revoke_refresh_session(self, user: UP, session_id: str) -> bool:
+        """Revoke one refresh session by public session id.
+
+        Returns:
+            ``True`` when a matching active session was revoked, otherwise ``False``.
+        """
+
+    async def revoke_other_refresh_sessions(self, user: UP, current_session_id: str | None) -> int:
+        """Revoke active refresh sessions except the supplied current session.
+
+        Returns:
+            Number of active refresh sessions revoked.
+        """
+
+
+@runtime_checkable
+class RefreshSessionIdentifierStrategy[UP: UserProtocol[Any]](Protocol):
+    """Protocol for strategies that can identify a refresh session from a raw refresh token."""
+
+    async def identify_refresh_session(self, user: UP, refresh_token: str) -> str | None:
+        """Return the user's public refresh-session id for ``refresh_token`` when it can be resolved."""

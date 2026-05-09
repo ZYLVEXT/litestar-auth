@@ -384,6 +384,9 @@ def test_bundled_token_bootstrap_detection_skips_custom_token_models() -> None:
         created_at = None
         user_id = None
         user = None
+        session_id = None
+        last_used_at = None
+        client_metadata = None
 
     custom_strategy = DatabaseTokenStrategy(
         session=cast("Any", object()),

@@ -44,14 +44,16 @@ class AppUserCreate(msgspec.Struct, forbid_unknown_fields=True):
     these types. User CRUD schemas also stay in ``litestar_auth.schemas`` instead of passing through this module.
     Import auth lifecycle DTOs from ``litestar_auth.payloads`` so code follows the documented payload boundary.
 
-Use these types when you want the exact request and response structs exposed by the built-in login, refresh, verify,
-reset-password, and TOTP routes.
+Use these types when you want the exact request and response structs exposed by the built-in login, refresh,
+session/device management, verify, reset-password, and TOTP routes.
 
 ::: litestar_auth.payloads
     options:
       members:
         - LoginCredentials
         - RefreshTokenRequest
+        - RefreshSessionRead
+        - RefreshSessionListResponse
         - ForgotPassword
         - ResetPassword
         - RequestVerifyToken

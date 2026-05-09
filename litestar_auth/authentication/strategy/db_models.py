@@ -18,29 +18,44 @@ from litestar_auth._auth_model_mixins import AccessTokenMixin, RefreshTokenMixin
 from litestar_auth.exceptions import ConfigurationError
 
 _MISSING = object()
-_REQUIRED_TOKEN_MODEL_ATTRIBUTES = ("token", "created_at", "user_id", "user")
+_REQUIRED_ACCESS_TOKEN_MODEL_ATTRIBUTES = ("token", "created_at", "user_id", "user")
+_REQUIRED_REFRESH_TOKEN_MODEL_ATTRIBUTES = (
+    "token",
+    "created_at",
+    "user_id",
+    "user",
+    "session_id",
+    "last_used_at",
+    "client_metadata",
+)
 
 
-def _validate_token_model_contract(model: type[Any], *, field_name: str) -> None:
+def _validate_token_model_contract(
+    model: type[Any],
+    *,
+    field_name: str,
+    required_attributes: tuple[str, ...],
+) -> None:
     """Validate that a token model exposes the minimum strategy contract.
 
     Args:
         model: Access-token or refresh-token ORM class supplied to the public contract.
         field_name: Dataclass field name used in error messages.
+        required_attributes: Mapped attributes the model must expose.
 
     Raises:
         ConfigurationError: If the supplied model does not expose the required attributes.
     """
     missing_attributes = [
         attribute_name
-        for attribute_name in _REQUIRED_TOKEN_MODEL_ATTRIBUTES
+        for attribute_name in required_attributes
         if getattr_static(model, attribute_name, _MISSING) is _MISSING
     ]
     if not missing_attributes:
         return
 
     missing_display = ", ".join(missing_attributes)
-    required_display = ", ".join(_REQUIRED_TOKEN_MODEL_ATTRIBUTES)
+    required_display = ", ".join(required_attributes)
     msg = (
         f"DatabaseTokenModels.{field_name} must define mapped attributes {required_display}; "
         f"missing: {missing_display}."
@@ -64,8 +79,10 @@ class RefreshToken(RefreshTokenMixin, DefaultBase):
 class DatabaseTokenModels:
     """Explicit access-token and refresh-token ORM contract for ``DatabaseTokenStrategy``.
 
-    The supplied models must expose mapped ``token``, ``created_at``, ``user_id``, and ``user``
-    attributes compatible with the persistence operations performed by the DB token strategy.
+    The supplied access-token model must expose mapped ``token``, ``created_at``, ``user_id``, and ``user``
+    attributes compatible with the persistence operations performed by the DB token strategy. The supplied
+    refresh-token model must also expose ``session_id``, ``last_used_at``, and ``client_metadata`` so DB-backed
+    refresh sessions have a non-sensitive public session identifier and bounded client metadata.
     Defaults preserve the bundled ``AccessToken`` / ``RefreshToken`` behavior.
     """
 
@@ -74,8 +91,16 @@ class DatabaseTokenModels:
 
     def __post_init__(self) -> None:
         """Validate the supplied token-model classes eagerly."""
-        _validate_token_model_contract(self.access_token_model, field_name="access_token_model")
-        _validate_token_model_contract(self.refresh_token_model, field_name="refresh_token_model")
+        _validate_token_model_contract(
+            self.access_token_model,
+            field_name="access_token_model",
+            required_attributes=_REQUIRED_ACCESS_TOKEN_MODEL_ATTRIBUTES,
+        )
+        _validate_token_model_contract(
+            self.refresh_token_model,
+            field_name="refresh_token_model",
+            required_attributes=_REQUIRED_REFRESH_TOKEN_MODEL_ATTRIBUTES,
+        )
 
 
 def import_token_orm_models() -> tuple[type[AccessToken], type[RefreshToken]]:

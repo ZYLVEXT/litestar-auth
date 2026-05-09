@@ -37,6 +37,7 @@ from litestar_auth.controllers import (
     create_users_controller,
     create_verify_controller,
 )
+from litestar_auth.controllers._auth_helpers import _resolve_cookie_transport
 from litestar_auth.controllers._utils import (
     RequestBodyErrorConfig,
     RequestHandler,
@@ -52,6 +53,11 @@ from litestar_auth.controllers.auth import (
     _handle_auth_refresh,
     _make_auth_controller_context,
 )
+from litestar_auth.controllers.session_devices import (
+    _define_session_devices_controller_class,
+    _require_session_management_strategy,
+    _SessionDevicesControllerContext,
+)
 from litestar_auth.exceptions import ErrorCode
 from litestar_auth.guards import is_authenticated
 from litestar_auth.payloads import LoginCredentials, RefreshTokenRequest  # noqa: TC001
@@ -63,6 +69,7 @@ if TYPE_CHECKING:
     from litestar.openapi.spec import SecurityRequirement
     from litestar.types import ControllerRouterHandler, ExceptionHandlersMap
 
+    from litestar_auth.authentication.backend import AuthenticationBackend
     from litestar_auth.ratelimit import AuthRateLimitConfig
     from litestar_auth.types import LoginIdentifier
 
@@ -388,6 +395,14 @@ def _append_optional_feature_controllers[UP: UserProtocol[Any], ID](
                 **users_schema_kwargs(config),
             ),
         )
+    if config.include_session_devices:
+        controllers.append(
+            create_session_devices_controller(
+                config=config,
+                backend_inventory=backend_inventory,
+                security=security,
+            ),
+        )
     if config.totp_config is not None:
         controllers.append(build_totp_controller(config, backend_inventory=backend_inventory, security=security))
     _append_oauth_login_controllers(
@@ -439,3 +454,46 @@ def backend_auth_path(*, auth_path: str, backend_name: str, index: int) -> str:
         return base_path
 
     return f"{base_path}/{backend_name}"
+
+
+def create_session_devices_controller[UP: UserProtocol[Any], ID](
+    *,
+    config: LitestarAuthConfig[UP, ID],
+    backend_inventory: StartupBackendInventory[UP, ID] | None = None,
+    security: Sequence[SecurityRequirement] | None = None,
+) -> type[Controller]:
+    """Return the plugin-owned session/device management controller."""
+    inventory = resolve_backend_inventory(config) if backend_inventory is None else backend_inventory
+    backend_index, backend = inventory.primary()
+
+    def _build_context(request_backends: object | None = None) -> _SessionDevicesControllerContext[UP]:
+        request_backend = _resolve_session_devices_request_backend(
+            inventory,
+            backend,
+            backend_index=backend_index,
+            litestar_auth_backends=request_backends,
+        )
+        return _SessionDevicesControllerContext(
+            _require_session_management_strategy(request_backend.strategy),
+            cookie_transport=_resolve_cookie_transport(cast("Any", request_backend)),
+        )
+
+    generated_controller = _define_session_devices_controller_class(_build_context, security=security)
+    generated_controller.__module__ = __name__
+    generated_controller.__name__ = f"{_build_controller_name(backend.name)}SessionDevicesController"
+    generated_controller.__qualname__ = generated_controller.__name__
+    generated_controller.path = config.auth_path.rstrip("/") or "/"
+    return _mark_litestar_auth_route_handler(generated_controller)
+
+
+def _resolve_session_devices_request_backend[UP: UserProtocol[Any], ID](
+    inventory: StartupBackendInventory[UP, ID],
+    startup_backend: StartupBackendTemplate[UP, ID],
+    *,
+    backend_index: int,
+    litestar_auth_backends: object | None,
+) -> AuthenticationBackend[UP, ID] | StartupBackendTemplate[UP, ID]:
+    """Return a request-scoped backend when DI supplied one, otherwise the startup backend."""
+    if litestar_auth_backends is None:
+        return startup_backend
+    return inventory.resolve_request_backend(litestar_auth_backends, backend_index=backend_index)

@@ -18,6 +18,75 @@ For plugin-mounted protected routes, `LitestarAuth` also publishes per-operation
 | POST | `{auth}/login` | `LoginCredentials` (`identifier`, `password`) | Always (auth controller) | Credentials → tokens / session. |
 | POST | `{auth}/logout` | None | Always | Authenticated; clears session per strategy. |
 | POST | `{auth}/refresh` | `RefreshTokenRequest` (`refresh_token`) | `enable_refresh=True` | New access token from refresh token / cookie. |
+| GET | `{auth}/sessions` | None | `include_session_devices=True` | Authenticated; list the current user's active DB-backed refresh sessions. CookieTransport clients can be marked current from the refresh cookie. |
+| POST | `{auth}/sessions` | `RefreshTokenRequest` (`refresh_token`) | `include_session_devices=True` | Authenticated; list active refresh sessions while identifying the current bearer refresh session. |
+| DELETE | `{auth}/sessions/{session_id}` | None | `include_session_devices=True` | Authenticated; revoke one of the current user's refresh sessions by public session id. |
+| POST | `{auth}/sessions/revoke-others` | Optional `RefreshTokenRequest` (`refresh_token`) for bearer clients | `include_session_devices=True` | Authenticated; revoke the current user's other refresh sessions. |
+
+## Session/device response contracts
+
+Session/device management routes use response DTOs from `litestar_auth.payloads`. Bearer clients use
+`POST {auth}/sessions` with the existing `RefreshTokenRequest` body when they want the server to
+identify the current refresh session in a list response, and may include the same body on
+`POST {auth}/sessions/revoke-others`. Cookie clients do not submit that body; the
+controller reads the configured `CookieTransport` refresh cookie instead.
+
+`RefreshSessionRead` serializes one active DB-backed refresh session:
+
+- `session_id` — stable public session identifier. It is not the raw refresh token, access token,
+  token digest, or keyed token digest.
+- `created_at` — original refresh-session creation timestamp.
+- `last_used_at` — timestamp of the last successful refresh rotation, or `null` when the session has
+  not been used after login.
+- `is_current` — `true` / `false` when the current refresh credential can be matched to the row, or
+  `null` when the route cannot compute that marker.
+- `client_metadata` — optional bounded safe client hints. The built-in DB strategy stores only
+  normalized `user_agent` metadata capped at 255 characters; exact IP addresses and token material
+  are not part of this contract.
+
+List responses use `RefreshSessionListResponse`:
+
+```json
+{
+  "sessions": [
+    {
+      "session_id": "a4ff5e6a-60f8-4a8e-9684-7239150fd91b",
+      "created_at": "2026-05-09T01:20:00Z",
+      "last_used_at": "2026-05-09T01:25:00Z",
+      "is_current": true,
+      "client_metadata": {
+        "user_agent": "Example Browser/1.0"
+      }
+    }
+  ]
+}
+```
+
+Plugin-owned session/device routes are opt-in with `include_session_devices=True` and are mounted
+under `auth_path`. They are authenticated routes and always scope strategy calls to `request.user`.
+The first controller slice supports strategies implementing the refresh-session management protocol,
+including the built-in DB token strategy. JWT and Redis token strategies do not provide a session
+dashboard in this slice.
+
+| Status | Error code | Applies to | Meaning |
+| ------ | ---------- | ---------- | ------- |
+| 400 | `SESSION_MANAGEMENT_UNSUPPORTED` | All session/device routes | The configured strategy does not implement refresh-session management. |
+| 401 | None | All session/device routes | Authentication credentials are absent or invalid. |
+| 404 | `REFRESH_SESSION_NOT_FOUND` | `DELETE {auth}/sessions/{session_id}` | The public session id is missing or does not belong to the authenticated user. |
+
+Current-session detection is available when the configured strategy can identify a public session id
+from the current raw refresh credential. The built-in DB token strategy supports that lookup by
+hashing the supplied refresh token and comparing it to stored digests; it does not store or expose raw
+refresh tokens. When the credential is available and matches one of the current user's active refresh
+sessions, cookie clients can use `GET {auth}/sessions` and bearer clients can use
+`POST {auth}/sessions` to mark exactly that item with `is_current: true` and the other active items
+with `false`; `POST {auth}/sessions/revoke-others` preserves that session.
+
+When no current refresh credential is present, the credential is invalid, the credential belongs to a
+different user, the refresh session is expired, or the configured strategy does not support
+identification, the current session is unresolved. In that fallback, list responses keep
+`is_current: null`, and revoke-others fails closed by passing an unknown current-session marker to the
+strategy. For the built-in DB strategy this revokes all active refresh sessions for the current user.
 
 ## Registration and email
 

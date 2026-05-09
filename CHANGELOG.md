@@ -1,3 +1,89 @@
+## Unreleased
+
+### Added
+
+- **Refresh-session / device management.** New opt-in
+  ``include_session_devices`` flag on ``LitestarAuthConfig`` mounts a
+  plugin-owned controller exposing authenticated routes for inspecting and
+  revoking active refresh sessions:
+  - ``GET /auth/sessions`` and ``POST /auth/sessions`` list active refresh
+    sessions for the authenticated user; the ``POST`` variant accepts a
+    ``RefreshTokenRequest`` body so non-cookie clients can mark the current
+    session via ``is_current``.
+  - ``DELETE /auth/sessions/{session_id}`` revokes one session by its
+    public id (404 with ``REFRESH_SESSION_NOT_FOUND`` when the id is
+    absent or foreign to the user).
+  - ``POST /auth/sessions/revoke-others`` revokes every active refresh
+    session for the user except the current one (resolved from the request
+    body or refresh-token cookie when available).
+- **Public session metadata payloads.** New
+  ``litestar_auth.payloads.RefreshSessionRead`` and
+  ``RefreshSessionListResponse`` msgspec structs, plus bounded
+  ``SessionClientMetadataKey`` / ``SessionClientMetadataValue`` aliases,
+  describe the safe response shape (``session_id``, ``created_at``,
+  ``last_used_at``, ``is_current``, optional ``client_metadata``). Raw
+  refresh tokens and stored token digests are never returned.
+- **Strategy protocols for session management.** New
+  ``RefreshSessionManagementStrategy`` and
+  ``RefreshSessionIdentifierStrategy`` runtime-checkable protocols and a
+  frozen ``RefreshSession`` dataclass in
+  ``litestar_auth.authentication.strategy.base`` describe the contract a
+  strategy must implement for the new controller. ``DatabaseTokenStrategy``
+  implements both protocols (``list_refresh_sessions``,
+  ``revoke_refresh_session``, ``revoke_other_refresh_sessions``,
+  ``identify_refresh_session``) and prunes expired refresh-token rows
+  before listing or revoking.
+- **Bounded client metadata on refresh tokens.** ``RefreshTokenMixin`` (and
+  the bundled ``RefreshToken`` model) now persists a public
+  ``session_id`` (UUID4, unique, indexed), a ``last_used_at`` timestamp,
+  and a JSON ``client_metadata`` column. Login and refresh handlers call
+  the new ``RefreshTokenRequestContextRecorder`` hook so the DB strategy
+  can capture a normalized, length-capped ``user_agent`` hint from the
+  current request without ever storing arbitrary header content.
+- **Cookie transport refresh-token reader.**
+  ``CookieTransport.read_refresh_token`` returns the refresh token from
+  the dedicated refresh cookie, used by the new session controller (and a
+  shared ``_resolve_refresh_token_value`` helper) to identify the
+  request's current session in cookie flows.
+- **New error codes / exceptions.** ``ErrorCode.SESSION_MANAGEMENT_UNSUPPORTED``
+  and ``ErrorCode.REFRESH_SESSION_NOT_FOUND``, plus
+  ``SessionManagementUnsupportedError`` and ``RefreshSessionNotFoundError``
+  (both subclassing ``TokenError``), accompany the new controller.
+
+### Changed
+
+- **``DatabaseTokenModels`` contract widened for refresh tokens.**
+  Refresh-token models supplied through ``DatabaseTokenModels`` must now
+  expose mapped ``session_id``, ``last_used_at``, and ``client_metadata``
+  attributes in addition to the previously required
+  ``token``/``created_at``/``user_id``/``user``. Validation now uses
+  separate required-attribute tuples per model. The bundled
+  ``RefreshToken`` satisfies the new contract automatically; custom
+  refresh-token classes must add the three new mapped columns.
+- **Refresh-token rotation preserves session identity.** Rotating a
+  refresh token now reuses the previous row's ``session_id`` and
+  ``created_at`` and stamps ``last_used_at``, so a single device's session
+  retains a stable public id across rotations and surfaces realistic
+  "last used" timestamps in the new listing endpoint.
+
+### Migration
+
+- **Database schema.** Existing deployments using ``DatabaseTokenStrategy``
+  must add three columns to their refresh-token table: a unique, indexed
+  ``session_id VARCHAR(36)`` (backfill with UUID4s for existing rows),
+  a nullable ``last_used_at`` timestamp, and a nullable JSON
+  ``client_metadata`` column. The mixin defaults handle new rows; backfill
+  is required only for previously persisted refresh tokens you intend to
+  keep.
+- **Custom refresh-token models.** Any subclass that bypassed
+  ``RefreshTokenMixin`` must declare matching ``session_id``,
+  ``last_used_at``, and ``client_metadata`` mapped attributes or
+  ``DatabaseTokenModels`` will raise ``ConfigurationError`` at startup.
+- **Enabling the new controller is opt-in.** Set
+  ``LitestarAuthConfig(include_session_devices=True)`` (alongside
+  ``enable_refresh=True``) to mount the routes; existing apps that do not
+  set the flag are unaffected.
+
 ## 3.0.0 (2026-05-09)
 
 ### Added

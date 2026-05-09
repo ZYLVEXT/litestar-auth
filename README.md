@@ -107,6 +107,8 @@ app = Litestar(route_handlers=[protected], plugins=[LitestarAuth(config)])
 - Litestar-native plugin setup through `LitestarAuthConfig(...)` and `LitestarAuth(config)`.
 - Registration, login, email verification, password reset, and protected-route guards out of the box.
 - Transport + strategy auth backends, including Bearer or Cookie transports and JWT, database, or Redis token strategies.
+- Opt-in DB-backed session/device routes for listing active refresh sessions and revoking one session
+  or all other sessions without exposing raw tokens or token digests.
 - `BaseUserManager` hooks for integrating email delivery, background jobs, and app-specific lifecycle logic.
 - Bundled SQLAlchemy user model plus `SQLAlchemyUserDatabase` for the default persistence path.
 - Normalized flat-role contract for responses and guards, with a matching `litestar roles` CLI for operator workflows.
@@ -143,6 +145,7 @@ under the library default, so rotate or reset those credentials before upgrading
 - [Quickstart](https://zylvext.github.io/litestar-auth/quickstart/): bootstrap SQLite, run the app, and walk through register/verify/login.
 - [Installation](https://zylvext.github.io/litestar-auth/install/): requirements, extras, and typical deployment stacks.
 - [Configuration](https://zylvext.github.io/litestar-auth/configuration/): user model, manager, backends, Redis, OAuth, TOTP, and security knobs.
+- [HTTP API](https://zylvext.github.io/litestar-auth/http_api/): generated routes, including the opt-in DB refresh-session/device management surface.
 - [Security](https://zylvext.github.io/litestar-auth/security/): secure defaults, migration-only flags, and production hardening notes.
 - [Role management CLI](https://zylvext.github.io/litestar-auth/guides/roles_cli/): operator commands for bundled relational roles.
 - [Testing plugin-backed apps](https://zylvext.github.io/litestar-auth/guides/testing/): AsyncTestClient patterns and repo-aligned test advice.

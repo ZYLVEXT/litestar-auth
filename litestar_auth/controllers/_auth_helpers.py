@@ -16,9 +16,11 @@ from litestar_auth.exceptions import ConfigurationError, ErrorCode
 from litestar_auth.types import LoginIdentifier, UserProtocol
 
 if TYPE_CHECKING:
+    from litestar import Request
     from litestar.response import Response
 
     from litestar_auth.authentication.backend import AuthenticationBackend
+    from litestar_auth.payloads import RefreshTokenRequest
 
 _LOGIN_EMAIL_MAX_LENGTH = schema_fields.LOGIN_IDENTIFIER_MAX_LENGTH
 _LOGIN_USERNAME_MAX_LENGTH = 150
@@ -66,6 +68,24 @@ def _resolve_cookie_transport[UP: UserProtocol[Any], ID](
     """Return the backend cookie transport when refresh-cookie behavior is available."""
     transport = backend.transport
     return transport if isinstance(transport, CookieTransport) else None
+
+
+async def _resolve_refresh_token_value(
+    request: Request[Any, Any, Any],
+    data: RefreshTokenRequest | None,
+    *,
+    cookie_transport: CookieTransport | None = None,
+) -> str | None:
+    """Return a raw refresh token from a request body or refresh cookie.
+
+    Body values take precedence so non-cookie clients keep the same explicit request contract.
+    Cookie refresh tokens are only read when the configured backend uses ``CookieTransport``.
+    """
+    if data is not None:
+        return data.refresh_token
+    if cookie_transport is None:
+        return None
+    return await cookie_transport.read_refresh_token(request)
 
 
 def _validate_manual_cookie_auth_contract(

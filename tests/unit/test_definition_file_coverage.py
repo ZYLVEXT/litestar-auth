@@ -23,6 +23,7 @@ import litestar_auth.authentication.strategy.base as strategy_base_module
 import litestar_auth.authentication.transport.base as transport_base_module
 import litestar_auth.db.base as db_base_module
 import litestar_auth.models.mixins as model_mixins_module
+import litestar_auth.payloads as payloads_module
 import litestar_auth.schemas as schemas_module
 import litestar_auth.types as types_module
 from litestar_auth.authentication.strategy.db_models import AccessToken as ModelsAccessToken
@@ -197,6 +198,24 @@ def test_schemas_module_preserves_struct_definitions() -> None:
     assert user_read_hints["roles"] == list[str]
     assert get_args(admin_update_hints["roles"])[0] == list[str]
     assert get_args(admin_update_hints["roles"])[1] is type(None)
+
+
+def test_payloads_module_preserves_refresh_session_response_contract() -> None:
+    """Session/device response payloads expose only safe public refresh-session data."""
+    session_hints = get_type_hints(payloads_module.RefreshSessionRead, include_extras=True)
+
+    assert payloads_module.RefreshSessionRead.__struct_fields__ == (
+        "session_id",
+        "created_at",
+        "last_used_at",
+        "is_current",
+        "client_metadata",
+    )
+    assert payloads_module.RefreshSessionListResponse.__struct_fields__ == ("sessions",)
+    assert session_hints["session_id"] is str
+    assert get_args(session_hints["last_used_at"])[1] is type(None)
+    assert get_args(session_hints["is_current"])[1] is type(None)
+    assert get_args(session_hints["client_metadata"])[1] is type(None)
 
 
 def test_strategy_base_module_preserves_abstract_contracts() -> None:

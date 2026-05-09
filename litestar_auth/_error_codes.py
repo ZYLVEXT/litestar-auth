@@ -52,6 +52,8 @@ class ErrorCode(StrEnum):
     REQUEST_BODY_INVALID = auto()
     LOGIN_PAYLOAD_INVALID = auto()
     REFRESH_TOKEN_INVALID = auto()
+    SESSION_MANAGEMENT_UNSUPPORTED = auto()
+    REFRESH_SESSION_NOT_FOUND = auto()
     ROLE_ALREADY_EXISTS = auto()
     ROLE_NOT_FOUND = auto()
     ROLE_STILL_ASSIGNED = auto()

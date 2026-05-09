@@ -86,6 +86,10 @@ class CookieTransport(Transport):
         """Return the cookie key used to carry refresh tokens in cookie flows."""
         return f"{self.cookie_name}_refresh"
 
+    async def read_refresh_token(self, connection: ASGIConnection[Any, Any, Any, Any]) -> str | None:
+        """Return the refresh token from the dedicated refresh-token cookie."""
+        return connection.cookies.get(self.refresh_cookie_name)
+
     def _set_cookie(
         self,
         response: Response[Any],

@@ -200,7 +200,7 @@ class LitestarAuthConfig[UP: UserProtocol[Any], ID]:
     Paths and endpoint flags:
         ``auth_path``, ``users_path``, ``include_register``, ``include_verify``,
         ``include_reset_password``, ``include_users``, ``enable_refresh``,
-        ``requires_verification``, ``hard_delete``.
+        ``include_session_devices``, ``requires_verification``, ``hard_delete``.
     TOTP:
         ``totp_config`` (`TotpConfig | None`) enables and configures TOTP flows.
     OAuth and account linking:
@@ -250,6 +250,7 @@ class LitestarAuthConfig[UP: UserProtocol[Any], ID]:
     include_verify: bool = True
     include_reset_password: bool = True
     include_users: bool = False
+    include_session_devices: bool = False
     include_openapi_security: bool = True
     enable_refresh: bool = False
     requires_verification: bool = True

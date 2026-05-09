@@ -5,10 +5,10 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from functools import cache
-from typing import Any, NotRequired, Protocol, Required, TypedDict, Unpack, cast, overload, override
+from typing import TYPE_CHECKING, Any, NotRequired, Protocol, Required, TypedDict, Unpack, cast, overload, override
 
 from advanced_alchemy.repository import SQLAlchemyAsyncRepository
-from sqlalchemy import delete
+from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_scoped_session
 
 from litestar_auth.authentication.strategy._opaque_tokens import (
@@ -16,11 +16,19 @@ from litestar_auth.authentication.strategy._opaque_tokens import (
     mint_opaque_token,
     validate_token_bytes,
 )
-from litestar_auth.authentication.strategy.base import RefreshableStrategy, Strategy, UserManagerProtocol
+from litestar_auth.authentication.strategy.base import (
+    RefreshableStrategy,
+    RefreshSession,
+    Strategy,
+    UserManagerProtocol,
+)
 from litestar_auth.authentication.strategy.db_models import AccessToken, DatabaseTokenModels, RefreshToken
 from litestar_auth.config import validate_production_secret
 from litestar_auth.exceptions import ConfigurationError
 from litestar_auth.types import UserProtocol
+
+if TYPE_CHECKING:
+    from sqlalchemy.sql.base import Executable
 
 type AsyncSessionT = AsyncSession | async_scoped_session[AsyncSession]
 type TokenRepositoryType = type[SQLAlchemyAsyncRepository[Any]]
@@ -28,6 +36,8 @@ type TokenRepositoryType = type[SQLAlchemyAsyncRepository[Any]]
 DEFAULT_MAX_AGE = timedelta(hours=1)
 DEFAULT_REFRESH_MAX_AGE = timedelta(days=30)
 DEFAULT_TOKEN_BYTES = 32
+_CLIENT_METADATA_USER_AGENT_KEY = "user_agent"
+_MAX_CLIENT_METADATA_VALUE_LENGTH = 255
 
 
 @cache
@@ -53,6 +63,10 @@ class _RefreshTokenRow(Protocol):
 
     token: str
     created_at: datetime
+    session_id: str
+    last_used_at: datetime | None
+    client_metadata: dict[str, str] | None
+    user_id: object
     user: object
 
 
@@ -130,6 +144,7 @@ class DatabaseTokenStrategy[UP: UserProtocol[Any], ID](Strategy[UP, ID], Refresh
         self.refresh_max_age = settings.refresh_max_age
         self.token_bytes = settings.token_bytes
         self.unsafe_testing = settings.unsafe_testing
+        self._refresh_token_request_metadata: dict[str, str] | None = None
 
     def with_session(self, session: AsyncSessionT) -> DatabaseTokenStrategy[UP, ID]:
         """Return a copy of the strategy bound to the provided async session."""
@@ -172,6 +187,44 @@ class DatabaseTokenStrategy[UP: UserProtocol[Any], ID](Strategy[UP, ID], Refresh
         """Return the keyed digest stored for a raw token."""
         return digest_opaque_token(token_hash_secret=self._token_hash_secret, token=token)
 
+    async def _execute_delete(self, statement: Executable) -> int:
+        """Execute a delete statement and return its matched row count.
+
+        Returns:
+            Number of rows matched by the statement.
+        """
+        result = await self.session.execute(statement)
+        return cast("int", getattr(result, "rowcount", 0) or 0)
+
+    @staticmethod
+    def _bounded_client_metadata_value(value: object) -> str | None:
+        """Return a normalized, bounded metadata value safe for refresh-session storage."""
+        if not isinstance(value, str):
+            return None
+        normalized = " ".join(value.split())
+        if not normalized:
+            return None
+        return normalized[:_MAX_CLIENT_METADATA_VALUE_LENGTH]
+
+    @classmethod
+    def _extract_refresh_token_client_metadata(cls, request: object) -> dict[str, str] | None:
+        """Return bounded client metadata derived from the current HTTP request."""
+        headers = getattr(request, "headers", {})
+        user_agent = cls._bounded_client_metadata_value(getattr(headers, "get", lambda _: None)("user-agent"))
+        if user_agent is None:
+            return None
+        return {_CLIENT_METADATA_USER_AGENT_KEY: user_agent}
+
+    def set_refresh_token_request_context(self, request: object) -> None:
+        """Capture safe request metadata for the next refresh-token write or rotation."""
+        self._refresh_token_request_metadata = self._extract_refresh_token_client_metadata(request)
+
+    def _consume_refresh_token_request_metadata(self) -> dict[str, str] | None:
+        """Return captured request metadata and clear it from the strategy instance."""
+        metadata = self._refresh_token_request_metadata
+        self._refresh_token_request_metadata = None
+        return metadata
+
     async def _resolve_token(
         self,
         repository: SQLAlchemyAsyncRepository[Any],
@@ -208,6 +261,108 @@ class DatabaseTokenStrategy[UP: UserProtocol[Any], ID](Strategy[UP, ID], Refresh
         access_rowcount = getattr(access_result, "rowcount", 0) or 0
         refresh_rowcount = getattr(refresh_result, "rowcount", 0) or 0
         return access_rowcount + refresh_rowcount
+
+    async def _delete_expired_refresh_sessions_for_user(self, user: UP) -> int:
+        """Delete expired refresh-token rows for ``user``.
+
+        Returns:
+            Number of deleted rows.
+        """
+        cutoff = datetime.now(tz=UTC) - self.refresh_max_age
+        return await self._execute_delete(
+            delete(self.refresh_token_model).where(
+                self.refresh_token_model.user_id == user.id,
+                self.refresh_token_model.created_at <= cutoff,
+            ),
+        )
+
+    @staticmethod
+    def _refresh_session_from_row(row: _RefreshTokenRow) -> RefreshSession:
+        """Build safe public refresh-session metadata from a persistence row.
+
+        Returns:
+            Refresh-session metadata without token storage details.
+        """
+        return RefreshSession(
+            session_id=row.session_id,
+            created_at=row.created_at,
+            last_used_at=row.last_used_at,
+            client_metadata=row.client_metadata,
+        )
+
+    async def list_refresh_sessions(self, user: UP) -> list[RefreshSession]:
+        """Return active refresh sessions belonging to ``user``.
+
+        Expired refresh-token rows are deleted before active sessions are returned.
+
+        Returns:
+            Active refresh-session metadata ordered by creation time.
+        """
+        expired_count = await self._delete_expired_refresh_sessions_for_user(user)
+        if expired_count:
+            await self.session.commit()
+
+        result = await self.session.execute(
+            select(self.refresh_token_model)
+            .where(self.refresh_token_model.user_id == user.id)
+            .order_by(self.refresh_token_model.created_at),
+        )
+        rows = cast("list[_RefreshTokenRow]", result.scalars().all())
+        return [self._refresh_session_from_row(row) for row in rows]
+
+    async def revoke_refresh_session(self, user: UP, session_id: str) -> bool:
+        """Revoke one active refresh session for ``user`` by public session id.
+
+        Returns:
+            ``True`` when a matching active session was deleted, otherwise ``False``.
+        """
+        expired_count = await self._delete_expired_refresh_sessions_for_user(user)
+        deleted_count = await self._execute_delete(
+            delete(self.refresh_token_model).where(
+                self.refresh_token_model.user_id == user.id,
+                self.refresh_token_model.session_id == session_id,
+            ),
+        )
+        if expired_count or deleted_count:
+            await self.session.commit()
+        return deleted_count > 0
+
+    async def revoke_other_refresh_sessions(self, user: UP, current_session_id: str | None) -> int:
+        """Revoke active refresh sessions for ``user`` except ``current_session_id``.
+
+        Returns:
+            Number of active refresh sessions revoked.
+        """
+        expired_count = await self._delete_expired_refresh_sessions_for_user(user)
+        conditions = [self.refresh_token_model.user_id == user.id]
+        if current_session_id is not None:
+            conditions.append(self.refresh_token_model.session_id != current_session_id)
+        deleted_count = await self._execute_delete(delete(self.refresh_token_model).where(*conditions))
+        if expired_count or deleted_count:
+            await self.session.commit()
+        return deleted_count
+
+    async def identify_refresh_session(self, user: UP, refresh_token: str) -> str | None:
+        """Return the public refresh-session id for ``refresh_token`` when it belongs to ``user``.
+
+        Returns:
+            Public refresh-session id, or ``None`` when the token is missing, expired, or not owned by ``user``.
+        """
+        persisted_token = cast(
+            "_RefreshTokenRow | None",
+            await self._resolve_token(
+                self._repository(self._refresh_token_repository_type),
+                refresh_token,
+                load=[],
+            ),
+        )
+        if persisted_token is None or persisted_token.user_id != user.id:
+            return None
+        if self._is_token_expired(persisted_token.created_at, self.refresh_max_age):
+            await self._delete_refresh_token_row(persisted_token)
+            await self.session.commit()
+            return None
+        return persisted_token.session_id
 
     @override
     async def read_token(
@@ -265,7 +420,11 @@ class DatabaseTokenStrategy[UP: UserProtocol[Any], ID](Strategy[UP, ID], Refresh
             Newly created opaque refresh-token string.
         """
         token, token_digest = mint_opaque_token(token_bytes=self.token_bytes, token_hash_secret=self._token_hash_secret)
-        refresh_token = self.refresh_token_model(token=token_digest, user_id=user.id)
+        refresh_token = self.refresh_token_model(
+            token=token_digest,
+            user_id=user.id,
+            client_metadata=self._consume_refresh_token_request_metadata(),
+        )
         await self._repository(self._refresh_token_repository_type).add(refresh_token, auto_refresh=True)
         return token
 
@@ -291,7 +450,13 @@ class DatabaseTokenStrategy[UP: UserProtocol[Any], ID](Strategy[UP, ID], Refresh
             auto_commit=False,
         )
 
-    async def _mint_replacement_refresh_token(self, user: UP) -> str:
+    async def _mint_replacement_refresh_token(
+        self,
+        user: UP,
+        persisted_token: _RefreshTokenRow,
+        *,
+        client_metadata: dict[str, str] | None,
+    ) -> str:
         """Persist and return a replacement refresh token for ``user``.
 
         Returns:
@@ -301,7 +466,14 @@ class DatabaseTokenStrategy[UP: UserProtocol[Any], ID](Strategy[UP, ID], Refresh
             token_bytes=self.token_bytes,
             token_hash_secret=self._token_hash_secret,
         )
-        rotated_model = self.refresh_token_model(token=token_digest, user_id=user.id)
+        rotated_model = self.refresh_token_model(
+            token=token_digest,
+            user_id=user.id,
+            session_id=persisted_token.session_id,
+            created_at=persisted_token.created_at,
+            last_used_at=datetime.now(tz=UTC),
+            client_metadata=client_metadata if client_metadata is not None else persisted_token.client_metadata,
+        )
         await self._repository(self._refresh_token_repository_type).add(
             rotated_model,
             auto_commit=False,
@@ -321,6 +493,7 @@ class DatabaseTokenStrategy[UP: UserProtocol[Any], ID](Strategy[UP, ID], Refresh
             Tuple of the resolved user and rotated refresh token, or ``None`` when invalid.
         """
         del user_manager
+        client_metadata = self._consume_refresh_token_request_metadata()
         persisted_token = await self._load_refresh_token_for_rotation(refresh_token)
         if persisted_token is None:
             return None
@@ -330,7 +503,11 @@ class DatabaseTokenStrategy[UP: UserProtocol[Any], ID](Strategy[UP, ID], Refresh
 
         user = cast("UP", persisted_token.user)
         await self._delete_refresh_token_row(persisted_token)
-        rotated_refresh_token = await self._mint_replacement_refresh_token(user)
+        rotated_refresh_token = await self._mint_replacement_refresh_token(
+            user,
+            persisted_token,
+            client_metadata=client_metadata,
+        )
         return user, rotated_refresh_token
 
     async def invalidate_all_tokens(self, user: UP) -> None:
