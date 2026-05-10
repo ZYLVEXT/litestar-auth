@@ -60,12 +60,14 @@ from tests.integration.test_orchestrator import (
     DummySession,
     DummySessionMaker,
     ExampleUser,
+    InMemoryRefreshTokenStrategy,
     InMemoryTokenStrategy,
     InMemoryUserDatabase,
     PluginUserManager,
 )
 
 FernetKeyringConfig = plugin_module.FernetKeyringConfig
+ApiKeyConfig = plugin_module.ApiKeyConfig
 LitestarAuth = plugin_module.LitestarAuth
 LitestarAuthConfig = plugin_module.LitestarAuthConfig
 OAuthConfig = plugin_module.OAuthConfig
@@ -82,6 +84,7 @@ OAUTH_FLOW_COOKIE_SECRET = "oauth-flow-cookie-secret-1234567890"
 TOKEN_HASH_SECRET = "0123456789abcdef" * 4
 VERIFICATION_SECRET = "89abcdef01234567" * 4
 RESET_PASSWORD_SECRET = "fedcba9876543210" * 4
+API_KEY_HASH_SECRET = "api-key-hash-secret-0123456789abcdef"
 TOTP_PENDING_SECRET = "76543210fedcba98" * 4
 CSRF_SECRET = "456789abcdef0123" * 4
 TOTP_RECOVERY_CODE_LOOKUP_SECRET = "13579bdf02468ace" * 4
@@ -473,6 +476,27 @@ def test_on_app_init_rejects_enable_refresh_with_non_refreshable_strategy() -> N
     assert "primary" in message
     assert "InMemoryTokenStrategy" in message
     assert "does not implement RefreshableStrategy" in message
+
+
+def test_on_app_init_allows_enable_refresh_with_api_key_backend() -> None:
+    """API-key startup backends do not participate in refresh-token capability checks."""
+    refreshable_backend = AuthenticationBackend[ExampleUser, UUID](
+        name="refreshable",
+        transport=BearerTransport(),
+        strategy=cast("Any", InMemoryRefreshTokenStrategy(token_prefix="refreshable")),
+    )
+    config = _minimal_config(backends=[refreshable_backend])
+    config.enable_refresh = True
+    config.api_keys = ApiKeyConfig(enabled=True, allowed_scopes=("read",))
+    config.user_manager_security = UserManagerSecurity[UUID](
+        verification_token_secret=VERIFICATION_SECRET,
+        reset_password_token_secret=RESET_PASSWORD_SECRET,
+        api_key_hash_secret=API_KEY_HASH_SECRET,
+        id_parser=UUID,
+    )
+    plugin = LitestarAuth(config)
+
+    plugin.on_app_init(AppConfig())
 
 
 def test_on_app_init_multiworker_rate_limit_error_names_unsafe_endpoint_slots() -> None:

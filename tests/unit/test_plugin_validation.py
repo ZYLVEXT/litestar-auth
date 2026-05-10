@@ -26,6 +26,7 @@ from litestar_auth._plugin.middleware import build_csrf_config, get_cookie_trans
 from litestar_auth.authentication.backend import AuthenticationBackend
 from litestar_auth.authentication.strategy import InMemoryApiKeyNonceStore
 from litestar_auth.authentication.strategy.db import DatabaseTokenStrategy
+from litestar_auth.authentication.transport.api_key import ApiKeyTransport
 from litestar_auth.authentication.transport.bearer import BearerTransport
 from litestar_auth.authentication.transport.cookie import CookieTransport
 from litestar_auth.config import (
@@ -1519,6 +1520,32 @@ def test_require_refreshable_strategy_when_enable_refresh_accepts_refreshable_st
         ],
     )
     config.enable_refresh = True
+
+    startup_module.require_refreshable_strategy_when_enable_refresh(config)
+
+
+def test_require_refreshable_strategy_when_enable_refresh_ignores_api_key_backend() -> None:
+    """API-key backends are standalone authenticators outside refresh-token flows."""
+    config = _minimal_config(
+        backends=[
+            AuthenticationBackend[ExampleUser, UUID](
+                name="refreshable",
+                transport=BearerTransport(),
+                strategy=cast("Any", InMemoryRefreshTokenStrategy(token_prefix="refreshable")),
+            ),
+        ],
+        user_manager_security=UserManagerSecurity[UUID](
+            verification_token_secret=VERIFICATION_SECRET,
+            reset_password_token_secret=RESET_PASSWORD_SECRET,
+            api_key_hash_secret=API_KEY_HASH_SECRET,
+        ),
+    )
+    config.api_keys = ApiKeyConfig(enabled=True, allowed_scopes=("read",))
+    config.enable_refresh = True
+
+    startup_backends = config.resolve_startup_backends()
+    assert [backend.name for backend in startup_backends] == ["refreshable", "api_key"]
+    assert isinstance(startup_backends[1].transport, ApiKeyTransport)
 
     startup_module.require_refreshable_strategy_when_enable_refresh(config)
 

@@ -90,6 +90,10 @@ database-token preset, so existing primary-backend route selection stays caller-
 authentication accepts API keys through either `Authorization: Bearer ak_<env>_<key_id>.<secret>`
 or `X-API-Key: ak_<env>_<key_id>.<secret>`.
 
+API-key backends are standalone authenticators and do not participate in refresh-token flows. When
+`enable_refresh=True`, startup refresh-capability validation still applies to refresh-relevant
+Bearer/Cookie/database/Redis token backends, but intentionally skips `ApiKeyTransport` backends.
+
 Set `signing_required=true` on `ApiKeyCreateRequest` or pass
 `create_api_key(..., signing_required=True)` to issue a key that can only authenticate signed
 requests. Signing mode uses `Authorization: LSA1-HMAC-SHA256 Credential=<key_id>,

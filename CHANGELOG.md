@@ -1,3 +1,11 @@
+## Unreleased
+
+### Fixed
+
+- **Refresh routes now coexist with API-key backends.** `enable_refresh=True` startup validation
+  skips `ApiKeyTransport` backends because API keys do not participate in refresh-token flows, while
+  non-API-key backends still must use a `RefreshableStrategy`.
+
 ## 3.1.0 (2026-05-10)
 
 ### Added

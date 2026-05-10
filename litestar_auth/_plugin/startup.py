@@ -241,19 +241,25 @@ def require_shared_rate_limit_backends_for_multiworker(config: LitestarAuthConfi
 def require_refreshable_strategy_when_enable_refresh(config: LitestarAuthConfig[Any, Any]) -> None:
     """Fail closed when refresh routes are enabled without refresh-capable strategies.
 
+    API-key backends are intentionally excluded because ``ApiKeyTransport``
+    authenticates standalone keys and does not participate in refresh-token flows.
     The lazy per-request check in generated auth controllers remains as defense-in-depth
     for direct controller construction that bypasses plugin startup.
 
     Raises:
-        ConfigurationError: If ``enable_refresh=True`` and any configured backend
-            strategy does not implement ``RefreshableStrategy``.
+        ConfigurationError: If ``enable_refresh=True`` and any refresh-relevant
+            configured backend strategy does not implement ``RefreshableStrategy``.
     """
     if not config.enable_refresh:
         return
 
     from litestar_auth.authentication.strategy.base import RefreshableStrategy  # noqa: PLC0415
+    from litestar_auth.authentication.transport.api_key import ApiKeyTransport  # noqa: PLC0415
 
     for backend in config.resolve_startup_backends():
+        if isinstance(backend.transport, ApiKeyTransport):
+            continue
+
         strategy = backend.strategy
         if isinstance(strategy, RefreshableStrategy):
             continue
