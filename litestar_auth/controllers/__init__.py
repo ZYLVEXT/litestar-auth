@@ -3,6 +3,7 @@
 Use ``litestar_auth.payloads`` for built-in request and response payload types.
 """
 
+from litestar_auth.controllers.api_keys import ApiKeysControllerConfig, create_api_keys_controllers
 from litestar_auth.controllers.auth import AuthControllerConfig, create_auth_controller
 from litestar_auth.controllers.oauth import (
     OAuthAssociateControllerConfig,
@@ -21,6 +22,7 @@ from litestar_auth.controllers.users import UsersControllerConfig, create_users_
 from litestar_auth.controllers.verify import create_verify_controller
 
 __all__ = (
+    "ApiKeysControllerConfig",
     "AuthControllerConfig",
     "OAuthAssociateControllerConfig",
     "OAuthControllerConfig",
@@ -29,6 +31,7 @@ __all__ = (
     "TotpControllerOptions",
     "TotpUserManagerProtocol",
     "UsersControllerConfig",
+    "create_api_keys_controllers",
     "create_auth_controller",
     "create_oauth_associate_controller",
     "create_oauth_controller",

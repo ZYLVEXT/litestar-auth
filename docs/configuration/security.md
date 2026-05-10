@@ -34,6 +34,32 @@ For direct/manual wiring, the underlying runtime objects report their own postur
 - `JWTStrategy(secret=..., denylist_store=RedisJWTDenylistStore(...))` reports `revocation_posture.key == "shared_store"` and `revocation_is_durable == True`.
 - `JWTStrategy(secret=..., allow_inmemory_denylist=True)` reports `revocation_posture.key == "in_memory"` and `revocation_is_durable == False`. `InMemoryJWTDenylistStore` fails closed when its `max_entries` cap is hit and no expired JTIs can be pruned: new revocations are skipped (logged) rather than dropping an active revocation entry. `JWTDenylistStore.deny` returns `False` in that case; `JWTStrategy.destroy_token` raises `TokenError`, and plugin HTTP logout surfaces **503** with `TOKEN_PROCESSING_FAILED`. The same capacity signal applies to TOTP pending-login JTI recording after a successful code check: verification responds with **503** instead of issuing a session when the pending-token denylist cannot store the spent JTI.
 - Direct `BaseUserManager(..., security=UserManagerSecurity(...))` reports `totp_secret_storage_posture.key == "fernet_encrypted"` for persisted TOTP secrets. Setting `user_manager_security.totp_secret_keyring=FernetKeyringConfig(...)` on `LitestarAuthConfig` (passed through to `UserManagerSecurity`) or on a direct `UserManagerSecurity(...)` bundle enables encrypted reads and writes with active-key rotation. The one-key `totp_secret_key` field remains available for single-key deployments; omitting both key inputs leaves disabled TOTP (`None`) readable but makes non-null TOTP secret persistence fail closed. The TOTP controller uses the same keyring/key to encrypt pending-enrollment secret values before writing them to `totp_enrollment_store`.
+- `ApiKeyConfig(signing_enabled=True, secret_encryption_keyring=FernetKeyringConfig(...))` enables
+  encrypted storage for signing-required API-key secrets. The config field is intentionally named
+  `api_keys.secret_encryption_keyring` in operator docs because it belongs to the nested API-key
+  config, not `UserManagerSecurity`. Rotate it with the same staged keyring shape as OAuth and TOTP:
+  deploy old+new ids, switch `active_key_id`, re-encrypt rows, verify, then remove the retired id.
+
+### API-key signing-secret rotation
+
+Only signing-required API-key rows participate in `api_keys.secret_encryption_keyring` rotation.
+Bearer rows remain digest-only (`hashed_secret` only), do not have recoverable plaintext, cannot be
+upgraded to signing mode, and should not be passed to signing-secret rotation helpers.
+
+Use the manager helpers for one row at a time:
+
+- `BaseUserManager.api_key_signing_secret_requires_reencrypt(row)` returns whether the row's
+  `encrypted_secret` is readable but not encrypted under the active key id.
+- `await BaseUserManager.reencrypt_api_key_signing_secret(row_or_key_id)` rewrites that one
+  signing-required row under the active key id and returns the updated row metadata. It does not
+  print, log, or return the plaintext signing secret, and it does not run API-key create, revoke, or
+  use lifecycle hooks.
+
+Failure handling is intentionally fail-closed. Missing `api_keys.secret_encryption_keyring`,
+bearer rows, signing rows without `encrypted_secret`, raw bearer credential input, unknown key ids,
+malformed envelopes, and replacement races surface as errors for the migration job to handle. Treat
+those as operator cleanup cases; do not remove retired Fernet key ids until a fresh verification scan
+finds no signing-required rows that still need re-encryption.
 
 ### Password hash policy
 

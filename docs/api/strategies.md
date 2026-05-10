@@ -16,6 +16,14 @@ Token **strategies** validate or issue credentials and pair with transports insi
   `RedisTokenStrategyConfig(...)` when you want the Redis client, hash secret, TTL, key prefix,
   token byte count, and optional subject decoder carried as one typed settings object.
 
+- **`ApiKeyStrategy`** verifies user-owned API keys against a `BaseApiKeyStore`. Configure it with
+  `ApiKeyStrategyConfig` or equivalent keyword arguments. Bearer keys compare the presented secret
+  with the stored HMAC digest. Signing-required keys use the encrypted stored secret to verify
+  `LSA1-HMAC-SHA256` normalized request signatures, validate `X-Auth-Date` within
+  `signing_skew_seconds`, and reject replayed `X-Auth-Nonce` values through an `ApiKeyNonceStore`.
+  Successful reads return `ApiKeyAuthenticationResult` with the resolved user and `ApiKeyContext`;
+  middleware exposes that context as `request.auth`.
+
 For plugin-oriented setup, **`DatabaseTokenAuthConfig`** on `LitestarAuthConfig` is the direct shortcut for wiring opaque database-backed tokens (hash secret, optional backend naming, and related compatibility flags) without hand-assembling the strategy and related pieces in isolation. Full wiring for the preset, route flags, and related options is covered in [Backends](../configuration/backends.md#opaque-db-token-preset); ORM mixins, token tables, and `SQLAlchemyUserDatabase` contracts are covered in [User and manager](../configuration/user_and_manager.md).
 
 ## Refresh-session management support

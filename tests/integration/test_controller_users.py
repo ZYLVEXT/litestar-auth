@@ -15,6 +15,8 @@ from litestar_auth._plugin.dependencies import authorization_error_handler
 from litestar_auth.authentication.authenticator import Authenticator
 from litestar_auth.authentication.backend import AuthenticationBackend
 from litestar_auth.authentication.middleware import LitestarAuthMiddleware
+from litestar_auth.authentication.strategy.api_key import ApiKeyStrategy
+from litestar_auth.authentication.transport.api_key import ApiKeyTransport
 from litestar_auth.authentication.transport.bearer import BearerTransport
 from litestar_auth.controllers import create_auth_controller, create_users_controller
 from litestar_auth.controllers.auth import INVALID_CREDENTIALS_DETAIL
@@ -22,6 +24,7 @@ from litestar_auth.exceptions import AuthorizationError, ErrorCode, InvalidPassw
 from litestar_auth.guards import has_all_roles, has_any_role
 from litestar_auth.manager import BaseUserManager, UserManagerSecurity
 from litestar_auth.password import PasswordHelper
+from litestar_auth.plugin import ApiKeyConfig
 from litestar_auth.ratelimit import (
     AuthRateLimitConfig,
     EndpointRateLimit,
@@ -37,6 +40,7 @@ from tests.integration.conftest import (
     InMemoryTokenStrategy,
     InMemoryUserDatabase,
 )
+from tests.integration.test_controller_api_keys import API_KEY_HASH_SECRET, InMemoryApiKeyStore
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -91,6 +95,8 @@ class UsersControllerManager(BaseUserManager[ExampleUser, UUID]):
         *,
         password_helper: PasswordHelper,
         backends: tuple[object, ...] = (),
+        api_key_store: InMemoryApiKeyStore | None = None,
+        api_key_config: object | None = None,
     ) -> None:
         """Initialize the manager and track hard-delete hooks."""
         super().__init__(
@@ -99,8 +105,11 @@ class UsersControllerManager(BaseUserManager[ExampleUser, UUID]):
             security=UserManagerSecurity[UUID](
                 verification_token_secret="0123456789abcdef" * 4,
                 reset_password_token_secret="fedcba9876543210" * 4,
+                api_key_hash_secret=API_KEY_HASH_SECRET,
             ),
             backends=backends,
+            api_key_store=api_key_store,
+            api_key_config=api_key_config,
         )
         self.deleted_users: list[ExampleUser] = []
 
@@ -160,6 +169,7 @@ class InvalidationCapableInMemoryTokenStrategy(InMemoryTokenStrategy):
 def build_app(
     *,
     hard_delete: bool = False,
+    include_api_keys: bool = False,
     rate_limit_config: AuthRateLimitConfig | None = None,
 ) -> tuple[
     Litestar,
@@ -199,12 +209,33 @@ def build_app(
     )
     user_db = InMemoryUserDatabase([admin_user, regular_user, extra_user])
     strategy = InvalidationCapableInMemoryTokenStrategy()
+    api_key_store = InMemoryApiKeyStore()
     backend = AuthenticationBackend[ExampleUser, UUID](
         name="memory-bearer",
         transport=BearerTransport(),
         strategy=cast("Any", strategy),
     )
-    user_manager = UsersControllerManager(user_db, password_helper=password_helper, backends=(backend,))
+    backends: list[AuthenticationBackend[ExampleUser, UUID]] = [backend]
+    if include_api_keys:
+        backends.append(
+            AuthenticationBackend[ExampleUser, UUID](
+                name="api_key",
+                transport=ApiKeyTransport(),
+                strategy=ApiKeyStrategy[ExampleUser, UUID](
+                    api_key_store=api_key_store,
+                    api_key_hash_secret=API_KEY_HASH_SECRET,
+                    prefix_env="prod",
+                    unsafe_testing=True,
+                ),
+            ),
+        )
+    user_manager = UsersControllerManager(
+        user_db,
+        password_helper=password_helper,
+        backends=tuple(backends),
+        api_key_store=api_key_store if include_api_keys else None,
+        api_key_config=ApiKeyConfig(enabled=include_api_keys, allowed_scopes=("member",), environment_marker="prod"),
+    )
     auth_controller = create_auth_controller(
         backend=backend,
         enable_refresh=True,
@@ -217,7 +248,7 @@ def build_app(
     middleware = DefineMiddleware(
         LitestarAuthMiddleware[ExampleUser, UUID],
         get_request_session=auth_middleware_get_request_session(cast("Any", DummySessionMaker())),
-        authenticator_factory=lambda _session: Authenticator([backend], user_manager),
+        authenticator_factory=lambda _session: Authenticator(backends, user_manager),
     )
     route_handlers = [
         auth_controller,
@@ -433,6 +464,25 @@ async def test_change_password_rejects_wrong_current_password_and_preserves_hash
     assert stored_user is not None
     assert stored_user.hashed_password == original_hash
     assert PasswordHelper().verify("user-password", stored_user.hashed_password) is True
+
+
+async def test_change_password_rejects_api_key_authenticated_callers(
+    async_test_client_factory: Callable[[Any], Any],
+) -> None:
+    """POST /users/me/change-password requires a password session, not an API-key principal."""
+    app_value = build_app(include_api_keys=True)
+    app, _user_db, manager, _strategy, _admin_user, regular_user = app_value
+    created = await manager.create_api_key(user=regular_user, name="CLI", scopes=["member"])
+
+    async with async_test_client_factory(app) as test_client:
+        response = await test_client.post(
+            "/users/me/change-password",
+            headers={"Authorization": f"Bearer {created.secret.get_secret_value()}"},
+            json={"current_password": "user-password", "new_password": "rotated-password"},
+        )
+
+    assert response.status_code == HTTP_FORBIDDEN
+    assert (response.json().get("extra") or {}).get("code") == ErrorCode.AUTHORIZATION_DENIED
 
 
 async def test_patch_me_rejects_password_and_preserves_hash(

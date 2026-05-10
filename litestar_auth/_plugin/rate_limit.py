@@ -24,6 +24,9 @@ class _RateLimitConfigProtocol(Protocol):
     totp_regenerate_recovery_codes: EndpointRateLimit | None
     verify_token: EndpointRateLimit | None
     request_verify_token: EndpointRateLimit | None
+    api_key_create: EndpointRateLimit | None
+    api_key_update: EndpointRateLimit | None
+    api_key_use: EndpointRateLimit | None
 
 
 _RATE_LIMIT_ENDPOINT_SLOT_NAMES = (
@@ -40,6 +43,9 @@ _RATE_LIMIT_ENDPOINT_SLOT_NAMES = (
     "totp_regenerate_recovery_codes",
     "verify_token",
     "request_verify_token",
+    "api_key_create",
+    "api_key_update",
+    "api_key_use",
 )
 
 

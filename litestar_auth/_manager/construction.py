@@ -17,7 +17,7 @@ from litestar_auth.types import LoginIdentifier, UserProtocol
 
 if TYPE_CHECKING:
     from litestar_auth._manager.security import UserManagerSecurity
-    from litestar_auth.db.base import BaseUserStore
+    from litestar_auth.db.base import BaseApiKeyStore, BaseUserStore
     from litestar_auth.password import PasswordHelper
 
 type PasswordValidator = Callable[[str], None]
@@ -60,6 +60,8 @@ class ConstructorAttributes[UP: UserProtocol[Any], ID]:
 
     user_db: BaseUserStore[UP, ID]
     oauth_account_store: BaseOAuthAccountStore[UP, ID] | None
+    api_key_store: BaseApiKeyStore[Any, ID] | None
+    api_key_config: object | None
     resolved_secret_inputs: ResolvedSecretInputs[ID]
     verification_token_lifetime: timedelta
     reset_password_token_lifetime: timedelta
@@ -77,6 +79,8 @@ class BaseUserManagerConfig[UP: UserProtocol[Any], ID]:
 
     user_db: BaseUserStore[UP, ID]
     oauth_account_store: BaseOAuthAccountStore[UP, ID] | None = None
+    api_key_store: BaseApiKeyStore[Any, ID] | None = None
+    api_key_config: object | None = None
     password_helper: PasswordHelper | None = None
     security: UserManagerSecurity[ID] | None = None
     verification_token_lifetime: timedelta = DEFAULT_VERIFY_TOKEN_LIFETIME
@@ -93,6 +97,8 @@ class BaseUserManagerOptions[UP: UserProtocol[Any], ID](TypedDict, total=False):
     """Keyword options accepted by :class:`~litestar_auth.manager.BaseUserManager`."""
 
     oauth_account_store: BaseOAuthAccountStore[UP, ID] | None
+    api_key_store: BaseApiKeyStore[Any, ID] | None
+    api_key_config: object | None
     password_helper: PasswordHelper | None
     security: UserManagerSecurity[ID] | None
     verification_token_lifetime: timedelta
@@ -212,6 +218,12 @@ def resolve_secret_inputs[ID](
         validate_production_secret(
             resolved_security.totp_recovery_code_lookup_secret,
             label="totp_recovery_code_lookup_secret",
+            unsafe_testing=unsafe_testing,
+        )
+    if resolved_security.api_key_hash_secret is not None and not unsafe_testing:
+        validate_production_secret(
+            resolved_security.api_key_hash_secret,
+            label="api_key_hash_secret",
             unsafe_testing=unsafe_testing,
         )
 

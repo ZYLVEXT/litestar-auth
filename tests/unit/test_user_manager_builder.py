@@ -15,7 +15,7 @@ from litestar_auth.authentication.transport.bearer import BearerTransport
 from litestar_auth.config import DEFAULT_MINIMUM_PASSWORD_LENGTH, require_password_length
 from litestar_auth.manager import FernetKeyringConfig, UserManagerSecurity
 from litestar_auth.password import PasswordHelper
-from litestar_auth.plugin import LitestarAuthConfig
+from litestar_auth.plugin import ApiKeyConfig, LitestarAuthConfig
 from tests.e2e.conftest import assert_structural_session_factory
 from tests.integration.test_orchestrator import (
     DummySession,
@@ -242,6 +242,34 @@ def test_build_user_manager_passes_only_canonical_kwargs() -> None:
     assert typed_manager.received_manager_kwargs["unsafe_testing"] is False
     assert typed_manager.received_security.id_parser is UUID
     assert typed_manager.received_security.totp_secret_keyring is totp_keyring
+
+
+def test_build_user_manager_passes_api_key_inputs_only_when_enabled() -> None:
+    """Runtime manager construction binds API-key store/config only for the opt-in backend."""
+
+    class _ApiKeyAwareManager(PluginUserManager):
+        def __init__(self, user_db: object, **kwargs: object) -> None:
+            self.received_manager_kwargs = dict(kwargs)
+            super().__init__(cast("Any", user_db), **cast("Any", kwargs))
+
+    api_key_store = object()
+    config = _minimal_config(user_manager_class=_ApiKeyAwareManager)
+    config.api_keys = ApiKeyConfig(
+        enabled=True,
+        allowed_scopes=("read",),
+        store_factory=lambda _session: cast("Any", api_key_store),
+    )
+
+    manager = user_manager_builder_module.build_user_manager(
+        session=cast("Any", DummySession()),
+        user_db=InMemoryUserDatabase([]),
+        config=config,
+        backends=(),
+    )
+    typed_manager = cast("_ApiKeyAwareManager", manager)
+
+    assert typed_manager.received_manager_kwargs["api_key_store"] is api_key_store
+    assert typed_manager.received_manager_kwargs["api_key_config"] is config.api_keys
 
 
 def test_build_user_manager_rejects_missing_manager_class_without_custom_factory() -> None:

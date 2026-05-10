@@ -70,6 +70,7 @@ from tests.conftest import project_version_from_pyproject
 
 AuthenticationBackend = litestar_auth.AuthenticationBackend
 Authenticator = litestar_auth.Authenticator
+ApiKeyConfig = litestar_auth.ApiKeyConfig
 BaseUserManager = litestar_auth.BaseUserManager
 BaseUserManagerConfig = litestar_auth.BaseUserManagerConfig
 BearerTransport = litestar_auth.BearerTransport
@@ -127,6 +128,8 @@ create_reset_password_controller = controllers_package.create_reset_password_con
 create_totp_controller = controllers_package.create_totp_controller
 create_users_controller = controllers_package.create_users_controller
 create_verify_controller = controllers_package.create_verify_controller
+ApiKeyData = db_module.ApiKeyData
+BaseApiKeyStore = db_module.BaseApiKeyStore
 BaseOAuthAccountStore = db_module.BaseOAuthAccountStore
 BaseUserStore = db_module.BaseUserStore
 OAuthAccountData = db_module.OAuthAccountData
@@ -519,6 +522,8 @@ def test_models_and_strategy_modules_expose_documented_orm_setup_surface() -> No
 
     assert models_module.__all__ == (
         "AccessTokenMixin",
+        "ApiKey",
+        "ApiKeyMixin",
         "OAuthAccount",
         "OAuthAccountMixin",
         "RefreshTokenMixin",
@@ -533,11 +538,20 @@ def test_models_and_strategy_modules_expose_documented_orm_setup_surface() -> No
         "import_token_orm_models",
     )
     assert strategy_module.__all__ == (
+        "ApiKeyContext",
+        "ApiKeyNonceStore",
+        "ApiKeyNonceStoreResult",
+        "ApiKeyStrategy",
+        "ApiKeyStrategyConfig",
+        "ContextualStrategy",
         "DatabaseTokenModels",
         "DatabaseTokenStrategy",
         "DatabaseTokenStrategyConfig",
+        "InMemoryApiKeyNonceStore",
         "JWTStrategy",
         "JWTStrategyConfig",
+        "RedisApiKeyNonceStore",
+        "RedisApiKeyNonceStoreClient",
         "RedisTokenStrategy",
         "RedisTokenStrategyConfig",
         "RefreshableStrategy",
@@ -545,6 +559,8 @@ def test_models_and_strategy_modules_expose_documented_orm_setup_surface() -> No
         "UserManagerProtocol",
     )
     assert models_module.AccessTokenMixin.__name__ == "AccessTokenMixin"
+    assert models_module.ApiKey.__name__ == "ApiKey"
+    assert models_module.ApiKeyMixin.__name__ == "ApiKeyMixin"
     assert models_module.OAuthAccountMixin.__name__ == "OAuthAccountMixin"
     assert models_module.RefreshTokenMixin.__name__ == "RefreshTokenMixin"
     assert models_module.Role.__name__ == "Role"
@@ -572,16 +588,29 @@ def test_root_and_db_packages_keep_orm_symbols_on_documented_modules() -> None:
     """The package root and ``litestar_auth.db`` keep ORM wiring on the documented modules."""
     assert "Role" not in __all__
     assert "User" not in __all__
+    assert "ApiKey" not in __all__
     assert "OAuthAccount" not in __all__
+    assert "SQLAlchemyApiKeyStore" not in __all__
     assert "SQLAlchemyUserDatabase" not in __all__
     assert not hasattr(litestar_auth, "Role")
     assert not hasattr(litestar_auth, "User")
+    assert not hasattr(litestar_auth, "ApiKey")
     assert not hasattr(litestar_auth, "OAuthAccount")
+    assert not hasattr(litestar_auth, "SQLAlchemyApiKeyStore")
     assert not hasattr(litestar_auth, "SQLAlchemyUserDatabase")
-    assert db_module.__all__ == ("BaseOAuthAccountStore", "BaseUserStore", "OAuthAccountData")
+    assert db_module.__all__ == (
+        "ApiKeyData",
+        "BaseApiKeyStore",
+        "BaseOAuthAccountStore",
+        "BaseUserStore",
+        "OAuthAccountData",
+    )
+    assert db_module.ApiKeyData is ApiKeyData
+    assert db_module.BaseApiKeyStore is BaseApiKeyStore
     assert db_module.BaseOAuthAccountStore is BaseOAuthAccountStore
     assert db_module.BaseUserStore is BaseUserStore
     assert db_module.OAuthAccountData is OAuthAccountData
+    assert not hasattr(db_module, "SQLAlchemyApiKeyStore")
     assert not hasattr(db_module, "SQLAlchemyUserDatabase")
 
 
@@ -878,6 +907,8 @@ def test_contrib_redis_module_exposes_high_level_preset_without_root_reexport() 
     assert redis_contrib_module.RedisAuthRateLimitTier is RedisAuthRateLimitTier
     assert redis_contrib_module.RedisTokenStrategyConfig is ContribRedisTokenStrategyConfig
     assert redis_contrib_module.__all__ == (
+        "RedisApiKeyNonceStore",
+        "RedisApiKeyNonceStoreClient",
         "RedisAuthClientProtocol",
         "RedisAuthPreset",
         "RedisAuthRateLimitConfigOptions",
@@ -987,7 +1018,7 @@ def test_ratelimit_identifier_contract_stays_on_the_public_ratelimit_module() ->
 
     assert not hasattr(ratelimit_module, "AuthRateLimitEndpointSlot")
     assert current_group_alias.__name__ == AuthRateLimitEndpointGroup.__name__
-    assert get_args(ratelimit_module.RateLimitScope.__value__) == ("ip", "ip_email")
+    assert get_args(ratelimit_module.RateLimitScope.__value__) == ("api_key_id", "ip", "ip_email")
     assert tuple(ratelimit_module.AuthRateLimitSlot) == (
         AuthRateLimitSlot.LOGIN,
         AuthRateLimitSlot.CHANGE_PASSWORD,
@@ -1002,8 +1033,12 @@ def test_ratelimit_identifier_contract_stays_on_the_public_ratelimit_module() ->
         AuthRateLimitSlot.TOTP_REGENERATE_RECOVERY_CODES,
         AuthRateLimitSlot.VERIFY_TOKEN,
         AuthRateLimitSlot.REQUEST_VERIFY_TOKEN,
+        AuthRateLimitSlot.API_KEY_CREATE,
+        AuthRateLimitSlot.API_KEY_UPDATE,
+        AuthRateLimitSlot.API_KEY_USE,
     )
     assert get_args(current_group_alias.__value__) == (
+        "api_keys",
         "login",
         "password_reset",
         "refresh",
@@ -1041,6 +1076,7 @@ def test_ratelimit_identifier_contract_stays_on_the_public_ratelimit_module() ->
 def test_payload_module_is_authoritative_boundary_without_controllers_package_reexports() -> None:
     """Payloads resolve from the dedicated module without controllers-package aliases."""
     assert controllers_package.__all__ == (
+        "ApiKeysControllerConfig",
         "AuthControllerConfig",
         "OAuthAssociateControllerConfig",
         "OAuthControllerConfig",
@@ -1049,6 +1085,7 @@ def test_payload_module_is_authoritative_boundary_without_controllers_package_re
         "TotpControllerOptions",
         "TotpUserManagerProtocol",
         "UsersControllerConfig",
+        "create_api_keys_controllers",
         "create_auth_controller",
         "create_oauth_associate_controller",
         "create_oauth_controller",
@@ -1060,6 +1097,15 @@ def test_payload_module_is_authoritative_boundary_without_controllers_package_re
         "create_verify_controller",
     )
     assert payloads_module.__all__ == (
+        "ApiKeyAdminCreateRequest",
+        "ApiKeyCreateRequest",
+        "ApiKeyCreateResponse",
+        "ApiKeyIdField",
+        "ApiKeyListResponse",
+        "ApiKeyNameField",
+        "ApiKeyRead",
+        "ApiKeyScopeField",
+        "ApiKeyUpdateRequest",
         "ForgotPassword",
         "LoginCredentials",
         "RefreshSessionListResponse",
@@ -1130,6 +1176,7 @@ def test_root_package_all_excludes_private_symbols() -> None:
     """`__all__` lists only public names."""
     assert tuple(__all__) == (
         "DEFAULT_SUPERUSER_ROLE_NAME",
+        "ApiKeyConfig",
         "AuthenticationBackend",
         "Authenticator",
         "BaseUserManager",
@@ -1179,6 +1226,7 @@ def test_root_package_all_excludes_private_symbols() -> None:
     for symbol in REMOVED_ROOT_SECONDARY_EXPORTS:
         assert symbol not in __all__
     assert "LitestarAuth" in __all__
+    assert "ApiKeyConfig" in __all__
     assert "DatabaseTokenAuthConfig" in __all__
 
 
@@ -1247,6 +1295,7 @@ def test_root_package_does_not_export_compat_aliases() -> None:
 def test_plugin_module_public_exports_no_compat_shims() -> None:
     """Plugin module exposes ``LitestarAuth``, ``LitestarAuthConfig``, config dataclasses; legacy shims removed."""
     assert plugin_module.__all__ == (
+        "ApiKeyConfig",
         "DatabaseTokenAuthConfig",
         "FernetKeyringConfig",
         "LitestarAuth",
@@ -1256,6 +1305,7 @@ def test_plugin_module_public_exports_no_compat_shims() -> None:
         "StartupBackendTemplate",
         "TotpConfig",
     )
+    assert plugin_module.ApiKeyConfig is litestar_auth.ApiKeyConfig
     assert plugin_module.DatabaseTokenAuthConfig is litestar_auth.DatabaseTokenAuthConfig
     assert plugin_module.FernetKeyringConfig is litestar_auth.FernetKeyringConfig
     assert plugin_module.LitestarAuthConfig is plugin_internals.LitestarAuthConfig

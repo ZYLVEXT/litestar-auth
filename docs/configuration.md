@@ -16,7 +16,7 @@ from litestar_auth.models import User  # or your own model
 
 | Topic | Page |
 | ----- | ---- |
-| Database-token preset, backend lifecycle, auth paths, and built-in payloads | [Backends](configuration/backends.md) |
+| Database-token preset, API-key backend, backend lifecycle, auth paths, and built-in payloads | [Backends](configuration/backends.md) |
 | User model contracts, bundled ORM mixins, token tables, roles, and `SQLAlchemyUserDatabase` | [User and manager](configuration/user_and_manager.md) |
 | Role CLI, manager construction, plugin hooks, password helper, schemas, and secret contracts | [Manager customization](configuration/manager.md) |
 | Redis auth preset, shared rate limiting, replay stores, and Redis import boundaries | [Redis](configuration/redis.md) |

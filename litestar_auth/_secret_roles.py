@@ -60,6 +60,14 @@ _OAUTH_FLOW_COOKIE_SECRET_ROLE = _SecretRole(
     setting_name="oauth_flow_cookie_secret",
     protected_surface="transient OAuth state and PKCE verifier cookie encryption",
 )
+_API_KEY_HASH_SECRET_ROLE = _SecretRole(
+    setting_name="api_key_hash_secret",
+    protected_surface="API-key secret lookup HMAC",
+)
+_API_KEY_SECRET_ENCRYPTION_KEY_ROLE = _SecretRole(
+    setting_name="api_key_secret_encryption_keyring",
+    protected_surface="API-key request-signing secret encryption at rest",
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -73,6 +81,8 @@ class SecretRoleValues:
     totp_pending_secret: str | None = None
     totp_recovery_code_lookup_secret: str | None = None
     oauth_flow_cookie_secret: str | None = None
+    api_key_hash_secret: str | None = None
+    api_key_secret_encryption_key: str | None = None
 
     def as_role_pairs(self) -> tuple[tuple[_SecretRole, str | None], ...]:
         """Return role metadata paired with the configured secret material."""
@@ -84,6 +94,8 @@ class SecretRoleValues:
             (_TOTP_PENDING_SECRET_ROLE, self.totp_pending_secret),
             (_TOTP_RECOVERY_CODE_LOOKUP_SECRET_ROLE, self.totp_recovery_code_lookup_secret),
             (_OAUTH_FLOW_COOKIE_SECRET_ROLE, self.oauth_flow_cookie_secret),
+            (_API_KEY_HASH_SECRET_ROLE, self.api_key_hash_secret),
+            (_API_KEY_SECRET_ENCRYPTION_KEY_ROLE, self.api_key_secret_encryption_key),
         )
 
 
@@ -117,7 +129,7 @@ def validate_secret_roles_are_distinct(role_values: SecretRoleValues) -> None:
     role_descriptions = "; ".join(", ".join(role.render_usage() for role in roles) for roles in reused_roles)
     msg = (
         "Distinct secrets/keys are the supported production posture for "
-        "verification, reset-password, login telemetry, TOTP, and OAuth flow-cookie roles. "
+        "verification, reset-password, login telemetry, TOTP, OAuth flow-cookie, and API-key roles. "
         "Distinct JWT audiences "
         "and encrypted-cookie envelopes still prevent token cross-use, but reusing one configured value across "
         "roles increases blast radius if that secret leaks. "

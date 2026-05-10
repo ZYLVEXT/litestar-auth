@@ -21,7 +21,16 @@ from litestar_auth.controllers.totp import (
     TotpVerifyRequest,
 )
 from litestar_auth.controllers.verify import RequestVerifyToken, VerifyToken
-from litestar_auth.payloads import RefreshSessionListResponse, RefreshSessionRead
+from litestar_auth.payloads import (
+    ApiKeyAdminCreateRequest,
+    ApiKeyCreateRequest,
+    ApiKeyCreateResponse,
+    ApiKeyListResponse,
+    ApiKeyRead,
+    ApiKeyUpdateRequest,
+    RefreshSessionListResponse,
+    RefreshSessionRead,
+)
 from litestar_auth.schemas import AdminUserUpdate, UserCreate, UserEmailField, UserPasswordField, UserRead, UserUpdate
 
 pytestmark = pytest.mark.unit
@@ -135,6 +144,67 @@ def test_refresh_session_metadata_rejects_unbounded_values() -> None:
 
     with pytest.raises(msgspec.ValidationError):
         msgspec.json.decode(body, type=RefreshSessionListResponse)
+
+
+def test_api_key_payloads_round_trip_without_secret_in_metadata() -> None:
+    """API-key read/list payloads expose metadata without raw credential material."""
+    created_at = datetime(2026, 5, 9, 12, 0, tzinfo=UTC)
+    read = ApiKeyRead(
+        key_id="akid_public",
+        name="CLI",
+        scopes=["read"],
+        prefix_env="prod",
+        created_at=created_at,
+    )
+    response = ApiKeyCreateResponse(api_key="ak_prod_akid_public.raw-secret", key=read)
+
+    encoded_create = msgspec.json.encode(response)
+    encoded_list = msgspec.json.encode(ApiKeyListResponse(api_keys=[read]))
+
+    assert msgspec.json.decode(encoded_create, type=ApiKeyCreateResponse) == response
+    assert msgspec.json.decode(encoded_list, type=ApiKeyListResponse).api_keys == [read]
+    assert b"raw-secret" in encoded_create
+    assert b"raw-secret" not in encoded_list
+
+
+def test_api_key_create_and_update_payloads_are_strict() -> None:
+    """API-key mutation payloads reject unknown fields and malformed scopes."""
+    create = msgspec.json.decode(
+        b'{"name":"CLI","current_password":"secret","scopes":["read:users"]}',
+        type=ApiKeyCreateRequest,
+    )
+    admin_create = msgspec.json.decode(
+        b'{"name":"Admin CLI","scopes":["read:users"]}',
+        type=ApiKeyAdminCreateRequest,
+    )
+    create_without_password = msgspec.json.decode(
+        b'{"name":"CLI","scopes":["read:users"]}',
+        type=ApiKeyCreateRequest,
+    )
+    update = msgspec.json.decode(
+        b'{"name":"Renamed","current_password":"secret","scopes":["write-users"]}',
+        type=ApiKeyUpdateRequest,
+    )
+
+    assert create.name == "CLI"
+    assert admin_create.name == "Admin CLI"
+    assert create_without_password.current_password is None
+    assert update.name == "Renamed"
+    with pytest.raises(msgspec.ValidationError):
+        msgspec.json.decode(
+            b'{"name":"Admin CLI","current_password":"target-password","scopes":["read:users"]}',
+            type=ApiKeyAdminCreateRequest,
+        )
+    with pytest.raises(msgspec.ValidationError):
+        msgspec.json.decode(
+            b'{"name":"CLI","current_password":"secret","deprecated":true}',
+            type=ApiKeyCreateRequest,
+        )
+    with pytest.raises(msgspec.ValidationError):
+        msgspec.json.decode(
+            b'{"current_password":"secret","scopes":["bad scope"]}',
+            type=ApiKeyUpdateRequest,
+        )
 
 
 def test_user_update_field_order_uses_roles_as_authorization_surface() -> None:

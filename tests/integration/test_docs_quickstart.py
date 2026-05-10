@@ -5,6 +5,7 @@ from __future__ import annotations
 import importlib
 import sys
 from dataclasses import replace
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 import pytest
@@ -16,7 +17,6 @@ from tests._helpers import FakeAioSQLiteConnection, build_fake_aiosqlite_module,
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator, Callable
     from contextlib import AbstractAsyncContextManager
-    from pathlib import Path
     from types import ModuleType
 
     from litestar import Litestar
@@ -25,6 +25,7 @@ if TYPE_CHECKING:
 MODULE_NAME = "docs.snippets.quickstart_plugin"
 HTTP_CREATED = 201
 HTTP_OK = 200
+REPO_ROOT = Path(__file__).resolve().parents[2]
 
 pytestmark = [pytest.mark.integration]
 
@@ -115,3 +116,73 @@ async def test_quickstart_example_register_verify_login_and_hits_protected_route
         )
         assert protected_response.status_code == HTTP_OK
         assert protected_response.json() == {"email": email}
+
+
+def test_api_key_error_codes_are_documented() -> None:
+    """Every API-key error code is present in the public error-code reference."""
+    errors_doc = (REPO_ROOT / "docs/errors.md").read_text(encoding="utf-8")
+
+    for code in (
+        "API_KEY_INVALID",
+        "API_KEY_REVOKED",
+        "API_KEY_EXPIRED",
+        "API_KEY_SCOPE_DENIED",
+        "API_KEY_LIMIT_REACHED",
+        "API_KEY_SIGNATURE_INVALID",
+        "API_KEY_SIGNATURE_TIMESTAMP_SKEW",
+        "API_KEY_SIGNATURE_NONCE_REPLAY",
+    ):
+        assert f"`{code}`" in errors_doc
+
+
+def test_api_key_public_symbols_are_documented() -> None:
+    """The public API-key surface is discoverable from guide or API docs."""
+    docs_text = "\n".join(
+        (REPO_ROOT / relative_path).read_text(encoding="utf-8")
+        for relative_path in (
+            "docs/configuration/api_keys.md",
+            "docs/guides/api_keys.md",
+            "docs/cookbook/api_keys.md",
+            "docs/api/authentication.md",
+            "docs/api/transports.md",
+            "docs/api/strategies.md",
+            "docs/api/guards.md",
+            "docs/api/schemas.md",
+            "docs/api/plugin.md",
+            "docs/api/models.md",
+            "docs/api/db.md",
+            "docs/api/controllers.md",
+            "docs/api/contrib_redis.md",
+        )
+    )
+
+    for symbol in (
+        "ApiKeyConfig",
+        "ApiKeyTransport",
+        "ApiKeyStrategy",
+        "ApiKeyStrategyConfig",
+        "ApiKeyContext",
+        "ApiKeyAuthenticationResult",
+        "ApiKeyCreateRequest",
+        "ApiKeyCreateResponse",
+        "ApiKeyUpdateRequest",
+        "ApiKeyRead",
+        "ApiKeyListResponse",
+        "ApiKeysControllerConfig",
+        "create_api_keys_controllers",
+        "requires_api_key",
+        "has_scope",
+        "has_any_scope",
+        "requires_password_session",
+        "ApiKey",
+        "ApiKeyMixin",
+        "ApiKeyData",
+        "BaseApiKeyStore",
+        "SQLAlchemyApiKeyStore",
+        "InMemoryApiKeyNonceStore",
+        "RedisApiKeyNonceStore",
+        "apiKeyAuth",
+        "apiKeyHmacAuth",
+        "LSA1-HMAC-SHA256",
+    ):
+        assert symbol in docs_text

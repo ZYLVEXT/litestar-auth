@@ -50,6 +50,7 @@ def test_config_reexports_secret_role_catalog_helpers() -> None:
         login_identifier_telemetry_secret="telemetry",
         totp_secret_key="totp-key",
         totp_pending_secret="totp-pending",
+        api_key_hash_secret="api-key-hash",
         oauth_flow_cookie_secret="oauth-flow",
     )
 
@@ -63,6 +64,8 @@ def test_config_reexports_secret_role_catalog_helpers() -> None:
         "totp_pending_secret",
         "totp_recovery_code_lookup_secret",
         "oauth_flow_cookie_secret",
+        "api_key_hash_secret",
+        "api_key_secret_encryption_keyring",
     ]
 
 

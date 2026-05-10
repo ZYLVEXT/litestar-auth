@@ -63,6 +63,17 @@ class ErrorCode(StrEnum):
     TOTP_CODE_INVALID = auto()
     TOTP_ALREADY_ENABLED = auto()
     TOTP_ENROLL_BAD_TOKEN = auto()
+    # See docs/security.md#bearer-failure-code-taxonomy for the API-key disclosure trade-off.
+    API_KEY_INVALID = auto()
+    # See docs/security.md#bearer-failure-code-taxonomy for the API-key disclosure trade-off.
+    API_KEY_REVOKED = auto()
+    # See docs/security.md#bearer-failure-code-taxonomy for the API-key disclosure trade-off.
+    API_KEY_EXPIRED = auto()
+    API_KEY_SCOPE_DENIED = auto()
+    API_KEY_LIMIT_REACHED = auto()
+    API_KEY_SIGNATURE_INVALID = auto()
+    API_KEY_SIGNATURE_TIMESTAMP_SKEW = auto()
+    API_KEY_SIGNATURE_NONCE_REPLAY = auto()
 
 
 __all__ = ("ErrorCode", "UserIdentifier", "UserIdentifierType")

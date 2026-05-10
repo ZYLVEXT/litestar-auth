@@ -6,11 +6,14 @@ from typing import Any, cast
 from unittest.mock import MagicMock
 
 import pytest
+from cryptography.fernet import Fernet
 from litestar.config.app import AppConfig
 from litestar.openapi.config import OpenAPIConfig
 from litestar.openapi.spec import Components, SecurityScheme
 
+from litestar_auth._plugin.api_key import build_api_key_backend_template
 from litestar_auth._plugin.config import StartupBackendTemplate
+from litestar_auth._plugin.feature_configs import ApiKeyConfig
 from litestar_auth._plugin.openapi import (
     build_openapi_security_schemes,
     build_security_requirement,
@@ -19,8 +22,10 @@ from litestar_auth._plugin.openapi import (
 )
 from litestar_auth.authentication.backend import AuthenticationBackend
 from litestar_auth.authentication.strategy.jwt import JWTStrategy
+from litestar_auth.authentication.transport.api_key import API_KEY_HEADER_NAME, ApiKeyTransport
 from litestar_auth.authentication.transport.bearer import BearerTransport
 from litestar_auth.authentication.transport.cookie import CookieTransport
+from litestar_auth.manager import FernetKeyringConfig
 
 _EXPECTED_PAIR = 2
 
@@ -44,6 +49,22 @@ def _cookie_backend(name: str = "cookie", cookie_name: str = "auth_token") -> St
 def _bearer_non_jwt_backend(name: str = "token") -> StartupBackendTemplate[Any, Any]:
     strategy = MagicMock()
     backend = AuthenticationBackend(name=name, transport=BearerTransport(), strategy=strategy)
+    return StartupBackendTemplate.from_runtime_backend(backend)
+
+
+def _api_key_backend(name: str = "api_key") -> StartupBackendTemplate[Any, Any]:
+    strategy = MagicMock()
+    strategy.api_key_config = None
+    strategy.secret_encryption_keyring = None
+    backend = AuthenticationBackend(name=name, transport=ApiKeyTransport(), strategy=strategy)
+    return StartupBackendTemplate.from_runtime_backend(backend)
+
+
+def _api_key_signing_backend(name: str = "api_key") -> StartupBackendTemplate[Any, Any]:
+    strategy = MagicMock()
+    strategy.api_key_config.signing_enabled = True
+    strategy.secret_encryption_keyring = None
+    backend = AuthenticationBackend(name=name, transport=ApiKeyTransport(), strategy=strategy)
     return StartupBackendTemplate.from_runtime_backend(backend)
 
 
@@ -87,6 +108,15 @@ class TestSecuritySchemeForTransport:
         assert scheme.name == "my_auth"
         assert scheme.security_scheme_in == "cookie"
 
+    def test_api_key_transport(self) -> None:
+        """API-key transport produces a bearer-style HTTP scheme."""
+        scheme = security_scheme_for_transport(ApiKeyTransport())
+
+        assert scheme.type == "http"
+        assert scheme.scheme == "Bearer"
+        assert scheme.bearer_format == "API key"
+        assert API_KEY_HEADER_NAME in cast("str", scheme.description)
+
     def test_unsupported_transport_raises(self) -> None:
         """Unknown transport type raises TypeError."""
         transport = MagicMock()
@@ -126,6 +156,42 @@ class TestBuildOpenApiSecuritySchemes:
         assert len(schemes) == _EXPECTED_PAIR
         assert "jwt" in schemes
         assert "cookie" in schemes
+
+    def test_api_key_backend_uses_stable_scheme_name(self) -> None:
+        """API-key backend OpenAPI registration uses the documented apiKeyAuth scheme name."""
+        schemes = build_openapi_security_schemes((_api_key_backend(),))
+
+        assert set(schemes) == {"apiKeyAuth"}
+        assert schemes["apiKeyAuth"].type == "http"
+        assert schemes["apiKeyAuth"].scheme == "Bearer"
+
+    def test_api_key_signing_backend_adds_hmac_scheme(self) -> None:
+        """Configured signing mode exposes the HMAC OpenAPI scheme."""
+        schemes = build_openapi_security_schemes((_api_key_signing_backend(),))
+
+        assert set(schemes) == {"apiKeyAuth", "apiKeyHmacAuth"}
+        assert schemes["apiKeyHmacAuth"].type == "http"
+        assert schemes["apiKeyHmacAuth"].scheme == "LSA1-HMAC-SHA256"
+
+    def test_api_key_backend_template_mounts_signing_keyring(self) -> None:
+        """API-key backend templates carry signing keyring metadata into OpenAPI detection."""
+        backend = build_api_key_backend_template(
+            ApiKeyConfig(
+                enabled=True,
+                allowed_scopes=("read",),
+                signing_enabled=True,
+                secret_encryption_keyring=FernetKeyringConfig(
+                    active_key_id="current",
+                    keys={"current": Fernet.generate_key().decode()},
+                ),
+            ),
+            api_key_hash_secret="api-key-hash-secret-0123456789abcdef",
+            unsafe_testing=True,
+        )
+        schemes = build_openapi_security_schemes((backend,))
+
+        assert cast("Any", backend.strategy).secret_encryption_keyring is not None
+        assert "apiKeyHmacAuth" in schemes
 
     def test_empty_backends(self) -> None:
         """Empty backends produce an empty dict."""

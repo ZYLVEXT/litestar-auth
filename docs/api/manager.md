@@ -70,6 +70,16 @@ return `True`, and only then remove retired key ids from `FernetKeyringConfig.ke
 unversioned Fernet rows need explicit old-key migration code, and plaintext TOTP rows remain
 unsupported.
 
+API-key signing-secret rotation uses the API-key config keyring instead of
+`UserManagerSecurity`. When `api_keys.secret_encryption_keyring.active_key_id` changes, application
+migration jobs should scan signing-required API-key rows with non-null `encrypted_secret`, call
+`manager.api_key_signing_secret_requires_reencrypt(row)`, and rewrite only matching rows through
+`await manager.reencrypt_api_key_signing_secret(row_or_key_id)`. These helpers are explicit
+row-level primitives: they do not create routes, run background sweeps, return plaintext signing
+secrets, or call API-key create/revoke/use lifecycle hooks. Bearer keys, missing encrypted secrets,
+missing stores or keyrings, malformed Fernet envelopes, and unknown key ids fail closed with manager
+errors.
+
 For production, keep `verification_token_secret`, `reset_password_token_secret`,
 `login_identifier_telemetry_secret`, and every configured TOTP Fernet key distinct on
 `UserManagerSecurity`. Outside testing, `BaseUserManager(...)` raises `ConfigurationError` when one

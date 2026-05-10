@@ -24,8 +24,10 @@ from typing import TYPE_CHECKING
 from litestar_auth.models.tokens import import_token_orm_models
 
 if TYPE_CHECKING:
+    from litestar_auth.models.api_key import ApiKey
     from litestar_auth.models.mixins import (
         AccessTokenMixin,
+        ApiKeyMixin,
         OAuthAccountMixin,
         RefreshTokenMixin,
         RoleMixin,
@@ -40,6 +42,8 @@ if TYPE_CHECKING:
 
 __all__ = (
     "AccessTokenMixin",
+    "ApiKey",
+    "ApiKeyMixin",
     "OAuthAccount",
     "OAuthAccountMixin",
     "RefreshTokenMixin",
@@ -66,6 +70,8 @@ def __getattr__(name: str) -> object:
     """
     module_name = {
         "AccessTokenMixin": "litestar_auth.models.mixins",
+        "ApiKey": "litestar_auth.models.api_key",
+        "ApiKeyMixin": "litestar_auth.models.mixins",
         "OAuthAccount": "litestar_auth.models.oauth",
         "OAuthAccountMixin": "litestar_auth.models.mixins",
         "RefreshTokenMixin": "litestar_auth.models.mixins",

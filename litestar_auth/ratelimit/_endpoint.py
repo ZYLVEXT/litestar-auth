@@ -8,10 +8,17 @@ from typing import Any, Literal
 from litestar.connection import Request  # noqa: TC002
 from litestar.exceptions import TooManyRequestsException
 
-from ._helpers import _DEFAULT_TRUSTED_HEADERS, _client_host, _extract_email, _safe_key_part, logger
+from ._helpers import (
+    _DEFAULT_TRUSTED_HEADERS,
+    _client_host,
+    _extract_api_key_id,
+    _extract_email,
+    _safe_key_part,
+    logger,
+)
 from ._protocol import RateLimiterBackend  # noqa: TC001
 
-type RateLimitScope = Literal["ip", "ip_email"]
+type RateLimitScope = Literal["api_key_id", "ip", "ip_email"]
 
 _DEFAULT_IDENTITY_FIELDS = ("identifier", "username", "email")
 
@@ -79,5 +86,9 @@ class EndpointRateLimit:
             email = await _extract_email(request, identity_fields=self.identity_fields)
             if email:
                 parts.append(_safe_key_part(email))
+        if self.scope == "api_key_id":
+            key_id = _extract_api_key_id(request)
+            if key_id:
+                parts.append(_safe_key_part(key_id))
 
         return ":".join(parts)

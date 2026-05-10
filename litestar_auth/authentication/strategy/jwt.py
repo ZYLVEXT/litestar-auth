@@ -114,6 +114,53 @@ class JWTStrategyOptions[UP, ID](TypedDict):
     session_fingerprint_claim: NotRequired[str]
 
 
+def _resolve_jwt_strategy_config[UP, ID](
+    *,
+    config: JWTStrategyConfig[UP, ID] | None,
+    options: JWTStrategyOptions[UP, ID],
+) -> JWTStrategyConfig[UP, ID]:
+    """Return the effective JWT strategy config.
+
+    Raises:
+        ValueError: If ``config`` and keyword options are combined.
+    """
+    if config is not None and options:
+        msg = "Pass either JWTStrategyConfig or keyword options, not both."
+        raise ValueError(msg)
+    return JWTStrategyConfig(**options) if config is None else config
+
+
+def _validate_jwt_algorithm_settings[UP, ID](settings: JWTStrategyConfig[UP, ID]) -> None:
+    """Validate JWT algorithm and signing-key posture.
+
+    Raises:
+        ValueError: If the algorithm is unsupported or asymmetric verification material is missing.
+    """
+    if settings.algorithm not in _ALLOWED_ALGORITHMS:
+        msg = f"Unsupported JWT algorithm '{settings.algorithm}'. Allowed algorithms: {sorted(_ALLOWED_ALGORITHMS)}"
+        raise ValueError(msg)
+    if settings.algorithm in _ASYMMETRIC_ALGORITHMS:
+        _validate_asymmetric_jwt_settings(settings)
+        return
+    validate_production_secret(settings.secret, label="JWT signing secret")
+
+
+def _validate_asymmetric_jwt_settings[UP, ID](settings: JWTStrategyConfig[UP, ID]) -> None:
+    """Validate asymmetric JWT key material.
+
+    Raises:
+        ValueError: If the public verification key is missing.
+    """
+    if settings.verify_key is not None:
+        return
+    msg = (
+        f"JWT algorithm {settings.algorithm!r} is asymmetric and requires an "
+        "explicit verify_key (public-key PEM). Refusing to fall back to the "
+        "private signing key."
+    )
+    raise ValueError(msg)
+
+
 class JWTStrategy(Strategy[UP, ID]):
     """Stateless strategy that stores user identifiers inside JWTs.
 
@@ -150,36 +197,13 @@ class JWTStrategy(Strategy[UP, ID]):
             config: JWT strategy configuration.
             **options: Individual JWT strategy settings. Do not combine with
                 ``config``.
-
-        Raises:
-            ValueError: If ``config`` and keyword options are combined.
-            ValueError: Raised when the configured algorithm is not allow-listed, when
-                no denylist store is configured, or when both revocation configuration
-                paths are supplied.
         """
-        if config is not None and options:
-            msg = "Pass either JWTStrategyConfig or keyword options, not both."
-            raise ValueError(msg)
-        settings = JWTStrategyConfig(**options) if config is None else config
-        if settings.algorithm not in _ALLOWED_ALGORITHMS:
-            msg = f"Unsupported JWT algorithm '{settings.algorithm}'. Allowed algorithms: {sorted(_ALLOWED_ALGORITHMS)}"
-            raise ValueError(msg)
+        settings = _resolve_jwt_strategy_config(config=config, options=options)
+        _validate_jwt_algorithm_settings(settings)
+        self._apply_settings(settings)
 
-        # Security: asymmetric algorithms must receive an explicit public-key
-        # verify_key. Silently reusing the private signing secret as the
-        # verify key would leak private material into any consumer that reads
-        # the verify side, and the chars-count secret-length check below is
-        # meaningless against multi-line PEM material.
-        if settings.algorithm in _ASYMMETRIC_ALGORITHMS:
-            if settings.verify_key is None:
-                msg = (
-                    f"JWT algorithm {settings.algorithm!r} is asymmetric and requires an "
-                    "explicit verify_key (public-key PEM). Refusing to fall back to the "
-                    "private signing key."
-                )
-                raise ValueError(msg)
-        else:
-            validate_production_secret(settings.secret, label="JWT signing secret")
+    def _apply_settings(self, settings: JWTStrategyConfig[UP, ID]) -> None:
+        """Apply validated JWT settings to this strategy."""
         self.secret = settings.secret
         self.verify_key = settings.verify_key if settings.verify_key is not None else settings.secret
         self.algorithm = settings.algorithm

@@ -83,3 +83,20 @@ class UserManagerHooks[UP]:
         """Hook invoked after a user is deleted permanently."""
         del self
         del user
+
+    async def on_after_api_key_created(self, user: UP, api_key: object) -> None:
+        """Hook invoked after an API key is created."""
+        del self
+        del user
+        del api_key
+
+    async def on_after_api_key_revoked(self, user: UP, api_key: object) -> None:
+        """Hook invoked after an API key is revoked."""
+        del self
+        del user
+        del api_key
+
+    async def on_after_api_key_used(self, api_key: object) -> None:
+        """Hook invoked after an API-key last-used timestamp is persisted."""
+        del self
+        del api_key

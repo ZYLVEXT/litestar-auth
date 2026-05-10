@@ -8,6 +8,7 @@ import sys
 import types
 import uuid
 import warnings
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast, get_args, get_type_hints
 
@@ -28,6 +29,7 @@ import litestar_auth.schemas as schemas_module
 import litestar_auth.types as types_module
 from litestar_auth.authentication.strategy.db_models import AccessToken as ModelsAccessToken
 from litestar_auth.authentication.strategy.db_models import RefreshToken as ModelsRefreshToken
+from litestar_auth.models.api_key import ApiKey as ModelsApiKey
 from litestar_auth.models.oauth import OAuthAccount as ModelsOAuthAccount
 from litestar_auth.models.role import Role as ModelsRole
 from litestar_auth.models.role import UserRole as ModelsUserRole
@@ -36,6 +38,7 @@ from tests._helpers import ExampleUser
 
 uuid4 = uuid.uuid4
 AccessTokenMixin = model_mixins_module.AccessTokenMixin
+ApiKeyMixin = model_mixins_module.ApiKeyMixin
 OAuthAccountMixin = model_mixins_module.OAuthAccountMixin
 RefreshTokenMixin = model_mixins_module.RefreshTokenMixin
 RoleMixin = model_mixins_module.RoleMixin
@@ -245,6 +248,13 @@ def test_db_base_module_preserves_store_contracts() -> None:
         "list_users",
         "update",
     }
+    assert db_base_module.BaseApiKeyStore.__dict__.keys() >= {
+        "create",
+        "get_by_key_id",
+        "list_for_user",
+        "revoke",
+        "update_last_used_at",
+    }
     assert "get_by_oauth_account" in db_base_module.BaseOAuthAccountStore.__dict__
     assert "upsert_oauth_account" in db_base_module.BaseOAuthAccountStore.__dict__
 
@@ -277,6 +287,27 @@ async def test_db_base_protocol_method_stubs_execute_under_coverage() -> None:
         )
         is None
     )
+    api_key_data = db_base_module.ApiKeyData(
+        key_id="akid_protocol",
+        user_id=uuid4(),
+        hashed_secret=b"hashed-secret",
+        encrypted_secret=None,
+        name="Protocol",
+        scopes=[],
+        prefix_env="prod",
+        signing_required=False,
+        expires_at=None,
+        created_via="test",
+    )
+    assert await db_base_module.BaseApiKeyStore.create(dummy_self, api_key_data) is None
+    assert await db_base_module.BaseApiKeyStore.get_by_key_id(dummy_self, "akid_protocol") is None
+    assert await db_base_module.BaseApiKeyStore.list_for_user(dummy_self, uuid4()) is None
+    revoked_at = datetime.now(tz=UTC)
+    assert await db_base_module.BaseApiKeyStore.revoke(dummy_self, "akid_protocol", revoked_at=revoked_at) is None
+    assert (
+        await db_base_module.BaseApiKeyStore.update_last_used_at(dummy_self, "akid_protocol", last_used_at=revoked_at)
+        is None
+    )
 
 
 def test_manager_protocols_module_preserves_internal_protocols() -> None:
@@ -290,6 +321,7 @@ def test_models_mixins_module_preserves_contract_exports() -> None:
     """side-effect-free auth mixin module still exposes its export surface."""
     assert model_mixins_module.__all__ == (
         "AccessTokenMixin",
+        "ApiKeyMixin",
         "OAuthAccountMixin",
         "RefreshTokenMixin",
         "RoleMixin",
@@ -299,11 +331,13 @@ def test_models_mixins_module_preserves_contract_exports() -> None:
         "UserRoleRelationshipMixin",
     )
     assert hasattr(model_mixins_module.UserModelMixin, "email")
+    assert hasattr(model_mixins_module.ApiKeyMixin, "key_id")
     assert hasattr(model_mixins_module.OAuthAccountMixin, "access_token")
     assert hasattr(model_mixins_module.RoleMixin, "name")
     assert hasattr(model_mixins_module.UserRoleRelationshipMixin, "roles")
     assert not hasattr(model_mixins_module, "_TokenModelMixin")
     assert issubclass(ModelsUser, UserModelMixin)
+    assert issubclass(ModelsApiKey, ApiKeyMixin)
     assert issubclass(ModelsOAuthAccount, OAuthAccountMixin)
     assert issubclass(ModelsRole, RoleMixin)
     assert issubclass(ModelsUserRole, UserRoleAssociationMixin)
@@ -323,6 +357,7 @@ def test_internal_auth_model_mixins_module_preserves_contract_exports(
 
     assert reloaded_module.__all__ == (
         "AccessTokenMixin",
+        "ApiKeyMixin",
         "RefreshTokenMixin",
         "RoleMixin",
         "UserAuthRelationshipMixin",
@@ -561,6 +596,7 @@ def test_models_user_module_columns_and_relationships() -> None:
     assert issubclass(ModelsRole, RoleMixin)
     assert issubclass(ModelsUserRole, UserRoleAssociationMixin)
     assert issubclass(ModelsOAuthAccount, OAuthAccountMixin)
+    assert issubclass(ModelsApiKey, ApiKeyMixin)
     assert issubclass(ModelsAccessToken, AccessTokenMixin)
     assert issubclass(ModelsRefreshToken, RefreshTokenMixin)
     assert ModelsUser.__tablename__ == "user"
@@ -588,12 +624,15 @@ def test_models_user_module_columns_and_relationships() -> None:
     assert set(ModelsUserRole.__table__.c.keys()) == {"role_name", "user_id"}
     assert sorted(user_relationships.keys()) == [
         "access_tokens",
+        "api_keys",
         "oauth_accounts",
         "refresh_tokens",
         "role_assignments",
     ]
     assert user_relationships["access_tokens"].mapper.class_.__name__ == "AccessToken"
     assert user_relationships["access_tokens"].back_populates == "user"
+    assert user_relationships["api_keys"].mapper.class_.__name__ == "ApiKey"
+    assert user_relationships["api_keys"].back_populates == "user"
     assert user_relationships["refresh_tokens"].mapper.class_.__name__ == "RefreshToken"
     assert user_relationships["refresh_tokens"].back_populates == "user"
     assert user_relationships["oauth_accounts"].mapper.class_.__name__ == "OAuthAccount"

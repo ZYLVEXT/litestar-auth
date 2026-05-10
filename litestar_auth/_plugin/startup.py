@@ -58,6 +58,7 @@ def warn_insecure_plugin_startup_defaults(config: LitestarAuthConfig[Any, Any]) 
     _warn_process_local_rate_limit_backend(config)
     _warn_process_local_totp_stores(config)
     _warn_refresh_cookie_max_age_mismatch(config)
+    _warn_api_key_unbounded_default_ttl(config)
 
 
 def _warn_plaintext_oauth_token_storage(config: LitestarAuthConfig[Any, Any]) -> None:
@@ -185,6 +186,18 @@ def _warn_process_local_totp_stores(config: LitestarAuthConfig[Any, Any]) -> Non
             SecurityWarning,
             stacklevel=2,
         )
+
+
+def _warn_api_key_unbounded_default_ttl(config: LitestarAuthConfig[Any, Any]) -> None:
+    api_key_config = config.api_keys
+    if not api_key_config.enabled or api_key_config.default_ttl is not None:
+        return
+    warnings.warn(
+        "API-key creation default_ttl is None; newly created API keys may be non-expiring unless callers "
+        "set an explicit expires_at. Prefer a bounded default_ttl for production.",
+        SecurityWarning,
+        stacklevel=2,
+    )
 
 
 def require_oauth_token_encryption_for_configured_providers(

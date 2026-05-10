@@ -31,6 +31,8 @@ from litestar_auth.models._oauth_encrypted_types import (
 from litestar_auth.oauth_encryption import OAuthTokenEncryption, bind_oauth_token_encryption
 
 AccessTokenMixin = litestar_auth_models.AccessTokenMixin
+ApiKey = litestar_auth_models.ApiKey
+ApiKeyMixin = litestar_auth_models.ApiKeyMixin
 OAuthAccount = litestar_auth_models.OAuthAccount
 OAuthAccountMixin = litestar_auth_models.OAuthAccountMixin
 RefreshTokenMixin = litestar_auth_models.RefreshTokenMixin
@@ -90,6 +92,8 @@ def test_models_package_dir_lists_lazy_exports() -> None:
     """``__dir__`` advertises the public model exports for tab-completion / introspection."""
     assert litestar_auth_models.__dir__() == [  # noqa: PLC2801
         "AccessTokenMixin",
+        "ApiKey",
+        "ApiKeyMixin",
         "OAuthAccount",
         "OAuthAccountMixin",
         "RefreshTokenMixin",
@@ -112,6 +116,7 @@ def test_models_package_mixins_do_not_load_reference_model_modules() -> None:
         "import sys\n"
         "from litestar_auth.models import (\n"
         "    AccessTokenMixin,\n"
+        "    ApiKeyMixin,\n"
         "    OAuthAccountMixin,\n"
         "    RefreshTokenMixin,\n"
         "    RoleMixin,\n"
@@ -121,6 +126,7 @@ def test_models_package_mixins_do_not_load_reference_model_modules() -> None:
         "    UserRoleRelationshipMixin,\n"
         ")\n"
         "assert AccessTokenMixin.__name__ == 'AccessTokenMixin'\n"
+        "assert ApiKeyMixin.__name__ == 'ApiKeyMixin'\n"
         "assert OAuthAccountMixin.__name__ == 'OAuthAccountMixin'\n"
         "assert RefreshTokenMixin.__name__ == 'RefreshTokenMixin'\n"
         "assert RoleMixin.__name__ == 'RoleMixin'\n"
@@ -129,6 +135,7 @@ def test_models_package_mixins_do_not_load_reference_model_modules() -> None:
         "assert UserRoleAssociationMixin.__name__ == 'UserRoleAssociationMixin'\n"
         "assert UserRoleRelationshipMixin.__name__ == 'UserRoleRelationshipMixin'\n"
         'assert "litestar_auth.models.user" not in sys.modules\n'
+        'assert "litestar_auth.models.api_key" not in sys.modules\n'
         'assert "litestar_auth.models.oauth" not in sys.modules\n'
         'assert "litestar_auth.models.role" not in sys.modules\n'
     )
@@ -1020,7 +1027,7 @@ def test_models_package_import_token_orm_models_keeps_user_relationship_unresolv
     assert result.returncode == 0, (result.stdout, result.stderr)
 
 
-def test_reference_user_model_inverse_relationship_contracts_are_stable() -> None:
+def test_reference_user_model_inverse_relationship_contracts_are_stable() -> None:  # noqa: PLR0915
     """The bundled ``User`` model keeps token and OAuth inverse relationships wired to the current classes."""
     user_relationships = inspect(User).relationships
 
@@ -1030,10 +1037,12 @@ def test_reference_user_model_inverse_relationship_contracts_are_stable() -> Non
     assert issubclass(Role, RoleMixin)
     assert issubclass(UserRole, UserRoleAssociationMixin)
     assert issubclass(OAuthAccount, OAuthAccountMixin)
+    assert issubclass(ApiKey, ApiKeyMixin)
     assert issubclass(AccessToken, AccessTokenMixin)
     assert issubclass(RefreshToken, RefreshTokenMixin)
     assert sorted(user_relationships.keys()) == [
         "access_tokens",
+        "api_keys",
         "oauth_accounts",
         "refresh_tokens",
         "role_assignments",
@@ -1046,6 +1055,14 @@ def test_reference_user_model_inverse_relationship_contracts_are_stable() -> Non
         ("id", "user_id"),
     ]
     assert user_relationships["access_tokens"].uselist is True
+    assert user_relationships["api_keys"].mapper.class_ is ApiKey
+    assert user_relationships["api_keys"].back_populates == "user"
+    assert user_relationships["api_keys"].lazy == "select"
+    assert user_relationships["api_keys"]._user_defined_foreign_keys == set()
+    assert [(left.key, right.key) for left, right in user_relationships["api_keys"].synchronize_pairs] == [
+        ("id", "user_id"),
+    ]
+    assert user_relationships["api_keys"].uselist is True
     assert user_relationships["refresh_tokens"].mapper.class_ is RefreshToken
     assert user_relationships["refresh_tokens"].back_populates == "user"
     assert user_relationships["refresh_tokens"].lazy == "select"
@@ -1072,6 +1089,8 @@ def test_reference_user_model_inverse_relationship_contracts_are_stable() -> Non
     assert user_relationships["role_assignments"].uselist is True
     assert inspect(AccessToken).relationships["user"].mapper.class_ is User
     assert inspect(AccessToken).relationships["user"].back_populates == "access_tokens"
+    assert inspect(ApiKey).relationships["user"].mapper.class_ is User
+    assert inspect(ApiKey).relationships["user"].back_populates == "api_keys"
     assert inspect(RefreshToken).relationships["user"].mapper.class_ is User
     assert inspect(RefreshToken).relationships["user"].back_populates == "refresh_tokens"
     assert inspect(OAuthAccount).relationships["user"].mapper.class_ is User
@@ -1242,6 +1261,133 @@ def test_refresh_token_model_enforces_foreign_key_constraint() -> None:
         engine.dispose()
 
 
+def test_api_key_model_creates_schema_and_relationship() -> None:
+    """API keys create their table, indexes, and user relationship."""
+    engine = create_test_engine()
+    try:
+        User.metadata.create_all(engine)
+
+        inspector = inspect(engine)
+        api_key_columns = {column["name"]: column for column in inspector.get_columns("api_key")}
+        indexes = inspector.get_indexes("api_key")
+        foreign_keys = inspector.get_foreign_keys("api_key")
+
+        assert "api_key" in inspector.get_table_names()
+        assert set(api_key_columns).issuperset(
+            {
+                "id",
+                "key_id",
+                "user_id",
+                "hashed_secret",
+                "encrypted_secret",
+                "name",
+                "scopes",
+                "prefix_env",
+                "signing_required",
+                "expires_at",
+                "last_used_at",
+                "created_at",
+                "revoked_at",
+                "created_via",
+                "client_metadata",
+            },
+        )
+        assert api_key_columns["key_id"]["nullable"] is False
+        assert api_key_columns["user_id"]["nullable"] is False
+        assert api_key_columns["hashed_secret"]["nullable"] is False
+        assert api_key_columns["encrypted_secret"]["nullable"] is True
+        assert api_key_columns["client_metadata"]["nullable"] is True
+        assert any(index["name"] == "ix_api_key_key_id" and index["unique"] == 1 for index in indexes)
+        assert any(index["name"] == "ix_api_key_user_id" and index["unique"] == 0 for index in indexes)
+        assert foreign_keys[0]["referred_table"] == "user"
+
+        with Session(engine) as session:
+            user = User(email="api-key@example.com", hashed_password="hashed-password")
+            api_key = ApiKey(
+                key_id="akid_1",
+                user=user,
+                hashed_secret=b"hashed-secret",
+                encrypted_secret=None,
+                name="Automation",
+                scopes=["read", "write"],
+                prefix_env="prod",
+                signing_required=False,
+                created_via="test",
+                client_metadata={"user_agent": "Unit Test/1.0"},
+            )
+            session.add_all([user, api_key])
+            session.commit()
+            session.refresh(user)
+            session.refresh(api_key)
+
+            assert api_key.user_id == user.id
+            assert api_key.user is user
+            assert user.api_keys == [api_key]
+            assert api_key.hashed_secret == b"hashed-secret"
+            assert api_key.encrypted_secret is None
+            assert api_key.created_at is not None
+            assert api_key.revoked_at is None
+    finally:
+        engine.dispose()
+
+
+def test_api_key_model_rejects_unbounded_client_metadata() -> None:
+    """API-key metadata follows the same 64/255 key-value bounds as public session metadata."""
+    assert (
+        ApiKey(
+            key_id="akid_no_metadata",
+            user_id=UUID("00000000-0000-0000-0000-000000000001"),
+            hashed_secret=b"hashed-secret",
+            name="No metadata",
+            scopes=[],
+            prefix_env="prod",
+            signing_required=False,
+            created_via="test",
+            client_metadata=None,
+        ).client_metadata
+        is None
+    )
+
+    with pytest.raises(ValueError, match="client_metadata keys"):
+        ApiKey(
+            key_id="akid_invalid_key",
+            user_id=UUID("00000000-0000-0000-0000-000000000001"),
+            hashed_secret=b"hashed-secret",
+            name="Invalid",
+            scopes=[],
+            prefix_env="prod",
+            signing_required=False,
+            created_via="test",
+            client_metadata={"x" * 65: "value"},
+        )
+
+    with pytest.raises(ValueError, match="client_metadata keys"):
+        ApiKey(
+            key_id="akid_invalid_key_pattern",
+            user_id=UUID("00000000-0000-0000-0000-000000000001"),
+            hashed_secret=b"hashed-secret",
+            name="Invalid",
+            scopes=[],
+            prefix_env="prod",
+            signing_required=False,
+            created_via="test",
+            client_metadata={"User-Agent": "value"},
+        )
+
+    with pytest.raises(ValueError, match="client_metadata keys"):
+        ApiKey(
+            key_id="akid_invalid_value",
+            user_id=UUID("00000000-0000-0000-0000-000000000001"),
+            hashed_secret=b"hashed-secret",
+            name="Invalid",
+            scopes=[],
+            prefix_env="prod",
+            signing_required=False,
+            created_via="test",
+            client_metadata={"user_agent": "x" * 256},
+        )
+
+
 @pytest.mark.imports
 def test_models_package_import_token_orm_models_resolves_to_reference_user_relationships_after_user_import() -> None:
     """After the bundled ``User`` model loads, the helper-returned token classes bind correctly."""
@@ -1249,9 +1395,12 @@ def test_models_package_import_token_orm_models_resolves_to_reference_user_relat
         "from sqlalchemy import inspect\n"
         "from litestar_auth.models import import_token_orm_models\n"
         "AccessToken, RefreshToken = import_token_orm_models()\n"
+        "from litestar_auth.models import ApiKey\n"
         "from litestar_auth.models import User\n"
         "from litestar_auth.models.oauth import OAuthAccount\n"
         "user_relationships = inspect(User).relationships\n"
+        "assert user_relationships['api_keys'].mapper.class_ is ApiKey\n"
+        "assert user_relationships['api_keys'].back_populates == 'user'\n"
         "assert user_relationships['access_tokens'].mapper.class_ is AccessToken\n"
         "assert user_relationships['access_tokens'].back_populates == 'user'\n"
         "assert user_relationships['refresh_tokens'].mapper.class_ is RefreshToken\n"

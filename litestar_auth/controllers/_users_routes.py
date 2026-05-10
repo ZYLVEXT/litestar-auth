@@ -23,7 +23,7 @@ from litestar_auth.controllers.users import (
     _users_handle_update_user,
 )
 from litestar_auth.exceptions import ErrorCode, InvalidPasswordError
-from litestar_auth.guards import is_authenticated, is_superuser
+from litestar_auth.guards import is_authenticated, is_superuser, requires_password_session
 
 if TYPE_CHECKING:
     from litestar_auth.controllers._utils import RequestBodyRouteHandler
@@ -170,7 +170,7 @@ def _create_change_password_handler[UP: UsersControllerUserProtocol[Any], ID](
 
     @post(
         "/me/change-password",
-        guards=[is_authenticated],
+        guards=[is_authenticated, requires_password_session],
         status_code=204,
         before_request=ctx.change_password_before_request,
         responses=_CHANGE_PASSWORD_OPENAPI_RESPONSES,

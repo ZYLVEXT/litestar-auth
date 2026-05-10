@@ -33,7 +33,9 @@ from litestar_auth._secrets_at_rest import decode_versioned_fernet_value
 from litestar_auth.authentication.authenticator import Authenticator
 from litestar_auth.authentication.backend import AuthenticationBackend
 from litestar_auth.authentication.middleware import LitestarAuthMiddleware
+from litestar_auth.authentication.strategy.api_key import ApiKeyStrategy
 from litestar_auth.authentication.strategy.jwt import InMemoryJWTDenylistStore
+from litestar_auth.authentication.transport.api_key import ApiKeyTransport
 from litestar_auth.authentication.transport.bearer import BearerTransport
 from litestar_auth.config import TOTP_ENROLL_AUDIENCE
 from litestar_auth.controllers import create_auth_controller, create_totp_controller
@@ -41,11 +43,12 @@ from litestar_auth.controllers.auth import INVALID_CREDENTIALS_DETAIL, TOTP_PEND
 from litestar_auth.exceptions import ConfigurationError, ErrorCode, InactiveUserError, TokenError
 from litestar_auth.manager import ENCRYPTED_TOTP_SECRET_PREFIX, BaseUserManager, UserManagerSecurity
 from litestar_auth.password import PasswordHelper
-from litestar_auth.plugin import LitestarAuth, LitestarAuthConfig
+from litestar_auth.plugin import ApiKeyConfig, LitestarAuth, LitestarAuthConfig
 from litestar_auth.ratelimit import AuthRateLimitConfig, EndpointRateLimit
 from litestar_auth.totp_flow import InvalidTotpPendingTokenError
 from tests._helpers import auth_middleware_get_request_session, litestar_app_with_user_manager
 from tests.integration.conftest import DummySessionMaker, ExampleUser, InMemoryTokenStrategy, InMemoryUserDatabase
+from tests.integration.test_controller_api_keys import API_KEY_HASH_SECRET, InMemoryApiKeyStore
 
 _DEFAULT_TOTP_FERNET_KEY_ID = totp_enrollment_module._DEFAULT_TOTP_FERNET_KEY_ID
 _consume_enrollment_secret = totp_enrollment_module._consume_enrollment_secret
@@ -78,6 +81,7 @@ HTTP_OK = 200
 HTTP_CREATED = 201
 HTTP_ACCEPTED = 202
 HTTP_BAD_REQUEST = 400
+HTTP_FORBIDDEN = 403
 HTTP_UNPROCESSABLE_ENTITY = 422
 HTTP_UNAUTHORIZED = 401
 HTTP_SERVICE_UNAVAILABLE = 503
@@ -124,6 +128,8 @@ class TrackingUserManager(BaseUserManager[ExampleUser, UUID]):
         reset_password_token_secret: str = "fedcba9876543210" * 4,
         *,
         backends: tuple[object, ...] = (),
+        api_key_store: InMemoryApiKeyStore | None = None,
+        api_key_config: object | None = None,
         login_identifier: Literal["email", "username"] = "email",
         totp_secret_key: str | None = TOTP_SECRET_KEY,
     ) -> None:
@@ -134,10 +140,13 @@ class TrackingUserManager(BaseUserManager[ExampleUser, UUID]):
             security=UserManagerSecurity[UUID](
                 verification_token_secret=verification_token_secret,
                 reset_password_token_secret=reset_password_token_secret,
+                api_key_hash_secret=API_KEY_HASH_SECRET,
                 totp_secret_key=totp_secret_key,
                 totp_recovery_code_lookup_secret=TOTP_RECOVERY_CODE_LOOKUP_SECRET,
             ),
             backends=backends,
+            api_key_store=api_key_store,
+            api_key_config=api_key_config,
             login_identifier=login_identifier,
         )
         self.logged_in_users: list[ExampleUser] = []
@@ -183,6 +192,7 @@ def build_app(  # noqa: PLR0913
     account_state: AccountState | None = None,
     login_identifier: Literal["email", "username"] = "email",
     totp_pending_require_client_binding: bool = True,
+    include_api_keys: bool = False,
     unsafe_testing: bool = False,
 ) -> tuple[Litestar, InMemoryUserDatabase, InMemoryTokenStrategy, TrackingUserManager]:
     """Create a test application with optional 2FA support.
@@ -205,12 +215,34 @@ def build_app(  # noqa: PLR0913
         is_verified=initial_is_verified,
     )
     user_db = InMemoryUserDatabase([user])
-    user_manager = TrackingUserManager(user_db, password_helper, login_identifier=login_identifier)
     strategy = InMemoryTokenStrategy()
+    api_key_store = InMemoryApiKeyStore()
     backend = AuthenticationBackend[ExampleUser, UUID](
         name="memory-bearer",
         transport=BearerTransport(),
         strategy=cast("Any", strategy),
+    )
+    backends: list[AuthenticationBackend[ExampleUser, UUID]] = [backend]
+    if include_api_keys:
+        backends.append(
+            AuthenticationBackend[ExampleUser, UUID](
+                name="api_key",
+                transport=ApiKeyTransport(),
+                strategy=ApiKeyStrategy[ExampleUser, UUID](
+                    api_key_store=api_key_store,
+                    api_key_hash_secret=API_KEY_HASH_SECRET,
+                    prefix_env="prod",
+                    unsafe_testing=True,
+                ),
+            ),
+        )
+    user_manager = TrackingUserManager(
+        user_db,
+        password_helper,
+        backends=tuple(backends),
+        api_key_store=api_key_store if include_api_keys else None,
+        api_key_config=ApiKeyConfig(enabled=include_api_keys, allowed_scopes=("read",), environment_marker="prod"),
+        login_identifier=login_identifier,
     )
     pending_secret = TOTP_PENDING_SECRET if with_totp else None
     replay_store = InMemoryUsedTotpCodeStore() if used_tokens_store is _DEFAULT_USED_TOKENS_STORE else used_tokens_store
@@ -245,7 +277,7 @@ def build_app(  # noqa: PLR0913
     middleware = DefineMiddleware(
         LitestarAuthMiddleware[ExampleUser, UUID],
         get_request_session=auth_middleware_get_request_session(cast("Any", DummySessionMaker())),
-        authenticator_factory=lambda _session: Authenticator([backend], user_manager),
+        authenticator_factory=lambda _session: Authenticator(backends, user_manager),
     )
     app = litestar_app_with_user_manager(
         user_manager,
@@ -465,6 +497,34 @@ async def test_enable_2fa_keeps_email_in_the_otpauth_uri_under_username_login_mo
     decoded_uri = unquote(enable_resp.json()["uri"])
     assert user.email in decoded_uri
     assert user.username not in decoded_uri
+
+
+async def test_totp_sensitive_routes_reject_api_key_authenticated_callers() -> None:
+    """TOTP enrollment, disable, and recovery-code rotation require a password session."""
+    app, user_db, _strategy, manager = build_app(include_api_keys=True)
+    user = next(iter(user_db.users_by_id.values()))
+    created = await manager.create_api_key(user=user, name="CLI", scopes=["read"])
+    headers = {"Authorization": f"Bearer {created.secret.get_secret_value()}"}
+
+    async with AsyncTestClient(app=app) as client:
+        enable_response = await client.post("/auth/2fa/enable", headers=headers, json={"password": "correct-password"})
+        confirm_response = await client.post(
+            "/auth/2fa/enable/confirm",
+            headers=headers,
+            json={"enrollment_token": "token", "code": "123456"},
+        )
+        regenerate_response = await client.post(
+            "/auth/2fa/recovery-codes/regenerate",
+            headers=headers,
+            json={"current_password": "correct-password"},
+        )
+        disable_response = await client.post("/auth/2fa/disable", headers=headers, json={"code": "123456"})
+
+    assert enable_response.status_code == HTTP_FORBIDDEN
+    assert confirm_response.status_code == HTTP_FORBIDDEN
+    assert regenerate_response.status_code == HTTP_FORBIDDEN
+    assert disable_response.status_code == HTTP_FORBIDDEN
+    assert (enable_response.json().get("extra") or {}).get("code") == ErrorCode.AUTHORIZATION_DENIED
 
 
 def test_sign_and_decode_enrollment_token_round_trip_plaintext() -> None:

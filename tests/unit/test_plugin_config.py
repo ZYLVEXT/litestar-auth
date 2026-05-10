@@ -15,10 +15,12 @@ import msgspec
 import pytest
 from cryptography.fernet import Fernet
 
+import litestar_auth._plugin.api_key as api_key_module
 import litestar_auth._plugin.backend_inventory as backend_inventory_module
 import litestar_auth._plugin.config as plugin_config_module
 import litestar_auth._plugin.database_token as database_token_module
 import litestar_auth._plugin.feature_configs as feature_configs_module
+import litestar_auth.guards._api_key_guards as api_key_guards_module
 from litestar_auth import DEFAULT_SUPERUSER_ROLE_NAME
 from litestar_auth._plugin.oauth_contract import _build_oauth_route_registration_contract
 from litestar_auth._plugin.scoped_session import SessionFactory
@@ -54,7 +56,13 @@ from tests.integration.test_orchestrator import (
 
 # Canonical substring from ``_raise_startup_only_database_token_runtime_error`` (database_token.py).
 _DB_TOKEN_STARTUP_ONLY_FAIL_CLOSED = re.escape("LitestarAuthConfig.resolve_backends(session)")
+_API_KEY_STARTUP_ONLY_FAIL_CLOSED = re.escape("LitestarAuthConfig.resolve_backends(session)")
 DEFAULT_REGISTER_MINIMUM_RESPONSE_SECONDS = plugin_config_module.DEFAULT_REGISTER_MINIMUM_RESPONSE_SECONDS
+API_KEY_HASH_SECRET = "api-key-hash-secret-0123456789abcdef"
+ApiKeyConfig = plugin_config_module.ApiKeyConfig
+DEFAULT_API_KEY_MAX_KEYS_PER_USER = plugin_config_module.DEFAULT_API_KEY_MAX_KEYS_PER_USER
+DEFAULT_API_KEY_LAST_USED_THROTTLE_SECONDS = plugin_config_module.DEFAULT_API_KEY_LAST_USED_THROTTLE_SECONDS
+DEFAULT_API_KEY_SIGNED_BODY_MAX_MESSAGES = plugin_config_module.DEFAULT_API_KEY_SIGNED_BODY_MAX_MESSAGES
 DatabaseTokenAuthConfig = plugin_config_module.DatabaseTokenAuthConfig
 OAuthConfig = plugin_config_module.OAuthConfig
 StartupBackendTemplate = plugin_config_module.StartupBackendTemplate
@@ -91,6 +99,7 @@ def _oauth_provider(*, name: str, client: object) -> OAuthProviderConfig:
 
 def test_plugin_config_reexports_feature_config_contracts() -> None:
     """Historical config-module imports resolve to the relocated feature config classes."""
+    assert plugin_config_module.ApiKeyConfig is feature_configs_module.ApiKeyConfig
     assert plugin_config_module.DatabaseTokenAuthConfig is feature_configs_module.DatabaseTokenAuthConfig
     assert plugin_config_module.OAuthConfig is feature_configs_module.OAuthConfig
     assert plugin_config_module.TotpConfig is feature_configs_module.TotpConfig
@@ -132,6 +141,103 @@ def test_backend_inventory_resolve_returns_consistent_inventory() -> None:
             [mismatched_backend],
             backend_index=0,
         )
+
+
+def test_backend_inventory_appends_api_key_backend_only_when_enabled() -> None:
+    """Disabled API keys leave backend order unchanged; enabling appends the backend."""
+    disabled_config = _minimal_config()
+    enabled_config = _minimal_config(
+        api_keys=ApiKeyConfig(enabled=True, allowed_scopes=("read",)),
+        user_manager_security=UserManagerSecurity[UUID](
+            verification_token_secret=VERIFICATION_SECRET,
+            reset_password_token_secret=RESET_PASSWORD_SECRET,
+            api_key_hash_secret=API_KEY_HASH_SECRET,
+        ),
+    )
+
+    disabled_backends = backend_inventory_module.resolve_backend_inventory(disabled_config).startup_backends()
+    enabled_backends = backend_inventory_module.resolve_backend_inventory(enabled_config).startup_backends()
+
+    assert [backend.name for backend in disabled_backends] == ["primary"]
+    assert [backend.name for backend in enabled_backends] == ["primary", "api_key"]
+    assert enabled_backends[1].transport.__class__.__name__ == "ApiKeyTransport"
+    assert cast("Any", enabled_backends[1].strategy).prefix_env == "prod"
+
+
+def test_backend_inventory_skips_api_key_backend_until_secret_is_available() -> None:
+    """Direct inventory resolution leaves API-key auth absent until validation supplies a hash secret."""
+    no_security_config = _minimal_config(api_keys=ApiKeyConfig(enabled=True, allowed_scopes=("read",)))
+    no_security_config.user_manager_security = None
+    no_hash_secret_config = _minimal_config(api_keys=ApiKeyConfig(enabled=True, allowed_scopes=("read",)))
+
+    assert [backend.name for backend in no_security_config.resolve_startup_backends()] == ["primary"]
+    assert [backend.name for backend in no_hash_secret_config.resolve_startup_backends()] == ["primary"]
+
+
+def test_resolve_backends_binds_api_key_store_factory_to_request_session() -> None:
+    """The API-key backend is startup-lazy and binds its store per request session."""
+    sessions: list[object] = []
+    api_key_store = object()
+
+    def _store_factory(session: object) -> object:
+        sessions.append(session)
+        return api_key_store
+
+    config = _minimal_config(
+        backends=[],
+        api_keys=ApiKeyConfig(
+            enabled=True,
+            store_factory=cast("Any", _store_factory),
+            allowed_scopes=("read",),
+            environment_marker="test",
+        ),
+        user_manager_security=UserManagerSecurity[UUID](
+            verification_token_secret=VERIFICATION_SECRET,
+            reset_password_token_secret=RESET_PASSWORD_SECRET,
+            api_key_hash_secret=API_KEY_HASH_SECRET,
+        ),
+    )
+    session = DummySession()
+
+    (backend,) = config.resolve_backends(cast("Any", session))
+
+    assert backend.name == "api_key"
+    assert sessions == [session]
+    assert cast("Any", backend.strategy).api_key_store is api_key_store
+    assert cast("Any", backend.strategy).prefix_env == "test"
+    assert cast("Any", backend.strategy).scope_authority is api_key_guards_module.default_api_key_scope_authority
+
+
+def test_resolve_backends_preserves_custom_api_key_scope_authority() -> None:
+    """A custom API-key scope authority is passed through to the request-bound strategy."""
+    sessions: list[object] = []
+
+    def _store_factory(session: object) -> object:
+        sessions.append(session)
+        return object()
+
+    def _scope_authority(_connection: object, _api_key_scopes: frozenset[str]) -> bool:
+        return True
+
+    config = _minimal_config(
+        backends=[],
+        api_keys=ApiKeyConfig(
+            enabled=True,
+            store_factory=cast("Any", _store_factory),
+            allowed_scopes=("read",),
+            scope_authority=cast("Any", _scope_authority),
+        ),
+        user_manager_security=UserManagerSecurity[UUID](
+            verification_token_secret=VERIFICATION_SECRET,
+            reset_password_token_secret=RESET_PASSWORD_SECRET,
+            api_key_hash_secret=API_KEY_HASH_SECRET,
+        ),
+    )
+
+    (backend,) = config.resolve_backends(cast("Any", DummySession()))
+
+    assert sessions
+    assert cast("Any", backend.strategy).scope_authority is _scope_authority
 
 
 def test_feature_configs_module_constructors_apply_documented_defaults() -> None:
@@ -179,6 +285,7 @@ def _minimal_config(  # noqa: PLR0913
     backends: list[AuthenticationBackend[ExampleUser, UUID]] | None = None,
     include_users: bool = False,
     totp_config: TotpConfig | None = None,
+    api_keys: ApiKeyConfig | None = None,
     user_manager_security: UserManagerSecurity[UUID] | None = None,
     user_manager_class: type[Any] | None = None,
     id_parser: type[UUID] | None = None,
@@ -212,6 +319,7 @@ def _minimal_config(  # noqa: PLR0913
         user_db_factory=lambda _session: user_db,
         user_manager_security=resolved_manager_security,
         include_users=include_users,
+        api_keys=api_keys or ApiKeyConfig(),
         id_parser=id_parser,
         totp_config=totp_config,
         login_identifier=login_identifier,
@@ -224,6 +332,71 @@ def test_litestar_auth_config_declares_oauth_config_field() -> None:
     dataclass_fields = LitestarAuthConfig.__dataclass_fields__
 
     assert "oauth_config" in dataclass_fields
+
+
+def test_api_key_config_defaults_match_plugin_contract() -> None:
+    """API-key config defaults are opt-in and bounded where production can be inferred."""
+    api_key_config = ApiKeyConfig()
+
+    assert api_key_config.enabled is False
+    assert api_key_config.store_factory is None
+    assert api_key_config.backend_name == "api_key"
+    assert api_key_config.prefix == "ak"
+    assert api_key_config.environment_marker == "prod"
+    assert api_key_config.max_keys_per_user == DEFAULT_API_KEY_MAX_KEYS_PER_USER
+    assert api_key_config.default_ttl == timedelta(days=365)
+    assert api_key_config.require_step_up_on_create is True
+    assert api_key_config.allowed_scopes == ()
+    assert api_key_config.scope_subset_check is True
+    assert api_key_config.scope_authority is None
+    assert api_key_config.last_used_write_strategy == "throttled"
+    assert api_key_config.last_used_throttle_seconds == DEFAULT_API_KEY_LAST_USED_THROTTLE_SECONDS
+    assert api_key_config.signed_body_max_messages == DEFAULT_API_KEY_SIGNED_BODY_MAX_MESSAGES
+    assert api_key_config.nonce_store is None
+    assert api_key_config.secret_encryption_keyring is None
+
+
+@pytest.mark.parametrize("signed_body_max_messages", [0, -1])
+def test_api_key_config_rejects_non_positive_signed_body_message_limit(signed_body_max_messages: int) -> None:
+    """API-key signing body frame limits must fail closed when enabled."""
+    config = _minimal_config(
+        api_keys=ApiKeyConfig(
+            enabled=True,
+            allowed_scopes=("read",),
+            signed_body_max_messages=signed_body_max_messages,
+        ),
+        user_manager_security=UserManagerSecurity[UUID](
+            verification_token_secret=VERIFICATION_SECRET,
+            reset_password_token_secret=RESET_PASSWORD_SECRET,
+            api_key_hash_secret=API_KEY_HASH_SECRET,
+        ),
+    )
+
+    with pytest.raises(
+        ConfigurationError,
+        match=re.escape("api_keys.signed_body_max_messages must be greater than 0."),
+    ):
+        LitestarAuth(config)
+
+
+def test_litestar_auth_config_declares_api_key_config_field() -> None:
+    """The plugin config exposes an explicit nested API-key config field."""
+    dataclass_fields = LitestarAuthConfig.__dataclass_fields__
+
+    assert "api_keys" in dataclass_fields
+    assert isinstance(
+        LitestarAuthConfig[ExampleUser, UUID](
+            backends=[],
+            user_model=ExampleUser,
+            user_manager_class=PluginUserManager,
+            session_maker=cast("Any", DummySessionMaker()),
+            user_manager_security=UserManagerSecurity[UUID](
+                verification_token_secret=VERIFICATION_SECRET,
+                reset_password_token_secret=RESET_PASSWORD_SECRET,
+            ),
+        ).api_keys,
+        ApiKeyConfig,
+    )
 
 
 def test_litestar_auth_config_declares_password_validator_factory_fields() -> None:
@@ -1405,6 +1578,38 @@ async def test_startup_database_token_templates_fail_closed_for_remaining_runtim
 
     for operation in runtime_calls:
         with pytest.raises(RuntimeError, match=_DB_TOKEN_STARTUP_ONLY_FAIL_CLOSED):
+            _ = await operation
+
+
+def test_default_api_key_store_factory_builds_bundled_sqlalchemy_store_lazily() -> None:
+    """The API-key default store factory resolves the bundled SQLAlchemy store only when called."""
+    store_factory = api_key_module.resolve_api_key_store_factory(ApiKeyConfig())
+
+    store = store_factory(cast("Any", DummySession()))
+
+    assert store.__class__.__name__ == "SQLAlchemyApiKeyStore"
+
+
+async def test_startup_api_key_templates_fail_closed_for_runtime_work() -> None:
+    """Startup-only API-key templates fail closed if callers skip request-session binding."""
+    config = _minimal_config(
+        backends=[],
+        api_keys=ApiKeyConfig(enabled=True, allowed_scopes=("read",)),
+        user_manager_security=UserManagerSecurity[UUID](
+            verification_token_secret=VERIFICATION_SECRET,
+            reset_password_token_secret=RESET_PASSWORD_SECRET,
+            api_key_hash_secret=API_KEY_HASH_SECRET,
+        ),
+    )
+    startup_strategy = cast("Any", config.resolve_startup_backends()[0].strategy)
+    user = ExampleUser(id=uuid4())
+
+    for operation in (
+        startup_strategy.read_token(None, object()),
+        startup_strategy.write_token(user),
+        startup_strategy.destroy_token("token", user),
+    ):
+        with pytest.raises(RuntimeError, match=_API_KEY_STARTUP_ONLY_FAIL_CLOSED):
             _ = await operation
 
 

@@ -40,6 +40,7 @@ from litestar_auth.authentication import Authenticator, LitestarAuthMiddleware
 from litestar_auth.authentication.backend import AuthenticationBackend
 from litestar_auth.authentication.strategy.db import DatabaseTokenStrategy
 from litestar_auth.authentication.strategy.db_models import DatabaseTokenModels
+from litestar_auth.authentication.transport.api_key import ApiKeyTransport
 from litestar_auth.authentication.transport.bearer import BearerTransport
 from litestar_auth.authentication.transport.cookie import CookieTransport
 from litestar_auth.config import require_password_length
@@ -1443,7 +1444,26 @@ def test_register_middleware_without_cookie_transports_skips_csrf_registration()
     assert isinstance(middleware, DefineMiddleware)
     middleware_config = middleware.kwargs["config"]
     assert middleware_config.auth_cookie_names == frozenset()
+    assert middleware_config.api_key_backend_present is False
     assert middleware_config.superuser_role_name == "superuser"
+
+
+def test_register_middleware_detects_api_key_transport_for_signed_body_buffering() -> None:
+    """API-key backends opt signed request buffering into the auth middleware."""
+    api_key_backend = AuthenticationBackend[ExampleUser, UUID](
+        name="api_key",
+        transport=ApiKeyTransport(),
+        strategy=cast("Any", InMemoryTokenStrategy(token_prefix="plugin-orchestrator-api-key")),
+    )
+    plugin = LitestarAuth(_minimal_config(backends=[api_key_backend]))
+    app_config = AppConfig()
+
+    plugin._register_middleware(app_config)
+
+    middleware = app_config.middleware[0]
+    assert isinstance(middleware, DefineMiddleware)
+    middleware_config = middleware.kwargs["config"]
+    assert middleware_config.api_key_backend_present is True
 
 
 def test_resolve_account_state_validator_delegates_to_shared_validation_helper(

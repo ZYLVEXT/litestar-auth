@@ -52,7 +52,13 @@ DEFAULT_DATABASE_TOKEN_BACKEND_NAME = _feature_configs.DEFAULT_DATABASE_TOKEN_BA
 DEFAULT_DATABASE_TOKEN_MAX_AGE = _feature_configs.DEFAULT_DATABASE_TOKEN_MAX_AGE
 DEFAULT_DATABASE_TOKEN_REFRESH_MAX_AGE = _feature_configs.DEFAULT_DATABASE_TOKEN_REFRESH_MAX_AGE
 DEFAULT_DATABASE_TOKEN_BYTES = _feature_configs.DEFAULT_DATABASE_TOKEN_BYTES
+DEFAULT_API_KEY_BACKEND_NAME = _feature_configs.DEFAULT_API_KEY_BACKEND_NAME
+DEFAULT_API_KEY_TTL = _feature_configs.DEFAULT_API_KEY_TTL
+DEFAULT_API_KEY_MAX_KEYS_PER_USER = _feature_configs.DEFAULT_API_KEY_MAX_KEYS_PER_USER
+DEFAULT_API_KEY_LAST_USED_THROTTLE_SECONDS = _feature_configs.DEFAULT_API_KEY_LAST_USED_THROTTLE_SECONDS
+DEFAULT_API_KEY_SIGNED_BODY_MAX_MESSAGES = _feature_configs.DEFAULT_API_KEY_SIGNED_BODY_MAX_MESSAGES
 DEFAULT_REGISTER_MINIMUM_RESPONSE_SECONDS = 0.4
+ApiKeyConfig = _feature_configs.ApiKeyConfig
 DatabaseTokenAuthConfig = _feature_configs.DatabaseTokenAuthConfig
 OAuthConfig = _feature_configs.OAuthConfig
 TotpConfig = _feature_configs.TotpConfig
@@ -192,7 +198,7 @@ class LitestarAuthConfig[UP: UserProtocol[Any], ID]:
         dependencies, a custom signature, or caller-owned construction.
 
     Core:
-        ``user_model``, ``user_manager_class``, ``backends``, ``database_token_auth``,
+        ``user_model``, ``user_manager_class``, ``backends``, ``database_token_auth``, ``api_keys``,
         ``session_maker``, ``user_db_factory``, ``user_manager_security``,
         ``password_validator_factory``, ``user_manager_factory``, ``rate_limit_config``.
     Plugin customization hooks:
@@ -233,6 +239,7 @@ class LitestarAuthConfig[UP: UserProtocol[Any], ID]:
     user_manager_class: type[BaseUserManager[UP, ID]] | None = None
     backends: Sequence[AuthenticationBackend[UP, ID]] = field(default_factory=tuple)
     database_token_auth: DatabaseTokenAuthConfig | None = None
+    api_keys: ApiKeyConfig = field(default_factory=ApiKeyConfig)
     session_maker: SessionFactory | None = None
     user_db_factory: UserDatabaseFactory[UP, ID] | None = None
     user_manager_security: UserManagerSecurity[ID] | None = None

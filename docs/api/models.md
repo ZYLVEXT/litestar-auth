@@ -1,16 +1,18 @@
 # Models
 
-Package `litestar_auth.models` exposes the reference **`User`**, **`Role`**, **`UserRole`**, and
-**`OAuthAccount`** ORM models plus the side-effect-free mixins behind the bundled model family.
+Package `litestar_auth.models` exposes the reference **`User`**, **`Role`**, **`UserRole`**,
+**`OAuthAccount`**, and **`ApiKey`** ORM models plus the side-effect-free mixins behind the bundled
+model family.
 Names are loaded lazily (PEP 562) when accessed on the package.
 
 ## Import paths
 
 | Goal | Import |
 |------|--------|
-| Shared auth-model mixins without registering reference mappers | `from litestar_auth.models.mixins import UserModelMixin, UserAuthRelationshipMixin, UserRoleRelationshipMixin, RoleMixin, UserRoleAssociationMixin, OAuthAccountMixin, AccessTokenMixin, RefreshTokenMixin` |
+| Shared auth-model mixins without registering reference mappers | `from litestar_auth.models.mixins import UserModelMixin, UserAuthRelationshipMixin, UserRoleRelationshipMixin, RoleMixin, UserRoleAssociationMixin, OAuthAccountMixin, ApiKeyMixin, AccessTokenMixin, RefreshTokenMixin` |
 | Bundled `AccessToken` / `RefreshToken` mapper bootstrap | `from litestar_auth.models import import_token_orm_models` |
 | Bundled role tables without loading reference `User` | `from litestar_auth.models.role import Role, UserRole` |
+| API-key table contract **without** loading reference `User` | `from litestar_auth.models.api_key import ApiKey` |
 | OAuth table contract **without** loading reference `User` | `from litestar_auth.models.oauth import OAuthAccount` |
 | Reference `User` (and typical tests / quickstarts) | `from litestar_auth.models import User` or `from litestar_auth.models.user import User` |
 
@@ -48,6 +50,21 @@ Existing deployments using the bundled `refresh_token` table must add `session_i
 per existing row. Existing custom refresh-token models passed through `DatabaseTokenModels` must expose
 mapped `session_id`, `last_used_at`, and `client_metadata` attributes; otherwise configuration fails fast
 with `ConfigurationError`.
+
+## `api_key` shape
+
+The bundled `ApiKeyMixin` stores API-key metadata and verifier material:
+
+- `key_id` — public lookup id embedded in the raw credential.
+- `hashed_secret` — keyed HMAC digest of the raw bearer secret.
+- `encrypted_secret` — nullable encrypted raw secret for signing-required keys.
+- `name`, `scopes`, `prefix_env`, `signing_required`, `expires_at`, `last_used_at`, `revoked_at`,
+  `created_via`, and `client_metadata` — safe management metadata.
+
+Import `ApiKey` from `litestar_auth.models.api_key` or lazily from `litestar_auth.models`. Use
+`ApiKeyMixin` on a custom declarative base when the application owns the model family. The SQLAlchemy
+store lives at `litestar_auth.db.sqlalchemy.SQLAlchemyApiKeyStore`; the lazy `litestar_auth.db`
+package exports only `BaseApiKeyStore` and `ApiKeyData`.
 
 ## Lazy imports and IDE support
 

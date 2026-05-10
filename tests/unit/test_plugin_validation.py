@@ -24,6 +24,7 @@ import litestar_auth._plugin.user_manager_builder as user_manager_builder_module
 import litestar_auth._plugin.validation as validation_module
 from litestar_auth._plugin.middleware import build_csrf_config, get_cookie_transports
 from litestar_auth.authentication.backend import AuthenticationBackend
+from litestar_auth.authentication.strategy import InMemoryApiKeyNonceStore
 from litestar_auth.authentication.strategy.db import DatabaseTokenStrategy
 from litestar_auth.authentication.transport.bearer import BearerTransport
 from litestar_auth.authentication.transport.cookie import CookieTransport
@@ -50,6 +51,8 @@ from tests.integration.test_orchestrator import (
 )
 
 DEFAULT_CSRF_COOKIE_NAME = plugin_config_module.DEFAULT_CSRF_COOKIE_NAME
+API_KEY_HASH_SECRET = "api-key-hash-secret-0123456789abcdef"
+ApiKeyConfig = plugin_config_module.ApiKeyConfig
 DatabaseTokenAuthConfig = plugin_config_module.DatabaseTokenAuthConfig
 LitestarAuthConfig = plugin_config_module.LitestarAuthConfig
 OAuthConfig = plugin_config_module.OAuthConfig
@@ -66,6 +69,7 @@ _validate_backend_strategy_security = validation_module._validate_backend_strate
 _validate_totp_encryption_key = validation_module._validate_totp_encryption_key
 _validate_totp_pending_secret_config = validation_module._validate_totp_pending_secret_config
 validate_config = validation_module.validate_config
+validate_api_key_config = validation_module.validate_api_key_config
 validate_cookie_auth_config = validation_module.validate_cookie_auth_config
 validate_password_validator_config = validation_module.validate_password_validator_config
 validate_rate_limit_config = validation_module.validate_rate_limit_config
@@ -542,6 +546,24 @@ def test_warn_insecure_plugin_startup_defaults_warns_for_current_jwt_strategy(
 
     messages = [str(record.message) for record in records]
     assert strategy.revocation_posture.startup_warning in messages
+
+
+def test_warn_insecure_plugin_startup_defaults_warns_for_unbounded_api_key_default_ttl() -> None:
+    """Production API-key creation warns when the configured default expiry is unbounded."""
+    config = _minimal_config(
+        user_manager_security=UserManagerSecurity[UUID](
+            verification_token_secret=VERIFICATION_SECRET,
+            reset_password_token_secret=RESET_PASSWORD_SECRET,
+            api_key_hash_secret=API_KEY_HASH_SECRET,
+        ),
+    )
+    config.api_keys = ApiKeyConfig(enabled=True, allowed_scopes=("read",), default_ttl=None)
+
+    with warnings.catch_warnings(record=True) as records:
+        warnings.simplefilter("always")
+        warn_insecure_plugin_startup_defaults(config)
+
+    assert any("API-key creation default_ttl is None" in str(record.message) for record in records)
 
 
 class _PasskeyOnlyUser:
@@ -1303,7 +1325,7 @@ def test_iter_rate_limit_endpoints_includes_request_verify_token() -> None:
 
     endpoints = iter_rate_limit_endpoints(AuthRateLimitConfig(request_verify_token=rate_limit))
 
-    assert endpoints[-1] is rate_limit
+    assert rate_limit in endpoints
 
 
 def test_iter_rate_limit_endpoints_includes_change_password() -> None:
@@ -1343,12 +1365,12 @@ def test_iter_rate_limit_endpoint_items_include_supported_slot_names() -> None:
     items = rate_limit_module.iter_rate_limit_endpoint_items(
         AuthRateLimitConfig(totp_regenerate_recovery_codes=rate_limit),
     )
+    item_map = dict(items)
 
-    assert items[-3:] == (
-        ("totp_regenerate_recovery_codes", rate_limit),
-        ("verify_token", None),
-        ("request_verify_token", None),
-    )
+    assert item_map["totp_regenerate_recovery_codes"] is rate_limit
+    assert item_map["verify_token"] is None
+    assert item_map["request_verify_token"] is None
+    assert item_map["api_key_update"] is None
 
 
 def test_collect_process_local_rate_limit_endpoint_names_accepts_no_rate_limit_config() -> None:
@@ -1879,6 +1901,241 @@ def test_validate_user_manager_security_config_rejects_when_secret_roles_share_o
     assert TOTP_PENDING_AUDIENCE in message
     assert TOTP_ENROLL_AUDIENCE in message
     assert shared_secret not in message
+
+
+def test_validate_api_key_config_rejects_missing_hash_secret() -> None:
+    """API-key auth cannot be enabled without dedicated HMAC key material."""
+    config = _minimal_config()
+    config.api_keys = ApiKeyConfig(enabled=True, allowed_scopes=("read",))
+
+    with pytest.raises(ConfigurationError, match="api_key_hash_secret is required"):
+        validate_api_key_config(config)
+
+
+def test_validate_api_key_config_rejects_non_positive_max_keys() -> None:
+    """API-key max key count must fail closed when enabled."""
+    config = _minimal_config(
+        user_manager_security=UserManagerSecurity[UUID](
+            verification_token_secret=VERIFICATION_SECRET,
+            reset_password_token_secret=RESET_PASSWORD_SECRET,
+            api_key_hash_secret=API_KEY_HASH_SECRET,
+        ),
+    )
+    config.api_keys = ApiKeyConfig(enabled=True, max_keys_per_user=0, allowed_scopes=("read",))
+
+    with pytest.raises(ConfigurationError, match="max_keys_per_user"):
+        validate_api_key_config(config)
+
+
+def test_validate_api_key_config_rejects_empty_allowed_scopes_when_subset_check_enabled() -> None:
+    """API-key scope subset checks require an explicit whitelist."""
+    config = _minimal_config(
+        user_manager_security=UserManagerSecurity[UUID](
+            verification_token_secret=VERIFICATION_SECRET,
+            reset_password_token_secret=RESET_PASSWORD_SECRET,
+            api_key_hash_secret=API_KEY_HASH_SECRET,
+        ),
+    )
+    config.api_keys = ApiKeyConfig(enabled=True)
+
+    with pytest.raises(ConfigurationError, match="allowed_scopes"):
+        validate_api_key_config(config)
+
+
+def test_validate_api_key_config_accepts_disabled_config_without_hash_secret() -> None:
+    """Disabled API-key auth does not require API-key secret material."""
+    config = _minimal_config()
+
+    validation_module._api_key_validation._validate_api_key_signing_secret_distinctness(config)
+
+
+def test_validate_api_key_config_accepts_enabled_production_shape() -> None:
+    """A complete API-key config passes startup validation."""
+    config = _minimal_config(
+        user_manager_security=UserManagerSecurity[UUID](
+            verification_token_secret=VERIFICATION_SECRET,
+            reset_password_token_secret=RESET_PASSWORD_SECRET,
+            api_key_hash_secret=API_KEY_HASH_SECRET,
+        ),
+    )
+    config.api_keys = ApiKeyConfig(enabled=True, allowed_scopes=("read",))
+
+    validate_api_key_config(config)
+
+
+def test_validate_api_key_config_rejects_signing_without_keyring() -> None:
+    """Signing mode requires API-key secret-at-rest encryption material."""
+    config = _minimal_config(
+        user_manager_security=UserManagerSecurity[UUID](
+            verification_token_secret=VERIFICATION_SECRET,
+            reset_password_token_secret=RESET_PASSWORD_SECRET,
+            api_key_hash_secret=API_KEY_HASH_SECRET,
+        ),
+    )
+    config.api_keys = ApiKeyConfig(
+        enabled=True,
+        allowed_scopes=("read",),
+        signing_enabled=True,
+        nonce_store=InMemoryApiKeyNonceStore(),
+    )
+
+    with pytest.raises(ConfigurationError, match="secret_encryption_keyring"):
+        validate_api_key_config(config)
+
+
+def test_validate_api_key_config_rejects_signing_without_nonce_store() -> None:
+    """Signing mode requires replay protection outside unsafe testing."""
+    config = _minimal_config(
+        user_manager_security=UserManagerSecurity[UUID](
+            verification_token_secret=VERIFICATION_SECRET,
+            reset_password_token_secret=RESET_PASSWORD_SECRET,
+            api_key_hash_secret=API_KEY_HASH_SECRET,
+        ),
+    )
+    config.api_keys = ApiKeyConfig(
+        enabled=True,
+        allowed_scopes=("read",),
+        signing_enabled=True,
+        secret_encryption_keyring=FernetKeyringConfig(active_key_id="current", keys={"current": _fernet_key()}),
+    )
+
+    with pytest.raises(ConfigurationError, match="nonce_store"):
+        validate_api_key_config(config)
+
+
+def test_validate_api_key_config_rejects_signing_key_reuse() -> None:
+    """API-key signing encryption keys must not reuse API-key hash material."""
+    shared_secret = _fernet_key()
+    config = _minimal_config(
+        user_manager_security=UserManagerSecurity[UUID](
+            verification_token_secret=VERIFICATION_SECRET,
+            reset_password_token_secret=RESET_PASSWORD_SECRET,
+            api_key_hash_secret=shared_secret,
+        ),
+    )
+    config.api_keys = ApiKeyConfig(
+        enabled=True,
+        allowed_scopes=("read",),
+        signing_enabled=True,
+        nonce_store=InMemoryApiKeyNonceStore(),
+        secret_encryption_keyring=FernetKeyringConfig(active_key_id="current", keys={"current": shared_secret}),
+    )
+
+    with pytest.raises(ConfigurationError, match="api_key_secret_encryption_keyring"):
+        validate_api_key_config(config)
+
+
+def test_validate_api_key_config_rejects_process_local_nonce_store_for_multiworker() -> None:
+    """Signing nonce stores must be shared in declared multi-worker deployments."""
+    config = _minimal_config(
+        deployment_worker_count=2,
+        user_manager_security=UserManagerSecurity[UUID](
+            verification_token_secret=VERIFICATION_SECRET,
+            reset_password_token_secret=RESET_PASSWORD_SECRET,
+            api_key_hash_secret=API_KEY_HASH_SECRET,
+        ),
+    )
+    config.api_keys = ApiKeyConfig(
+        enabled=True,
+        allowed_scopes=("read",),
+        signing_enabled=True,
+        nonce_store=InMemoryApiKeyNonceStore(),
+        secret_encryption_keyring=FernetKeyringConfig(active_key_id="current", keys={"current": _fernet_key()}),
+    )
+
+    with pytest.raises(ConfigurationError, match="shared across workers"):
+        validate_api_key_config(config)
+
+
+def test_validate_api_key_config_accepts_shared_nonce_store_for_multiworker() -> None:
+    """Shared signing nonce stores satisfy declared multi-worker validation."""
+
+    class SharedNonceStore:
+        is_shared_across_workers = True
+
+    config = _minimal_config(
+        deployment_worker_count=2,
+        user_manager_security=UserManagerSecurity[UUID](
+            verification_token_secret=VERIFICATION_SECRET,
+            reset_password_token_secret=RESET_PASSWORD_SECRET,
+            api_key_hash_secret=API_KEY_HASH_SECRET,
+        ),
+    )
+    config.api_keys = ApiKeyConfig(
+        enabled=True,
+        allowed_scopes=("read",),
+        signing_enabled=True,
+        nonce_store=SharedNonceStore(),
+        secret_encryption_keyring=FernetKeyringConfig(active_key_id="current", keys={"current": _fernet_key()}),
+    )
+
+    validate_api_key_config(config)
+
+
+def test_validate_api_key_signing_distinctness_skips_without_security() -> None:
+    """Signing distinctness validation is a no-op without manager security material."""
+    config = _minimal_config()
+    config.api_keys = ApiKeyConfig(
+        enabled=False,
+        signing_enabled=True,
+        secret_encryption_keyring=FernetKeyringConfig(active_key_id="current", keys={"current": _fernet_key()}),
+    )
+
+    validate_api_key_config(config)
+
+
+@pytest.mark.parametrize(
+    ("api_key_config", "match"),
+    [
+        pytest.param(
+            ApiKeyConfig(enabled=True, allowed_scopes=("read",), last_used_throttle_seconds=-1),
+            "last_used_throttle_seconds",
+            id="negative-throttle",
+        ),
+        pytest.param(
+            ApiKeyConfig(
+                enabled=True,
+                allowed_scopes=("read",),
+                last_used_write_strategy=cast("Any", "sometimes"),
+            ),
+            "last_used_write_strategy",
+            id="invalid-last-used-strategy",
+        ),
+        pytest.param(
+            ApiKeyConfig(enabled=True, allowed_scopes=("read",), environment_marker="_prod"),
+            "environment_marker",
+            id="invalid-environment-marker",
+        ),
+        pytest.param(
+            ApiKeyConfig(enabled=True, allowed_scopes=("read",), prefix="1ak"),
+            "prefix",
+            id="invalid-prefix",
+        ),
+        pytest.param(
+            ApiKeyConfig(enabled=True, allowed_scopes=("read",), signing_skew_seconds=0),
+            "signing_skew_seconds",
+            id="invalid-signing-skew",
+        ),
+        pytest.param(
+            ApiKeyConfig(enabled=True, allowed_scopes=("read",), signed_body_max_bytes=0),
+            "signed_body_max_bytes",
+            id="invalid-signed-body-limit",
+        ),
+    ],
+)
+def test_validate_api_key_config_rejects_invalid_policy_fields(api_key_config: ApiKeyConfig, match: str) -> None:
+    """API-key policy fields are validated before backend wiring."""
+    config = _minimal_config(
+        user_manager_security=UserManagerSecurity[UUID](
+            verification_token_secret=VERIFICATION_SECRET,
+            reset_password_token_secret=RESET_PASSWORD_SECRET,
+            api_key_hash_secret=API_KEY_HASH_SECRET,
+        ),
+    )
+    config.api_keys = api_key_config
+
+    with pytest.raises(ConfigurationError, match=match):
+        validate_api_key_config(config)
 
 
 def test_validate_user_manager_security_config_rejects_short_login_telemetry_secret() -> None:

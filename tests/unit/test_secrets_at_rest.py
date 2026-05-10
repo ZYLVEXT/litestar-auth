@@ -6,6 +6,11 @@ import pytest
 
 import litestar_auth._optional_deps as optional_deps_module
 import litestar_auth._secrets_at_rest as secrets_at_rest
+from litestar_auth._manager.security import (
+    UserManagerSecurity,
+    validate_user_manager_security_secret_roles_are_distinct,
+)
+from litestar_auth.exceptions import ConfigurationError
 
 FernetKey = secrets_at_rest.FernetKey
 FernetKeyring = secrets_at_rest.FernetKeyring
@@ -110,6 +115,25 @@ def test_load_cryptography_fernet_imports_on_demand(monkeypatch: pytest.MonkeyPa
 
     assert secrets_at_rest._load_cryptography_fernet() is fake_module
     assert loaded_modules == ["cryptography.fernet"]
+
+
+def test_api_key_hash_secret_must_be_distinct_from_existing_secret_roles() -> None:
+    """API-key HMAC material is a first-class distinct secret role."""
+    shared_secret = "shared-secret-material-1234567890abcdef"
+
+    with pytest.raises(ConfigurationError, match="api_key_hash_secret") as exc_info:
+        validate_user_manager_security_secret_roles_are_distinct(
+            UserManagerSecurity[str](
+                verification_token_secret=shared_secret,
+                reset_password_token_secret="reset-secret-material-1234567890",
+                api_key_hash_secret=shared_secret,
+            ),
+        )
+
+    message = str(exc_info.value)
+    assert "verification_token_secret" in message
+    assert "api_key_hash_secret" in message
+    assert shared_secret not in message
 
 
 def test_load_cryptography_fernet_missing_dependency_raises_extra_hint(

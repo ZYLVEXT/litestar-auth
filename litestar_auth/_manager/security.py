@@ -67,6 +67,7 @@ class UserManagerSecurity[ID]:
     login_identifier_telemetry_secret: str | None = dataclasses.field(default=None, repr=False)
     totp_secret_key: str | None = dataclasses.field(default=None, repr=False)
     totp_recovery_code_lookup_secret: str | None = dataclasses.field(default=None, repr=False)
+    api_key_hash_secret: str | None = dataclasses.field(default=None, repr=False)
     totp_secret_keyring: FernetKeyringConfig | None = dataclasses.field(default=None, repr=False)
     id_parser: Callable[[str], ID] | None = dataclasses.field(default=None, repr=False)
     password_helper: PasswordHelper | None = dataclasses.field(default=None, repr=False)
@@ -94,6 +95,7 @@ class UserManagerSecurity[ID]:
             f"totp_secret_key={_mask_optional_secret(self.totp_secret_key)!r}, "
             f"totp_recovery_code_lookup_secret="
             f"{_mask_optional_secret(self.totp_recovery_code_lookup_secret)!r}, "
+            f"api_key_hash_secret={_mask_optional_secret(self.api_key_hash_secret)!r}, "
             f"totp_secret_keyring={self.totp_secret_keyring!r}, "
             f"id_parser={self.id_parser!r}, "
             f"password_helper={self.password_helper!r}, "
@@ -187,6 +189,7 @@ def validate_user_manager_security_secret_roles_are_distinct(
                 totp_pending_secret=totp_pending_secret,
                 totp_recovery_code_lookup_secret=security.totp_recovery_code_lookup_secret,
                 oauth_flow_cookie_secret=oauth_flow_cookie_secret,
+                api_key_hash_secret=security.api_key_hash_secret,
             ),
         )
 

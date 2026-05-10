@@ -10,8 +10,16 @@ from typing import TYPE_CHECKING, Literal, Protocol
 if TYPE_CHECKING:
     from collections.abc import Iterable
 
-type AuthRateLimitEndpointGroup = Literal["login", "password_reset", "refresh", "register", "totp", "verification"]
-type _RecipeScope = Literal["ip", "ip_email"]
+type AuthRateLimitEndpointGroup = Literal[
+    "api_keys",
+    "login",
+    "password_reset",
+    "refresh",
+    "register",
+    "totp",
+    "verification",
+]
+type _RecipeScope = Literal["api_key_id", "ip", "ip_email"]
 
 
 class _BuilderNamesValidator(Protocol):
@@ -45,6 +53,9 @@ class AuthRateLimitSlot(StrEnum):
     TOTP_REGENERATE_RECOVERY_CODES = auto()
     VERIFY_TOKEN = auto()
     REQUEST_VERIFY_TOKEN = auto()
+    API_KEY_CREATE = auto()
+    API_KEY_UPDATE = auto()
+    API_KEY_USE = auto()
 
 
 @dataclass(slots=True, frozen=True)
@@ -135,6 +146,24 @@ _AUTH_RATE_LIMIT_ENDPOINT_RECIPES: tuple[_AuthRateLimitEndpointRecipe, ...] = (
         default_scope="ip_email",
         default_namespace="request-verify-token",
         group="verification",
+    ),
+    _AuthRateLimitEndpointRecipe(
+        slot=AuthRateLimitSlot.API_KEY_CREATE,
+        default_scope="ip",
+        default_namespace="api-key-create",
+        group="api_keys",
+    ),
+    _AuthRateLimitEndpointRecipe(
+        slot=AuthRateLimitSlot.API_KEY_UPDATE,
+        default_scope="ip",
+        default_namespace="api-key-update",
+        group="api_keys",
+    ),
+    _AuthRateLimitEndpointRecipe(
+        slot=AuthRateLimitSlot.API_KEY_USE,
+        default_scope="api_key_id",
+        default_namespace="api-key-use",
+        group="api_keys",
     ),
 )
 

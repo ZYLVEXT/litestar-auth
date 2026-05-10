@@ -16,6 +16,16 @@ This page summarizes protections and **conscious trade-offs** shipped by the lib
 - **TOTP** — pending enrollment secrets stay server-side in `totp_enrollment_store`; replay protection is enforced when `totp_used_tokens_store` is configured; production fails fast without required stores; persisted TOTP secrets require encrypted-at-rest storage through `BaseUserManager.totp_secret_storage_posture` plus `UserManagerSecurity.totp_secret_keyring` or the one-key `totp_secret_key`; recovery codes are 112-bit lowercase hex values stored as HMAC lookup digests mapped to Argon2 hashes; pending-login tokens are bound to hashed client IP and User-Agent fingerprints by default.
 - **OAuth** — state and PKCE verifier evidence in a short-lived `HttpOnly` flow cookie encrypted/authenticated with a Fernet key HKDF-derived from `oauth_flow_cookie_secret`; strict state validation; optional encryption at rest for provider tokens (`oauth_token_encryption_keyring` or one-key `oauth_token_encryption_key`); OAuth token persistence accepts only current-module `OAuthTokenEncryption` policies; write-time plaintext snapshots are restored after successful writes and cleared on rollback; guarded associate-by-email rules (`oauth_trust_provider_email_verified` on plugin-owned routes, `trust_provider_email_verified` on manual controllers, and `oauth_associate_by_email`); **the associate authorize route is POST + CSRF-protected** so a victim's `SameSite=Lax` session cookie cannot be abused by a cross-site top-level navigation to attach an attacker-controlled provider account to the victim's local user. Login authorize stays GET because anonymous OAuth login has no victim session to abuse.
 - **Opaque DB tokens** — keyed digest at rest; plugin-managed DB-token wiring uses `DatabaseTokenAuthConfig` plus `LitestarAuthConfig(..., database_token_auth=...)`.
+- **API keys** — opt-in user-owned credentials with digest-only bearer storage, one-time raw-secret
+  create responses, soft revocation, expiry, active-key caps, allowed-scope validation, and
+  route-time downscoping by current user roles when `scope_subset_check=True`. Self-service
+  list/read/create/update/revoke routes and superuser admin mint/list/revoke routes require
+  `requires_password_session`, so API-key callers cannot enumerate or maintain API-key inventory
+  or cross the password-session boundary. Optional
+  `LSA1-HMAC-SHA256` request signing adds timestamp skew and
+  nonce replay checks and caps pre-auth body buffering with `api_keys.signed_body_max_bytes`, but
+  signing-required keys store an encrypted copy of the raw secret via `api_keys.secret_encryption_keyring`;
+  this is a deliberate reversible-storage trade-off compared with bearer keys' digest-only storage.
 - **Failed-login telemetry** — failed-login logs never include the submitted email/username. Configure
   `UserManagerSecurity.login_identifier_telemetry_secret` when you want a stable, non-reversible
   `identifier_digest`; the digest is omitted when that dedicated secret is unset.
@@ -54,9 +64,21 @@ Use `FernetKeyringConfig(active_key_id=..., keys=...)` for production. During ro
 keyring that contains both the old and new ids, switch `active_key_id` to the new id for writes, run
 row-level re-encryption with `OAuthTokenEncryption.requires_reencrypt(...)` /
 `OAuthTokenEncryption.reencrypt(...)` and `BaseUserManager.totp_secret_requires_reencrypt(...)` /
-`BaseUserManager.reencrypt_totp_secret_for_storage(...)`, verify no rows still require rotation, and
-only then remove the retired key id. The full operator checklist lives in
-[Deployment](deployment.md#versioned-fernet-key-rotation).
+`BaseUserManager.reencrypt_totp_secret_for_storage(...)`.
+
+API-key signing secrets use the same Fernet envelope through
+`api_keys.secret_encryption_keyring`, but only signing-required keys have reversible storage. Bearer
+API keys remain digest-only, cannot be upgraded to signing mode, and are not rotation candidates.
+For signing rows, scan rows where `signing_required` is true and `encrypted_secret` is non-null, call
+`BaseUserManager.api_key_signing_secret_requires_reencrypt(row)`, and rewrite one row at a time with
+`BaseUserManager.reencrypt_api_key_signing_secret(row_or_key_id)`. The helper returns the updated row
+metadata, never the plaintext signing secret, and it does not invoke API-key create/revoke/use
+lifecycle hooks. Verify no rows still require rotation, and only then remove the retired key id. The
+full operator checklist lives in [Deployment](deployment.md#versioned-fernet-key-rotation).
+
+Unknown key ids, malformed Fernet envelopes, missing `encrypted_secret` values on signing rows, and
+bearer rows must be treated as migration errors or explicit data-cleanup cases. Do not catch and
+ignore those failures while removing an old key id.
 
 Legacy unversioned Fernet values must be handled as explicit migration input because they do not
 identify the decrypting key. They are not a general runtime compatibility mode. Plaintext persisted
@@ -70,12 +92,41 @@ Additional explicit opt-ins to weaker behavior:
 | `csrf_secret` unset with plugin-owned cookie auth | Plugin validation fails closed unless cookie auth explicitly opts out. |
 | `csrf_protection_managed_externally=True` on manual cookie auth | You are asserting that app-owned CSRF middleware or an equivalent framework-level control protects the manual route table. |
 | `CookieTransport(allow_insecure_cookie_auth=True)` | Allows cookie auth without CSRF for controlled non-browser scenarios only. |
+| `ApiKeyConfig(signing_enabled=True, secret_encryption_keyring=...)` | Enables request signing, but stores an encrypted copy of signing-required key secrets so signatures can be verified. |
+| `InMemoryApiKeyNonceStore` | Process-local API-key signing replay cache; use `RedisApiKeyNonceStore` for multi-worker deployments. |
+
+## Bearer failure-code taxonomy
+
+Bearer API-key authentication returns the same outer response shape for unknown, revoked, and expired keys:
+HTTP **401** with a JSON `code` value. The distinct `API_KEY_INVALID`, `API_KEY_REVOKED`, and
+`API_KEY_EXPIRED` codes are a deliberate client-semantics trade-off, not an accidental disclosure
+channel.
+
+The bearer credential embeds a generated `key_id` with at least 128 bits of entropy before the raw
+secret is verified against the stored HMAC digest. Blind enumeration of real `key_id` values is
+therefore impractical under ordinary online attack constraints. Once a request names a valid
+high-entropy `key_id`, separate codes let clients choose the correct remediation:
+
+- `API_KEY_INVALID` — the key id is unknown or the presented raw secret does not match; rotate or
+  report the credential rather than retrying indefinitely.
+- `API_KEY_REVOKED` — the key row is known but was intentionally disabled; stop using the credential
+  and create a replacement through a password-backed session.
+- `API_KEY_EXPIRED` — the key row is known but past its configured expiry; refresh the credential
+  through normal key-management flows.
+
+Do not depend on the specific code to grant access. All three outcomes are authentication failures
+and must remain non-authorizing.
 
 ## Limitations (by design)
 
 - No built-in **email** sending — you must implement hooks.
 - No **RBAC** or **WebAuthn** in core — the built-in role guards are flat membership checks only; extend in your application for permission matrices or object-level policy.
 - **Durable JWT revocation** requires an explicit shared store — `JWTStrategy(secret=...)` without `denylist_store` or `allow_inmemory_denylist=True` fails closed at construction time. Use Redis (or equivalent) denylist for multi-worker production if you rely on revoke; reserve `allow_inmemory_denylist=True` for single-process development or tests.
+- **API keys** are user-owned delegated credentials only. Service-account-only keys, HKDF child keys,
+  IP allowlists, per-key audit tables, and mTLS binding are intentionally outside this release.
+- API-key signing-secret rotation is operator-owned row processing. The library does not provide
+  built-in batching, locking, audit-log storage, per-key audit tables, or an automatic database
+  migration service for this workflow.
 
 ## Further reading
 

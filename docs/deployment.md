@@ -21,8 +21,8 @@ a process-local backend such as `InMemoryRateLimiter`. Use `RedisRateLimiter` or
   auth roles for convenience.
 - Rotate secrets independently by role. Plan rotation for JWT signing keys,
   verify/reset-token secrets, CSRF secrets, TOTP Fernet keys, OAuth token
-  encryption keys, OAuth flow-cookie secrets, and opaque-token hash secrets
-  before the first production incident.
+  encryption keys, API-key signing-secret Fernet keys, OAuth flow-cookie
+  secrets, and opaque-token hash secrets before the first production incident.
 - For the full manager/password contract, including `PasswordHelper` sharing,
   `password_validator_factory`, and the `UserEmailField` / `UserPasswordField`
   schema helpers, see
@@ -48,6 +48,9 @@ a process-local backend such as `InMemoryRateLimiter`. Use `RedisRateLimiter` or
 - **`oauth_token_encryption_keyring`** — required when OAuth providers are configured (encrypts tokens at rest in the DB). The one-key `oauth_token_encryption_key` field remains available for single-key deployments.
 - **`oauth_flow_cookie_secret`** — required when OAuth providers are configured (HKDF-derived into the Fernet key that encrypts and authenticates transient OAuth `state` plus PKCE verifier material in the browser-held flow cookie).
 - **`token_hash_secret`** (database opaque token strategy) — protects digest-at-rest storage for DB tokens.
+- **`api_keys.secret_encryption_keyring`** — required when API-key request signing is enabled and
+  signing-required API keys can be created. This keyring encrypts the recoverable signing secret
+  copy stored in `api_key.encrypted_secret`; bearer keys do not use it and remain digest-only.
 - Keep **`verification_token_secret`**, **`reset_password_token_secret`**,
   **`login_identifier_telemetry_secret`** when configured, **`totp_pending_secret`**, every
   configured TOTP Fernet key, and **`oauth_flow_cookie_secret`** distinct. Production configuration now
@@ -138,11 +141,14 @@ No-downtime rotation is a staged data migration:
 2. Deploy the same key map with `active_key_id` changed to the new key id. New OAuth and TOTP writes
    now store `fernet:v1:<new_key_id>:...`; old rows remain readable because the old key id is still
    configured.
-3. Run an application-owned migration job over stored OAuth `access_token` / `refresh_token` columns
-   and stored TOTP secret columns. The library exposes row-level helpers, not an automatic database
-   sweep: call `OAuthTokenEncryption.requires_reencrypt(value)` / `OAuthTokenEncryption.reencrypt(value)`
-   for OAuth token values, and `BaseUserManager.totp_secret_requires_reencrypt(value)` /
-   `BaseUserManager.reencrypt_totp_secret_for_storage(value)` for TOTP values.
+3. Run an application-owned migration job over stored OAuth `access_token` / `refresh_token`
+   columns, stored TOTP secret columns, and API-key signing rows with non-null `encrypted_secret`.
+   The library exposes row-level helpers, not an automatic database sweep: call
+   `OAuthTokenEncryption.requires_reencrypt(value)` / `OAuthTokenEncryption.reencrypt(value)` for
+   OAuth token values, `BaseUserManager.totp_secret_requires_reencrypt(value)` /
+   `BaseUserManager.reencrypt_totp_secret_for_storage(value)` for TOTP values, and
+   `BaseUserManager.api_key_signing_secret_requires_reencrypt(row)` /
+   `BaseUserManager.reencrypt_api_key_signing_secret(row_or_key_id)` for one API-key signing row.
 4. Verify that a fresh scan finds no stored values requiring re-encryption. Treat unknown key ids,
    malformed values, or decryption failures as migration errors; do not skip them silently.
 5. Remove retired key ids only after all app instances run the new config and the verification scan
@@ -153,6 +159,47 @@ normal runtime compatibility path. If you have them from an older release, migra
 knowledge of the old key material and rewrite them to `fernet:v1:<key_id>:<ciphertext>` before relying
 on the versioned keyring. Plaintext persisted TOTP secrets are still unsupported; clear those rows or
 encrypt them before production rollout.
+
+### API-key signing-secret rotation runbook
+
+API-key request signing is the exception to the bearer-key digest-only model. Signing-required keys
+need the raw secret for HMAC verification, so the server stores an encrypted copy in
+`api_key.encrypted_secret` using `api_keys.secret_encryption_keyring`. That storage is reversible by
+design. Bearer API keys have only `hashed_secret`, cannot be converted to signing mode, and should be
+replaced with newly issued signing-required keys if a client needs request signing.
+
+For no-downtime rotation:
+
+1. Deploy a keyring that includes both the retired id and the new id, while the old id is still
+   active. Confirm every application instance can read existing signing rows.
+2. Deploy the same key map with `active_key_id` set to the new id. New signing-required API keys now
+   write `fernet:v1:<new_key_id>:...` envelopes.
+3. Run an operator-owned job that scans signing-required rows with non-null `encrypted_secret`,
+   checks each row with `BaseUserManager.api_key_signing_secret_requires_reencrypt(row)`, and calls
+   `await BaseUserManager.reencrypt_api_key_signing_secret(row_or_key_id)` for rows that still use a
+   non-active key id.
+4. Run the scan again and require a zero-candidate result before removing the retired key id from
+   `api_keys.secret_encryption_keyring`.
+
+The SQLAlchemy store exposes `list_signing_keys_requiring_reencrypt(...)` for candidate discovery,
+and custom stores should provide the same row-level behavior. Keep batching, locking, retries, and
+operator audit logs in application-owned migration tooling; the library intentionally does not own a
+global sweep or built-in audit-log table.
+
+```python
+async def rotate_api_key_signing_secrets(manager: BaseUserManager, api_key_store: BaseApiKeyStore) -> int:
+    rows = await api_key_store.list_signing_keys_requiring_reencrypt(
+        manager.api_key_signing_secret_requires_reencrypt,
+    )
+    for row in rows:
+        await manager.reencrypt_api_key_signing_secret(row)
+    return len(rows)
+```
+
+Do not log raw API keys, `encrypted_secret` ciphertexts, decrypted signing secrets, or exception
+payloads from failed rotation. Unknown key ids, malformed envelopes, rows missing `encrypted_secret`,
+or bearer rows passed to the helper are fail-closed conditions that need explicit data cleanup before
+old Fernet key ids are removed.
 
 ## Redis (recommended for scaled deployments)
 
@@ -221,8 +268,9 @@ When `rate_limit_config` is set, throttled endpoints return **429** with **`Retr
   `identifier_digest` is emitted only when `login_identifier_telemetry_secret` is configured; it is
   keyed and non-reversible, but still belongs in your privacy notice if you use it for abuse
   correlation.
-- Emails are normalized account identifiers. Built-in rate-limit keys hash normalized identifiers
-  before writing backend keys, but database encryption at rest and privacy disclosures remain
+- Emails are normalized account identifiers. Built-in rate-limit keys use scoped PBKDF2-HMAC-SHA-256 digests for
+  normalized identifiers before writing backend keys, but these digests are not a privacy boundary against
+  brute-force guessing of common identifiers. Database encryption at rest and privacy disclosures remain
   application/operator responsibilities.
 - Send reset/verify emails through a queue or background worker and perform
   equivalent work for existing and non-existing accounts. Synchronous SMTP/API

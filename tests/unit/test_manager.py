@@ -15,6 +15,7 @@ import jwt
 import pytest
 from cryptography.fernet import Fernet
 
+import litestar_auth._manager.totp_facade as totp_facade_module
 import litestar_auth._optional_deps as optional_deps_module
 import litestar_auth.manager as manager_module
 from litestar_auth._manager._coercions import _account_state_user, _as_dict, _managed_user, _require_str
@@ -96,6 +97,9 @@ class TrackingUserManager(BaseUserManager[ExampleUser, UUID]):
         backends: tuple[object, ...] = (),
         login_identifier: Literal["email", "username"] = "email",
         login_identifier_telemetry_secret: str | None = LOGIN_IDENTIFIER_TELEMETRY_SECRET,
+        api_key_store: object | None = None,
+        api_key_config: object | None = None,
+        api_key_hash_secret: str | None = None,
     ) -> None:
         """Initialize the tracking manager with predictable secrets."""
         super().__init__(
@@ -105,8 +109,11 @@ class TrackingUserManager(BaseUserManager[ExampleUser, UUID]):
                 verification_token_secret="0123456789abcdef" * 4,
                 reset_password_token_secret="fedcba9876543210" * 4,
                 login_identifier_telemetry_secret=login_identifier_telemetry_secret,
+                api_key_hash_secret=api_key_hash_secret,
                 id_parser=UUID,
             ),
+            api_key_store=cast("Any", api_key_store),
+            api_key_config=api_key_config,
             password_validator=password_validator,
             reset_verification_on_email_change=reset_verification_on_email_change,
             backends=backends,
@@ -123,6 +130,9 @@ class TrackingUserManager(BaseUserManager[ExampleUser, UUID]):
         self.after_update_events: list[tuple[ExampleUser, dict]] = []
         self.before_delete_users: list[ExampleUser] = []
         self.deleted_users: list[ExampleUser] = []
+        self.created_api_key_events: list[tuple[ExampleUser, object]] = []
+        self.revoked_api_key_events: list[tuple[ExampleUser, object]] = []
+        self.used_api_key_events: list[object] = []
 
     async def on_after_register(self, user: ExampleUser, token: str) -> None:
         """Record a successful registration."""
@@ -164,6 +174,18 @@ class TrackingUserManager(BaseUserManager[ExampleUser, UUID]):
     async def on_after_delete(self, user: ExampleUser) -> None:
         """Record a completed hard delete."""
         self.deleted_users.append(user)
+
+    async def on_after_api_key_created(self, user: ExampleUser, api_key: object) -> None:
+        """Record an API-key creation."""
+        self.created_api_key_events.append((user, api_key))
+
+    async def on_after_api_key_revoked(self, user: ExampleUser, api_key: object) -> None:
+        """Record an API-key revocation."""
+        self.revoked_api_key_events.append((user, api_key))
+
+    async def on_after_api_key_used(self, api_key: object) -> None:
+        """Record an API-key use write."""
+        self.used_api_key_events.append(api_key)
 
 
 def _build_user(
@@ -595,6 +617,23 @@ def test_manager_init_rejects_short_login_telemetry_secret_in_production() -> No
                 verification_token_secret="0123456789abcdef" * 4,
                 reset_password_token_secret="fedcba9876543210" * 4,
                 login_identifier_telemetry_secret="short",
+            ),
+        )
+
+
+def test_manager_init_rejects_short_api_key_hash_secret_in_production() -> None:
+    """Configured API-key hash secrets must meet the normal secret-length floor."""
+    user_db = AsyncMock()
+    password_helper = PasswordHelper()
+
+    with pytest.raises(ConfigurationError, match="api_key_hash_secret"):
+        BaseUserManager(
+            user_db,
+            password_helper=password_helper,
+            security=UserManagerSecurity[UUID](
+                verification_token_secret="0123456789abcdef" * 4,
+                reset_password_token_secret="fedcba9876543210" * 4,
+                api_key_hash_secret="short",
             ),
         )
 
@@ -2239,19 +2278,19 @@ async def test_totp_secret_helpers_delegate_to_totp_service() -> None:
     set_secret.assert_awaited_once_with(
         user,
         None,
-        load_cryptography_fernet=manager_module._load_cryptography_fernet,
+        load_cryptography_fernet=totp_facade_module._load_cryptography_fernet,
     )
     read_secret.assert_awaited_once_with(
         "encrypted-value",
-        load_cryptography_fernet=manager_module._load_cryptography_fernet,
+        load_cryptography_fernet=totp_facade_module._load_cryptography_fernet,
     )
     requires_reencrypt.assert_called_once_with(
         "encrypted-value",
-        load_cryptography_fernet=manager_module._load_cryptography_fernet,
+        load_cryptography_fernet=totp_facade_module._load_cryptography_fernet,
     )
     reencrypt_secret.assert_called_once_with(
         "encrypted-value",
-        load_cryptography_fernet=manager_module._load_cryptography_fernet,
+        load_cryptography_fernet=totp_facade_module._load_cryptography_fernet,
     )
 
 
@@ -2333,7 +2372,7 @@ async def test_read_totp_secret_raises_when_decryption_fails(monkeypatch: pytest
             raise FakeInvalidTokenError
 
     fake_module = type("FakeFernetModule", (), {"Fernet": FakeFernet, "InvalidToken": FakeInvalidTokenError})()
-    monkeypatch.setattr(manager_module, "_load_cryptography_fernet", lambda: fake_module)
+    monkeypatch.setattr(totp_facade_module, "_load_cryptography_fernet", lambda: fake_module)
 
     with pytest.raises(RuntimeError, match="TOTP secret decryption failed"):
         await manager.read_totp_secret(f"{manager_module.ENCRYPTED_TOTP_SECRET_PREFIX}v1:default:encrypted")
@@ -2354,14 +2393,14 @@ def test_prepare_totp_secret_encrypts_and_prefixes_when_key_set(monkeypatch: pyt
             return b"encrypted-value"
 
     fake_module = type("FakeFernetModule", (), {"Fernet": FakeFernet, "InvalidToken": Exception})()
-    monkeypatch.setattr(manager_module, "_load_cryptography_fernet", lambda: fake_module)
+    monkeypatch.setattr(totp_facade_module, "_load_cryptography_fernet", lambda: fake_module)
 
     stored = manager._prepare_totp_secret_for_storage("secret")
     assert stored == f"{manager_module.ENCRYPTED_TOTP_SECRET_PREFIX}v1:default:encrypted-value"
 
     stored_via_service = manager.totp.prepare_secret_for_storage(
         "secret",
-        load_cryptography_fernet=manager_module._load_cryptography_fernet,
+        load_cryptography_fernet=totp_facade_module._load_cryptography_fernet,
     )
     assert stored_via_service == f"{manager_module.ENCRYPTED_TOTP_SECRET_PREFIX}v1:default:encrypted-value"
 
@@ -2374,7 +2413,7 @@ def test_load_cryptography_fernet_raises_with_install_hint(monkeypatch: pytest.M
         lambda *_args, **_kwargs: (_ for _ in ()).throw(ImportError),
     )
     with pytest.raises(ImportError, match=r"Install litestar-auth\[totp\]"):
-        manager_module._load_cryptography_fernet()
+        totp_facade_module._load_cryptography_fernet()
 
 
 async def test_base_hooks_are_noops() -> None:
@@ -2403,6 +2442,9 @@ async def test_base_hooks_are_noops() -> None:
     assert await manager.on_after_update(user, {"email": user.email}) is None
     assert await manager.on_before_delete(user) is None
     assert await manager.on_after_delete(user) is None
+    assert await manager.on_after_api_key_created(user, object()) is None
+    assert await manager.on_after_api_key_revoked(user, object()) is None
+    assert await manager.on_after_api_key_used(object()) is None
 
 
 def test_require_account_state_raises_for_inactive_user() -> None:

@@ -159,4 +159,19 @@ def resolve_backend_inventory[UP: UserProtocol[Any], ID](
         )
     else:
         startup_backends = tuple(StartupBackendTemplate.from_runtime_backend(backend) for backend in config.backends)
+    if config.api_keys.enabled:
+        from litestar_auth._plugin.api_key import build_api_key_backend_template  # noqa: PLC0415
+
+        api_key_hash_secret = None
+        if config.user_manager_security is not None:
+            api_key_hash_secret = config.user_manager_security.api_key_hash_secret
+        if api_key_hash_secret is not None:
+            startup_backends = (
+                *startup_backends,
+                build_api_key_backend_template(
+                    config.api_keys,
+                    api_key_hash_secret=api_key_hash_secret,
+                    unsafe_testing=config.unsafe_testing,
+                ),
+            )
     return StartupBackendInventory(startup_backends)

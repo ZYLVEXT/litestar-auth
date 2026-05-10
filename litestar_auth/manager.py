@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import logging
-from functools import partial
 from typing import TYPE_CHECKING, Any, Unpack, cast, overload
 
 from litestar_auth._manager import security as _manager_security
@@ -13,6 +12,8 @@ from litestar_auth._manager.account_tokens import (
     AccountTokensService,
     _AccountTokensManagerProtocol,
 )
+from litestar_auth._manager.api_key_facade import ApiKeyManagerFacade
+from litestar_auth._manager.api_keys import ApiKeyManagerService
 from litestar_auth._manager.construction import (
     DEFAULT_RESET_PASSWORD_TOKEN_LIFETIME as _DEFAULT_RESET_PASSWORD_TOKEN_LIFETIME,
 )
@@ -34,6 +35,7 @@ from litestar_auth._manager.hooks import UserManagerHooks
 from litestar_auth._manager.security import (
     _SecretValue,
 )
+from litestar_auth._manager.totp_facade import TotpManagerFacade
 from litestar_auth._manager.totp_secrets import (
     TotpSecretsService,
     TotpSecretStoragePosture,
@@ -44,7 +46,6 @@ from litestar_auth._manager.user_lifecycle import (
     _UserLifecycleManagerProtocol,
 )
 from litestar_auth._manager.user_policy import UserPolicy
-from litestar_auth._optional_deps import require_cryptography_fernet
 from litestar_auth._superuser_role import normalize_superuser_role_name
 from litestar_auth.config import RESET_PASSWORD_TOKEN_AUDIENCE, VERIFY_TOKEN_AUDIENCE
 from litestar_auth.password import PasswordHelper
@@ -65,18 +66,19 @@ UserManagerSecurity = _manager_security.UserManagerSecurity
 
 
 logger = logging.getLogger(__name__)
-_TOTP_SECRET_FERNET_INSTALL_HINT = "Install litestar-auth[totp] to use TOTP secret encryption."  # noqa: S105
 
 
 _get_dummy_hash = get_dummy_hash
 _login_identifier_digest = login_identifier_digest
 
 
-class BaseUserManager[UP: UserProtocol[Any], ID](  # noqa: PLR0904
+class BaseUserManager[UP: UserProtocol[Any], ID](
     UserManagerHooks[UP],
     _UserLifecycleManagerProtocol[UP, ID],
     _AccountTokensManagerProtocol[UP, ID],
     _TotpSecretsManagerProtocol[UP],
+    ApiKeyManagerFacade[UP, ID],
+    TotpManagerFacade[UP],
 ):
     """Coordinate user persistence, password hashing, and account tokens.
 
@@ -147,6 +149,8 @@ class BaseUserManager[UP: UserProtocol[Any], ID](  # noqa: PLR0904
             ConstructorAttributes(
                 user_db=settings.user_db,
                 oauth_account_store=settings.oauth_account_store,
+                api_key_store=settings.api_key_store,
+                api_key_config=settings.api_key_config,
                 resolved_secret_inputs=resolved_secret_inputs,
                 verification_token_lifetime=settings.verification_token_lifetime,
                 reset_password_token_lifetime=settings.reset_password_token_lifetime,
@@ -169,6 +173,8 @@ class BaseUserManager[UP: UserProtocol[Any], ID](  # noqa: PLR0904
         resolved_security = resolved_secret_inputs.security
         self.user_db = settings.user_db
         self.oauth_account_store = settings.oauth_account_store or resolve_oauth_account_store(settings.user_db)
+        self.api_key_store = settings.api_key_store
+        self.api_key_config = settings.api_key_config
         self._account_token_secrets = resolved_secret_inputs.account_token_secrets
         self.verification_token_secret = self._account_token_secrets.verification_token_secret
         self.reset_password_token_secret = self._account_token_secrets.reset_password_token_secret
@@ -183,6 +189,11 @@ class BaseUserManager[UP: UserProtocol[Any], ID](  # noqa: PLR0904
         self.password_validator = settings.password_validator
         self.reset_verification_on_email_change = settings.reset_verification_on_email_change
         self.totp_secret_key = resolved_security.totp_secret_key
+        self.api_key_hash_secret = (
+            _SecretValue(resolved_security.api_key_hash_secret)
+            if resolved_security.api_key_hash_secret is not None
+            else None
+        )
         self._totp_recovery_code_lookup_secret = resolved_security.totp_recovery_code_lookup_secret
         self.backends: tuple[object, ...] = settings.backends
         self.login_identifier: LoginIdentifier = settings.login_identifier
@@ -215,6 +226,11 @@ class BaseUserManager[UP: UserProtocol[Any], ID](  # noqa: PLR0904
             token_security=self._account_token_security,
             logger=logger,
             policy=self.policy,
+        )
+        self._api_keys = ApiKeyManagerService(
+            self,
+            api_key_store=self.api_key_store,
+            config=cast("Any", self.api_key_config),
         )
         if self.totp_secret_keyring is None:
             self._totp_secrets = cast(
@@ -382,71 +398,6 @@ class BaseUserManager[UP: UserProtocol[Any], ID](  # noqa: PLR0904
         """
         return await self._account_tokens.reset_password(token, password)
 
-    async def set_totp_secret(self, user: UP, secret: str | None) -> UP:
-        """Store or clear the TOTP secret directly, bypassing None-filtering.
-
-        Args:
-            user: The user whose TOTP secret should be updated.
-            secret: New secret string, or ``None`` to disable 2FA.
-
-        Returns:
-            The updated user instance.
-        """
-        return await self._totp_secrets.set_secret(
-            user,
-            secret,
-            load_cryptography_fernet=_load_cryptography_fernet,
-        )
-
-    async def read_totp_secret(self, secret: str | None) -> str | None:
-        """Return a plain-text TOTP secret from storage.
-
-        Returns:
-            Plain-text secret, or ``None`` when 2FA is disabled.
-        """
-        return await self._totp_secrets.read_secret(secret, load_cryptography_fernet=_load_cryptography_fernet)
-
-    def totp_secret_requires_reencrypt(self, secret: str | None) -> bool:
-        """Return whether a stored TOTP secret should be rewritten with the active key."""
-        return self._totp_secrets.requires_reencrypt(
-            secret,
-            load_cryptography_fernet=_load_cryptography_fernet,
-        )
-
-    def reencrypt_totp_secret_for_storage(self, secret: str | None) -> str | None:
-        """Return a stored TOTP secret rewritten with the active key."""
-        return self._totp_secrets.reencrypt_secret_for_storage(
-            secret,
-            load_cryptography_fernet=_load_cryptography_fernet,
-        )
-
-    async def set_recovery_code_hashes(self, user: UP, code_index: dict[str, str]) -> UP:
-        """Replace the active TOTP recovery-code lookup index for a user.
-
-        Returns:
-            The updated user instance.
-        """
-        return cast("UP", await self.user_db.set_recovery_code_hashes(user, code_index))
-
-    async def find_recovery_code_hash_by_lookup(self, user: UP, lookup_hex: str) -> str | None:
-        """Return the active recovery-code hash matching ``lookup_hex``."""
-        return cast("str | None", await self.user_db.find_recovery_code_hash_by_lookup(user, lookup_hex))
-
-    async def consume_recovery_code_by_lookup(self, user: UP, lookup_hex: str) -> bool:
-        """Atomically consume an active TOTP recovery-code lookup entry.
-
-        Returns:
-            ``True`` when the lookup entry was consumed, otherwise ``False``.
-        """
-        return cast("bool", await self.user_db.consume_recovery_code_by_lookup(user, lookup_hex))
-
-    def _prepare_totp_secret_for_storage(self, secret: str | None) -> str | None:
-        """Return the database representation for a TOTP secret."""
-        return self._totp_secrets.prepare_secret_for_storage(
-            secret,
-            load_cryptography_fernet=_load_cryptography_fernet,
-        )
-
     async def update(
         self,
         user_update: msgspec.Struct | Mapping[str, Any],
@@ -492,9 +443,3 @@ class BaseUserManager[UP: UserProtocol[Any], ID](  # noqa: PLR0904
         tokens for the user.
         """
         await self._user_lifecycle.invalidate_all_tokens(user)
-
-
-_load_cryptography_fernet = cast(
-    "Any",
-    partial(require_cryptography_fernet, install_hint=_TOTP_SECRET_FERNET_INSTALL_HINT),
-)

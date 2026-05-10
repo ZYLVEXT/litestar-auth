@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any, Protocol, cast
 
 from litestar.exceptions import ClientException, NotAuthorizedException
 from litestar.response import Response
 
-from litestar_auth.authentication.strategy.base import SessionBindable, TokenInvalidationCapable
+from litestar_auth.authentication.strategy.base import ContextualStrategy, SessionBindable, TokenInvalidationCapable
 from litestar_auth.authentication.transport.base import LogoutTokenReadable
 from litestar_auth.authentication.transport.cookie import CookieTransport
 from litestar_auth.exceptions import TokenError
@@ -18,6 +18,13 @@ if TYPE_CHECKING:
 
     from litestar_auth.authentication.strategy.base import UserManagerProtocol
     from litestar_auth.types import StrategyProtocol, TransportProtocol
+
+
+class _AuthenticationResultWithContext[UP: UserProtocol[Any]](Protocol):
+    """Structural result returned by contextual strategies."""
+
+    user: UP
+    context: object
 
 
 class AuthenticationBackend[UP: UserProtocol[Any], ID]:
@@ -110,8 +117,34 @@ class AuthenticationBackend[UP: UserProtocol[Any], ID]:
         Returns:
             Authenticated user or ``None`` when no valid token is present.
         """
+        result = await self.authenticate_with_context(connection, user_manager)
+        return None if result is None else result[0]
+
+    async def authenticate_with_context(
+        self,
+        connection: ASGIConnection[Any, Any, Any, Any],
+        user_manager: UserManagerProtocol[UP, ID],
+    ) -> tuple[UP, object] | None:
+        """Resolve a user and request auth context from the current request.
+
+        Returns:
+            Authenticated user plus request auth context, or ``None`` when no valid token is present.
+        """
         token = await self.transport.read_token(connection)
-        return await self.strategy.read_token(token, user_manager)
+        if isinstance(self.strategy, ContextualStrategy):
+            contextual_strategy = cast(
+                "ContextualStrategy[UP, ID, _AuthenticationResultWithContext[UP]]",
+                self.strategy,
+            )
+            result = await contextual_strategy.read_token_with_context(token, user_manager)
+            if result is None:
+                return None
+            return result.user, result.context
+
+        user = await self.strategy.read_token(token, user_manager)
+        if user is None:
+            return None
+        return user, self.name
 
 
 def _bind_strategy_session[UP: UserProtocol[Any], ID, S](

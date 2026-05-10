@@ -56,3 +56,12 @@ class UserManagerHooksProtocol[UP](Protocol):
 
     async def on_after_delete(self, user: UP) -> None:  # pragma: no cover
         """Run after deleting a user."""
+
+    async def on_after_api_key_created(self, user: UP, api_key: object) -> None:  # pragma: no cover
+        """Run after an API key has been created."""
+
+    async def on_after_api_key_revoked(self, user: UP, api_key: object) -> None:  # pragma: no cover
+        """Run after an API key has been revoked."""
+
+    async def on_after_api_key_used(self, api_key: object) -> None:  # pragma: no cover
+        """Run after an API-key last-used timestamp has been persisted."""

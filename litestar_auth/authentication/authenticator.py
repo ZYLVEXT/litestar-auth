@@ -28,16 +28,20 @@ class Authenticator[UP: UserProtocol[Any], ID]:
     async def authenticate(
         self,
         connection: ASGIConnection[Any, Any, Any, Any],
-    ) -> tuple[UP | None, str | None]:
-        """Return the first authenticated user and backend name.
+    ) -> tuple[UP | None, object | None]:
+        """Return the first authenticated user and request auth context.
 
         Returns:
-            Tuple of authenticated user and backend name, or ``(None, None)``
+            Tuple of authenticated user and request auth context, or ``(None, None)``
             when no backend resolves the request.
         """
         for backend in self.backends:
-            user = await backend.authenticate(connection, self.user_manager)
-            if user is not None:
-                return user, backend.name
+            if callable(getattr(type(backend), "authenticate_with_context", None)):
+                result = await backend.authenticate_with_context(connection, self.user_manager)
+            else:
+                user = await backend.authenticate(connection, self.user_manager)
+                result = None if user is None else (user, backend.name)
+            if result is not None:
+                return result
 
         return None, None

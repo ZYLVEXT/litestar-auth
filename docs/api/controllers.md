@@ -15,6 +15,10 @@ For direct registration-controller assembly, `RegisterControllerConfig(...)` car
 settings accepted by `create_register_controller(...)` as keyword arguments.
 For direct users-controller assembly, `UsersControllerConfig(...)` carries the same settings
 accepted by `create_users_controller(...)` as keyword arguments.
+For direct API-key-controller assembly, `ApiKeysControllerConfig(...)` carries the same settings
+accepted by `create_api_keys_controllers(...)` as keyword arguments. Most apps should still prefer
+`LitestarAuthConfig.api_keys`, which wires the backend, store, rate-limit slot, OpenAPI security,
+and generated controllers together.
 
 Manual cookie-auth route tables must declare their CSRF posture explicitly:
 `create_auth_controller(..., csrf_protection_managed_externally=True)` means

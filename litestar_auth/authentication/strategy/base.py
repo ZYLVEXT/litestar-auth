@@ -47,6 +47,18 @@ class Strategy[UP: UserProtocol[Any], ID](ABC):
 
 
 @runtime_checkable
+class ContextualStrategy[UP: UserProtocol[Any], ID, AuthT](Protocol):
+    """Protocol for strategies that return custom request auth context."""
+
+    async def read_token_with_context(
+        self,
+        token: str | None,
+        user_manager: UserManagerProtocol[UP, ID],
+    ) -> AuthT | None:
+        """Resolve a user plus strategy-specific authentication context."""
+
+
+@runtime_checkable
 class SessionBindable[UP: UserProtocol[Any], ID, S](Protocol):
     """Protocol for strategies that can be rebound to a request-local session."""
 

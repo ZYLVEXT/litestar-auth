@@ -17,6 +17,15 @@ from litestar_auth._plugin.config import (
 )
 from litestar_auth._plugin.oauth_contract import _build_oauth_route_registration_contract
 from litestar_auth.controllers.oauth import (
+    _OAUTH_OPENAPI_RESPONSES,
+    _OAuthAssociateControllerSettings,
+    _OAuthClientBinding,
+    _OAuthControllerAssembly,
+    _OAuthControllerAssemblySettings,
+    _OAuthLoginCallbackInputs,
+    _OAuthServiceSettings,
+)
+from litestar_auth.controllers.oauth import (
     _build_direct_user_manager_binding as _build_oauth_direct_user_manager_binding,
 )
 from litestar_auth.controllers.oauth import (
@@ -31,14 +40,6 @@ from litestar_auth.controllers.oauth import (
 )
 from litestar_auth.controllers.oauth import (
     _create_oauth_controller_type as _create_plugin_oauth_controller_type,
-)
-from litestar_auth.controllers.oauth import (
-    _OAuthAssociateControllerSettings,
-    _OAuthClientBinding,
-    _OAuthControllerAssembly,
-    _OAuthControllerAssemblySettings,
-    _OAuthLoginCallbackInputs,
-    _OAuthServiceSettings,
 )
 from litestar_auth.types import UserProtocol
 
@@ -111,6 +112,7 @@ def create_oauth_login_controller[UP: UserProtocol[Any], ID](
         assembly=assembly,
         authorize_handler=_create_plugin_oauth_authorize_handler(
             assembly=assembly,
+            responses=_OAUTH_OPENAPI_RESPONSES,
         ),
         callback_handler=_create_plugin_oauth_login_callback(settings=settings, assembly=assembly),
         docstring="Provider-specific OAuth authorize/callback endpoints.",

@@ -2,6 +2,30 @@
 
 ### Added
 
+- **User-owned API keys.** New opt-in `ApiKeyConfig(enabled=True, ...)` wiring adds API-key
+  authentication, self-service `/api-keys` routes, superuser `/users/{user_id}/api-keys` routes,
+  scope guards, `ApiKeyContext`, HMAC-digest persistence, one-time raw credential responses, active
+  key limits, expiry, soft revocation, `last_used_at` tracking, and `apiKeyAuth` OpenAPI security.
+- **Signed API-key requests.** Optional `LSA1-HMAC-SHA256` request signing adds canonical request
+  verification (mandatory `Host`, `X-Auth-Date`, `X-Auth-Nonce` in `SignedHeaders`; strict ISO-8601
+  timestamp), `X-Auth-Nonce` replay protection, `apiKeyHmacAuth` OpenAPI security, in-memory and
+  Redis nonce stores, and encrypted signing-secret storage through `api_keys.secret_encryption_keyring`.
+- **API-key authorization guards.** New `requires_api_key`, `has_scope`, `has_any_scope`, and
+  `requires_password_session` guards exported from `litestar_auth.guards`, with a pluggable
+  `ApiKeyConfig.scope_authority` (default: scopes-as-role-names via
+  `default_api_key_scope_authority`).
+- **API-key rate-limit slots.** `AuthRateLimitConfig.api_key_create`, `api_key_update`, and
+  `api_key_use` slots throttle credential-check failures and failed signed-auth attempts (the latter
+  keyed by `api_key_id`).
+- **API-key error codes.** `API_KEY_INVALID`, `API_KEY_REVOKED`, `API_KEY_EXPIRED`,
+  `API_KEY_SCOPE_DENIED`, `API_KEY_LIMIT_REACHED`, `API_KEY_SIGNATURE_INVALID`,
+  `API_KEY_SIGNATURE_TIMESTAMP_SKEW`, `API_KEY_SIGNATURE_NONCE_REPLAY`.
+- **API-key lifecycle hooks.** `on_after_api_key_created`, `on_after_api_key_revoked`, and
+  `on_after_api_key_used` (throttled) on `BaseUserManager` for audit-trail integration.
+- **Signing-secret rotation helpers.** `BaseUserManager.api_key_signing_secret_requires_reencrypt`
+  and `reencrypt_api_key_signing_secret` perform row-level Fernet re-encryption when the active
+  keyring key changes.
+
 - **Refresh-session / device management.** New opt-in
   ``include_session_devices`` flag on ``LitestarAuthConfig`` mounts a
   plugin-owned controller exposing authenticated routes for inspecting and
@@ -52,6 +76,32 @@
 
 ### Changed
 
+- **API-key admin routes require password-session authentication.** Superuser routes that mint,
+  list, or revoke another user's API keys now reject API-key-authenticated callers with
+  `AUTHORIZATION_DENIED`, matching the password-session boundary used for self-service key
+  mutations.
+- **API-key self-service read routes require password-session authentication.** User-owned
+  `/api-keys` and `/api-keys/{key_id}` read routes now reject API-key-authenticated callers with
+  `AUTHORIZATION_DENIED`, matching the existing password-session boundary for key mutations.
+- **Signed API-key body buffering now caps ASGI frame count.** Signed-request pre-auth buffering is
+  bounded by both `api_keys.signed_body_max_bytes` and `api_keys.signed_body_max_messages`; requests
+  exceeding either limit fail closed with `REQUEST_BODY_INVALID`.
+- **API-key update routes can now be rate limited.** `AuthRateLimitConfig.api_key_update` adds an opt-in
+  `api-key-update` endpoint slot for self-service `PATCH /api-keys/{key_id}` password
+  re-verification and scope-denial failures. Successful updates reset the slot counter, matching the
+  create-route posture without changing the default unthrottled PATCH behavior.
+- **API-key update rate-limit configuration was renamed.** Migrate
+  `AuthRateLimitConfig(update=...)` to `AuthRateLimitConfig(api_key_update=...)`; the
+  `AuthRateLimitSlot.API_KEY_UPDATE` string value also changed from `"update"` to
+  `"api_key_update"`.
+- **API-key bearer failure-code taxonomy is documented.** The security model now records the
+  deliberate `API_KEY_INVALID` / `API_KEY_REVOKED` / `API_KEY_EXPIRED` trade-off for high-entropy
+  bearer `key_id` values and the API-key guide links to that operator-facing explanation.
+- **Direct middleware integrations no longer buffer signed API-key bodies by default.**
+  `LitestarAuthMiddlewareConfig.api_key_backend_present` now defaults to `False`; plugin-managed
+  applications are unchanged because the plugin still passes the computed backend inventory
+  explicitly. Direct integrators that construct `LitestarAuthMiddleware` outside the plugin and use
+  an `ApiKeyTransport` must pass `api_key_backend_present=True` to enable LSA1 signed-body buffering.
 - **``DatabaseTokenModels`` contract widened for refresh tokens.**
   Refresh-token models supplied through ``DatabaseTokenModels`` must now
   expose mapped ``session_id``, ``last_used_at``, and ``client_metadata``
@@ -68,6 +118,15 @@
 
 ### Migration
 
+- **API-key table.** Enabling `ApiKeyConfig(enabled=True)` requires a new `api_key` table with
+  unique-indexed `key_id`, FK-indexed `user_id`, bytes `hashed_secret`, nullable bytes
+  `encrypted_secret` (signing keys only), `name`, JSON `scopes`, `prefix_env`, `signing_required`,
+  `expires_at`, `last_used_at`, `created_at`, `revoked_at`, `created_via`, and JSON-bounded
+  `client_metadata`. See `docs/migration.md` for the schema snippet.
+- **API-key secrets.** `UserManagerSecurity.api_key_hash_secret` is required whenever
+  `ApiKeyConfig.enabled=True`; `ApiKeyConfig.secret_encryption_keyring` (Fernet) is additionally
+  required when `signing_enabled=True`. Both are validated for distinctness against every other
+  configured secret at startup.
 - **Database schema.** Existing deployments using ``DatabaseTokenStrategy``
   must add three columns to their refresh-token table: a unique, indexed
   ``session_id VARCHAR(36)`` (backfill with UUID4s for existing rows),

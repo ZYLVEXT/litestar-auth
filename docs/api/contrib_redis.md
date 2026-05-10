@@ -21,6 +21,8 @@ auth rate limiting plus the TOTP Redis stores:
   direct `RedisJWTDenylistStore(...)` / `RedisTotpEnrollmentStore(...)` /
   `RedisUsedTotpCodeStore(...)` construction remain the
   fallback low-level path for applications that need separate backends or fully bespoke wiring.
+- `RedisApiKeyNonceStore` is the shared-store nonce backend for signed API-key replay protection.
+  Use it instead of `InMemoryApiKeyNonceStore` in multi-worker deployments.
 
 Optional Redis-backed helpers (requires `litestar-auth[redis]`).
 

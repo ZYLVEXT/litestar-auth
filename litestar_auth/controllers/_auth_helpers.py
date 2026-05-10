@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import re
 from collections.abc import Mapping
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any, Protocol, cast, runtime_checkable
 
 from litestar.enums import MediaType
 from litestar.exceptions import ClientException
@@ -38,6 +38,23 @@ def _get_refresh_strategy[UP: UserProtocol[Any], ID](strategy: object) -> Refres
 
     msg = "enable_refresh=True requires a strategy with refresh-token support."
     raise ConfigurationError(msg)
+
+
+@runtime_checkable
+class RefreshTokenRequestContextRecorder(Protocol):
+    """Optional strategy hook for bounded refresh-token request metadata."""
+
+    def set_refresh_token_request_context(self, request: object) -> None:
+        """Capture request context for the next refresh-token write or rotation."""
+
+
+def _record_refresh_token_request_context(
+    refresh_strategy: RefreshableStrategy[Any, Any],
+    request: object,
+) -> None:
+    """Record request metadata when the concrete refresh strategy supports it."""
+    if isinstance(refresh_strategy, RefreshTokenRequestContextRecorder):
+        refresh_strategy.set_refresh_token_request_context(request)
 
 
 def _attach_refresh_token(

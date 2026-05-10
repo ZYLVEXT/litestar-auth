@@ -45,7 +45,7 @@ class AppUserCreate(msgspec.Struct, forbid_unknown_fields=True):
     Import auth lifecycle DTOs from ``litestar_auth.payloads`` so code follows the documented payload boundary.
 
 Use these types when you want the exact request and response structs exposed by the built-in login, refresh,
-session/device management, verify, reset-password, and TOTP routes.
+session/device management, verify, reset-password, TOTP, and API-key routes.
 
 ::: litestar_auth.payloads
     options:
@@ -54,6 +54,12 @@ session/device management, verify, reset-password, and TOTP routes.
         - RefreshTokenRequest
         - RefreshSessionRead
         - RefreshSessionListResponse
+        - ApiKeyAdminCreateRequest
+        - ApiKeyCreateRequest
+        - ApiKeyCreateResponse
+        - ApiKeyUpdateRequest
+        - ApiKeyRead
+        - ApiKeyListResponse
         - ForgotPassword
         - ResetPassword
         - RequestVerifyToken

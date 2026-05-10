@@ -24,7 +24,7 @@ from litestar_auth.controllers.totp_session_handlers import (
     _totp_handle_verify,
 )
 from litestar_auth.exceptions import ErrorCode
-from litestar_auth.guards import is_authenticated
+from litestar_auth.guards import is_authenticated, requires_password_session
 from litestar_auth.payloads import (
     TotpConfirmEnableRequest,
     TotpConfirmEnableResponse,
@@ -69,7 +69,7 @@ def _create_totp_enable_handler[UP: UserProtocol[Any], ID](
         Decorated Litestar route handler.
     """
 
-    @post("/enable", guards=[is_authenticated], security=security)
+    @post("/enable", guards=[is_authenticated, requires_password_session], security=security)
     async def enable(
         self: object,
         request: Request[Any, Any, Any],
@@ -97,7 +97,7 @@ def _create_totp_confirm_enable_handler[UP: UserProtocol[Any], ID](
         Decorated Litestar route handler.
     """
 
-    @post("/enable/confirm", guards=[is_authenticated], security=security)
+    @post("/enable/confirm", guards=[is_authenticated, requires_password_session], security=security)
     async def confirm_enable(
         self: object,
         request: Request[Any, Any, Any],
@@ -153,7 +153,7 @@ def _create_totp_disable_handler[UP: UserProtocol[Any], ID](
         Decorated Litestar route handler.
     """
 
-    @post("/disable", guards=[is_authenticated], security=security)
+    @post("/disable", guards=[is_authenticated, requires_password_session], security=security)
     async def disable(
         self: object,
         request: Request[Any, Any, Any],
@@ -181,7 +181,7 @@ def _create_totp_regenerate_recovery_codes_handler[UP: UserProtocol[Any], ID](
         Decorated Litestar route handler.
     """
 
-    @post("/recovery-codes/regenerate", guards=[is_authenticated], security=security)
+    @post("/recovery-codes/regenerate", guards=[is_authenticated, requires_password_session], security=security)
     async def regenerate_recovery_codes(
         self: object,
         request: Request[Any, Any, Any],

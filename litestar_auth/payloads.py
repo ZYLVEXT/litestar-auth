@@ -19,6 +19,9 @@ type SessionClientMetadataKey = Annotated[
     msgspec.Meta(min_length=1, max_length=64, pattern=r"^[a-z][a-z0-9_]*$"),
 ]
 type SessionClientMetadataValue = Annotated[str, msgspec.Meta(min_length=1, max_length=255)]
+type ApiKeyNameField = Annotated[str, msgspec.Meta(min_length=1, max_length=120)]
+type ApiKeyScopeField = Annotated[str, msgspec.Meta(min_length=1, max_length=120, pattern=r"^[A-Za-z0-9:_-]+$")]
+type ApiKeyIdField = Annotated[str, msgspec.Meta(min_length=1, max_length=128)]
 
 
 class LoginCredentials(msgspec.Struct):
@@ -54,6 +57,59 @@ class RefreshSessionListResponse(msgspec.Struct):
     """Response returned when listing active refresh sessions for a user."""
 
     sessions: list[RefreshSessionRead]
+
+
+class ApiKeyRead(msgspec.Struct):
+    """Safe API-key metadata returned by API-key management endpoints."""
+
+    key_id: ApiKeyIdField
+    name: str
+    scopes: list[str]
+    prefix_env: str
+    created_at: datetime | None = None
+    expires_at: datetime | None = None
+    last_used_at: datetime | None = None
+    revoked_at: datetime | None = None
+
+
+class ApiKeyListResponse(msgspec.Struct):
+    """Response returned when listing API keys."""
+
+    api_keys: list[ApiKeyRead]
+
+
+class ApiKeyCreateRequest(msgspec.Struct, forbid_unknown_fields=True):
+    """Payload used to create a user-owned API key."""
+
+    name: ApiKeyNameField
+    current_password: schema_fields.PasswordField | None = None
+    scopes: list[ApiKeyScopeField] = []
+    expires_at: datetime | None = None
+    signing_required: bool = False
+
+
+class ApiKeyAdminCreateRequest(msgspec.Struct, forbid_unknown_fields=True):
+    """Payload used by superusers to create an API key for a path-selected user."""
+
+    name: ApiKeyNameField
+    scopes: list[ApiKeyScopeField] = []
+    expires_at: datetime | None = None
+    signing_required: bool = False
+
+
+class ApiKeyCreateResponse(msgspec.Struct):
+    """Creation response containing the one-time raw API key."""
+
+    api_key: str
+    key: ApiKeyRead
+
+
+class ApiKeyUpdateRequest(msgspec.Struct, omit_defaults=True, forbid_unknown_fields=True):
+    """Payload used to update mutable API-key metadata."""
+
+    current_password: schema_fields.PasswordField
+    name: ApiKeyNameField | None = None
+    scopes: list[ApiKeyScopeField] | None = None
 
 
 class ForgotPassword(msgspec.Struct):
@@ -157,6 +213,15 @@ class TotpDisableRequest(msgspec.Struct):
 
 
 __all__ = (
+    "ApiKeyAdminCreateRequest",
+    "ApiKeyCreateRequest",
+    "ApiKeyCreateResponse",
+    "ApiKeyIdField",
+    "ApiKeyListResponse",
+    "ApiKeyNameField",
+    "ApiKeyRead",
+    "ApiKeyScopeField",
+    "ApiKeyUpdateRequest",
     "ForgotPassword",
     "LoginCredentials",
     "RefreshSessionListResponse",

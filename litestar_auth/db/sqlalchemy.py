@@ -17,6 +17,7 @@ from litestar_auth.db._repositories import (
     _build_user_load,
     _build_user_repository,
 )
+from litestar_auth.db._sqlalchemy_api_keys import SQLAlchemyApiKeyStore
 from litestar_auth.db.base import BaseUserStore, OAuthAccountData
 from litestar_auth.exceptions import ConfigurationError, OAuthAccountAlreadyLinkedError
 from litestar_auth.oauth_encryption import (
@@ -35,6 +36,12 @@ if TYPE_CHECKING:
     from litestar_auth.types import LoginIdentifier
 
 type AsyncSessionT = AsyncSession | async_scoped_session[AsyncSession]
+
+__all__ = (
+    "SQLAlchemyApiKeyStore",
+    "SQLAlchemyUserDatabase",
+    "SQLAlchemyUserModelProtocol",
+)
 
 
 def _collect_writable_user_fields(user_model: type[Any]) -> frozenset[str]:

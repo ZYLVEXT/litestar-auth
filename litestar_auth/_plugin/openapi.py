@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING, Any, cast
 from litestar.openapi.spec import Components, SecurityScheme
 
 from litestar_auth.authentication.strategy.jwt import JWTStrategy
+from litestar_auth.authentication.transport.api_key import API_KEY_HEADER_NAME, ApiKeyTransport
 from litestar_auth.authentication.transport.bearer import BearerTransport
 from litestar_auth.authentication.transport.cookie import CookieTransport
 
@@ -36,6 +37,14 @@ def security_scheme_for_transport(
     Raises:
         TypeError: If the transport type is not supported for OpenAPI scheme derivation.
     """
+    if isinstance(transport, ApiKeyTransport):
+        return SecurityScheme(
+            type="http",
+            scheme="Bearer",
+            bearer_format="API key",
+            description=f"API-key authentication via Authorization bearer or {API_KEY_HEADER_NAME} header.",
+        )
+
     if isinstance(transport, BearerTransport):
         bearer_format = "JWT" if isinstance(strategy, JWTStrategy) else None
         return SecurityScheme(
@@ -68,10 +77,32 @@ def build_openapi_security_schemes(
     Returns:
         Dictionary keyed by backend name with corresponding security schemes.
     """
-    return {
-        backend.name: security_scheme_for_transport(backend.transport, strategy=backend.strategy)
+    schemes = {
+        (
+            "apiKeyAuth" if isinstance(backend.transport, ApiKeyTransport) else backend.name
+        ): security_scheme_for_transport(
+            backend.transport,
+            strategy=backend.strategy,
+        )
         for backend in backends
     }
+    if any(
+        isinstance(backend.transport, ApiKeyTransport)
+        and (
+            getattr(getattr(backend.strategy, "api_key_config", None), "signing_enabled", False) is True
+            or getattr(backend.strategy, "secret_encryption_keyring", None) is not None
+        )
+        for backend in backends
+    ):
+        schemes["apiKeyHmacAuth"] = SecurityScheme(
+            type="http",
+            scheme="LSA1-HMAC-SHA256",
+            description=(
+                "Signed API-key authentication via Authorization: "
+                "LSA1-HMAC-SHA256 Credential=<key_id>, SignedHeaders=<headers>, Signature=<hex>."
+            ),
+        )
+    return schemes
 
 
 def build_security_requirement(

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import hashlib
-import importlib as _importlib
 import ipaddress
 import logging
 import unicodedata
@@ -11,6 +10,9 @@ from collections import deque
 from typing import TYPE_CHECKING, Any
 
 from litestar_auth._optional_deps import _require_redis_asyncio
+from litestar_auth.authentication.strategy._api_key_format import parse_api_key
+from litestar_auth.authentication.strategy.api_key import ApiKeyContext
+from litestar_auth.authentication.transport.api_key import API_KEY_HEADER_NAME
 from litestar_auth.config import resolve_trusted_proxy_setting
 
 if TYPE_CHECKING:
@@ -20,9 +22,11 @@ type SlidingWindow = deque[float]
 type RedisScriptResult = bytes | str | int | float
 
 DEFAULT_KEY_PREFIX = "litestar_auth:ratelimit:"
+_API_KEY_HMAC_SCHEME = "LSA1-HMAC-SHA256"
+_RATE_LIMIT_KEY_DERIVATION_SALT = b"litestar-auth:rate-limit-key:v5"
+_RATE_LIMIT_KEY_DERIVATION_ITERATIONS = 4096
+_RATE_LIMIT_KEY_PART_BYTES = 16
 logger = logging.getLogger("litestar_auth.ratelimit")
-
-importlib = _importlib
 
 _DEFAULT_TRUSTED_HEADERS: tuple[str, ...] = ("X-Forwarded-For",)
 _warned_missing_proxy_headers: set[tuple[str, ...]] = set()
@@ -97,12 +101,18 @@ def _validate_configuration(*, max_attempts: int, window_seconds: float) -> None
 
 
 def _safe_key_part(value: str) -> str:
-    """Hash a key component to prevent delimiter injection and collisions.
+    """Digest a key component to prevent delimiter injection and raw identifier storage.
 
     Returns:
-        Truncated SHA-256 hex digest of the value.
+        Scoped PBKDF2-HMAC-SHA-256 hex digest of the value for rate-limit key derivation.
     """
-    return hashlib.sha256(value.encode()).hexdigest()[:32]
+    return hashlib.pbkdf2_hmac(
+        "sha256",
+        value.encode("utf-8"),
+        _RATE_LIMIT_KEY_DERIVATION_SALT,
+        _RATE_LIMIT_KEY_DERIVATION_ITERATIONS,
+        dklen=_RATE_LIMIT_KEY_PART_BYTES,
+    ).hex()
 
 
 def _client_host(
@@ -148,6 +158,56 @@ def _client_host(
     if all_headers_absent:
         _warn_missing_proxy_headers_once(trusted_headers)
     return fallback_host()
+
+
+def _extract_api_key_id(request: Request[Any, Any, Any]) -> str | None:
+    """Return a resolvable API-key id from bearer or X-API-Key credentials."""
+    scope = getattr(request, "scope", None)
+    if isinstance(scope, dict):
+        auth_context = scope.get("auth")
+        if isinstance(auth_context, ApiKeyContext):
+            return auth_context.key_id
+    hmac_key_id = _extract_hmac_api_key_id_from_authorization(request)
+    if hmac_key_id is not None:
+        return hmac_key_id
+    token = _extract_api_key_token(request)
+    if token is None:
+        return None
+    parsed = parse_api_key(token)
+    return None if parsed is None else parsed.key_id
+
+
+def _extract_api_key_token(request: Request[Any, Any, Any]) -> str | None:
+    authorization = request.headers.get("Authorization")
+    if authorization is not None:
+        scheme, _, token = authorization.partition(" ")
+        if scheme.lower() == "bearer":
+            return token.strip() or None
+
+    header_token = request.headers.get(API_KEY_HEADER_NAME)
+    if header_token is None:
+        return None
+    return header_token.strip() or None
+
+
+def _extract_hmac_api_key_id_from_authorization(request: Request[Any, Any, Any]) -> str | None:
+    authorization = request.headers.get("Authorization")
+    if authorization is None:
+        return None
+    scheme, _, parameters = authorization.partition(" ")
+    if scheme != _API_KEY_HMAC_SCHEME:
+        return None
+    return _extract_hmac_api_key_id(parameters)
+
+
+def _extract_hmac_api_key_id(parameters: str) -> str | None:
+    """Return the ``Credential`` key id from an LSA1 API-key signing header."""
+    for raw_part in parameters.split(","):
+        name, separator, value = raw_part.strip().partition("=")
+        if separator and name.lower() == "credential":
+            key_id = value.strip()
+            return key_id or None
+    return None
 
 
 async def _extract_email(

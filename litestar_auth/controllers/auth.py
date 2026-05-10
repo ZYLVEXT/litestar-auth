@@ -30,6 +30,7 @@ from litestar_auth.config import validate_production_secret
 from litestar_auth.controllers._auth_helpers import (
     _attach_refresh_token,
     _get_refresh_strategy,
+    _record_refresh_token_request_context,
     _resolve_cookie_transport,
     _resolve_login_identifier,
     _validate_manual_cookie_auth_contract,
@@ -93,14 +94,6 @@ class AuthControllerUserManagerProtocol[UP: UserProtocol[Any], ID](
         """Return a plain-text TOTP secret from storage."""
 
 
-@runtime_checkable
-class RefreshTokenRequestContextRecorder(Protocol):
-    """Optional strategy hook for bounded refresh-token request metadata."""
-
-    def set_refresh_token_request_context(self, request: object) -> None:
-        """Capture request context for the next refresh-token write or rotation."""
-
-
 @dataclass(slots=True)
 class _AuthControllerContext[UP: UserProtocol[Any], ID]:
     """Runtime dependencies shared by generated auth controller handlers."""
@@ -155,15 +148,6 @@ class AuthControllerOptions[UP: UserProtocol[Any], ID](TypedDict):
     unsafe_testing: NotRequired[bool]
     csrf_protection_managed_externally: NotRequired[bool]
     security: NotRequired[Sequence[SecurityRequirement] | None]
-
-
-def _record_refresh_token_request_context(
-    refresh_strategy: RefreshableStrategy[Any, Any],
-    request: object,
-) -> None:
-    """Record request metadata when the concrete refresh strategy supports it."""
-    if isinstance(refresh_strategy, RefreshTokenRequestContextRecorder):
-        refresh_strategy.set_refresh_token_request_context(request)
 
 
 @dataclass(frozen=True, slots=True)

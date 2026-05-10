@@ -47,7 +47,8 @@ def test_import_db_package_exposes_only_base_store_types() -> None:
     proc = _run_isolated(
         "import sys\n"
         "import litestar_auth.db as auth_db\n"
-        "assert auth_db.__all__ == ('BaseOAuthAccountStore', 'BaseUserStore', 'OAuthAccountData')\n"
+        "assert auth_db.__all__ == ('ApiKeyData', 'BaseApiKeyStore', 'BaseOAuthAccountStore', 'BaseUserStore', 'OAuthAccountData')\n"
+        "assert not hasattr(auth_db, 'SQLAlchemyApiKeyStore')\n"
         "assert not hasattr(auth_db, 'SQLAlchemyUserDatabase')\n"
         "assert 'litestar_auth.db.sqlalchemy' not in sys.modules\n",
     )
@@ -101,6 +102,8 @@ def test_import_models_package_keeps_concrete_orm_submodules_lazy() -> None:
         "import litestar_auth.models as models\n"
         "assert models.__dir__() == [\n"
         "    'AccessTokenMixin',\n"
+        "    'ApiKey',\n"
+        "    'ApiKeyMixin',\n"
         "    'OAuthAccount',\n"
         "    'OAuthAccountMixin',\n"
         "    'RefreshTokenMixin',\n"
@@ -114,6 +117,7 @@ def test_import_models_package_keeps_concrete_orm_submodules_lazy() -> None:
         "    'UserRoleRelationshipMixin',\n"
         "    'import_token_orm_models',\n"
         "]\n"
+        "assert 'litestar_auth.models.api_key' not in sys.modules\n"
         "assert 'litestar_auth.models.user' not in sys.modules\n"
         "assert 'litestar_auth.models.oauth' not in sys.modules\n"
         "assert 'litestar_auth.models.role' not in sys.modules\n",
@@ -128,6 +132,19 @@ def test_import_models_mixins_module_does_not_register_oauth_encryption_events()
         "from litestar_auth.models.mixins import OAuthAccountMixin\n"
         "from litestar_auth._oauth_mapper_events import _decrypt_loaded_oauth_tokens\n"
         "assert not event.contains(OAuthAccountMixin, 'load', _decrypt_loaded_oauth_tokens)\n",
+    )
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+
+
+def test_accessing_api_key_from_models_package_only_loads_api_key_submodule() -> None:
+    """Lazy ``ApiKey`` access loads ``models.api_key`` without importing the reference ``User`` model."""
+    proc = _run_isolated(
+        "import sys\n"
+        "import litestar_auth.models as models\n"
+        "api_key_model = models.ApiKey\n"
+        "assert api_key_model.__module__ == 'litestar_auth.models.api_key'\n"
+        "assert 'litestar_auth.models.api_key' in sys.modules\n"
+        "assert 'litestar_auth.models.user' not in sys.modules\n",
     )
     assert proc.returncode == 0, proc.stdout + proc.stderr
 
@@ -200,14 +217,17 @@ def test_models_package_token_registration_helper_stays_lazy_until_reference_map
         "import litestar_auth.models as models\n"
         "access_token_model, refresh_token_model = models.import_token_orm_models()\n"
         "assert 'litestar_auth.models.oauth' not in sys.modules\n"
+        "assert 'litestar_auth.models.api_key' not in sys.modules\n"
         "assert 'litestar_auth.models.user' not in sys.modules\n"
         "from litestar_auth.models.oauth import OAuthAccount\n"
         "assert OAuthAccount.__module__ == 'litestar_auth.models.oauth'\n"
         "assert 'litestar_auth.models.oauth' in sys.modules\n"
+        "assert 'litestar_auth.models.api_key' not in sys.modules\n"
         "assert 'litestar_auth.models.user' not in sys.modules\n"
         "from litestar_auth.models import User\n"
         "relationships = inspect(User).relationships\n"
         "assert 'litestar_auth.models.user' in sys.modules\n"
+        "assert relationships['api_keys'].mapper.class_.__module__ == 'litestar_auth.models.api_key'\n"
         "assert relationships['access_tokens'].mapper.class_ is access_token_model\n"
         "assert relationships['refresh_tokens'].mapper.class_ is refresh_token_model\n"
         "assert relationships['oauth_accounts'].mapper.class_ is OAuthAccount\n",
@@ -237,11 +257,20 @@ def test_import_strategy_package_keeps_models_namespace_unloaded() -> None:
         "assert 'litestar_auth.models.oauth' not in sys.modules\n"
         "assert 'litestar_auth.models.user' not in sys.modules\n"
         "assert strategy.__all__ == (\n"
+        "    'ApiKeyContext',\n"
+        "    'ApiKeyNonceStore',\n"
+        "    'ApiKeyNonceStoreResult',\n"
+        "    'ApiKeyStrategy',\n"
+        "    'ApiKeyStrategyConfig',\n"
+        "    'ContextualStrategy',\n"
         "    'DatabaseTokenModels',\n"
         "    'DatabaseTokenStrategy',\n"
         "    'DatabaseTokenStrategyConfig',\n"
+        "    'InMemoryApiKeyNonceStore',\n"
         "    'JWTStrategy',\n"
         "    'JWTStrategyConfig',\n"
+        "    'RedisApiKeyNonceStore',\n"
+        "    'RedisApiKeyNonceStoreClient',\n"
         "    'RedisTokenStrategy',\n"
         "    'RedisTokenStrategyConfig',\n"
         "    'RefreshableStrategy',\n"

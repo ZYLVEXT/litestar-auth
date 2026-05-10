@@ -10,11 +10,11 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, NotRequired, Required, TypedDict, Unpack, cast, overload
 
-from litestar import Controller, Request, get, post
+from litestar import Controller, Request, get
 from litestar.openapi.datastructures import ResponseSpec
 from litestar.openapi.spec import Example
 from litestar.params import Parameter
-from litestar.response import Redirect, Response
+from litestar.response import Response
 
 from litestar_auth.controllers._oauth_assembly import (
     _build_associate_user_manager_binding,
@@ -29,11 +29,14 @@ from litestar_auth.controllers._oauth_assembly import (
     _OAuthServiceSettings,
 )
 from litestar_auth.controllers._oauth_associate_routes import _create_associate_callback_handler
+from litestar_auth.controllers._oauth_authorize_routes import (
+    _create_associate_authorize_handler,
+    _create_authorize_handler,
+)
 from litestar_auth.controllers._oauth_helpers import (
     _clear_state_cookie,
     _decode_oauth_flow_cookie,
     _OAuthCookieSettings,
-    _reject_runtime_oauth_scope_override,
     _set_state_cookie,
     _validate_state,
 )
@@ -41,18 +44,30 @@ from litestar_auth.controllers._utils import _mark_litestar_auth_route_handler
 from litestar_auth.exceptions import ErrorCode
 from litestar_auth.guards import is_authenticated
 from litestar_auth.oauth import service as _oauth_service
-from litestar_auth.oauth._flow_cookie import _OAuthFlowCookie
 from litestar_auth.oauth.client_adapter import OAuthClientProtocol, _build_oauth_client_adapter
 from litestar_auth.types import UserProtocol
 
 OAuthControllerUserManagerProtocol = _oauth_service.OAuthServiceUserManagerProtocol
+
+__all__ = (
+    "OAuthAssociateControllerConfig",
+    "OAuthControllerConfig",
+    "OAuthControllerOptions",
+    "OAuthControllerUserManagerProtocol",
+    "_OAuthCookieSettings",
+    "_clear_state_cookie",
+    "_decode_oauth_flow_cookie",
+    "_set_state_cookie",
+    "_validate_state",
+    "create_oauth_associate_controller",
+    "create_oauth_controller",
+)
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
 
     from litestar.openapi.spec import SecurityRequirement
     from litestar.response import Response
-    from litestar.types import Guard
 
     from litestar_auth.authentication.backend import AuthenticationBackend
 
@@ -169,99 +184,6 @@ def _create_oauth_controller_type(
     return _mark_litestar_auth_route_handler(OAuthController)
 
 
-async def _perform_authorize_redirect[UP: UserProtocol[Any], ID](
-    request: Request[Any, Any, Any],
-    *,
-    assembly: _OAuthControllerAssembly[UP, ID],
-) -> Redirect:
-    """Mint OAuth state + PKCE material, set the flow cookie, and redirect to the provider.
-
-    Shared body for both the login authorize handler (GET, anonymous) and the
-    associate authorize handler (POST, authenticated). The HTTP method on the
-    associate variant is what enables Litestar's CSRF middleware to enforce a
-    token check on the request before this body runs, so a victim's session
-    cookie alone cannot trigger a forced association.
-
-    Returns:
-        Litestar redirect carrying the encrypted state cookie and pointing at
-        the provider authorization URL.
-    """
-    _reject_runtime_oauth_scope_override(request)
-    authorization = await assembly.oauth_service.authorize(
-        redirect_uri=assembly.callback_url,
-        scopes=list(assembly.oauth_scopes) if assembly.oauth_scopes is not None else None,
-    )
-    response = Redirect(authorization.authorization_url)
-    _set_state_cookie(
-        response,
-        flow_cookie=_OAuthFlowCookie(
-            state=authorization.state,
-            code_verifier=authorization.code_verifier,
-        ),
-        cookie_settings=_cookie_settings_from_assembly(assembly),
-    )
-    return response
-
-
-def _create_authorize_handler[UP: UserProtocol[Any], ID](
-    *,
-    assembly: _OAuthControllerAssembly[UP, ID],
-    security: Sequence[SecurityRequirement] | None = None,
-) -> object:
-    """Create the GET authorize route handler for the provider-scoped login flow.
-
-    Login authorize is anonymous and side-effect free apart from setting the
-    encrypted flow cookie; CSRF does not apply because there is no
-    pre-authenticated victim session whose privileges could be abused.
-
-    Returns:
-        Decorated Litestar route handler for the provider login authorize endpoint.
-    """
-
-    @get("/authorize", security=security, responses=_OAUTH_OPENAPI_RESPONSES)
-    async def authorize(
-        self: object,
-        request: Request[Any, Any, Any],
-    ) -> Redirect:
-        del self
-        return await _perform_authorize_redirect(request, assembly=assembly)
-
-    return authorize
-
-
-def _create_associate_authorize_handler[UP: UserProtocol[Any], ID](
-    *,
-    assembly: _OAuthControllerAssembly[UP, ID],
-    guards: Sequence[Guard] | None = None,
-    security: Sequence[SecurityRequirement] | None = None,
-) -> object:
-    """Create the POST authorize route handler for the provider-scoped associate flow.
-
-    Associate authorize is authenticated and binds a provider account to the
-    *current* user, so a cross-site request (a victim clicking an attacker
-    link, or any cross-origin form post) must not be able to trigger it.
-    Switching the method from GET to POST forces Litestar's CSRF middleware
-    to validate a same-origin CSRF token before the body runs; cross-site
-    requests cannot mirror a Strict/Lax CSRF cookie into the required header
-    or body, so forced-association attacks fail closed at the middleware
-    layer regardless of the configured ``samesite`` policy on the auth
-    cookie.
-
-    Returns:
-        Decorated Litestar route handler for the provider associate authorize endpoint.
-    """
-
-    @post("/authorize", guards=guards, security=security, responses=_OAUTH_OPENAPI_RESPONSES)
-    async def authorize(
-        self: object,
-        request: Request[Any, Any, Any],
-    ) -> Redirect:
-        del self
-        return await _perform_authorize_redirect(request, assembly=assembly)
-
-    return authorize
-
-
 async def _complete_login_callback[UP: UserProtocol[Any], ID](
     *,
     assembly: _OAuthControllerAssembly[UP, ID],
@@ -358,6 +280,7 @@ def _create_login_oauth_controller[UP: UserProtocol[Any], ID](
         assembly=assembly,
         authorize_handler=_create_authorize_handler(
             assembly=assembly,
+            responses=_OAUTH_OPENAPI_RESPONSES,
         ),
         callback_handler=_create_login_callback_handler(
             assembly=assembly,
@@ -456,6 +379,7 @@ def _create_oauth_associate_controller[UP: UserProtocol[Any], ID](
         assembly=assembly,
         authorize_handler=_create_associate_authorize_handler(
             assembly=assembly,
+            responses=_OAUTH_OPENAPI_RESPONSES,
             guards=[is_authenticated],
             security=settings.security,
         ),
@@ -527,14 +451,4 @@ def create_oauth_associate_controller[UP: UserProtocol[Any], ID](
             cookie_secure=settings.cookie_secure,
             security=settings.security,
         ),
-    )
-
-
-def _cookie_settings_from_assembly(assembly: _OAuthControllerAssembly[Any, Any]) -> _OAuthCookieSettings:
-    """Return cookie settings from provider-scoped assembly state."""
-    return _OAuthCookieSettings(
-        cookie_name=assembly.cookie_name,
-        cookie_path=assembly.cookie_path,
-        cookie_secure=assembly.cookie_secure,
-        flow_cookie_cipher=assembly.flow_cookie_cipher,
     )

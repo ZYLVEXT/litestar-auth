@@ -123,6 +123,11 @@ AuthRateLimitSlot.TOTP_VERIFY
 - Backends: **`InMemoryRateLimiter`** (single process / dev) or **`RedisRateLimiter`** (production, multiple workers). See [Deployment](../deployment.md).
 - `InMemoryRateLimiter` fails closed for new keys when `max_keys` is reached and no expired counters can be pruned. It logs `event=rate_limit_memory_capacity`; size `max_keys` for local/dev traffic or use Redis for public multi-worker deployments.
 - `LitestarAuthConfig.deployment_worker_count` is the explicit topology declaration for startup validation. `None` means unknown worker count and preserves warning-only diagnostics, `1` means known single-worker, and values greater than `1` fail closed if any enabled auth rate-limit slot uses a process-local backend.
+- Backend keys use scoped PBKDF2-HMAC-SHA-256 digests for IP addresses, normalized identifiers, and API-key ids so
+  raw request identifiers are not written into Redis or process-local key maps. Changing this digest
+  contract invalidates existing active rate-limit windows after upgrade; it does not affect persisted
+  users, tokens, or API keys. These digests protect backend key shape and avoid raw identifier storage;
+  they are not a privacy boundary against brute-force guessing of low-entropy identifiers such as common IPs.
 - For the production shared-client Redis path, use the configuration recipe so rate
   limiting stays aligned with the TOTP Redis stores instead of hand-maintaining a partial copy in
   this guide.

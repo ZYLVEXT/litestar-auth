@@ -11,10 +11,12 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Mapped, declared_attr, mapped_column, relationship, validates
 from sqlalchemy.orm import Session as ORMSession
 
+from litestar_auth._api_key_model_mixin import ApiKeyMixin
 from litestar_auth._roles import normalize_role_name, normalize_roles
 
 __all__ = (
     "AccessTokenMixin",
+    "ApiKeyMixin",
     "RefreshTokenMixin",
     "RoleMixin",
     "UserAuthRelationshipMixin",
@@ -321,6 +323,7 @@ class UserAuthRelationshipMixin:
     """
 
     auth_access_token_model: ClassVar[str | None] = "AccessToken"
+    auth_api_key_model: ClassVar[str | None] = None
     auth_refresh_token_model: ClassVar[str | None] = "RefreshToken"
     auth_oauth_account_model: ClassVar[str | None] = "OAuthAccount"
     auth_token_relationship_lazy: ClassVar[str | None] = None
@@ -372,6 +375,19 @@ class UserAuthRelationshipMixin:
         """
         return cls._relationship(
             cls.auth_refresh_token_model,
+            lazy=cls.auth_token_relationship_lazy,
+        )
+
+    @declared_attr
+    @classmethod
+    def api_keys(cls) -> Mapped[list[Any]]:
+        """Map the inverse side of the configured API-key model when enabled.
+
+        Returns:
+            The relationship descriptor, or ``None`` when API-key integration is disabled.
+        """
+        return cls._relationship(
+            cls.auth_api_key_model,
             lazy=cls.auth_token_relationship_lazy,
         )
 

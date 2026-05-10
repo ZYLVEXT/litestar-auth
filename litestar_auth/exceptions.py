@@ -92,6 +92,53 @@ class ConfigurationError(LitestarAuthError):
     default_code = ErrorCode.CONFIGURATION_INVALID
 
 
+class ApiKeyError(LitestarAuthError):
+    """Raised when an API-key manager operation fails."""
+
+    default_message = "API-key operation failed."
+    default_code = ErrorCode.AUTHORIZATION_DENIED
+
+
+class ApiKeyNotFoundError(ApiKeyError):
+    """Raised when an API key cannot be found in the caller's ownership scope."""
+
+    default_message = "API key not found."
+
+
+class ApiKeyScopeDeniedError(ApiKeyError):
+    """Raised when requested API-key scopes are outside the configured whitelist."""
+
+    default_message = "One or more requested API-key scopes are not allowed."
+
+    def __init__(
+        self,
+        *,
+        denied_scopes: frozenset[str],
+        message: str | None = None,
+        code: str | None = None,
+    ) -> None:
+        """Initialize the scope-denial error with structured scope context."""
+        self.denied_scopes = denied_scopes
+        super().__init__(message=message, code=code)
+
+
+class ApiKeyLimitReachedError(ApiKeyError):
+    """Raised when a user has reached the configured active API-key limit."""
+
+    default_message = "API-key limit reached."
+
+    def __init__(
+        self,
+        *,
+        max_keys_per_user: int,
+        message: str | None = None,
+        code: str | None = None,
+    ) -> None:
+        """Initialize the limit error with structured policy context."""
+        self.max_keys_per_user = max_keys_per_user
+        super().__init__(message=message, code=code)
+
+
 class UserAlreadyExistsError(AuthenticationError):
     """Raised when creating a user that already exists.
 

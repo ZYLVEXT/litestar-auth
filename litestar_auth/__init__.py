@@ -44,6 +44,7 @@ from litestar_auth.exceptions import ErrorCode, LitestarAuthError
 from litestar_auth.guards import has_all_roles, has_any_role, is_active, is_authenticated, is_superuser, is_verified
 from litestar_auth.manager import BaseUserManager, BaseUserManagerConfig, UserManagerSecurity
 from litestar_auth.plugin import (
+    ApiKeyConfig,
     DatabaseTokenAuthConfig,
     FernetKeyringConfig,
     LitestarAuth,
@@ -66,6 +67,7 @@ __version__ = "3.0.0"
 
 __all__ = (
     "DEFAULT_SUPERUSER_ROLE_NAME",
+    "ApiKeyConfig",
     "AuthenticationBackend",
     "Authenticator",
     "BaseUserManager",

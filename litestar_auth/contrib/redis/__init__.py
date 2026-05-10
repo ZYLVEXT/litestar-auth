@@ -8,6 +8,8 @@ imports.
 from __future__ import annotations
 
 from litestar_auth.contrib.redis._surface import (
+    RedisApiKeyNonceStore,
+    RedisApiKeyNonceStoreClient,
     RedisAuthClientProtocol,
     RedisAuthPreset,
     RedisAuthRateLimitConfigOptions,
@@ -19,6 +21,8 @@ from litestar_auth.contrib.redis._surface import (
 )
 
 __all__ = (
+    "RedisApiKeyNonceStore",
+    "RedisApiKeyNonceStoreClient",
     "RedisAuthClientProtocol",
     "RedisAuthPreset",
     "RedisAuthRateLimitConfigOptions",

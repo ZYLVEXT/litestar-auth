@@ -73,6 +73,10 @@ def _assert_exported_symbols(module: ModuleType, *, expected_names: Iterable[str
         pytest.param(
             strategy_module,
             (
+                "ApiKeyContext",
+                "ApiKeyStrategy",
+                "ApiKeyStrategyConfig",
+                "ContextualStrategy",
                 "DatabaseTokenModels",
                 "DatabaseTokenStrategy",
                 "DatabaseTokenStrategyConfig",
@@ -88,7 +92,7 @@ def _assert_exported_symbols(module: ModuleType, *, expected_names: Iterable[str
         ),
         pytest.param(
             transport_module,
-            ("BearerTransport", "CookieTransport", "CookieTransportConfig", "Transport"),
+            ("ApiKeyTransport", "BearerTransport", "CookieTransport", "CookieTransportConfig", "Transport"),
             id="authentication.transport",
         ),
         pytest.param(
@@ -107,7 +111,7 @@ def _assert_exported_symbols(module: ModuleType, *, expected_names: Iterable[str
         ),
         pytest.param(
             db_module,
-            ("BaseOAuthAccountStore", "BaseUserStore", "OAuthAccountData"),
+            ("ApiKeyData", "BaseApiKeyStore", "BaseOAuthAccountStore", "BaseUserStore", "OAuthAccountData"),
             id="db",
         ),
         pytest.param(
@@ -133,6 +137,7 @@ def test_root_package_exposes_documented_public_surface_and_null_logger() -> Non
         expected_names=(
             "AuthenticationBackend",
             "Authenticator",
+            "ApiKeyConfig",
             "BaseUserManager",
             "BaseUserManagerConfig",
             "BearerTransport",
@@ -178,6 +183,8 @@ def test_models_package_owns_token_registration_helper_and_strategy_keeps_db_tok
     """The models package owns the token bootstrap helper while strategy keeps its runtime contract."""
     assert models_module.__all__ == (
         "AccessTokenMixin",
+        "ApiKey",
+        "ApiKeyMixin",
         "OAuthAccount",
         "OAuthAccountMixin",
         "RefreshTokenMixin",
@@ -192,11 +199,20 @@ def test_models_package_owns_token_registration_helper_and_strategy_keeps_db_tok
         "import_token_orm_models",
     )
     assert strategy_module.__all__ == (
+        "ApiKeyContext",
+        "ApiKeyNonceStore",
+        "ApiKeyNonceStoreResult",
+        "ApiKeyStrategy",
+        "ApiKeyStrategyConfig",
+        "ContextualStrategy",
         "DatabaseTokenModels",
         "DatabaseTokenStrategy",
         "DatabaseTokenStrategyConfig",
+        "InMemoryApiKeyNonceStore",
         "JWTStrategy",
         "JWTStrategyConfig",
+        "RedisApiKeyNonceStore",
+        "RedisApiKeyNonceStoreClient",
         "RedisTokenStrategy",
         "RedisTokenStrategyConfig",
         "RefreshableStrategy",

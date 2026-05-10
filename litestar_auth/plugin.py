@@ -20,7 +20,7 @@ from litestar_auth._plugin.dependencies import (
     register_dependencies,
     register_exception_handlers,
 )
-from litestar_auth._plugin.middleware import build_csrf_config, get_cookie_transports
+from litestar_auth._plugin.middleware import build_csrf_config, get_cookie_transports, has_api_key_transport
 from litestar_auth._plugin.scoped_session import get_or_create_scoped_session
 from litestar_auth._plugin.session_binding import (
     _AccountStateValidator as PluginAccountStateValidator,
@@ -70,6 +70,7 @@ if TYPE_CHECKING:
 
 from litestar_auth.manager import FernetKeyringConfig
 
+ApiKeyConfig = _plugin_config.ApiKeyConfig
 DatabaseTokenAuthConfig = _plugin_config.DatabaseTokenAuthConfig
 ControllerHook = _plugin_config.ControllerHook
 ExceptionResponseHook = _plugin_config.ExceptionResponseHook
@@ -228,7 +229,8 @@ class LitestarAuth[UP: UserProtocol[Any], ID](InitPlugin, CLIPlugin):
 
     def _register_middleware(self, app_config: AppConfig) -> None:
         backend_inventory = _plugin_config.resolve_backend_inventory(self.config)
-        cookie_transports = get_cookie_transports(backend_inventory.startup_backends())
+        startup_backends = backend_inventory.startup_backends()
+        cookie_transports = get_cookie_transports(startup_backends)
         if cookie_transports:
             app_config.csrf_config = build_csrf_config(self.config, cookie_transports)
 
@@ -244,6 +246,12 @@ class LitestarAuth[UP: UserProtocol[Any], ID](InitPlugin, CLIPlugin):
                 get_request_session=partial(get_or_create_scoped_session, session_maker=self._session_maker),
                 authenticator_factory=self._build_authenticator,
                 auth_cookie_names=auth_cookie_names,
+                api_key_use_rate_limit=(
+                    self.config.rate_limit_config.api_key_use if self.config.rate_limit_config is not None else None
+                ),
+                api_key_backend_present=has_api_key_transport(startup_backends),
+                api_key_signed_body_max_bytes=self.config.api_keys.signed_body_max_bytes,
+                api_key_signed_body_max_messages=self.config.api_keys.signed_body_max_messages,
                 superuser_role_name=self.config.superuser_role_name,
             ),
         )
@@ -266,6 +274,7 @@ class LitestarAuth[UP: UserProtocol[Any], ID](InitPlugin, CLIPlugin):
 
 
 __all__ = (
+    "ApiKeyConfig",
     "DatabaseTokenAuthConfig",
     "FernetKeyringConfig",
     "LitestarAuth",

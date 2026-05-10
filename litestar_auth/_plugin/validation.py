@@ -11,6 +11,7 @@ from sqlalchemy import inspect as sa_inspect
 
 from litestar_auth._manager.construction import ManagerConstructorInputs
 from litestar_auth._manager.security import validate_user_manager_security_secret_roles_are_distinct
+from litestar_auth._plugin import api_key_validation as _api_key_validation
 from litestar_auth._plugin.config import (
     LitestarAuthConfig,
     _normalize_config_superuser_role_name,
@@ -49,6 +50,8 @@ __all__ = (
     "validate_totp_secret_config",
     "validate_totp_sub_config",
 )
+
+validate_api_key_config = _api_key_validation.validate_api_key_config
 
 
 def _current_jwt_strategy_type() -> type[JWTStrategy]:
@@ -216,6 +219,7 @@ def validate_backend_security_config[UP: UserProtocol[Any], ID](config: Litestar
 def validate_config[UP: UserProtocol[Any], ID](config: LitestarAuthConfig[UP, ID]) -> None:
     """Validate the requested plugin configuration during plugin construction."""
     for validator in (
+        validate_api_key_config,
         validate_core_session_config,
         validate_credential_config,
         validate_totp_secret_config,

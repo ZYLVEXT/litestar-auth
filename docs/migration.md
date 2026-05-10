@@ -1,5 +1,102 @@
 # Migration Guide
 
+## API-key persistence table
+
+API-key storage now has a dedicated `api_key` table. Import the bundled model from
+`litestar_auth.models` or `litestar_auth.models.api_key`; do not import ORM models from the
+package root or `litestar_auth.db`. The SQLAlchemy store lives at
+`litestar_auth.db.sqlalchemy.SQLAlchemyApiKeyStore`, while the structural store protocol is
+available as `litestar_auth.db.BaseApiKeyStore`.
+
+Minimum migration shape for deployments using the bundled model:
+
+```sql
+CREATE TABLE api_key (
+    id UUID PRIMARY KEY,
+    key_id VARCHAR(64) NOT NULL,
+    user_id UUID NOT NULL REFERENCES "user" (id),
+    hashed_secret BYTEA NOT NULL,
+    encrypted_secret BYTEA NULL,
+    name VARCHAR(255) NOT NULL,
+    scopes JSON NOT NULL,
+    prefix_env VARCHAR(32) NOT NULL,
+    signing_required BOOLEAN NOT NULL,
+    expires_at TIMESTAMP WITH TIME ZONE NULL,
+    last_used_at TIMESTAMP WITH TIME ZONE NULL,
+    created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    revoked_at TIMESTAMP WITH TIME ZONE NULL,
+    created_via VARCHAR(64) NOT NULL,
+    client_metadata JSON NULL
+);
+
+CREATE UNIQUE INDEX ix_api_key_key_id ON api_key (key_id);
+CREATE INDEX ix_api_key_user_id ON api_key (user_id);
+```
+
+SQLAlchemy metadata equivalent for a hand-written migration:
+
+```python
+import sqlalchemy as sa
+from alembic import op
+from sqlalchemy.dialects.postgresql import JSONB, UUID
+
+
+def upgrade() -> None:
+    op.create_table(
+        "api_key",
+        sa.Column("id", UUID(as_uuid=True), primary_key=True),
+        sa.Column("key_id", sa.String(length=64), nullable=False),
+        sa.Column("user_id", UUID(as_uuid=True), sa.ForeignKey("user.id"), nullable=False),
+        sa.Column("hashed_secret", sa.LargeBinary(), nullable=False),
+        sa.Column("encrypted_secret", sa.LargeBinary(), nullable=True),
+        sa.Column("name", sa.String(length=255), nullable=False),
+        sa.Column("scopes", JSONB(), nullable=False),
+        sa.Column("prefix_env", sa.String(length=32), nullable=False),
+        sa.Column("signing_required", sa.Boolean(), nullable=False),
+        sa.Column("expires_at", sa.DateTime(timezone=True), nullable=True),
+        sa.Column("last_used_at", sa.DateTime(timezone=True), nullable=True),
+        sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
+        sa.Column("revoked_at", sa.DateTime(timezone=True), nullable=True),
+        sa.Column("created_via", sa.String(length=64), nullable=False),
+        sa.Column("client_metadata", JSONB(), nullable=True),
+    )
+    op.create_index("ix_api_key_key_id", "api_key", ["key_id"], unique=True)
+    op.create_index("ix_api_key_user_id", "api_key", ["user_id"])
+```
+
+`key_id` is the public lookup identifier and must stay unique. `hashed_secret` stores only the
+keyed secret digest as bytes; raw API-key secrets are not persisted. `encrypted_secret` is nullable
+and reserved for signing-mode keys, so non-signing rows should leave it `NULL`. Signing-mode rows
+store `fernet:v1:<keyring-key-id>:<ciphertext>` bytes encrypted with
+`api_keys.secret_encryption_keyring`; existing bearer keys cannot be upgraded to signing mode
+because their raw secret was intentionally never persisted. Create replacement signing-required
+keys and revoke the old bearer keys during migration. `client_metadata` must use the same bounded
+shape as refresh-session metadata: 1-64 character keys and 1-255 character string values.
+
+### API-key signing-secret Fernet rotation
+
+Deployments that enable request signing must treat `api_keys.secret_encryption_keyring` as an
+operator-rotated Fernet keyring. Rotation is a staged data migration, not an automatic library
+service:
+
+1. Add the new Fernet key id to the keyring while keeping the old id configured.
+2. Deploy the same key map with `active_key_id` changed to the new id.
+3. Scan API-key rows where `signing_required = true` and `encrypted_secret IS NOT NULL`.
+4. For each candidate, call `BaseUserManager.api_key_signing_secret_requires_reencrypt(row)` and
+   then `await BaseUserManager.reencrypt_api_key_signing_secret(row_or_key_id)` when it returns
+   `True`.
+5. Repeat the scan and remove the retired key id only after no signing-required row still requires
+   re-encryption.
+
+The helper accepts a loaded row or a public `key_id`; it rejects raw bearer credentials and never
+returns plaintext signing secrets. Bearer rows, missing `encrypted_secret` values, malformed Fernet
+envelopes, unknown key ids, and lost replacement rows are fail-closed migration errors. Resolve them
+explicitly instead of skipping them in a bulk job.
+
+The library does not add built-in batching, advisory locks, audit-log storage, per-key audit tables,
+service-account-only keys, IP allowlists, or mTLS binding for this migration. Keep those concerns in
+application-owned migration and observability tooling when your deployment needs them.
+
 ## Argon2-only default password helper
 
 The library default password-helper policy is now Argon2-only. `PasswordHelper.from_defaults()`,

@@ -54,6 +54,14 @@ Exact JSON layout follows your Litestar exception handler configuration.
 | `TOTP_CODE_INVALID` | 400 | Wrong or reused TOTP code. |
 | `TOTP_ALREADY_ENABLED` | 400 | TOTP already active. |
 | `TOTP_ENROLL_BAD_TOKEN` | 400 | Enrollment token invalid. |
+| `API_KEY_INVALID` | 401 / 404 | API-key credential is absent, malformed, unknown, foreign to the current user, or failed non-enumerating lookup. Self-service metadata routes use 404 for missing or foreign key ids. |
+| `API_KEY_REVOKED` | 401 | Parsed API-key credential belongs to a revoked key. |
+| `API_KEY_EXPIRED` | 401 | Parsed API-key credential belongs to an expired key. |
+| `API_KEY_SCOPE_DENIED` | 400 / 403 | Requested key scopes are outside `allowed_scopes`, or an API-key route guard denied the current request because required scopes or role-downscoped access were missing. |
+| `API_KEY_LIMIT_REACHED` | 400 | User has reached `ApiKeyConfig.max_keys_per_user` active keys. |
+| `API_KEY_SIGNATURE_INVALID` | 401 | Signed API-key request is malformed, uses the wrong key mode, has a bad signature, lacks signing secret material, or cannot use the configured nonce store. |
+| `API_KEY_SIGNATURE_TIMESTAMP_SKEW` | 401 | Signed API-key request `X-Auth-Date` is outside the configured skew window. |
+| `API_KEY_SIGNATURE_NONCE_REPLAY` | 401 | Signed API-key request reused a nonce within the nonce-store TTL. |
 
 `USER_ALREADY_EXISTS`, `REGISTER_FAILED`, and `UPDATE_USER_INVALID_PASSWORD` keep stable HTTP mappings even though the corresponding Python exceptions now use keyword-only structured context.
 

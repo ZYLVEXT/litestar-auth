@@ -124,4 +124,12 @@ class StrategyProtocol(Protocol[UP, ID]):
         """Invalidate a token for strategies that keep server-side state."""
 
 
+@runtime_checkable
+class ContextualStrategyProtocol(StrategyProtocol[UP, ID], Protocol[UP, ID]):
+    """Protocol for strategies that expose custom request authentication context."""
+
+    async def read_token_with_context(self, token: str | None, user_manager: object) -> object | None:
+        """Resolve a user plus strategy-specific request auth context."""
+
+
 type LoginIdentifier = Literal["email", "username"]

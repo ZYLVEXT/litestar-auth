@@ -4,13 +4,12 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from functools import cache
 from typing import TYPE_CHECKING, Any, NotRequired, Protocol, Required, TypedDict, Unpack, cast, overload, override
 
-from advanced_alchemy.repository import SQLAlchemyAsyncRepository
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_scoped_session
 
+from litestar_auth.authentication.strategy._db_repositories import TokenRepositoryType, build_token_repository
 from litestar_auth.authentication.strategy._opaque_tokens import (
     digest_opaque_token,
     mint_opaque_token,
@@ -22,40 +21,22 @@ from litestar_auth.authentication.strategy.base import (
     Strategy,
     UserManagerProtocol,
 )
-from litestar_auth.authentication.strategy.db_models import AccessToken, DatabaseTokenModels, RefreshToken
+from litestar_auth.authentication.strategy.db_models import DatabaseTokenModels
 from litestar_auth.config import validate_production_secret
 from litestar_auth.exceptions import ConfigurationError
 from litestar_auth.types import UserProtocol
 
 if TYPE_CHECKING:
+    from advanced_alchemy.repository import SQLAlchemyAsyncRepository
     from sqlalchemy.sql.base import Executable
 
 type AsyncSessionT = AsyncSession | async_scoped_session[AsyncSession]
-type TokenRepositoryType = type[SQLAlchemyAsyncRepository[Any]]
 
 DEFAULT_MAX_AGE = timedelta(hours=1)
 DEFAULT_REFRESH_MAX_AGE = timedelta(days=30)
 DEFAULT_TOKEN_BYTES = 32
 _CLIENT_METADATA_USER_AGENT_KEY = "user_agent"
 _MAX_CLIENT_METADATA_VALUE_LENGTH = 255
-
-
-@cache
-def _build_token_repository(token_model: type[Any]) -> TokenRepositoryType:
-    """Create a repository type bound to the provided token model.
-
-    Returns:
-        Cached Advanced Alchemy async repository subclass for ``token_model``.
-    """
-    return type(
-        f"{token_model.__name__}Repository",
-        (SQLAlchemyAsyncRepository,),
-        {"model_type": token_model, "id_attribute": "token"},
-    )
-
-
-AccessTokenRepository = _build_token_repository(AccessToken)
-RefreshTokenRepository = _build_token_repository(RefreshToken)
 
 
 class _RefreshTokenRow(Protocol):
@@ -138,8 +119,8 @@ class DatabaseTokenStrategy[UP: UserProtocol[Any], ID](Strategy[UP, ID], Refresh
         self.token_models = DatabaseTokenModels() if settings.token_models is None else settings.token_models
         self.access_token_model = self.token_models.access_token_model
         self.refresh_token_model = self.token_models.refresh_token_model
-        self._access_token_repository_type = _build_token_repository(self.access_token_model)
-        self._refresh_token_repository_type = _build_token_repository(self.refresh_token_model)
+        self._access_token_repository_type = build_token_repository(self.access_token_model)
+        self._refresh_token_repository_type = build_token_repository(self.refresh_token_model)
         self.max_age = settings.max_age
         self.refresh_max_age = settings.refresh_max_age
         self.token_bytes = settings.token_bytes

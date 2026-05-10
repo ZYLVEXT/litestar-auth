@@ -145,6 +145,8 @@ def test_contrib_packages_reexport_public_symbols() -> None:
 def test_contrib_packages_define_all() -> None:
     """Contrib packages publish only their intended public symbols."""
     assert redis_all == (
+        "RedisApiKeyNonceStore",
+        "RedisApiKeyNonceStoreClient",
         "RedisAuthClientProtocol",
         "RedisAuthPreset",
         "RedisAuthRateLimitConfigOptions",
@@ -1118,6 +1120,8 @@ async def test_contrib_role_admin_controller_handlers_cover_config_and_request_b
 @pytest.mark.imports
 def test_contrib_redis_public_boundary_tracks_internal_surface() -> None:
     """The public Redis contrib package re-exports the dedicated internal surface."""
+    assert redis_module.RedisApiKeyNonceStore is redis_surface_module.RedisApiKeyNonceStore
+    assert redis_module.RedisApiKeyNonceStoreClient is redis_surface_module.RedisApiKeyNonceStoreClient
     assert redis_module.RedisAuthClientProtocol is redis_surface_module.RedisAuthClientProtocol
     assert redis_module.RedisAuthPreset is redis_surface_module.RedisAuthPreset
     assert redis_module.RedisAuthRateLimitConfigOptions is redis_surface_module.RedisAuthRateLimitConfigOptions
