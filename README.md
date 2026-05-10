@@ -140,6 +140,26 @@ Password hashing defaults are now Argon2-only. Unsupported stored password hashe
 under the library default, so rotate or reset those credentials before upgrading; see the
 [Migration Guide](https://zylvext.github.io/litestar-auth/migration/).
 
+## Runnable examples
+
+This repository ships small Litestar apps under [`examples/`](examples/__init__.py) (not published on PyPI).
+Each package documents its own environment variables; local demos typically set `..._INSECURE=1` as noted there.
+
+Install an ASGI server (for example `uvicorn`), then pick a scenario from the table in [`examples/__init__.py`](examples/__init__.py).
+
+Bearer JWT + TOTP sketch (`demo_totp`):
+
+```bash
+export LITESTAR_AUTH_DEMO_TOTP_INSECURE=1
+uv run uvicorn examples.demo_totp.app:app --host 127.0.0.1 --port 8000
+# curl http://127.0.0.1:8000/health
+# curl -sS -X POST http://127.0.0.1:8000/auth/register \
+#   -H 'Content-Type: application/json' \
+#   -d '{"email":"you@example.com","password":"choose-a-strong-password"}'
+```
+
+Cookie + CSRF flows (`demo_cookie_jwt`, `demo_cookie_jwt_totp`) need a client that keeps cookies and sends `X-CSRF-Token` on unsafe methods after loading `/health`.
+
 ## Read more
 
 - [Quickstart](https://zylvext.github.io/litestar-auth/quickstart/): bootstrap SQLite, run the app, and walk through register/verify/login.

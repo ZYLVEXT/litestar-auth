@@ -44,6 +44,7 @@ all = ["litestar-auth[redis,oauth,totp]"]
 
 [dependency-groups]
 dev = [
+    "aiosqlite>=0.21.0,<0.23",
     "commitizen>=4.15.1",
     "pip-audit>=2.10.0",
     "pytest>=9.0.3",
@@ -79,6 +80,7 @@ experimental_namespace_package = true
 optional_dependencies_dev_groups = ["dev", "docs"]
 
 [tool.deptry.per_rule_ignores]
+DEP001 = ["uvicorn"]
 DEP004 = ["dotenv"]
 DEP002 = ["redis", "httpx-oauth", "litestar-auth", "cryptography"]
 DEP003 = ["msgspec", "sqlalchemy"]
