@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import inspect
+import logging
 from typing import TYPE_CHECKING, Any, cast
 from unittest.mock import AsyncMock
 from uuid import uuid4
@@ -167,8 +168,49 @@ def test_user_schema_module_strips_sensitive_fields_when_serializing() -> None:
     )
 
 
+@pytest.mark.parametrize("failure", ["inactive", "unverified"])
+def test_resolve_account_state_client_error_collapses_account_state_failures(
+    failure: account_state_module.AccountStateFailure,
+) -> None:
+    """Shared account-state failures expose one client-facing error code."""
+    assert account_state_module.resolve_account_state_client_error(failure) == (
+        STATUS_BAD_REQUEST,
+        ErrorCode.LOGIN_ACCOUNT_UNAVAILABLE,
+    )
+
+
+@pytest.mark.parametrize("failure", ["inactive", "unverified"])
+def test_resolve_account_state_client_error_logs_internal_reason(
+    failure: account_state_module.AccountStateFailure,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Security logs keep the internal account-state reason without adding PII."""
+    with caplog.at_level(logging.INFO, logger="litestar_auth.security"):
+        account_state_module.resolve_account_state_client_error(failure)
+
+    record = next(record for record in caplog.records if getattr(record, "event", None) == "account_state_failure")
+    assert record.name == "litestar_auth.security"
+    assert record.levelno == logging.INFO
+    assert vars(record)["reason"] == failure
+
+
+@pytest.mark.parametrize("failure", ["inactive", "unverified"])
+def test_raise_account_state_client_exception_uses_generic_detail(
+    failure: account_state_module.AccountStateFailure,
+) -> None:
+    """Client exceptions use a uniform detail regardless of the internal account-state failure."""
+    cause = RuntimeError("domain-specific account state failure")
+
+    with pytest.raises(ClientException) as exc_info:
+        account_state_module.raise_account_state_client_exception(failure, cause=cause)
+
+    assert exc_info.value.status_code == STATUS_BAD_REQUEST
+    assert exc_info.value.detail == account_state_module._GENERIC_ACCOUNT_UNAVAILABLE_DETAIL
+    assert exc_info.value.extra == {"code": ErrorCode.LOGIN_ACCOUNT_UNAVAILABLE}
+
+
 def test_shared_account_state_client_error_helper_maps_inactive_users() -> None:
-    """Shared account-state helpers preserve the stable inactive-user client payload."""
+    """Shared account-state helpers preserve the stable account-unavailable client payload."""
     with pytest.raises(ClientException) as exc_info:
         account_state_module.require_account_state_with_client_error(
             _DummyUser(is_active=False),
@@ -181,8 +223,8 @@ def test_shared_account_state_client_error_helper_maps_inactive_users() -> None:
         )
 
     assert exc_info.value.status_code == STATUS_BAD_REQUEST
-    assert exc_info.value.detail == "The user account is inactive."
-    assert exc_info.value.extra == {"code": ErrorCode.LOGIN_USER_INACTIVE}
+    assert exc_info.value.detail == account_state_module._GENERIC_ACCOUNT_UNAVAILABLE_DETAIL
+    assert exc_info.value.extra == {"code": ErrorCode.LOGIN_ACCOUNT_UNAVAILABLE}
 
 
 @pytest.mark.asyncio
@@ -708,7 +750,7 @@ async def test_require_account_state_falls_back_when_manager_has_no_validator() 
             require_verified=True,
         )
 
-    assert exc_info.value.extra == {"code": ErrorCode.LOGIN_USER_NOT_VERIFIED}
+    assert exc_info.value.extra == {"code": ErrorCode.LOGIN_ACCOUNT_UNAVAILABLE}
 
 
 @pytest.mark.asyncio
@@ -718,8 +760,8 @@ async def test_require_account_state_falls_back_to_user_attributes_without_manag
         await _require_account_state(_DummyUser(is_verified=False), require_verified=True)
 
     assert exc_info.value.status_code == STATUS_BAD_REQUEST
-    assert exc_info.value.detail == "The user account is not verified."
-    assert exc_info.value.extra == {"code": ErrorCode.LOGIN_USER_NOT_VERIFIED}
+    assert exc_info.value.detail == account_state_module._GENERIC_ACCOUNT_UNAVAILABLE_DETAIL
+    assert exc_info.value.extra == {"code": ErrorCode.LOGIN_ACCOUNT_UNAVAILABLE}
 
 
 @pytest.mark.asyncio
@@ -735,8 +777,8 @@ async def test_require_account_state_maps_inactive_manager_errors() -> None:
         await _require_account_state(_DummyUser(), user_manager=cast("Any", _Manager()))
 
     assert exc_info.value.status_code == STATUS_BAD_REQUEST
-    assert exc_info.value.detail == "The user account is inactive."
-    assert exc_info.value.extra == {"code": ErrorCode.LOGIN_USER_INACTIVE}
+    assert exc_info.value.detail == account_state_module._GENERIC_ACCOUNT_UNAVAILABLE_DETAIL
+    assert exc_info.value.extra == {"code": ErrorCode.LOGIN_ACCOUNT_UNAVAILABLE}
 
 
 @pytest.mark.asyncio
@@ -756,8 +798,8 @@ async def test_require_account_state_maps_unverified_manager_errors() -> None:
         )
 
     assert exc_info.value.status_code == STATUS_BAD_REQUEST
-    assert exc_info.value.detail == "The user account is not verified."
-    assert exc_info.value.extra == {"code": ErrorCode.LOGIN_USER_NOT_VERIFIED}
+    assert exc_info.value.detail == account_state_module._GENERIC_ACCOUNT_UNAVAILABLE_DETAIL
+    assert exc_info.value.extra == {"code": ErrorCode.LOGIN_ACCOUNT_UNAVAILABLE}
 
 
 @pytest.mark.asyncio
@@ -782,7 +824,7 @@ async def test_require_account_state_invokes_failure_callback_before_raising() -
         )
 
     on_failure.assert_awaited_once_with()
-    assert exc_info.value.extra == {"code": ErrorCode.LOGIN_USER_INACTIVE}
+    assert exc_info.value.extra == {"code": ErrorCode.LOGIN_ACCOUNT_UNAVAILABLE}
 
 
 @pytest.mark.asyncio
@@ -798,7 +840,7 @@ async def test_require_account_state_invokes_failure_callback_for_unverified_err
         )
 
     on_failure.assert_awaited_once_with()
-    assert exc_info.value.extra == {"code": ErrorCode.LOGIN_USER_NOT_VERIFIED}
+    assert exc_info.value.extra == {"code": ErrorCode.LOGIN_ACCOUNT_UNAVAILABLE}
 
 
 @pytest.mark.asyncio
@@ -810,5 +852,5 @@ async def test_require_account_state_returns_inactive_client_error_for_dual_fail
             require_verified=True,
         )
 
-    assert exc_info.value.detail == "The user account is inactive."
-    assert exc_info.value.extra == {"code": ErrorCode.LOGIN_USER_INACTIVE}
+    assert exc_info.value.detail == account_state_module._GENERIC_ACCOUNT_UNAVAILABLE_DETAIL
+    assert exc_info.value.extra == {"code": ErrorCode.LOGIN_ACCOUNT_UNAVAILABLE}

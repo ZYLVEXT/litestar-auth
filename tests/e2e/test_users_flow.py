@@ -245,7 +245,7 @@ async def _verify_then_login_headers(
     assert response.status_code == HTTP_BAD_REQUEST
     login_payload = response.json()
     login_code = login_payload.get("code") or (login_payload.get("extra") or {}).get("code")
-    assert login_code == ErrorCode.LOGIN_USER_NOT_VERIFIED
+    assert login_code == ErrorCode.LOGIN_ACCOUNT_UNAVAILABLE
 
     verify_token = UsersFlowManager.verification_tokens[email]
     response = await client.post("/auth/verify", json={"token": verify_token})
@@ -694,8 +694,8 @@ async def test_users_me_rejects_deactivated_user_with_existing_session(
 
     me_response = await test_client.get("/users/me", headers=member_headers)
     assert me_response.status_code == HTTP_BAD_REQUEST
-    assert me_response.json()["detail"] == "The user account is inactive."
-    assert me_response.json()["code"] == ErrorCode.LOGIN_USER_INACTIVE
+    assert me_response.json()["detail"] == "Account is not available for sign-in."
+    assert me_response.json()["code"] == ErrorCode.LOGIN_ACCOUNT_UNAVAILABLE
 
 
 async def test_role_guards_and_request_user_roles_survive_relational_storage(

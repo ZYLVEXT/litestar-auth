@@ -110,8 +110,8 @@ def test_oauth_service_module_reload_preserves_behavioral_error_contract(monkeyp
     assert type(exc_info.value).__name__ == "ConfigurationError"
     assert getattr(exc_info.value, "code", None) == ErrorCode.CONFIGURATION_INVALID
     extra = client_exc_info.value.extra
-    assert (extra.get("code") if isinstance(extra, dict) else None) == ErrorCode.LOGIN_USER_INACTIVE
-    assert client_exc_info.value.detail == reloaded_module.InactiveUserError.default_message
+    assert (extra.get("code") if isinstance(extra, dict) else None) == ErrorCode.LOGIN_ACCOUNT_UNAVAILABLE
+    assert client_exc_info.value.detail == reloaded_module._shared_account_state._GENERIC_ACCOUNT_UNAVAILABLE_DETAIL
 
 
 def test_pkce_module_reload_preserves_generation_contract(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -428,7 +428,7 @@ def test_require_account_state_maps_unverified_user_error() -> None:
         )
 
     extra = exc_info.value.extra
-    assert (extra.get("code") if isinstance(extra, dict) else None) == ErrorCode.LOGIN_USER_NOT_VERIFIED
+    assert (extra.get("code") if isinstance(extra, dict) else None) == ErrorCode.LOGIN_ACCOUNT_UNAVAILABLE
 
 
 def test_require_account_state_rejects_inactive_guarded_user_without_validator() -> None:
@@ -443,7 +443,7 @@ def test_require_account_state_rejects_inactive_guarded_user_without_validator()
         )
 
     extra = exc_info.value.extra
-    assert (extra.get("code") if isinstance(extra, dict) else None) == ErrorCode.LOGIN_USER_INACTIVE
+    assert (extra.get("code") if isinstance(extra, dict) else None) == ErrorCode.LOGIN_ACCOUNT_UNAVAILABLE
 
 
 def test_require_account_state_allows_active_guarded_user_without_validator() -> None:
@@ -481,7 +481,7 @@ async def test_complete_login_maps_inactive_user_to_client_error() -> None:
         )
 
     extra = exc_info.value.extra
-    assert (extra.get("code") if isinstance(extra, dict) else None) == ErrorCode.LOGIN_USER_INACTIVE
+    assert (extra.get("code") if isinstance(extra, dict) else None) == ErrorCode.LOGIN_ACCOUNT_UNAVAILABLE
     manager.oauth_account_store.upsert_oauth_account.assert_not_awaited()
 
 

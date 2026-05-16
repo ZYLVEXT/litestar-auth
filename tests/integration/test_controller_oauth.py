@@ -1017,7 +1017,7 @@ async def test_callback_rejects_inactive_existing_user() -> None:
     assert callback_response.status_code == HTTP_BAD_REQUEST
     body = callback_response.json()
     code = body.get("code") or (body.get("extra") or {}).get("code")
-    assert code == ErrorCode.LOGIN_USER_INACTIVE
+    assert code == ErrorCode.LOGIN_ACCOUNT_UNAVAILABLE
     assert user_manager.created_users == []
     assert user_manager.logged_in_users == []
     assert len(user_db.oauth_accounts) == 0
@@ -1057,8 +1057,8 @@ async def test_callback_maps_unverified_account_state_error_to_client_error() ->
     assert callback_response.status_code == HTTP_BAD_REQUEST
     body = callback_response.json()
     code = body.get("code") or (body.get("extra") or {}).get("code")
-    assert code == ErrorCode.LOGIN_USER_NOT_VERIFIED
-    assert body["detail"] == "The user account is not verified."
+    assert code == ErrorCode.LOGIN_ACCOUNT_UNAVAILABLE
+    assert body["detail"] == "Account is not available for sign-in."
     assert user_db.oauth_accounts == {}
 
 
@@ -1736,7 +1736,7 @@ async def test_associate_rejects_inactive_authenticated_user() -> None:
     assert callback_response.status_code == HTTP_BAD_REQUEST
     body = callback_response.json()
     code = body.get("code") or (body.get("extra") or {}).get("code")
-    assert code == ErrorCode.LOGIN_USER_INACTIVE
+    assert code == ErrorCode.LOGIN_ACCOUNT_UNAVAILABLE
     assert user_db.oauth_accounts == {}
 
 

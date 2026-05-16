@@ -342,7 +342,7 @@ async def test_refresh_enforces_inactive_user_policy(client: tuple[AsyncTestClie
     assert refresh_response.status_code == HTTP_BAD_REQUEST
     payload = refresh_response.json()
     code = payload.get("code") or (payload.get("extra") or {}).get("code")
-    assert code == ErrorCode.LOGIN_USER_INACTIVE
+    assert code == ErrorCode.LOGIN_ACCOUNT_UNAVAILABLE
 
 
 async def test_refresh_enforces_verified_user_policy(session: Session) -> None:
@@ -366,7 +366,7 @@ async def test_refresh_enforces_verified_user_policy(session: Session) -> None:
     assert refresh_response.status_code == HTTP_BAD_REQUEST
     payload = refresh_response.json()
     code = payload.get("code") or (payload.get("extra") or {}).get("code")
-    assert code == ErrorCode.LOGIN_USER_NOT_VERIFIED
+    assert code == ErrorCode.LOGIN_ACCOUNT_UNAVAILABLE
 
 
 async def test_refresh_rate_limit_is_optional_and_valid_requests_still_succeed(session: Session) -> None:

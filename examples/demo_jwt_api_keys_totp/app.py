@@ -92,6 +92,53 @@ class _DemoSecrets:
     totp_fernet_key: str
 
 
+class DemoUserManager(BaseUserManager[User, UUID]):
+    """Demo hooks (verification is optional because ``requires_verification=False``)."""
+
+    async def on_after_request_verify_token(self, user: User | None, token: str | None) -> None:
+        """Log issued verification tokens during local demos."""
+        await super().on_after_request_verify_token(user, token)
+        if user is not None and token is not None:
+            logger.info(
+                "Verification token issued for %s — POST /auth/verify with the token payload",
+                user.email,
+            )
+
+
+def _required_secret(name: str) -> str:
+    value = os.environ.get(name)
+    if not value:
+        msg = (
+            f"Missing {name}. Export strong secrets or set "
+            "LITESTAR_AUTH_DEMO_JWT_API_KEYS_TOTP_INSECURE=1 for local demonstration only."
+        )
+        raise RuntimeError(msg)
+    return value
+
+
+def _insecure_demo_secrets() -> _DemoSecrets:
+    (
+        jwt_s,
+        verify_s,
+        reset_s,
+        ak_s,
+        csrf_s,
+        pending_s,
+        recovery_s,
+        fernet_s,
+    ) = _INSECURE_DEFAULTS
+    return _DemoSecrets(
+        jwt_secret=jwt_s,
+        verify_secret=verify_s,
+        reset_secret=reset_s,
+        api_key_hash_secret=ak_s,
+        csrf_secret=csrf_s,
+        totp_pending_secret=pending_s,
+        totp_recovery_lookup_secret=recovery_s,
+        totp_fernet_key=fernet_s,
+    )
+
+
 def _demo_secrets() -> _DemoSecrets:
     """Load secrets from the environment or insecure demo defaults.
 
@@ -103,74 +150,56 @@ def _demo_secrets() -> _DemoSecrets:
             "LITESTAR_AUTH_DEMO_JWT_API_KEYS_TOTP_INSECURE=1 uses fixed secrets; never enable in production.",
             stacklevel=2,
         )
-        (
-            jwt_s,
-            verify_s,
-            reset_s,
-            ak_s,
-            csrf_s,
-            pending_s,
-            recovery_s,
-            fernet_s,
-        ) = _INSECURE_DEFAULTS
-        return _DemoSecrets(
-            jwt_secret=jwt_s,
-            verify_secret=verify_s,
-            reset_secret=reset_s,
-            api_key_hash_secret=ak_s,
-            csrf_secret=csrf_s,
-            totp_pending_secret=pending_s,
-            totp_recovery_lookup_secret=recovery_s,
-            totp_fernet_key=fernet_s,
-        )
-
-    def _req(name: str) -> str:
-        value = os.environ.get(name)
-        if not value:
-            msg = (
-                f"Missing {name}. Export strong secrets or set "
-                "LITESTAR_AUTH_DEMO_JWT_API_KEYS_TOTP_INSECURE=1 for local demonstration only."
-            )
-            raise RuntimeError(msg)
-        return value
+        return _insecure_demo_secrets()
 
     return _DemoSecrets(
-        jwt_secret=_req("LITESTAR_AUTH_JWT_SECRET"),
-        verify_secret=_req("LITESTAR_AUTH_VERIFY_TOKEN_SECRET"),
-        reset_secret=_req("LITESTAR_AUTH_RESET_PASSWORD_TOKEN_SECRET"),
-        api_key_hash_secret=_req("LITESTAR_AUTH_API_KEY_HASH_SECRET"),
-        csrf_secret=_req("LITESTAR_AUTH_CSRF_SECRET"),
-        totp_pending_secret=_req("LITESTAR_AUTH_TOTP_PENDING_SECRET"),
-        totp_recovery_lookup_secret=_req("LITESTAR_AUTH_TOTP_RECOVERY_LOOKUP_SECRET"),
-        totp_fernet_key=_req("LITESTAR_AUTH_TOTP_FERNET_KEY"),
+        jwt_secret=_required_secret("LITESTAR_AUTH_JWT_SECRET"),
+        verify_secret=_required_secret("LITESTAR_AUTH_VERIFY_TOKEN_SECRET"),
+        reset_secret=_required_secret("LITESTAR_AUTH_RESET_PASSWORD_TOKEN_SECRET"),
+        api_key_hash_secret=_required_secret("LITESTAR_AUTH_API_KEY_HASH_SECRET"),
+        csrf_secret=_required_secret("LITESTAR_AUTH_CSRF_SECRET"),
+        totp_pending_secret=_required_secret("LITESTAR_AUTH_TOTP_PENDING_SECRET"),
+        totp_recovery_lookup_secret=_required_secret("LITESTAR_AUTH_TOTP_RECOVERY_LOOKUP_SECRET"),
+        totp_fernet_key=_required_secret("LITESTAR_AUTH_TOTP_FERNET_KEY"),
     )
 
 
-def _build_litestar_auth_config(*, secrets: _DemoSecrets, runtime: _DemoRuntime) -> LitestarAuthConfig[User, UUID]:
-    bearer_backend = AuthenticationBackend[User, UUID](
+def _bearer_backend(secret: str) -> AuthenticationBackend[User, UUID]:
+    return AuthenticationBackend[User, UUID](
         name="jwt_bearer",
         transport=BearerTransport(),
         strategy=JWTStrategy[User, UUID](
-            secret=secrets.jwt_secret,
+            secret=secret,
             lifetime=timedelta(minutes=30),
             subject_decoder=UUID,
             allow_inmemory_denylist=True,
         ),
     )
 
-    class DemoUserManager(BaseUserManager[User, UUID]):
-        """Demo hooks (verification is optional because ``requires_verification=False``)."""
 
-        async def on_after_request_verify_token(self, user: User | None, token: str | None) -> None:
-            await super().on_after_request_verify_token(user, token)
-            if user is not None and token is not None:
-                logger.info(
-                    "Verification token issued for %s — POST /auth/verify with the token payload",
-                    user.email,
-                )
+def _totp_config(secrets: _DemoSecrets) -> TotpConfig:
+    return TotpConfig(
+        totp_pending_secret=secrets.totp_pending_secret,
+        totp_pending_jti_store=InMemoryJWTDenylistStore(),
+        totp_enrollment_store=InMemoryTotpEnrollmentStore(),
+        totp_used_tokens_store=InMemoryUsedTotpCodeStore(),
+        totp_issuer="litestar-auth-demo-jwt-keys",
+    )
 
+
+def _api_key_config() -> ApiKeyConfig:
+    return ApiKeyConfig(
+        enabled=True,
+        allowed_scopes=("read", "write"),
+        store_factory=lambda session: SQLAlchemyApiKeyStore(session, api_key_model=ApiKey),
+        environment_marker="demo",
+        scope_subset_check=False,
+    )
+
+
+def _build_litestar_auth_config(*, secrets: _DemoSecrets, runtime: _DemoRuntime) -> LitestarAuthConfig[User, UUID]:
     return LitestarAuthConfig[User, UUID](
-        backends=(bearer_backend,),
+        backends=(_bearer_backend(secrets.jwt_secret),),
         session_maker=runtime.session_maker,
         user_model=User,
         user_manager_class=DemoUserManager,
@@ -184,20 +213,8 @@ def _build_litestar_auth_config(*, secrets: _DemoSecrets, runtime: _DemoRuntime)
             id_parser=UUID,
         ),
         csrf_secret=secrets.csrf_secret,
-        totp_config=TotpConfig(
-            totp_pending_secret=secrets.totp_pending_secret,
-            totp_pending_jti_store=InMemoryJWTDenylistStore(),
-            totp_enrollment_store=InMemoryTotpEnrollmentStore(),
-            totp_used_tokens_store=InMemoryUsedTotpCodeStore(),
-            totp_issuer="litestar-auth-demo-jwt-keys",
-        ),
-        api_keys=ApiKeyConfig(
-            enabled=True,
-            allowed_scopes=("read", "write"),
-            store_factory=lambda session: SQLAlchemyApiKeyStore(session, api_key_model=ApiKey),
-            environment_marker="demo",
-            scope_subset_check=False,
-        ),
+        totp_config=_totp_config(secrets),
+        api_keys=_api_key_config(),
         auth_path="/auth",
         users_path="/users",
         include_register=True,

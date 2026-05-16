@@ -567,8 +567,8 @@ async def test_controller_helper_module_reload_preserves_account_state_error_con
         await reloaded_module._require_account_state(object(), user_manager=manager)
 
     extra = exc_info.value.extra
-    assert (extra.get("code") if isinstance(extra, dict) else None) == ErrorCode.LOGIN_USER_INACTIVE
-    assert exc_info.value.detail == reloaded_module.InactiveUserError.default_message
+    assert (extra.get("code") if isinstance(extra, dict) else None) == ErrorCode.LOGIN_ACCOUNT_UNAVAILABLE
+    assert exc_info.value.detail == reloaded_module._shared_account_state._GENERIC_ACCOUNT_UNAVAILABLE_DETAIL
 
 
 def test_oauth_module_reload_preserves_helper_error_contract(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -962,7 +962,7 @@ async def test_oauth_associate_callback_rejects_inactive_user_before_linking(
 
     assert exc_info.value.status_code == HTTP_400_BAD_REQUEST
     extra = exc_info.value.extra
-    assert (extra.get("code") if isinstance(extra, dict) else None) == ErrorCode.LOGIN_USER_INACTIVE
+    assert (extra.get("code") if isinstance(extra, dict) else None) == ErrorCode.LOGIN_ACCOUNT_UNAVAILABLE
     associate_account.assert_not_awaited()
 
 

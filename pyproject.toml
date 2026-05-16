@@ -38,14 +38,14 @@ tracker = "https://github.com/ZYLVEXT/litestar-auth/issues"
 
 [project.optional-dependencies]
 redis = ["redis>=7.4.0,<8.0.0"]
-oauth = ["httpx-oauth>=0.16.1,<0.17.0", "cryptography>=48.0.0"]
+oauth = ["httpx-oauth>=0.17.0,<0.18.0", "cryptography>=48.0.0"]
 totp = ["cryptography>=48.0.0"]
 all = ["litestar-auth[redis,oauth,totp]"]
 
 [dependency-groups]
 dev = [
-    "aiosqlite>=0.21.0,<0.23",
-    "commitizen>=4.15.1",
+    "aiosqlite>=0.22.1,<0.23",
+    "commitizen>=4.16.2",
     "pip-audit>=2.10.0",
     "pytest>=9.0.3",
     "pytest-cov>=7.1.0",
@@ -54,17 +54,17 @@ dev = [
     "python-dotenv>=1.2.2",
     "pytest-timeout>=2.4.0",
     "pytest-xdist>=3.8.0",
-    "ruff>=0.15.12",
-    "rust-just>=1.50.0",
-    "ty>=0.0.34",
+    "ruff>=0.15.13",
+    "rust-just>=1.51.0",
+    "ty>=0.0.37",
     "deptry>=0.25.1",
-    "prek>=0.3.13",
+    "prek>=0.4.0",
     "fakeredis[lua]>=2.35.1",
 ]
 docs = [
     "mkdocstrings[python]>=1.0.4",
-    "pymdown-extensions>=10.21.2",
-    "zensical>=0.0.41",
+    "pymdown-extensions>=10.21.3",
+    "zensical>=0.0.42",
 ]
 
 [tool.ty.environment]

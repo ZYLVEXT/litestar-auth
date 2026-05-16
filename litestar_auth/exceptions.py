@@ -199,14 +199,14 @@ class InactiveUserError(AuthenticationError):
     """Raised when an operation requires an active account."""
 
     default_message = "The user account is inactive."
-    default_code = ErrorCode.LOGIN_USER_INACTIVE
+    default_code = ErrorCode.LOGIN_ACCOUNT_UNAVAILABLE
 
 
 class UnverifiedUserError(AuthenticationError):
     """Raised when an operation requires a verified account."""
 
     default_message = "The user account is not verified."
-    default_code = ErrorCode.LOGIN_USER_NOT_VERIFIED
+    default_code = ErrorCode.LOGIN_ACCOUNT_UNAVAILABLE
 
 
 class InvalidVerifyTokenError(TokenError):

@@ -2433,7 +2433,7 @@ async def test_verify_rejects_inactive_user_when_requires_verification_enabled()
         )
 
         assert resp.status_code == HTTP_BAD_REQUEST
-        assert resp.json()["detail"] == "The user account is inactive."
+        assert resp.json()["detail"] == "Account is not available for sign-in."
 
 
 async def test_verify_rejects_unverified_user_when_requires_verification_enabled() -> None:
@@ -2457,15 +2457,15 @@ async def test_verify_rejects_unverified_user_when_requires_verification_enabled
         )
 
         assert resp.status_code == HTTP_BAD_REQUEST
-        assert resp.json()["detail"] == "The user account is not verified."
+        assert resp.json()["detail"] == "Account is not available for sign-in."
 
 
 @pytest.mark.parametrize(
     ("account_patch", "expected_detail"),
     [
-        ({"is_active": False}, "The user account is inactive."),
-        ({"is_verified": False}, "The user account is not verified."),
-        ({"is_active": False, "is_verified": False}, "The user account is inactive."),
+        ({"is_active": False}, "Account is not available for sign-in."),
+        ({"is_verified": False}, "Account is not available for sign-in."),
+        ({"is_active": False, "is_verified": False}, "Account is not available for sign-in."),
     ],
 )
 async def test_verify_account_state_failures_reset_without_incrementing_rate_limit(
@@ -2549,8 +2549,8 @@ async def test_verify_routes_through_manager_account_state_validator() -> None:
         )
 
     assert resp.status_code == HTTP_BAD_REQUEST
-    assert resp.json()["detail"] == "The user account is inactive."
-    assert resp.json()["extra"]["code"] == ErrorCode.LOGIN_USER_INACTIVE.value
+    assert resp.json()["detail"] == "Account is not available for sign-in."
+    assert resp.json()["extra"]["code"] == ErrorCode.LOGIN_ACCOUNT_UNAVAILABLE.value
 
 
 async def test_verify_rejects_replayed_code_when_store_enabled() -> None:

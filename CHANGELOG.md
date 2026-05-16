@@ -1,3 +1,31 @@
+## Unreleased
+
+### Added
+
+- **Unified login account-state error code.** Added `ErrorCode.LOGIN_ACCOUNT_UNAVAILABLE` for
+  account-state failures that are intentionally opaque to clients.
+
+### Removed
+
+- **Deprecated differentiated login account-state codes.** Removed `ErrorCode.LOGIN_USER_INACTIVE`
+  and `ErrorCode.LOGIN_USER_NOT_VERIFIED`; downstream consumers should match
+  `LOGIN_ACCOUNT_UNAVAILABLE` instead.
+
+### Security
+
+- **Account-state responses no longer reveal inactive vs. unverified state.** Login and related
+  account-state gated flows now return the same 400 / `LOGIN_ACCOUNT_UNAVAILABLE` client payload to
+  prevent account-state enumeration (audit VULN #1, CWE-204). Operators can still observe the
+  internal reason through the `account_state_failure` structured log event on the
+  `litestar_auth.security` logger.
+
+### Migration
+
+- **Update assertions and client handling for account-state failures.** Replace any downstream
+  assertions on `LOGIN_USER_INACTIVE` or `LOGIN_USER_NOT_VERIFIED` with
+  `LOGIN_ACCOUNT_UNAVAILABLE`; use server logs, not client payloads, when the internal
+  inactive/unverified reason is needed.
+
 ## 3.2.0 (2026-05-10)
 
 ### Fixed

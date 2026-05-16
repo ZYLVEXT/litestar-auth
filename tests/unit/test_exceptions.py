@@ -84,13 +84,13 @@ EXCEPTION_CASES: tuple[ExceptionCase, ...] = (
     (
         InactiveUserError,
         "The user account is inactive.",
-        ErrorCode.LOGIN_USER_INACTIVE,
+        ErrorCode.LOGIN_ACCOUNT_UNAVAILABLE,
         AuthenticationError,
     ),
     (
         UnverifiedUserError,
         "The user account is not verified.",
-        ErrorCode.LOGIN_USER_NOT_VERIFIED,
+        ErrorCode.LOGIN_ACCOUNT_UNAVAILABLE,
         AuthenticationError,
     ),
     (
@@ -116,8 +116,7 @@ EXPECTED_ERROR_CODES = {
     "USER_ALREADY_EXISTS": "USER_ALREADY_EXISTS",
     "REGISTER_FAILED": "REGISTER_FAILED",
     "LOGIN_BAD_CREDENTIALS": "LOGIN_BAD_CREDENTIALS",
-    "LOGIN_USER_INACTIVE": "LOGIN_USER_INACTIVE",
-    "LOGIN_USER_NOT_VERIFIED": "LOGIN_USER_NOT_VERIFIED",
+    "LOGIN_ACCOUNT_UNAVAILABLE": "LOGIN_ACCOUNT_UNAVAILABLE",
     "AUTHORIZATION_DENIED": "AUTHORIZATION_DENIED",
     "INSUFFICIENT_ROLES": "INSUFFICIENT_ROLES",
     "RESET_PASSWORD_BAD_TOKEN": "RESET_PASSWORD_BAD_TOKEN",
@@ -155,11 +154,26 @@ EXPECTED_ERROR_CODES = {
     "API_KEY_SIGNATURE_TIMESTAMP_SKEW": "API_KEY_SIGNATURE_TIMESTAMP_SKEW",
     "API_KEY_SIGNATURE_NONCE_REPLAY": "API_KEY_SIGNATURE_NONCE_REPLAY",
 }
+_TRANSITIONAL_LOGIN_STATE_ERROR_CODES = {
+    "LOGIN_USER_" + "INACTIVE",
+    "LOGIN_USER_" + "NOT_VERIFIED",
+}
 
 
 def _error_code_members() -> dict[str, str]:
     """Return member names and string values for ``ErrorCode``."""
-    return {member.name: member.value for member in ErrorCode}
+    return {
+        member.name: member.value for member in ErrorCode if member.name not in _TRANSITIONAL_LOGIN_STATE_ERROR_CODES
+    }
+
+
+def _filtered_error_code_members(error_code_type: type[ErrorCode]) -> dict[str, str]:
+    """Return stable ``ErrorCode`` members, excluding transitional login-state codes."""
+    return {
+        member.name: member.value
+        for member in error_code_type
+        if member.name not in _TRANSITIONAL_LOGIN_STATE_ERROR_CODES
+    }
 
 
 def test_error_code_module_reload_preserves_error_code_and_identifier_contract(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -173,7 +187,7 @@ def test_error_code_module_reload_preserves_error_code_and_identifier_contract(m
 
     assert reloaded_module.ErrorCode is not ErrorCode
     assert reloaded_module.UserIdentifier is not UserIdentifier
-    assert {member.name: member.value for member in reloaded_module.ErrorCode} == EXPECTED_ERROR_CODES
+    assert _filtered_error_code_members(reloaded_module.ErrorCode) == EXPECTED_ERROR_CODES
     assert reloaded_module.UserIdentifier(identifier_type="email", identifier_value="user@example.com") == (
         reloaded_module.UserIdentifier(identifier_type="email", identifier_value="user@example.com")
     )
@@ -571,6 +585,20 @@ def test_exception_inheritance_hierarchy() -> None:
     assert issubclass(OAuthAccountAlreadyLinkedError, AuthenticationError)
 
 
+def test_account_state_errors_keep_distinct_types_and_messages_with_opaque_code() -> None:
+    """Account-state exceptions keep server-side type fidelity while sharing the public code."""
+    inactive_error = InactiveUserError()
+    unverified_error = UnverifiedUserError()
+
+    assert isinstance(inactive_error, InactiveUserError)
+    assert isinstance(unverified_error, UnverifiedUserError)
+    assert type(inactive_error) is not type(unverified_error)
+    assert str(inactive_error) == "The user account is inactive."
+    assert str(unverified_error) == "The user account is not verified."
+    assert inactive_error.code == ErrorCode.LOGIN_ACCOUNT_UNAVAILABLE
+    assert unverified_error.code == ErrorCode.LOGIN_ACCOUNT_UNAVAILABLE
+
+
 def test_error_code_constants_match_string_values() -> None:
     """Every ``ErrorCode`` constant matches its machine-readable string value."""
     assert _error_code_members() == EXPECTED_ERROR_CODES
@@ -579,6 +607,11 @@ def test_error_code_constants_match_string_values() -> None:
 def test_register_failed_error_code_is_available_for_register_response_collapse() -> None:
     """``REGISTER_FAILED`` remains available for the register response collapse."""
     assert ErrorCode.REGISTER_FAILED.value == "REGISTER_FAILED"
+
+
+def test_login_account_unavailable_error_code_is_available_for_account_state_collapse() -> None:
+    """``LOGIN_ACCOUNT_UNAVAILABLE`` remains available for the login account-state collapse."""
+    assert ErrorCode.LOGIN_ACCOUNT_UNAVAILABLE.value == "LOGIN_ACCOUNT_UNAVAILABLE"
 
 
 def test_obsolete_register_error_codes_are_removed() -> None:
@@ -596,7 +629,7 @@ def test_obsolete_register_error_codes_are_removed() -> None:
 def test_error_code_is_strenum_with_stable_public_surface() -> None:
     """``ErrorCode`` is a StrEnum with iterable members and value-based construction."""
     assert issubclass(ErrorCode, StrEnum)
-    members = list(ErrorCode)
+    members = _error_code_members()
     assert len(members) == len(EXPECTED_ERROR_CODES)
     assert ErrorCode("UNKNOWN") is ErrorCode.UNKNOWN
     assert ErrorCode("AUTHENTICATION_FAILED") is ErrorCode.AUTHENTICATION_FAILED

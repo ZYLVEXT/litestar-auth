@@ -510,7 +510,7 @@ async def test_refresh_rejects_inactive_user_without_global_invalidation_hook() 
             **{DEFAULT_USER_MANAGER_DEPENDENCY_KEY: um},
         )
 
-    assert exc_info.value.extra == {"code": ErrorCode.LOGIN_USER_INACTIVE}
+    assert exc_info.value.extra == {"code": ErrorCode.LOGIN_ACCOUNT_UNAVAILABLE}
 
 
 async def test_refresh_invalidates_all_tokens_for_protocol_matching_strategy() -> None:
@@ -575,7 +575,7 @@ async def test_refresh_invalidates_all_tokens_for_protocol_matching_strategy() -
             **{DEFAULT_USER_MANAGER_DEPENDENCY_KEY: um},
         )
 
-    assert exc_info.value.extra == {"code": ErrorCode.LOGIN_USER_INACTIVE}
+    assert exc_info.value.extra == {"code": ErrorCode.LOGIN_ACCOUNT_UNAVAILABLE}
     strategy.invalidate_all_tokens.assert_awaited_once()
 
 
@@ -673,7 +673,7 @@ async def test_login_increments_rate_limit_on_account_state_failure() -> None:
             user_manager=user_manager,
         )
 
-    assert exc_info.value.extra == {"code": ErrorCode.LOGIN_USER_INACTIVE}
+    assert exc_info.value.extra == {"code": ErrorCode.LOGIN_ACCOUNT_UNAVAILABLE}
     limiter_backend.increment.assert_awaited_once()
     limiter_backend.reset.assert_not_awaited()
 

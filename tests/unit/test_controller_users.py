@@ -12,6 +12,7 @@ import pytest
 from litestar.exceptions import ClientException, NotFoundException
 from litestar.status_codes import HTTP_400_BAD_REQUEST
 
+import litestar_auth._account_state as account_state_module
 import litestar_auth.controllers.users as users_module
 from litestar_auth.controllers._users_helpers import (
     _build_change_password_rate_limit_key,
@@ -228,15 +229,15 @@ def build_context(
 
 
 async def test_require_account_state_uses_explicit_manager_contract_for_unverified_users() -> None:
-    """The shared helper maps explicit-manager UnverifiedUserError into LOGIN_USER_NOT_VERIFIED."""
+    """The shared helper maps explicit-manager UnverifiedUserError into the unified account-state error."""
     user = DummyUser(id=uuid4(), email="user@example.com")
 
     with pytest.raises(ClientException) as exc_info:
         await _require_account_state(user, user_manager=cast("Any", DummyUserManager()), require_verified=False)
 
     assert exc_info.value.status_code == HTTP_400_BAD_REQUEST
-    assert exc_info.value.detail == "The user account is not verified."
-    assert exc_info.value.extra == {"code": ErrorCode.LOGIN_USER_NOT_VERIFIED}
+    assert exc_info.value.detail == account_state_module._GENERIC_ACCOUNT_UNAVAILABLE_DETAIL
+    assert exc_info.value.extra == {"code": ErrorCode.LOGIN_ACCOUNT_UNAVAILABLE}
 
 
 async def test_require_account_state_uses_attribute_fallback_without_manager_contract() -> None:

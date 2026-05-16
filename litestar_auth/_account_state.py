@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from typing import Literal, NoReturn, Protocol, cast
 
@@ -16,6 +17,8 @@ _ACCOUNT_STATE_PROTOCOL_DETAIL = (
 )
 
 _HTTP_BAD_REQUEST = 400
+_GENERIC_ACCOUNT_UNAVAILABLE_DETAIL = "Account is not available for sign-in."
+_SECURITY_LOGGER = logging.getLogger("litestar_auth.security")
 
 type AccountStateFailure = Literal["inactive", "unverified"]
 
@@ -118,14 +121,16 @@ def resolve_account_state_client_error(
     Returns:
         Stable status code and error code for the internal account-state failure.
     """
-    error_code = ErrorCode.LOGIN_USER_INACTIVE if failure == "inactive" else ErrorCode.LOGIN_USER_NOT_VERIFIED
-    return _HTTP_BAD_REQUEST, error_code
+    _SECURITY_LOGGER.info(
+        "account state failure",
+        extra={"event": "account_state_failure", "reason": failure},
+    )
+    return _HTTP_BAD_REQUEST, ErrorCode.LOGIN_ACCOUNT_UNAVAILABLE
 
 
 def raise_account_state_client_exception(
     failure: AccountStateFailure,
     *,
-    detail: str,
     cause: BaseException,
 ) -> NoReturn:
     """Raise the stable client-facing payload for an account-state failure.
@@ -134,7 +139,11 @@ def raise_account_state_client_exception(
         ClientException: Always raised with the stable login account-state payload.
     """
     status_code, error_code = resolve_account_state_client_error(failure)
-    raise ClientException(status_code=status_code, detail=detail, extra={"code": error_code}) from cause
+    raise ClientException(
+        status_code=status_code,
+        detail=_GENERIC_ACCOUNT_UNAVAILABLE_DETAIL,
+        extra={"code": error_code},
+    ) from cause
 
 
 def require_account_state_with_client_error(
@@ -153,9 +162,9 @@ def require_account_state_with_client_error(
             error_types=error_types,
         )
     except error_types.inactive_error as exc:
-        raise_account_state_client_exception("inactive", detail=str(exc), cause=exc)
+        raise_account_state_client_exception("inactive", cause=exc)
     except error_types.unverified_error as exc:
-        raise_account_state_client_exception("unverified", detail=str(exc), cause=exc)
+        raise_account_state_client_exception("unverified", cause=exc)
 
 
 def raise_account_state_failure(

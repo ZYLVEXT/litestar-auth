@@ -26,8 +26,7 @@ Exact JSON layout follows your Litestar exception handler configuration.
 | `USER_ALREADY_EXISTS` | 400 | Duplicate user in a non-endpoint-specific default exception context. |
 | `REGISTER_FAILED` | 400 | Generic registration failure. |
 | `LOGIN_BAD_CREDENTIALS` | 400 | Wrong password or unknown user (login). |
-| `LOGIN_USER_INACTIVE` | 403 | Account disabled. |
-| `LOGIN_USER_NOT_VERIFIED` | 403 | Verification required (`requires_verification` / flow). |
+| `LOGIN_ACCOUNT_UNAVAILABLE` | 400 | Account-state policy blocked sign-in, refresh, OAuth local session issue, or another account-state gated flow. |
 | `AUTHORIZATION_DENIED` | 403 | Guard denied access. |
 | `INSUFFICIENT_ROLES` | 403 | Role-based guard denial. Structured role context stays on the exception object but is omitted from default HTTP responses. |
 | `ROLE_ALREADY_EXISTS` | 409 | Opt-in contrib role-admin create conflict. |
@@ -66,6 +65,11 @@ Exact JSON layout follows your Litestar exception handler configuration.
 `USER_ALREADY_EXISTS`, `REGISTER_FAILED`, and `UPDATE_USER_INVALID_PASSWORD` keep stable HTTP mappings even though the corresponding Python exceptions now use keyword-only structured context.
 
 Source of truth in code: `litestar_auth._error_codes.ErrorCode` (re-exported from `litestar_auth.exceptions`) and controller `ClientException` sites. Full exception hierarchy: [Python API — Exceptions](api/exceptions.md).
+
+`LOGIN_ACCOUNT_UNAVAILABLE` intentionally uses one opaque 400 response for inactive and unverified
+account-state failures so external observers cannot enumerate account state after valid credentials.
+Operators can correlate the internal `inactive` / `unverified` reason through the `account_state_failure`
+structured log event emitted on the `litestar_auth.security` logger.
 
 ## Enumeration safety
 

@@ -65,6 +65,10 @@ class _DemoRuntime:
     engine: AsyncEngine
 
 
+class DemoUserManager(BaseUserManager[User, UUID]):
+    """Thin concrete manager for the bundled ``User`` model."""
+
+
 def _demo_secrets() -> tuple[str, str, str]:
     """Return (db_token_hash, verify, reset) secrets."""
     if os.environ.get("LITESTAR_AUTH_DEMO_DB_TOKEN_INSECURE") == "1":
@@ -88,6 +92,52 @@ def _demo_secrets() -> tuple[str, str, str]:
     )
 
 
+def _demo_runtime() -> _DemoRuntime:
+    db_url = os.environ.get(
+        "LITESTAR_AUTH_DEMO_DB_TOKEN_DATABASE_URL",
+        f"sqlite+aiosqlite:///{Path.cwd() / 'demo_db_token.db'}",
+    )
+    engine = create_async_engine(db_url, echo=False)
+    session_maker = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+    return _DemoRuntime(session_maker=session_maker, engine=engine)
+
+
+def _build_litestar_auth_config(
+    *,
+    hash_secret: str,
+    verify_secret: str,
+    reset_secret: str,
+    runtime: _DemoRuntime,
+) -> LitestarAuthConfig[User, UUID]:
+    return LitestarAuthConfig[User, UUID](
+        database_token_auth=DatabaseTokenAuthConfig(token_hash_secret=hash_secret),
+        session_maker=runtime.session_maker,
+        user_model=User,
+        user_manager_class=DemoUserManager,
+        user_db_factory=lambda session: SQLAlchemyUserDatabase(session, user_model=User),
+        user_manager_security=UserManagerSecurity[UUID](
+            verification_token_secret=verify_secret,
+            reset_password_token_secret=reset_secret,
+        ),
+        enable_refresh=True,
+        requires_verification=False,
+        deployment_worker_count=1,
+        include_openapi_security=True,
+    )
+
+
+def _build_lifespan(engine: AsyncEngine) -> AsyncIterator[None]:
+    @asynccontextmanager
+    async def lifespan(_: Litestar) -> AsyncIterator[None]:
+        configure_mappers()
+        async with engine.begin() as connection:
+            await connection.run_sync(User.metadata.create_all)
+        yield
+        await engine.dispose()
+
+    return lifespan
+
+
 @get("/demo/db-token-profile", guards=[is_authenticated], sync_to_thread=False)
 def db_token_profile(request: Request[User, UUID, Any]) -> dict[str, Any]:
     """Echo the authenticated user when a valid DB-backed access token is presented.
@@ -107,46 +157,18 @@ def create_app() -> Litestar:
     """
     import_token_orm_models()
     hash_s, verify_s, reset_s = _demo_secrets()
-
-    db_url = os.environ.get(
-        "LITESTAR_AUTH_DEMO_DB_TOKEN_DATABASE_URL",
-        f"sqlite+aiosqlite:///{Path.cwd() / 'demo_db_token.db'}",
+    runtime = _demo_runtime()
+    config = _build_litestar_auth_config(
+        hash_secret=hash_s,
+        verify_secret=verify_s,
+        reset_secret=reset_s,
+        runtime=runtime,
     )
-    engine = create_async_engine(db_url, echo=False)
-    session_maker = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
-    runtime = _DemoRuntime(session_maker=session_maker, engine=engine)
-
-    class DemoUserManager(BaseUserManager[User, UUID]):
-        """Thin concrete manager for the bundled ``User`` model."""
-
-    config = LitestarAuthConfig[User, UUID](
-        database_token_auth=DatabaseTokenAuthConfig(token_hash_secret=hash_s),
-        session_maker=runtime.session_maker,
-        user_model=User,
-        user_manager_class=DemoUserManager,
-        user_db_factory=lambda session: SQLAlchemyUserDatabase(session, user_model=User),
-        user_manager_security=UserManagerSecurity[UUID](
-            verification_token_secret=verify_s,
-            reset_password_token_secret=reset_s,
-        ),
-        enable_refresh=True,
-        requires_verification=False,
-        deployment_worker_count=1,
-        include_openapi_security=True,
-    )
-
-    @asynccontextmanager
-    async def lifespan(_: Litestar) -> AsyncIterator[None]:
-        configure_mappers()
-        async with engine.begin() as connection:
-            await connection.run_sync(User.metadata.create_all)
-        yield
-        await engine.dispose()
 
     return Litestar(
         route_handlers=[db_token_profile],
         plugins=[LitestarAuth(config)],
-        lifespan=[lifespan],
+        lifespan=[_build_lifespan(runtime.engine)],
         openapi_config=OpenAPIConfig(
             title="litestar-auth demo (database tokens + refresh)",
             version="0.1.0",

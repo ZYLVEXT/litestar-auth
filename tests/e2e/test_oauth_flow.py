@@ -684,7 +684,7 @@ async def test_oauth_callback_rejects_inactive_existing_user_before_session_issu
         )
 
     assert callback_response.status_code == HTTP_BAD_REQUEST
-    assert callback_response.json().get("code") == ErrorCode.LOGIN_USER_INACTIVE
+    assert callback_response.json().get("code") == ErrorCode.LOGIN_ACCOUNT_UNAVAILABLE
     assert "access_token" not in callback_response.json()
     assert await get_oauth_account(state, "github", "provider-user-inactive") is None
     state.engine.dispose()

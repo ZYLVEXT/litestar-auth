@@ -393,8 +393,8 @@ async def test_login_inactive_user_is_rejected(login_identifier: Literal["email"
     assert response.status_code == HTTP_BAD_REQUEST
     data = response.json()
     code = data.get("code") or (data.get("extra") or {}).get("code")
-    assert code == ErrorCode.LOGIN_USER_INACTIVE
-    assert "inactive" in str(data.get("detail", "")).lower()
+    assert code == ErrorCode.LOGIN_ACCOUNT_UNAVAILABLE
+    assert data["detail"] == "Account is not available for sign-in."
 
 
 async def test_guarded_route_rejects_inactive_user_token() -> None:
@@ -571,7 +571,7 @@ async def test_refresh_rejects_inactive_user_in_auth_controller() -> None:
 
     assert response.status_code == HTTP_BAD_REQUEST
     code = response.json().get("code") or (response.json().get("extra") or {}).get("code")
-    assert code == ErrorCode.LOGIN_USER_INACTIVE
+    assert code == ErrorCode.LOGIN_ACCOUNT_UNAVAILABLE
     assert refresh_strategy.refresh_tokens == {"refresh-2": user.id}
 
 
@@ -682,7 +682,7 @@ async def test_failed_login_does_not_update_hash(login_identifier: Literal["emai
 async def test_requires_verification_true_unverified_returns_400(
     login_identifier: Literal["email", "username"],
 ) -> None:
-    """When requires_verification=True, unverified user gets 400 with LOGIN_USER_NOT_VERIFIED."""
+    """When verification is required, unverified users receive the opaque account-state error."""
     cred = login_identifier_credential(login_identifier)
     app, _, _ = build_app(
         login_identifier=login_identifier,
@@ -697,15 +697,50 @@ async def test_requires_verification_true_unverified_returns_400(
     assert response.status_code == HTTP_BAD_REQUEST
     data = response.json()
     code = data.get("code") or (data.get("extra") or {}).get("code")
-    assert code == ErrorCode.LOGIN_USER_NOT_VERIFIED
-    assert "detail" in data
+    assert code == ErrorCode.LOGIN_ACCOUNT_UNAVAILABLE
+    assert data["detail"] == "Account is not available for sign-in."
+
+
+@pytest.mark.parametrize("login_identifier", ["email", "username"])
+async def test_login_account_state_failures_share_identical_client_payload(
+    login_identifier: Literal["email", "username"],
+) -> None:
+    """Inactive and unverified login failures expose the same client payload."""
+    cred = login_identifier_credential(login_identifier)
+    inactive_app, _, _ = build_app(
+        login_identifier=login_identifier,
+        requires_verification=True,
+        initial_is_active=False,
+    )
+    unverified_app, _, _ = build_app(
+        login_identifier=login_identifier,
+        requires_verification=True,
+        initial_is_verified=False,
+    )
+
+    async with (
+        AsyncTestClient(app=inactive_app) as inactive_client,
+        AsyncTestClient(app=unverified_app) as unverified_client,
+    ):
+        inactive_response = await inactive_client.post(
+            "/auth/login",
+            json={"identifier": cred, "password": "correct-password"},
+        )
+        unverified_response = await unverified_client.post(
+            "/auth/login",
+            json={"identifier": cred, "password": "correct-password"},
+        )
+
+    assert inactive_response.status_code == HTTP_BAD_REQUEST
+    assert unverified_response.status_code == HTTP_BAD_REQUEST
+    assert inactive_response.json() == unverified_response.json()
 
 
 @pytest.mark.parametrize("login_identifier", ["email", "username"])
 async def test_requires_verification_true_dual_account_state_failure_returns_inactive_error(
     login_identifier: Literal["email", "username"],
 ) -> None:
-    """Users failing both account-state checks receive the inactive login error."""
+    """Users failing both account-state checks receive the opaque account-state error."""
     cred = login_identifier_credential(login_identifier)
     app, _, _ = build_app(
         login_identifier=login_identifier,
@@ -722,8 +757,8 @@ async def test_requires_verification_true_dual_account_state_failure_returns_ina
     assert response.status_code == HTTP_BAD_REQUEST
     data = response.json()
     code = data.get("code") or (data.get("extra") or {}).get("code")
-    assert code == ErrorCode.LOGIN_USER_INACTIVE
-    assert data["detail"] == "The user account is inactive."
+    assert code == ErrorCode.LOGIN_ACCOUNT_UNAVAILABLE
+    assert data["detail"] == "Account is not available for sign-in."
 
 
 @pytest.mark.parametrize("login_identifier", ["email", "username"])

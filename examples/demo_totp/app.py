@@ -126,6 +126,19 @@ class _DemoTotpSecrets:
     totp_fernet_key: str
 
 
+class DemoTotpUserManager(BaseUserManager[User, UUID]):
+    """Demo hooks (verification is optional because ``requires_verification=False``)."""
+
+    async def on_after_request_verify_token(self, user: User | None, token: str | None) -> None:
+        """Log issued verification tokens during local demos."""
+        await super().on_after_request_verify_token(user, token)
+        if user is not None and token is not None:
+            logger.info(
+                "Verification token issued for %s — POST /auth/verify with the token payload",
+                user.email,
+            )
+
+
 def _demo_secrets() -> _DemoTotpSecrets:
     """Load secrets from the environment or fixed insecure defaults.
 
@@ -177,35 +190,36 @@ def _demo_secrets() -> _DemoTotpSecrets:
     )
 
 
-def _build_litestar_auth_config(
-    *,
-    secrets: _DemoTotpSecrets,
-    runtime: _DemoRuntime,
-) -> LitestarAuthConfig[User, UUID]:
-    bearer_backend = AuthenticationBackend[User, UUID](
+def _bearer_backend(secret: str) -> AuthenticationBackend[User, UUID]:
+    return AuthenticationBackend[User, UUID](
         name="jwt_bearer",
         transport=BearerTransport(),
         strategy=JWTStrategy[User, UUID](
-            secret=secrets.jwt_secret,
+            secret=secret,
             lifetime=timedelta(minutes=30),
             subject_decoder=UUID,
             allow_inmemory_denylist=True,
         ),
     )
 
-    class DemoTotpUserManager(BaseUserManager[User, UUID]):
-        """Demo hooks (verification is optional because ``requires_verification=False``)."""
 
-        async def on_after_request_verify_token(self, user: User | None, token: str | None) -> None:
-            await super().on_after_request_verify_token(user, token)
-            if user is not None and token is not None:
-                logger.info(
-                    "Verification token issued for %s — POST /auth/verify with the token payload",
-                    user.email,
-                )
+def _totp_config(secrets: _DemoTotpSecrets) -> TotpConfig:
+    return TotpConfig(
+        totp_pending_secret=secrets.totp_pending_secret,
+        totp_pending_jti_store=InMemoryJWTDenylistStore(),
+        totp_enrollment_store=InMemoryTotpEnrollmentStore(),
+        totp_used_tokens_store=InMemoryUsedTotpCodeStore(),
+        totp_issuer="litestar-auth-demo",
+    )
 
+
+def _build_litestar_auth_config(
+    *,
+    secrets: _DemoTotpSecrets,
+    runtime: _DemoRuntime,
+) -> LitestarAuthConfig[User, UUID]:
     return LitestarAuthConfig[User, UUID](
-        backends=(bearer_backend,),
+        backends=(_bearer_backend(secrets.jwt_secret),),
         session_maker=runtime.session_maker,
         user_model=User,
         user_manager_class=DemoTotpUserManager,
@@ -218,13 +232,7 @@ def _build_litestar_auth_config(
             id_parser=UUID,
         ),
         csrf_secret=secrets.csrf_secret,
-        totp_config=TotpConfig(
-            totp_pending_secret=secrets.totp_pending_secret,
-            totp_pending_jti_store=InMemoryJWTDenylistStore(),
-            totp_enrollment_store=InMemoryTotpEnrollmentStore(),
-            totp_used_tokens_store=InMemoryUsedTotpCodeStore(),
-            totp_issuer="litestar-auth-demo",
-        ),
+        totp_config=_totp_config(secrets),
         auth_path="/auth",
         users_path="/users",
         include_register=True,

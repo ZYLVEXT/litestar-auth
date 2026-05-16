@@ -127,35 +127,49 @@ class _DemoAuthSecrets:
     csrf_secret: str
 
 
-def _build_litestar_auth_config(
-    *,
-    secrets: _DemoAuthSecrets,
-    runtime: _DemoRuntime,
-) -> LitestarAuthConfig[User, UUID]:
-    bearer_backend = AuthenticationBackend[User, UUID](
+class DemoUserManager(BaseUserManager[User, UUID]):
+    """Demo hooks (verification is optional because ``requires_verification=False``)."""
+
+    async def on_after_request_verify_token(self, user: User | None, token: str | None) -> None:
+        """Log issued verification tokens during local demos."""
+        await super().on_after_request_verify_token(user, token)
+        if user is not None and token is not None:
+            logger.info(
+                "Verification token issued for %s — POST /auth/verify with the token payload",
+                user.email,
+            )
+
+
+def _bearer_backend(secret: str) -> AuthenticationBackend[User, UUID]:
+    return AuthenticationBackend[User, UUID](
         name="jwt_bearer",
         transport=BearerTransport(),
         strategy=JWTStrategy[User, UUID](
-            secret=secrets.jwt_secret,
+            secret=secret,
             lifetime=timedelta(minutes=30),
             subject_decoder=UUID,
             allow_inmemory_denylist=True,
         ),
     )
 
-    class DemoUserManager(BaseUserManager[User, UUID]):
-        """Demo hooks (verification is optional because ``requires_verification=False``)."""
 
-        async def on_after_request_verify_token(self, user: User | None, token: str | None) -> None:
-            await super().on_after_request_verify_token(user, token)
-            if user is not None and token is not None:
-                logger.info(
-                    "Verification token issued for %s — POST /auth/verify with the token payload",
-                    user.email,
-                )
+def _api_key_config() -> ApiKeyConfig:
+    return ApiKeyConfig(
+        enabled=True,
+        allowed_scopes=("read", "write"),
+        store_factory=lambda session: SQLAlchemyApiKeyStore(session, api_key_model=ApiKey),
+        environment_marker="demo",
+        scope_subset_check=False,
+    )
 
+
+def _build_litestar_auth_config(
+    *,
+    secrets: _DemoAuthSecrets,
+    runtime: _DemoRuntime,
+) -> LitestarAuthConfig[User, UUID]:
     return LitestarAuthConfig[User, UUID](
-        backends=(bearer_backend,),
+        backends=(_bearer_backend(secrets.jwt_secret),),
         session_maker=runtime.session_maker,
         user_model=User,
         user_manager_class=DemoUserManager,
@@ -166,13 +180,7 @@ def _build_litestar_auth_config(
             api_key_hash_secret=secrets.api_key_hash_secret,
         ),
         csrf_secret=secrets.csrf_secret,
-        api_keys=ApiKeyConfig(
-            enabled=True,
-            allowed_scopes=("read", "write"),
-            store_factory=lambda session: SQLAlchemyApiKeyStore(session, api_key_model=ApiKey),
-            environment_marker="demo",
-            scope_subset_check=False,
-        ),
+        api_keys=_api_key_config(),
         auth_path="/auth",
         users_path="/users",
         include_register=True,
