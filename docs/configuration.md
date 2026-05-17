@@ -21,9 +21,10 @@ from litestar_auth.models import User  # or your own model
 | Role CLI, manager construction, plugin hooks, password helper, schemas, and secret contracts | [Manager customization](configuration/manager.md) |
 | Redis auth preset, shared rate limiting, replay stores, and Redis import boundaries | [Redis](configuration/redis.md) |
 | Deployment worker-count posture and production shared-store requirements | [Deployment](deployment.md#process-topology) |
-| `TotpConfig` fields and TOTP route behavior | [TOTP](configuration/totp.md) |
+| `TotpConfig` fields, TOTP route behavior, and TOTP step-up policy | [TOTP](configuration/totp.md) |
 | `OAuthConfig`, provider inventory, redirect policy, and token encryption | [OAuth](configuration/oauth.md) |
 | CSRF, legacy-token policy, dependency keys, and shared helpers | [Security and DI](configuration/security.md) |
+| Operator-side proxy, cookie, and secrets-at-rest preconditions | [Deployment security contract](deployment.md#deployment-security-contract) |
 
 ## Moved Sections
 
@@ -123,6 +124,10 @@ Moved to: [Redis](configuration/redis.md#redis-contrib-import-boundary).
 ## TOTP — `totp_config: TotpConfig | None`
 
 Moved to: [TOTP](configuration/totp.md#totp--totp_config-totpconfig--none).
+
+### TOTP step-up for sensitive operations
+
+Moved to: [TOTP](configuration/totp.md#totp-step-up-for-sensitive-operations).
 
 ## OAuth — `oauth_config: OAuthConfig | None`
 

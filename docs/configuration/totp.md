@@ -64,3 +64,52 @@ only when a secondary startup backend should issue post-2FA tokens.
 
 !!! note "Pending-enrollment store"
     The plugin-owned controller forwards `TotpConfig.totp_enrollment_store` into `create_totp_controller(..., enrollment_store=...)`. In production, missing enrollment storage now fails closed unless `unsafe_testing=True`; each `/2fa/enable` replaces the previous pending enrollment for that user, and `/2fa/enable/confirm` consumes the matching `jti` once.
+
+## TOTP step-up for sensitive operations {#totp-step-up-for-sensitive-operations}
+
+TOTP step-up is the server-side proof that an authenticated user recently completed an app-code
+TOTP verification. The marker is session-scoped, stored by the configured token strategy, and
+expires server-side. Sensitive controller operations check that marker before mutating state, or
+verify an inline `totp_code` when the request body supports one.
+
+The relevant `LitestarAuthConfig` fields are:
+
+| Field | Default | Meaning |
+| ----- | ------- | ------- |
+| `totp_stepup_ttl_seconds` | `300` | Lifetime, in seconds, for a recent-TOTP marker. The value must be a non-negative integer. |
+| `totp_stepup_policy` | `{}` | Per-endpoint overrides. Valid modes are `required_when_enrolled`, `always_required`, and `off`. Unknown endpoint keys fail startup validation. |
+| `totp_stepup_allow_recovery` | `False` | Controls whether successful recovery-code verification at `{auth_path}/2fa/verify` may issue the recent-TOTP marker. Keep the default when recovery codes should only complete login. |
+
+Default endpoint policy:
+
+| `totp_stepup_policy` key | Built-in route surface | Default mode | Inline proof field |
+| ------------------------ | ---------------------- | ------------ | ------------------ |
+| `users.update_self` | `PATCH {users_path}/me` email changes | `required_when_enrolled` | `totp_code` |
+| `api_keys.create` | `POST /api-keys` and `POST {users_path}/{user_id}/api-keys` | `required_when_enrolled` | `totp_code` on create bodies |
+| `api_keys.update` | `PATCH /api-keys/{key_id}` | `required_when_enrolled` | `totp_code` |
+| `api_keys.revoke` | `DELETE /api-keys/{key_id}` and `DELETE {users_path}/{user_id}/api-keys/{key_id}` | `required_when_enrolled` | None; use a recent marker |
+| `oauth.associate` | `GET {auth_path}/associate/{provider}/callback` | `required_when_enrolled` | None; use a recent marker |
+| `totp.disable` | `POST {auth_path}/2fa/disable` | `required_when_enrolled` | `code` |
+| `totp.regenerate_recovery_codes` | `POST {auth_path}/2fa/recovery-codes/regenerate` | `required_when_enrolled` | `totp_code` |
+
+`required_when_enrolled` preserves existing behavior for users without TOTP. If the user has an
+active TOTP secret, the operation requires either a recent marker for the same authenticated session
+or a valid inline TOTP code. `always_required` also blocks users without an active readable TOTP
+secret, which is useful only when enrollment is mandatory before the protected operation can be used.
+`off` disables the built-in gate for that endpoint.
+
+When the gate fails, bundled controllers return HTTP 403 with `ErrorCode.TOTP_STEPUP_REQUIRED`
+(`TOTP_STEPUP_REQUIRED`) in the response `extra.code`. Clients should prompt for a fresh TOTP code,
+submit it inline when the endpoint accepts the field, or complete `{auth_path}/2fa/verify` and retry
+from the same session.
+
+Recovery codes are intentionally narrower than app-code verification. With the default
+`totp_stepup_allow_recovery=False`, a recovery code can complete the pending login flow but does not
+create a marker that unlocks other sensitive operations. `POST {auth_path}/2fa/disable` still accepts
+a recovery code as its own unlock factor so users can disable MFA when the authenticator app is
+unavailable.
+
+API-key authenticated requests cannot complete an interactive TOTP challenge. API-key management
+routes also require `requires_password_session`, so API-key callers are rejected before the step-up
+gate instead of being allowed to satisfy it with the same delegated credential they are trying to
+manage. Use a bearer or cookie login session for API-key create/update/revoke flows.

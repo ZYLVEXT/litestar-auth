@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING, Any, cast
 import msgspec  # noqa: TC002
 from litestar import Controller, Request, post
 
+from litestar_auth.controllers._auth_helpers import TOTP_STEPUP_REQUIRED_OPENAPI_RESPONSE
 from litestar_auth.controllers._utils import (
     RequestBodyErrorConfig,
     RequestBodyRouteHandler,
@@ -153,7 +154,12 @@ def _create_totp_disable_handler[UP: UserProtocol[Any], ID](
         Decorated Litestar route handler.
     """
 
-    @post("/disable", guards=[is_authenticated, requires_password_session], security=security)
+    @post(
+        "/disable",
+        guards=[is_authenticated, requires_password_session],
+        security=security,
+        responses={403: TOTP_STEPUP_REQUIRED_OPENAPI_RESPONSE},
+    )
     async def disable(
         self: object,
         request: Request[Any, Any, Any],
@@ -181,7 +187,12 @@ def _create_totp_regenerate_recovery_codes_handler[UP: UserProtocol[Any], ID](
         Decorated Litestar route handler.
     """
 
-    @post("/recovery-codes/regenerate", guards=[is_authenticated, requires_password_session], security=security)
+    @post(
+        "/recovery-codes/regenerate",
+        guards=[is_authenticated, requires_password_session],
+        security=security,
+        responses={403: TOTP_STEPUP_REQUIRED_OPENAPI_RESPONSE},
+    )
     async def regenerate_recovery_codes(
         self: object,
         request: Request[Any, Any, Any],
@@ -246,13 +257,13 @@ def _define_totp_controller_class_di[UP: UserProtocol[Any], ID](
     )
     controller = cast("Any", controller_cls)
 
+    async def _on_regenerate_request_body_error(request: Request[Any, Any, Any]) -> None:
+        await ctx.runtime.rate_limit.on_invalid_attempt("regenerate_recovery_codes", request)
+
     if ctx.security.totp_enable_requires_password:
 
         async def _on_enable_request_body_error(request: Request[Any, Any, Any]) -> None:
             await ctx.runtime.rate_limit.on_invalid_attempt("enable", request)
-
-        async def _on_regenerate_request_body_error(request: Request[Any, Any, Any]) -> None:
-            await ctx.runtime.rate_limit.on_invalid_attempt("regenerate_recovery_codes", request)
 
         _configure_request_body_handler(
             controller.enable,
@@ -263,17 +274,17 @@ def _define_totp_controller_class_di[UP: UserProtocol[Any], ID](
                 on_decode_error=_on_enable_request_body_error,
             ),
         )
-        _configure_request_body_handler(
-            controller.regenerate_recovery_codes,
-            schema=TotpRegenerateRecoveryCodesRequest,
-            error_config=RequestBodyErrorConfig(
-                validation_code=ErrorCode.LOGIN_PAYLOAD_INVALID,
-                on_validation_error=_on_regenerate_request_body_error,
-                on_decode_error=_on_regenerate_request_body_error,
-            ),
-        )
     else:
         _remove_request_body_handler_data_parameter(controller.enable)
-        _remove_request_body_handler_data_parameter(controller.regenerate_recovery_codes)
+
+    _configure_request_body_handler(
+        controller.regenerate_recovery_codes,
+        schema=TotpRegenerateRecoveryCodesRequest,
+        error_config=RequestBodyErrorConfig(
+            validation_code=ErrorCode.LOGIN_PAYLOAD_INVALID,
+            on_validation_error=_on_regenerate_request_body_error,
+            on_decode_error=_on_regenerate_request_body_error,
+        ),
+    )
 
     return controller_cls

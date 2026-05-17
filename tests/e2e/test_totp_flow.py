@@ -17,6 +17,7 @@ from litestar_auth._plugin.config import TotpConfig
 from litestar_auth.authentication.backend import AuthenticationBackend
 from litestar_auth.authentication.strategy.jwt import InMemoryJWTDenylistStore, JWTStrategy
 from litestar_auth.authentication.transport.bearer import BearerTransport
+from litestar_auth.exceptions import ErrorCode
 from litestar_auth.guards import is_authenticated
 from litestar_auth.manager import BaseUserManager, UserManagerSecurity
 from litestar_auth.models import User
@@ -35,6 +36,7 @@ pytestmark = [pytest.mark.e2e]
 HTTP_ACCEPTED = 202
 HTTP_BAD_REQUEST = 400
 HTTP_CREATED = 201
+HTTP_FORBIDDEN = 403
 HTTP_OK = 200
 TOTP_PENDING_SECRET = "test-totp-pending-secret-1234567890"
 TOTP_RECOVERY_CODE_LOOKUP_SECRET = "test-recovery-code-lookup-secret-123"
@@ -109,6 +111,7 @@ def app() -> Iterator[Litestar]:
         session_maker=cast("Any", SessionMaker(engine)),
         user_model=User,
         user_manager_class=TOTPUserManager,
+        include_users=True,
         user_manager_security=UserManagerSecurity[UUID](
             verification_token_secret="0123456789abcdef" * 4,
             reset_password_token_secret="fedcba9876543210" * 4,
@@ -285,3 +288,65 @@ async def test_totp_recovery_code_fallback_authenticates_pending_login_flow(
     )
     assert protected_response.status_code == HTTP_OK
     assert protected_response.json() == {"email": "user@example.com"}
+
+
+@pytest.mark.filterwarnings("ignore::litestar_auth.totp.SecurityWarning")
+async def test_totp_stepup_enforced_on_email_change(
+    client: AsyncTestClient[Litestar],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Email changes require an inline TOTP step-up proof for enrolled users."""
+    fixed_counter = 123_456
+    monkeypatch.setattr("litestar_auth.totp._current_counter", lambda: fixed_counter)
+    initial_login_response = await client.post(
+        "/auth/login",
+        json={"identifier": "user@example.com", "password": "correct-password"},
+    )
+    initial_access_token = initial_login_response.json()["access_token"]
+    enable_response = await client.post(
+        "/auth/2fa/enable",
+        json={"password": "correct-password"},
+        headers={"Authorization": f"Bearer {initial_access_token}"},
+    )
+    enable_payload = enable_response.json()
+    confirm_response = await client.post(
+        "/auth/2fa/enable/confirm",
+        json={
+            "enrollment_token": enable_payload["enrollment_token"],
+            "code": _generate_totp_code(enable_payload["secret"], fixed_counter),
+        },
+        headers={"Authorization": f"Bearer {initial_access_token}"},
+    )
+    assert confirm_response.status_code == HTTP_CREATED
+    pending_login_response = await client.post(
+        "/auth/login",
+        json={"identifier": "user@example.com", "password": "correct-password"},
+    )
+    verify_response = await client.post(
+        "/auth/2fa/verify",
+        json={
+            "pending_token": pending_login_response.json()["pending_token"],
+            "code": _generate_totp_code(enable_payload["secret"], fixed_counter),
+        },
+    )
+    verified_access_token = verify_response.json()["access_token"]
+
+    missing_stepup_response = await client.patch(
+        "/users/me",
+        headers={"Authorization": f"Bearer {verified_access_token}"},
+        json={"email": "updated@example.com", "current_password": "correct-password"},
+    )
+    accepted_response = await client.patch(
+        "/users/me",
+        headers={"Authorization": f"Bearer {verified_access_token}"},
+        json={
+            "email": "updated@example.com",
+            "current_password": "correct-password",
+            "totp_code": _generate_totp_code(enable_payload["secret"], fixed_counter),
+        },
+    )
+
+    assert missing_stepup_response.status_code == HTTP_FORBIDDEN
+    assert missing_stepup_response.json()["extra"]["code"] == ErrorCode.TOTP_STEPUP_REQUIRED
+    assert accepted_response.status_code == HTTP_OK
+    assert accepted_response.json()["email"] == "updated@example.com"

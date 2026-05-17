@@ -58,6 +58,8 @@ from tests.integration.test_orchestrator import (
 _DB_TOKEN_STARTUP_ONLY_FAIL_CLOSED = re.escape("LitestarAuthConfig.resolve_backends(session)")
 _API_KEY_STARTUP_ONLY_FAIL_CLOSED = re.escape("LitestarAuthConfig.resolve_backends(session)")
 DEFAULT_REGISTER_MINIMUM_RESPONSE_SECONDS = plugin_config_module.DEFAULT_REGISTER_MINIMUM_RESPONSE_SECONDS
+DEFAULT_VERIFY_MINIMUM_RESPONSE_SECONDS = plugin_config_module.DEFAULT_VERIFY_MINIMUM_RESPONSE_SECONDS
+DEFAULT_REQUEST_VERIFY_MINIMUM_RESPONSE_SECONDS = plugin_config_module.DEFAULT_REQUEST_VERIFY_MINIMUM_RESPONSE_SECONDS
 API_KEY_HASH_SECRET = "api-key-hash-secret-0123456789abcdef"
 ApiKeyConfig = plugin_config_module.ApiKeyConfig
 DEFAULT_API_KEY_MAX_KEYS_PER_USER = plugin_config_module.DEFAULT_API_KEY_MAX_KEYS_PER_USER
@@ -444,13 +446,23 @@ def test_litestar_auth_config_declares_superuser_role_name_field() -> None:
 
 
 def test_litestar_auth_config_declares_register_minimum_response_seconds_field() -> None:
-    """The plugin config exposes the register timing envelope knob."""
+    """The plugin config exposes the endpoint timing envelope knobs."""
     dataclass_fields = LitestarAuthConfig.__dataclass_fields__
 
     assert "register_minimum_response_seconds" in dataclass_fields
     assert dataclass_fields["register_minimum_response_seconds"].type == "float"
     assert dataclass_fields["register_minimum_response_seconds"].default == pytest.approx(
         DEFAULT_REGISTER_MINIMUM_RESPONSE_SECONDS,
+    )
+    assert "verify_minimum_response_seconds" in dataclass_fields
+    assert dataclass_fields["verify_minimum_response_seconds"].type == "float"
+    assert dataclass_fields["verify_minimum_response_seconds"].default == pytest.approx(
+        DEFAULT_VERIFY_MINIMUM_RESPONSE_SECONDS,
+    )
+    assert "request_verify_minimum_response_seconds" in dataclass_fields
+    assert dataclass_fields["request_verify_minimum_response_seconds"].type == "float"
+    assert dataclass_fields["request_verify_minimum_response_seconds"].default == pytest.approx(
+        DEFAULT_REQUEST_VERIFY_MINIMUM_RESPONSE_SECONDS,
     )
 
 
@@ -471,12 +483,24 @@ def test_litestar_auth_config_login_identifier_defaults_to_email() -> None:
 
 
 def test_litestar_auth_config_rejects_negative_register_minimum_response_seconds() -> None:
-    """Negative register timing envelopes fail during config construction."""
+    """Negative endpoint timing envelopes fail during config construction."""
     with pytest.raises(ConfigurationError, match="register_minimum_response_seconds must be non-negative"):
         LitestarAuthConfig[ExampleUser, UUID](
             user_model=ExampleUser,
             user_manager_class=PluginUserManager,
             register_minimum_response_seconds=-0.001,
+        )
+    with pytest.raises(ConfigurationError, match="verify_minimum_response_seconds must be non-negative"):
+        LitestarAuthConfig[ExampleUser, UUID](
+            user_model=ExampleUser,
+            user_manager_class=PluginUserManager,
+            verify_minimum_response_seconds=-0.001,
+        )
+    with pytest.raises(ConfigurationError, match="request_verify_minimum_response_seconds must be non-negative"):
+        LitestarAuthConfig[ExampleUser, UUID](
+            user_model=ExampleUser,
+            user_manager_class=PluginUserManager,
+            request_verify_minimum_response_seconds=-0.001,
         )
 
 

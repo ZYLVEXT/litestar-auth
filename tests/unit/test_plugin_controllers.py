@@ -595,6 +595,8 @@ def test_append_optional_feature_controllers_appends_enabled_features_in_order(
     config.user_read_schema = _ReadSchema
     config.user_create_schema = _CreateSchema
     config.user_update_schema = _UpdateSchema
+    config.verify_minimum_response_seconds = 0.2
+    config.request_verify_minimum_response_seconds = 0.3
     calls: list[tuple[str, dict[str, object]]] = []
 
     def _record(name: str) -> Callable[..., str]:
@@ -662,6 +664,8 @@ def test_append_optional_feature_controllers_appends_enabled_features_in_order(
         {
             "rate_limit_config": None,
             "path": "/auth",
+            "verify_minimum_response_seconds": 0.2,
+            "request_verify_minimum_response_seconds": 0.3,
             "unsafe_testing": False,
             "user_read_schema": _ReadSchema,
         },
@@ -684,6 +688,7 @@ def test_append_optional_feature_controllers_appends_enabled_features_in_order(
             "hard_delete": False,
             "unsafe_testing": False,
             "security": None,
+            "totp_stepup_policy": {},
             "user_read_schema": _ReadSchema,
             "user_update_schema": _UpdateSchema,
         },
@@ -823,6 +828,7 @@ def test_append_oauth_associate_controllers_uses_explicit_redirect_base_url(
             "path": "/auth/associate",
             "cookie_secure": True,
             "security": None,
+            "totp_stepup_policy": {},
         },
     ]
 
@@ -960,4 +966,5 @@ def _oauth_associate_call(provider_name: str, oauth_client: object) -> dict[str,
         "path": "/auth/associate",
         "cookie_secure": False,
         "security": None,
+        "totp_stepup_policy": {},
     }

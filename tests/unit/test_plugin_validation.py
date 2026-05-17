@@ -932,8 +932,8 @@ def test_validate_config_allows_roleless_user_model_with_roleless_custom_schemas
 def test_validate_config_rejects_roleless_user_model_for_users_surface_with_role_aware_schemas() -> None:
     """The users controller also fails fast when its effective schemas still require roles.
 
-    With the self-service ``UserUpdate`` closed to email-only, the default
-    ``UserRead`` is the only schema in the users surface that still requires
+    With the self-service ``UserUpdate`` closed to email plus current-password
+    proof, the default ``UserRead`` is the only schema in the users surface that still requires
     a ``roles`` attribute — so the validator's diagnostic now points at
     "users responses" alone. ``AdminUserUpdate`` keeps ``roles`` for
     privileged writes; that path is still rejected when the model lacks
@@ -962,7 +962,7 @@ def test_validate_config_rejects_roleless_user_model_for_users_surface_with_role
 def test_validate_config_rejects_roleless_user_model_when_custom_update_schema_requires_roles() -> None:
     """A custom ``user_update_schema`` that re-introduces ``roles`` still triggers the validator.
 
-    The library default ``UserUpdate`` is email-only, but apps may legitimately provide a
+    The library default ``UserUpdate`` has no role fields, but apps may legitimately provide a
     custom schema that restores the privileged shape. The validator must keep flagging the
     "users update requests" surface for any such custom schema, otherwise a roleless user
     model paired with a roles-bearing custom update schema would slip past startup
@@ -2358,6 +2358,14 @@ def test_build_csrf_config_rejects_heterogeneous_cookie_transports() -> None:
         build_csrf_config(config, cookie_transports)
 
 
+def test_build_csrf_config_rejects_missing_csrf_secret() -> None:
+    """Runtime CSRF construction keeps the csrf_secret invariant local."""
+    config = _minimal_config(backends=[_cookie_backend()])
+
+    with pytest.raises(ValueError, match="csrf_secret must be configured"):
+        build_csrf_config(config, [CookieTransport()])
+
+
 def test_build_csrf_config_returns_expected_cookie_settings() -> None:
     """A homogeneous cookie transport set produces the shared CSRF config."""
     config = _minimal_config(backends=[_cookie_backend()])
@@ -2667,6 +2675,56 @@ def test_validate_config_runs_happy_path_for_database_token_preset(
             reset_password_token_secret=RESET_PASSWORD_SECRET,
         ),
     )
+
+    validate_config(config)
+
+
+def test_litestar_auth_config_rejects_negative_totp_stepup_ttl() -> None:
+    """TOTP step-up TTL must be non-negative at construction time."""
+    with pytest.raises(ConfigurationError, match="totp_stepup_ttl_seconds"):
+        LitestarAuthConfig[ExampleUser, UUID](
+            backends=[_jwt_backend()],
+            session_maker=cast("Any", DummySessionMaker()),
+            user_model=ExampleUser,
+            user_manager_class=PluginUserManager,
+            user_manager_security=UserManagerSecurity[UUID](
+                verification_token_secret=VERIFICATION_SECRET,
+                reset_password_token_secret=RESET_PASSWORD_SECRET,
+            ),
+            totp_stepup_ttl_seconds=-1,
+        )
+
+
+def test_validate_config_rejects_unknown_totp_stepup_policy_key() -> None:
+    """Startup validation rejects policy entries for unknown endpoint ids."""
+    config = _minimal_config(totp_config=_configured_totp_config())
+    config.totp_stepup_policy = {"unknown.endpoint": "required_when_enrolled"}
+
+    with pytest.raises(ConfigurationError, match="Unknown totp_stepup_policy endpoint"):
+        validate_config(config)
+
+
+def test_validate_config_rejects_invalid_totp_stepup_policy_mode() -> None:
+    """Startup validation rejects unsupported TOTP step-up policy modes."""
+    config = _minimal_config(totp_config=_configured_totp_config())
+    config.totp_stepup_policy = {"api_keys.create": cast("Any", "required")}
+
+    with pytest.raises(ConfigurationError, match="Invalid totp_stepup_policy mode"):
+        validate_config(config)
+
+
+def test_validate_config_accepts_known_totp_stepup_policy_entry() -> None:
+    """Startup validation accepts documented TOTP step-up endpoint policy entries."""
+    config = _minimal_config(
+        totp_config=_configured_totp_config(totp_require_replay_protection=False),
+        user_manager_security=UserManagerSecurity[UUID](
+            verification_token_secret=VERIFICATION_SECRET,
+            reset_password_token_secret=RESET_PASSWORD_SECRET,
+            totp_secret_key=TOTP_SECRET_KEY,
+            totp_recovery_code_lookup_secret=TOTP_RECOVERY_CODE_LOOKUP_SECRET,
+        ),
+    )
+    config.totp_stepup_policy = {"api_keys.create": "required_when_enrolled"}
 
     validate_config(config)
 

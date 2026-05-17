@@ -32,6 +32,8 @@ logger = logging.getLogger("litestar_auth.controllers.totp")
 class TotpUserManagerProtocol[UP: UserProtocol[Any], ID](AccountStateValidatorProvider[UP], Protocol):
     """User-manager behavior required by the TOTP controller."""
 
+    backends: tuple[object, ...]
+
     async def get(self, user_id: ID) -> UP | None:
         """Return the user for the given identifier."""
 
@@ -52,6 +54,12 @@ class TotpUserManagerProtocol[UP: UserProtocol[Any], ID](AccountStateValidatorPr
 
     async def consume_recovery_code_by_lookup(self, user: UP, lookup_hex: str) -> bool:
         """Atomically consume a matched recovery-code lookup entry."""
+
+    async def issue_totp_stepup_verification(self, user: UP, session_id: str, *, ttl_seconds: int) -> None:
+        """Store a recent TOTP verification marker for the current session."""
+
+    async def has_recent_totp_verification(self, user: UP, session_id: str) -> bool:
+        """Return whether the current session has a recent TOTP marker."""
 
     @property
     def recovery_code_lookup_secret(self) -> bytes | None:

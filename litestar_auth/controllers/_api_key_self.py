@@ -14,6 +14,12 @@ from litestar_auth.controllers._api_key_common import (
     to_api_key_read,
     update_api_key_for_request,
 )
+from litestar_auth.controllers._auth_helpers import (
+    TOTP_STEPUP_REQUIRED_OPENAPI_RESPONSE,
+    TotpStepUpCheck,
+    TotpStepUpVerifierProtocol,
+    require_totp_stepup,
+)
 from litestar_auth.controllers._utils import (
     RequestBodyErrorConfig,
     _configure_request_body_handler,
@@ -37,6 +43,7 @@ def _create_self_api_key_create_handler[ID](ctx: ApiKeysControllerContext[ID]) -
         guards=[is_authenticated, requires_password_session],
         security=ctx.security,
         before_request=ctx.create_before_request,
+        responses={403: TOTP_STEPUP_REQUIRED_OPENAPI_RESPONSE},
         exception_handlers=_create_request_body_exception_handlers(
             RequestBodyErrorConfig(
                 validation_detail="Invalid API-key create payload.",
@@ -106,6 +113,7 @@ def _create_self_api_key_update_handler[ID](ctx: ApiKeysControllerContext[ID]) -
         guards=[is_authenticated, requires_password_session],
         security=ctx.security,
         before_request=ctx.update_before_request,
+        responses={403: TOTP_STEPUP_REQUIRED_OPENAPI_RESPONSE},
         exception_handlers=_create_request_body_exception_handlers(
             RequestBodyErrorConfig(
                 validation_detail="Invalid API-key update payload.",
@@ -145,6 +153,7 @@ def _create_self_api_key_revoke_handler[ID](ctx: ApiKeysControllerContext[ID]) -
         guards=[is_authenticated, requires_password_session],
         security=ctx.security,
         status_code=200,
+        responses={403: TOTP_STEPUP_REQUIRED_OPENAPI_RESPONSE},
     )
     async def revoke_api_key(
         self: Controller,
@@ -153,6 +162,14 @@ def _create_self_api_key_revoke_handler[ID](ctx: ApiKeysControllerContext[ID]) -
         litestar_auth_user_manager: ApiKeysControllerUserManagerProtocol[Any, Any],
     ) -> ApiKeyRead:
         del self
+        await require_totp_stepup(
+            request,
+            TotpStepUpCheck(
+                endpoint="api_keys.revoke",
+                policy=ctx.totp_stepup_policy,
+                user_manager=cast("TotpStepUpVerifierProtocol[Any]", litestar_auth_user_manager),
+            ),
+        )
         try:
             api_key = await litestar_auth_user_manager.revoke_api_key(request.user, key_id)
         except ApiKeyNotFoundError as exc:

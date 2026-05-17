@@ -33,6 +33,7 @@ if TYPE_CHECKING:
 DEFAULT_KEY_PREFIX = "litestar_auth:token:"
 DEFAULT_LIFETIME = timedelta(hours=1)
 DEFAULT_TOKEN_BYTES = 32
+_TOTP_STEPUP_SEGMENT = "totp_stepup"
 
 _load_redis_asyncio = partial(_require_redis_asyncio, feature_name="RedisTokenStrategy")
 
@@ -137,6 +138,14 @@ class RedisTokenStrategy(Strategy[UP, ID]):
         """Return the Redis key for the per-user token index."""
         return f"{self.key_prefix}user:{_safe_key_part(user_id)}"
 
+    def _totp_stepup_key(self, user_id: str, session_id: str) -> str:
+        """Return the Redis key for a TOTP step-up marker."""
+        return f"{self.key_prefix}{_TOTP_STEPUP_SEGMENT}:{_safe_key_part(user_id)}:{_safe_key_part(session_id)}"
+
+    def _totp_stepup_index_key(self, user_id: str) -> str:
+        """Return the Redis set key indexing TOTP step-up markers by user."""
+        return f"{self.key_prefix}{_TOTP_STEPUP_SEGMENT}:user:{_safe_key_part(user_id)}"
+
     @staticmethod
     def _decode_user_id(value: RedisStoredValue) -> str:
         """Normalize Redis payloads to text identifiers.
@@ -221,4 +230,32 @@ class RedisTokenStrategy(Strategy[UP, ID]):
         user, avoiding keyspace scans under the global prefix. Tokens that do
         not have a per-user index entry are left to expire naturally by TTL.
         """
-        await self._invalidate_via_index(str(user.id))
+        user_id = str(user.id)
+        await self._invalidate_via_index(user_id)
+        await self._invalidate_stepup_markers(user_id)
+
+    async def issue_totp_stepup(self, user: UP, session_id: str, *, ttl_seconds: int) -> None:
+        """Store a short-lived TOTP step-up marker for a Redis-backed session."""
+        user_id = str(user.id)
+        key = self._totp_stepup_key(user_id, session_id)
+        index_key = self._totp_stepup_index_key(user_id)
+        if ttl_seconds <= 0:
+            await self.redis.delete(key)
+            await self.redis.srem(index_key, key)
+            return
+        await self.redis.setex(key, ttl_seconds, "1")
+        await self.redis.sadd(index_key, key)
+        await self.redis.expire(index_key, ttl_seconds)
+
+    async def has_recent_totp_verification(self, user: UP, session_id: str) -> bool:
+        """Return whether a Redis-backed session has a live TOTP step-up marker."""
+        return await self.redis.get(self._totp_stepup_key(str(user.id), session_id)) is not None
+
+    async def _invalidate_stepup_markers(self, user_id: str) -> None:
+        """Delete indexed TOTP step-up markers for ``user_id``."""
+        index_key = self._totp_stepup_index_key(user_id)
+        members = await self.redis.smembers(index_key)
+        marker_keys = [self._decode_user_id(member) for member in members] if members else []
+        if not marker_keys:
+            return
+        await self.redis.delete(*marker_keys, index_key)

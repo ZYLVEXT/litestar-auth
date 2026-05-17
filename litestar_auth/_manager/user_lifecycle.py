@@ -38,6 +38,14 @@ class _StrategyBackendProtocol[UP](Protocol):
     strategy: object
 
 
+@runtime_checkable
+class _ApiKeyBulkDeleteStoreProtocol[ID](Protocol):
+    """API-key store surface required for hard-delete cleanup."""
+
+    async def delete_for_user(self, user_id: ID) -> int:
+        """Delete API-key rows owned by ``user_id``."""
+
+
 SAFE_FIELDS = frozenset({"email", "password"})
 PRIVILEGED_FIELDS = frozenset({"is_active", "is_verified", "roles"})
 
@@ -248,6 +256,8 @@ class UserLifecycleService[UP, ID]:
             raise UserNotExistsError
 
         await self._manager.on_before_delete(user)
+        await self.invalidate_all_tokens(user)
+        await self._delete_api_keys_for_user(user_id)
         await self._manager.user_db.delete(user_id)
         await self._manager.on_after_delete(user)
 
@@ -277,3 +287,9 @@ class UserLifecycleService[UP, ID]:
             if isinstance(backend.strategy, TokenInvalidationCapable):
                 strategy = cast("TokenInvalidationCapable[Any]", backend.strategy)
                 await strategy.invalidate_all_tokens(user)
+
+    async def _delete_api_keys_for_user(self, user_id: ID) -> None:
+        """Delete API keys when the manager has a bulk-delete-capable store."""
+        api_key_store = getattr(self._manager, "api_key_store", None)
+        if isinstance(api_key_store, _ApiKeyBulkDeleteStoreProtocol):
+            await api_key_store.delete_for_user(user_id)

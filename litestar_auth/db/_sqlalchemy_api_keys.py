@@ -10,7 +10,7 @@ from typing import TYPE_CHECKING, Any, Protocol, cast, override
 from uuid import UUID
 
 from advanced_alchemy.base import ModelProtocol
-from sqlalchemy import inspect, select
+from sqlalchemy import delete, inspect, select
 
 from litestar_auth.db.base import ApiKeyData, BaseApiKeyStore
 from litestar_auth.exceptions import ConfigurationError
@@ -190,6 +190,18 @@ class SQLAlchemyApiKeyStore[AK: _ApiKeyRow](BaseApiKeyStore[AK, UUID]):
         )
         result = await self.session.execute(statement)
         return list(cast("Any", result).scalars().all())
+
+    @override
+    async def delete_for_user(self, user_id: UUID) -> int:
+        """Permanently delete all API-key rows owned by ``user_id``.
+
+        Returns:
+            Number of deleted rows reported by the database driver.
+        """
+        api_key_model = cast("Any", self.api_key_model)
+        result = await self.session.execute(delete(self.api_key_model).where(api_key_model.user_id == user_id))
+        await self.session.flush()
+        return int(getattr(result, "rowcount", 0) or 0)
 
     @override
     async def revoke(self, key_id: str, *, revoked_at: datetime) -> AK | None:

@@ -79,6 +79,15 @@ class ApiKeyStore:
         del user_id, include_inactive
         return []
 
+    async def delete_for_user(self, user_id: UUID) -> int:
+        """Unused protocol method for this strategy-only fixture.
+
+        Returns:
+            ``0`` because tests never exercise hard-delete cleanup through this fixture.
+        """
+        del user_id
+        return 0
+
     async def revoke(self, key_id: str, *, revoked_at: datetime) -> ApiKeyRow | None:
         """Unused protocol method for this strategy-only fixture.
 

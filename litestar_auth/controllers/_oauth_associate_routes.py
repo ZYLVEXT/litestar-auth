@@ -10,6 +10,7 @@ from litestar.enums import MediaType
 from litestar.params import Parameter
 from litestar.response import Response
 
+from litestar_auth.controllers._auth_helpers import TotpStepUpCheck, TotpStepUpVerifierProtocol, require_totp_stepup
 from litestar_auth.controllers._oauth_helpers import _clear_state_cookie, _decode_oauth_flow_cookie, _validate_state
 from litestar_auth.guards import is_authenticated
 from litestar_auth.oauth.service import (
@@ -101,6 +102,14 @@ async def _complete_associate_callback[UP: UserProtocol[Any], ID](
     _validate_state(flow_cookie.state, oauth_state)
     user = cast("UP", request.user)
     _require_service_account_state(user, user_manager=user_manager)
+    await require_totp_stepup(
+        request,
+        TotpStepUpCheck(
+            endpoint="oauth.associate",
+            policy=assembly.totp_stepup_policy,
+            user_manager=cast("TotpStepUpVerifierProtocol[UP]", user_manager),
+        ),
+    )
     await assembly.oauth_service.associate_account(
         user=user,
         code=code,

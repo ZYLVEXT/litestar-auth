@@ -36,6 +36,7 @@ DEFAULT_MAX_AGE = timedelta(hours=1)
 DEFAULT_REFRESH_MAX_AGE = timedelta(days=30)
 DEFAULT_TOKEN_BYTES = 32
 _CLIENT_METADATA_USER_AGENT_KEY = "user_agent"
+_CLIENT_METADATA_TOTP_STEPUP_EXPIRES_AT_KEY = "totp_stepup_expires_at"
 _MAX_CLIENT_METADATA_VALUE_LENGTH = 255
 
 
@@ -344,6 +345,48 @@ class DatabaseTokenStrategy[UP: UserProtocol[Any], ID](Strategy[UP, ID], Refresh
             await self.session.commit()
             return None
         return persisted_token.session_id
+
+    async def _load_refresh_session_row(self, user: UP, session_id: str) -> _RefreshTokenRow | None:
+        """Return one refresh-token row by public session id for a user."""
+        result = await self.session.execute(
+            select(self.refresh_token_model).where(
+                self.refresh_token_model.user_id == user.id,
+                self.refresh_token_model.session_id == session_id,
+            ),
+        )
+        return cast("_RefreshTokenRow | None", result.scalars().first())
+
+    async def issue_totp_stepup(self, user: UP, session_id: str, *, ttl_seconds: int) -> None:
+        """Store a short-lived TOTP step-up marker on a DB-backed refresh session."""
+        row = await self._load_refresh_session_row(user, session_id)
+        if row is None:
+            return
+        metadata = dict(row.client_metadata or {})
+        if ttl_seconds <= 0:
+            metadata.pop(_CLIENT_METADATA_TOTP_STEPUP_EXPIRES_AT_KEY, None)
+        else:
+            expires_at = datetime.now(tz=UTC).timestamp() + ttl_seconds
+            metadata[_CLIENT_METADATA_TOTP_STEPUP_EXPIRES_AT_KEY] = str(expires_at)
+        row.client_metadata = metadata or None
+        await self.session.commit()
+
+    async def has_recent_totp_verification(self, user: UP, session_id: str) -> bool:
+        """Return whether a DB-backed refresh session has a live TOTP step-up marker."""
+        row = await self._load_refresh_session_row(user, session_id)
+        if row is None:
+            return False
+        metadata = row.client_metadata or {}
+        try:
+            expires_at = float(metadata.get(_CLIENT_METADATA_TOTP_STEPUP_EXPIRES_AT_KEY, ""))
+        except ValueError:
+            return False
+        if expires_at > datetime.now(tz=UTC).timestamp():
+            return True
+        metadata = dict(metadata)
+        metadata.pop(_CLIENT_METADATA_TOTP_STEPUP_EXPIRES_AT_KEY, None)
+        row.client_metadata = metadata or None
+        await self.session.commit()
+        return False
 
     @override
     async def read_token(

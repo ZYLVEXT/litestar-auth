@@ -130,9 +130,9 @@ Mounted under `{auth}/2fa/...` when `totp_config` is set.
 | ------ | ---- | ------------ | ----- |
 | POST | `{auth}/2fa/enable` | `TotpEnableRequest` (`password`) by default; no body when `totp_enable_requires_password=False` | Authenticated; starts enrollment. |
 | POST | `{auth}/2fa/enable/confirm` | `TotpConfirmEnableRequest` (`enrollment_token`, `code`) | Authenticated; confirms enrollment and returns one-time recovery codes. |
-| POST | `{auth}/2fa/verify` | `TotpVerifyRequest` (`pending_token`, `code`) | Completes login when TOTP is enabled; `code` accepts either a current TOTP code or an unused recovery code. |
-| POST | `{auth}/2fa/disable` | `TotpDisableRequest` (`code`) | Authenticated; disables TOTP. `code` accepts either a current TOTP code or an unused recovery code. |
-| POST | `{auth}/2fa/recovery-codes/regenerate` | `TotpRegenerateRecoveryCodesRequest` (`current_password`) by default; no body when `totp_enable_requires_password=False` | Authenticated; replaces the stored recovery-code set and returns the new plaintext codes once. |
+| POST | `{auth}/2fa/verify` | `TotpVerifyRequest` (`pending_token`, `code`) | Completes login when TOTP is enabled; `code` accepts either a current TOTP code or an unused recovery code. Successful app-code verification records the server-side recent-TOTP marker used by downstream step-up checks; recovery-code verification only does so when `totp_stepup_allow_recovery=True`. |
+| POST | `{auth}/2fa/disable` | `TotpDisableRequest` (`code`) | Authenticated; disables TOTP. `code` accepts either a current TOTP code or an unused recovery code. A recovery code remains accepted for lockout recovery. |
+| POST | `{auth}/2fa/recovery-codes/regenerate` | `TotpRegenerateRecoveryCodesRequest` (optional `current_password`, optional `totp_code`) | Authenticated; replaces the stored recovery-code set and returns the new plaintext codes once. `current_password` is required when `totp_enable_requires_password=True`; `totp_code` can satisfy the TOTP step-up gate. |
 
 `TotpConfirmEnableResponse` and `TotpRecoveryCodesResponse` carry `recovery_codes`; those plaintext
 values are returned once and only their hashes are stored. Generated recovery codes are 28 lowercase
@@ -143,6 +143,15 @@ over HTTPS. Pending-login JWTs are client-bound by default with `cip` / `uaf` fi
 an invalid pending token.
 
 The built-in TOTP flow remains email-oriented internally: the otpauth URI and default password step-up for `POST {auth}/2fa/enable` use `request.user.email`, not `login_identifier`.
+
+Sensitive operations use `LitestarAuthConfig.totp_stepup_policy` and default to `required_when_enrolled`
+for `users.update_self`, `api_keys.create`, `api_keys.update`, `api_keys.revoke`, `oauth.associate`,
+`totp.disable`, and `totp.regenerate_recovery_codes`. Enrolled users must present either a recent
+server-side TOTP marker from `/2fa/verify` or a valid inline `totp_code` field where the request body
+supports it. Missing proof returns HTTP 403 with `TOTP_STEPUP_REQUIRED`; users without TOTP are not
+blocked unless the endpoint policy is `always_required`. The full configuration and per-endpoint
+default table lives in
+[TOTP step-up for sensitive operations](configuration/totp.md#totp-step-up-for-sensitive-operations).
 
 ## OAuth2 login
 
@@ -180,12 +189,15 @@ When `include_users=True`, routes are under `{users}`.
 
 The built-in users surface also serializes `UserRead`, so all `/users` reads include normalized
 `roles`. `PATCH {users}/me` strips `roles` and the other privileged fields from self-service
-payloads even when a custom `user_update_schema` includes them. It does not rotate passwords.
+payloads even when a custom `user_update_schema` includes them. Email changes use `UserUpdate`
+(`email`, optional `current_password`, optional `totp_code`) and require `current_password`; non-email self-service
+updates from custom schemas do not. `PATCH {users}/me` does not rotate passwords.
 Authenticated password rotation uses `POST {users}/me/change-password` with `ChangePasswordRequest`
 (`current_password`, `new_password`); the controller re-verifies the current password before
-delegating the replacement password through the manager update lifecycle. Wrong current-password
-submissions return `400` with `LOGIN_BAD_CREDENTIALS`, invalid replacement passwords return `400`
-with `UPDATE_USER_INVALID_PASSWORD`, malformed request payloads use `REQUEST_BODY_INVALID`,
+delegating the replacement password through the manager update lifecycle. Wrong or missing
+current-password submissions on email changes and password rotation return `400` with
+`LOGIN_BAD_CREDENTIALS`, invalid replacement passwords return `400` with
+`UPDATE_USER_INVALID_PASSWORD`, malformed request payloads use `REQUEST_BODY_INVALID`,
 unauthenticated requests return `401`, and configured rate limits return `429` with `Retry-After`.
 Superuser `PATCH {users}/{id}` uses `AdminUserUpdate`, can persist validated `roles`, and remains
 the admin-initiated password rotation path.

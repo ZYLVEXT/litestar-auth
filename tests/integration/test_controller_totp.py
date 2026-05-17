@@ -27,6 +27,7 @@ import litestar_auth._optional_deps as optional_deps_module
 import litestar_auth._totp_enrollment as totp_enrollment_module
 import litestar_auth.controllers.totp as totp_controller_module
 import litestar_auth.controllers.totp_handlers as totp_handlers_module
+import litestar_auth.controllers.totp_session_handlers as totp_session_handlers_module
 import litestar_auth.totp as _totp_mod
 from litestar_auth._plugin.config import DEFAULT_USER_MANAGER_DEPENDENCY_KEY, TotpConfig
 from litestar_auth._secrets_at_rest import decode_versioned_fernet_value
@@ -35,6 +36,7 @@ from litestar_auth.authentication.backend import AuthenticationBackend
 from litestar_auth.authentication.middleware import LitestarAuthMiddleware
 from litestar_auth.authentication.strategy.api_key import ApiKeyStrategy
 from litestar_auth.authentication.strategy.jwt import InMemoryJWTDenylistStore
+from litestar_auth.authentication.strategy.redis import RedisClientProtocol, RedisTokenStrategy
 from litestar_auth.authentication.transport.api_key import ApiKeyTransport
 from litestar_auth.authentication.transport.bearer import BearerTransport
 from litestar_auth.config import TOTP_ENROLL_AUDIENCE
@@ -46,7 +48,7 @@ from litestar_auth.password import PasswordHelper
 from litestar_auth.plugin import ApiKeyConfig, LitestarAuth, LitestarAuthConfig
 from litestar_auth.ratelimit import AuthRateLimitConfig, EndpointRateLimit
 from litestar_auth.totp_flow import InvalidTotpPendingTokenError
-from tests._helpers import auth_middleware_get_request_session, litestar_app_with_user_manager
+from tests._helpers import auth_middleware_get_request_session, cast_fakeredis, litestar_app_with_user_manager
 from tests.integration.conftest import DummySessionMaker, ExampleUser, InMemoryTokenStrategy, InMemoryUserDatabase
 from tests.integration.test_controller_api_keys import API_KEY_HASH_SECRET, InMemoryApiKeyStore
 
@@ -73,7 +75,9 @@ _current_counter = _totp_mod._current_counter
 _generate_totp_code = _totp_mod._generate_totp_code
 
 if TYPE_CHECKING:
+    from litestar_auth.authentication.strategy.base import Strategy
     from litestar_auth.db.base import BaseUserStore
+    from tests._helpers import AsyncFakeRedis
 
 pytestmark = [pytest.mark.integration]
 
@@ -132,6 +136,7 @@ class TrackingUserManager(BaseUserManager[ExampleUser, UUID]):
         api_key_config: object | None = None,
         login_identifier: Literal["email", "username"] = "email",
         totp_secret_key: str | None = TOTP_SECRET_KEY,
+        unsafe_testing: bool = False,
     ) -> None:
         """Initialize the manager with deterministic hook tracking."""
         super().__init__(
@@ -148,6 +153,7 @@ class TrackingUserManager(BaseUserManager[ExampleUser, UUID]):
             api_key_store=api_key_store,
             api_key_config=api_key_config,
             login_identifier=login_identifier,
+            unsafe_testing=unsafe_testing,
         )
         self.logged_in_users: list[ExampleUser] = []
 
@@ -194,6 +200,8 @@ def build_app(  # noqa: PLR0913
     totp_pending_require_client_binding: bool = True,
     include_api_keys: bool = False,
     unsafe_testing: bool = False,
+    strategy: Strategy[ExampleUser, UUID] | None = None,
+    totp_stepup_allow_recovery: bool = False,
 ) -> tuple[Litestar, InMemoryUserDatabase, InMemoryTokenStrategy, TrackingUserManager]:
     """Create a test application with optional 2FA support.
 
@@ -215,12 +223,12 @@ def build_app(  # noqa: PLR0913
         is_verified=initial_is_verified,
     )
     user_db = InMemoryUserDatabase([user])
-    strategy = InMemoryTokenStrategy()
+    token_strategy = InMemoryTokenStrategy() if strategy is None else strategy
     api_key_store = InMemoryApiKeyStore()
     backend = AuthenticationBackend[ExampleUser, UUID](
         name="memory-bearer",
         transport=BearerTransport(),
-        strategy=cast("Any", strategy),
+        strategy=cast("Any", token_strategy),
     )
     backends: list[AuthenticationBackend[ExampleUser, UUID]] = [backend]
     if include_api_keys:
@@ -243,6 +251,7 @@ def build_app(  # noqa: PLR0913
         api_key_store=api_key_store if include_api_keys else None,
         api_key_config=ApiKeyConfig(enabled=include_api_keys, allowed_scopes=("read",), environment_marker="prod"),
         login_identifier=login_identifier,
+        unsafe_testing=not isinstance(token_strategy, RedisTokenStrategy),
     )
     pending_secret = TOTP_PENDING_SECRET if with_totp else None
     replay_store = InMemoryUsedTotpCodeStore() if used_tokens_store is _DEFAULT_USED_TOKENS_STORE else used_tokens_store
@@ -271,6 +280,7 @@ def build_app(  # noqa: PLR0913
         totp_issuer="Test App",
         id_parser=UUID,
         requires_verification=requires_verification,
+        totp_stepup_allow_recovery=totp_stepup_allow_recovery,
         totp_pending_require_client_binding=totp_pending_require_client_binding,
         unsafe_testing=unsafe_testing,
     )
@@ -286,7 +296,7 @@ def build_app(  # noqa: PLR0913
         probe,
         middleware=[middleware],
     )
-    return app, user_db, strategy, user_manager
+    return app, user_db, cast("InMemoryTokenStrategy", token_strategy), user_manager
 
 
 def _build_direct_totp_context(
@@ -317,6 +327,8 @@ def _build_direct_totp_context(
             totp_enable_requires_password=totp_enable_requires_password,
             totp_issuer="Test App",
             totp_algorithm="SHA256",
+            totp_stepup_ttl_seconds=300,
+            totp_stepup_allow_recovery=False,
             totp_rate_limit=cast("Any", rate_limit),
             totp_pending_secret=TOTP_PENDING_SECRET,
             totp_pending_require_client_binding=True,
@@ -404,14 +416,19 @@ def test_enable_route_publishes_request_body_in_openapi_when_step_up_is_enabled(
 
 
 def test_enable_route_omits_request_body_in_openapi_when_step_up_is_disabled() -> None:
-    """Password-optional enrollment keeps the no-body OpenAPI contract."""
+    """Password-optional enrollment is no-body while recovery rotation can accept TOTP step-up."""
     app, *_ = build_app(totp_enable_requires_password=False)
 
     enable_post = cast("Any", app.openapi_schema.paths)["/auth/2fa/enable"].post
     regenerate_post = cast("Any", app.openapi_schema.paths)["/auth/2fa/recovery-codes/regenerate"].post
 
     assert enable_post.request_body is None
-    assert regenerate_post.request_body is None
+    assert regenerate_post.request_body is not None
+
+
+def test_extract_login_session_id_ignores_cookie_style_response() -> None:
+    """TOTP step-up marker extraction is a no-op when the transport does not expose a bearer body."""
+    assert totp_session_handlers_module._extract_login_session_id(SimpleNamespace(content=None)) is None
 
 
 async def test_confirm_enable_returns_plaintext_recovery_codes_once_and_stores_only_hashes(
@@ -1044,6 +1061,31 @@ async def test_handle_regenerate_recovery_codes_accepts_valid_decoded_payload(
     rate_limit.on_success.assert_awaited_once()
 
 
+async def test_handle_regenerate_recovery_codes_rejects_missing_password_when_required() -> None:
+    """Password-required recovery rotation rejects bodies that only contain TOTP proof."""
+    _app, user_db, _strategy, _user_manager = build_app()
+    user = next(iter(user_db.users_by_id.values()))
+    ctx, rate_limit, _backend = _build_direct_totp_context()
+    user_manager = SimpleNamespace(
+        authenticate=AsyncMock(return_value=user),
+        password_helper=PasswordHelper(),
+        recovery_code_lookup_secret=TOTP_RECOVERY_CODE_LOOKUP_SECRET.encode(),
+        set_recovery_code_hashes=AsyncMock(return_value=user),
+    )
+
+    with pytest.raises(ClientException) as exc_info:
+        await _totp_handle_regenerate_recovery_codes(
+            cast("Any", SimpleNamespace(user=user)),
+            ctx=ctx,
+            data=totp_controller_module.TotpRegenerateRecoveryCodesRequest(totp_code="123456"),
+            user_manager=cast("Any", user_manager),
+        )
+
+    assert exc_info.value.status_code == HTTP_UNPROCESSABLE_ENTITY
+    assert exc_info.value.extra == {"code": ErrorCode.LOGIN_PAYLOAD_INVALID}
+    rate_limit.on_invalid_attempt.assert_awaited_once()
+
+
 async def test_handle_regenerate_recovery_codes_requires_lookup_secret() -> None:
     """Direct regenerate helper fails closed when recovery-code lookup secret is missing."""
     _app, user_db, _strategy, _user_manager = build_app()
@@ -1434,6 +1476,104 @@ async def test_verify_with_valid_code_issues_full_token(
 
 
 @pytest.mark.filterwarnings("ignore::litestar_auth.totp.SecurityWarning")
+async def test_verify_with_valid_code_sets_redis_backed_stepup_marker(async_fakeredis: AsyncFakeRedis) -> None:
+    """Public TOTP verify records recent verification state in the configured Redis token strategy."""
+    redis_strategy = RedisTokenStrategy[ExampleUser, UUID](
+        redis=cast_fakeredis(async_fakeredis, RedisClientProtocol),
+        token_hash_secret="0123456789abcdef" * 4,
+        subject_decoder=UUID,
+    )
+    app, _user_db, _strategy, user_manager = build_app(strategy=redis_strategy)
+
+    async with AsyncTestClient(app=app) as client:
+        login_resp = await client.post(
+            "/auth/login",
+            json={"identifier": "user@example.com", "password": "correct-password"},
+        )
+        token = login_resp.json()["access_token"]
+        enable_resp = await client.post(
+            "/auth/2fa/enable",
+            json={"password": "correct-password"},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        enable_body = enable_resp.json()
+        secret = enable_body["secret"]
+        await _confirm_enrollment(client, token=token, enable_body=enable_body)
+        pending_resp = await client.post(
+            "/auth/login",
+            json={"identifier": "user@example.com", "password": "correct-password"},
+        )
+        verify_resp = await client.post(
+            "/auth/2fa/verify",
+            json={
+                "pending_token": pending_resp.json()["pending_token"],
+                "code": _generate_totp_code(secret, _current_counter()),
+            },
+        )
+
+    assert verify_resp.status_code == HTTP_CREATED
+    session_id = verify_resp.json()["access_token"]
+    user = next(iter(user_manager.user_db.users_by_id.values()))
+    assert await user_manager.has_recent_totp_verification(user, session_id) is True
+
+
+@pytest.mark.parametrize(("allow_recovery", "expected_marker"), [(False, False), (True, True)])
+@pytest.mark.filterwarnings("ignore::litestar_auth.totp.SecurityWarning")
+async def test_verify_recovery_code_stepup_marker_respects_downgrade_flag(
+    async_fakeredis: AsyncFakeRedis,
+    allow_recovery: object,
+    expected_marker: object,
+) -> None:
+    """Recovery-code login only records a step-up marker when explicitly allowed."""
+    redis_strategy = RedisTokenStrategy[ExampleUser, UUID](
+        redis=cast_fakeredis(async_fakeredis, RedisClientProtocol),
+        token_hash_secret="fedcba9876543210" * 4,
+        subject_decoder=UUID,
+    )
+    app, _user_db, _strategy, user_manager = build_app(
+        strategy=redis_strategy,
+        totp_stepup_allow_recovery=bool(allow_recovery),
+    )
+
+    async with AsyncTestClient(app=app) as client:
+        login_resp = await client.post(
+            "/auth/login",
+            json={"identifier": "user@example.com", "password": "correct-password"},
+        )
+        token = login_resp.json()["access_token"]
+        enable_resp = await client.post(
+            "/auth/2fa/enable",
+            json={"password": "correct-password"},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        enable_body = enable_resp.json()
+        confirm_resp = await client.post(
+            "/auth/2fa/enable/confirm",
+            json={
+                "enrollment_token": enable_body["enrollment_token"],
+                "code": _generate_totp_code(enable_body["secret"], _current_counter()),
+            },
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert confirm_resp.status_code == HTTP_CREATED
+        recovery_code = confirm_resp.json()["recovery_codes"][0]
+        pending_resp = await client.post(
+            "/auth/login",
+            json={"identifier": "user@example.com", "password": "correct-password"},
+        )
+        verify_resp = await client.post(
+            "/auth/2fa/verify",
+            json={"pending_token": pending_resp.json()["pending_token"], "code": recovery_code},
+        )
+
+    assert verify_resp.status_code == HTTP_CREATED
+    user = next(iter(user_manager.user_db.users_by_id.values()))
+    assert await user_manager.has_recent_totp_verification(user, verify_resp.json()["access_token"]) is bool(
+        expected_marker,
+    )
+
+
+@pytest.mark.filterwarnings("ignore::litestar_auth.totp.SecurityWarning")
 async def test_verify_with_recovery_code_logs_in_once_and_reuse_matches_wrong_totp_shape(
     client_and_db: tuple[AsyncTestClient[Litestar], InMemoryUserDatabase],
 ) -> None:
@@ -1595,6 +1735,7 @@ async def test_regenerate_recovery_codes_without_password_requirement_returns_ne
         response = await client.post(
             "/auth/2fa/recovery-codes/regenerate",
             headers={"Authorization": f"Bearer {token}"},
+            json={"totp_code": _generate_totp_code(enable_body["secret"], _current_counter())},
         )
 
     assert response.status_code == HTTP_CREATED
@@ -1635,7 +1776,10 @@ async def test_regenerate_recovery_codes_returns_new_set_and_old_codes_stop_work
 
         response = await client.post(
             "/auth/2fa/recovery-codes/regenerate",
-            json={"current_password": "correct-password"},
+            json={
+                "current_password": "correct-password",
+                "totp_code": _generate_totp_code(enable_body["secret"], _current_counter()),
+            },
             headers={"Authorization": f"Bearer {token}"},
         )
 

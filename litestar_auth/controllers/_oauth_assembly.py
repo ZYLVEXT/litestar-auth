@@ -33,6 +33,7 @@ if TYPE_CHECKING:
     from litestar import Request
 
     from litestar_auth.authentication.backend import AuthenticationBackend
+    from litestar_auth.controllers._auth_helpers import TotpStepUpPolicyMode
 
 
 @dataclass(frozen=True, slots=True)
@@ -57,6 +58,7 @@ class _OAuthControllerAssembly[UP: UserProtocol[Any], ID]:
     flow_cookie_cipher: _OAuthFlowCookieCipher
     oauth_service: OAuthService[UP, ID]
     user_manager_binding: _OAuthUserManagerBinding[UP, ID]
+    totp_stepup_policy: dict[str, TotpStepUpPolicyMode]
 
 
 @dataclass(frozen=True, slots=True)
@@ -71,6 +73,7 @@ class _OAuthControllerAssemblySettings:
     state_cookie_prefix: str
     controller_name_suffix: str
     validate_redirect_base_url: bool = True
+    totp_stepup_policy: dict[str, TotpStepUpPolicyMode] | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -122,6 +125,7 @@ class _OAuthAssociateControllerSettings[UP: UserProtocol[Any], ID]:
     cookie_secure: bool = True
     validate_redirect_base_url: bool = True
     security: Sequence[Any] | None = None
+    totp_stepup_policy: dict[str, TotpStepUpPolicyMode] | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -221,4 +225,5 @@ def _build_oauth_controller_assembly[UP: UserProtocol[Any], ID](
             trust_provider_email_verified=resolved_service_settings.trust_provider_email_verified,
         ),
         user_manager_binding=user_manager_binding,
+        totp_stepup_policy=dict(settings.totp_stepup_policy or {}),
     )

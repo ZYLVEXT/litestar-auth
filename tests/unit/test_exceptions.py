@@ -29,6 +29,7 @@ UserIdentifier = exceptions_module.UserIdentifier
 UserNotExistsError = exceptions_module.UserNotExistsError
 
 pytestmark = pytest.mark.unit
+HTTP_FORBIDDEN = 403
 
 type ExceptionCase = tuple[type[LitestarAuthError], str, str | ErrorCode, type[BaseException]]
 
@@ -145,6 +146,7 @@ EXPECTED_ERROR_CODES = {
     "TOTP_CODE_INVALID": "TOTP_CODE_INVALID",
     "TOTP_ALREADY_ENABLED": "TOTP_ALREADY_ENABLED",
     "TOTP_ENROLL_BAD_TOKEN": "TOTP_ENROLL_BAD_TOKEN",
+    "TOTP_STEPUP_REQUIRED": "TOTP_STEPUP_REQUIRED",
     "API_KEY_INVALID": "API_KEY_INVALID",
     "API_KEY_REVOKED": "API_KEY_REVOKED",
     "API_KEY_EXPIRED": "API_KEY_EXPIRED",
@@ -612,6 +614,15 @@ def test_register_failed_error_code_is_available_for_register_response_collapse(
 def test_login_account_unavailable_error_code_is_available_for_account_state_collapse() -> None:
     """``LOGIN_ACCOUNT_UNAVAILABLE`` remains available for the login account-state collapse."""
     assert ErrorCode.LOGIN_ACCOUNT_UNAVAILABLE.value == "LOGIN_ACCOUNT_UNAVAILABLE"
+
+
+def test_totp_stepup_required_exception_uses_stable_forbidden_contract() -> None:
+    """The TOTP step-up helper exposes the downstream guard response contract."""
+    error = exceptions_module.totp_stepup_required_exception()
+
+    assert error.status_code == HTTP_FORBIDDEN
+    assert error.detail == "Recent TOTP verification is required."
+    assert error.extra == {"code": ErrorCode.TOTP_STEPUP_REQUIRED}
 
 
 def test_obsolete_register_error_codes_are_removed() -> None:

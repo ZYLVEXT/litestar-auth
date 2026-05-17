@@ -99,8 +99,11 @@ COMPONENT_CONTRACTS = {
         properties={"password": PropertyContract(min_length=1, max_length=128)},
     ),
     "TotpRegenerateRecoveryCodesRequest": ComponentContract(
-        required=frozenset({"current_password"}),
-        properties={"current_password": PropertyContract(min_length=1, max_length=128)},
+        required=frozenset(),
+        properties={
+            "current_password": PropertyContract(),
+            "totp_code": PropertyContract(),
+        },
     ),
     "TotpVerifyRequest": ComponentContract(
         required=frozenset({"code", "pending_token"}),
@@ -114,6 +117,14 @@ COMPONENT_CONTRACTS = {
         properties={
             "email": PropertyContract(max_length=320, pattern=EMAIL_PATTERN),
             "password": PropertyContract(min_length=12, max_length=128),
+        },
+    ),
+    "UserUpdate": ComponentContract(
+        required=frozenset(),
+        properties={
+            "email": PropertyContract(),
+            "current_password": PropertyContract(),
+            "totp_code": PropertyContract(),
         },
     ),
     "VerifyToken": ComponentContract(
@@ -205,6 +216,8 @@ def _assert_component_contract(
     assert set(properties) == set(contract.properties)
     for property_name, expected in contract.properties.items():
         property_schema = properties[property_name]
+        if property_schema.one_of:
+            property_schema = next(option for option in property_schema.one_of if option.type is not None)
 
         assert getattr(property_schema.type, "value", property_schema.type) == STRING_TYPE
         assert property_schema.min_length == expected.min_length
@@ -348,12 +361,20 @@ def test_direct_users_patch_routes_publish_expected_request_bodies(path: str, sc
     """Direct users-controller patch routes retain their request-body contract."""
     app, *_ = build_users_app()
 
-    _assert_request_body_component_ref(
-        app,
-        path=path,
-        method_name="patch",
-        schema_ref=schema_ref,
-    )
+    if schema_ref == "#/components/schemas/UserUpdate":
+        _assert_request_body_component_contract(
+            app,
+            path=path,
+            method_name="patch",
+            schema_ref=schema_ref,
+        )
+    else:
+        _assert_request_body_component_ref(
+            app,
+            path=path,
+            method_name="patch",
+            schema_ref=schema_ref,
+        )
 
 
 def test_direct_users_change_password_route_publishes_expected_request_body_component_shape() -> None:
@@ -428,7 +449,7 @@ def test_direct_totp_routes_publish_recovery_code_response_components() -> None:
 
 
 def test_direct_totp_enable_omits_request_body_when_step_up_is_disabled() -> None:
-    """Password-optional direct TOTP enable keeps the no-body contract while other TOTP payloads stay documented."""
+    """Password-optional direct TOTP enable is no-body while recovery rotation still exposes TOTP step-up."""
     app, *_ = build_totp_app(totp_enable_requires_password=False)
 
     _assert_request_body_component_ref(app, path="/auth/2fa/enable", method_name="post", schema_ref=None)
@@ -450,9 +471,9 @@ def test_direct_totp_enable_omits_request_body_when_step_up_is_disabled() -> Non
         method_name="post",
         schema_ref="#/components/schemas/TotpDisableRequest",
     )
-    _assert_request_body_component_ref(
+    _assert_request_body_component_contract(
         app,
         path="/auth/2fa/recovery-codes/regenerate",
         method_name="post",
-        schema_ref=None,
+        schema_ref="#/components/schemas/TotpRegenerateRecoveryCodesRequest",
     )

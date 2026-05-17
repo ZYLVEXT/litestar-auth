@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
 from litestar_auth.controllers.totp_contracts import logger
@@ -16,6 +16,7 @@ if TYPE_CHECKING:
     from litestar_auth._totp_enrollment import _EnrollmentTokenCipher
     from litestar_auth.authentication.backend import AuthenticationBackend
     from litestar_auth.authentication.strategy.jwt import JWTDenylistStore
+    from litestar_auth.controllers._auth_helpers import TotpStepUpPolicyMode
     from litestar_auth.ratelimit import TotpRateLimitOrchestrator
 
 
@@ -36,7 +37,10 @@ class _TotpControllerSecurityContext:
     requires_verification: bool
     totp_enable_requires_password: bool
     totp_algorithm: TotpAlgorithm
+    totp_stepup_ttl_seconds: int
+    totp_stepup_allow_recovery: bool
     unsafe_testing: bool
+    totp_stepup_policy: dict[str, TotpStepUpPolicyMode] = field(default_factory=dict)
 
 
 @dataclass(slots=True)
@@ -81,6 +85,8 @@ class _TotpControllerContextSettings[UP: UserProtocol[Any], ID]:
     totp_enable_requires_password: bool
     totp_issuer: str
     totp_algorithm: TotpAlgorithm
+    totp_stepup_ttl_seconds: int
+    totp_stepup_allow_recovery: bool
     totp_rate_limit: TotpRateLimitOrchestrator
     totp_pending_secret: str
     totp_pending_require_client_binding: bool
@@ -91,6 +97,7 @@ class _TotpControllerContextSettings[UP: UserProtocol[Any], ID]:
     unsafe_testing: bool
     enrollment_token_cipher: _EnrollmentTokenCipher | None
     enrollment_store: TotpEnrollmentStore
+    totp_stepup_policy: dict[str, TotpStepUpPolicyMode] = field(default_factory=dict)
 
 
 def _totp_validate_replay_and_password(
@@ -199,6 +206,9 @@ def _build_totp_controller_context[UP: UserProtocol[Any], ID](
             requires_verification=settings.requires_verification,
             totp_enable_requires_password=settings.totp_enable_requires_password,
             totp_algorithm=settings.totp_algorithm,
+            totp_stepup_ttl_seconds=settings.totp_stepup_ttl_seconds,
+            totp_stepup_allow_recovery=settings.totp_stepup_allow_recovery,
+            totp_stepup_policy=dict(settings.totp_stepup_policy),
             unsafe_testing=settings.unsafe_testing,
         ),
         pending_token=_TotpPendingTokenContext(

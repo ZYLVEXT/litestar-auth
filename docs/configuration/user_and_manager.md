@@ -15,8 +15,8 @@ set/find/consume helpers that later recovery-code flows use; custom stores shoul
 lookup-index contract and make consumption single-use.
 
 The built-in `UserRead` and `AdminUserUpdate` schemas assume that same `roles` attribute (the
-self-service `UserUpdate` is intentionally email-only — privileged fields live on
-`AdminUserUpdate`). Apps that keep the default register/verify/reset/users controllers should
+self-service `UserUpdate` is limited to email plus `current_password` proof for email changes;
+privileged fields live on `AdminUserUpdate`). Apps that keep the default register/verify/reset/users controllers should
 either expose `roles: Sequence[str]` on the user model or provide custom `user_read_schema` /
 `admin_user_update_schema` types that intentionally omit role fields. Plugin validation fails
 fast when an enabled built-in route surface still uses a schema with `roles` against a

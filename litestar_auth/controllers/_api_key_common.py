@@ -2,11 +2,17 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Never, Protocol, TypedDict, Unpack, cast, runtime_checkable
 
 from litestar.exceptions import ClientException, NotFoundException
 
+from litestar_auth.controllers._auth_helpers import (
+    TotpStepUpCheck,
+    TotpStepUpPolicyMode,
+    TotpStepUpVerifierProtocol,
+    require_totp_stepup,
+)
 from litestar_auth.controllers._utils import _map_domain_exceptions
 from litestar_auth.exceptions import (
     ApiKeyLimitReachedError,
@@ -43,6 +49,8 @@ _API_KEY_NOT_FOUND_DETAIL = "API key not found."
 class ApiKeysControllerUserManagerProtocol[UP: UserProtocol[Any], ID](Protocol):
     """User-manager behavior required by API-key controllers."""
 
+    backends: tuple[object, ...]
+
     async def get(self, user_id: ID) -> UP | None:
         """Return a user by identifier."""
 
@@ -77,6 +85,12 @@ class ApiKeysControllerUserManagerProtocol[UP: UserProtocol[Any], ID](Protocol):
     ) -> ApiKeyRowProtocol:
         """Soft-revoke an API key."""
 
+    async def has_recent_totp_verification(self, user: UP, session_id: str) -> bool:
+        """Return whether the current session has a recent TOTP marker."""
+
+    async def read_totp_secret(self, secret: str | None) -> str | None:
+        """Return the plain TOTP secret for verification."""
+
 
 @dataclass(frozen=True, slots=True)
 class ApiKeysControllerConfig[ID]:
@@ -89,6 +103,7 @@ class ApiKeysControllerConfig[ID]:
     security: Sequence[SecurityRequirement] | None = None
     require_step_up_on_create: bool = True
     signing_enabled: bool = False
+    totp_stepup_policy: dict[str, TotpStepUpPolicyMode] = field(default_factory=dict)
 
 
 class ApiKeysControllerOptions[ID](TypedDict, total=False):
@@ -101,6 +116,7 @@ class ApiKeysControllerOptions[ID](TypedDict, total=False):
     security: Sequence[SecurityRequirement] | None
     require_step_up_on_create: bool
     signing_enabled: bool
+    totp_stepup_policy: dict[str, TotpStepUpPolicyMode]
 
 
 @dataclass(frozen=True, slots=True)
@@ -117,6 +133,7 @@ class ApiKeysControllerContext[ID]:
     security: Sequence[SecurityRequirement] | None
     require_step_up_on_create: bool
     signing_enabled: bool
+    totp_stepup_policy: dict[str, TotpStepUpPolicyMode]
 
 
 def to_api_key_read(api_key: ApiKeyRowProtocol) -> ApiKeyRead:
@@ -179,6 +196,15 @@ async def create_api_key_for_user[UP: UserProtocol[Any], ID](
     Returns:
         Creation response containing the raw API key exactly once.
     """
+    await require_totp_stepup(
+        request,
+        TotpStepUpCheck(
+            endpoint="api_keys.create",
+            policy=ctx.totp_stepup_policy,
+            user_manager=cast("TotpStepUpVerifierProtocol[UP]", user_manager),
+            totp_code=data.totp_code,
+        ),
+    )
     if isinstance(data, ApiKeyCreateRequest) and ctx.require_step_up_on_create and data.current_password is None:
         raise_invalid_api_key_create_payload("API-key create payload requires current_password.")
     if data.signing_required and not ctx.signing_enabled:
@@ -226,6 +252,15 @@ async def update_api_key_for_request[UP: UserProtocol[Any], ID](
     Returns:
         The updated API-key row.
     """
+    await require_totp_stepup(
+        request,
+        TotpStepUpCheck(
+            endpoint="api_keys.update",
+            policy=ctx.totp_stepup_policy,
+            user_manager=cast("TotpStepUpVerifierProtocol[UP]", user_manager),
+            totp_code=data.totp_code,
+        ),
+    )
     async with _map_domain_exceptions(
         {
             InvalidPasswordError: (400, ErrorCode.LOGIN_BAD_CREDENTIALS),

@@ -138,6 +138,17 @@ class ApiKeyStore:
             row for row in self.rows.values() if row.user_id == user_id and (include_inactive or self._is_active(row))
         ]
 
+    async def delete_for_user(self, user_id: UUID) -> int:
+        """Delete all API-key rows owned by a user.
+
+        Returns:
+            Number of deleted rows.
+        """
+        deleted_keys = [key_id for key_id, row in self.rows.items() if row.user_id == user_id]
+        for key_id in deleted_keys:
+            del self.rows[key_id]
+        return len(deleted_keys)
+
     async def revoke(self, key_id: str, *, revoked_at: datetime) -> ApiKeyRow | None:
         """Soft-revoke an API key.
 

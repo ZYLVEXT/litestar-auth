@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any
 
 from litestar.config.csrf import CSRFConfig
 
@@ -62,8 +62,13 @@ def build_csrf_config[UP: UserProtocol[Any], ID](
             )
             raise ValueError(msg)
 
+    csrf_secret = config.csrf_secret
+    if csrf_secret is None:
+        msg = "csrf_secret must be configured before building plugin-managed CSRF middleware."
+        raise ValueError(msg)
+
     return CSRFConfig(
-        secret=cast("str", config.csrf_secret),
+        secret=csrf_secret,
         cookie_name=DEFAULT_CSRF_COOKIE_NAME,
         cookie_path=reference_transport.path,
         header_name=config.csrf_header_name,

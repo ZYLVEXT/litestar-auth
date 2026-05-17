@@ -67,6 +67,7 @@ def create_api_keys_controllers[ID](
         security=settings.security,
         require_step_up_on_create=settings.require_step_up_on_create,
         signing_enabled=settings.signing_enabled,
+        totp_stepup_policy=dict(settings.totp_stepup_policy),
     )
     self_controller = define_self_api_keys_controller(ctx)
     admin_controller = define_admin_api_keys_controller(ctx)

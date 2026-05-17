@@ -55,7 +55,7 @@ class ApiKeyMixin:
         Returns:
             The mapped ``user_id`` foreign-key column.
         """
-        return mapped_column(ForeignKey(f"{cls.auth_user_table}.id"), index=True, nullable=False)
+        return mapped_column(ForeignKey(f"{cls.auth_user_table}.id", ondelete="CASCADE"), index=True, nullable=False)
 
     @declared_attr
     @classmethod

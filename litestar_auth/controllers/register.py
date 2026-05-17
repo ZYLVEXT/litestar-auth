@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
-import time
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Protocol, TypedDict, Unpack, cast, overload, runtime_checkable
 
@@ -12,6 +10,7 @@ from litestar import Controller, Request, post
 from litestar.openapi.datastructures import ResponseSpec
 from litestar.openapi.spec import Example
 
+from litestar_auth.controllers._response_timing import DEFAULT_MINIMUM_RESPONSE_SECONDS, await_minimum_response_seconds
 from litestar_auth.controllers._utils import (
     RequestBodyRouteHandler,
     _configure_request_body_handler,
@@ -29,7 +28,7 @@ if TYPE_CHECKING:
     from litestar_auth.ratelimit import AuthRateLimitConfig, EndpointRateLimit
 
 REGISTER_FAILURE_DETAIL = "Registration could not be completed."
-DEFAULT_REGISTER_MINIMUM_RESPONSE_SECONDS = 0.4
+DEFAULT_REGISTER_MINIMUM_RESPONSE_SECONDS = DEFAULT_MINIMUM_RESPONSE_SECONDS
 _REGISTER_OPENAPI_RESPONSES = {
     400: ResponseSpec(
         data_container=dict[str, object],
@@ -164,17 +163,6 @@ def _validate_register_minimum_response_seconds(value: float) -> float:
     raise ValueError(msg)
 
 
-async def _await_register_minimum_response(
-    *,
-    started_at: float,
-    minimum_seconds: float,
-) -> None:
-    """Pad registration responses to the configured minimum duration."""
-    remaining_seconds = minimum_seconds - (time.perf_counter() - started_at)
-    if remaining_seconds > 0:
-        await asyncio.sleep(remaining_seconds)
-
-
 async def _increment_register_rate_limit(
     register_rate_limit: EndpointRateLimit | None,
     request: Request[Any, Any, Any],
@@ -236,8 +224,8 @@ def _create_register_handler(settings: _RegisterControllerSettings) -> RequestBo
         litestar_auth_user_manager: RegisterControllerUserManagerProtocol[Any, Any],
     ) -> msgspec.Struct:
         del self
-        started_at = time.perf_counter()
-        try:
+
+        async def _register_work() -> msgspec.Struct:
             user = await _create_user_or_register_failure(
                 data,
                 request=request,
@@ -246,11 +234,11 @@ def _create_register_handler(settings: _RegisterControllerSettings) -> RequestBo
             )
             await _reset_register_rate_limit(settings.register_rate_limit, request)
             return _to_user_schema(user, settings.user_read_schema, unsafe_testing=settings.unsafe_testing)
-        finally:
-            await _await_register_minimum_response(
-                started_at=started_at,
-                minimum_seconds=settings.minimum_response_seconds,
-            )
+
+        return await await_minimum_response_seconds(
+            minimum_seconds=settings.minimum_response_seconds,
+            work=_register_work,
+        )
 
     return cast("RequestBodyRouteHandler", register)
 

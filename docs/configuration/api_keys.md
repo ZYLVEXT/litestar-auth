@@ -58,16 +58,22 @@ The plugin mounts these self-service routes when API keys are enabled:
 
 | Route | Purpose |
 | ---- | ---- |
-| `POST /api-keys` | Create a key and return the raw `api_key` once plus safe metadata. Requires a password session through `requires_password_session`; also requires `current_password` by default. |
+| `POST /api-keys` | Create a key and return the raw `api_key` once plus safe metadata. Requires a password session through `requires_password_session`; also requires `current_password` by default and TOTP step-up for enrolled users. |
 | `GET /api-keys` | List active keys for the current user. |
 | `GET /api-keys/{key_id}` | Read safe metadata for one current-user key. Missing or foreign keys return `API_KEY_INVALID` as a 404. |
-| `PATCH /api-keys/{key_id}` | Update name or scopes. Requires a password session through `requires_password_session`. |
-| `DELETE /api-keys/{key_id}` | Soft-revoke one current-user key. Requires a password session through `requires_password_session`. |
+| `PATCH /api-keys/{key_id}` | Update name or scopes. Requires a password session through `requires_password_session` and TOTP step-up for enrolled users. |
+| `DELETE /api-keys/{key_id}` | Soft-revoke one current-user key. Requires a password session through `requires_password_session` and TOTP step-up for enrolled users. |
 
 Admin routes are guarded by `is_superuser` and use the path user id as authority:
 `POST /users/{user_id}/api-keys`, `GET /users/{user_id}/api-keys`, and
 `DELETE /users/{user_id}/api-keys/{key_id}`. Request bodies never choose the target user, and admin
 create requests do not require the target user's `current_password`.
+
+When TOTP is enrolled, API-key create/update/revoke routes use the `api_keys.*` entries in
+`LitestarAuthConfig.totp_stepup_policy` and default to `required_when_enrolled`. `POST` and `PATCH`
+bodies accept `totp_code` as an inline proof; otherwise callers need a recent TOTP marker from the
+same authenticated session. API-key-authenticated callers are rejected by `requires_password_session`
+before this gate because API-key requests have no interactive step-up channel.
 
 ## Rate-limit slots
 

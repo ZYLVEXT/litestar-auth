@@ -26,6 +26,7 @@ if TYPE_CHECKING:
 type ApiKeyStoreFactory = Callable[[AsyncSession], BaseApiKeyStore[Any, Any]]
 type ApiKeyScopeAuthority = Callable[[ASGIConnection[Any, Any, Any, Any], frozenset[str]], bool]
 type ApiKeyLastUsedWriteStrategy = Literal["disabled", "immediate", "throttled"]
+type TotpStepUpPolicyMode = Literal["required_when_enrolled", "always_required", "off"]
 
 DEFAULT_DATABASE_TOKEN_BACKEND_NAME = "database"  # noqa: S105
 DEFAULT_DATABASE_TOKEN_MAX_AGE = timedelta(hours=1)
@@ -37,6 +38,19 @@ DEFAULT_API_KEY_MAX_KEYS_PER_USER = 20
 DEFAULT_API_KEY_LAST_USED_THROTTLE_SECONDS = 60
 DEFAULT_API_KEY_SIGNED_BODY_MAX_BYTES = 1024 * 1024
 DEFAULT_API_KEY_SIGNED_BODY_MAX_MESSAGES = 1024
+DEFAULT_TOTP_STEPUP_TTL_SECONDS = 300
+TOTP_STEPUP_POLICY_ENDPOINTS = frozenset(
+    {
+        "totp.enable",
+        "totp.disable",
+        "totp.regenerate_recovery_codes",
+        "api_keys.create",
+        "api_keys.update",
+        "api_keys.revoke",
+        "users.update_self",
+        "oauth.associate",
+    },
+)
 
 
 @dataclass(slots=True)

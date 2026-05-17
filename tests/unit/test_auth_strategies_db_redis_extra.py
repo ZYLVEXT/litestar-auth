@@ -170,6 +170,27 @@ async def test_redis_token_strategy_invalidate_all_tokens_uses_index_when_presen
     assert await async_fakeredis.exists(strategy._user_index_key(str(user.id))) == 0
 
 
+async def test_redis_token_strategy_totp_stepup_marker_uses_ttl(
+    async_fakeredis: AsyncFakeRedis,
+) -> None:
+    """Redis TOTP step-up markers are present only while their TTL is live."""
+    strategy = RedisTokenStrategy(
+        config=RedisTokenStrategyConfig(
+            redis=cast_fakeredis(async_fakeredis, RedisClientProtocol),
+            token_hash_secret=REDIS_TOKEN_HASH_SECRET,
+        ),
+    )
+    user = _DummyUser(uuid4())
+
+    await strategy.issue_totp_stepup(user, "session-1", ttl_seconds=30)
+
+    assert await strategy.has_recent_totp_verification(user, "session-1") is True
+
+    await strategy.issue_totp_stepup(user, "session-1", ttl_seconds=0)
+
+    assert await strategy.has_recent_totp_verification(user, "session-1") is False
+
+
 async def test_redis_token_strategy_invalidate_all_tokens_without_index_leaves_foreign_keys(
     async_fakeredis: AsyncFakeRedis,
 ) -> None:

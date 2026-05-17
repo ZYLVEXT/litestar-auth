@@ -167,6 +167,7 @@ Cookie + CSRF flows (`demo_cookie_jwt`, `demo_cookie_jwt_totp`) need a client th
 - [Configuration](https://zylvext.github.io/litestar-auth/configuration/): user model, manager, backends, Redis, OAuth, TOTP, and security knobs.
 - [HTTP API](https://zylvext.github.io/litestar-auth/http_api/): generated routes, including the opt-in DB refresh-session/device management surface.
 - [Security](https://zylvext.github.io/litestar-auth/security/): secure defaults, migration-only flags, and production hardening notes.
+- [Deployment security checklist](https://zylvext.github.io/litestar-auth/deployment/#deployment-security-contract): reverse-proxy trust, cookie transport, and secrets-at-rest preconditions.
 - [Role management CLI](https://zylvext.github.io/litestar-auth/guides/roles_cli/): operator commands for bundled relational roles.
 - [Testing plugin-backed apps](https://zylvext.github.io/litestar-auth/guides/testing/): AsyncTestClient patterns and repo-aligned test advice.
 - [Python API overview](https://zylvext.github.io/litestar-auth/api/package/): stable imports and where advanced submodules live.

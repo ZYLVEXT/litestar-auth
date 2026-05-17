@@ -35,6 +35,7 @@ if TYPE_CHECKING:
 pytestmark = [pytest.mark.e2e]
 
 HTTP_BAD_REQUEST = 400
+HTTP_ACCEPTED = 202
 HTTP_CREATED = 201
 HTTP_FORBIDDEN = 403
 HTTP_NO_CONTENT = 204
@@ -191,11 +192,17 @@ class UsersFlowManager(BaseUserManager[User, UUID]):
     """Concrete manager used by the users e2e app."""
 
     verification_tokens: ClassVar[dict[str, str]] = {}
+    reset_tokens: ClassVar[dict[str, str]] = {}
 
     async def on_after_request_verify_token(self, user: User | None, token: str | None) -> None:
         """Capture re-verification tokens emitted after identity changes."""
         if user is not None and token is not None:
             type(self).verification_tokens[user.email] = token
+
+    async def on_after_forgot_password(self, user: User | None, token: str | None) -> None:
+        """Capture reset-password tokens emitted for existing users."""
+        if user is not None and token is not None:
+            type(self).reset_tokens[user.email] = token
 
 
 async def _login_headers(
@@ -268,6 +275,7 @@ def app() -> Iterator[tuple[Litestar, Engine, PasswordHelper, dict[str, UUID]]]:
         App under test, backing engine, password helper, and seeded user ids.
     """
     UsersFlowManager.verification_tokens.clear()
+    UsersFlowManager.reset_tokens.clear()
     engine = create_engine(
         "sqlite+pysqlite:///:memory:",
         connect_args={"check_same_thread": False},
@@ -354,6 +362,7 @@ def app() -> Iterator[tuple[Litestar, Engine, PasswordHelper, dict[str, UUID]]]:
         user_ids,
     )
     UsersFlowManager.verification_tokens.clear()
+    UsersFlowManager.reset_tokens.clear()
     engine.dispose()
 
 
@@ -365,6 +374,7 @@ def refreshable_app() -> Iterator[tuple[Litestar, Engine, PasswordHelper, dict[s
         App under test, backing engine, password helper, and seeded user ids.
     """
     UsersFlowManager.verification_tokens.clear()
+    UsersFlowManager.reset_tokens.clear()
     import_token_orm_models()
     engine = create_engine(
         "sqlite+pysqlite:///:memory:",
@@ -440,6 +450,7 @@ def refreshable_app() -> Iterator[tuple[Litestar, Engine, PasswordHelper, dict[s
         user_ids,
     )
     UsersFlowManager.verification_tokens.clear()
+    UsersFlowManager.reset_tokens.clear()
     engine.dispose()
 
 
@@ -484,7 +495,7 @@ async def test_users_crud_flow_via_plugin(
     response = await test_client.patch(
         "/users/me",
         headers=regular_headers,
-        json={"email": "member-updated@example.com"},
+        json={"email": "member-updated@example.com", "current_password": "member-password"},
     )
     assert response.status_code == HTTP_OK
     _assert_public_user(
@@ -606,6 +617,40 @@ async def test_users_crud_flow_via_plugin(
     assert stored_member.is_verified is False
     assert stored_member.roles == ["admin", "billing"]
     assert password_helper.verify("member-password", stored_member.hashed_password)
+
+
+async def test_users_me_email_change_requires_password_before_reset_pivot(
+    client: tuple[AsyncTestClient[Litestar], Engine, PasswordHelper, dict[str, UUID]],
+) -> None:
+    """A hijacked session cannot redirect reset-password delivery by changing email."""
+    test_client, engine, _, user_ids = client
+    member_headers = await _login_headers(
+        test_client,
+        email="member@example.com",
+        password="member-password",
+    )
+
+    patch_response = await test_client.patch(
+        "/users/me",
+        headers=member_headers,
+        json={"email": "attacker@example.com"},
+    )
+    forgot_password_response = await test_client.post(
+        "/auth/forgot-password",
+        json={"email": "attacker@example.com"},
+    )
+
+    assert patch_response.status_code == HTTP_BAD_REQUEST
+    patch_code = patch_response.json().get("code") or (patch_response.json().get("extra") or {}).get("code")
+    assert patch_code == ErrorCode.LOGIN_BAD_CREDENTIALS
+    assert forgot_password_response.status_code == HTTP_ACCEPTED
+    assert "attacker@example.com" not in UsersFlowManager.reset_tokens
+
+    with SASession(engine) as session:
+        stored_member = session.scalar(select(User).where(User.id == user_ids["member"]))
+
+    assert stored_member is not None
+    assert stored_member.email == "member@example.com"
 
 
 async def test_change_password_endpoint_invalidates_prior_access_and_refresh_tokens(

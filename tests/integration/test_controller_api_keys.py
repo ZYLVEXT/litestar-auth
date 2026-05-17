@@ -41,6 +41,7 @@ from litestar_auth.manager import BaseUserManager, UserManagerSecurity
 from litestar_auth.password import PasswordHelper
 from litestar_auth.plugin import ApiKeyConfig, LitestarAuth, LitestarAuthConfig
 from litestar_auth.ratelimit import AuthRateLimitConfig, EndpointRateLimit, InMemoryRateLimiter
+from litestar_auth.totp import _current_counter, _generate_totp_code, generate_totp_secret
 from tests._helpers import auth_middleware_get_request_session, litestar_app_with_user_manager
 from tests.integration.conftest import DummySessionMaker, ExampleUser, InMemoryTokenStrategy, InMemoryUserDatabase
 
@@ -124,6 +125,13 @@ class InMemoryApiKeyStore(BaseApiKeyStore[InMemoryApiKeyRow, UUID]):
         ]
 
     @override
+    async def delete_for_user(self, user_id: UUID) -> int:
+        deleted_keys = [key_id for key_id, row in self.rows.items() if row.user_id == user_id]
+        for key_id in deleted_keys:
+            del self.rows[key_id]
+        return len(deleted_keys)
+
+    @override
     async def revoke(self, key_id: str, *, revoked_at: datetime) -> InMemoryApiKeyRow | None:
         row = self.rows.get(key_id)
         if row is None:
@@ -202,6 +210,7 @@ def build_app(  # noqa: PLR0913
     signing_nonce_store: InMemoryApiKeyNonceStore | None = None,
     signed_body_max_bytes: int = 1024 * 1024,
     require_step_up_on_create: bool = True,
+    owner_totp_secret: str | None = None,
 ) -> tuple[Any, InMemoryApiKeyStore, InMemoryTokenStrategy, ExampleUser, ExampleUser]:
     """Create an app with auth plus API-key controllers.
 
@@ -215,6 +224,7 @@ def build_app(  # noqa: PLR0913
         hashed_password=password_helper.hash("owner-password"),
         is_verified=True,
         roles=["read", "write"] if owner_roles is None else owner_roles,
+        totp_secret=owner_totp_secret,
     )
     other = ExampleUser(
         id=uuid4(),
@@ -265,6 +275,7 @@ def build_app(  # noqa: PLR0913
             verification_token_secret="0123456789abcdef" * 4,
             reset_password_token_secret="fedcba9876543210" * 4,
             api_key_hash_secret=API_KEY_HASH_SECRET,
+            totp_secret_key=Fernet.generate_key().decode(),
         ),
         backends=(bearer_backend, api_key_backend),
         api_key_store=api_key_store,
@@ -278,6 +289,8 @@ def build_app(  # noqa: PLR0913
             secret_encryption_keyring=None if signing_keyring is None else cast("Any", signing_keyring),
         ),
     )
+    if owner_totp_secret is not None:
+        owner.totp_secret = manager._prepare_totp_secret_for_storage(owner_totp_secret)
     auth_controller = create_auth_controller(backend=bearer_backend)
     route_handlers: list[object] = [
         auth_controller,
@@ -526,6 +539,45 @@ async def test_create_current_password_requirement_follows_controller_config(
     assert required_response.status_code == HTTP_BAD_REQUEST
     assert _error_code(required_response) == ErrorCode.REQUEST_BODY_INVALID
     assert relaxed_response.status_code == HTTP_CREATED
+
+
+async def test_create_requires_totp_stepup_for_enrolled_user(async_test_client_factory: Any) -> None:  # noqa: ANN401
+    """API-key creation fails before persistence when an enrolled user lacks TOTP step-up."""
+    secret = generate_totp_secret()
+    app, store, strategy, owner, _other = build_app(owner_totp_secret=secret)
+    async with async_test_client_factory(app) as test_client:
+        headers = await _login(test_client, owner, strategy)
+
+        response = await test_client.post(
+            "/api-keys",
+            headers=headers,
+            json={"name": "CLI", "scopes": ["read"], "current_password": "owner-password"},
+        )
+
+    assert response.status_code == HTTP_FORBIDDEN
+    assert _error_code(response) == ErrorCode.TOTP_STEPUP_REQUIRED
+    assert store.rows == {}
+
+
+async def test_create_accepts_inline_totp_code_for_enrolled_user(async_test_client_factory: Any) -> None:  # noqa: ANN401
+    """A valid inline TOTP code satisfies the API-key create step-up gate."""
+    secret = generate_totp_secret()
+    app, _store, strategy, owner, _other = build_app(owner_totp_secret=secret)
+    async with async_test_client_factory(app) as test_client:
+        headers = await _login(test_client, owner, strategy)
+
+        response = await test_client.post(
+            "/api-keys",
+            headers=headers,
+            json={
+                "name": "CLI",
+                "scopes": ["read"],
+                "current_password": "owner-password",
+                "totp_code": _generate_totp_code(secret, _current_counter()),
+            },
+        )
+
+    assert response.status_code == HTTP_CREATED
 
 
 async def test_api_key_authenticates_then_revoke_blocks_future_use(async_test_client_factory: Any) -> None:  # noqa: ANN401

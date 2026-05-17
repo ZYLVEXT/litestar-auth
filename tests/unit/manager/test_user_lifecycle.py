@@ -423,6 +423,43 @@ async def test_delete_calls_hooks_and_rejects_missing_users() -> None:
         await service.delete(missing_user_id)
 
 
+async def test_delete_invalidates_dependent_stores_before_user_delete() -> None:
+    """Hard delete removes dependent auth stores before the user row is deleted."""
+    calls: list[str] = []
+    user_db = AsyncMock()
+    password_helper = PasswordHelper()
+    user = _build_user(password_helper)
+
+    class ApiKeyStore:
+        async def delete_for_user(self, user_id: object) -> int:
+            assert user_id == user.id
+            calls.append("api_keys")
+            return 1
+
+    class InvalidateStrategy:
+        async def invalidate_all_tokens(self, deleted_user: ExampleUser) -> None:
+            assert deleted_user is user
+            calls.append("tokens")
+
+    def delete_user(user_id: object) -> None:
+        assert user_id == user.id
+        calls.append("user")
+
+    user_db.get.return_value = user
+    user_db.delete.side_effect = delete_user
+    manager = TrackingUserManager(
+        user_db,
+        password_helper,
+        backends=(_Backend(strategy=InvalidateStrategy()),),
+        api_key_store=ApiKeyStore(),
+    )
+    service = UserLifecycleService(manager, policy=manager.policy)
+
+    await service.delete(user.id)
+
+    assert calls == ["tokens", "api_keys", "user"]
+
+
 def test_helper_methods_route_through_injected_policy() -> None:
     """Helper methods should delegate exclusively to the injected policy object."""
     user_db = AsyncMock()

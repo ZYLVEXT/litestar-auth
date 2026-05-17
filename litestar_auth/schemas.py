@@ -1,9 +1,10 @@
 """Public msgspec schemas and schema helpers for litestar-auth user payloads.
 
 Import ``UserEmailField`` and ``UserPasswordField`` from this module when
-app-owned ``msgspec.Struct`` user create, admin update, or change-password
-schemas should share the same email and password metadata as the built-in
-payloads. Self-service ``UserUpdate`` does not accept password fields; use the
+app-owned ``msgspec.Struct`` user create, self-update, admin update, or
+change-password schemas should share the same email and password metadata as
+the built-in payloads. Self-service ``UserUpdate`` accepts
+``current_password`` only as a step-up credential for email changes; use the
 dedicated ``ChangePasswordRequest`` contract for authenticated password
 rotation.
 """
@@ -45,20 +46,24 @@ class UserCreate(msgspec.Struct, forbid_unknown_fields=True):
 
 
 class UserUpdate(msgspec.Struct, omit_defaults=True, forbid_unknown_fields=True):
-    """Self-service profile-update payload (non-credential, non-privileged).
+    """Self-service profile-update payload (non-privileged).
 
     Security:
         Privileged fields (``is_active``, ``is_verified``, ``roles``) are not
         accepted on this self-service contract. They belong to
         :class:`AdminUserUpdate` via privileged ``PATCH /users/{user_id}``
-        instead. Password rotation goes through :class:`ChangePasswordRequest`
-        on ``POST /users/me/change-password`` so the current password can be
+        instead. Email changes require ``current_password`` so the authenticated
+        session re-proves the user's password before identity mutation.
+        Password rotation goes through :class:`ChangePasswordRequest` on
+        ``POST /users/me/change-password`` so the current password can be
         re-verified first. ``forbid_unknown_fields=True`` rejects any of those
         fields at decode time, so the persistence layer's defense-in-depth
         deny-list never has to run on an incoming self-service body.
     """
 
     email: UserEmailField | None = None
+    current_password: UserPasswordField | None = None
+    totp_code: schema_fields.TotpCodeField | None = None
 
 
 class AdminUserUpdate(msgspec.Struct, omit_defaults=True, forbid_unknown_fields=True):

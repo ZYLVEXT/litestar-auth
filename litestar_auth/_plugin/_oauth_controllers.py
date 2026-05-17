@@ -49,6 +49,7 @@ if TYPE_CHECKING:
     from litestar.openapi.spec import SecurityRequirement
     from litestar.types import ControllerRouterHandler
 
+    from litestar_auth.controllers._auth_helpers import TotpStepUpPolicyMode
     from litestar_auth.oauth.client_adapter import OAuthClientProtocol
 
 
@@ -64,6 +65,7 @@ class _PluginOAuthAssociateControllerSettings:
     path: str = "/auth/associate"
     cookie_secure: bool = True
     security: Sequence[SecurityRequirement] | None = None
+    totp_stepup_policy: dict[str, TotpStepUpPolicyMode] | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -99,6 +101,7 @@ def create_oauth_associate_controller(
             cookie_secure=settings.cookie_secure,
             validate_redirect_base_url=False,
             security=settings.security,
+            totp_stepup_policy=settings.totp_stepup_policy,
         ),
     )
 
@@ -255,6 +258,7 @@ def _append_oauth_associate_controllers[UP: UserProtocol[Any], ID](
                 path=contract.associate_path,
                 cookie_secure=contract.oauth_cookie_secure,
                 security=security,
+                totp_stepup_policy=config.totp_stepup_policy,
             ),
         )
         for entry in contract.providers

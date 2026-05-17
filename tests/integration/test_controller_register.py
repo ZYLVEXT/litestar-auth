@@ -443,7 +443,7 @@ async def test_register_minimum_response_does_not_double_delay_after_slow_busine
 ) -> None:
     """Naturally slow registration work is not padded again after exceeding the configured minimum."""
     sleep = AsyncMock(wraps=asyncio.sleep)
-    monkeypatch.setattr("litestar_auth.controllers.register.asyncio.sleep", sleep)
+    monkeypatch.setattr("litestar_auth.controllers._response_timing.asyncio.sleep", sleep)
 
     class SlowTrackingUserManager(TrackingUserManager):
         """Tracking manager whose create path naturally exceeds the timing envelope."""

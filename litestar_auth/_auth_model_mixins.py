@@ -101,6 +101,7 @@ class UserRoleRelationshipMixin:
         relationship_kwargs: dict[str, Any] = {
             "back_populates": _USER_RELATIONSHIP_NAME,
             "cascade": "all, delete-orphan",
+            "passive_deletes": True,
         }
         if cls.auth_user_role_relationship_lazy:
             relationship_kwargs["lazy"] = cls.auth_user_role_relationship_lazy
@@ -185,7 +186,7 @@ class UserRoleAssociationMixin:
         Returns:
             The mapped user foreign-key column.
         """
-        return mapped_column(ForeignKey(f"{cls.auth_user_table}.id"), primary_key=True)
+        return mapped_column(ForeignKey(f"{cls.auth_user_table}.id", ondelete="CASCADE"), primary_key=True)
 
     @declared_attr
     @classmethod
@@ -345,7 +346,7 @@ class UserAuthRelationshipMixin:
         if target is None:
             return cast("Mapped[list[Any]]", None)
 
-        relationship_kwargs: dict[str, Any] = {"back_populates": _USER_RELATIONSHIP_NAME}
+        relationship_kwargs: dict[str, Any] = {"back_populates": _USER_RELATIONSHIP_NAME, "passive_deletes": True}
         if lazy is not None:
             relationship_kwargs["lazy"] = lazy
         if foreign_keys is not None:
@@ -430,7 +431,7 @@ class _TokenModelMixin:
         Returns:
             The mapped ``user_id`` foreign-key column.
         """
-        return mapped_column(ForeignKey(f"{cls.auth_user_table}.id"), nullable=False)
+        return mapped_column(ForeignKey(f"{cls.auth_user_table}.id", ondelete="CASCADE"), nullable=False)
 
     @declared_attr
     @classmethod

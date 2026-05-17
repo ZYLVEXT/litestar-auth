@@ -176,8 +176,9 @@ def test_schemas_module_preserves_struct_definitions() -> None:
     """Msgspec schema definitions still expose their fields remain stable.
 
     Privileged fields live exclusively on AdminUserUpdate; the self-service
-    UserUpdate is intentionally email-only so a forgotten field on the
-    runtime deny-list cannot escalate self-update into a privilege change.
+    UserUpdate carries only email plus current-password proof so a forgotten
+    field on the runtime deny-list cannot escalate self-update into a
+    privilege change.
     """
     user_read_hints = get_type_hints(schemas_module.UserRead, include_extras=True)
     admin_update_hints = get_type_hints(schemas_module.AdminUserUpdate, include_extras=True)
@@ -190,7 +191,7 @@ def test_schemas_module_preserves_struct_definitions() -> None:
         "roles",
     )
     assert schemas_module.UserCreate.__struct_fields__ == ("email", "password")
-    assert schemas_module.UserUpdate.__struct_fields__ == ("email",)
+    assert schemas_module.UserUpdate.__struct_fields__ == ("email", "current_password", "totp_code")
     assert schemas_module.AdminUserUpdate.__struct_fields__ == (
         "password",
         "email",
@@ -250,6 +251,7 @@ def test_db_base_module_preserves_store_contracts() -> None:
     }
     assert db_base_module.BaseApiKeyStore.__dict__.keys() >= {
         "create",
+        "delete_for_user",
         "get_by_key_id",
         "list_for_user",
         "revoke",
@@ -302,6 +304,7 @@ async def test_db_base_protocol_method_stubs_execute_under_coverage() -> None:
     assert await db_base_module.BaseApiKeyStore.create(dummy_self, api_key_data) is None
     assert await db_base_module.BaseApiKeyStore.get_by_key_id(dummy_self, "akid_protocol") is None
     assert await db_base_module.BaseApiKeyStore.list_for_user(dummy_self, uuid4()) is None
+    assert await db_base_module.BaseApiKeyStore.delete_for_user(dummy_self, uuid4()) is None
     revoked_at = datetime.now(tz=UTC)
     assert await db_base_module.BaseApiKeyStore.revoke(dummy_self, "akid_protocol", revoked_at=revoked_at) is None
     assert (

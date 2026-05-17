@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING, Any, cast
 
 from litestar.exceptions import ClientException, NotAuthorizedException
 
+from litestar_auth.controllers._auth_helpers import TotpStepUpCheck, require_totp_stepup
 from litestar_auth.controllers._utils import AccountStateValidatorProvider, _require_account_state
 from litestar_auth.controllers.totp_contracts import (
     INVALID_TOTP_CODE_DETAIL,
@@ -49,6 +50,15 @@ if TYPE_CHECKING:
 
     from litestar_auth.controllers.totp_context import _TotpControllerContext, _TotpPendingTokenContext
     from litestar_auth.ratelimit import TotpRateLimitOrchestrator
+
+
+def _extract_login_session_id(response: object) -> str | None:
+    """Return the issued bearer access token when exposed in the login response body."""
+    content = getattr(response, "content", None)
+    if not isinstance(content, dict):
+        return None
+    token = content.get("access_token")
+    return token if isinstance(token, str) and token else None
 
 
 async def _totp_fail_invalid_pending(
@@ -153,7 +163,7 @@ async def _totp_handle_verify[UP: UserProtocol[Any], ID](
     totp_login_flow = _build_totp_login_flow(ctx=ctx, user_manager=user_manager)
 
     try:
-        user = await totp_login_flow.authenticate_pending_login(
+        completed_login = await totp_login_flow.authenticate_pending_login_with_method(
             pending_token=data.pending_token,
             code=data.code,
             client_binding=_totp_pending_client_binding(request, pending_token=pending_token),
@@ -181,9 +191,16 @@ async def _totp_handle_verify[UP: UserProtocol[Any], ID](
             extra={"code": exc.code},
         ) from exc
 
-    verified_user = cast("UP", user)
+    verified_user = cast("UP", completed_login.user)
     await totp_rate_limit.on_success("verify", request)
     response = await runtime.backend.login(verified_user)
+    session_id = _extract_login_session_id(response)
+    if session_id is not None and (not completed_login.used_recovery_code or ctx.security.totp_stepup_allow_recovery):
+        await user_manager.issue_totp_stepup_verification(
+            verified_user,
+            session_id,
+            ttl_seconds=ctx.security.totp_stepup_ttl_seconds,
+        )
     await user_manager.on_after_login(verified_user)
     return response
 
@@ -238,6 +255,17 @@ async def _totp_handle_disable[UP: UserProtocol[Any], ID](
         await runtime.rate_limit.on_invalid_attempt("disable", request)
         msg = INVALID_TOTP_CODE_DETAIL
         raise ClientException(status_code=400, detail=msg, extra={"code": ErrorCode.TOTP_CODE_INVALID})
+    if not recovery_code_verified:
+        await require_totp_stepup(
+            request,
+            TotpStepUpCheck(
+                endpoint="totp.disable",
+                policy=security.totp_stepup_policy,
+                user_manager=user_manager,
+                totp_code=data.code,
+                totp_algorithm=security.totp_algorithm,
+            ),
+        )
     await user_manager.set_totp_secret(user, None)
     await user_manager.set_recovery_code_hashes(user, {})
     await enrollment.enrollment_store.clear(user_id=str(user.id))
@@ -258,6 +286,7 @@ async def _totp_handle_regenerate_recovery_codes[UP: UserProtocol[Any], ID](
         retrieved again.
 
     Raises:
+        ClientException: If the request payload or TOTP step-up proof is invalid.
         RuntimeError: If recovery-code lookup secret configuration is missing.
     """
     runtime = ctx.runtime
@@ -272,6 +301,10 @@ async def _totp_handle_regenerate_recovery_codes[UP: UserProtocol[Any], ID](
 
     if security.totp_enable_requires_password:
         payload = await _totp_resolve_regenerate_payload(request, runtime=runtime, data=data)
+        if payload.current_password is None:
+            await runtime.rate_limit.on_invalid_attempt("regenerate_recovery_codes", request)
+            msg = "Invalid request payload."
+            raise ClientException(status_code=422, detail=msg, extra={"code": ErrorCode.LOGIN_PAYLOAD_INVALID})
         await _totp_verify_current_password(
             _TotpPasswordStepUpContext(
                 request=request,
@@ -282,6 +315,23 @@ async def _totp_handle_regenerate_recovery_codes[UP: UserProtocol[Any], ID](
             ),
             password=payload.current_password,
         )
+        totp_code = payload.totp_code
+    else:
+        payload = (
+            await _totp_resolve_regenerate_payload(request, runtime=runtime, data=data) if data is not None else None
+        )
+        totp_code = None if payload is None else payload.totp_code
+
+    await require_totp_stepup(
+        request,
+        TotpStepUpCheck(
+            endpoint="totp.regenerate_recovery_codes",
+            policy=security.totp_stepup_policy,
+            user_manager=user_manager,
+            totp_code=totp_code,
+            totp_algorithm=security.totp_algorithm,
+        ),
+    )
 
     recovery_codes = generate_totp_recovery_codes()
     lookup_secret = user_manager.recovery_code_lookup_secret

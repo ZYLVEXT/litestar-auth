@@ -7,7 +7,7 @@ that envelope, validate ``state`` in constant time, and pass the verifier into t
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, NotRequired, Required, TypedDict, Unpack, cast, overload
 
 from litestar import Controller, Request, get
@@ -16,6 +16,7 @@ from litestar.openapi.spec import Example
 from litestar.params import Parameter
 from litestar.response import Response
 
+from litestar_auth.controllers._auth_helpers import TOTP_STEPUP_REQUIRED_OPENAPI_RESPONSE, TotpStepUpPolicyMode
 from litestar_auth.controllers._oauth_assembly import (
     _build_associate_user_manager_binding,
     _build_direct_user_manager_binding,
@@ -93,6 +94,7 @@ _OAUTH_OPENAPI_RESPONSES = {
             ),
         ],
     ),
+    403: TOTP_STEPUP_REQUIRED_OPENAPI_RESPONSE,
 }
 
 
@@ -111,6 +113,7 @@ class OAuthControllerConfig[UP: UserProtocol[Any], ID]:
     oauth_scopes: Sequence[str] | None = None
     associate_by_email: bool = False
     trust_provider_email_verified: bool = False
+    totp_stepup_policy: dict[str, TotpStepUpPolicyMode] = field(default_factory=dict)
 
 
 class OAuthControllerOptions[UP: UserProtocol[Any], ID](TypedDict):
@@ -127,6 +130,7 @@ class OAuthControllerOptions[UP: UserProtocol[Any], ID](TypedDict):
     oauth_scopes: NotRequired[Sequence[str] | None]
     associate_by_email: NotRequired[bool]
     trust_provider_email_verified: NotRequired[bool]
+    totp_stepup_policy: NotRequired[dict[str, TotpStepUpPolicyMode]]
 
 
 @dataclass(frozen=True, slots=True)
@@ -142,6 +146,7 @@ class OAuthAssociateControllerConfig[UP: UserProtocol[Any], ID]:
     path: str = "/auth/associate"
     cookie_secure: bool = True
     security: Sequence[SecurityRequirement] | None = None
+    totp_stepup_policy: dict[str, TotpStepUpPolicyMode] = field(default_factory=dict)
 
 
 class OAuthAssociateControllerOptions[UP: UserProtocol[Any], ID](TypedDict):
@@ -156,6 +161,7 @@ class OAuthAssociateControllerOptions[UP: UserProtocol[Any], ID](TypedDict):
     path: NotRequired[str]
     cookie_secure: NotRequired[bool]
     security: NotRequired[Sequence[SecurityRequirement] | None]
+    totp_stepup_policy: NotRequired[dict[str, TotpStepUpPolicyMode]]
 
 
 def _create_oauth_controller_type(
@@ -366,6 +372,7 @@ def _create_oauth_associate_controller[UP: UserProtocol[Any], ID](
             state_cookie_prefix=ASSOCIATE_STATE_COOKIE_PREFIX,
             controller_name_suffix="OAuthAssociateController",
             validate_redirect_base_url=settings.validate_redirect_base_url,
+            totp_stepup_policy=settings.totp_stepup_policy,
         ),
         client_binding=_OAuthClientBinding(
             oauth_client_adapter=_build_oauth_client_adapter(oauth_client=settings.oauth_client),
@@ -450,5 +457,6 @@ def create_oauth_associate_controller[UP: UserProtocol[Any], ID](
             path=settings.path,
             cookie_secure=settings.cookie_secure,
             security=settings.security,
+            totp_stepup_policy=settings.totp_stepup_policy or None,
         ),
     )

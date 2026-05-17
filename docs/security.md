@@ -2,6 +2,14 @@
 
 This page summarizes protections and **conscious trade-offs** shipped by the library.
 
+## Operator checklist {#operator-checklist}
+
+Before production rollout, verify the deployment-owned security contract in
+[Deployment](deployment.md#deployment-security-contract):
+[reverse-proxy and trust boundaries](deployment.md#reverse-proxy-and-trust-boundaries),
+[cookie transport security requirements](deployment.md#cookie-transport-security-requirements), and
+[secrets at rest and key rotation](deployment.md#secrets-at-rest-and-key-rotation).
+
 ## Implemented controls
 
 - **Passwords** — hashing via `pwdlib`; hash upgrade on login when parameters change.
@@ -13,7 +21,7 @@ This page summarizes protections and **conscious trade-offs** shipped by the lib
 - **JWT** — library-issued access tokens include JOSE `typ=JWT`, and access-token decode rejects missing or unexpected `typ` headers before signature, audience, issuer, algorithm, and required-claim validation. This is defense-in-depth against token-class confusion, not a substitute for those primary controls. Access-token validation also enforces `exp` / `iat` / `aud`; optional `iss`; a small `exp` / `nbf` leeway for ordinary clock skew; and `jti` denylist support (`InMemoryJWTDenylistStore`, `RedisJWTDenylistStore`) with an explicit `JWTStrategy.revocation_posture` contract. The in-memory denylist prunes expired JTIs on each revoke and **fails closed** when `max_entries` is reached with no reclaimable slots: it does not insert the new revocation and does not drop active revocations (use `RedisJWTDenylistStore` or raise the cap for high revoke volume). Callers are not misled into thinking logout succeeded: `JWTStrategy.destroy_token` raises `TokenError`, and `AuthenticationBackend.logout` maps that to HTTP **503** with `TOKEN_PROCESSING_FAILED` for API routes using the bundled exception handler.
 - **Session fingerprint** — optional claim on JWT tying tokens to current password/email state.
 - **Cookie auth** — secure defaults (`HttpOnly`, `Secure`, `SameSite`); CSRF for unsafe methods when wired (see [Guides — Security](guides/security.md)).
-- **TOTP** — pending enrollment secrets stay server-side in `totp_enrollment_store`; replay protection is enforced when `totp_used_tokens_store` is configured; production fails fast without required stores; persisted TOTP secrets require encrypted-at-rest storage through `BaseUserManager.totp_secret_storage_posture` plus `UserManagerSecurity.totp_secret_keyring` or the one-key `totp_secret_key`; recovery codes are 112-bit lowercase hex values stored as HMAC lookup digests mapped to Argon2 hashes; pending-login tokens are bound to hashed client IP and User-Agent fingerprints by default.
+- **TOTP** — pending enrollment secrets stay server-side in `totp_enrollment_store`; replay protection is enforced when `totp_used_tokens_store` is configured; production fails fast without required stores; persisted TOTP secrets require encrypted-at-rest storage through `BaseUserManager.totp_secret_storage_posture` plus `UserManagerSecurity.totp_secret_keyring` or the one-key `totp_secret_key`; recovery codes are 112-bit lowercase hex values stored as HMAC lookup digests mapped to Argon2 hashes; pending-login tokens are bound to hashed client IP and User-Agent fingerprints by default; successful app-code verification can record a short-lived server-side step-up marker for downstream sensitive operations.
 - **OAuth** — state and PKCE verifier evidence in a short-lived `HttpOnly` flow cookie encrypted/authenticated with a Fernet key HKDF-derived from `oauth_flow_cookie_secret`; strict state validation; optional encryption at rest for provider tokens (`oauth_token_encryption_keyring` or one-key `oauth_token_encryption_key`); OAuth token persistence accepts only current-module `OAuthTokenEncryption` policies; write-time plaintext snapshots are restored after successful writes and cleared on rollback; guarded associate-by-email rules (`oauth_trust_provider_email_verified` on plugin-owned routes, `trust_provider_email_verified` on manual controllers, and `oauth_associate_by_email`); **the associate authorize route is POST + CSRF-protected** so a victim's `SameSite=Lax` session cookie cannot be abused by a cross-site top-level navigation to attach an attacker-controlled provider account to the victim's local user. Login authorize stays GET because anonymous OAuth login has no victim session to abuse.
 - **Opaque DB tokens** — keyed digest at rest; plugin-managed DB-token wiring uses `DatabaseTokenAuthConfig` plus `LitestarAuthConfig(..., database_token_auth=...)`.
 - **API keys** — opt-in user-owned credentials with digest-only bearer storage, one-time raw-secret
@@ -50,6 +58,11 @@ When you assemble `JWTStrategy` or `BaseUserManager` yourself, inspect the runti
 - `BaseUserManager.totp_secret_storage_posture` reports the `fernet_encrypted` persisted-secret contract. Supplying `totp_secret_keyring=FernetKeyringConfig(...)` on `UserManagerSecurity(...)` lets direct/custom integrations store and read encrypted TOTP secrets with an active key id and configured old keys. The one-key `totp_secret_key` field remains a deliberate ergonomic shortcut and is encoded under the `default` key id.
 - New persisted TOTP secret writes use `fernet:v1:<key_id>:<ciphertext>` values. `BaseUserManager.totp_secret_requires_reencrypt(...)` and `BaseUserManager.reencrypt_totp_secret_for_storage(...)` are the manager helpers for explicit at-rest rotation jobs.
 - With `totp_secret_keyring` and `totp_secret_key` omitted, `None` still represents disabled 2FA, but non-null TOTP secret writes and unprefixed legacy plaintext reads fail closed. Encrypt, rotate, or clear existing plaintext TOTP secret rows before upgrading.
+- TOTP step-up for sensitive operations is documented in
+  [TOTP step-up for sensitive operations](configuration/totp.md#totp-step-up-for-sensitive-operations),
+  including `totp_stepup_ttl_seconds`, `totp_stepup_policy`, `totp_stepup_allow_recovery`, the
+  `TOTP_STEPUP_REQUIRED` 403 contract, default endpoint policies, recovery-code behavior, and the
+  API-key transport rationale.
 - `BaseUserManager` uses `UserManagerSecurity.login_identifier_telemetry_secret` only for
   failed-login identifier digests. It is optional; omitting it keeps logs correlation-safe by
   leaving `identifier_digest` out rather than reusing another auth secret.

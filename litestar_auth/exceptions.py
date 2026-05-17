@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from litestar.exceptions import ClientException
+
 from litestar_auth._error_codes import ErrorCode, UserIdentifier
 
 
@@ -62,6 +64,12 @@ class InsufficientRolesError(AuthorizationError):
         # default human-readable message.
         resolved_message = message or f"The authenticated user does not have {required_role_phrase}."
         super().__init__(message=resolved_message, code=code)
+
+
+def totp_stepup_required_exception() -> ClientException:
+    """Return the stable 403 client response for missing recent TOTP verification."""
+    msg = "Recent TOTP verification is required."
+    return ClientException(status_code=403, detail=msg, extra={"code": ErrorCode.TOTP_STEPUP_REQUIRED})
 
 
 class TokenError(LitestarAuthError):

@@ -14,6 +14,12 @@ from litestar_auth.controllers._api_key_common import (
     raise_api_key_not_found,
     to_api_key_read,
 )
+from litestar_auth.controllers._auth_helpers import (
+    TOTP_STEPUP_REQUIRED_OPENAPI_RESPONSE,
+    TotpStepUpCheck,
+    TotpStepUpVerifierProtocol,
+    require_totp_stepup,
+)
 from litestar_auth.controllers._utils import _configure_request_body_handler
 from litestar_auth.exceptions import ApiKeyNotFoundError
 from litestar_auth.guards import is_superuser, requires_password_session
@@ -33,6 +39,7 @@ def _create_admin_api_key_create_handler[ID](ctx: ApiKeysControllerContext[ID]) 
         status_code=201,
         guards=[is_superuser, requires_password_session],
         security=ctx.security,
+        responses={403: TOTP_STEPUP_REQUIRED_OPENAPI_RESPONSE},
     )
     async def create_user_api_key(
         self: Controller,
@@ -42,6 +49,15 @@ def _create_admin_api_key_create_handler[ID](ctx: ApiKeysControllerContext[ID]) 
         litestar_auth_user_manager: ApiKeysControllerUserManagerProtocol[Any, Any],
     ) -> ApiKeyCreateResponse:
         del self
+        await require_totp_stepup(
+            request,
+            TotpStepUpCheck(
+                endpoint="api_keys.create",
+                policy=ctx.totp_stepup_policy,
+                user_manager=cast("TotpStepUpVerifierProtocol[Any]", litestar_auth_user_manager),
+                totp_code=data.totp_code,
+            ),
+        )
         user = await load_user_or_404(user_id, ctx=ctx, user_manager=litestar_auth_user_manager)
         return await create_api_key_for_user(
             request,
@@ -79,14 +95,24 @@ def _create_admin_api_key_revoke_handler[ID](ctx: ApiKeysControllerContext[ID]) 
         guards=[is_superuser, requires_password_session],
         security=ctx.security,
         status_code=200,
+        responses={403: TOTP_STEPUP_REQUIRED_OPENAPI_RESPONSE},
     )
     async def revoke_user_api_key(
         self: Controller,
+        request: Request[Any, Any, Any],
         user_id: str,
         key_id: str,
         litestar_auth_user_manager: ApiKeysControllerUserManagerProtocol[Any, Any],
     ) -> ApiKeyRead:
         del self
+        await require_totp_stepup(
+            request,
+            TotpStepUpCheck(
+                endpoint="api_keys.revoke",
+                policy=ctx.totp_stepup_policy,
+                user_manager=cast("TotpStepUpVerifierProtocol[Any]", litestar_auth_user_manager),
+            ),
+        )
         user = await load_user_or_404(user_id, ctx=ctx, user_manager=litestar_auth_user_manager)
         try:
             api_key = await litestar_auth_user_manager.revoke_api_key(user, key_id)

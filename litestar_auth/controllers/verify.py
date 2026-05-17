@@ -10,6 +10,7 @@ from litestar import Controller, Request, post
 from litestar.exceptions import ClientException
 from litestar.status_codes import HTTP_200_OK, HTTP_202_ACCEPTED
 
+from litestar_auth.controllers._response_timing import DEFAULT_MINIMUM_RESPONSE_SECONDS, await_minimum_response_seconds
 from litestar_auth.controllers._utils import (
     RequestHandler,
     _create_before_request_handler,
@@ -52,6 +53,8 @@ class _VerifyControllerContext:
 
     user_read_schema: type[msgspec.Struct]
     unsafe_testing: bool
+    verify_minimum_response_seconds: float
+    request_verify_minimum_response_seconds: float
     verify_before_request: RequestHandler | None
     request_verify_before_request: RequestHandler | None
     verify_increment: RequestHandler
@@ -59,11 +62,13 @@ class _VerifyControllerContext:
     request_verify_rate_limit: EndpointRateLimit | None
 
 
-def create_verify_controller[UP: VerifyControllerUserProtocol[Any], ID](
+def create_verify_controller[UP: VerifyControllerUserProtocol[Any], ID](  # noqa: PLR0913
     *,
     rate_limit_config: AuthRateLimitConfig | None = None,
     path: str = "/auth",
     user_read_schema: type[msgspec.Struct] = UserRead,
+    verify_minimum_response_seconds: float = DEFAULT_MINIMUM_RESPONSE_SECONDS,
+    request_verify_minimum_response_seconds: float = DEFAULT_MINIMUM_RESPONSE_SECONDS,
     unsafe_testing: bool = False,
 ) -> type[Controller]:
     """Return a controller subclass that resolves the user manager via Litestar DI.
@@ -73,6 +78,8 @@ def create_verify_controller[UP: VerifyControllerUserProtocol[Any], ID](
             ``request_verify_token`` requests are subject to rate limiting.
         path: Base route prefix for the generated controller.
         user_read_schema: Custom msgspec struct used for public verification responses.
+        verify_minimum_response_seconds: Minimum wall-clock duration for verify responses.
+        request_verify_minimum_response_seconds: Minimum wall-clock duration for request-verify-token responses.
         unsafe_testing: Explicit test-only override that allows response
             schemas with sensitive fields for isolated fixtures.
 
@@ -87,6 +94,14 @@ def create_verify_controller[UP: VerifyControllerUserProtocol[Any], ID](
         _VerifyControllerContext(
             user_read_schema=user_read_schema,
             unsafe_testing=unsafe_testing,
+            verify_minimum_response_seconds=_validate_minimum_response_seconds(
+                verify_minimum_response_seconds,
+                field_name="verify_minimum_response_seconds",
+            ),
+            request_verify_minimum_response_seconds=_validate_minimum_response_seconds(
+                request_verify_minimum_response_seconds,
+                field_name="request_verify_minimum_response_seconds",
+            ),
             verify_before_request=_create_before_request_handler(verify_rate_limit),
             request_verify_before_request=_create_before_request_handler(request_verify_rate_limit),
             verify_increment=verify_rate_limit_increment,
@@ -96,6 +111,19 @@ def create_verify_controller[UP: VerifyControllerUserProtocol[Any], ID](
     )
     verify_cls.path = path
     return _mark_litestar_auth_route_handler(verify_cls)
+
+
+def _validate_minimum_response_seconds(value: float, *, field_name: str) -> float:
+    """Return a non-negative timing-envelope value.
+
+    Raises:
+        ValueError: If ``value`` is negative.
+    """
+    if value >= 0:
+        return value
+
+    msg = f"{field_name} must be non-negative."
+    raise ValueError(msg)
 
 
 def _define_verify_controller_class(ctx: _VerifyControllerContext) -> type[Controller]:
@@ -109,18 +137,24 @@ def _define_verify_controller_class(ctx: _VerifyControllerContext) -> type[Contr
             data: VerifyToken,
             litestar_auth_user_manager: VerifyControllerUserManagerProtocol[Any, Any],
         ) -> msgspec.Struct:
-            try:
-                user = await litestar_auth_user_manager.verify(data.token)
-            except InvalidVerifyTokenError as exc:
-                await ctx.verify_increment(request)
-                raise ClientException(
-                    status_code=400,
-                    detail="The email verification token is invalid.",
-                    extra={"code": ErrorCode.VERIFY_USER_BAD_TOKEN},
-                ) from exc
+            async def _verify_work() -> msgspec.Struct:
+                try:
+                    user = await litestar_auth_user_manager.verify(data.token)
+                except InvalidVerifyTokenError as exc:
+                    await ctx.verify_increment(request)
+                    raise ClientException(
+                        status_code=400,
+                        detail="The email verification token is invalid.",
+                        extra={"code": ErrorCode.VERIFY_USER_BAD_TOKEN},
+                    ) from exc
 
-            await ctx.verify_reset(request)
-            return _to_user_schema(user, ctx.user_read_schema, unsafe_testing=ctx.unsafe_testing)
+                await ctx.verify_reset(request)
+                return _to_user_schema(user, ctx.user_read_schema, unsafe_testing=ctx.unsafe_testing)
+
+            return await await_minimum_response_seconds(
+                minimum_seconds=ctx.verify_minimum_response_seconds,
+                work=_verify_work,
+            )
 
         @post("/request-verify-token", status_code=HTTP_202_ACCEPTED, before_request=ctx.request_verify_before_request)
         async def request_verify_token(  # noqa: PLR6301
@@ -129,13 +163,19 @@ def _define_verify_controller_class(ctx: _VerifyControllerContext) -> type[Contr
             data: RequestVerifyToken,
             litestar_auth_user_manager: VerifyControllerUserManagerProtocol[Any, Any],
         ) -> None:
-            # Security: increment in `finally` so transient manager errors do not
-            # bypass the limiter. request_verify_token is enumeration-resistant.
-            try:
-                await litestar_auth_user_manager.request_verify_token(data.email)
-            finally:
-                if ctx.request_verify_rate_limit is not None:
-                    await ctx.request_verify_rate_limit.increment(request)
+            async def _request_verify_work() -> None:
+                # Security: increment in `finally` so transient manager errors do not
+                # bypass the limiter. request_verify_token is enumeration-resistant.
+                try:
+                    await litestar_auth_user_manager.request_verify_token(data.email)
+                finally:
+                    if ctx.request_verify_rate_limit is not None:
+                        await ctx.request_verify_rate_limit.increment(request)
+
+            await await_minimum_response_seconds(
+                minimum_seconds=ctx.request_verify_minimum_response_seconds,
+                work=_request_verify_work,
+            )
 
     verify_cls = VerifyController
     verify_cls.__module__ = __name__

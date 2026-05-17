@@ -374,14 +374,7 @@ class OAuthClientAdapter:
 
         raw_profile = await self._oauth_client.get_profile(access_token)
         profile = _as_mapping(raw_profile, message="OAuth client returned an invalid profile payload.")
-        identity = _extract_identity_from_profile(profile)
-
-        if _supports_email_verified(self._oauth_client):
-            email_verified = await self._call_dedicated_email_verified(self._oauth_client, access_token)
-        else:
-            email_verified = _parse_email_verified_from_profile(profile)
-
-        return identity, email_verified
+        return _identity_and_email_verified_from_profile(profile)
 
     @staticmethod
     async def _call_dedicated_email_verified(
@@ -416,6 +409,15 @@ def _parse_email_verified_from_profile(profile: Mapping[str, object]) -> bool | 
             return lowered == "true"
     msg = "OAuth provider returned an invalid email_verified value."
     raise ConfigurationError(msg)
+
+
+def _identity_and_email_verified_from_profile(profile: Mapping[str, object]) -> tuple[tuple[str, str], bool | None]:
+    """Extract account identity and email-verification signal from one profile payload.
+
+    Returns:
+        Tuple of account identity and profile-derived email-verification signal.
+    """
+    return _extract_identity_from_profile(profile), _parse_email_verified_from_profile(profile)
 
 
 def _as_mapping(raw_payload: object, *, message: str) -> Mapping[str, object]:

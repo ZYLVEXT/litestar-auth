@@ -196,6 +196,8 @@ def _append_account_feature_controllers[UP: UserProtocol[Any], ID](
             create_verify_controller(
                 rate_limit_config=config.rate_limit_config,
                 path=config.auth_path,
+                verify_minimum_response_seconds=config.verify_minimum_response_seconds,
+                request_verify_minimum_response_seconds=config.request_verify_minimum_response_seconds,
                 unsafe_testing=config.unsafe_testing,
                 **user_read_schema_kwargs(config),
             ),
@@ -218,6 +220,7 @@ def _append_account_feature_controllers[UP: UserProtocol[Any], ID](
                 hard_delete=config.hard_delete,
                 unsafe_testing=config.unsafe_testing,
                 security=security,
+                totp_stepup_policy=config.totp_stepup_policy,
                 **users_schema_kwargs(config),
             ),
         )
@@ -248,6 +251,7 @@ def _append_session_feature_controllers[UP: UserProtocol[Any], ID](
                 users_path=config.users_path,
                 require_step_up_on_create=config.api_keys.require_step_up_on_create,
                 signing_enabled=config.api_keys.signing_enabled,
+                totp_stepup_policy=config.totp_stepup_policy,
             ),
         )
     if config.totp_config is not None:

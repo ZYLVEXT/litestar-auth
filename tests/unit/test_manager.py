@@ -188,6 +188,32 @@ class TrackingUserManager(BaseUserManager[ExampleUser, UUID]):
         self.used_api_key_events.append(api_key)
 
 
+class _StepUpStrategy:
+    """Fake server-side step-up strategy with an injectable monotonic clock."""
+
+    def __init__(self, clock: Callable[[], float]) -> None:
+        self._clock = clock
+        self._markers: dict[tuple[object, str], float] = {}
+
+    async def issue_totp_stepup(self, user: ExampleUser, session_id: str, *, ttl_seconds: int) -> None:
+        """Record a marker expiry from the fake clock."""
+        if ttl_seconds <= 0:
+            self._markers.pop((user.id, session_id), None)
+            return
+        self._markers[user.id, session_id] = self._clock() + ttl_seconds
+
+    async def has_recent_totp_verification(self, user: ExampleUser, session_id: str) -> bool:
+        """Return whether the marker has not expired under the fake clock."""
+        return self._markers.get((user.id, session_id), 0) > self._clock()
+
+
+@dataclass(slots=True)
+class _StepUpBackend:
+    """Backend wrapper exposing the fake strategy via the normal manager seam."""
+
+    strategy: _StepUpStrategy
+
+
 def _build_user(
     password_helper: PasswordHelper,
     *,
@@ -410,6 +436,38 @@ def test_manager_init_accepts_config_object() -> None:
     assert manager.password_helper is password_helper
     assert manager.login_identifier == "username"
     assert manager.id_parser is UUID
+
+
+async def test_totp_stepup_marker_uses_backend_storage_and_ttl() -> None:
+    """The manager facade delegates TOTP step-up state to backend storage."""
+    now = 10.0
+
+    def clock() -> float:
+        return now
+
+    user_db = AsyncMock()
+    password_helper = PasswordHelper()
+    strategy = _StepUpStrategy(clock)
+    manager = TrackingUserManager(user_db, password_helper, backends=(_StepUpBackend(strategy),))
+    user = _build_user(password_helper)
+
+    await manager.issue_totp_stepup_verification(user, "session-1", ttl_seconds=5)
+
+    assert await manager.has_recent_totp_verification(user, "session-1") is True
+    now = 15.1
+    assert await manager.has_recent_totp_verification(user, "session-1") is False
+
+
+async def test_totp_stepup_marker_is_absent_without_capable_backend() -> None:
+    """Managers without a capable backend do not create in-memory step-up state."""
+    user_db = AsyncMock()
+    password_helper = PasswordHelper()
+    manager = TrackingUserManager(user_db, password_helper)
+    user = _build_user(password_helper)
+
+    await manager.issue_totp_stepup_verification(user, "session-1", ttl_seconds=5)
+
+    assert await manager.has_recent_totp_verification(user, "session-1") is False
 
 
 def test_manager_init_rejects_config_combined_with_user_db_or_options() -> None:

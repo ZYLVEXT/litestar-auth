@@ -42,8 +42,10 @@ Generated recovery codes are 28 lowercase hex characters (112 bits).
 By default this route follows the same password step-up policy as enrollment:
 when **`totp_enable_requires_password=True`**, send
 `TotpRegenerateRecoveryCodesRequest` with `current_password`. A wrong password
-returns the same `LOGIN_BAD_CREDENTIALS` failure shape as login. When the flag is
-disabled, the route accepts no request body.
+returns the same `LOGIN_BAD_CREDENTIALS` failure shape as login. Because recovery-code
+rotation is also protected by TOTP step-up for enrolled users, the body can include
+`totp_code`; when password step-up is disabled, `totp_code` is the interactive proof
+for callers that do not already have a recent TOTP marker.
 
 ## Login completion
 

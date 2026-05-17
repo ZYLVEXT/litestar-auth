@@ -72,6 +72,67 @@ in-progress OAuth handshakes, CSRF secret rotation affects active browser sessio
 telemetry rotation starts a new digest correlation window. Keep token lifetimes short enough that
 planned rotation can happen without a long dual-secret compatibility period.
 
+## Deployment security contract
+
+These requirements are deployment preconditions, not library toggles that make unsafe infrastructure
+safe. Configure them before exposing browser auth, rate-limited auth endpoints, OAuth token storage,
+TOTP, or API-key request signing to production traffic.
+
+### Reverse-proxy and trust boundaries
+
+Set `trusted_proxy=True` only on rate-limit endpoints whose traffic reaches the application through a
+trusted reverse proxy or load balancer that overwrites the configured `trusted_headers`. This applies
+to `EndpointRateLimit.trusted_proxy`, `EndpointRateLimit.trusted_headers`, and the shared builders that
+copy those settings into endpoint limiters, including `SharedRateLimitConfigOptions.trusted_proxy` and
+`RedisAuthRateLimitConfigOptions.trusted_proxy`.
+
+The default trusted header is `X-Forwarded-For`. When `trusted_proxy=True`, the rate-limit key builder
+uses the **rightmost** `X-Forwarded-For` value because that is the value appended by the immediately
+upstream trusted proxy in common `proxy_add_x_forwarded_for` deployments. Leftmost entries may be
+client-controlled and spoofed. For multi-proxy chains such as CDN -> load balancer -> app, either make
+the trusted edge strip incoming forwarded headers or configure the chain so the application only sees
+headers written by infrastructure you control. Leave `trusted_proxy=False` when those conditions are
+not true; the direct client host is the fail-closed rate-limit identity source.
+
+### Cookie transport security requirements
+
+Browser cookie authentication requires HTTPS in production. Keep `CookieTransportConfig.secure=True`
+and `CookieTransport.secure=True`, terminate TLS before the app, and set HSTS at the edge. The
+transport rejects `samesite="none"` with `secure=False`; cross-site browser flows that need
+`CookieTransportConfig.samesite="none"` must therefore run over HTTPS and need explicit CSRF
+protection because browsers automatically attach those cookies to cross-origin requests.
+
+For plugin-owned cookie auth, configure `LitestarAuthConfig.csrf_secret`; production validation fails
+closed when `CookieTransport` is used without it unless you explicitly opt into a non-browser or
+externally managed CSRF posture. The escape valves are intentionally narrow:
+`CookieTransportConfig.allow_insecure_cookie_auth=True` / `CookieTransport.allow_insecure_cookie_auth`
+for controlled non-browser cookie use, or manual route setups that set
+`csrf_protection_managed_externally=True` only when app-owned CSRF middleware protects unsafe methods.
+Use `LitestarAuthConfig.csrf_header_name` to align clients with the expected CSRF header.
+
+### Secrets at rest and key rotation
+
+Persisted OAuth tokens, persisted TOTP secrets, pending TOTP enrollment secrets, and API-key
+signing-required raw secrets are secrets at rest. Configure their encryption fields before production:
+`OAuthConfig.oauth_token_encryption_keyring` or the one-key `oauth_token_encryption_key`;
+`UserManagerSecurity.totp_secret_keyring` or the one-key `totp_secret_key`; and
+`ApiKeyConfig.secret_encryption_keyring`, surfaced in plugin config as
+`api_keys.secret_encryption_keyring`. API-key signing stores the reversible ciphertext in
+`api_key.encrypted_secret`; bearer API keys remain digest-only and are not signing-secret rotation
+candidates.
+
+Use `FernetKeyringConfig(active_key_id=..., keys=...)` for deployments that need no-downtime
+rotation. The caller-owned migration pattern is dual-key: deploy old and new keys together, switch
+`active_key_id` to the new key for fresh writes, re-encrypt stored rows one at a time, verify that no
+stored values still require re-encryption, and only then remove the old key id. The library provides
+row-level helpers such as `OAuthTokenEncryption.requires_reencrypt(...)` /
+`OAuthTokenEncryption.reencrypt(...)`, `BaseUserManager.totp_secret_requires_reencrypt(...)` /
+`BaseUserManager.reencrypt_totp_secret_for_storage(...)`, and
+`BaseUserManager.api_key_signing_secret_requires_reencrypt(...)` /
+`BaseUserManager.reencrypt_api_key_signing_secret(...)`; it does not provide a global database sweep,
+locking strategy, batching job, audit-log table, or full Fernet key-rotation service. Those migration
+concerns remain application-owned until the library ships a built-in helper.
+
 ## DB refresh-session metadata
 
 Session/device management is a DB-backed refresh-token feature. Before enabling

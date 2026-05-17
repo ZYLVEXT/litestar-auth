@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import logging
 from functools import partial
 from typing import TYPE_CHECKING, Any, Self, cast
@@ -27,6 +28,10 @@ from litestar_auth.authentication.middleware import (
 from litestar_auth.authentication.middleware import logger as middleware_logger
 from litestar_auth.authentication.strategy._api_key_format import digest_api_key_secret
 from litestar_auth.authentication.strategy.api_key import ApiKeyContext, ApiKeyStrategy
+from litestar_auth.authentication.transport._api_key_signing import (
+    API_KEY_SIGNED_BODY_SCOPE_KEY,
+    build_canonical_request,
+)
 from litestar_auth.db import ApiKeyData
 from litestar_auth.exceptions import ErrorCode
 from tests._helpers import ExampleUser
@@ -198,6 +203,20 @@ async def _app(scope: Scope, receive: Receive, send: Send) -> None:
     await asyncio.sleep(0)
 
 
+async def _raising_app(scope: Scope, receive: Receive, send: Send) -> None:
+    """Raise from the downstream app after authentication middleware has run.
+
+    Raises:
+        RuntimeError: Always raised to exercise middleware cleanup.
+    """
+    del scope
+    del receive
+    del send
+    await asyncio.sleep(0)
+    msg = "downstream boom"
+    raise RuntimeError(msg)
+
+
 def test_middleware_rejects_config_combined_with_keyword_options() -> None:
     """LitestarAuthMiddleware accepts either a config object or keyword options."""
     session_maker = DummySessionMaker(DummySession())
@@ -347,10 +366,18 @@ async def test_middleware_buffers_body_for_api_key_backend_when_any_authorizatio
     scope["headers"] = [
         (b"authorization", b"LSA1-HMAC-SHA256 keyid=test,signedheaders=host,signature=abc"),
         (b"authorization", b"Bearer token"),
+        (b"host", b"example.test"),
     ]
     session_maker = DummySessionMaker(DummySession())
     authenticator = Mock()
-    authenticator.authenticate = AsyncMock(return_value=(None, None))
+
+    async def authenticate(connection: ASGIConnection[Any, Any, Any, Any]) -> tuple[None, None]:
+        await asyncio.sleep(0)
+        canonical_request = build_canonical_request(connection, signed_headers=("host",))
+        assert canonical_request.endswith(hashlib.sha256(body).hexdigest())
+        return None, None
+
+    authenticator.authenticate = AsyncMock(side_effect=authenticate)
     middleware = LitestarAuthMiddleware[ExampleUser, UUID](
         app=_app,
         get_request_session=partial(get_or_create_scoped_session, session_maker=cast("Any", session_maker)),
@@ -361,7 +388,29 @@ async def test_middleware_buffers_body_for_api_key_backend_when_any_authorizatio
     await middleware(scope, cast("Receive", receive), cast("Send", _send))
 
     assert receive.call_count == 1
-    assert cast("dict[str, Any]", scope)["litestar_auth_body"] == body
+    assert API_KEY_SIGNED_BODY_SCOPE_KEY not in scope
+
+
+async def test_middleware_clears_signed_body_when_downstream_raises() -> None:
+    """Signed-body scope storage is bounded by the middleware frame on downstream errors."""
+    scope = _build_scope()
+    receive = BodyReceive(b'{"signed": true}')
+    scope["headers"] = [(b"authorization", b"LSA1-HMAC-SHA256 keyid=test,signedheaders=host,signature=abc")]
+    session_maker = DummySessionMaker(DummySession())
+    authenticator = Mock()
+    authenticator.authenticate = AsyncMock(return_value=(None, None))
+    middleware = LitestarAuthMiddleware[ExampleUser, UUID](
+        app=_raising_app,
+        get_request_session=partial(get_or_create_scoped_session, session_maker=cast("Any", session_maker)),
+        authenticator_factory=Mock(return_value=authenticator),
+        api_key_backend_present=True,
+    )
+
+    with pytest.raises(RuntimeError, match="downstream boom"):
+        await middleware(scope, cast("Receive", receive), cast("Send", _send))
+
+    assert receive.call_count == 1
+    assert API_KEY_SIGNED_BODY_SCOPE_KEY not in scope
 
 
 async def test_middleware_does_not_buffer_signed_body_without_api_key_backend() -> None:
@@ -382,7 +431,7 @@ async def test_middleware_does_not_buffer_signed_body_without_api_key_backend() 
     await middleware(scope, cast("Receive", receive), cast("Send", _send))
 
     assert receive.call_count == 0
-    assert "litestar_auth_body" not in scope
+    assert API_KEY_SIGNED_BODY_SCOPE_KEY not in scope
 
 
 async def test_middleware_allows_signed_body_at_configured_message_limit() -> None:
@@ -405,7 +454,7 @@ async def test_middleware_allows_signed_body_at_configured_message_limit() -> No
     await middleware(scope, cast("Receive", receive), cast("Send", _send))
 
     assert receive.call_count == max_messages
-    assert cast("dict[str, Any]", scope)["litestar_auth_body"] == b""
+    assert API_KEY_SIGNED_BODY_SCOPE_KEY not in scope
 
 
 async def test_middleware_rejects_signed_body_over_configured_message_limit() -> None:
@@ -451,7 +500,7 @@ async def test_middleware_does_not_buffer_body_for_single_non_signed_authorizati
     await middleware(scope, cast("Receive", receive), cast("Send", _send))
 
     assert receive.call_count == 0
-    assert "litestar_auth_body" not in scope
+    assert API_KEY_SIGNED_BODY_SCOPE_KEY not in scope
 
 
 async def test_authenticate_request_propagates_authenticator_factory_errors() -> None:

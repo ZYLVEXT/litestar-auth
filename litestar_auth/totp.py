@@ -157,7 +157,11 @@ class TotpRecoveryCodeUserManager[UP](Protocol):
         """Return the Argon2 hash matching ``lookup_hex``, if active."""
 
     async def consume_recovery_code_by_lookup(self, user: UP, lookup_hex: str) -> bool:
-        """Atomically consume the active recovery-code entry for ``lookup_hex``."""
+        """Atomically consume the active recovery-code entry for ``lookup_hex``.
+
+        Concurrent callers presenting the same recovery code MUST observe
+        exactly one success and N-1 failures.
+        """
 
     @property
     def recovery_code_lookup_secret(self) -> bytes | None:

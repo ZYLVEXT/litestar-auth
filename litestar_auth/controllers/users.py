@@ -2,13 +2,19 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Protocol, TypedDict, Unpack, cast, overload, runtime_checkable
 
 import msgspec
 from litestar import Controller, Request
 from litestar.exceptions import ClientException, NotFoundException
 
+from litestar_auth.controllers._auth_helpers import (
+    TotpStepUpCheck,
+    TotpStepUpPolicyMode,
+    TotpStepUpVerifierProtocol,
+    require_totp_stepup,
+)
 from litestar_auth.controllers._users_helpers import (
     SELF_UPDATE_FORBIDDEN_FIELDS as _USERS_SELF_UPDATE_FORBIDDEN_FIELDS,
 )
@@ -53,6 +59,7 @@ class UsersControllerUserProtocol[ID](RoleCapableUserProtocol[ID], Protocol):
 @runtime_checkable
 class UsersControllerUserManagerProtocol[UP: UsersControllerUserProtocol[Any], ID](
     AccountStateValidatorProvider[UP],
+    TotpStepUpVerifierProtocol[UP],
     Protocol,
 ):
     """User-manager behavior required by the users controller."""
@@ -100,6 +107,7 @@ class UsersControllerConfig[ID]:
     admin_user_update_schema: type[msgspec.Struct] = AdminUserUpdate
     unsafe_testing: bool = False
     security: Sequence[SecurityRequirement] | None = None
+    totp_stepup_policy: dict[str, TotpStepUpPolicyMode] = field(default_factory=dict)
 
 
 class UsersControllerOptions[ID](TypedDict, total=False):
@@ -116,6 +124,7 @@ class UsersControllerOptions[ID](TypedDict, total=False):
     admin_user_update_schema: type[msgspec.Struct]
     unsafe_testing: bool
     security: Sequence[SecurityRequirement] | None
+    totp_stepup_policy: dict[str, TotpStepUpPolicyMode]
 
 
 @dataclass(slots=True)
@@ -134,6 +143,7 @@ class _UsersControllerContext[UP: UsersControllerUserProtocol[Any], ID]:
     change_password_rate_limit_increment: RequestHandler
     change_password_rate_limit_reset: RequestHandler
     unsafe_testing: bool
+    totp_stepup_policy: dict[str, TotpStepUpPolicyMode] = field(default_factory=dict)
 
 
 async def _users_get_user_or_404[UP: UsersControllerUserProtocol[Any], ID](
@@ -189,9 +199,9 @@ async def _users_handle_update_me[UP: UsersControllerUserProtocol[Any], ID](
 ) -> msgspec.Struct:
     """Apply a self-service profile update after blocking credential and privileged fields.
 
-    ``PATCH /users/me`` is a non-credential update path. Password rotation is
-    handled by ``POST /users/me/change-password`` so the current password can
-    be re-verified before the manager receives the replacement password.
+    Email changes require current-password re-verification. Password rotation
+    is handled by ``POST /users/me/change-password`` so the current password
+    can be re-verified before the manager receives the replacement password.
 
     Returns:
         Public payload for the updated authenticated user.
@@ -199,7 +209,6 @@ async def _users_handle_update_me[UP: UsersControllerUserProtocol[Any], ID](
     """
     # Litestar does not narrow ``Request.user`` to ``UP``; this handler is mounted behind ``is_authenticated``.
     user = cast("UP", request.user)
-    await _require_account_state(user, user_manager=user_manager, require_verified=False)
     async with _map_domain_exceptions(
         {
             UserAlreadyExistsError: (400, ErrorCode.UPDATE_USER_EMAIL_ALREADY_EXISTS),
@@ -207,8 +216,64 @@ async def _users_handle_update_me[UP: UsersControllerUserProtocol[Any], ID](
             AuthorizationError: (400, ErrorCode.REQUEST_BODY_INVALID),
         },
     ):
-        updated_user = await user_manager.update(_build_safe_self_update(data), user)
+        safe_update = _build_safe_self_update(data)
+        current_password = safe_update.pop("current_password", None)
+        totp_code = cast("str | None", safe_update.pop("totp_code", None))
+        if "email" in safe_update:
+            await _require_sensitive_self_update_reauthentication(
+                request,
+                user,
+                current_password=cast("str | None", current_password),
+                ctx=ctx,
+                user_manager=user_manager,
+            )
+            await require_totp_stepup(
+                request,
+                TotpStepUpCheck(
+                    endpoint="users.update_self",
+                    policy=ctx.totp_stepup_policy,
+                    user_manager=user_manager,
+                    totp_code=totp_code,
+                ),
+            )
+        else:
+            await _require_account_state(user, user_manager=user_manager, require_verified=False)
+        updated_user = await user_manager.update(safe_update, user)
     return _to_user_schema(updated_user, ctx.user_read_schema_type, unsafe_testing=ctx.unsafe_testing)
+
+
+async def _require_sensitive_self_update_reauthentication[UP: UsersControllerUserProtocol[Any], ID](
+    request: Request[Any, Any, Any],
+    user: UP,
+    *,
+    current_password: str | None,
+    ctx: _UsersControllerContext[UP, ID],
+    user_manager: UsersControllerUserManagerProtocol[UP, ID],
+) -> None:
+    """Re-authenticate the current user before sensitive self-service updates.
+
+    Raises:
+        ClientException: If the current password is missing or invalid.
+    """
+    await _require_account_state(user, user_manager=user_manager, require_verified=False)
+    authenticated = (
+        await user_manager.authenticate(
+            user.email,
+            current_password,
+            login_identifier="email",
+        )
+        if current_password is not None
+        else None
+    )
+    if authenticated is None or getattr(authenticated, "id", None) != getattr(user, "id", None):
+        await ctx.change_password_rate_limit_increment(request)
+        raise ClientException(
+            status_code=400,
+            detail=INVALID_CREDENTIALS_DETAIL,
+            extra={"code": ErrorCode.LOGIN_BAD_CREDENTIALS},
+        )
+
+    await ctx.change_password_rate_limit_reset(request)
 
 
 async def _users_handle_change_password[UP: UsersControllerUserProtocol[Any], ID](
@@ -227,25 +292,16 @@ async def _users_handle_change_password[UP: UsersControllerUserProtocol[Any], ID
     allow_privileged=True)`` so manager-level password validation and session
     invalidation stay authoritative.
 
-    Raises:
-        ClientException: If the current password is invalid or the new password fails validation.
     """
     user = cast("UP", request.user)
     payload = cast("ChangePasswordRequest", data)
-    await _require_account_state(user, user_manager=user_manager, require_verified=False)
-
-    authenticated = await user_manager.authenticate(
-        user.email,
-        payload.current_password,
-        login_identifier="email",
+    await _require_sensitive_self_update_reauthentication(
+        request,
+        user,
+        current_password=payload.current_password,
+        ctx=ctx,
+        user_manager=user_manager,
     )
-    if authenticated is None or getattr(authenticated, "id", None) != getattr(user, "id", None):
-        await ctx.change_password_rate_limit_increment(request)
-        raise ClientException(
-            status_code=400,
-            detail=INVALID_CREDENTIALS_DETAIL,
-            extra={"code": ErrorCode.LOGIN_BAD_CREDENTIALS},
-        )
 
     async with _map_domain_exceptions({InvalidPasswordError: (400, ErrorCode.UPDATE_USER_INVALID_PASSWORD)}):
         await user_manager.update(
@@ -253,7 +309,6 @@ async def _users_handle_change_password[UP: UsersControllerUserProtocol[Any], ID
             user,
             allow_privileged=True,
         )
-    await ctx.change_password_rate_limit_reset(request)
 
 
 async def _users_handle_delete_user[UP: UsersControllerUserProtocol[Any], ID](
@@ -476,6 +531,7 @@ def create_users_controller[UP: UsersControllerUserProtocol[Any], ID](
         change_password_rate_limit_increment=change_password_rate_limit_increment,
         change_password_rate_limit_reset=change_password_rate_limit_reset,
         unsafe_testing=settings.unsafe_testing,
+        totp_stepup_policy=dict(settings.totp_stepup_policy),
     )
     controller_cls = _define_users_controller_class_di(ctx)
     controller_cls.path = settings.path

@@ -19,6 +19,7 @@ from litestar_auth._superuser_role import (
     set_scope_superuser_role_name,
 )
 from litestar_auth.authentication.strategy.api_key import ApiKeyContext, ApiKeyStrategy
+from litestar_auth.authentication.transport._api_key_signing import API_KEY_SIGNED_BODY_SCOPE_KEY
 from litestar_auth.authentication.transport.api_key import API_KEY_HEADER_NAME, ApiKeyTransport
 from litestar_auth.exceptions import ErrorCode
 from litestar_auth.types import UserProtocol
@@ -133,14 +134,20 @@ class LitestarAuthMiddleware[UP: UserProtocol[Any], ID](AbstractAuthenticationMi
     @override
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         """Buffer signed request bodies before authentication so signatures cover raw bytes."""
+        buffered_signed_body = False
         if self._api_key_backend_present and _has_signed_api_key_authorization_header(scope.get("headers", [])):
             body, receive = await _buffer_body_for_signature(
                 receive,
                 max_body_bytes=self.api_key_signed_body_max_bytes,
                 max_messages=self.api_key_signed_body_max_messages,
             )
-            cast("dict[str, Any]", scope)["litestar_auth_body"] = body
-        await super().__call__(scope, receive, send)
+            cast("dict[str, Any]", scope)[API_KEY_SIGNED_BODY_SCOPE_KEY] = body
+            buffered_signed_body = True
+        try:
+            await super().__call__(scope, receive, send)
+        finally:
+            if buffered_signed_body:
+                cast("dict[str, Any]", scope).pop(API_KEY_SIGNED_BODY_SCOPE_KEY, None)
 
     @override
     async def authenticate_request(

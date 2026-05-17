@@ -196,7 +196,6 @@ def build_app(
         id=uuid4(),
         email="user@example.com",
         hashed_password=password_helper.hash("user-password"),
-        totp_secret="sensitive-secret",
         is_verified=True,
         roles=["member"],
     )
@@ -355,10 +354,11 @@ def test_users_mutation_routes_publish_request_body_and_response_contracts_in_op
         == "#/components/schemas/ChangePasswordRequest"
     )
     assert next(iter(admin_request_body.content.values())).schema.ref == "#/components/schemas/AdminUserUpdate"
-    # Self-service UserUpdate is intentionally email-only; privileged fields
-    # live on AdminUserUpdate so the OpenAPI surface for ``/users/me`` does
-    # not advertise mutable account-state fields that would never persist.
+    # Self-service UserUpdate exposes email plus current-password proof;
+    # privileged fields live on AdminUserUpdate so the OpenAPI surface for
+    # ``/users/me`` does not advertise mutable account-state fields that would never persist.
     assert "email" in (update_schema.properties or {})
+    assert "current_password" in (update_schema.properties or {})
     assert "roles" not in (update_schema.properties or {})
     assert "is_active" not in (update_schema.properties or {})
     assert "is_verified" not in (update_schema.properties or {})
@@ -405,7 +405,7 @@ async def test_me_endpoints_return_public_payload_and_allow_non_privileged_updat
     patch_response = await test_client.patch(
         "/users/me",
         headers=headers,
-        json={"email": "updated-user@example.com"},
+        json={"email": "updated-user@example.com", "current_password": "user-password"},
     )
 
     assert get_response.status_code == HTTP_OK
@@ -433,6 +433,69 @@ async def test_me_endpoints_return_public_payload_and_allow_non_privileged_updat
     assert stored_user.is_verified is False
     assert stored_user.roles == ["member"]
     assert PasswordHelper().verify("user-password", stored_user.hashed_password) is True
+
+
+async def test_patch_me_rejects_email_change_without_current_password(
+    client: tuple[
+        AsyncTestClient[Litestar],
+        InMemoryUserDatabase,
+        UsersControllerManager,
+        InMemoryTokenStrategy,
+        ExampleUser,
+        ExampleUser,
+    ],
+) -> None:
+    """PATCH /users/me requires current-password proof before changing email."""
+    test_client, user_db, _, strategy, _, regular_user = client
+    token = await strategy.write_token(regular_user)
+    headers = {"Authorization": f"Bearer {token}"}
+
+    response = await test_client.patch(
+        "/users/me",
+        headers=headers,
+        json={"email": "updated-user@example.com"},
+    )
+
+    assert response.status_code == HTTP_BAD_REQUEST
+    assert response.json()["detail"] == INVALID_CREDENTIALS_DETAIL
+    assert (response.json().get("extra") or {}).get("code") == ErrorCode.LOGIN_BAD_CREDENTIALS
+    stored_user = await user_db.get(regular_user.id)
+    assert stored_user is not None
+    assert stored_user.email == regular_user.email
+
+
+async def test_patch_me_email_reauth_uses_change_password_rate_limit(
+    async_test_client_factory: Callable[[Any], Any],
+) -> None:
+    """Repeated failed email-change reauth attempts exhaust the shared change-password slot."""
+    rate_limit_config = _change_password_rate_limit_config(
+        InMemoryRateLimiter(max_attempts=2, window_seconds=60),
+    )
+    app_value = build_app(rate_limit_config=rate_limit_config)
+
+    async with async_test_client_factory(app_value) as client:
+        test_client, _user_db, _, strategy, _, regular_user = client
+        headers = {"Authorization": f"Bearer {await strategy.write_token(regular_user)}"}
+
+        first_response = await test_client.patch(
+            "/users/me",
+            headers=headers,
+            json={"email": "updated-user@example.com", "current_password": "wrong-password"},
+        )
+        second_response = await test_client.patch(
+            "/users/me",
+            headers=headers,
+            json={"email": "updated-user@example.com", "current_password": "wrong-password"},
+        )
+        blocked_response = await test_client.patch(
+            "/users/me",
+            headers=headers,
+            json={"email": "updated-user@example.com", "current_password": "wrong-password"},
+        )
+
+    assert first_response.status_code == HTTP_BAD_REQUEST
+    assert second_response.status_code == HTTP_BAD_REQUEST
+    _assert_rate_limited(blocked_response)
 
 
 async def test_change_password_rejects_wrong_current_password_and_preserves_hash(
@@ -844,7 +907,11 @@ async def test_update_me_maps_user_manager_errors(
 
     exists_message = "Email already exists."
     monkeypatch.setattr(user_manager, "update", AsyncMock(side_effect=UserAlreadyExistsError(message=exists_message)))
-    exists_response = await test_client.patch("/users/me", headers=headers, json={"email": "dup@example.com"})
+    exists_response = await test_client.patch(
+        "/users/me",
+        headers=headers,
+        json={"email": "dup@example.com", "current_password": "user-password"},
+    )
     assert exists_response.status_code == HTTP_BAD_REQUEST
     assert (exists_response.json().get("extra") or {}).get("code") == ErrorCode.UPDATE_USER_EMAIL_ALREADY_EXISTS
 
@@ -857,7 +924,7 @@ async def test_update_me_maps_user_manager_errors(
     authorization_response = await test_client.patch(
         "/users/me",
         headers=headers,
-        json={"email": "blocked@example.com"},
+        json={"email": "blocked@example.com", "current_password": "user-password"},
     )
     assert authorization_response.status_code == HTTP_BAD_REQUEST
     assert (authorization_response.json().get("extra") or {}).get("code") == ErrorCode.REQUEST_BODY_INVALID

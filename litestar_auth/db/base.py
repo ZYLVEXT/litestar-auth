@@ -106,6 +106,13 @@ class BaseApiKeyStore[AK, ID](Protocol):
     async def list_for_user(self, user_id: ID, *, include_inactive: bool = False) -> list[AK]:
         """Return API keys for a user, excluding revoked or expired rows by default."""
 
+    async def delete_for_user(self, user_id: ID) -> int:
+        """Permanently delete all API-key rows for ``user_id``.
+
+        Returns:
+            Number of rows deleted when the backend can report it, otherwise ``0``.
+        """
+
     async def revoke(self, key_id: str, *, revoked_at: datetime) -> AK | None:
         """Soft-revoke an API key and return the updated row when present."""
 

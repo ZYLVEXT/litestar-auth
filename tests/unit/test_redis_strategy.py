@@ -422,6 +422,60 @@ async def test_redis_strategy_invalidate_all_tokens_uses_per_user_index(
     assert await async_fakeredis.exists(index_key) == 0
 
 
+async def test_redis_strategy_invalidate_all_tokens_removes_indexed_totp_stepup_markers(
+    monkeypatch: pytest.MonkeyPatch,
+    async_fakeredis: AsyncFakeRedis,
+) -> None:
+    """invalidate_all_tokens() should remove per-user TOTP step-up markers."""
+    _disable_optional_import(monkeypatch)
+    strategy = RedisTokenStrategy[ExampleUser, UUID](
+        config=RedisTokenStrategyConfig(
+            redis=cast_fakeredis(async_fakeredis, RedisClientProtocol),
+            token_hash_secret=TOKEN_HASH_SECRET,
+        ),
+    )
+    user = ExampleUser(id=uuid4())
+    other_user = ExampleUser(id=uuid4())
+
+    await strategy.issue_totp_stepup(user, "session-a", ttl_seconds=FIVE_MINUTES_TTL_SECONDS)
+    await strategy.issue_totp_stepup(user, "session-b", ttl_seconds=FIVE_MINUTES_TTL_SECONDS)
+    await strategy.issue_totp_stepup(other_user, "session-c", ttl_seconds=FIVE_MINUTES_TTL_SECONDS)
+
+    await strategy.invalidate_all_tokens(user)
+
+    first_key = strategy._totp_stepup_key(str(user.id), "session-a")
+    second_key = strategy._totp_stepup_key(str(user.id), "session-b")
+    other_key = strategy._totp_stepup_key(str(other_user.id), "session-c")
+    index_key = strategy._totp_stepup_index_key(str(user.id))
+    assert await async_fakeredis.get(first_key) is None
+    assert await async_fakeredis.get(second_key) is None
+    assert await async_fakeredis.get(other_key) == b"1"
+    assert await async_fakeredis.exists(index_key) == 0
+
+
+async def test_redis_strategy_issue_totp_stepup_non_positive_ttl_deletes_marker_and_index_entry(
+    monkeypatch: pytest.MonkeyPatch,
+    async_fakeredis: AsyncFakeRedis,
+) -> None:
+    """A non-positive TOTP step-up TTL removes an existing marker and index entry."""
+    _disable_optional_import(monkeypatch)
+    strategy = RedisTokenStrategy[ExampleUser, UUID](
+        config=RedisTokenStrategyConfig(
+            redis=cast_fakeredis(async_fakeredis, RedisClientProtocol),
+            token_hash_secret=TOKEN_HASH_SECRET,
+        ),
+    )
+    user = ExampleUser(id=uuid4())
+
+    await strategy.issue_totp_stepup(user, "session-a", ttl_seconds=FIVE_MINUTES_TTL_SECONDS)
+    await strategy.issue_totp_stepup(user, "session-a", ttl_seconds=0)
+
+    marker_key = strategy._totp_stepup_key(str(user.id), "session-a")
+    index_key = strategy._totp_stepup_index_key(str(user.id))
+    assert await async_fakeredis.get(marker_key) is None
+    assert await async_fakeredis.smembers(index_key) == set()  # ty: ignore[invalid-await]
+
+
 async def test_redis_strategy_invalidate_all_tokens_without_index_leaves_orphaned_tokens(
     monkeypatch: pytest.MonkeyPatch,
     async_fakeredis_factory: AsyncFakeRedisFactory,

@@ -16,6 +16,7 @@ from litestar_auth._plugin.config import (
     LitestarAuthConfig,
     _normalize_config_superuser_role_name,
 )
+from litestar_auth._plugin.feature_configs import TOTP_STEPUP_POLICY_ENDPOINTS
 from litestar_auth._plugin.middleware import get_cookie_transports
 from litestar_auth._plugin.oauth_validation import validate_oauth_route_registration_config as _validate_oauth_routes
 from litestar_auth._plugin.rate_limit import iter_rate_limit_endpoints
@@ -197,6 +198,7 @@ def validate_credential_config[UP: UserProtocol[Any], ID](config: LitestarAuthCo
 def validate_totp_domain_config[UP: UserProtocol[Any], ID](config: LitestarAuthConfig[UP, ID]) -> None:
     """Validate TOTP feature-level configuration before deeper security checks."""
     validate_totp_user_model_protocol(config)
+    validate_totp_stepup_policy_config(config)
     validate_totp_config(config)
 
 
@@ -338,6 +340,22 @@ def validate_user_manager_security_config[UP: UserProtocol[Any], ID](config: Lit
             config.oauth_config.oauth_flow_cookie_secret if config.oauth_config is not None else None
         ),
     )
+
+
+def validate_totp_stepup_policy_config[UP: UserProtocol[Any], ID](config: LitestarAuthConfig[UP, ID]) -> None:
+    """Validate endpoint ids and modes for the TOTP step-up policy map.
+
+    Raises:
+        ConfigurationError: If an endpoint id or policy mode is not supported.
+    """
+    allowed_modes = {"required_when_enrolled", "always_required", "off"}
+    for endpoint, mode in config.totp_stepup_policy.items():
+        if endpoint not in TOTP_STEPUP_POLICY_ENDPOINTS:
+            msg = f"Unknown totp_stepup_policy endpoint {endpoint!r}."
+            raise ConfigurationError(msg)
+        if mode not in allowed_modes:
+            msg = f"Invalid totp_stepup_policy mode {mode!r} for endpoint {endpoint!r}."
+            raise ConfigurationError(msg)
 
 
 def validate_password_validator_config[UP: UserProtocol[Any], ID](config: LitestarAuthConfig[UP, ID]) -> None:

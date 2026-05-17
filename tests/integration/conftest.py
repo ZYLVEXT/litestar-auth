@@ -14,7 +14,43 @@ if TYPE_CHECKING:
     from collections.abc import Callable, Mapping
     from types import TracebackType
 
+    from sqlalchemy.ext.asyncio import AsyncEngine
+
     from litestar_auth.types import LoginIdentifier
+
+
+class _PragmaCursorProtocol(Protocol):
+    """Cursor surface needed to enable SQLite foreign keys."""
+
+    def execute(self, statement: str) -> object:
+        """Execute a SQL statement."""
+
+    def close(self) -> object:
+        """Close the cursor."""
+
+
+class _SQLitePragmaConnectionProtocol(Protocol):
+    """Connection surface needed to enable SQLite foreign keys."""
+
+    def cursor(self) -> _PragmaCursorProtocol:
+        """Return a DB-API cursor."""
+
+
+def enable_aiosqlite_foreign_keys(engine: AsyncEngine) -> None:
+    """Enable SQLite FK enforcement for every connection opened by an aiosqlite async engine.
+
+    SQLite leaves FK constraints disabled by default, so integration tests that
+    assert database-level cascade behavior must opt in at connection creation.
+    """
+    from sqlalchemy import event  # noqa: PLC0415
+
+    @event.listens_for(engine.sync_engine, "connect")
+    def _enable_sqlite_foreign_keys(dbapi_connection: _SQLitePragmaConnectionProtocol, _: object) -> None:
+        cursor = dbapi_connection.cursor()
+        try:
+            cursor.execute("PRAGMA foreign_keys=ON")
+        finally:
+            cursor.close()
 
 
 class _EmailUserProtocol(UserProtocol[UUID], Protocol):

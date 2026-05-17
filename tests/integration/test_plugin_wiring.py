@@ -482,6 +482,7 @@ def test_plugin_openapi_security_uses_alternative_requirements_for_multiple_back
             ),
         ],
     )
+    config.csrf_secret = "0123456789abcdef" * 4
     app = Litestar(
         plugins=[LitestarAuth(config)],
         openapi_config=OpenAPIConfig(title="Test", version="1.0.0"),

@@ -10,7 +10,8 @@ from litestar.openapi.datastructures import ResponseSpec
 from litestar.openapi.spec import Example
 from litestar.params import Parameter
 
-from litestar_auth.controllers._users_helpers import _reject_blocked_self_update_fields
+from litestar_auth.controllers._auth_helpers import TOTP_STEPUP_REQUIRED_OPENAPI_RESPONSE
+from litestar_auth.controllers._users_helpers import _reject_blocked_self_update_fields, _self_update_includes_email
 from litestar_auth.controllers.auth import INVALID_CREDENTIALS_DETAIL
 from litestar_auth.controllers.users import (
     UsersControllerUserManagerProtocol,
@@ -141,7 +142,17 @@ def _create_update_me_handler[UP: UsersControllerUserProtocol[Any], ID](
         Decorated Litestar route handler.
     """
 
-    @patch("/me", guards=[is_authenticated], before_request=_reject_blocked_self_update_fields)
+    async def update_me_before_request(request: Request[Any, Any, Any]) -> None:
+        await _reject_blocked_self_update_fields(request)
+        if ctx.change_password_before_request is not None and await _self_update_includes_email(request):
+            await ctx.change_password_before_request(request)
+
+    @patch(
+        "/me",
+        guards=[is_authenticated],
+        before_request=update_me_before_request,
+        responses={403: TOTP_STEPUP_REQUIRED_OPENAPI_RESPONSE},
+    )
     async def update_me(
         self: object,
         request: Request[Any, Any, Any],

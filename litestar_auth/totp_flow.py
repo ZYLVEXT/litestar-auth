@@ -136,6 +136,14 @@ class PendingTotpLogin[UP: TotpUserProtocol[Any]]:
 
 
 @dataclass(frozen=True, slots=True)
+class CompletedTotpLogin[UP: TotpUserProtocol[Any]]:
+    """Verified pending-login result plus the factor type used."""
+
+    user: UP
+    used_recovery_code: bool
+
+
+@dataclass(frozen=True, slots=True)
 class TotpLoginFlowConfig[ID]:
     """Configuration for pending-login TOTP issue and verification."""
 
@@ -224,13 +232,34 @@ class TotpLoginFlowService[UP: TotpUserProtocol[Any], ID]:
         Returns:
             The user resolved from the verified pending-login challenge.
 
-        Raises:
-            InvalidTotpCodeError: If the TOTP/recovery code is invalid,
-                already consumed, or TOTP is not enabled.
-
         Invalid pending-token failures propagate as
         ``InvalidTotpPendingTokenError`` from token resolution before any code
         fallback runs.
+        """
+        completed = await self.authenticate_pending_login_with_method(
+            pending_token=pending_token,
+            code=code,
+            client_binding=client_binding,
+            validate_user=validate_user,
+        )
+        return completed.user
+
+    async def authenticate_pending_login_with_method(
+        self,
+        *,
+        pending_token: str,
+        code: str,
+        client_binding: PendingTotpClientBinding | None = None,
+        validate_user: PendingUserValidator[UP] | None = None,
+    ) -> CompletedTotpLogin[UP]:
+        """Validate a pending-login token and return whether a recovery code was used.
+
+        Returns:
+            Completed login result with user and factor-type metadata.
+
+        Raises:
+            InvalidTotpCodeError: If the TOTP/recovery code is invalid,
+                already consumed, or TOTP is not enabled.
         """
         pending_login = await self._resolve_pending_login(pending_token, client_binding=client_binding)
         if validate_user is not None:
@@ -238,7 +267,7 @@ class TotpLoginFlowService[UP: TotpUserProtocol[Any], ID]:
         secret = await self._user_manager.read_totp_secret(pending_login.user.totp_secret)
         if not secret:
             raise InvalidTotpCodeError
-        if not await verify_totp_with_store(
+        totp_verified = await verify_totp_with_store(
             secret,
             code,
             replay=TotpReplayProtection(
@@ -248,15 +277,19 @@ class TotpLoginFlowService[UP: TotpUserProtocol[Any], ID]:
                 unsafe_testing=self._unsafe_testing,
             ),
             algorithm=self._totp_algorithm,
-        ) and not await _consume_matching_recovery_code(
-            self._user_manager,
-            pending_login.user,
-            code,
-            password_helper=self._password_helper,
-        ):
+        )
+        recovery_code_verified = False
+        if not totp_verified:
+            recovery_code_verified = await _consume_matching_recovery_code(
+                self._user_manager,
+                pending_login.user,
+                code,
+                password_helper=self._password_helper,
+            )
+        if not totp_verified and not recovery_code_verified:
             raise InvalidTotpCodeError
         await self._deny_pending_login(pending_login)
-        return pending_login.user
+        return CompletedTotpLogin(user=pending_login.user, used_recovery_code=recovery_code_verified)
 
     async def _resolve_pending_login(
         self,

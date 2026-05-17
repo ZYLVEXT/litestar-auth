@@ -17,6 +17,14 @@ _SENSITIVE_FIELD_BLOCKLIST: frozenset[str] = frozenset(
         "password",
     },
 )
+ALWAYS_BLOCKED_FIELDS: frozenset[str] = _SENSITIVE_FIELD_BLOCKLIST | frozenset(
+    {
+        "current_password",
+        "new_password",
+        "password_hash",
+        "recovery_codes",
+    },
+)
 
 
 def _require_msgspec_struct(
@@ -48,11 +56,15 @@ def _to_user_schema(
 ) -> msgspec.Struct:
     """Build the configured public response struct from a user object.
 
+    ``_SENSITIVE_FIELD_BLOCKLIST`` rejects unsafe schema definitions early.
+    ``ALWAYS_BLOCKED_FIELDS`` is a runtime defense around attribute access for
+    credential, TOTP, and recovery-code fields that must never be serialized.
+
     Returns:
         The configured response struct populated from ``user`` attributes.
 
     Raises:
-        ConfigurationError: If the schema includes sensitive fields in production.
+        ConfigurationError: If the schema includes fields that must not be serialized.
     """
     leaked = _SENSITIVE_FIELD_BLOCKLIST & frozenset(schema.__struct_fields__)
     if leaked:
@@ -68,6 +80,12 @@ def _to_user_schema(
         )
     payload: dict[str, object] = {}
     for field_name in schema.__struct_fields__:
+        if field_name in ALWAYS_BLOCKED_FIELDS:
+            msg = (
+                f"UserRead schema includes blocked field {field_name!r}; remove it from the response schema "
+                "to prevent sensitive data leakage."
+            )
+            raise ConfigurationError(msg)
         if not hasattr(user, field_name):
             msg = (
                 f"User schema {schema.__name__!r} requires field {field_name!r}, but "

@@ -78,7 +78,7 @@ class OAuthAccountMixin:
         Returns:
             The mapped ``user_id`` foreign-key column.
         """
-        return mapped_column(ForeignKey(f"{cls.auth_user_table}.id"), nullable=False)
+        return mapped_column(ForeignKey(f"{cls.auth_user_table}.id", ondelete="CASCADE"), nullable=False)
 
     oauth_name: Mapped[str] = mapped_column(String(length=100))
     account_id: Mapped[str] = mapped_column(String(length=255))

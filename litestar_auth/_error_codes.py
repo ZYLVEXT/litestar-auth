@@ -62,6 +62,7 @@ class ErrorCode(StrEnum):
     TOTP_CODE_INVALID = auto()
     TOTP_ALREADY_ENABLED = auto()
     TOTP_ENROLL_BAD_TOKEN = auto()
+    TOTP_STEPUP_REQUIRED = auto()
     # See docs/security.md#bearer-failure-code-taxonomy for the API-key disclosure trade-off.
     API_KEY_INVALID = auto()
     # See docs/security.md#bearer-failure-code-taxonomy for the API-key disclosure trade-off.

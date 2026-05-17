@@ -6,6 +6,7 @@ from functools import partial
 from typing import TYPE_CHECKING, Any, cast
 
 from litestar_auth._optional_deps import require_cryptography_fernet
+from litestar_auth.authentication.strategy.base import TotpStepUpStrategy
 from litestar_auth.types import UserProtocol
 
 if TYPE_CHECKING:
@@ -18,11 +19,23 @@ _load_cryptography_fernet = cast(
 )
 
 
+def _iter_totp_stepup_strategies(backends: tuple[object, ...]) -> tuple[TotpStepUpStrategy[Any], ...]:
+    """Return configured backend strategies that can persist TOTP step-up markers."""
+    strategies: list[TotpStepUpStrategy[Any]] = []
+    for backend in backends:
+        strategy = getattr(backend, "strategy", None)
+        if isinstance(strategy, TotpStepUpStrategy):
+            strategies.append(strategy)
+    return tuple(strategies)
+
+
 class TotpManagerFacade[UP: UserProtocol[Any]]:
     """Mixin exposing TOTP secret helpers on ``BaseUserManager``."""
 
     user_db: Any
     _totp_secrets: TotpSecretsService[UP]
+    backends: tuple[object, ...]
+    unsafe_testing: bool
 
     async def set_totp_secret(self, user: UP, secret: str | None) -> UP:
         """Store or clear the TOTP secret directly, bypassing None-filtering.
@@ -81,6 +94,21 @@ class TotpManagerFacade[UP: UserProtocol[Any]]:
             ``True`` when the lookup entry was consumed, otherwise ``False``.
         """
         return cast("bool", await self.user_db.consume_recovery_code_by_lookup(user, lookup_hex))
+
+    async def issue_totp_stepup_verification(self, user: UP, session_id: str, *, ttl_seconds: int) -> None:
+        """Store a recent TOTP verification marker for the current authenticated session."""
+        strategies = _iter_totp_stepup_strategies(self.backends)
+        if not strategies:
+            return
+        for strategy in strategies:
+            await strategy.issue_totp_stepup(user, session_id, ttl_seconds=ttl_seconds)
+
+    async def has_recent_totp_verification(self, user: UP, session_id: str) -> bool:
+        """Return whether the user's current session has a live TOTP step-up marker."""
+        for strategy in _iter_totp_stepup_strategies(self.backends):
+            if await strategy.has_recent_totp_verification(user, session_id):
+                return True
+        return False
 
     def _prepare_totp_secret_for_storage(self, secret: str | None) -> str | None:
         """Return the database representation for a TOTP secret."""

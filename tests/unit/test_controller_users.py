@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Awaitable, Callable, Mapping
+from dataclasses import dataclass
 from typing import Any, cast
 from unittest.mock import AsyncMock
 from uuid import UUID, uuid4
@@ -14,9 +15,11 @@ from litestar.status_codes import HTTP_400_BAD_REQUEST
 
 import litestar_auth._account_state as account_state_module
 import litestar_auth.controllers.users as users_module
+from litestar_auth.controllers._auth_helpers import TotpStepUpCheck, require_totp_stepup
 from litestar_auth.controllers._users_helpers import (
     _build_change_password_rate_limit_key,
     _reject_blocked_self_update_fields,
+    _self_update_includes_email,
 )
 from litestar_auth.controllers._utils import _require_account_state
 from litestar_auth.controllers.auth import INVALID_CREDENTIALS_DETAIL
@@ -24,6 +27,7 @@ from litestar_auth.exceptions import AuthorizationError, ErrorCode, UnverifiedUs
 from litestar_auth.ratelimit import EndpointRateLimit, InMemoryRateLimiter
 from litestar_auth.ratelimit._helpers import _safe_key_part
 from litestar_auth.schemas import AdminUserUpdate, ChangePasswordRequest, UserRead, UserUpdate
+from litestar_auth.totp import _current_counter, _generate_totp_code, generate_totp_secret
 
 UsersControllerConfig = users_module.UsersControllerConfig
 _build_safe_self_update = users_module._build_safe_self_update
@@ -54,6 +58,7 @@ class DummyUser(msgspec.Struct):
     is_active: bool = True
     is_verified: bool = False
     roles: list[str] = msgspec.field(default_factory=list)
+    totp_secret: str | None = None
 
 
 class DummyUserManager:
@@ -87,6 +92,7 @@ class RecordingUserManager:
         self.require_account_state_calls: list[tuple[DummyUser, bool]] = []
         self.update_calls: list[tuple[object, DummyUser, bool]] = []
         self.delete_calls: list[UUID] = []
+        self.backends: tuple[object, ...] = ()
 
     def require_account_state(self, user: DummyUser, *, require_verified: bool) -> None:
         """Record account-state validation requests."""
@@ -148,6 +154,43 @@ class RecordingUserManager:
         """Record hard-delete requests."""
         self.delete_calls.append(user_id)
 
+    async def read_totp_secret(self, secret: str | None) -> str | None:
+        """Return the stored test TOTP secret."""
+        return secret
+
+    async def has_recent_totp_verification(self, user: DummyUser, session_id: str) -> bool:
+        """Return no recent marker for direct helper tests."""
+        del user, session_id
+        return False
+
+
+class MarkerUserManager(RecordingUserManager):
+    """Manager stub with configurable TOTP marker and secret behavior."""
+
+    def __init__(
+        self,
+        *,
+        user_to_get: DummyUser | None = None,
+        secret_result: str | None = None,
+        marker_session_id: str | None = None,
+        backends: tuple[object, ...] = (),
+    ) -> None:
+        """Store configurable TOTP marker behavior."""
+        super().__init__(user_to_get=user_to_get)
+        self.secret_result = secret_result
+        self.marker_session_id = marker_session_id
+        self.backends = backends
+
+    async def read_totp_secret(self, secret: str | None) -> str | None:
+        """Return the configured plain secret result."""
+        del secret
+        return self.secret_result
+
+    async def has_recent_totp_verification(self, user: DummyUser, session_id: str) -> bool:
+        """Return whether the supplied session matches the configured marker."""
+        del user
+        return session_id == self.marker_session_id
+
 
 class DummyRequest:
     """Minimal request stub for controller helper tests."""
@@ -175,16 +218,36 @@ class DummyRequest:
         return self._json_payload
 
 
+class _TokenTransport:
+    """Transport stub exposing a token reader."""
+
+    def __init__(self, token: object) -> None:
+        self.token = token
+
+    async def read_token(self, _request: object) -> object:
+        """Return the configured token."""
+        return self.token
+
+
+@dataclass(frozen=True, slots=True)
+class _Backend:
+    """Backend stub with a transport attribute."""
+
+    transport: object
+
+
 class ExtendedSelfUpdate(msgspec.Struct, omit_defaults=True):
     """Custom self-update payload with one safe extra field."""
 
     email: str | None = None
+    current_password: str | None = None
     password: str | None = None
     is_active: bool | None = None
     is_verified: bool | None = None
     roles: list[str] | None = None
     hashed_password: str | None = None
     bio: str | None = None
+    totp_code: str | None = None
 
 
 async def _noop_request_handler(_request: object) -> None:
@@ -299,14 +362,16 @@ async def test_users_handle_update_me_forwards_safe_fields() -> None:
     """Self-updates only forward safe fields to the manager."""
     user = DummyUser(id=uuid4(), email="user@example.com", is_verified=True, roles=["member"])
     manager = RecordingUserManager(user_to_get=user)
+    rate_limit_reset = AsyncMock()
 
     result = await _users_handle_update_me(
         cast("Any", DummyRequest(user=user)),
         ExtendedSelfUpdate(
             email="updated@example.com",
+            current_password="current-password",
             bio="still-allowed",
         ),
-        ctx=build_context(),
+        ctx=build_context(change_password_rate_limit_reset=rate_limit_reset),
         user_manager=cast("Any", manager),
     )
 
@@ -318,7 +383,181 @@ async def test_users_handle_update_me_forwards_safe_fields() -> None:
         roles=["member"],
     )
     assert manager.require_account_state_calls == [(user, False)]
+    assert manager.authenticate_calls == [(user.email, "current-password", "email")]
     assert manager.update_calls == [({"bio": "still-allowed", "email": "updated@example.com"}, user, False)]
+    rate_limit_reset.assert_awaited_once()
+
+
+async def test_users_handle_update_me_requires_totp_stepup_before_email_mutation() -> None:
+    """Enrolled users need a recent TOTP proof before self-service email mutation."""
+    secret = generate_totp_secret()
+    user = DummyUser(id=uuid4(), email="user@example.com", is_verified=True, roles=["member"], totp_secret=secret)
+    manager = RecordingUserManager(user_to_get=user)
+
+    with pytest.raises(ClientException) as exc_info:
+        await _users_handle_update_me(
+            cast("Any", DummyRequest(user=user)),
+            ExtendedSelfUpdate(email="updated@example.com", current_password="current-password"),
+            ctx=build_context(),
+            user_manager=cast("Any", manager),
+        )
+
+    assert exc_info.value.status_code == HTTP_FORBIDDEN
+    assert exc_info.value.extra == {"code": ErrorCode.TOTP_STEPUP_REQUIRED}
+    assert manager.update_calls == []
+
+
+async def test_users_handle_update_me_accepts_inline_totp_code_for_email_change() -> None:
+    """A valid inline TOTP code satisfies the email-change step-up gate."""
+    secret = generate_totp_secret()
+    user = DummyUser(id=uuid4(), email="user@example.com", is_verified=True, roles=["member"], totp_secret=secret)
+    manager = RecordingUserManager(user_to_get=user)
+
+    result = await _users_handle_update_me(
+        cast("Any", DummyRequest(user=user)),
+        ExtendedSelfUpdate(
+            email="updated@example.com",
+            current_password="current-password",
+            totp_code=_generate_totp_code(secret, _current_counter()),
+        ),
+        ctx=build_context(),
+        user_manager=cast("Any", manager),
+    )
+
+    assert cast("UserRead", result).email == "updated@example.com"
+
+
+async def test_require_totp_stepup_policy_off_skips_enforcement() -> None:
+    """An explicit off policy leaves enrolled users unblocked."""
+    user = DummyUser(id=uuid4(), email="user@example.com", totp_secret="stored-secret")
+    manager = MarkerUserManager(user_to_get=user, secret_result=None)
+
+    await require_totp_stepup(
+        cast("Any", DummyRequest(user=user)),
+        TotpStepUpCheck(endpoint="users.update_self", policy={"users.update_self": "off"}, user_manager=manager),
+    )
+
+
+@pytest.mark.parametrize("stored_secret", [None, "stored-secret"])
+async def test_require_totp_stepup_always_required_blocks_missing_enrollment_or_secret(
+    stored_secret: str | None,
+) -> None:
+    """The always-required mode fails closed when no usable TOTP secret is available."""
+    user = DummyUser(id=uuid4(), email="user@example.com", totp_secret=stored_secret)
+    manager = MarkerUserManager(user_to_get=user, secret_result=None)
+
+    with pytest.raises(ClientException) as exc_info:
+        await require_totp_stepup(
+            cast("Any", DummyRequest(user=user)),
+            TotpStepUpCheck(
+                endpoint="users.update_self",
+                policy={"users.update_self": "always_required"},
+                user_manager=manager,
+            ),
+        )
+
+    assert exc_info.value.extra == {"code": ErrorCode.TOTP_STEPUP_REQUIRED}
+
+
+async def test_require_totp_stepup_ignores_unreadable_secret_when_not_always_required() -> None:
+    """Required-when-enrolled mode does not block when the manager reports no usable TOTP secret."""
+    user = DummyUser(id=uuid4(), email="user@example.com", totp_secret="stored-secret")
+    manager = MarkerUserManager(user_to_get=user, secret_result=None)
+
+    await require_totp_stepup(
+        cast("Any", DummyRequest(user=user)),
+        TotpStepUpCheck(endpoint="users.update_self", policy={}, user_manager=manager),
+    )
+
+
+async def test_require_totp_stepup_accepts_recent_session_marker() -> None:
+    """A recent marker on the current transport token satisfies the TOTP gate."""
+    user = DummyUser(id=uuid4(), email="user@example.com", totp_secret="stored-secret")
+    manager = MarkerUserManager(
+        user_to_get=user,
+        secret_result="plain-secret",
+        marker_session_id="session-token",
+        backends=(
+            _Backend(object()),
+            _Backend(_TokenTransport("")),
+            _Backend(_TokenTransport("session-token")),
+        ),
+    )
+
+    await require_totp_stepup(
+        cast("Any", DummyRequest(user=user)),
+        TotpStepUpCheck(endpoint="users.update_self", policy={}, user_manager=manager),
+    )
+
+
+async def test_users_handle_update_me_requires_current_password_for_email_change() -> None:
+    """Email changes require current-password re-authentication before persistence."""
+    user = DummyUser(id=uuid4(), email="user@example.com", is_verified=True, roles=["member"])
+    manager = RecordingUserManager(user_to_get=user)
+    rate_limit_increment = AsyncMock()
+
+    with pytest.raises(ClientException) as exc_info:
+        await _users_handle_update_me(
+            cast("Any", DummyRequest(user=user)),
+            ExtendedSelfUpdate(email="updated@example.com"),
+            ctx=build_context(change_password_rate_limit_increment=rate_limit_increment),
+            user_manager=cast("Any", manager),
+        )
+
+    assert exc_info.value.status_code == HTTP_400_BAD_REQUEST
+    assert exc_info.value.detail == INVALID_CREDENTIALS_DETAIL
+    assert exc_info.value.extra == {"code": ErrorCode.LOGIN_BAD_CREDENTIALS}
+    assert manager.require_account_state_calls == [(user, False)]
+    assert manager.authenticate_calls == []
+    assert manager.update_calls == []
+    rate_limit_increment.assert_awaited_once()
+
+
+async def test_users_handle_update_me_rejects_wrong_current_password_for_email_change() -> None:
+    """Wrong current-password email changes reuse the password-rotation failure surface."""
+    user = DummyUser(id=uuid4(), email="user@example.com", is_verified=True, roles=["member"])
+    manager = RecordingUserManager(user_to_get=user, authenticated_user=None)
+    rate_limit_increment = AsyncMock()
+
+    with pytest.raises(ClientException) as exc_info:
+        await _users_handle_update_me(
+            cast("Any", DummyRequest(user=user)),
+            ExtendedSelfUpdate(email="updated@example.com", current_password="wrong-password"),
+            ctx=build_context(change_password_rate_limit_increment=rate_limit_increment),
+            user_manager=cast("Any", manager),
+        )
+
+    assert exc_info.value.status_code == HTTP_400_BAD_REQUEST
+    assert exc_info.value.detail == INVALID_CREDENTIALS_DETAIL
+    assert exc_info.value.extra == {"code": ErrorCode.LOGIN_BAD_CREDENTIALS}
+    assert manager.require_account_state_calls == [(user, False)]
+    assert manager.authenticate_calls == [(user.email, "wrong-password", "email")]
+    assert manager.update_calls == []
+    rate_limit_increment.assert_awaited_once()
+
+
+async def test_users_handle_update_me_does_not_reauthenticate_without_email_change() -> None:
+    """Non-identity self-updates keep the existing path and do not call authenticate()."""
+    user = DummyUser(id=uuid4(), email="user@example.com", is_verified=True, roles=["member"])
+    manager = RecordingUserManager(user_to_get=user)
+
+    result = await _users_handle_update_me(
+        cast("Any", DummyRequest(user=user)),
+        ExtendedSelfUpdate(bio="still-allowed"),
+        ctx=build_context(),
+        user_manager=cast("Any", manager),
+    )
+
+    assert result == UserRead(
+        id=user.id,
+        email=user.email,
+        is_active=True,
+        is_verified=True,
+        roles=["member"],
+    )
+    assert manager.require_account_state_calls == [(user, False)]
+    assert manager.authenticate_calls == []
+    assert manager.update_calls == [({"bio": "still-allowed"}, user, False)]
 
 
 def test_change_password_request_round_trips_through_msgspec() -> None:
@@ -464,7 +703,7 @@ async def test_users_handle_update_me_maps_authorization_errors_to_400() -> None
     with pytest.raises(ClientException) as exc_info:
         await _users_handle_update_me(
             cast("Any", DummyRequest(user=user)),
-            ExtendedSelfUpdate(email="updated@example.com"),
+            ExtendedSelfUpdate(email="updated@example.com", current_password="current-password"),
             ctx=build_context(),
             user_manager=cast("Any", manager),
         )
@@ -488,6 +727,16 @@ async def test_reject_blocked_self_update_fields_rejects_password_in_raw_request
 async def test_reject_blocked_self_update_fields_ignores_non_mapping_json_bodies() -> None:
     """The preflight hook ignores valid non-object JSON and leaves later validation to the route."""
     await _reject_blocked_self_update_fields(cast("Any", DummyRequest(user=None, body_bytes=b'["not","a","mapping"]')))
+
+
+async def test_self_update_includes_email_detects_email_mapping_field() -> None:
+    """The update route preflight only rate-limit checks requests that include email."""
+    assert await _self_update_includes_email(
+        cast("Any", DummyRequest(user=None, body_bytes=b'{"email":"updated@example.com"}')),
+    )
+    assert not await _self_update_includes_email(cast("Any", DummyRequest(user=None, body_bytes=b'{"bio":"ok"}')))
+    assert not await _self_update_includes_email(cast("Any", DummyRequest(user=None, body_bytes=b'["not","mapping"]')))
+    assert not await _self_update_includes_email(cast("Any", DummyRequest(user=None, body_bytes=b'{"email":')))
 
 
 async def test_users_handle_delete_user_rejects_superuser_self_delete() -> None:

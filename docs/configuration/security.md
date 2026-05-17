@@ -10,6 +10,8 @@ Use this page for CSRF settings, token downgrade policy, schemas, dependency key
 | `csrf_header_name` | `"X-CSRF-Token"` | Header Litestar expects for CSRF token. |
 | `unsafe_testing` | `False` | Explicit per-config test-only override for generated fallback secrets, single-process validation shortcuts, and startup-warning suppression. Never enable it for production traffic. |
 | `register_minimum_response_seconds` | `0.4` | Minimum wall-clock duration for plugin-owned `POST /auth/register` success and domain-failure responses. This is defense-in-depth against registration timing enumeration and is independent of rate limiting. |
+| `verify_minimum_response_seconds` | `0.4` | Minimum wall-clock duration for plugin-owned `POST /auth/verify` success and invalid-token responses. |
+| `request_verify_minimum_response_seconds` | `0.4` | Minimum wall-clock duration for plugin-owned `POST /auth/request-verify-token` responses, including manager failures after rate-limit accounting runs. |
 | `id_parser` | `None` | Parse path/query user ids (e.g. `UUID`). Effective parser: `user_manager_security.id_parser` when set; otherwise `LitestarAuthConfig.id_parser` is applied (including the no-`user_manager_security` default builder path). |
 
 ### CSRF cookie name and login telemetry
@@ -78,7 +80,7 @@ password policy is fully application-owned and outside the library default descr
 | ----- | ------- | ------- |
 | `user_read_schema` | `None` | msgspec struct for safe user responses returned by register/verify/reset/users flows. The built-in `UserRead` includes normalized `roles`. |
 | `user_create_schema` | `None` | msgspec struct for registration/create request bodies; built-in registration defaults to `UserCreate`. |
-| `user_update_schema` | `None` | msgspec struct for user PATCH bodies on the self-service `/users/me` route. The built-in `UserUpdate` is intentionally email-only — privileged fields (`is_active`, `is_verified`, `roles`) live on `AdminUserUpdate` for the privileged `PATCH /users/{id}` route, and self-service requests that include them are rejected at msgspec decode (`forbid_unknown_fields=True`). |
+| `user_update_schema` | `None` | msgspec struct for user PATCH bodies on the self-service `/users/me` route. The built-in `UserUpdate` accepts `email` plus `current_password` proof for email changes — privileged fields (`is_active`, `is_verified`, `roles`) live on `AdminUserUpdate` for the privileged `PATCH /users/{id}` route, and self-service requests that include them are rejected at msgspec decode (`forbid_unknown_fields=True`). |
 | `db_session_dependency_key` | `"db_session"` | Litestar DI key for `AsyncSession`. Must be a valid non-keyword Python identifier because Litestar matches dependency keys to callable parameter names. |
 | `db_session_dependency_provided_externally` | `False` | Skip plugin session provider when your app already registers the key. |
 

@@ -4,6 +4,13 @@
 
 - **Unified login account-state error code.** Added `ErrorCode.LOGIN_ACCOUNT_UNAVAILABLE` for
   account-state failures that are intentionally opaque to clients.
+- **`LitestarAuthConfig.verify_minimum_response_seconds`** and
+  **`LitestarAuthConfig.request_verify_minimum_response_seconds`** (default `0.4`) — minimum
+  wall-clock duration for plugin-owned `POST /auth/verify` and
+  `POST /auth/request-verify-token` responses, padding success and failure paths alike as
+  defense-in-depth against timing-based enumeration on the verification flow.
+- **`ErrorCode.TOTP_STEPUP_REQUIRED`** and the matching `ClientException` factory for the new
+  step-up gate (see Security).
 
 ### Removed
 
@@ -13,6 +20,23 @@
 
 ### Security
 
+- **Self-service email changes now require current-password proof.** `PATCH /users/me` still
+  accepts non-credential self-service updates, but changing `email` now requires
+  `current_password` on `UserUpdate`. Missing or wrong current passwords fail with the existing
+  `LOGIN_BAD_CREDENTIALS` error and share the same rate-limit slot as
+  `POST /users/me/change-password`. Successful email changes still flow through the manager
+  update lifecycle, preserving verification and session-binding invalidation behavior.
+- **Hard delete now removes user-owned auth state.** `BaseUserManager.delete()` now invalidates
+  configured token strategies and deletes SQL-backed API keys before deleting the user row, and the
+  bundled user-owned SQL tables now declare `ON DELETE CASCADE` on their user foreign keys. Deleting a
+  user with access tokens, refresh tokens, API keys, OAuth accounts, TOTP secrets, or recovery codes
+  now removes those dependent secrets instead of leaving orphaned state or relying on backend-specific
+  FK failures. Redis opaque tokens and Redis TOTP step-up markers are deleted through their per-user
+  indexes; legacy Redis token keys that were written without an index still expire naturally by TTL.
+- **Sensitive controller operations now enforce TOTP step-up.** Enrolled users must present a recent
+  TOTP marker or a valid inline `totp_code` before self-service email changes, API-key create/update/revoke,
+  OAuth account association, TOTP disable, or recovery-code regeneration. Missing proof returns 403 with
+  `TOTP_STEPUP_REQUIRED`; TOTP disable still accepts a recovery code as the lockout-recovery path.
 - **Account-state responses no longer reveal inactive vs. unverified state.** Login and related
   account-state gated flows now return the same 400 / `LOGIN_ACCOUNT_UNAVAILABLE` client payload to
   prevent account-state enumeration (audit VULN #1, CWE-204). Operators can still observe the
@@ -21,6 +45,17 @@
 
 ### Migration
 
+- **Email change requests must include `current_password`.** Clients that change the
+  authenticated user's email must send `{ "email": "new@example.com", "current_password":
+  "current-password" }`. Non-email self-service updates from custom `user_update_schema`
+  contracts do not require `current_password`. Password rotation remains on
+  `POST /users/me/change-password` with `ChangePasswordRequest`.
+- **Recreate user-owned auth FKs with `ON DELETE CASCADE`.** Deployments using the bundled SQLAlchemy
+  auth tables should drop and recreate the foreign keys from `access_token.user_id`,
+  `refresh_token.user_id`, `api_key.user_id`, `oauth_account.user_id`, and `user_role.user_id` to the
+  user table with `ON DELETE CASCADE`. See `docs/migration.md` for an Alembic shape. PostgreSQL
+  deployments that previously saw FK violations on hard delete will now delete dependents; SQLite
+  deployments must keep `PRAGMA foreign_keys=ON` enabled to observe the same database-level cascade.
 - **Update assertions and client handling for account-state failures.** Replace any downstream
   assertions on `LOGIN_USER_INACTIVE` or `LOGIN_USER_NOT_VERIFIED` with
   `LOGIN_ACCOUNT_UNAVAILABLE`; use server logs, not client payloads, when the internal

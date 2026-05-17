@@ -19,7 +19,6 @@ from tests._helpers import litestar_app_with_user_manager
 
 DEFAULT_REGISTER_MINIMUM_RESPONSE_SECONDS = register_module.DEFAULT_REGISTER_MINIMUM_RESPONSE_SECONDS
 RegisterControllerConfig = register_module.RegisterControllerConfig
-_await_register_minimum_response = register_module._await_register_minimum_response
 create_register_controller = register_module.create_register_controller
 
 pytestmark = pytest.mark.unit
@@ -133,32 +132,6 @@ def test_register_controller_rejects_negative_minimum_response_seconds() -> None
     """Negative timing envelopes fail at controller construction."""
     with pytest.raises(ValueError, match="register_minimum_response_seconds must be non-negative"):
         create_register_controller(register_minimum_response_seconds=-0.001)
-
-
-async def test_register_minimum_response_helper_awaits_remaining_duration(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Padding waits only for the remaining minimum duration."""
-    sleep = AsyncMock()
-    monkeypatch.setattr(register_module.asyncio, "sleep", sleep)
-    monkeypatch.setattr(register_module.time, "perf_counter", lambda: 10.01)
-
-    await _await_register_minimum_response(started_at=10.0, minimum_seconds=0.05)
-
-    sleep.assert_awaited_once_with(pytest.approx(0.04))
-
-
-async def test_register_minimum_response_helper_skips_elapsed_duration(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Padding is a no-op when the business logic already exceeded the minimum."""
-    sleep = AsyncMock()
-    monkeypatch.setattr(register_module.asyncio, "sleep", sleep)
-    monkeypatch.setattr(register_module.time, "perf_counter", lambda: 10.06)
-
-    await _await_register_minimum_response(started_at=10.0, minimum_seconds=0.05)
-
-    sleep.assert_not_awaited()
 
 
 async def test_register_duplicate_user_returns_400_and_increments_rate_limit() -> None:

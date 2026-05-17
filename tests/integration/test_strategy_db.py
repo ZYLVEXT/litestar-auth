@@ -791,6 +791,50 @@ async def test_database_token_strategy_lists_only_active_refresh_sessions_for_us
     assert await strategy.list_refresh_sessions(user) == sessions
 
 
+async def test_database_token_strategy_persists_totp_stepup_marker_on_refresh_session(session: Session) -> None:
+    """TOTP step-up markers live on DB-backed refresh sessions and expire server-side."""
+    user = _create_user(session, email="db-stepup@example.com")
+    foreign_user = _create_user(session, email="foreign-db-stepup@example.com")
+    session.add_all(
+        [
+            RefreshToken(token="stepup-session-token", user_id=user.id),
+            RefreshToken(token="foreign-stepup-session-token", user_id=foreign_user.id),
+        ],
+    )
+    session.commit()
+    session_id = session.scalar(select(RefreshToken.session_id).where(RefreshToken.token == "stepup-session-token"))
+    foreign_session_id = session.scalar(
+        select(RefreshToken.session_id).where(RefreshToken.token == "foreign-stepup-session-token"),
+    )
+    assert session_id is not None
+    assert foreign_session_id is not None
+    strategy = DatabaseTokenStrategy(
+        session=_strategy_session(session),
+        token_hash_secret=_TOKEN_HASH_SECRET,
+    )
+
+    await strategy.issue_totp_stepup(user, "missing-session", ttl_seconds=300)
+    await strategy.issue_totp_stepup(user, foreign_session_id, ttl_seconds=300)
+    await strategy.issue_totp_stepup(user, session_id, ttl_seconds=300)
+
+    persisted = session.scalar(select(RefreshToken).where(RefreshToken.session_id == session_id))
+    assert persisted is not None
+    assert await strategy.has_recent_totp_verification(user, session_id) is True
+    assert await strategy.has_recent_totp_verification(user, foreign_session_id) is False
+    assert (persisted.client_metadata or {}).get("totp_stepup_expires_at") is not None
+
+    await strategy.issue_totp_stepup(user, session_id, ttl_seconds=0)
+
+    assert await strategy.has_recent_totp_verification(user, session_id) is False
+    persisted.client_metadata = {"totp_stepup_expires_at": "not-a-float"}
+    session.commit()
+    assert await strategy.has_recent_totp_verification(user, session_id) is False
+    persisted.client_metadata = {"totp_stepup_expires_at": str(datetime.now(tz=UTC).timestamp() - 1)}
+    session.commit()
+    assert await strategy.has_recent_totp_verification(user, session_id) is False
+    assert persisted.client_metadata is None
+
+
 async def test_database_token_strategy_revoke_refresh_session_is_user_scoped(session: Session) -> None:
     """Revoking one refresh session cannot delete another user's row."""
     user = _create_user(session, email="revoke-session@example.com")

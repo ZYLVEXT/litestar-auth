@@ -6,10 +6,15 @@ from uuid import uuid4
 
 import pytest
 
+from litestar_auth._totp_stores import RedisUsedTotpCodeStore, UsedTotpCodeStore
+from litestar_auth.db.sqlalchemy import SQLAlchemyUserDatabase
+from litestar_auth.totp import TotpRecoveryCodeUserManager
 from tests._helpers import ExampleUser
 from tests.integration.conftest import InMemoryUserDatabase
 
 pytestmark = pytest.mark.unit
+
+ATOMIC_CONCURRENCY_CLAUSE = "MUST observe exactly one success and N-1 failures"
 
 
 async def test_in_memory_user_database_round_trips_recovery_code_hashes() -> None:
@@ -35,3 +40,18 @@ async def test_in_memory_user_database_consumes_recovery_code_hash_once() -> Non
     assert await database.consume_recovery_code_by_lookup(user, "lookup-1") is True
     assert await database.consume_recovery_code_by_lookup(user, "lookup-1") is False
     assert user.recovery_codes == {"lookup-2": "hash-2"}
+
+
+@pytest.mark.parametrize(
+    "method",
+    [
+        TotpRecoveryCodeUserManager.consume_recovery_code_by_lookup,
+        SQLAlchemyUserDatabase.consume_recovery_code_by_lookup,
+        UsedTotpCodeStore.mark_used,
+        RedisUsedTotpCodeStore.mark_used,
+    ],
+)
+def test_recovery_code_consume_contract_documents_atomic_concurrency(method: object) -> None:
+    """Store contracts keep the atomic concurrent-consume guarantee visible."""
+    normalized_docstring = " ".join(getattr(method, "__doc__", "").split())
+    assert ATOMIC_CONCURRENCY_CLAUSE in normalized_docstring

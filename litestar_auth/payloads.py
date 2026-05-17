@@ -83,6 +83,7 @@ class ApiKeyCreateRequest(msgspec.Struct, forbid_unknown_fields=True):
 
     name: ApiKeyNameField
     current_password: schema_fields.PasswordField | None = None
+    totp_code: schema_fields.TotpCodeField | None = None
     scopes: list[ApiKeyScopeField] = []
     expires_at: datetime | None = None
     signing_required: bool = False
@@ -92,6 +93,7 @@ class ApiKeyAdminCreateRequest(msgspec.Struct, forbid_unknown_fields=True):
     """Payload used by superusers to create an API key for a path-selected user."""
 
     name: ApiKeyNameField
+    totp_code: schema_fields.TotpCodeField | None = None
     scopes: list[ApiKeyScopeField] = []
     expires_at: datetime | None = None
     signing_required: bool = False
@@ -107,7 +109,8 @@ class ApiKeyCreateResponse(msgspec.Struct):
 class ApiKeyUpdateRequest(msgspec.Struct, omit_defaults=True, forbid_unknown_fields=True):
     """Payload used to update mutable API-key metadata."""
 
-    current_password: schema_fields.PasswordField
+    current_password: schema_fields.PasswordField | None = None
+    totp_code: schema_fields.TotpCodeField | None = None
     name: ApiKeyNameField | None = None
     scopes: list[ApiKeyScopeField] | None = None
 
@@ -162,7 +165,8 @@ class TotpRegenerateRecoveryCodesRequest(msgspec.Struct):
     policy is disabled, the regenerate route accepts no request body.
     """
 
-    current_password: schema_fields.PasswordField
+    current_password: schema_fields.PasswordField | None = None
+    totp_code: schema_fields.TotpCodeField | None = None
 
 
 class TotpRecoveryCodesResponse(msgspec.Struct):

@@ -7,7 +7,7 @@ from uuid import UUID
 
 from advanced_alchemy.base import ModelProtocol
 from advanced_alchemy.filters import LimitOffset
-from sqlalchemy import inspect, select
+from sqlalchemy import func, inspect, select, update
 
 from litestar_auth.db._contract import _validate_oauth_account_model_contract
 from litestar_auth.db._repositories import (
@@ -404,11 +404,35 @@ class SQLAlchemyUserDatabase[UP: SQLAlchemyUserModelProtocol](BaseUserStore[UP, 
     async def consume_recovery_code_by_lookup(self, user: UP, lookup_hex: str) -> bool:
         """Atomically mark the recovery code keyed by ``lookup_hex`` consumed.
 
+        Concurrent callers presenting the same recovery code MUST observe
+        exactly one success and N-1 failures.
+
         Returns:
             ``True`` when the code was active and is now consumed; ``False`` when
             it was already consumed or never existed.
         """
         primary_key_column = inspect(self.user_model).primary_key[0]
+        if self.session.get_bind().dialect.name == "sqlite":
+            recovery_codes_column = inspect(self.user_model).columns["recovery_codes"]
+            lookup_path = f'$."{lookup_hex}"'
+            updated_recovery_codes = func.nullif(func.json_remove(recovery_codes_column, lookup_path), "{}")
+            result = await self.session.execute(
+                update(self.user_model)
+                .where(primary_key_column == user.id)
+                .where(func.json_type(recovery_codes_column, lookup_path).is_not(None))
+                .values(recovery_codes=updated_recovery_codes)
+                .execution_options(synchronize_session=False),
+            )
+            if cast("Any", result).rowcount != 1:
+                return False
+
+            await self.session.flush()
+            refresh_result = await self.session.execute(
+                select(self.user_model).where(primary_key_column == user.id).execution_options(populate_existing=True),
+            )
+            cast("Any", refresh_result).scalar_one_or_none()
+            return True
+
         result = await self.session.execute(
             select(self.user_model).where(primary_key_column == user.id).with_for_update(),
         )

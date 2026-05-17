@@ -161,6 +161,7 @@ def test_error_responses_module_exports_domain_error_helpers() -> None:
 def test_user_schema_module_strips_sensitive_fields_when_serializing() -> None:
     """The user-schema helper drops sensitive fields when materializing user reads."""
     assert frozenset({"hashed_password", "totp_secret", "password"}) == user_schema_module._SENSITIVE_FIELD_BLOCKLIST
+    assert user_schema_module.ALWAYS_BLOCKED_FIELDS >= user_schema_module._SENSITIVE_FIELD_BLOCKLIST
     assert user_schema_module._to_user_schema(_DummyUser(), _UserReadSchema) == _UserReadSchema(
         id="user-id",
         email="user@example.com",
@@ -569,15 +570,29 @@ def test_to_user_schema_rejects_sensitive_fields_outside_testing() -> None:
         _to_user_schema(_DummyUser(), _SensitiveUserReadSchema)
 
 
-def test_to_user_schema_allows_sensitive_fields_in_testing_with_warning(
+def test_to_user_schema_rejects_sensitive_fields_at_runtime_in_testing(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """Testing mode keeps legacy behavior but emits a warning."""
-    with caplog.at_level("WARNING"):
-        result = _to_user_schema(_DummyUser(), _SensitiveUserReadSchema, unsafe_testing=True)
+    """Testing mode bypasses schema-time rejection but not runtime sensitive-field access."""
+    with caplog.at_level("WARNING"), pytest.raises(ConfigurationError, match="blocked field 'hashed_password'"):
+        _to_user_schema(_DummyUser(), _SensitiveUserReadSchema, unsafe_testing=True)
 
-    assert result == _SensitiveUserReadSchema(id="user-id", hashed_password="hashed-secret")
     assert "sensitive fields" in caplog.text
+
+
+def test_to_user_schema_rejects_runtime_only_blocked_fields_before_getattr() -> None:
+    """The runtime guard blocks adjacent sensitive attributes that are outside schema-time validation."""
+
+    class _RecoveryCodeSchema(msgspec.Struct):
+        id: str
+        recovery_codes: dict[str, str]
+
+    class _RecoveryCodeUser(msgspec.Struct):
+        id: str = "user-id"
+        recovery_codes: dict[str, str] = msgspec.field(default_factory=lambda: {"lookup": "hash"})
+
+    with pytest.raises(ConfigurationError, match="blocked field 'recovery_codes'"):
+        _to_user_schema(_RecoveryCodeUser(), _RecoveryCodeSchema, unsafe_testing=True)
 
 
 def test_build_controller_name_normalizes_identifiers() -> None:

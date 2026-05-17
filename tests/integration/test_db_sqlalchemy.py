@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import base64
 from datetime import UTC, datetime, timedelta
+from types import SimpleNamespace
 from typing import TYPE_CHECKING, Any, cast
 from uuid import uuid4
 
@@ -16,7 +17,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 from sqlalchemy.orm import Session as SASession
 
-from litestar_auth.authentication.strategy.db_models import AccessToken
+from litestar_auth.authentication.strategy.db_models import AccessToken, RefreshToken
 from litestar_auth.db import ApiKeyData, BaseApiKeyStore, BaseOAuthAccountStore, BaseUserStore, OAuthAccountData
 from litestar_auth.db._repositories import _build_oauth_repository, _build_user_load, _build_user_repository
 from litestar_auth.db.sqlalchemy import SQLAlchemyApiKeyStore, SQLAlchemyUserDatabase
@@ -227,6 +228,18 @@ class AsyncSessionAdapter:
     ) -> None:
         """Refresh an instance from the database."""
         self._session.refresh(instance, attribute_names=attribute_names, with_for_update=with_for_update)
+
+
+class NonSQLiteDialectAsyncSessionAdapter(AsyncSessionAdapter):
+    """Session adapter that forces non-SQLite recovery-code fallback coverage."""
+
+    def get_bind(self) -> Engine | Connection:
+        """Expose a non-SQLite dialect name for branch coverage.
+
+        Returns:
+            Minimal bind-like object with a dialect name.
+        """
+        return cast("Engine | Connection", SimpleNamespace(dialect=SimpleNamespace(name="postgresql")))
 
 
 @pytest.fixture
@@ -444,6 +457,14 @@ async def test_sqlalchemy_api_key_store_round_trips_bundled_api_key_model(sessio
     assert await store.list_for_user(user.id) == [resolved]
 
 
+def test_bundled_user_owned_foreign_keys_declare_ondelete_cascade() -> None:
+    """Bundled per-user dependent tables cascade when a user row is hard-deleted."""
+    for model in (AccessToken, RefreshToken, ApiKey, OAuthAccount, UserRole):
+        user_id_column = inspect(model).columns["user_id"]
+        foreign_key = next(iter(user_id_column.foreign_keys))
+        assert foreign_key.ondelete == "CASCADE"
+
+
 async def test_sqlalchemy_api_key_store_replaces_encrypted_secret_without_metadata_drift(
     session: SASession,
 ) -> None:
@@ -613,6 +634,36 @@ async def test_sqlalchemy_user_database_recovery_code_missing_paths(session: SAS
     assert await database.find_recovery_code_hash_by_lookup(cast("Any", object()), "missing-lookup") is None
     assert await database.consume_recovery_code_by_lookup(user, "missing-lookup") is False
     assert await database.consume_recovery_code_by_lookup(transient_user, "missing-lookup") is False
+
+
+async def test_sqlalchemy_user_database_non_sqlite_recovery_code_consume_fallback(session: SASession) -> None:
+    """The row-locking fallback keeps single-consumer recovery-code behavior."""
+    database = create_database(session)
+    user = await database.create(
+        {
+            "email": "recovery-non-sqlite@example.com",
+            "hashed_password": "hashed-password",
+        },
+    )
+    updated_user = await database.set_recovery_code_hashes(
+        user,
+        {"lookup-1": "hash-1", "lookup-2": "hash-2"},
+    )
+    fallback_database = SQLAlchemyUserDatabase(
+        session=cast("AsyncSession", NonSQLiteDialectAsyncSessionAdapter(session)),
+        user_model=User,
+        oauth_account_model=OAuthAccount,
+    )
+    transient_user = User(id=uuid4(), email="transient-non-sqlite@example.com", hashed_password="hashed-password")
+
+    assert await fallback_database.consume_recovery_code_by_lookup(transient_user, "lookup-1") is False
+    assert await fallback_database.consume_recovery_code_by_lookup(updated_user, "missing-lookup") is False
+    assert await fallback_database.consume_recovery_code_by_lookup(updated_user, "lookup-1") is True
+    assert await fallback_database.consume_recovery_code_by_lookup(updated_user, "lookup-1") is False
+
+    reloaded_user = await database.get(updated_user.id)
+    assert reloaded_user is not None
+    assert reloaded_user.recovery_codes == {"lookup-2": "hash-2"}
 
 
 async def test_sqlalchemy_user_database_concurrent_recovery_code_consume_returns_single_success(

@@ -124,3 +124,14 @@ class RefreshSessionIdentifierStrategy[UP: UserProtocol[Any]](Protocol):
 
     async def identify_refresh_session(self, user: UP, refresh_token: str) -> str | None:
         """Return the user's public refresh-session id for ``refresh_token`` when it can be resolved."""
+
+
+@runtime_checkable
+class TotpStepUpStrategy[UP: UserProtocol[Any]](Protocol):
+    """Protocol for strategies that persist recent TOTP verification markers."""
+
+    async def issue_totp_stepup(self, user: UP, session_id: str, *, ttl_seconds: int) -> None:
+        """Store a short-lived TOTP step-up marker for ``user`` and ``session_id``."""
+
+    async def has_recent_totp_verification(self, user: UP, session_id: str) -> bool:
+        """Return whether ``session_id`` has a live TOTP step-up marker for ``user``."""

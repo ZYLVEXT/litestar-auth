@@ -21,6 +21,7 @@ API_KEY_HMAC_SCHEME = "LSA1-HMAC-SHA256"
 API_KEY_HMAC_DATE_HEADER = "X-Auth-Date"
 API_KEY_HMAC_NONCE_HEADER = "X-Auth-Nonce"
 API_KEY_HMAC_BODY_SHA256_HEADER = "X-Auth-Content-SHA256"
+API_KEY_SIGNED_BODY_SCOPE_KEY = "litestar_auth_body"
 
 _SIGNING_REQUEST: contextvars.ContextVar[SignedApiKeyRequest | None] = contextvars.ContextVar(
     "litestar_auth_api_key_signing_request",
@@ -169,7 +170,7 @@ def build_canonical_request(
     path = _canonical_path(connection.scope)
     query = _canonical_query_string(connection.scope.get("query_string", b""))
     headers = _canonical_headers(connection, signed_headers=signed_headers)
-    body = connection.scope.get("litestar_auth_body", b"")
+    body = connection.scope.get(API_KEY_SIGNED_BODY_SCOPE_KEY, b"")
     body_digest = hashlib.sha256(body if isinstance(body, bytes) else b"").hexdigest()
     return "\n".join((method, path, query, headers, ";".join(signed_headers), body_digest.lower()))
 
@@ -276,6 +277,7 @@ __all__ = (
     "API_KEY_HMAC_DATE_HEADER",
     "API_KEY_HMAC_NONCE_HEADER",
     "API_KEY_HMAC_SCHEME",
+    "API_KEY_SIGNED_BODY_SCOPE_KEY",
     "SignedApiKeyRequest",
     "build_canonical_request",
     "classify_signed_request_skew",

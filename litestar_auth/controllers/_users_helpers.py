@@ -124,6 +124,15 @@ async def _reject_blocked_self_update_fields(request: Request[Any, Any, Any]) ->
     ) from AuthorizationError(detail)
 
 
+async def _self_update_includes_email(request: Request[Any, Any, Any]) -> bool:
+    """Return whether the raw self-update body includes an email field."""
+    try:
+        decoded_body = msgspec.json.decode(await request.body())
+    except msgspec.DecodeError:
+        return False
+    return isinstance(decoded_body, dict) and "email" in decoded_body
+
+
 def _build_safe_self_update(data: msgspec.Struct) -> dict[str, Any]:
     """Reject blocked self-update fields and return the remaining payload mapping.
 

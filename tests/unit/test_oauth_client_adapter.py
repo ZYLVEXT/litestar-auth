@@ -727,11 +727,11 @@ async def test_get_account_identity_and_email_verified_uses_single_profile_fetch
     oauth_client.get_profile.assert_awaited_once_with("access-token")
 
 
-async def test_get_account_identity_and_email_verified_uses_dedicated_email_verified_when_present() -> None:
-    """Profile identity can be combined with dedicated verification when needed."""
+async def test_get_account_identity_and_email_verified_uses_direct_identity_with_dedicated_email_verified() -> None:
+    """Direct identity can be combined with dedicated verification when needed."""
     oauth_client = _make_oauth_client(
-        get_id_email=AsyncMock(return_value=None),
-        get_profile=AsyncMock(return_value={"id": "provider-id", "email": "user@example.com"}),
+        get_id_email=AsyncMock(return_value=("provider-id", "user@example.com")),
+        get_profile=AsyncMock(return_value={"id": "fallback-id", "email": "fallback@example.com"}),
         get_email_verified=AsyncMock(return_value=True),
     )
 
@@ -741,24 +741,85 @@ async def test_get_account_identity_and_email_verified_uses_dedicated_email_veri
 
     assert identity == ("provider-id", "user@example.com")
     assert email_verified is True
-    oauth_client.get_profile.assert_awaited_once_with("access-token")
+    oauth_client.get_profile.assert_not_awaited()
     oauth_client.get_email_verified.assert_awaited_once_with("access-token")
 
 
-async def test_get_account_identity_and_email_verified_propagates_dedicated_verification_config_error() -> None:
-    """Combined identity lookup surfaces dedicated verification configuration errors unchanged."""
+async def test_get_account_identity_and_email_verified_profile_fallback_ignores_dedicated_verification() -> None:
+    """Profile fallback derives both values from the same profile response."""
     oauth_client = _make_oauth_client(
         get_id_email=AsyncMock(return_value=None),
-        get_profile=AsyncMock(return_value={"id": "provider-id", "email": "user@example.com"}),
+        get_profile=AsyncMock(
+            return_value={"id": "provider-id", "email": "user@example.com", "email_verified": False},
+        ),
         get_email_verified=AsyncMock(return_value="sometimes"),
     )
 
-    with pytest.raises(client_adapter_module.ConfigurationError, match="verification") as exc_info:
-        await _build_adapter(oauth_client).get_account_identity_and_email_verified("access-token")
+    identity, email_verified = await _build_adapter(oauth_client).get_account_identity_and_email_verified(
+        "access-token",
+    )
 
-    assert exc_info.value.code == client_adapter_module.ErrorCode.CONFIGURATION_INVALID
+    assert identity == ("provider-id", "user@example.com")
+    assert email_verified is False
     oauth_client.get_profile.assert_awaited_once_with("access-token")
-    oauth_client.get_email_verified.assert_awaited_once_with("access-token")
+    oauth_client.get_email_verified.assert_not_awaited()
+
+
+async def test_get_account_identity_and_email_verified_profile_fallback_calls_get_profile_at_most_once() -> None:
+    """Fallback identity and verification parsing share one provider profile call."""
+
+    class _ProfileClient:
+        def __init__(self) -> None:
+            self.get_profile_calls: list[str] = []
+
+        async def get_id_email(self, access_token: str) -> None:
+            del access_token
+
+        async def get_profile(self, access_token: str) -> dict[str, object]:
+            self.get_profile_calls.append(access_token)
+            return {
+                "account_id": "provider-id",
+                "account_email": "user@example.com",
+                "email_verified": True,
+            }
+
+    oauth_client = _ProfileClient()
+
+    identity, email_verified = await _build_adapter(oauth_client).get_account_identity_and_email_verified(
+        "access-token",
+    )
+
+    assert identity == ("provider-id", "user@example.com")
+    assert email_verified is True
+    assert oauth_client.get_profile_calls == ["access-token"]
+
+
+async def test_get_account_identity_and_email_verified_profile_fallback_never_observes_divergence() -> None:
+    """Fallback parsing cannot mix identity and verification from divergent profile responses."""
+
+    class _DivergentProfileClient:
+        def __init__(self) -> None:
+            self.profile_call_count = 0
+
+        async def get_id_email(self, access_token: str) -> None:
+            del access_token
+
+        async def get_profile(self, access_token: str) -> dict[str, object]:
+            del access_token
+            self.profile_call_count += 1
+            if self.profile_call_count == 1:
+                return {"id": "first-provider-id", "email": "first@example.com", "email_verified": True}
+            return {"id": "second-provider-id", "email": "second@example.com", "email_verified": False}
+
+    oauth_client = _DivergentProfileClient()
+
+    identity, email_verified = await _build_adapter(oauth_client).get_account_identity_and_email_verified(
+        "access-token",
+    )
+
+    assert identity == ("first-provider-id", "first@example.com")
+    assert email_verified is True
+    assert oauth_client.profile_call_count == 1
 
 
 async def test_get_account_identity_and_email_verified_requires_profile_fallback_method() -> None:

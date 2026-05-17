@@ -37,6 +37,7 @@ if TYPE_CHECKING:
 
     from litestar_auth.authentication.backend import AuthenticationBackend
     from litestar_auth.authentication.strategy.jwt import JWTDenylistStore
+    from litestar_auth.controllers._auth_helpers import TotpStepUpPolicyMode
     from litestar_auth.manager import FernetKeyringConfig
     from litestar_auth.ratelimit import AuthRateLimitConfig
     from litestar_auth.totp import TotpAlgorithm, TotpEnrollmentStore, UsedTotpCodeStore
@@ -75,6 +76,9 @@ class _PluginTotpControllerSettings[UP: UserProtocol[Any], ID]:
     totp_enable_requires_password: bool
     totp_issuer: str
     totp_algorithm: TotpAlgorithm
+    totp_stepup_ttl_seconds: int
+    totp_stepup_allow_recovery: bool
+    totp_stepup_policy: dict[str, TotpStepUpPolicyMode]
     totp_pending_require_client_binding: bool
     id_parser: Callable[[str], ID] | None
     path: str
@@ -101,6 +105,9 @@ class PluginTotpControllerOptions[UP: UserProtocol[Any], ID](TypedDict):
     totp_enable_requires_password: NotRequired[bool]
     totp_issuer: NotRequired[str]
     totp_algorithm: NotRequired[TotpAlgorithm]
+    totp_stepup_ttl_seconds: NotRequired[int]
+    totp_stepup_allow_recovery: NotRequired[bool]
+    totp_stepup_policy: NotRequired[dict[str, TotpStepUpPolicyMode]]
     totp_pending_lifetime: NotRequired[timedelta | None]
     totp_pending_require_client_binding: NotRequired[bool]
     id_parser: NotRequired[Callable[[str], ID] | None]
@@ -165,6 +172,9 @@ def _build_plugin_totp_context_settings[UP: UserProtocol[Any], ID](
         totp_enable_requires_password=settings.totp_enable_requires_password,
         totp_issuer=settings.totp_issuer,
         totp_algorithm=settings.totp_algorithm,
+        totp_stepup_ttl_seconds=settings.totp_stepup_ttl_seconds,
+        totp_stepup_allow_recovery=settings.totp_stepup_allow_recovery,
+        totp_stepup_policy=settings.totp_stepup_policy,
         totp_rate_limit=totp_rate_limit,
         totp_pending_secret=settings.totp_pending_secret,
         totp_pending_require_client_binding=settings.totp_pending_require_client_binding,
@@ -268,6 +278,9 @@ def _resolve_plugin_totp_controller_settings[UP: UserProtocol[Any], ID](
         totp_enable_requires_password=options.get("totp_enable_requires_password", True),
         totp_issuer=options.get("totp_issuer", "litestar-auth"),
         totp_algorithm=options.get("totp_algorithm", "SHA256"),
+        totp_stepup_ttl_seconds=options.get("totp_stepup_ttl_seconds", 300),
+        totp_stepup_allow_recovery=options.get("totp_stepup_allow_recovery", False),
+        totp_stepup_policy=dict(options.get("totp_stepup_policy", {})),
         totp_pending_secret=options["totp_pending_secret"],
         totp_secret_key=options.get("totp_secret_key"),
         totp_secret_keyring=options.get("totp_secret_keyring"),
@@ -329,6 +342,9 @@ def build_totp_controller[UP: UserProtocol[Any], ID](
         totp_enable_requires_password=totp_config.totp_enable_requires_password,
         totp_issuer=totp_config.totp_issuer,
         totp_algorithm=totp_config.totp_algorithm,
+        totp_stepup_ttl_seconds=config.totp_stepup_ttl_seconds,
+        totp_stepup_allow_recovery=config.totp_stepup_allow_recovery,
+        totp_stepup_policy=config.totp_stepup_policy,
         totp_pending_require_client_binding=totp_config.totp_pending_require_client_binding,
         id_parser=config.id_parser,
         path=totp_path(config.auth_path),

@@ -102,6 +102,9 @@ class UsedTotpCodeStore(Protocol):
     async def mark_used(self, user_id: Hashable, counter: int, ttl_seconds: float) -> UsedTotpMarkResult:
         """Atomically record a `(user_id, counter)` pair when unused.
 
+        Concurrent callers presenting the same code MUST observe exactly one
+        success and N-1 failures.
+
         Returns:
             :class:`UsedTotpMarkResult` with ``stored=True`` when the pair was newly recorded.
             When ``stored`` is ``False``, set ``rejected_as_replay=True`` if the pair was already
@@ -217,6 +220,9 @@ class RedisUsedTotpCodeStore:
 
     async def mark_used(self, user_id: Hashable, counter: int, ttl_seconds: float) -> UsedTotpMarkResult:
         """Atomically record a used (user_id, counter) pair via SET key 1 NX PX ttl_ms.
+
+        Concurrent callers presenting the same code MUST observe exactly one
+        success and N-1 failures.
 
         Returns:
             ``UsedTotpMarkResult(stored=True)`` when the pair was newly stored, or

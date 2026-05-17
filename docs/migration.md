@@ -1,5 +1,46 @@
 # Migration Guide
 
+## User hard-delete cascade
+
+Bundled user-owned auth tables now declare `ON DELETE CASCADE` on foreign keys that point at the
+user table. `BaseUserManager.delete()` also invalidates configured token strategies and deletes
+SQL-backed API keys before removing the user row, so hard delete removes per-user secrets and
+session artifacts instead of leaving orphan rows.
+
+For deployments using the bundled table names, migrate existing constraints by dropping each current
+foreign key and recreating it with `ON DELETE CASCADE`:
+
+```python
+from alembic import op
+
+
+def upgrade() -> None:
+    for table_name in ("access_token", "refresh_token", "api_key", "oauth_account", "user_role"):
+        op.drop_constraint(f"fk_{table_name}_user_id_user", table_name, type_="foreignkey")
+        op.create_foreign_key(
+            f"fk_{table_name}_user_id_user",
+            table_name,
+            "user",
+            ["user_id"],
+            ["id"],
+            ondelete="CASCADE",
+        )
+```
+
+Adjust constraint names for your database; SQLAlchemy/Alembic naming conventions or database-generated
+names may differ. For PostgreSQL tables with existing traffic, use your normal low-lock migration
+pattern for foreign keys: add the replacement constraint as `NOT VALID`, validate it separately, and
+drop the old constraint in a controlled migration window.
+
+SQLite only enforces cascades when `PRAGMA foreign_keys=ON` is set on every connection. The library's
+tests enable that pragma for SQLite engines; application-owned SQLite deployments should do the same
+through a SQLAlchemy connect event.
+
+Redis opaque tokens and Redis TOTP step-up markers written by current releases are indexed per user
+and are removed by hard delete through `invalidate_all_tokens()`. Older unindexed Redis token keys
+cannot be discovered by user id without scanning and remain TTL-bound; let them expire naturally or
+run an application-owned cleanup if your deployment previously wrote unindexed keys.
+
 ## API-key persistence table
 
 API-key storage now has a dedicated `api_key` table. Import the bundled model from
@@ -14,7 +55,7 @@ Minimum migration shape for deployments using the bundled model:
 CREATE TABLE api_key (
     id UUID PRIMARY KEY,
     key_id VARCHAR(64) NOT NULL,
-    user_id UUID NOT NULL REFERENCES "user" (id),
+    user_id UUID NOT NULL REFERENCES "user" (id) ON DELETE CASCADE,
     hashed_secret BYTEA NOT NULL,
     encrypted_secret BYTEA NULL,
     name VARCHAR(255) NOT NULL,
@@ -46,7 +87,7 @@ def upgrade() -> None:
         "api_key",
         sa.Column("id", UUID(as_uuid=True), primary_key=True),
         sa.Column("key_id", sa.String(length=64), nullable=False),
-        sa.Column("user_id", UUID(as_uuid=True), sa.ForeignKey("user.id"), nullable=False),
+        sa.Column("user_id", UUID(as_uuid=True), sa.ForeignKey("user.id", ondelete="CASCADE"), nullable=False),
         sa.Column("hashed_secret", sa.LargeBinary(), nullable=False),
         sa.Column("encrypted_secret", sa.LargeBinary(), nullable=True),
         sa.Column("name", sa.String(length=255), nullable=False),
@@ -134,7 +175,7 @@ Wrong current passwords return the login-shaped `LOGIN_BAD_CREDENTIALS` contract
 replacement passwords return `UPDATE_USER_INVALID_PASSWORD`. Admin-initiated password rotation
 continues through `AdminUserUpdate` on the privileged users update path.
 
-## Self-service `UserUpdate` is email-only
+## Self-service `UserUpdate` is limited to email changes
 
 The built-in self-service profile-update schema no longer accepts `is_active`, `is_verified`, or
 `roles`. Privileged fields live exclusively on `AdminUserUpdate` for the privileged
@@ -145,8 +186,10 @@ self-update into a privilege change.
 
 Update clients accordingly:
 
-- Self-service `PATCH /users/me` now accepts only `{ "email": "new@example.com" }`. Send
-  privileged updates through admin `PATCH /users/{user_id}` with `AdminUserUpdate` instead.
+- Self-service `PATCH /users/me` accepts `{ "email": "new@example.com", "current_password":
+  "current-password" }` for email changes. Missing or wrong `current_password` returns
+  `LOGIN_BAD_CREDENTIALS`. Send privileged updates through admin `PATCH /users/{user_id}` with
+  `AdminUserUpdate` instead.
 - Programmatic callers that constructed `UserUpdate(is_active=...)`, `UserUpdate(roles=...)`, or
   similar must switch to `AdminUserUpdate(...)` plus `manager.update(..., allow_privileged=True)`.
 - The library's bundled soft-delete path on the privileged `DELETE /users/{user_id}` route was

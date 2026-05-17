@@ -404,10 +404,10 @@ def test_root_package_exports_canonical_database_token_preset_entrypoint() -> No
 def test_public_user_schema_reuse_surface_stays_importable() -> None:
     """Custom-schema email/password helpers stay on the dedicated public schemas module.
 
-    The self-service ``UserUpdate`` is intentionally email-only — privileged
-    fields (``is_active`` / ``is_verified`` / ``roles``) live exclusively on
-    :class:`AdminUserUpdate`, so this contract no longer exposes a ``roles``
-    or any other privileged annotation.
+    The self-service ``UserUpdate`` carries email plus optional current-password
+    proof for email changes. Privileged fields (``is_active`` / ``is_verified``
+    / ``roles``) live exclusively on :class:`AdminUserUpdate`, so this contract
+    no longer exposes a ``roles`` or any other privileged annotation.
     """
     user_create_email_meta = _field_meta(UserCreate, "email")
     user_update_email_meta = _field_meta(UserUpdate, "email")
@@ -416,6 +416,7 @@ def test_public_user_schema_reuse_surface_stays_importable() -> None:
     user_create_email_annotation = get_type_hints(UserCreate, include_extras=True)["email"]
     user_update_email_annotation = get_type_hints(UserUpdate, include_extras=True)["email"]
     user_create_annotation = get_type_hints(UserCreate, include_extras=True)["password"]
+    user_update_current_password_annotation = get_type_hints(UserUpdate, include_extras=True)["current_password"]
     user_update_hints = get_type_hints(UserUpdate, include_extras=True)
     email_field_value = getattr(schemas_module.UserEmailField, "__value__", schemas_module.UserEmailField)
     password_field_value = getattr(schemas_module.UserPasswordField, "__value__", schemas_module.UserPasswordField)
@@ -446,6 +447,15 @@ def test_public_user_schema_reuse_surface_stays_importable() -> None:
     )
     assert get_args(user_update_email_annotation)[1] is type(None)
     assert getattr(user_create_annotation, "__value__", user_create_annotation) == password_field_value
+    assert (
+        getattr(
+            get_args(user_update_current_password_annotation)[0],
+            "__value__",
+            get_args(user_update_current_password_annotation)[0],
+        )
+        == password_field_value
+    )
+    assert get_args(user_update_current_password_annotation)[1] is type(None)
     assert "password" not in user_update_hints
     # Privileged fields live exclusively on AdminUserUpdate now.
     assert "is_active" not in user_update_hints
@@ -1266,7 +1276,7 @@ def test_root_package_does_not_reexport_secondary_surfaces() -> None:
     assert UserCreate.__struct_fields__ == ("email", "password")
     assert AdminUserUpdate.__struct_fields__ == ("password", "email", "is_active", "is_verified", "roles")
     assert ChangePasswordRequest.__struct_fields__ == ("current_password", "new_password")
-    assert UserUpdate.__struct_fields__ == ("email",)
+    assert UserUpdate.__struct_fields__ == ("email", "current_password", "totp_code")
     assert callable(create_provider_oauth_controller)
     assert callable(create_oauth_associate_controller)
     assert callable(load_httpx_oauth_client)

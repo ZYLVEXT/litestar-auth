@@ -53,6 +53,7 @@ Exact JSON layout follows your Litestar exception handler configuration.
 | `TOTP_CODE_INVALID` | 400 | Wrong or reused TOTP code. |
 | `TOTP_ALREADY_ENABLED` | 400 | TOTP already active. |
 | `TOTP_ENROLL_BAD_TOKEN` | 400 | Enrollment token invalid. |
+| `TOTP_STEPUP_REQUIRED` | 403 | A protected operation requires a recent TOTP verification marker or a valid inline TOTP code. Prompt the user for TOTP and retry the operation from the same session; see [TOTP step-up for sensitive operations](configuration/totp.md#totp-step-up-for-sensitive-operations). |
 | `API_KEY_INVALID` | 401 / 404 | API-key credential is absent, malformed, unknown, foreign to the current user, or failed non-enumerating lookup. Self-service metadata routes use 404 for missing or foreign key ids. |
 | `API_KEY_REVOKED` | 401 | Parsed API-key credential belongs to a revoked key. |
 | `API_KEY_EXPIRED` | 401 | Parsed API-key credential belongs to an expired key. |

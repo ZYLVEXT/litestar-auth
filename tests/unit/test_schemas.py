@@ -209,7 +209,7 @@ def test_api_key_create_and_update_payloads_are_strict() -> None:
 
 def test_user_update_field_order_uses_roles_as_authorization_surface() -> None:
     """UserUpdate keeps the public update fields for the role-based API surface."""
-    assert UserUpdate.__struct_fields__ == ("email",)
+    assert UserUpdate.__struct_fields__ == ("email", "current_password", "totp_code")
 
 
 def test_admin_user_update_field_order_matches_user_update_surface() -> None:
@@ -431,9 +431,10 @@ def test_public_email_alias_reuses_internal_metadata_source() -> None:
 def test_user_update_omits_unset_optional_fields() -> None:
     """UserUpdate excludes defaulted optional fields from serialized output.
 
-    The self-service self-update schema is intentionally email-only (privileged
-    fields belong on AdminUserUpdate); ``omit_defaults=True`` plus the empty
-    payload below proves no defaulted fields leak into encoded output.
+    The self-service self-update schema accepts email plus optional
+    current-password proof (privileged fields belong on AdminUserUpdate);
+    ``omit_defaults=True`` plus the empty payload below proves no defaulted
+    fields leak into encoded output.
     """
     payload = UserUpdate(email="updated@example.com")
 
@@ -445,6 +446,17 @@ def test_user_update_omits_unset_optional_fields() -> None:
 
     empty_payload = UserUpdate()
     assert msgspec.json.encode(empty_payload) == b"{}"
+
+
+def test_user_update_serializes_current_password_step_up_field() -> None:
+    """UserUpdate carries current-password proof only as an email-change step-up field."""
+    payload = UserUpdate(email="updated@example.com", current_password="current-password")
+
+    encoded = msgspec.json.encode(payload)
+    decoded = msgspec.json.decode(encoded, type=UserUpdate)
+
+    assert decoded == payload
+    assert encoded == b'{"email":"updated@example.com","current_password":"current-password"}'
 
 
 @pytest.mark.parametrize(
