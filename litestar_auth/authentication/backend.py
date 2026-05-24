@@ -132,6 +132,7 @@ class AuthenticationBackend[UP: UserProtocol[Any], ID]:
         """
         token = await self.transport.read_token(connection)
         if isinstance(self.strategy, ContextualStrategy):
+            # Runtime-checkable generic protocols do not preserve the AuthT parameter after isinstance narrowing.
             contextual_strategy = cast(
                 "ContextualStrategy[UP, ID, _AuthenticationResultWithContext[UP]]",
                 self.strategy,
@@ -159,8 +160,9 @@ def _bind_strategy_session[UP: UserProtocol[Any], ID, S](
     if not isinstance(strategy, SessionBindable):
         return strategy
 
+    # SessionBindable is checked structurally at runtime, but the session type parameter is known only to callers.
     bindable = cast("SessionBindable[UP, ID, S]", strategy)
-    return cast("StrategyProtocol[UP, ID]", bindable.with_session(session))
+    return bindable.with_session(session)
 
 
 async def _invalidate_refresh_artifacts[UP: UserProtocol[Any], ID](
@@ -169,5 +171,6 @@ async def _invalidate_refresh_artifacts[UP: UserProtocol[Any], ID](
 ) -> None:
     """Invalidate refresh/session artifacts for strategies that support full revocation."""
     if isinstance(strategy, TokenInvalidationCapable):
+        # Runtime-checkable generic protocols narrow their type parameter to Never here.
         revocation_strategy = cast("TokenInvalidationCapable[UP]", strategy)
         await revocation_strategy.invalidate_all_tokens(user)

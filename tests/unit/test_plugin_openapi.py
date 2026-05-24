@@ -13,7 +13,7 @@ from litestar.openapi.spec import Components, SecurityScheme
 
 from litestar_auth._plugin.api_key import build_api_key_backend_template
 from litestar_auth._plugin.config import StartupBackendTemplate
-from litestar_auth._plugin.feature_configs import ApiKeyConfig
+from litestar_auth._plugin.features import ApiKeyConfig
 from litestar_auth._plugin.openapi import (
     build_openapi_security_schemes,
     build_security_requirement,

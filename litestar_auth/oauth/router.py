@@ -13,7 +13,7 @@ from litestar_auth.controllers.oauth import (
     _OAuthLoginControllerSettings,
 )
 from litestar_auth.exceptions import ConfigurationError
-from litestar_auth.oauth.client_adapter import _build_oauth_client_adapter
+from litestar_auth.oauth._client import _build_oauth_client_adapter
 from litestar_auth.types import UserProtocol
 
 if TYPE_CHECKING:
@@ -22,7 +22,7 @@ if TYPE_CHECKING:
     from litestar import Controller
 
     from litestar_auth.authentication.backend import AuthenticationBackend
-    from litestar_auth.oauth._client_contracts import OAuthClientConstructor, OAuthClientFactory, OAuthClientProtocol
+    from litestar_auth.oauth._client import OAuthClientConstructor, OAuthClientFactory, OAuthClientProtocol
 
 
 @dataclass(frozen=True, slots=True)

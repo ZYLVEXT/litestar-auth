@@ -11,9 +11,16 @@ import litestar_auth._error_codes as error_codes_module
 import litestar_auth.exceptions as exceptions_module
 from tests.unit.test_definition_file_coverage import load_reloaded_test_alias
 
+ApiKeyError = exceptions_module.ApiKeyError
+ApiKeyErrorCode = error_codes_module.ApiKeyErrorCode
+ApiKeyLimitReachedError = exceptions_module.ApiKeyLimitReachedError
+ApiKeyNotFoundError = exceptions_module.ApiKeyNotFoundError
+ApiKeyScopeDeniedError = exceptions_module.ApiKeyScopeDeniedError
 AuthenticationError = exceptions_module.AuthenticationError
+AuthErrorCode = error_codes_module.AuthErrorCode
 AuthorizationError = exceptions_module.AuthorizationError
 ConfigurationError = exceptions_module.ConfigurationError
+ERROR_CODE_REGISTRY = error_codes_module.ERROR_CODE_REGISTRY
 ErrorCode = exceptions_module.ErrorCode
 InactiveUserError = exceptions_module.InactiveUserError
 InsufficientRolesError = exceptions_module.InsufficientRolesError
@@ -21,8 +28,12 @@ InvalidPasswordError = exceptions_module.InvalidPasswordError
 InvalidResetPasswordTokenError = exceptions_module.InvalidResetPasswordTokenError
 InvalidVerifyTokenError = exceptions_module.InvalidVerifyTokenError
 LitestarAuthError = exceptions_module.LitestarAuthError
+OAuthErrorCode = error_codes_module.OAuthErrorCode
 OAuthAccountAlreadyLinkedError = exceptions_module.OAuthAccountAlreadyLinkedError
+RoleErrorCode = error_codes_module.RoleErrorCode
+TokenErrorCode = error_codes_module.TokenErrorCode
 TokenError = exceptions_module.TokenError
+TotpErrorCode = error_codes_module.TotpErrorCode
 UnverifiedUserError = exceptions_module.UnverifiedUserError
 UserAlreadyExistsError = exceptions_module.UserAlreadyExistsError
 UserIdentifier = exceptions_module.UserIdentifier
@@ -63,6 +74,18 @@ EXCEPTION_CASES: tuple[ExceptionCase, ...] = (
         "litestar-auth is configured incorrectly.",
         ErrorCode.CONFIGURATION_INVALID,
         LitestarAuthError,
+    ),
+    (
+        ApiKeyError,
+        "API-key operation failed.",
+        ApiKeyErrorCode.API_KEY_INVALID,
+        LitestarAuthError,
+    ),
+    (
+        ApiKeyNotFoundError,
+        "API key not found.",
+        ApiKeyErrorCode.API_KEY_INVALID,
+        ApiKeyError,
     ),
     (
         UserAlreadyExistsError,
@@ -107,6 +130,67 @@ EXCEPTION_CASES: tuple[ExceptionCase, ...] = (
         TokenError,
     ),
 )
+
+EXPECTED_ERROR_CODE_GROUPS = {
+    AuthErrorCode: {
+        "UNKNOWN": "UNKNOWN",
+        "AUTHENTICATION_FAILED": "AUTHENTICATION_FAILED",
+        "CONFIGURATION_INVALID": "CONFIGURATION_INVALID",
+        "USER_NOT_FOUND": "USER_NOT_FOUND",
+        "USER_ALREADY_EXISTS": "USER_ALREADY_EXISTS",
+        "REGISTER_FAILED": "REGISTER_FAILED",
+        "LOGIN_BAD_CREDENTIALS": "LOGIN_BAD_CREDENTIALS",
+        "LOGIN_ACCOUNT_UNAVAILABLE": "LOGIN_ACCOUNT_UNAVAILABLE",
+        "AUTHORIZATION_DENIED": "AUTHORIZATION_DENIED",
+        "REQUEST_BODY_INVALID": "REQUEST_BODY_INVALID",
+        "LOGIN_PAYLOAD_INVALID": "LOGIN_PAYLOAD_INVALID",
+        "UPDATE_USER_EMAIL_ALREADY_EXISTS": "UPDATE_USER_EMAIL_ALREADY_EXISTS",
+        "UPDATE_USER_INVALID_PASSWORD": "UPDATE_USER_INVALID_PASSWORD",
+        "SUPERUSER_CANNOT_DELETE_SELF": "SUPERUSER_CANNOT_DELETE_SELF",
+    },
+    TokenErrorCode: {
+        "TOKEN_PROCESSING_FAILED": "TOKEN_PROCESSING_FAILED",
+        "RESET_PASSWORD_BAD_TOKEN": "RESET_PASSWORD_BAD_TOKEN",
+        "RESET_PASSWORD_INVALID_PASSWORD": "RESET_PASSWORD_INVALID_PASSWORD",
+        "VERIFY_USER_BAD_TOKEN": "VERIFY_USER_BAD_TOKEN",
+        "VERIFY_USER_ALREADY_VERIFIED": "VERIFY_USER_ALREADY_VERIFIED",
+        "REFRESH_TOKEN_INVALID": "REFRESH_TOKEN_INVALID",
+        "SESSION_MANAGEMENT_UNSUPPORTED": "SESSION_MANAGEMENT_UNSUPPORTED",
+        "REFRESH_SESSION_NOT_FOUND": "REFRESH_SESSION_NOT_FOUND",
+    },
+    RoleErrorCode: {
+        "INSUFFICIENT_ROLES": "INSUFFICIENT_ROLES",
+        "ROLE_ALREADY_EXISTS": "ROLE_ALREADY_EXISTS",
+        "ROLE_NOT_FOUND": "ROLE_NOT_FOUND",
+        "ROLE_STILL_ASSIGNED": "ROLE_STILL_ASSIGNED",
+        "ROLE_ASSIGNMENT_USER_NOT_FOUND": "ROLE_ASSIGNMENT_USER_NOT_FOUND",
+        "ROLE_NAME_INVALID": "ROLE_NAME_INVALID",
+    },
+    TotpErrorCode: {
+        "TOTP_PENDING_BAD_TOKEN": "TOTP_PENDING_BAD_TOKEN",
+        "TOTP_CODE_INVALID": "TOTP_CODE_INVALID",
+        "TOTP_ALREADY_ENABLED": "TOTP_ALREADY_ENABLED",
+        "TOTP_ENROLL_BAD_TOKEN": "TOTP_ENROLL_BAD_TOKEN",
+        "TOTP_STEPUP_REQUIRED": "TOTP_STEPUP_REQUIRED",
+    },
+    OAuthErrorCode: {
+        "OAUTH_NOT_AVAILABLE_EMAIL": "OAUTH_NOT_AVAILABLE_EMAIL",
+        "OAUTH_STATE_INVALID": "OAUTH_STATE_INVALID",
+        "OAUTH_EMAIL_NOT_VERIFIED": "OAUTH_EMAIL_NOT_VERIFIED",
+        "OAUTH_USER_ALREADY_EXISTS": "OAUTH_USER_ALREADY_EXISTS",
+        "OAUTH_ACCOUNT_ALREADY_LINKED": "OAUTH_ACCOUNT_ALREADY_LINKED",
+    },
+    ApiKeyErrorCode: {
+        "API_KEY_INVALID": "API_KEY_INVALID",
+        "API_KEY_REVOKED": "API_KEY_REVOKED",
+        "API_KEY_EXPIRED": "API_KEY_EXPIRED",
+        "API_KEY_SCOPE_DENIED": "API_KEY_SCOPE_DENIED",
+        "API_KEY_LIMIT_REACHED": "API_KEY_LIMIT_REACHED",
+        "API_KEY_SIGNATURE_INVALID": "API_KEY_SIGNATURE_INVALID",
+        "API_KEY_SIGNATURE_TIMESTAMP_SKEW": "API_KEY_SIGNATURE_TIMESTAMP_SKEW",
+        "API_KEY_SIGNATURE_NONCE_REPLAY": "API_KEY_SIGNATURE_NONCE_REPLAY",
+    },
+}
 
 EXPECTED_ERROR_CODES = {
     "UNKNOWN": "UNKNOWN",
@@ -169,7 +253,7 @@ def _error_code_members() -> dict[str, str]:
     }
 
 
-def _filtered_error_code_members(error_code_type: type[ErrorCode]) -> dict[str, str]:
+def _filtered_error_code_members(error_code_type: type[StrEnum]) -> dict[str, str]:
     """Return stable ``ErrorCode`` members, excluding transitional login-state codes."""
     return {
         member.name: member.value
@@ -190,6 +274,10 @@ def test_error_code_module_reload_preserves_error_code_and_identifier_contract(m
     assert reloaded_module.ErrorCode is not ErrorCode
     assert reloaded_module.UserIdentifier is not UserIdentifier
     assert _filtered_error_code_members(reloaded_module.ErrorCode) == EXPECTED_ERROR_CODES
+    assert {
+        group.__name__: _filtered_error_code_members(getattr(reloaded_module, group.__name__))
+        for group in EXPECTED_ERROR_CODE_GROUPS
+    } == {group.__name__: members for group, members in EXPECTED_ERROR_CODE_GROUPS.items()}
     assert reloaded_module.UserIdentifier(identifier_type="email", identifier_value="user@example.com") == (
         reloaded_module.UserIdentifier(identifier_type="email", identifier_value="user@example.com")
     )
@@ -232,6 +320,7 @@ def test_exception_module_reload_preserves_default_message_and_code_contract(mon
     assert reloaded_module.OAuthAccountAlreadyLinkedError is not OAuthAccountAlreadyLinkedError
     assert str(reloaded_configuration_error) == ConfigurationError.default_message
     assert reloaded_configuration_error.code == ErrorCode.CONFIGURATION_INVALID
+    assert reloaded_module.ApiKeyNotFoundError().code == ApiKeyErrorCode.API_KEY_INVALID
     assert str(reloaded_user_exists_error) == UserAlreadyExistsError.default_message
     assert reloaded_user_exists_error.code == ErrorCode.USER_ALREADY_EXISTS
     assert reloaded_user_exists_error.identifier_type == "email"
@@ -576,6 +665,10 @@ def test_exception_inheritance_hierarchy() -> None:
     assert issubclass(AuthorizationError, LitestarAuthError)
     assert issubclass(TokenError, LitestarAuthError)
     assert issubclass(ConfigurationError, LitestarAuthError)
+    assert issubclass(ApiKeyError, LitestarAuthError)
+    assert issubclass(ApiKeyNotFoundError, ApiKeyError)
+    assert issubclass(ApiKeyScopeDeniedError, ApiKeyError)
+    assert issubclass(ApiKeyLimitReachedError, ApiKeyError)
     assert issubclass(UserAlreadyExistsError, AuthenticationError)
     assert issubclass(UserNotExistsError, AuthenticationError)
     assert issubclass(InvalidPasswordError, AuthenticationError)
@@ -604,6 +697,42 @@ def test_account_state_errors_keep_distinct_types_and_messages_with_opaque_code(
 def test_error_code_constants_match_string_values() -> None:
     """Every ``ErrorCode`` constant matches its machine-readable string value."""
     assert _error_code_members() == EXPECTED_ERROR_CODES
+
+
+def test_error_code_domain_groups_match_aggregate_wire_values() -> None:
+    """Domain ``StrEnum`` groups partition the aggregate error-code registry without changing values."""
+    grouped_members = {
+        member_name: member_value
+        for group, expected_members in EXPECTED_ERROR_CODE_GROUPS.items()
+        for member_name, member_value in _filtered_error_code_members(group).items()
+        if member_name in expected_members
+    }
+
+    assert {
+        group: _filtered_error_code_members(group) for group in EXPECTED_ERROR_CODE_GROUPS
+    } == EXPECTED_ERROR_CODE_GROUPS
+    assert grouped_members == EXPECTED_ERROR_CODES
+    assert {member.name: ERROR_CODE_REGISTRY[member].value for member in ErrorCode} == EXPECTED_ERROR_CODES
+    assert ERROR_CODE_REGISTRY[ErrorCode.API_KEY_INVALID] is ApiKeyErrorCode.API_KEY_INVALID
+
+
+def test_error_code_members_carry_emission_site_docstrings() -> None:
+    """Documented code members link notable codes back to their emission sites."""
+    assert "InvalidPasswordError" in (ErrorCode.LOGIN_BAD_CREDENTIALS.__doc__ or "")
+    assert "non-enumerating lookups" in (ApiKeyErrorCode.API_KEY_INVALID.__doc__ or "")
+
+
+def test_api_key_exceptions_use_api_key_domain_codes_by_default() -> None:
+    """API-key domain exceptions no longer inherit the generic authorization-denied code."""
+    scope_error = ApiKeyScopeDeniedError(denied_scopes=frozenset({"admin"}))
+    limit_error = ApiKeyLimitReachedError(max_keys_per_user=1)
+
+    assert ApiKeyError().code == ApiKeyErrorCode.API_KEY_INVALID
+    assert ApiKeyNotFoundError().code == ApiKeyErrorCode.API_KEY_INVALID
+    assert scope_error.code == ApiKeyErrorCode.API_KEY_SCOPE_DENIED
+    assert scope_error.denied_scopes == frozenset({"admin"})
+    assert limit_error.code == ApiKeyErrorCode.API_KEY_LIMIT_REACHED
+    assert limit_error.max_keys_per_user == 1
 
 
 def test_register_failed_error_code_is_available_for_register_response_collapse() -> None:

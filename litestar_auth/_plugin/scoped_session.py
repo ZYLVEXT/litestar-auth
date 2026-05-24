@@ -4,12 +4,12 @@ from __future__ import annotations
 
 from typing import Any, Protocol, cast
 
+from advanced_alchemy.extensions.litestar.plugins.init.config.common import SESSION_SCOPE_KEY
 from litestar.datastructures.state import State  # noqa: TC002
 from litestar.types import Scope  # noqa: TC002
 from sqlalchemy.ext.asyncio import AsyncSession  # noqa: TC002
 
 _AA_SCOPE_NAMESPACE: str = "_aa_connection_state"
-SESSION_SCOPE_KEY: str = "_sqlalchemy_db_session"
 
 
 class SessionFactory(Protocol):
@@ -30,6 +30,8 @@ def get_or_create_scoped_session(
     state: State,
     scope: Scope,
     session_maker: SessionFactory,
+    *,
+    session_scope_key: str = SESSION_SCOPE_KEY,
 ) -> AsyncSession:
     """Return the request-scoped session, matching Advanced Alchemy ``provide_session`` semantics.
 
@@ -44,14 +46,16 @@ def get_or_create_scoped_session(
             factory is supplied via closure).
         scope: ASGI connection scope.
         session_maker: Callable request-session factory returning an AsyncSession-compatible object.
+        session_scope_key: Advanced Alchemy scope key for the request session. Must match
+            ``SQLAlchemyAsyncConfig.session_scope_key`` when coexisting with ``SQLAlchemyPlugin``.
 
     Returns:
         The shared ``AsyncSession`` for this request.
     """
     del state
     namespace = _get_aa_namespace(scope)
-    session: AsyncSession | None = namespace.get(SESSION_SCOPE_KEY)
+    session: AsyncSession | None = namespace.get(session_scope_key)
     if session is None:
         session = session_maker()
-        namespace[SESSION_SCOPE_KEY] = session
+        namespace[session_scope_key] = session
     return session

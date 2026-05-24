@@ -31,6 +31,38 @@ class AccountStateErrorTypes:
     unverified_error: type[BaseException]
 
 
+@dataclass(frozen=True, slots=True)
+class AccountStatePolicy:
+    """Cohesive account-state policy for domain and client-facing validation."""
+
+    inactive_error: type[BaseException]
+    unverified_error: type[BaseException]
+    user_manager: object | None = None
+
+    def require(self, user: object, *, require_verified: bool) -> None:
+        """Validate account state and raise the configured domain exceptions."""
+        failure = resolve_account_state_failure(
+            user,
+            require_verified=require_verified,
+            user_manager=self.user_manager,
+        )
+        if failure is not None:
+            raise_account_state_failure(
+                failure,
+                inactive_error=self.inactive_error,
+                unverified_error=self.unverified_error,
+            )
+
+    def require_for_client(self, user: object, *, require_verified: bool) -> None:
+        """Validate account state and translate domain failures to ``ClientException``."""
+        try:
+            self.require(user, require_verified=require_verified)
+        except self.inactive_error as exc:
+            raise_account_state_client_exception("inactive", cause=exc)
+        except self.unverified_error as exc:
+            raise_account_state_client_exception("unverified", cause=exc)
+
+
 class AccountStateValidator(Protocol):
     """Callable account-state validator contract used across auth flows."""
 
@@ -100,17 +132,11 @@ def require_account_state(
     error_types: AccountStateErrorTypes,
 ) -> None:
     """Enforce account-state policy via manager validator or guarded-user attributes."""
-    failure = resolve_account_state_failure(
-        user,
-        require_verified=require_verified,
+    AccountStatePolicy(
+        inactive_error=error_types.inactive_error,
+        unverified_error=error_types.unverified_error,
         user_manager=user_manager,
-    )
-    if failure is not None:
-        raise_account_state_failure(
-            failure,
-            inactive_error=error_types.inactive_error,
-            unverified_error=error_types.unverified_error,
-        )
+    ).require(user, require_verified=require_verified)
 
 
 def resolve_account_state_client_error(
@@ -154,17 +180,11 @@ def require_account_state_with_client_error(
     error_types: AccountStateErrorTypes,
 ) -> None:
     """Enforce account-state policy and translate domain failures to ``ClientException``."""
-    try:
-        require_account_state(
-            user,
-            require_verified=require_verified,
-            user_manager=user_manager,
-            error_types=error_types,
-        )
-    except error_types.inactive_error as exc:
-        raise_account_state_client_exception("inactive", cause=exc)
-    except error_types.unverified_error as exc:
-        raise_account_state_client_exception("unverified", cause=exc)
+    AccountStatePolicy(
+        inactive_error=error_types.inactive_error,
+        unverified_error=error_types.unverified_error,
+        user_manager=user_manager,
+    ).require_for_client(user, require_verified=require_verified)
 
 
 def raise_account_state_failure(

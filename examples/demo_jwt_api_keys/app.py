@@ -264,8 +264,10 @@ def create_app() -> Litestar:
         configure_mappers()
         async with engine.begin() as connection:
             await connection.run_sync(User.metadata.create_all)
-        yield
-        await engine.dispose()
+        try:
+            yield
+        finally:
+            await engine.dispose()
 
     return Litestar(
         route_handlers=[health, demo_jwt_profile, demo_api_key_scope_read],

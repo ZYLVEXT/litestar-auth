@@ -39,6 +39,17 @@ If you previously hand-assembled `AuthenticationBackend(..., transport=BearerTra
 
 When you use `database_token_auth=...`, `config.backends` stays empty by design. `config.resolve_startup_backends()` returns startup-only `StartupBackendTemplate` values for plugin assembly and validation, while `config.resolve_backends(session)` returns the request-scoped runtime `AuthenticationBackend` instances bound to the active `AsyncSession` for every supported backend configuration.
 
+### Default precedence
+
+Feature defaults are resolved once from the config snapshot used for plugin startup:
+
+- Explicit values on `DatabaseTokenAuthConfig`, `ApiKeyConfig`, `TotpConfig`, and `OAuthConfig` win.
+- Omitted feature objects keep that feature disabled, except `LitestarAuthConfig.api_keys`, whose default object is disabled with `enabled=False`.
+- Omitted `user_db_factory` falls back to the lazy SQLAlchemy store factory at request binding time.
+- Omitted `TotpConfig.totp_backend_name` selects the primary startup backend.
+
+`None` is meaningful only where documented, such as `ApiKeyConfig.default_ttl=None` for non-expiring keys. Other omitted fallback targets are normalized internally before startup wiring so defaults stay coherent across route, backend, and manager assembly.
+
 ### Backend lifecycle contract
 
 Treat the two backend helpers as distinct surfaces:
@@ -142,7 +153,7 @@ key policies, but production startup emits `SecurityWarning` unless `unsafe_test
 Request-scoped `BaseUserManager` instances receive the API-key store and config when
 `api_keys.enabled=True`. Use the manager surface to issue and maintain keys:
 
-- `create_api_key(user, name=..., scopes=..., current_password=...)` returns a `CreatedApiKey`
+- `create_api_key(user, name=..., scopes=..., current_password=...)` returns an `ApiKeyCreateResult`
   whose `secret.get_secret_value()` is the only place the raw `ak_<env>_<key_id>.<secret>` value is
   exposed. The persisted row stores only the HMAC digest for bearer keys. Signing-required keys also
   store the raw signing secret encrypted as `fernet:v1:<keyring-key-id>:<ciphertext>`.

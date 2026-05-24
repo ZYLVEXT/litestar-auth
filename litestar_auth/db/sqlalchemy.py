@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, Protocol, Self, cast, override
+from dataclasses import dataclass
+from typing import TYPE_CHECKING, Any, ClassVar, Protocol, Self, TypedDict, Unpack, cast, override
 from uuid import UUID
 
 from advanced_alchemy.base import ModelProtocol
@@ -31,6 +32,7 @@ if TYPE_CHECKING:
 
     from advanced_alchemy.repository import SQLAlchemyAsyncRepository
     from sqlalchemy.ext.asyncio import AsyncSession, async_scoped_session
+    from sqlalchemy.orm import InstrumentedAttribute
     from sqlalchemy.sql import Select
 
     from litestar_auth.types import LoginIdentifier
@@ -74,6 +76,153 @@ class _OAuthAccountRow(ModelProtocol, Protocol):
     access_token: str
     expires_at: int | None
     refresh_token: str | None
+
+
+class _UserColumnsProtocol(Protocol):
+    """SQLAlchemy class-level user columns consumed by query builders."""
+
+    id: ClassVar[InstrumentedAttribute[UUID]]
+
+
+class _OAuthAccountColumnsProtocol(Protocol):
+    """SQLAlchemy class-level OAuth account columns consumed by query builders."""
+
+    user_id: ClassVar[InstrumentedAttribute[UUID]]
+    oauth_name: ClassVar[InstrumentedAttribute[str]]
+    account_id: ClassVar[InstrumentedAttribute[str]]
+
+
+class _OAuthAccountRowCreateKwargs(TypedDict):
+    """Keyword payload used to construct an OAuth account ORM row."""
+
+    user_id: UUID
+    oauth_name: str
+    account_id: str
+    account_email: str
+    access_token: str
+    expires_at: int | None
+    refresh_token: str | None
+
+
+class _OAuthAccountRowFactory(Protocol):
+    """Constructor shape used by the OAuth account SQLAlchemy model."""
+
+    def __call__(self, **kwargs: Unpack[_OAuthAccountRowCreateKwargs]) -> _OAuthAccountRow:
+        """Return a new OAuth account ORM row."""
+
+
+class _RecoveryCodeUser(Protocol):
+    """User row shape needed by atomic recovery-code consumption."""
+
+    recovery_codes: dict[str, str] | None
+
+
+class _RowcountResult(Protocol):
+    """Result shape for SQLAlchemy DML statements that report affected rows."""
+
+    rowcount: int
+
+
+@dataclass(frozen=True, slots=True)
+class _RecoveryCodeConsumeRequest[UP: SQLAlchemyUserModelProtocol]:
+    """Data required by recovery-code consume strategies."""
+
+    session: AsyncSessionT
+    user_model: UserModelT[UP]
+    user: UP
+    lookup_hex: str
+    repository: SQLAlchemyAsyncRepository[UP]
+    user_load: Any
+
+
+class _RecoveryCodeConsumeStrategy[UP: SQLAlchemyUserModelProtocol](Protocol):
+    """Dialect-specific recovery-code consumption strategy."""
+
+    async def consume(self, request: _RecoveryCodeConsumeRequest[UP]) -> bool:
+        """Consume the recovery code identified by ``lookup_hex``."""
+
+
+class _SqliteJsonRemoveStrategy:
+    """Consume recovery codes atomically with SQLite JSON column functions."""
+
+    @staticmethod
+    async def consume[UP: SQLAlchemyUserModelProtocol](
+        request: _RecoveryCodeConsumeRequest[UP],
+    ) -> bool:
+        """Consume a recovery-code lookup entry using SQLite's atomic JSON update.
+
+        Returns:
+            ``True`` when a lookup entry was removed; otherwise ``False``.
+        """
+        mapper = inspect(request.user_model)
+        primary_key_column = mapper.primary_key[0]
+        recovery_codes_column = mapper.columns["recovery_codes"]
+        lookup_path = f'$."{request.lookup_hex}"'
+        updated_recovery_codes = func.nullif(func.json_remove(recovery_codes_column, lookup_path), "{}")
+        result = await request.session.execute(
+            update(request.user_model)
+            .where(primary_key_column == request.user.id)
+            .where(func.json_type(recovery_codes_column, lookup_path).is_not(None))
+            .values(recovery_codes=updated_recovery_codes)
+            .execution_options(synchronize_session=False),
+        )
+        if cast("_RowcountResult", result).rowcount != 1:
+            return False
+
+        await request.session.flush()
+        refresh_result = await request.session.execute(
+            select(request.user_model)
+            .where(primary_key_column == request.user.id)
+            .execution_options(populate_existing=True),
+        )
+        refresh_result.scalar_one_or_none()
+        return True
+
+
+class _SelectForUpdateStrategy:
+    """Consume recovery codes with an explicit row lock for non-SQLite dialects."""
+
+    @staticmethod
+    async def consume[UP: SQLAlchemyUserModelProtocol](
+        request: _RecoveryCodeConsumeRequest[UP],
+    ) -> bool:
+        """Consume a recovery-code lookup entry after locking the user row.
+
+        Returns:
+            ``True`` when a lookup entry was removed; otherwise ``False``.
+        """
+        primary_key_column = inspect(request.user_model).primary_key[0]
+        result = await request.session.execute(
+            select(request.user_model).where(primary_key_column == request.user.id).with_for_update(),
+        )
+        persistent_user = result.scalar_one_or_none()
+        if persistent_user is None:
+            return False
+
+        recovery_code_user = cast("_RecoveryCodeUser", persistent_user)
+        active_index = dict(recovery_code_user.recovery_codes or {})
+        if request.lookup_hex not in active_index:
+            return False
+
+        active_index.pop(request.lookup_hex)
+        recovery_code_user.recovery_codes = active_index or None
+        await request.repository.update(
+            persistent_user,
+            auto_refresh=True,
+            load=request.user_load or None,
+        )
+        return True
+
+
+_SQLITE_JSON_REMOVE_RECOVERY_CODE_STRATEGY = _SqliteJsonRemoveStrategy()
+_SELECT_FOR_UPDATE_RECOVERY_CODE_STRATEGY = _SelectForUpdateStrategy()
+
+
+def _recovery_code_consume_strategy_for_dialect(dialect_name: str) -> _RecoveryCodeConsumeStrategy[Any]:
+    """Return the recovery-code consume strategy for a SQL dialect name."""
+    if dialect_name == "sqlite":
+        return _SQLITE_JSON_REMOVE_RECOVERY_CODE_STRATEGY
+    return _SELECT_FOR_UPDATE_RECOVERY_CODE_STRATEGY
 
 
 class SQLAlchemyUserDatabase[UP: SQLAlchemyUserModelProtocol](BaseUserStore[UP, UUID]):
@@ -176,6 +325,15 @@ class SQLAlchemyUserDatabase[UP: SQLAlchemyUserModelProtocol](BaseUserStore[UP, 
             raise TypeError(msg)
         return self.oauth_account_model
 
+    def _user_columns(self) -> type[_UserColumnsProtocol]:
+        """Return the user model as the typed SQLAlchemy column surface."""
+        return cast("type[_UserColumnsProtocol]", self.user_model)
+
+    @staticmethod
+    def _oauth_columns(oauth_model: type[Any]) -> type[_OAuthAccountColumnsProtocol]:
+        """Return an OAuth account model as the typed SQLAlchemy column surface."""
+        return cast("type[_OAuthAccountColumnsProtocol]", oauth_model)
+
     def _repository(
         self,
         *,
@@ -219,19 +377,18 @@ class SQLAlchemyUserDatabase[UP: SQLAlchemyUserModelProtocol](BaseUserStore[UP, 
         if field_name not in self._ALLOWED_LOOKUP_FIELDS:
             msg = f"Lookup by {field_name!r} is not permitted; allowed: {sorted(self._ALLOWED_LOOKUP_FIELDS)}"
             raise ValueError(msg)
-        return await cast(
-            "Any",
-            self._repository().get_one_or_none,
-        )(**{field_name: value}, load=self._user_load or None)
+        if field_name == "email":
+            return await self._repository().get_one_or_none(email=value, load=self._user_load or None)
+        return await self._repository().get_one_or_none(username=value, load=self._user_load or None)
 
     async def get_by_oauth_account(self, oauth_name: str, account_id: str) -> UP | None:
         """Return a user linked to the given OAuth account, if present."""
         oa = self._require_oauth_account_model()
-        oauth_model = cast("Any", oa)
-        statement = select(self.user_model).join(oa, oauth_model.user_id == self.user_model.id)
+        oauth_columns = self._oauth_columns(oa)
+        statement = select(self.user_model).join(oa, oauth_columns.user_id == self._user_columns().id)
         return await self._repository(statement=statement).get_one_or_none(
-            oauth_model.oauth_name == oauth_name,
-            oauth_model.account_id == account_id,
+            oauth_columns.oauth_name == oauth_name,
+            oauth_columns.account_id == account_id,
             load=self._user_load or None,
         )
 
@@ -280,10 +437,10 @@ class SQLAlchemyUserDatabase[UP: SQLAlchemyUserModelProtocol](BaseUserStore[UP, 
         account_id: str,
     ) -> _OAuthAccountRow | None:
         """Return an OAuth account row by provider identity when it exists."""
-        oauth_model = cast("Any", repository.model_type)
+        oauth_columns = SQLAlchemyUserDatabase._oauth_columns(repository.model_type)
         return await repository.get_one_or_none(
-            oauth_model.oauth_name == oauth_name,
-            oauth_model.account_id == account_id,
+            oauth_columns.oauth_name == oauth_name,
+            oauth_columns.account_id == account_id,
         )
 
     @staticmethod
@@ -294,7 +451,7 @@ class SQLAlchemyUserDatabase[UP: SQLAlchemyUserModelProtocol](BaseUserStore[UP, 
         account: OAuthAccountData,
     ) -> None:
         """Persist a new OAuth account row linked to ``user``."""
-        oauth_account = oa_model(
+        oauth_account = cast("_OAuthAccountRowFactory", oa_model)(
             user_id=user.id,
             oauth_name=account.oauth_name,
             account_id=account.account_id,
@@ -345,7 +502,7 @@ class SQLAlchemyUserDatabase[UP: SQLAlchemyUserModelProtocol](BaseUserStore[UP, 
     @override
     async def list_users(self, *, offset: int, limit: int) -> tuple[list[UP], int]:
         """Return paginated users and the total available count."""
-        return await self._repository().list_and_count(
+        return await self._repository().get_many_and_count(
             LimitOffset(limit=limit, offset=offset),
             order_by=("email", True),
             load=self._user_load or None,
@@ -411,47 +568,19 @@ class SQLAlchemyUserDatabase[UP: SQLAlchemyUserModelProtocol](BaseUserStore[UP, 
             ``True`` when the code was active and is now consumed; ``False`` when
             it was already consumed or never existed.
         """
-        primary_key_column = inspect(self.user_model).primary_key[0]
-        if self.session.get_bind().dialect.name == "sqlite":
-            recovery_codes_column = inspect(self.user_model).columns["recovery_codes"]
-            lookup_path = f'$."{lookup_hex}"'
-            updated_recovery_codes = func.nullif(func.json_remove(recovery_codes_column, lookup_path), "{}")
-            result = await self.session.execute(
-                update(self.user_model)
-                .where(primary_key_column == user.id)
-                .where(func.json_type(recovery_codes_column, lookup_path).is_not(None))
-                .values(recovery_codes=updated_recovery_codes)
-                .execution_options(synchronize_session=False),
-            )
-            if cast("Any", result).rowcount != 1:
-                return False
-
-            await self.session.flush()
-            refresh_result = await self.session.execute(
-                select(self.user_model).where(primary_key_column == user.id).execution_options(populate_existing=True),
-            )
-            cast("Any", refresh_result).scalar_one_or_none()
-            return True
-
-        result = await self.session.execute(
-            select(self.user_model).where(primary_key_column == user.id).with_for_update(),
+        strategy = cast(
+            "_RecoveryCodeConsumeStrategy[UP]",
+            _recovery_code_consume_strategy_for_dialect(self.session.get_bind().dialect.name),
         )
-        persistent_user = cast("Any", result).scalar_one_or_none()
-        if persistent_user is None:
-            return False
-
-        active_index = dict(getattr(persistent_user, "recovery_codes", None) or {})
-        if lookup_hex not in active_index:
-            return False
-
-        active_index.pop(lookup_hex)
-        persistent_user.recovery_codes = active_index or None
-        await self._repository().update(
-            persistent_user,
-            auto_refresh=True,
-            load=self._user_load or None,
+        request = _RecoveryCodeConsumeRequest(
+            session=self.session,
+            user_model=self.user_model,
+            user=user,
+            lookup_hex=lookup_hex,
+            repository=self._repository(),
+            user_load=self._user_load,
         )
-        return True
+        return await strategy.consume(request)
 
     @override
     async def delete(self, user_id: UUID) -> None:

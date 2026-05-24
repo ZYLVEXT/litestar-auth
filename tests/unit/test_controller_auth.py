@@ -25,6 +25,7 @@ from litestar_auth.guards import is_authenticated
 from litestar_auth.ratelimit import AuthRateLimitConfig, EndpointRateLimit
 
 AuthControllerConfig = auth_controller_module.AuthControllerConfig
+DEFAULT_LOGIN_MINIMUM_RESPONSE_SECONDS = auth_controller_module.DEFAULT_LOGIN_MINIMUM_RESPONSE_SECONDS
 LoginCredentials = auth_controller_module.LoginCredentials
 _attach_refresh_token = auth_controller_module._attach_refresh_token
 _AuthControllerSettings = auth_controller_module._AuthControllerSettings
@@ -321,6 +322,45 @@ def test_create_auth_controller_accepts_config_object() -> None:
 
     assert controller_class.path == "/session"
     assert controller_class.__name__ == "BearerAuthController"
+
+
+def test_auth_controller_context_validates_login_minimum_response_seconds() -> None:
+    """Auth controller settings expose the configurable login timing floor."""
+    backend = AuthenticationBackend(
+        name="bearer",
+        transport=BearerTransport(),
+        strategy=cast("Any", _make_minimal_strategy()),
+    )
+    ctx = _make_auth_controller_context(
+        _AuthControllerSettings(
+            backend=backend,
+            rate_limit_config=None,
+            enable_refresh=False,
+            requires_verification=False,
+            login_identifier="email",
+            totp_pending_secret=None,
+            totp_pending_lifetime=timedelta(minutes=5),
+            login_minimum_response_seconds=0.123,
+        ),
+    )
+
+    assert ctx.login_minimum_response_seconds == pytest.approx(0.123)
+    assert AuthControllerConfig(backend=backend).login_minimum_response_seconds == pytest.approx(
+        DEFAULT_LOGIN_MINIMUM_RESPONSE_SECONDS,
+    )
+    with pytest.raises(ValueError, match="login_minimum_response_seconds must be non-negative"):
+        _make_auth_controller_context(
+            _AuthControllerSettings(
+                backend=backend,
+                rate_limit_config=None,
+                enable_refresh=False,
+                requires_verification=False,
+                login_identifier="email",
+                totp_pending_secret=None,
+                totp_pending_lifetime=timedelta(minutes=5),
+                login_minimum_response_seconds=-0.001,
+            ),
+        )
 
 
 def test_create_auth_controller_rejects_config_combined_with_keyword_options() -> None:

@@ -12,20 +12,13 @@ rotation.
 from __future__ import annotations
 
 import uuid  # noqa: TC003
-from typing import Annotated
 
 import msgspec
 
 import litestar_auth._schema_fields as schema_fields
 
-type UserEmailField = Annotated[
-    str,
-    schema_fields.EMAIL_FIELD_META,
-]
-type UserPasswordField = Annotated[
-    str,
-    schema_fields.USER_PASSWORD_FIELD_META,
-]
+type UserEmailField = schema_fields.EmailField
+type UserPasswordField = schema_fields.UserPasswordField
 
 
 class UserRead(msgspec.Struct):
@@ -70,8 +63,10 @@ class AdminUserUpdate(msgspec.Struct, omit_defaults=True, forbid_unknown_fields=
     """Privileged admin update payload.
 
     Admin writes may include ``password`` for operator-initiated credential
-    rotation. This schema is used for ``PATCH /users/{user_id}``, not for
-    self-service ``PATCH /users/me`` requests.
+    rotation. ``current_password`` and ``totp_code`` are step-up proof for the
+    authenticated admin and are not forwarded to persistence. This schema is
+    used for ``PATCH /users/{user_id}``, not for self-service ``PATCH
+    /users/me`` requests.
     """
 
     password: UserPasswordField | None = None
@@ -79,6 +74,8 @@ class AdminUserUpdate(msgspec.Struct, omit_defaults=True, forbid_unknown_fields=
     is_active: bool | None = None
     is_verified: bool | None = None
     roles: list[str] | None = None
+    current_password: UserPasswordField | None = None
+    totp_code: schema_fields.TotpCodeField | None = None
 
 
 class ChangePasswordRequest(msgspec.Struct, forbid_unknown_fields=True):

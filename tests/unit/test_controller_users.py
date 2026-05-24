@@ -15,8 +15,14 @@ from litestar.status_codes import HTTP_400_BAD_REQUEST
 
 import litestar_auth._account_state as account_state_module
 import litestar_auth.controllers.users as users_module
-from litestar_auth.controllers._auth_helpers import TotpStepUpCheck, require_totp_stepup
+from litestar_auth.controllers._step_up import (
+    PasswordStepUpCheck,
+    TotpStepUpCheck,
+    require_password_step_up,
+    require_totp_stepup,
+)
 from litestar_auth.controllers._users_helpers import (
+    AdminUserDeleteStepUpRequest,
     _build_change_password_rate_limit_key,
     _reject_blocked_self_update_fields,
     _self_update_includes_email,
@@ -36,11 +42,13 @@ _users_handle_change_password = users_module._users_handle_change_password
 _users_handle_delete_user = users_module._users_handle_delete_user
 _users_handle_get_me = users_module._users_handle_get_me
 _users_handle_update_me = users_module._users_handle_update_me
+_users_handle_update_user = users_module._users_handle_update_user
 _UsersControllerContext = users_module._UsersControllerContext
 create_users_controller = users_module.create_users_controller
 
 pytestmark = pytest.mark.unit
 HTTP_FORBIDDEN = 403
+HTTP_UNAUTHORIZED = 401
 _UNSET_AUTHENTICATED_USER = object()
 type RequestHandlerStub = Callable[[object], Awaitable[None]]
 
@@ -490,6 +498,54 @@ async def test_require_totp_stepup_accepts_recent_session_marker() -> None:
     )
 
 
+async def test_require_password_step_up_calls_failure_callback_for_wrong_password() -> None:
+    """Current-password step-up failures share the same callback and error contract."""
+    user = DummyUser(id=uuid4(), email="user@example.com")
+    manager = RecordingUserManager(user_to_get=user, authenticated_user=None)
+    on_failure = AsyncMock()
+    on_success = AsyncMock()
+
+    with pytest.raises(ClientException) as exc_info:
+        await require_password_step_up(
+            PasswordStepUpCheck(
+                user=user,
+                user_manager=manager,
+                current_password="wrong-password",
+                on_failure=on_failure,
+                on_success=on_success,
+            ),
+        )
+
+    assert exc_info.value.status_code == HTTP_400_BAD_REQUEST
+    assert exc_info.value.detail == INVALID_CREDENTIALS_DETAIL
+    assert exc_info.value.extra == {"code": ErrorCode.LOGIN_BAD_CREDENTIALS}
+    assert manager.authenticate_calls == [(user.email, "wrong-password", "email")]
+    on_failure.assert_awaited_once()
+    on_success.assert_not_awaited()
+
+
+async def test_require_password_step_up_calls_success_callback_for_matching_user() -> None:
+    """Current-password step-up success can reset the endpoint rate-limit bucket."""
+    user = DummyUser(id=uuid4(), email="user@example.com")
+    manager = RecordingUserManager(user_to_get=user)
+    on_failure = AsyncMock()
+    on_success = AsyncMock()
+
+    await require_password_step_up(
+        PasswordStepUpCheck(
+            user=user,
+            user_manager=manager,
+            current_password="current-password",
+            on_failure=on_failure,
+            on_success=on_success,
+        ),
+    )
+
+    assert manager.authenticate_calls == [(user.email, "current-password", "email")]
+    on_failure.assert_not_awaited()
+    on_success.assert_awaited_once()
+
+
 async def test_users_handle_update_me_requires_current_password_for_email_change() -> None:
     """Email changes require current-password re-authentication before persistence."""
     user = DummyUser(id=uuid4(), email="user@example.com", is_verified=True, roles=["member"])
@@ -748,6 +804,7 @@ async def test_users_handle_delete_user_rejects_superuser_self_delete() -> None:
         await _users_handle_delete_user(
             str(user.id),
             cast("Any", DummyRequest(user=user)),
+            AdminUserDeleteStepUpRequest(current_password="current-password"),
             ctx=build_context(),
             user_manager=cast("Any", manager),
         )
@@ -757,14 +814,131 @@ async def test_users_handle_delete_user_rejects_superuser_self_delete() -> None:
     assert exc_info.value.extra == {"code": ErrorCode.SUPERUSER_CANNOT_DELETE_SELF}
 
 
-async def test_users_handle_delete_user_soft_deletes_by_disabling_user() -> None:
-    """Soft-delete mode updates the user instead of calling hard delete."""
+async def test_users_handle_update_user_requires_admin_current_password_and_strips_step_up_fields() -> None:
+    """Admin updates authenticate the admin and never forward step-up credentials to persistence."""
+    user = DummyUser(id=uuid4(), email="user@example.com", is_verified=True, roles=["member"])
+    admin_user = DummyUser(id=uuid4(), email="admin@example.com", is_verified=True, roles=["superuser"])
+    manager = RecordingUserManager(user_to_get=user, authenticated_user=admin_user)
+    ctx = build_context()
+    ctx.totp_stepup_policy = {"users.update": "off"}
+
+    result = await _users_handle_update_user(
+        str(user.id),
+        cast("Any", DummyRequest(user=admin_user)),
+        AdminUserUpdate(
+            email="updated@example.com",
+            roles=["admin"],
+            current_password="admin-password",
+            totp_code="123456",
+        ),
+        ctx=ctx,
+        user_manager=cast("Any", manager),
+    )
+
+    assert result == UserRead(
+        id=user.id,
+        email="updated@example.com",
+        is_active=True,
+        is_verified=True,
+        roles=["admin"],
+    )
+    assert manager.require_account_state_calls == [(admin_user, False)]
+    assert manager.authenticate_calls == [(admin_user.email, "admin-password", "email")]
+    assert manager.update_calls == [({"email": "updated@example.com", "roles": ["admin"]}, user, True)]
+
+
+async def test_users_handle_update_user_rejects_wrong_admin_current_password() -> None:
+    """Wrong admin passwords block privileged target-user updates before persistence."""
+    user = DummyUser(id=uuid4(), email="user@example.com", is_verified=True, roles=["member"])
+    admin_user = DummyUser(id=uuid4(), email="admin@example.com", is_verified=True, roles=["superuser"])
+    manager = RecordingUserManager(user_to_get=user, authenticated_user=None)
+
+    with pytest.raises(ClientException) as exc_info:
+        await _users_handle_update_user(
+            str(user.id),
+            cast("Any", DummyRequest(user=admin_user)),
+            AdminUserUpdate(email="updated@example.com", current_password="wrong-password"),
+            ctx=build_context(),
+            user_manager=cast("Any", manager),
+        )
+
+    assert exc_info.value.status_code == HTTP_400_BAD_REQUEST
+    assert exc_info.value.detail == INVALID_CREDENTIALS_DETAIL
+    assert exc_info.value.extra == {"code": ErrorCode.LOGIN_BAD_CREDENTIALS}
+    assert manager.authenticate_calls == [(admin_user.email, "wrong-password", "email")]
+    assert manager.update_calls == []
+
+
+async def test_users_handle_update_user_rejects_missing_authenticated_admin() -> None:
+    """The admin update helper fails closed if called without an authenticated request user."""
     user = DummyUser(id=uuid4(), email="user@example.com", is_verified=True, roles=["member"])
     manager = RecordingUserManager(user_to_get=user)
 
+    with pytest.raises(ClientException) as exc_info:
+        await _users_handle_update_user(
+            str(user.id),
+            cast("Any", DummyRequest(user=None)),
+            AdminUserUpdate(email="updated@example.com", current_password="admin-password"),
+            ctx=build_context(),
+            user_manager=cast("Any", manager),
+        )
+
+    assert exc_info.value.status_code == HTTP_UNAUTHORIZED
+    assert exc_info.value.detail == "Authentication credentials were not provided."
+    assert manager.update_calls == []
+
+
+async def test_users_handle_update_user_rejects_non_mapping_update_payload(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Admin update payload extraction defends against unexpected msgspec conversion output."""
+    user = DummyUser(id=uuid4(), email="user@example.com", is_verified=True, roles=["member"])
+    admin_user = DummyUser(id=uuid4(), email="admin@example.com", is_verified=True, roles=["superuser"])
+    manager = RecordingUserManager(user_to_get=user, authenticated_user=admin_user)
+    monkeypatch.setattr("litestar_auth.controllers._users_handlers.msgspec.to_builtins", lambda _value: ["bad"])
+
+    with pytest.raises(TypeError, match="Expected a mapping from msgspec\\.to_builtins\\."):
+        await _users_handle_update_user(
+            str(user.id),
+            cast("Any", DummyRequest(user=admin_user)),
+            AdminUserUpdate(email="updated@example.com", current_password="admin-password"),
+            ctx=build_context(),
+            user_manager=cast("Any", manager),
+        )
+
+    assert manager.update_calls == []
+
+
+async def test_users_handle_delete_user_rejects_missing_authenticated_admin() -> None:
+    """The admin delete helper fails closed if called without an authenticated request user."""
+    user = DummyUser(id=uuid4(), email="user@example.com", is_verified=True, roles=["member"])
+    manager = RecordingUserManager(user_to_get=user)
+
+    with pytest.raises(ClientException) as exc_info:
+        await _users_handle_delete_user(
+            str(user.id),
+            cast("Any", DummyRequest(user=None)),
+            AdminUserDeleteStepUpRequest(current_password="admin-password"),
+            ctx=build_context(),
+            user_manager=cast("Any", manager),
+        )
+
+    assert exc_info.value.status_code == HTTP_UNAUTHORIZED
+    assert exc_info.value.detail == "Authentication credentials were not provided."
+    assert manager.update_calls == []
+    assert manager.delete_calls == []
+
+
+async def test_users_handle_delete_user_soft_deletes_by_disabling_user() -> None:
+    """Soft-delete mode updates the user instead of calling hard delete."""
+    user = DummyUser(id=uuid4(), email="user@example.com", is_verified=True, roles=["member"])
+    admin_user = DummyUser(id=uuid4(), email="admin@example.com", is_verified=True, roles=["superuser"])
+    manager = RecordingUserManager(user_to_get=user, authenticated_user=admin_user)
+
     result = await _users_handle_delete_user(
         str(user.id),
-        cast("Any", DummyRequest(user=None)),
+        cast("Any", DummyRequest(user=admin_user)),
+        AdminUserDeleteStepUpRequest(current_password="admin-password"),
         ctx=build_context(),
         user_manager=cast("Any", manager),
     )
@@ -786,16 +960,19 @@ async def test_users_handle_delete_user_soft_deletes_by_disabling_user() -> None
     assert payload.is_active is False
     assert updated_user is user
     assert allow_privileged is True
+    assert manager.authenticate_calls == [(admin_user.email, "admin-password", "email")]
 
 
 async def test_users_handle_delete_user_hard_deletes_when_enabled() -> None:
     """Hard-delete mode calls the manager delete hook and returns the original user schema."""
     user = DummyUser(id=uuid4(), email="user@example.com", is_verified=True, roles=["member"])
-    manager = RecordingUserManager(user_to_get=user)
+    admin_user = DummyUser(id=uuid4(), email="admin@example.com", is_verified=True, roles=["superuser"])
+    manager = RecordingUserManager(user_to_get=user, authenticated_user=admin_user)
 
     result = await _users_handle_delete_user(
         str(user.id),
-        cast("Any", DummyRequest(user=None)),
+        cast("Any", DummyRequest(user=admin_user)),
+        AdminUserDeleteStepUpRequest(current_password="admin-password"),
         ctx=build_context(hard_delete=True),
         user_manager=cast("Any", manager),
     )
@@ -809,6 +986,7 @@ async def test_users_handle_delete_user_hard_deletes_when_enabled() -> None:
     )
     assert manager.delete_calls == [user.id]
     assert manager.update_calls == []
+    assert manager.authenticate_calls == [(admin_user.email, "admin-password", "email")]
 
 
 def test_build_safe_self_update_preserves_custom_safe_fields() -> None:

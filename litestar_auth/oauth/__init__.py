@@ -18,7 +18,7 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from collections.abc import Callable
 
-    from litestar_auth.oauth.client_adapter import (
+    from litestar_auth.oauth._client import (
         OAuthEmailVerificationAsyncClientProtocol,
         OAuthEmailVerificationSyncClientProtocol,
         make_async_email_verification_client,
@@ -58,13 +58,13 @@ def __getattr__(name: str) -> Callable[..., object]:
         router = import_module("litestar_auth.oauth.router")
         return router.load_httpx_oauth_client
     if name == "OAuthEmailVerificationAsyncClientProtocol":
-        client_adapter = import_module("litestar_auth.oauth.client_adapter")
+        client_adapter = import_module("litestar_auth.oauth._client")
         return client_adapter.OAuthEmailVerificationAsyncClientProtocol
     if name == "OAuthEmailVerificationSyncClientProtocol":
-        client_adapter = import_module("litestar_auth.oauth.client_adapter")
+        client_adapter = import_module("litestar_auth.oauth._client")
         return client_adapter.OAuthEmailVerificationSyncClientProtocol
     if name == "make_async_email_verification_client":
-        client_adapter = import_module("litestar_auth.oauth.client_adapter")
+        client_adapter = import_module("litestar_auth.oauth._client")
         return client_adapter.make_async_email_verification_client
     msg = f"module {__name__!r} has no attribute {name!r}"
     raise AttributeError(msg)

@@ -3,29 +3,20 @@
 from __future__ import annotations
 
 import time
+from functools import partial
 from typing import TYPE_CHECKING
 from uuid import uuid4
 
 from litestar_auth._clock import Clock, read_clock
+from litestar_auth._optional_deps import _require_redis_asyncio
 
-from . import _helpers as helpers_module
-from ._helpers import DEFAULT_KEY_PREFIX, RedisScriptResult, _validate_configuration
+from ._key_derivation import DEFAULT_KEY_PREFIX
+from ._validation import RedisScriptResult, _validate_configuration
 
 if TYPE_CHECKING:
     from ._protocol import RedisClientProtocol
 
-
-def _load_package_redis_asyncio() -> object:
-    """Resolve the private shared Redis loader at runtime.
-
-    Looking up the helper module attribute at call time keeps monkeypatches on
-    ``litestar_auth.ratelimit._helpers._load_redis_asyncio`` visible to the
-    backend without re-exporting that private helper from the public package.
-
-    Returns:
-        The object returned by the private helper Redis loader.
-    """
-    return helpers_module._load_redis_asyncio()  # noqa: SLF001
+_load_redis_asyncio = partial(_require_redis_asyncio, feature_name="RedisRateLimiter")
 
 
 class RedisRateLimiter:
@@ -82,7 +73,9 @@ if #oldest < 2 then
     return 0
 end
 
-return math.max(math.ceil(window - (now - tonumber(oldest[2]))), 0)
+-- Keep this policy aligned with ratelimit._window_math.retry_seconds:
+-- an active full window reports at least one whole retry second.
+return math.max(math.ceil(window - (now - tonumber(oldest[2]))), 1)
 """
 
     def __init__(
@@ -95,7 +88,7 @@ return math.max(math.ceil(window - (now - tonumber(oldest[2]))), 0)
         clock: Clock = time.time,
     ) -> None:
         """Store the Redis client and shared rate-limiter configuration."""
-        _load_package_redis_asyncio()
+        _load_redis_asyncio()
         _validate_configuration(max_attempts=max_attempts, window_seconds=window_seconds)
 
         self.redis = redis

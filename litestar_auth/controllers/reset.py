@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Protocol, cast, runtime_checkable
+from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
 import msgspec  # noqa: TC002
 from litestar import Controller, Request, post
@@ -12,6 +12,7 @@ from litestar.status_codes import HTTP_200_OK, HTTP_202_ACCEPTED
 from litestar_auth.controllers._utils import (
     RequestHandler,
     _configure_request_body_handler,
+    _controller_route_handler,
     _create_before_request_handler,
     _create_rate_limit_handlers,
     _map_domain_exceptions,
@@ -25,7 +26,7 @@ from litestar_auth.schemas import UserRead
 from litestar_auth.types import RoleCapableUserProtocol
 
 if TYPE_CHECKING:
-    from litestar_auth.ratelimit import AuthRateLimitConfig, EndpointRateLimit
+    from litestar_auth.ratelimit import AuthRateLimitConfig
 
 
 class ResetPasswordControllerUserProtocol[ID](RoleCapableUserProtocol[ID], Protocol):
@@ -53,8 +54,8 @@ class _ResetPasswordControllerContext:
 
     user_read_schema: type[msgspec.Struct]
     unsafe_testing: bool
-    forgot_password_rate_limit: EndpointRateLimit | None
     forgot_password_before_request: RequestHandler | None
+    forgot_password_increment: RequestHandler
     reset_password_before_request: RequestHandler | None
     reset_password_increment: RequestHandler
     reset_password_reset: RequestHandler
@@ -82,6 +83,9 @@ def create_reset_password_controller[UP: ResetPasswordControllerUserProtocol[Any
     _require_msgspec_struct(user_read_schema, parameter_name="user_read_schema")
     forgot_password_rate_limit = rate_limit_config.forgot_password if rate_limit_config else None
     reset_password_rate_limit = rate_limit_config.reset_password if rate_limit_config else None
+    forgot_password_rate_limit_increment, _forgot_password_rate_limit_reset = _create_rate_limit_handlers(
+        forgot_password_rate_limit,
+    )
     reset_password_rate_limit_increment, reset_password_rate_limit_reset = _create_rate_limit_handlers(
         reset_password_rate_limit,
     )
@@ -89,14 +93,17 @@ def create_reset_password_controller[UP: ResetPasswordControllerUserProtocol[Any
         _ResetPasswordControllerContext(
             user_read_schema=user_read_schema,
             unsafe_testing=unsafe_testing,
-            forgot_password_rate_limit=forgot_password_rate_limit,
             forgot_password_before_request=_create_before_request_handler(forgot_password_rate_limit),
+            forgot_password_increment=forgot_password_rate_limit_increment,
             reset_password_before_request=_create_before_request_handler(reset_password_rate_limit),
             reset_password_increment=reset_password_rate_limit_increment,
             reset_password_reset=reset_password_rate_limit_reset,
         ),
     )
-    _configure_request_body_handler(cast("Any", reset_cls).reset_password, schema=ResetPassword)
+    _configure_request_body_handler(
+        _controller_route_handler(reset_cls, "reset_password"),
+        schema=ResetPassword,
+    )
     reset_cls.path = path
     return _mark_litestar_auth_route_handler(reset_cls)
 
@@ -120,8 +127,7 @@ def _define_reset_password_controller_class(ctx: _ResetPasswordControllerContext
             try:
                 await litestar_auth_user_manager.forgot_password(data.email)
             finally:
-                if ctx.forgot_password_rate_limit is not None:
-                    await ctx.forgot_password_rate_limit.increment(request)
+                await ctx.forgot_password_increment(request)
 
         @post("/reset-password", status_code=HTTP_200_OK, before_request=ctx.reset_password_before_request)
         async def reset_password(  # noqa: PLR6301

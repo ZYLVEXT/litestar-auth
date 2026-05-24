@@ -5,13 +5,18 @@ from __future__ import annotations
 import binascii
 import hashlib
 import hmac
+import importlib
 import logging
+import sys
 import warnings
 from typing import TYPE_CHECKING, cast
 from urllib.parse import parse_qs, urlparse
 
 import pytest
 
+import litestar_auth as litestar_auth_package
+from litestar_auth import _totp_primitive as totp_primitive
+from litestar_auth import _totp_recovery as totp_recovery
 from litestar_auth import totp
 from litestar_auth.contrib.redis import RedisAuthClientProtocol, RedisAuthPreset
 from litestar_auth.password import PasswordHelper
@@ -88,6 +93,34 @@ def test_generate_totp_recovery_codes_rejects_negative_count() -> None:
     """Invalid recovery-code counts fail explicitly."""
     with pytest.raises(ValueError, match="cannot be negative"):
         totp.generate_totp_recovery_codes(count=-1)
+
+
+def test_importing_totp_does_not_eagerly_hash_dummy_recovery_code(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Importing the public TOTP facade does not construct the dummy Argon2 hash."""
+    hash_calls = 0
+
+    def record_hash(self: PasswordHelper, password: str) -> str:
+        nonlocal hash_calls
+        del self, password
+        hash_calls += 1
+        return "unused-hash"
+
+    monkeypatch.setattr(PasswordHelper, "hash", record_hash)
+    monkeypatch.delitem(sys.modules, "litestar_auth.totp", raising=False)
+    monkeypatch.delattr(litestar_auth_package, "totp", raising=False)
+
+    imported_totp = importlib.import_module("litestar_auth.totp")
+
+    assert imported_totp.generate_totp_secret
+    assert hash_calls == 0
+
+
+def test_totp_primitive_facade_override_falls_back_without_public_facade(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Primitive helpers remain usable before the public facade is imported."""
+    sentinel = object()
+    monkeypatch.delitem(sys.modules, "litestar_auth.totp", raising=False)
+
+    assert totp_primitive._get_facade_override("_current_counter", sentinel) is sentinel
 
 
 def _recovery_lookup(code: str) -> str:
@@ -174,7 +207,7 @@ async def test_consume_matching_recovery_code_miss_runs_dummy_verify(monkeypatch
         verify_calls.append((password, hashed))
         return False
 
-    monkeypatch.setattr(totp, "_DUMMY_ARGON2_HASH", dummy_hash)
+    monkeypatch.setattr(totp_recovery, "_DUMMY_ARGON2_HASH", dummy_hash)
     monkeypatch.setattr(password_helper, "verify", record_verify)
     manager = _RecoveryCodeManager({})
 
@@ -205,7 +238,7 @@ async def test_consume_matching_recovery_code_collision_runs_single_verify(monke
         verify_calls.append((password, hashed))
         return False
 
-    monkeypatch.setattr(totp, "_DUMMY_ARGON2_HASH", dummy_hash)
+    monkeypatch.setattr(totp_recovery, "_DUMMY_ARGON2_HASH", dummy_hash)
     monkeypatch.setattr(password_helper, "verify", record_verify)
     manager = _RecoveryCodeManager({_recovery_lookup("submitted-code"): wrong_hash})
 

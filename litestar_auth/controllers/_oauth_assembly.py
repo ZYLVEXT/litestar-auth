@@ -15,12 +15,12 @@ from litestar_auth.controllers._oauth_helpers import (
 )
 from litestar_auth.controllers._utils import _build_controller_name
 from litestar_auth.exceptions import ConfigurationError
-from litestar_auth.oauth._flow_cookie import _OAuthFlowCookieCipher
-from litestar_auth.oauth.client_adapter import (
+from litestar_auth.oauth._client import (
     OAuthClientAdapter,
     OAuthClientProtocol,
     _build_oauth_client_adapter,
 )
+from litestar_auth.oauth._flow_cookie import _OAuthFlowCookieCipher
 from litestar_auth.oauth.service import OAuthService
 from litestar_auth.oauth.service import (
     OAuthServiceUserManagerProtocol as OAuthControllerUserManagerProtocol,
@@ -33,7 +33,7 @@ if TYPE_CHECKING:
     from litestar import Request
 
     from litestar_auth.authentication.backend import AuthenticationBackend
-    from litestar_auth.controllers._auth_helpers import TotpStepUpPolicyMode
+    from litestar_auth.controllers._step_up import TotpStepUpPolicyMode
 
 
 @dataclass(frozen=True, slots=True)

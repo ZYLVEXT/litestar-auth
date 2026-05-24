@@ -19,3 +19,11 @@ class RoleAdminRoleNotFoundError(LookupError):
 
 class RoleAdminUserNotFoundError(LookupError):
     """Raised when the configured user lookup target does not exist."""
+
+
+class RoleProtectedError(ValueError):
+    """Raised when a role-admin operation targets a protected role."""
+
+
+class SystemManagedRoleError(RoleProtectedError):
+    """Raised when an operation would weaken a plugin-managed role invariant."""

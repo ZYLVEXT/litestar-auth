@@ -13,10 +13,10 @@ from litestar_auth.types import UserProtocol
 if TYPE_CHECKING:
     from collections.abc import Callable
 
-    from litestar_auth._totp_enrollment import _EnrollmentTokenCipher
+    from litestar_auth._secrets_at_rest import FernetKeyring
     from litestar_auth.authentication.backend import AuthenticationBackend
     from litestar_auth.authentication.strategy.jwt import JWTDenylistStore
-    from litestar_auth.controllers._auth_helpers import TotpStepUpPolicyMode
+    from litestar_auth.controllers._step_up import TotpStepUpPolicyMode
     from litestar_auth.ratelimit import TotpRateLimitOrchestrator
 
 
@@ -60,7 +60,7 @@ class _TotpEnrollmentContext:
     """TOTP enrollment token and server-side secret storage dependencies."""
 
     totp_issuer: str
-    enrollment_token_cipher: _EnrollmentTokenCipher | None
+    enrollment_token_cipher: FernetKeyring
     enrollment_store: TotpEnrollmentStore
 
 
@@ -95,7 +95,7 @@ class _TotpControllerContextSettings[UP: UserProtocol[Any], ID]:
     effective_pending_jti_store: JWTDenylistStore | None
     id_parser: Callable[[str], ID] | None
     unsafe_testing: bool
-    enrollment_token_cipher: _EnrollmentTokenCipher | None
+    enrollment_token_cipher: FernetKeyring
     enrollment_store: TotpEnrollmentStore
     totp_stepup_policy: dict[str, TotpStepUpPolicyMode] = field(default_factory=dict)
 

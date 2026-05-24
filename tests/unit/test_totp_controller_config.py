@@ -8,6 +8,7 @@ from unittest.mock import AsyncMock
 import pytest
 from cryptography.fernet import Fernet
 from litestar import Litestar
+from litestar.di import Provide
 from litestar.openapi.config import OpenAPIConfig
 
 from litestar_auth._plugin.config import TotpConfig
@@ -23,6 +24,10 @@ from litestar_auth.manager import FernetKeyringConfig
 from litestar_auth.plugin import LitestarAuthConfig
 
 pytestmark = pytest.mark.unit
+
+
+def _stub_totp_user_manager() -> AsyncMock:
+    return AsyncMock()
 
 
 @pytest.mark.unit
@@ -207,6 +212,7 @@ def test_create_totp_controller_applies_openapi_security_to_guarded_routes() -> 
     )
     app = Litestar(
         route_handlers=[controller],
+        dependencies={"litestar_auth_user_manager": Provide(_stub_totp_user_manager, sync_to_thread=False)},
         openapi_config=OpenAPIConfig(title="Test", version="1.0.0"),
     )
     paths = cast("Any", app.openapi_schema.paths)

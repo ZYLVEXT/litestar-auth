@@ -254,8 +254,10 @@ def create_app() -> Litestar:
         async with engine.begin() as connection:
             await connection.run_sync(User.metadata.create_all)
         await _ensure_seed_roles(session_maker)
-        yield
-        await engine.dispose()
+        try:
+            yield
+        finally:
+            await engine.dispose()
 
     return Litestar(
         route_handlers=[health, demo_jwt_profile, demo_api_key_scope_read],

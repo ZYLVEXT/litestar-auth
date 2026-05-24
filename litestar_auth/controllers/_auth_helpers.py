@@ -4,20 +4,16 @@ from __future__ import annotations
 
 import re
 from collections.abc import Mapping
-from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Literal, Protocol, cast, runtime_checkable
+from typing import TYPE_CHECKING, Any, Protocol, cast, runtime_checkable
 
 from litestar.enums import MediaType
-from litestar.exceptions import ClientException
-from litestar.openapi.datastructures import ResponseSpec
-from litestar.openapi.spec import Example
 
 import litestar_auth._schema_fields as schema_fields
 from litestar_auth.authentication.strategy.base import RefreshableStrategy
 from litestar_auth.authentication.transport.cookie import CookieTransport
-from litestar_auth.exceptions import ConfigurationError, ErrorCode, totp_stepup_required_exception
-from litestar_auth.totp import verify_totp
-from litestar_auth.types import LoginIdentifier, TotpUserProtocol, UserProtocol
+from litestar_auth.controllers._error_responses import raise_invalid_login_payload
+from litestar_auth.exceptions import ConfigurationError
+from litestar_auth.types import LoginIdentifier, UserProtocol
 
 if TYPE_CHECKING:
     from litestar import Request
@@ -25,47 +21,9 @@ if TYPE_CHECKING:
 
     from litestar_auth.authentication.backend import AuthenticationBackend
     from litestar_auth.payloads import RefreshTokenRequest
-    from litestar_auth.totp import TotpAlgorithm
-
-type TotpStepUpEndpoint = Literal[
-    "totp.disable",
-    "totp.regenerate_recovery_codes",
-    "api_keys.create",
-    "api_keys.update",
-    "api_keys.revoke",
-    "users.update_self",
-    "oauth.associate",
-]
-type TotpStepUpPolicyMode = Literal["required_when_enrolled", "always_required", "off"]
-
 _LOGIN_EMAIL_MAX_LENGTH = schema_fields.LOGIN_IDENTIFIER_MAX_LENGTH
 _LOGIN_USERNAME_MAX_LENGTH = 150
 _EMAIL_PATTERN = re.compile(schema_fields.EMAIL_PATTERN)
-_DEFAULT_TOTP_STEPUP_POLICY: dict[TotpStepUpEndpoint, TotpStepUpPolicyMode] = {
-    "totp.disable": "required_when_enrolled",
-    "totp.regenerate_recovery_codes": "required_when_enrolled",
-    "api_keys.create": "required_when_enrolled",
-    "api_keys.update": "required_when_enrolled",
-    "api_keys.revoke": "required_when_enrolled",
-    "users.update_self": "required_when_enrolled",
-    "oauth.associate": "required_when_enrolled",
-}
-TOTP_STEPUP_REQUIRED_OPENAPI_RESPONSE = ResponseSpec(
-    data_container=dict[str, object],
-    generate_examples=False,
-    description="The operation requires a recent TOTP verification (`TOTP_STEPUP_REQUIRED`).",
-    examples=[
-        Example(
-            id="totp_stepup_required",
-            summary="Recent TOTP verification required",
-            value={
-                "status_code": 403,
-                "detail": "Recent TOTP verification is required.",
-                "extra": {"code": ErrorCode.TOTP_STEPUP_REQUIRED.value},
-            },
-        ),
-    ],
-)
 
 
 def _get_refresh_strategy[UP: UserProtocol[Any], ID](strategy: object) -> RefreshableStrategy[UP, ID]:
@@ -182,88 +140,13 @@ def _resolve_login_identifier(raw_identifier: str, login_identifier: LoginIdenti
     Returns:
         The validated identifier string (stripped in username mode).
 
-    Raises:
-        ClientException: If validation fails for the selected mode.
     """
     if login_identifier == "email":
         if len(raw_identifier) > _LOGIN_EMAIL_MAX_LENGTH or _EMAIL_PATTERN.fullmatch(raw_identifier) is None:
-            msg = "Invalid login payload."
-            raise ClientException(status_code=422, detail=msg, extra={"code": ErrorCode.LOGIN_PAYLOAD_INVALID})
+            raise_invalid_login_payload()
         return raw_identifier
 
     stripped = raw_identifier.strip()
     if not stripped or len(stripped) > _LOGIN_USERNAME_MAX_LENGTH:
-        msg = "Invalid login payload."
-        raise ClientException(status_code=422, detail=msg, extra={"code": ErrorCode.LOGIN_PAYLOAD_INVALID})
+        raise_invalid_login_payload()
     return stripped
-
-
-class TotpStepUpVerifierProtocol[UP: UserProtocol[Any]](Protocol):
-    """User-manager behavior required by downstream TOTP step-up checks."""
-
-    backends: tuple[object, ...]
-
-    async def has_recent_totp_verification(self, user: UP, session_id: str) -> bool:
-        """Return whether the current session has a recent TOTP marker."""
-
-    async def read_totp_secret(self, secret: str | None) -> str | None:
-        """Return the plain TOTP secret for verification."""
-
-
-@dataclass(frozen=True, slots=True)
-class TotpStepUpCheck[UP: UserProtocol[Any]]:
-    """Inputs for an endpoint-level TOTP step-up check."""
-
-    endpoint: TotpStepUpEndpoint
-    policy: dict[str, TotpStepUpPolicyMode]
-    user_manager: TotpStepUpVerifierProtocol[UP]
-    totp_code: str | None = None
-    totp_algorithm: TotpAlgorithm = "SHA256"
-
-
-async def require_totp_stepup[UP: UserProtocol[Any]](
-    request: Request[Any, Any, Any],
-    check: TotpStepUpCheck[UP],
-) -> None:
-    """Enforce endpoint-level TOTP step-up policy before sensitive mutations."""
-    mode = check.policy.get(check.endpoint, _DEFAULT_TOTP_STEPUP_POLICY[check.endpoint])
-    if mode == "off":
-        return
-    user = request.user
-    if not isinstance(user, TotpUserProtocol):
-        return
-    if user.totp_secret is None:
-        if mode == "always_required":
-            exception = totp_stepup_required_exception()
-            raise exception
-        return
-    secret = await check.user_manager.read_totp_secret(user.totp_secret)
-    if secret is None:
-        if mode == "always_required":
-            exception = totp_stepup_required_exception()
-            raise exception
-        return
-    if check.totp_code is not None and verify_totp(secret, check.totp_code, algorithm=check.totp_algorithm):
-        return
-    session_id = await _resolve_current_session_id(request, user_manager=check.user_manager)
-    if session_id is not None and await check.user_manager.has_recent_totp_verification(cast("UP", user), session_id):
-        return
-    exception = totp_stepup_required_exception()
-    raise exception
-
-
-async def _resolve_current_session_id[UP: UserProtocol[Any]](
-    request: Request[Any, Any, Any],
-    *,
-    user_manager: TotpStepUpVerifierProtocol[UP],
-) -> str | None:
-    """Return the current transport token to use as the step-up marker session id."""
-    for backend in user_manager.backends:
-        transport = getattr(backend, "transport", None)
-        read_token = getattr(transport, "read_token", None)
-        if read_token is None:
-            continue
-        token = await read_token(request)
-        if isinstance(token, str) and token:
-            return token
-    return None

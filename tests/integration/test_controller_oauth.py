@@ -46,6 +46,8 @@ if TYPE_CHECKING:
     from collections.abc import Mapping
     from types import TracebackType
 
+    from httpx import Response as HTTPXResponse
+
     from litestar_auth.types import LoginIdentifier
 
 pytestmark = pytest.mark.integration
@@ -76,6 +78,20 @@ def _oauth_state_from_cookie(cookie_value: str) -> str:
 def _oauth_code_verifier_from_cookie(cookie_value: str) -> str:
     """Return the PKCE verifier carried inside the OAuth flow cookie."""
     return _decode_oauth_flow_cookie(cookie_value, flow_cookie_cipher=_flow_cookie_cipher()).code_verifier
+
+
+def _assert_state_cookie_cleared(response: HTTPXResponse, *, cookie_name: str, cookie_path: str) -> None:
+    """Assert that a response expires the provider-scoped OAuth state cookie exactly once."""
+    matching_headers = [
+        header.lower() for header in response.headers.get_list("set-cookie") if header.startswith(f'{cookie_name}=""')
+    ]
+    assert len(matching_headers) == 1
+    set_cookie = matching_headers[0]
+    assert "max-age=0" in set_cookie
+    assert f"path={cookie_path}" in set_cookie
+    assert "secure" in set_cookie
+    assert "httponly" in set_cookie
+    assert "samesite=lax" in set_cookie
 
 
 @dataclass(slots=True)
@@ -732,13 +748,11 @@ async def test_callback_does_not_auto_verify_new_user_by_default(
     ]
     assert oauth_client.id_email_calls == ["provider-access-token"]
     assert not callback_response.cookies.get("__oauth_state_github")
-    set_cookie = callback_response.headers["set-cookie"].lower()
-    assert "__oauth_state_github=" in set_cookie
-    assert "max-age=0" in set_cookie
-    assert "path=/auth/oauth/github" in set_cookie
-    assert "secure" in set_cookie
-    assert "httponly" in set_cookie
-    assert "samesite=lax" in set_cookie
+    _assert_state_cookie_cleared(
+        callback_response,
+        cookie_name="__oauth_state_github",
+        cookie_path="/auth/oauth/github",
+    )
 
 
 async def test_callback_auto_verifies_new_user_when_opted_in() -> None:
@@ -1252,6 +1266,7 @@ async def test_callback_rejects_invalid_state(
     code = body.get("code") or (body.get("extra") or {}).get("code")
     assert body["detail"] == "Invalid OAuth state."
     assert code == ErrorCode.OAUTH_STATE_INVALID
+    _assert_state_cookie_cleared(response, cookie_name="__oauth_state_github", cookie_path="/auth/oauth/github")
     assert user_db.users_by_id == {}
     assert user_manager.created_users == []
     assert user_manager.logged_in_users == []
@@ -1363,6 +1378,7 @@ async def test_callback_rejects_flow_cookie_with_mismatched_code_verifier(
 
     assert response.status_code == HTTP_BAD_REQUEST
     assert response.json()["detail"] == "Provider rejected PKCE verifier."
+    _assert_state_cookie_cleared(response, cookie_name="__oauth_state_github", cookie_path="/auth/oauth/github")
     assert oauth_client.access_token_calls == [
         ("provider-code", "https://app.example/auth/oauth/github/callback", "mismatched-code-verifier"),
     ]
@@ -1630,13 +1646,11 @@ async def test_associate_authenticated_user_links_oauth() -> None:
         )
         assert associate_callback.status_code == HTTP_OK
         assert associate_callback.json() == {"linked": True}
-        callback_set_cookie = associate_callback.headers["set-cookie"].lower()
-        assert "__oauth_associate_state_github=" in callback_set_cookie
-        assert "max-age=0" in callback_set_cookie
-        assert "path=/auth/associate/github" in callback_set_cookie
-        assert "secure" in callback_set_cookie
-        assert "httponly" in callback_set_cookie
-        assert "samesite=lax" in callback_set_cookie
+        _assert_state_cookie_cleared(
+            associate_callback,
+            cookie_name="__oauth_associate_state_github",
+            cookie_path="/auth/associate/github",
+        )
         oauth_account = user_db.oauth_accounts.get(("github", "provider-user-1"))
         assert oauth_account is not None
         assert oauth_account.user_id == created_user.id
@@ -1692,6 +1706,11 @@ async def test_associate_rejects_flow_cookie_with_mismatched_code_verifier() -> 
 
     assert associate_callback.status_code == HTTP_BAD_REQUEST
     assert associate_callback.json()["detail"] == "Provider rejected PKCE verifier."
+    _assert_state_cookie_cleared(
+        associate_callback,
+        cookie_name="__oauth_associate_state_github",
+        cookie_path="/auth/associate/github",
+    )
     assert oauth_client.access_token_calls[-1] == (
         "associate-code",
         "https://app.example/auth/associate/github/callback",
@@ -1737,6 +1756,11 @@ async def test_associate_rejects_inactive_authenticated_user() -> None:
     body = callback_response.json()
     code = body.get("code") or (body.get("extra") or {}).get("code")
     assert code == ErrorCode.LOGIN_ACCOUNT_UNAVAILABLE
+    _assert_state_cookie_cleared(
+        callback_response,
+        cookie_name="__oauth_associate_state_github",
+        cookie_path="/auth/associate/github",
+    )
     assert user_db.oauth_accounts == {}
 
 

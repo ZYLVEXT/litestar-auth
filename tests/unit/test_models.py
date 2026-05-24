@@ -6,6 +6,7 @@ import base64
 import sqlite3
 import subprocess
 import sys
+from contextlib import contextmanager
 from typing import TYPE_CHECKING, Any, Self, cast, get_type_hints
 from uuid import UUID
 
@@ -47,6 +48,8 @@ UserRoleRelationshipMixin = litestar_auth_models.UserRoleRelationshipMixin
 import_token_orm_models_from_models = litestar_auth_models.import_token_orm_models
 
 if TYPE_CHECKING:
+    from collections.abc import Iterator
+
     from sqlalchemy.engine import Engine
 
 pytestmark = pytest.mark.unit
@@ -150,11 +153,14 @@ def test_models_package_mixins_do_not_load_reference_model_modules() -> None:
     assert result.returncode == 0, (result.stdout, result.stderr)
 
 
-def create_test_engine() -> Engine:
-    """Create an in-memory SQLite engine with foreign keys enabled.
+@contextmanager
+def create_test_engine() -> Iterator[Engine]:
+    """Yield an in-memory SQLite engine with foreign keys enabled and dispose on exit.
 
-    Returns:
-        Configured SQLite engine for model integration tests.
+    Yields:
+        Configured SQLite engine for model integration tests. The engine is
+        disposed when the ``with`` block exits, whether through normal completion
+        or an exception, so callers do not need their own ``try/finally``.
     """
     engine = create_engine(
         "sqlite+pysqlite:///:memory:",
@@ -173,13 +179,15 @@ def create_test_engine() -> Engine:
         finally:
             cursor.close()
 
-    return engine
+    try:
+        yield engine
+    finally:
+        engine.dispose()
 
 
 def test_user_model_creates_schema_with_expected_columns() -> None:
     """The bundled model family creates the expected relational role schema."""
-    engine = create_test_engine()
-    try:
+    with create_test_engine() as engine:
         User.metadata.create_all(engine)
 
         inspector = inspect(engine)
@@ -206,14 +214,11 @@ def test_user_model_creates_schema_with_expected_columns() -> None:
         assert columns["totp_secret"]["nullable"] is True
         assert {foreign_key["referred_table"] for foreign_key in user_role_foreign_keys} == {"role", "user"}
         assert any(index["name"] == "ix_user_email" and index["unique"] == 1 for index in email_indexes)
-    finally:
-        engine.dispose()
 
 
 def test_user_model_persists_defaults_and_generated_uuid() -> None:
     """Persisted users receive default flags and a UUID primary key."""
-    engine = create_test_engine()
-    try:
+    with create_test_engine() as engine:
         User.metadata.create_all(engine)
 
         with Session(engine) as session:
@@ -228,8 +233,6 @@ def test_user_model_persists_defaults_and_generated_uuid() -> None:
         assert user.roles == []
         assert user.totp_secret is None
         assert user.recovery_codes is None
-    finally:
-        engine.dispose()
 
 
 def test_user_model_rejects_unexpected_constructor_keyword() -> None:
@@ -248,8 +251,7 @@ def test_role_normalization_helpers_preserve_flat_membership_contract() -> None:
 
 def test_user_model_normalizes_roles_and_persists_relational_membership() -> None:
     """Bundled users persist deterministic roles through role and user-role tables."""
-    engine = create_test_engine()
-    try:
+    with create_test_engine() as engine:
         User.metadata.create_all(engine)
 
         with Session(engine) as session:
@@ -269,14 +271,11 @@ def test_user_model_normalizes_roles_and_persists_relational_membership() -> Non
                 "admin",
                 "billing",
             ]
-    finally:
-        engine.dispose()
 
 
 def test_user_model_role_reassignment_replaces_assignment_rows() -> None:
     """Assigning a new role iterable replaces the stored association rows."""
-    engine = create_test_engine()
-    try:
+    with create_test_engine() as engine:
         User.metadata.create_all(engine)
 
         with Session(engine) as session:
@@ -293,14 +292,11 @@ def test_user_model_role_reassignment_replaces_assignment_rows() -> None:
                 "admin",
                 "support",
             ]
-    finally:
-        engine.dispose()
 
 
 def test_role_catalog_rows_are_global_and_unique_across_users() -> None:
     """Repeated role names reuse one role row while keeping per-user assignment rows."""
-    engine = create_test_engine()
-    try:
+    with create_test_engine() as engine:
         User.metadata.create_all(engine)
 
         with Session(engine) as session:
@@ -320,14 +316,11 @@ def test_role_catalog_rows_are_global_and_unique_across_users() -> None:
                 "admin",
                 "support",
             ]
-    finally:
-        engine.dispose()
 
 
 def test_pending_role_catalog_rows_are_reused_during_user_role_flush() -> None:
     """Pre-created pending role rows satisfy assignment flushes without duplicates."""
-    engine = create_test_engine()
-    try:
+    with create_test_engine() as engine:
         User.metadata.create_all(engine)
 
         with Session(engine) as session:
@@ -337,8 +330,6 @@ def test_pending_role_catalog_rows_are_reused_during_user_role_flush() -> None:
 
             assert session.execute(select(Role.name)).scalars().all() == ["admin"]
             assert session.execute(select(UserRole.role_name)).scalars().all() == ["admin"]
-    finally:
-        engine.dispose()
 
 
 def test_insert_missing_role_row_ignores_duplicate_role_race_when_role_now_exists() -> None:
@@ -415,8 +406,7 @@ def test_insert_missing_role_row_reraises_non_duplicate_integrity_errors() -> No
 
 def test_user_model_enforces_unique_email_constraint() -> None:
     """Duplicate user emails are rejected by the database."""
-    engine = create_test_engine()
-    try:
+    with create_test_engine() as engine:
         User.metadata.create_all(engine)
 
         with Session(engine) as session:
@@ -426,14 +416,11 @@ def test_user_model_enforces_unique_email_constraint() -> None:
 
             with pytest.raises(IntegrityError):
                 session.commit()
-    finally:
-        engine.dispose()
 
 
 def test_oauth_account_model_creates_schema_and_relationship() -> None:
     """OAuth accounts create their table and link back to users."""
-    engine = create_test_engine()
-    try:
+    with create_test_engine() as engine:
         User.metadata.create_all(engine)
 
         inspector = inspect(engine)
@@ -475,14 +462,11 @@ def test_oauth_account_model_creates_schema_and_relationship() -> None:
             assert oauth_account.user_id == user.id
             assert oauth_account.user is user
             assert user.oauth_accounts == [oauth_account]
-    finally:
-        engine.dispose()
 
 
 def test_oauth_account_model_enforces_foreign_key_constraint() -> None:
     """Orphan OAuth accounts are rejected by the database."""
-    engine = create_test_engine()
-    try:
+    with create_test_engine() as engine:
         User.metadata.create_all(engine)
 
         with Session(engine) as session:
@@ -499,14 +483,11 @@ def test_oauth_account_model_enforces_foreign_key_constraint() -> None:
 
             with pytest.raises(IntegrityError):
                 session.commit()
-    finally:
-        engine.dispose()
 
 
 def test_access_token_model_creates_schema_and_relationship() -> None:
     """Access tokens create their table and link back to users."""
-    engine = create_test_engine()
-    try:
+    with create_test_engine() as engine:
         User.metadata.create_all(engine)
 
         inspector = inspect(engine)
@@ -532,8 +513,6 @@ def test_access_token_model_creates_schema_and_relationship() -> None:
             assert access_token.user is user
             assert user.access_tokens == [access_token]
             assert access_token.created_at is not None
-    finally:
-        engine.dispose()
 
 
 def test_models_package_import_token_orm_models_returns_token_model_classes() -> None:
@@ -807,8 +786,7 @@ def test_custom_user_model_can_map_hashed_password_to_custom_column_via_supporte
         auth_user_model = "CustomPasswordColumnUser"
         auth_user_table = "custom_password_column_user"
 
-    engine = create_test_engine()
-    try:
+    with create_test_engine() as engine:
         CustomPasswordColumnUser.metadata.create_all(engine)
 
         inspector = inspect(engine)
@@ -830,8 +808,6 @@ def test_custom_user_model_can_map_hashed_password_to_custom_column_via_supporte
             stored_hash = session.execute(select(CustomPasswordColumnUser.__table__.c.password_hash)).scalar_one()
 
         assert stored_hash == "custom-hash"
-    finally:
-        engine.dispose()
 
 
 def test_custom_role_mixins_round_trip_normalized_membership() -> None:
@@ -875,8 +851,7 @@ def test_custom_role_mixins_round_trip_normalized_membership() -> None:
         auth_role_model = "CustomRole"
         auth_role_table = "custom_role"
 
-    engine = create_test_engine()
-    try:
+    with create_test_engine() as engine:
         CustomRolesUser.metadata.create_all(engine)
 
         inspector = inspect(engine)
@@ -907,8 +882,6 @@ def test_custom_role_mixins_round_trip_normalized_membership() -> None:
                 "admin",
                 "support",
             ]
-    finally:
-        engine.dispose()
 
 
 def test_custom_user_model_can_define_hashed_password_mapping_directly() -> None:
@@ -933,8 +906,7 @@ def test_custom_user_model_can_define_hashed_password_mapping_directly() -> None
 
         hashed_password: Mapped[str] = mapped_column("password_hash", String(length=255))
 
-    engine = create_test_engine()
-    try:
+    with create_test_engine() as engine:
         DirectPasswordColumnUser.metadata.create_all(engine)
 
         inspector = inspect(engine)
@@ -952,8 +924,6 @@ def test_custom_user_model_can_define_hashed_password_mapping_directly() -> None
             stored_hash = session.execute(select(DirectPasswordColumnUser.__table__.c.password_hash)).scalar_one()
 
         assert stored_hash == "direct-hash"
-    finally:
-        engine.dispose()
 
 
 @pytest.mark.imports
@@ -1180,8 +1150,7 @@ def test_user_relationship_mixin_supports_relationship_option_overrides() -> Non
 
 def test_access_token_model_enforces_foreign_key_constraint() -> None:
     """Orphan access tokens are rejected by the database."""
-    engine = create_test_engine()
-    try:
+    with create_test_engine() as engine:
         User.metadata.create_all(engine)
 
         with Session(engine) as session:
@@ -1194,14 +1163,11 @@ def test_access_token_model_enforces_foreign_key_constraint() -> None:
 
             with pytest.raises(IntegrityError):
                 session.commit()
-    finally:
-        engine.dispose()
 
 
 def test_refresh_token_model_creates_schema_and_relationship() -> None:
     """Refresh tokens create their table and link back to users."""
-    engine = create_test_engine()
-    try:
+    with create_test_engine() as engine:
         User.metadata.create_all(engine)
 
         inspector = inspect(engine)
@@ -1212,12 +1178,21 @@ def test_refresh_token_model_creates_schema_and_relationship() -> None:
         assert "refresh_token" in inspector.get_table_names()
         assert primary_key["constrained_columns"] == ["token"]
         assert set(refresh_token_columns).issuperset(
-            {"token", "user_id", "created_at", "session_id", "last_used_at", "client_metadata"},
+            {
+                "token",
+                "user_id",
+                "created_at",
+                "session_id",
+                "last_used_at",
+                "client_metadata",
+                "consumed_token_digests",
+            },
         )
         assert refresh_token_columns["created_at"]["default"] is not None
         assert refresh_token_columns["session_id"]["nullable"] is False
         assert refresh_token_columns["last_used_at"]["nullable"] is True
         assert refresh_token_columns["client_metadata"]["nullable"] is True
+        assert refresh_token_columns["consumed_token_digests"]["nullable"] is True
         assert any(index["name"] == "ix_refresh_token_session_id" for index in inspector.get_indexes("refresh_token"))
         assert foreign_keys[0]["referred_table"] == "user"
 
@@ -1237,14 +1212,12 @@ def test_refresh_token_model_creates_schema_and_relationship() -> None:
             assert isinstance(UUID(refresh_token.session_id), UUID)
             assert refresh_token.last_used_at is None
             assert refresh_token.client_metadata is None
-    finally:
-        engine.dispose()
+            assert refresh_token.consumed_token_digests is None
 
 
 def test_refresh_token_model_enforces_foreign_key_constraint() -> None:
     """Orphan refresh tokens are rejected by the database."""
-    engine = create_test_engine()
-    try:
+    with create_test_engine() as engine:
         User.metadata.create_all(engine)
 
         with Session(engine) as session:
@@ -1257,14 +1230,11 @@ def test_refresh_token_model_enforces_foreign_key_constraint() -> None:
 
             with pytest.raises(IntegrityError):
                 session.commit()
-    finally:
-        engine.dispose()
 
 
 def test_api_key_model_creates_schema_and_relationship() -> None:
     """API keys create their table, indexes, and user relationship."""
-    engine = create_test_engine()
-    try:
+    with create_test_engine() as engine:
         User.metadata.create_all(engine)
 
         inspector = inspect(engine)
@@ -1327,8 +1297,6 @@ def test_api_key_model_creates_schema_and_relationship() -> None:
             assert api_key.encrypted_secret is None
             assert api_key.created_at is not None
             assert api_key.revoked_at is None
-    finally:
-        engine.dispose()
 
 
 def test_api_key_model_rejects_unbounded_client_metadata() -> None:

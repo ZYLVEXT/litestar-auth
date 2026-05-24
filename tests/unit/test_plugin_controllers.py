@@ -14,8 +14,8 @@ from cryptography.fernet import Fernet
 from litestar.exceptions import ValidationException
 
 import litestar_auth._plugin._oauth_controllers as oauth_controllers_module
-import litestar_auth._plugin._totp_controller as totp_controllers_module
 import litestar_auth._plugin.controllers as controllers_module
+import litestar_auth._plugin.totp_controller._core as totp_controllers_module
 import litestar_auth._plugin.totp_route_handlers as totp_route_handlers_module
 from litestar_auth._plugin.config import (
     OAUTH_ASSOCIATE_USER_MANAGER_DEPENDENCY_KEY,
@@ -24,8 +24,10 @@ from litestar_auth._plugin.config import (
     TotpConfig,
     resolve_backend_inventory,
 )
+from litestar_auth._plugin.controller_factory import ControllerFactoryKit
 from litestar_auth.authentication.backend import AuthenticationBackend
 from litestar_auth.authentication.transport.bearer import BearerTransport
+from litestar_auth.authentication.transport.cookie import CookieTransport
 from litestar_auth.manager import FernetKeyringConfig, UserManagerSecurity
 from litestar_auth.totp import InMemoryTotpEnrollmentStore
 from tests.integration.test_orchestrator import (
@@ -132,12 +134,14 @@ def test_build_auth_controllers_builds_backend_specific_paths_and_totp_secret(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Mandatory controller assembly fans out across backends and forwards TOTP pending-secret config."""
+    login_minimum_response_seconds = 0.2
     primary_backend = _backend(name="primary", token_prefix="primary")
     secondary_backend = _backend(name="secondary", token_prefix="secondary")
     config = _minimal_config(
         backends=[primary_backend, secondary_backend],
         totp_config=TotpConfig(totp_pending_secret="76543210fedcba98" * 4),
     )
+    config.login_minimum_response_seconds = login_minimum_response_seconds
     calls: list[dict[str, object]] = []
 
     def _create_auth_controller(settings: Any) -> str:  # noqa: ANN401
@@ -145,6 +149,7 @@ def test_build_auth_controllers_builds_backend_specific_paths_and_totp_secret(
             {
                 "backend": settings.backend,
                 "totp_pending_secret": settings.totp_pending_secret,
+                "login_minimum_response_seconds": settings.login_minimum_response_seconds,
                 "unsafe_testing": settings.unsafe_testing,
                 "path": settings.path,
             },
@@ -159,12 +164,14 @@ def test_build_auth_controllers_builds_backend_specific_paths_and_totp_secret(
     assert calls[0]["backend"].transport is primary_backend.transport
     assert calls[0]["backend"].strategy is primary_backend.strategy
     assert calls[0]["totp_pending_secret"] == "76543210fedcba98" * 4
+    assert calls[0]["login_minimum_response_seconds"] == pytest.approx(login_minimum_response_seconds)
     assert calls[0]["unsafe_testing"] is False
     assert isinstance(calls[1]["backend"], _current_startup_backend_template_type())
     assert calls[1]["backend"].name == secondary_backend.name
     assert calls[1]["backend"].transport is secondary_backend.transport
     assert calls[1]["backend"].strategy is secondary_backend.strategy
     assert calls[1]["path"] == "/auth/secondary"
+    assert calls[1]["login_minimum_response_seconds"] == pytest.approx(login_minimum_response_seconds)
     assert calls[1]["unsafe_testing"] is False
 
 
@@ -394,6 +401,31 @@ def test_resolve_request_backend_raises_when_backend_name_changes() -> None:
             [backend],
             backend_index=0,
         )
+
+
+def test_controller_factory_kit_requires_runtime_context_factory() -> None:
+    """ControllerFactoryKit fails closed when a caller requests an unconfigured runtime context."""
+    inventory = resolve_backend_inventory(_minimal_config())
+    kit: ControllerFactoryKit[ExampleUser, UUID] = ControllerFactoryKit(
+        backend_inventory=inventory,
+        backend_index=0,
+    )
+
+    with pytest.raises(RuntimeError, match=r"runtime_context_factory is required"):
+        kit.runtime_context([inventory.primary()[1]])
+
+
+def test_controller_factory_kit_resolves_cookie_transport() -> None:
+    """ControllerFactoryKit exposes the shared cookie-transport resolution helper."""
+    cookie_transport = CookieTransport()
+    backend = AuthenticationBackend[ExampleUser, UUID](
+        name="cookie",
+        transport=cookie_transport,
+        strategy=cast("Any", InMemoryTokenStrategy(token_prefix="cookie")),
+    )
+
+    assert ControllerFactoryKit.cookie_transport(backend) is cookie_transport
+    assert ControllerFactoryKit.cookie_transport(_backend(name="bearer", token_prefix="bearer")) is None
 
 
 async def test_create_totp_controller_enable_validation_callback_runs_background_task() -> None:

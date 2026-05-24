@@ -27,6 +27,7 @@ _REQUIRED_REFRESH_TOKEN_MODEL_ATTRIBUTES = (
     "session_id",
     "last_used_at",
     "client_metadata",
+    "consumed_token_digests",
 )
 
 
@@ -81,8 +82,9 @@ class DatabaseTokenModels:
 
     The supplied access-token model must expose mapped ``token``, ``created_at``, ``user_id``, and ``user``
     attributes compatible with the persistence operations performed by the DB token strategy. The supplied
-    refresh-token model must also expose ``session_id``, ``last_used_at``, and ``client_metadata`` so DB-backed
-    refresh sessions have a non-sensitive public session identifier and bounded client metadata.
+    refresh-token model must also expose ``session_id``, ``last_used_at``, ``client_metadata``, and
+    ``consumed_token_digests`` so DB-backed refresh sessions have a non-sensitive public session identifier,
+    bounded client metadata, and refresh-token reuse detection.
     Defaults preserve the bundled ``AccessToken`` / ``RefreshToken`` behavior.
     """
 

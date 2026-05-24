@@ -41,6 +41,34 @@ and are removed by hard delete through `invalidate_all_tokens()`. Older unindexe
 cannot be discovered by user id without scanning and remain TTL-bound; let them expire naturally or
 run an application-owned cleanup if your deployment previously wrote unindexed keys.
 
+## DB refresh-token reuse detection
+
+DB-backed refresh-token rotation records consumed refresh-token digests so a replayed refresh token
+revokes the entire refresh-session chain instead of looking like an ordinary missing token. Existing
+deployments using the bundled `refresh_token` table must add nullable JSON storage for consumed
+digests:
+
+```sql
+ALTER TABLE refresh_token ADD COLUMN consumed_token_digests JSON NULL;
+```
+
+SQLAlchemy metadata equivalent for a hand-written migration:
+
+```python
+import sqlalchemy as sa
+from alembic import op
+from sqlalchemy.dialects.postgresql import JSONB
+
+
+def upgrade() -> None:
+    op.add_column("refresh_token", sa.Column("consumed_token_digests", JSONB(), nullable=True))
+```
+
+Leave the column `NULL` for existing rows. New refresh rotations populate it with keyed token digests
+only; do not store raw refresh tokens there. Custom refresh-token models passed to
+`DatabaseTokenModels` must expose a mapped `consumed_token_digests` attribute. The recommended path is
+to compose `RefreshTokenMixin`, which includes the column.
+
 ## API-key persistence table
 
 API-key storage now has a dedicated `api_key` table. Import the bundled model from
@@ -196,10 +224,12 @@ Update clients accordingly:
   migrated to `AdminUserUpdate(is_active=False)` in this release; no application changes needed
   for the built-in users controller.
 
-If you previously customised `user_update_schema=...` to add app-specific safe fields, you can
-keep doing that — the runtime `_build_safe_self_update` deny-list still rejects the privileged
-field names as defense-in-depth for custom schemas. The change here only narrows the **library
-default**.
+If you previously customised `user_update_schema=...` to add app-specific safe fields, declare
+those same names in the manager's `updatable_fields` allowlist. The runtime
+`_build_safe_self_update` deny-list still rejects the privileged field names as defense-in-depth
+for custom schemas, and the manager now also rejects any non-privileged field that was not declared
+in its explicit field policy. For custom registration fields passed through direct
+`create(..., safe=False)` calls, add them to `creatable_fields`.
 
 ## Superuser boolean to role membership
 
@@ -367,6 +397,97 @@ Migration steps:
 4. Notify TOTP users that existing recovery codes no longer work; they should
    authenticate with their TOTP app and regenerate codes through
    `/auth/2fa/recovery-codes/regenerate`.
+
+### Litestar 2.22 route parameters and dependencies
+
+Litestar 2.22 deprecates inferred and legacy default parameter styles. With
+`filterwarnings = ["error"]`, handlers must declare parameters explicitly.
+
+| Parameter kind | Preferred style | Avoid |
+|----------------|-----------------|-------|
+| Path | `FromPath[T]` or `Annotated[T, PathParameter()]` | bare `user_id: int` on `{user_id:...}` routes |
+| Query | `FromQuery[T]` or `Annotated[T, QueryParameter(...)]` | bare `limit: int = 10` or `limit: int = QueryParameter(...)` |
+| Dependency | `Annotated[T, Dependency()]` | `value: T = Dependency()` |
+| Legacy `Parameter(query=...)` | `QueryParameter` / `FromQuery` | `Parameter(query="limit")` |
+
+Application routes that inject a dependency registered under the same parameter
+name (for example `litestar_auth_user_manager` when the plugin provides that key)
+do not emit inferred-parameter warnings even without `Dependency()` in the
+annotation. Generated plugin routes in this library still use
+`Annotated[..., Dependency()]` with concrete protocol types for clarity.
+
+Factory-built handlers with dynamic query limits (for example paginated user
+listing) should attach an explicit signature with
+`Annotated[..., QueryParameter(...)]`, following the same pattern as OAuth
+callback routes in `litestar_auth/controllers/_oauth_associate_routes.py`.
+
+### Advanced Alchemy session setup with LitestarAuth
+
+LitestarAuth expects a request-scoped `session_maker` and registers
+`LitestarAuthConfig.db_session_dependency_key` (default `db_session`). It also
+appends Advanced Alchemy's `async_autocommit_handler_maker()` when a builtin
+session factory is configured.
+
+Two supported setups:
+
+1. **LitestarAuth only** — pass `async_sessionmaker(...)` (or any factory with
+   `session_maker() -> AsyncSession`) to `LitestarAuthConfig.session_maker`.
+2. **SQLAlchemyPlugin + LitestarAuth** — use the same `session_maker` for both,
+   keep the default `db_session` dependency key (Advanced Alchemy's
+   `SQLAlchemyAsyncConfig.session_dependency_key` is also `db_session`), and add
+   both plugins. Request scope storage uses Advanced Alchemy's
+   `_aa_connection_state` namespace. After constructing
+   `SQLAlchemyAsyncConfig`, call
+   `bind_auth_session_to_alchemy(alchemy_config)` (or pass
+   `session_scope_key=alchemy_config.session_scope_key` manually) so LitestarAuth
+   uses the same post-init scope key as Advanced Alchemy. `get_or_create_scoped_session`
+   reuses an existing scoped session when present.
+
+   ```python
+   from litestar_auth.plugin import LitestarAuth, LitestarAuthConfig, bind_auth_session_to_alchemy
+
+   alchemy_config = SQLAlchemyAsyncConfig(...)
+   auth_session = bind_auth_session_to_alchemy(alchemy_config)
+   auth_config = LitestarAuthConfig(
+       ...,
+       session_maker=auth_session.session_maker,
+       session_scope_key=auth_session.session_scope_key,
+   )
+   ```
+
+Advanced Alchemy 1.10 deprecates repository helpers such as `list_and_count` in
+favor of `get_many_and_count`. The SQLAlchemy user adapter in this library uses
+the new API. When `filterwarnings = ["error"]` is enabled, pytest also ignores
+`DeprecationWarning` from the `advanced_alchemy` package itself because plugin
+internals (for example `set_async_context` inside `provide_session`) still emit
+warnings until Advanced Alchemy 2.0.
+
+```python
+from advanced_alchemy.config import AsyncSessionConfig
+from advanced_alchemy.extensions.litestar import SQLAlchemyAsyncConfig, SQLAlchemyPlugin
+from litestar import Litestar
+
+from litestar_auth import LitestarAuth, LitestarAuthConfig
+
+alchemy_config = SQLAlchemyAsyncConfig(
+    connection_string="postgresql+asyncpg://...",
+    session_config=AsyncSessionConfig(expire_on_commit=False),
+    before_send_handler="autocommit",
+)
+session_maker = alchemy_config.create_session_maker()
+
+auth_config = LitestarAuthConfig(
+    user_model=User,
+    user_manager_class=UserManager,
+    session_maker=session_maker,
+    # ... other auth settings ...
+)
+
+app = Litestar(
+    route_handlers=[...],
+    plugins=[SQLAlchemyPlugin(config=alchemy_config), LitestarAuth(auth_config)],
+)
+```
 
 ### `DbSessionDependencyKey` adoption
 

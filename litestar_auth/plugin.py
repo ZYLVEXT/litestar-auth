@@ -9,6 +9,11 @@ from litestar.middleware import DefineMiddleware
 from litestar.plugins import CLIPlugin, InitPlugin
 
 from litestar_auth._plugin import config as _plugin_config
+from litestar_auth._plugin._hooks import iter_feature_wiring
+from litestar_auth._plugin.advanced_alchemy import (
+    AlchemyAuthSessionBinding,
+    bind_auth_session_to_alchemy,
+)
 from litestar_auth._plugin.controllers import (
     build_controllers,
     totp_backend,
@@ -17,9 +22,10 @@ from litestar_auth._plugin.dependencies import (
     DependencyProviders,
     _make_backends_dependency_provider,
     _make_user_manager_dependency_provider,
+    _resolve_session_scope_key,
     register_dependencies,
-    register_exception_handlers,
 )
+from litestar_auth._plugin.exception_handlers import register_exception_handlers
 from litestar_auth._plugin.middleware import build_csrf_config, get_cookie_transports, has_api_key_transport
 from litestar_auth._plugin.scoped_session import get_or_create_scoped_session
 from litestar_auth._plugin.session_binding import (
@@ -29,12 +35,7 @@ from litestar_auth._plugin.session_binding import (
     _ScopedUserDatabaseProxy as ScopedUserDatabaseProxyImpl,
 )
 from litestar_auth._plugin.startup import (
-    bootstrap_bundled_token_orm_models,
-    require_oauth_token_encryption_for_configured_providers,
-    require_refreshable_strategy_when_enable_refresh,
-    require_secure_oauth_redirect_in_production,
-    require_shared_rate_limit_backends_for_multiworker,
-    warn_insecure_plugin_startup_defaults,
+    run_before_startup_wiring,
 )
 from litestar_auth._plugin.validation import (
     resolve_user_manager_account_state_validator,
@@ -95,6 +96,7 @@ class LitestarAuth[UP: UserProtocol[Any], ID](InitPlugin, CLIPlugin):
         self._oauth_token_encryption = _build_oauth_token_encryption(self.config)
         validate_config(self.config)
         self._session_maker = _plugin_config.require_session_maker(self.config)
+        self._session_scope_key = _resolve_session_scope_key(self.config)
         from litestar_auth._plugin.user_manager_builder import resolve_user_manager_factory  # noqa: PLC0415
 
         self._user_manager_factory = resolve_user_manager_factory(self.config)
@@ -118,20 +120,12 @@ class LitestarAuth[UP: UserProtocol[Any], ID](InitPlugin, CLIPlugin):
         Returns:
             The updated application config.
         """
-        require_shared_rate_limit_backends_for_multiworker(self.config)
-        require_refreshable_strategy_when_enable_refresh(self.config)
-        warn_insecure_plugin_startup_defaults(self.config)
-        require_oauth_token_encryption_for_configured_providers(
+        run_before_startup_wiring(
             config=self.config,
-            require_key=partial(require_oauth_token_encryption, self._oauth_token_encryption),
+            app_config=app_config,
+            require_oauth_key=partial(require_oauth_token_encryption, self._oauth_token_encryption),
         )
-        require_secure_oauth_redirect_in_production(config=self.config, app_config=app_config)
-        bootstrap_bundled_token_orm_models(self.config)
-        self._register_dependencies(app_config)
-        self._register_middleware(app_config)
-        security = self._register_openapi_security(app_config)
-        self._register_controllers(app_config, security=security)
-        self._register_exception_handlers(app_config.route_handlers)
+        self._run_after_startup_wiring(app_config)
         return app_config
 
     @override
@@ -191,7 +185,7 @@ class LitestarAuth[UP: UserProtocol[Any], ID](InitPlugin, CLIPlugin):
             return None
         from litestar_auth._plugin.openapi import build_security_requirement, register_openapi_security  # noqa: PLC0415
 
-        backend_inventory = _plugin_config.resolve_backend_inventory(self.config)
+        backend_inventory = self.config.resolve_feature_registry().backend_inventory
         schemes = register_openapi_security(app_config, backend_inventory.startup_backends())
         return build_security_requirement(schemes) or None
 
@@ -214,6 +208,34 @@ class LitestarAuth[UP: UserProtocol[Any], ID](InitPlugin, CLIPlugin):
             exception_response_hook=self.config.exception_response_hook,
         )
 
+    def _run_after_startup_wiring(self, app_config: AppConfig) -> None:
+        """Run app-config wiring phases in descriptor order.
+
+        Raises:
+            RuntimeError: If the wiring table names an unknown app-init hook.
+        """
+        security: list[dict[str, list[str]]] | None = None
+        for wiring in iter_feature_wiring(self.config):
+            for hook_name in wiring.after_startup:
+                if hook_name == "register_dependencies":
+                    self._register_dependencies(app_config)
+                elif hook_name == "register_middleware":
+                    self._register_middleware(app_config)
+                elif hook_name == "register_openapi_security":
+                    security = self._register_openapi_security(app_config)
+                elif hook_name == "register_controllers":
+                    self._register_controllers(app_config, security=security)
+                else:  # pragma: no cover - descriptor validation protects this branch
+                    msg = f"Unknown auth app-init wiring hook: {hook_name}"
+                    raise RuntimeError(msg)
+
+            for hook_name in wiring.exception_handlers:
+                if hook_name == "register_exception_handlers":
+                    self._register_exception_handlers(app_config.route_handlers)
+                else:  # pragma: no cover - descriptor validation protects this branch
+                    msg = f"Unknown auth exception-handler wiring hook: {hook_name}"
+                    raise RuntimeError(msg)
+
     def _register_dependencies(self, app_config: AppConfig) -> None:
         register_dependencies(
             app_config,
@@ -228,7 +250,7 @@ class LitestarAuth[UP: UserProtocol[Any], ID](InitPlugin, CLIPlugin):
         )
 
     def _register_middleware(self, app_config: AppConfig) -> None:
-        backend_inventory = _plugin_config.resolve_backend_inventory(self.config)
+        backend_inventory = self.config.resolve_feature_registry().backend_inventory
         startup_backends = backend_inventory.startup_backends()
         cookie_transports = get_cookie_transports(startup_backends)
         if cookie_transports:
@@ -243,7 +265,11 @@ class LitestarAuth[UP: UserProtocol[Any], ID](InitPlugin, CLIPlugin):
         middleware = DefineMiddleware(
             LitestarAuthMiddleware[UP, ID],
             config=LitestarAuthMiddlewareConfig[UP, ID](
-                get_request_session=partial(get_or_create_scoped_session, session_maker=self._session_maker),
+                get_request_session=partial(
+                    get_or_create_scoped_session,
+                    session_maker=self._session_maker,
+                    session_scope_key=self._session_scope_key,
+                ),
                 authenticator_factory=self._build_authenticator,
                 auth_cookie_names=auth_cookie_names,
                 api_key_use_rate_limit=(
@@ -260,7 +286,7 @@ class LitestarAuth[UP: UserProtocol[Any], ID](InitPlugin, CLIPlugin):
         app_config.middleware.insert(0, middleware)
 
     def _provide_backends(self) -> tuple[StartupBackendTemplate[UP, ID], ...]:
-        return _plugin_config.resolve_backend_inventory(self.config).startup_backends()
+        return self.config.resolve_feature_registry().startup_backends()
 
     def _provide_config(self) -> object:
         return self.config
@@ -269,11 +295,12 @@ class LitestarAuth[UP: UserProtocol[Any], ID](InitPlugin, CLIPlugin):
         return self.config.user_model
 
     def _totp_backend(self) -> StartupBackendTemplate[UP, ID]:
-        backend_inventory = _plugin_config.resolve_backend_inventory(self.config)
+        backend_inventory = self.config.resolve_feature_registry().backend_inventory
         return totp_backend(self.config, backend_inventory=backend_inventory)
 
 
 __all__ = (
+    "AlchemyAuthSessionBinding",
     "ApiKeyConfig",
     "DatabaseTokenAuthConfig",
     "FernetKeyringConfig",
@@ -283,6 +310,7 @@ __all__ = (
     "OAuthProviderConfig",
     "StartupBackendTemplate",
     "TotpConfig",
+    "bind_auth_session_to_alchemy",
 )
 
 

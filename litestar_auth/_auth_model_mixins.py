@@ -2,16 +2,16 @@
 
 from __future__ import annotations
 
+import re
 import uuid
 from datetime import datetime  # noqa: TC003 - SQLAlchemy resolves mapped annotations at runtime.
 from typing import TYPE_CHECKING, Any, ClassVar, cast
 
-from sqlalchemy import JSON, DateTime, ForeignKey, String, event, func, insert, inspect, select
+from sqlalchemy import JSON, DateTime, ForeignKey, LargeBinary, String, event, func, insert, inspect, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Mapped, declared_attr, mapped_column, relationship, validates
 from sqlalchemy.orm import Session as ORMSession
 
-from litestar_auth._api_key_model_mixin import ApiKeyMixin
 from litestar_auth._roles import normalize_role_name, normalize_roles
 
 __all__ = (
@@ -30,6 +30,13 @@ _USER_RELATIONSHIP_NAME = "user"
 _ROLE_ASSIGNMENTS_RELATIONSHIP_NAME = "role_assignments"
 _ROLE_NAME_LENGTH = 255
 _SESSION_ID_LENGTH = 36
+_API_KEY_ID_LENGTH = 64
+_API_KEY_PREFIX_ENV_LENGTH = 32
+_API_KEY_NAME_LENGTH = 255
+_API_KEY_CREATED_VIA_LENGTH = 64
+_CLIENT_METADATA_KEY_MAX_LENGTH = 64
+_CLIENT_METADATA_VALUE_MAX_LENGTH = 255
+_CLIENT_METADATA_KEY_PATTERN = re.compile(r"^[a-z][a-z0-9_]*$")
 
 
 def _new_session_id() -> str:
@@ -162,31 +169,124 @@ class RoleMixin:
         return relationship(cls.auth_user_role_model, **relationship_kwargs)
 
 
-class UserRoleAssociationMixin:
-    """Map one normalized role assignment for one user."""
+class _UserOwnedMixin:
+    """Shared user foreign-key and relationship mapping for user-owned rows."""
 
     auth_user_model: ClassVar[str] = "User"
     auth_user_table: ClassVar[str] = "user"
+    auth_user_back_populates: ClassVar[str]
+    auth_user_id_index: ClassVar[bool] = False
+    auth_user_id_nullable: ClassVar[bool] = False
+    auth_user_id_primary_key: ClassVar[bool] = False
+    auth_user_id_ondelete: ClassVar[str | None] = "CASCADE"
+    auth_user_relationship_foreign_keys: ClassVar[bool] = False
+    user_id: Mapped[uuid.UUID]
+    user: Mapped[Any]
+
+    @declared_attr
+    @classmethod
+    def user_id(cls) -> Mapped[uuid.UUID]:
+        """Map the user foreign key for a user-owned row.
+
+        Returns:
+            The mapped user foreign-key column.
+        """
+        return mapped_column(
+            ForeignKey(f"{cls.auth_user_table}.id", ondelete=cls.auth_user_id_ondelete),
+            index=cls.auth_user_id_index,
+            nullable=cls.auth_user_id_nullable,
+            primary_key=cls.auth_user_id_primary_key,
+        )
+
+    @declared_attr
+    @classmethod
+    def user(cls) -> Mapped[Any]:
+        """Map the relationship back to the configured user model.
+
+        Returns:
+            The relationship descriptor for the configured user model.
+        """
+        relationship_kwargs: dict[str, Any] = {"back_populates": cls.auth_user_back_populates}
+        if cls.auth_user_relationship_foreign_keys:
+            relationship_kwargs["foreign_keys"] = lambda: [cast("Mapped[Any]", cls.user_id)]
+        return relationship(cls.auth_user_model, **relationship_kwargs)
+
+
+class ApiKeyMixin(_UserOwnedMixin):
+    """Shared mapped attributes for API-key credential rows."""
+
+    auth_user_back_populates: ClassVar[str] = "api_keys"
+    auth_user_id_index: ClassVar[bool] = True
+
+    key_id: Mapped[str] = mapped_column(
+        String(length=_API_KEY_ID_LENGTH),
+        unique=True,
+        index=True,
+        nullable=False,
+    )
+    hashed_secret: Mapped[bytes] = mapped_column(LargeBinary(length=64), nullable=False)
+    encrypted_secret: Mapped[bytes | None] = mapped_column(LargeBinary(length=4096), default=None, nullable=True)
+    name: Mapped[str] = mapped_column(String(length=_API_KEY_NAME_LENGTH), nullable=False)
+    scopes: Mapped[list[str]] = mapped_column(JSON, default=list, nullable=False)
+    prefix_env: Mapped[str] = mapped_column(String(length=_API_KEY_PREFIX_ENV_LENGTH), nullable=False)
+    signing_required: Mapped[bool] = mapped_column(default=False, nullable=False)
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None, nullable=True)
+    last_used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None, nullable=True)
+    created_via: Mapped[str] = mapped_column(String(length=_API_KEY_CREATED_VIA_LENGTH), nullable=False)
+    client_metadata: Mapped[dict[str, str] | None] = mapped_column(JSON, default=None, nullable=True)
+
+    @validates("client_metadata")
+    def _validate_client_metadata(  # noqa: PLR6301
+        self,
+        key: str,
+        value: dict[str, str] | None,
+    ) -> dict[str, str] | None:
+        """Validate bounded API-key client metadata before persistence.
+
+        Returns:
+            The validated metadata mapping.
+
+        Raises:
+            ValueError: If metadata keys or values exceed the public session metadata bounds.
+        """
+        del key
+        if value is None:
+            return None
+        invalid_keys = [
+            metadata_key
+            for metadata_key in value
+            if (
+                not metadata_key
+                or len(metadata_key) > _CLIENT_METADATA_KEY_MAX_LENGTH
+                or _CLIENT_METADATA_KEY_PATTERN.fullmatch(metadata_key) is None
+            )
+        ]
+        invalid_values = [
+            metadata_value
+            for metadata_value in value.values()
+            if not metadata_value or len(metadata_value) > _CLIENT_METADATA_VALUE_MAX_LENGTH
+        ]
+        if invalid_keys or invalid_values:
+            msg = "API-key client_metadata keys must be 1-64 chars and values must be 1-255 chars."
+            raise ValueError(msg)
+        return value
+
+
+class UserRoleAssociationMixin(_UserOwnedMixin):
+    """Map one normalized role assignment for one user."""
+
     auth_user_back_populates: ClassVar[str] = _ROLE_ASSIGNMENTS_RELATIONSHIP_NAME
+    auth_user_id_primary_key: ClassVar[bool] = True
+    auth_user_relationship_foreign_keys: ClassVar[bool] = True
     auth_role_model: ClassVar[str] = "Role"
     auth_role_table: ClassVar[str] = "role"
     auth_role_back_populates: ClassVar[str] = "user_assignments"
 
     if TYPE_CHECKING:
-        user_id: Mapped[uuid.UUID]
         role_name: Mapped[str]
-        user: Mapped[Any]
         role: Mapped[Any]
-
-    @declared_attr
-    @classmethod
-    def user_id(cls) -> Mapped[uuid.UUID]:
-        """Map the user foreign key for the association row.
-
-        Returns:
-            The mapped user foreign-key column.
-        """
-        return mapped_column(ForeignKey(f"{cls.auth_user_table}.id", ondelete="CASCADE"), primary_key=True)
 
     @declared_attr
     @classmethod
@@ -211,20 +311,6 @@ class UserRoleAssociationMixin:
         """
         del key
         return normalize_role_name(value)
-
-    @declared_attr
-    @classmethod
-    def user(cls) -> Mapped[Any]:
-        """Map the relationship back to the configured user model.
-
-        Returns:
-            The relationship descriptor for the configured user model.
-        """
-        return relationship(
-            cls.auth_user_model,
-            back_populates=cls.auth_user_back_populates,
-            foreign_keys=lambda: [cast("Mapped[Any]", cls.user_id)],
-        )
 
     @declared_attr
     @classmethod
@@ -407,14 +493,10 @@ class UserAuthRelationshipMixin:
         )
 
 
-class _TokenModelMixin:
+class _TokenModelMixin(_UserOwnedMixin):
     """Shared mapped attributes for token models that belong to a user."""
 
-    auth_user_model: ClassVar[str] = "User"
-    auth_user_table: ClassVar[str] = "user"
     auth_user_back_populates: ClassVar[str]
-    user_id: Mapped[uuid.UUID]
-    user: Mapped[Any]
 
     token: Mapped[str] = mapped_column(String(length=255), primary_key=True)
     created_at: Mapped[datetime] = mapped_column(
@@ -422,26 +504,6 @@ class _TokenModelMixin:
         server_default=func.now(),
         nullable=False,
     )
-
-    @declared_attr
-    @classmethod
-    def user_id(cls) -> Mapped[uuid.UUID]:
-        """Map the foreign key to the configured user table.
-
-        Returns:
-            The mapped ``user_id`` foreign-key column.
-        """
-        return mapped_column(ForeignKey(f"{cls.auth_user_table}.id", ondelete="CASCADE"), nullable=False)
-
-    @declared_attr
-    @classmethod
-    def user(cls) -> Mapped[Any]:
-        """Map the relationship back to the configured user model.
-
-        Returns:
-            The relationship descriptor for the configured user model.
-        """
-        return relationship(cls.auth_user_model, back_populates=cls.auth_user_back_populates)
 
 
 class AccessTokenMixin(_TokenModelMixin):
@@ -464,3 +526,4 @@ class RefreshTokenMixin(_TokenModelMixin):
     )
     last_used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None, nullable=True)
     client_metadata: Mapped[dict[str, str] | None] = mapped_column(JSON, default=None, nullable=True)
+    consumed_token_digests: Mapped[list[str] | None] = mapped_column(JSON, default=None, nullable=True)

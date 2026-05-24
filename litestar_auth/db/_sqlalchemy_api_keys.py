@@ -2,23 +2,22 @@
 
 from __future__ import annotations
 
-import asyncio
-from collections import OrderedDict
-from contextlib import asynccontextmanager
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING, Any, Protocol, cast, override
+from typing import TYPE_CHECKING, ClassVar, Protocol, TypedDict, Unpack, cast, override
 from uuid import UUID
 
 from advanced_alchemy.base import ModelProtocol
 from sqlalchemy import delete, inspect, select
 
+from litestar_auth._locks import _BoundedAsyncLockRegistry
 from litestar_auth.db.base import ApiKeyData, BaseApiKeyStore
 from litestar_auth.exceptions import ConfigurationError
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncIterator, Callable
+    from collections.abc import Callable
 
     from sqlalchemy.ext.asyncio import AsyncSession, async_scoped_session
+    from sqlalchemy.orm import InstrumentedAttribute
     from sqlalchemy.sql import Select
     from sqlalchemy.sql.elements import ColumnElement
 
@@ -26,66 +25,7 @@ type AsyncSessionT = AsyncSession | async_scoped_session[AsyncSession]
 type _ApiKeyCreateLockKey = tuple[type[object], UUID]
 
 _API_KEY_CREATE_LOCK_LIMIT = 4096
-
-
-class _ApiKeyCreateLockRegistry:
-    """Bound process-local API-key creation locks while preserving active entries."""
-
-    def __init__(self, *, max_size: int = _API_KEY_CREATE_LOCK_LIMIT) -> None:
-        """Initialize a bounded lock registry.
-
-        Args:
-            max_size: Maximum number of idle and recently used locks to retain. When active concurrency exceeds this
-                value, held locks are retained until they can be safely evicted after release.
-
-        Raises:
-            ValueError: If ``max_size`` is less than one.
-        """
-        if max_size < 1:
-            msg = "max_size must be at least 1."
-            raise ValueError(msg)
-        self.max_size = max_size
-        self._locks: OrderedDict[_ApiKeyCreateLockKey, asyncio.Lock] = OrderedDict()
-
-    def __len__(self) -> int:
-        """Return the number of currently retained lock entries."""
-        return len(self._locks)
-
-    def __getitem__(self, key: _ApiKeyCreateLockKey) -> asyncio.Lock:
-        """Return a lock for ``key`` and evict oldest idle entries over the limit."""
-        lock = self._locks.get(key)
-        if lock is None:
-            lock = asyncio.Lock()
-            self._locks[key] = lock
-            self._evict_idle_locks(exclude_key=key)
-            return lock
-        self._locks.move_to_end(key)
-        return lock
-
-    @asynccontextmanager
-    async def lock(self, key: _ApiKeyCreateLockKey) -> AsyncIterator[None]:
-        """Hold the per-key create lock and prune idle overflow after release."""
-        lock = self[key]
-        await lock.acquire()
-        try:
-            yield
-        finally:
-            lock.release()
-            self._evict_idle_locks()
-
-    def _evict_idle_locks(self, *, exclude_key: _ApiKeyCreateLockKey | None = None) -> None:
-        """Evict oldest unlocked entries until the registry is within its idle bound."""
-        while len(self._locks) > self.max_size:
-            evicted_key = next(
-                (key for key, lock in self._locks.items() if key != exclude_key and not lock.locked()),
-                None,
-            )
-            if evicted_key is None:
-                return
-            del self._locks[evicted_key]
-
-
-_API_KEY_CREATE_LOCKS = _ApiKeyCreateLockRegistry()
+_API_KEY_CREATE_LOCKS = _BoundedAsyncLockRegistry[_ApiKeyCreateLockKey](max_size=_API_KEY_CREATE_LOCK_LIMIT)
 
 
 class _ApiKeyRow(ModelProtocol, Protocol):
@@ -107,6 +47,51 @@ class _ApiKeyRow(ModelProtocol, Protocol):
     client_metadata: dict[str, str] | None
 
 
+class _ApiKeyColumnsProtocol(Protocol):
+    """SQLAlchemy class-level API-key columns consumed by query builders."""
+
+    user_id: ClassVar[InstrumentedAttribute[UUID]]
+    key_id: ClassVar[InstrumentedAttribute[str]]
+    encrypted_secret: ClassVar[InstrumentedAttribute[bytes | None]]
+    signing_required: ClassVar[InstrumentedAttribute[bool]]
+    expires_at: ClassVar[InstrumentedAttribute[datetime | None]]
+    created_at: ClassVar[InstrumentedAttribute[datetime]]
+    revoked_at: ClassVar[InstrumentedAttribute[datetime | None]]
+
+
+class _ApiKeyRowCreateKwargs(TypedDict):
+    """Keyword payload used to construct an API-key ORM row."""
+
+    key_id: str
+    user_id: UUID
+    hashed_secret: bytes
+    encrypted_secret: bytes | None
+    name: str
+    scopes: list[str]
+    prefix_env: str
+    signing_required: bool
+    expires_at: datetime | None
+    created_via: str
+    client_metadata: dict[str, str] | None
+
+
+class _ApiKeyRowUpdateKwargs(TypedDict, total=False):
+    """Mutable API-key row fields updated by the store."""
+
+    encrypted_secret: bytes | None
+    last_used_at: datetime | None
+    name: str | None
+    revoked_at: datetime | None
+    scopes: list[str] | None
+
+
+class _ApiKeyRowFactory[AK: _ApiKeyRow](Protocol):
+    """Constructor shape used by the API-key SQLAlchemy model."""
+
+    def __call__(self, **kwargs: Unpack[_ApiKeyRowCreateKwargs]) -> AK:
+        """Return a new API-key ORM row."""
+
+
 class SQLAlchemyApiKeyStore[AK: _ApiKeyRow](BaseApiKeyStore[AK, UUID]):
     """Persist API keys via a caller-provided SQLAlchemy model and async session."""
 
@@ -119,6 +104,38 @@ class SQLAlchemyApiKeyStore[AK: _ApiKeyRow](BaseApiKeyStore[AK, UUID]):
         """
         self.session = session
         self.api_key_model = api_key_model
+
+    def _columns(self) -> type[_ApiKeyColumnsProtocol]:
+        """Return the API-key model as the typed SQLAlchemy column surface."""
+        return cast("type[_ApiKeyColumnsProtocol]", self.api_key_model)
+
+    async def _persist_and_refresh(self, api_key: AK) -> AK:
+        """Flush pending row changes, refresh the instance, and return it.
+
+        Returns:
+            Refreshed API-key row.
+        """
+        await self.session.flush()
+        await self.session.refresh(api_key)
+        return api_key
+
+    async def _apply_and_persist(self, api_key: AK, **changes: Unpack[_ApiKeyRowUpdateKwargs]) -> AK:
+        """Apply supplied API-key row changes and persist the refreshed row.
+
+        Returns:
+            Refreshed API-key row.
+        """
+        if (encrypted_secret := changes.get("encrypted_secret")) is not None:
+            api_key.encrypted_secret = encrypted_secret
+        if (last_used_at := changes.get("last_used_at")) is not None:
+            api_key.last_used_at = last_used_at
+        if (name := changes.get("name")) is not None:
+            api_key.name = name
+        if (revoked_at := changes.get("revoked_at")) is not None:
+            api_key.revoked_at = revoked_at
+        if (scopes := changes.get("scopes")) is not None:
+            api_key.scopes = list(scopes)
+        return await self._persist_and_refresh(api_key)
 
     @override
     async def create(self, data: ApiKeyData[UUID]) -> AK:
@@ -133,27 +150,22 @@ class SQLAlchemyApiKeyStore[AK: _ApiKeyRow](BaseApiKeyStore[AK, UUID]):
         if not data.signing_required and data.encrypted_secret is not None:
             msg = "encrypted_secret is only valid when signing_required is true."
             raise ValueError(msg)
-        api_key_model = cast("Any", self.api_key_model)
-        api_key = cast(
-            "AK",
-            api_key_model(
-                key_id=data.key_id,
-                user_id=data.user_id,
-                hashed_secret=data.hashed_secret,
-                encrypted_secret=data.encrypted_secret,
-                name=data.name,
-                scopes=list(data.scopes),
-                prefix_env=data.prefix_env,
-                signing_required=data.signing_required,
-                expires_at=data.expires_at,
-                created_via=data.created_via,
-                client_metadata=None if data.client_metadata is None else dict(data.client_metadata),
-            ),
+        api_key_model = cast("_ApiKeyRowFactory[AK]", self.api_key_model)
+        api_key = api_key_model(
+            key_id=data.key_id,
+            user_id=data.user_id,
+            hashed_secret=data.hashed_secret,
+            encrypted_secret=data.encrypted_secret,
+            name=data.name,
+            scopes=list(data.scopes),
+            prefix_env=data.prefix_env,
+            signing_required=data.signing_required,
+            expires_at=data.expires_at,
+            created_via=data.created_via,
+            client_metadata=None if data.client_metadata is None else dict(data.client_metadata),
         )
         self.session.add(api_key)
-        await self.session.flush()
-        await self.session.refresh(api_key)
-        return api_key
+        return await self._persist_and_refresh(api_key)
 
     @override
     async def create_for_user_with_limit(self, data: ApiKeyData[UUID], *, max_keys_per_user: int) -> AK | None:
@@ -171,9 +183,9 @@ class SQLAlchemyApiKeyStore[AK: _ApiKeyRow](BaseApiKeyStore[AK, UUID]):
     @override
     async def get_by_key_id(self, key_id: str, *, include_inactive: bool = False) -> AK | None:
         """Return an API key by public key id when present and active."""
-        api_key_model = cast("Any", self.api_key_model)
+        api_key_columns = self._columns()
         statement = self._active_statement(select(self.api_key_model), include_inactive=include_inactive).where(
-            api_key_model.key_id == key_id,
+            api_key_columns.key_id == key_id,
         )
         result = await self.session.execute(statement)
         return result.scalar_one_or_none()
@@ -181,15 +193,15 @@ class SQLAlchemyApiKeyStore[AK: _ApiKeyRow](BaseApiKeyStore[AK, UUID]):
     @override
     async def list_for_user(self, user_id: UUID, *, include_inactive: bool = False) -> list[AK]:
         """Return API keys for a user, excluding revoked or expired rows by default."""
-        api_key_model = cast("Any", self.api_key_model)
+        api_key_columns = self._columns()
         statement = (
             self
             ._active_statement(select(self.api_key_model), include_inactive=include_inactive)
-            .where(api_key_model.user_id == user_id)
-            .order_by(api_key_model.created_at, api_key_model.key_id)
+            .where(api_key_columns.user_id == user_id)
+            .order_by(api_key_columns.created_at, api_key_columns.key_id)
         )
         result = await self.session.execute(statement)
-        return list(cast("Any", result).scalars().all())
+        return list(result.scalars().all())
 
     @override
     async def delete_for_user(self, user_id: UUID) -> int:
@@ -198,8 +210,8 @@ class SQLAlchemyApiKeyStore[AK: _ApiKeyRow](BaseApiKeyStore[AK, UUID]):
         Returns:
             Number of deleted rows reported by the database driver.
         """
-        api_key_model = cast("Any", self.api_key_model)
-        result = await self.session.execute(delete(self.api_key_model).where(api_key_model.user_id == user_id))
+        api_key_columns = self._columns()
+        result = await self.session.execute(delete(self.api_key_model).where(api_key_columns.user_id == user_id))
         await self.session.flush()
         return int(getattr(result, "rowcount", 0) or 0)
 
@@ -214,9 +226,7 @@ class SQLAlchemyApiKeyStore[AK: _ApiKeyRow](BaseApiKeyStore[AK, UUID]):
         if api_key is None:
             return None
         if api_key.revoked_at is None:
-            api_key.revoked_at = revoked_at
-            await self.session.flush()
-            await self.session.refresh(api_key)
+            return await self._apply_and_persist(api_key, revoked_at=revoked_at)
         return api_key
 
     @override
@@ -229,13 +239,7 @@ class SQLAlchemyApiKeyStore[AK: _ApiKeyRow](BaseApiKeyStore[AK, UUID]):
         api_key = await self.get_by_key_id(key_id)
         if api_key is None:
             return None
-        if name is not None:
-            api_key.name = name
-        if scopes is not None:
-            api_key.scopes = list(scopes)
-        await self.session.flush()
-        await self.session.refresh(api_key)
-        return api_key
+        return await self._apply_and_persist(api_key, name=name, scopes=scopes)
 
     @override
     async def update_last_used_at(self, key_id: str, *, last_used_at: datetime) -> AK | None:
@@ -247,10 +251,7 @@ class SQLAlchemyApiKeyStore[AK: _ApiKeyRow](BaseApiKeyStore[AK, UUID]):
         api_key = await self.get_by_key_id(key_id)
         if api_key is None:
             return None
-        api_key.last_used_at = last_used_at
-        await self.session.flush()
-        await self.session.refresh(api_key)
-        return api_key
+        return await self._apply_and_persist(api_key, last_used_at=last_used_at)
 
     @override
     async def list_signing_keys_requiring_reencrypt(
@@ -260,18 +261,18 @@ class SQLAlchemyApiKeyStore[AK: _ApiKeyRow](BaseApiKeyStore[AK, UUID]):
         include_inactive: bool = False,
     ) -> list[AK]:
         """Return signing API-key rows whose encrypted secret needs keyring rotation."""
-        api_key_model = cast("Any", self.api_key_model)
+        api_key_columns = self._columns()
         statement = (
             self
             ._active_statement(select(self.api_key_model), include_inactive=include_inactive)
             .where(
-                api_key_model.signing_required.is_(True),
-                api_key_model.encrypted_secret.is_not(None),
+                api_key_columns.signing_required.is_(True),
+                api_key_columns.encrypted_secret.is_not(None),
             )
-            .order_by(api_key_model.created_at, api_key_model.key_id)
+            .order_by(api_key_columns.created_at, api_key_columns.key_id)
         )
         result = await self.session.execute(statement)
-        candidates = cast("Any", result).scalars().all()
+        candidates = result.scalars().all()
         return [api_key for api_key in candidates if requires_reencrypt(api_key)]
 
     @override
@@ -281,20 +282,17 @@ class SQLAlchemyApiKeyStore[AK: _ApiKeyRow](BaseApiKeyStore[AK, UUID]):
         Returns:
             Updated API-key row, or ``None`` when ``key_id`` does not identify a signing key with an encrypted secret.
         """
-        api_key_model = cast("Any", self.api_key_model)
+        api_key_columns = self._columns()
         statement = select(self.api_key_model).where(
-            api_key_model.key_id == key_id,
-            api_key_model.signing_required.is_(True),
-            api_key_model.encrypted_secret.is_not(None),
+            api_key_columns.key_id == key_id,
+            api_key_columns.signing_required.is_(True),
+            api_key_columns.encrypted_secret.is_not(None),
         )
         result = await self.session.execute(statement)
         api_key = result.scalar_one_or_none()
         if api_key is None:
             return None
-        api_key.encrypted_secret = encrypted_secret
-        await self.session.flush()
-        await self.session.refresh(api_key)
-        return api_key
+        return await self._apply_and_persist(api_key, encrypted_secret=encrypted_secret)
 
     def _active_statement(self, statement: Select[tuple[AK]], *, include_inactive: bool) -> Select[tuple[AK]]:
         """Apply revoked/expired filtering unless inactive rows were requested.
@@ -304,11 +302,11 @@ class SQLAlchemyApiKeyStore[AK: _ApiKeyRow](BaseApiKeyStore[AK, UUID]):
         """
         if include_inactive:
             return statement
-        api_key_model = cast("Any", self.api_key_model)
+        api_key_columns = self._columns()
         now = datetime.now(tz=UTC)
         return statement.where(
-            api_key_model.revoked_at.is_(None),
-            (api_key_model.expires_at.is_(None)) | (api_key_model.expires_at > now),
+            api_key_columns.revoked_at.is_(None),
+            (api_key_columns.expires_at.is_(None)) | (api_key_columns.expires_at > now),
         )
 
     async def _lock_api_key_owner(self, user_id: UUID) -> None:

@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from functools import partial
 from typing import TYPE_CHECKING, Any
 
-from litestar_auth._manager.construction import ManagerConstructorInputs
+from litestar_auth._manager.construction import BaseUserManagerConstructorKwargs, ManagerConstructorInputs
 from litestar_auth._plugin.config import UserManagerFactory  # noqa: TC001
 from litestar_auth.config import DEFAULT_MINIMUM_PASSWORD_LENGTH, require_password_length
 from litestar_auth.exceptions import ConfigurationError
@@ -18,8 +18,9 @@ if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
 
     from litestar_auth._plugin.config import LitestarAuthConfig
-    from litestar_auth.db.base import BaseUserStore
+    from litestar_auth.db.base import BaseApiKeyStore, BaseUserStore
     from litestar_auth.manager import BaseUserManager
+    from litestar_auth.password import PasswordHelper
 
 
 _DEFAULT_USER_MANAGER_CONSTRUCTOR_DESCRIPTION = (
@@ -52,9 +53,9 @@ class _DefaultUserManagerBuilderContract[UP: UserProtocol[Any], ID]:
     """Shared internal contract for plugin-owned default user-manager construction."""
 
     config: LitestarAuthConfig[UP, ID]
-    password_helper: object
+    password_helper: PasswordHelper
     password_validator: Callable[[str], None] | None
-    api_key_store: object | None = None
+    api_key_store: BaseApiKeyStore[Any, ID] | None = None
     backends: tuple[object, ...] = ()
 
     @property
@@ -68,7 +69,7 @@ class _DefaultUserManagerBuilderContract[UP: UserProtocol[Any], ID]:
             id_parser=self.config.id_parser,
         )
 
-    def build_kwargs(self) -> dict[str, Any]:
+    def build_kwargs(self) -> BaseUserManagerConstructorKwargs[UP, ID]:
         """Materialize the default-builder kwargs for one call site.
 
         Returns:
@@ -100,9 +101,9 @@ class _DefaultUserManagerBuilderContract[UP: UserProtocol[Any], ID]:
 def _build_default_user_manager_contract[UP: UserProtocol[Any], ID](
     config: LitestarAuthConfig[UP, ID],
     *,
-    password_helper: object,
+    password_helper: PasswordHelper,
     password_validator: Callable[[str], None] | None,
-    api_key_store: object | None = None,
+    api_key_store: BaseApiKeyStore[Any, ID] | None = None,
     backends: tuple[object, ...] = (),
 ) -> _DefaultUserManagerBuilderContract[UP, ID]:
     """Return the shared contract for plugin-owned default manager construction."""
@@ -119,7 +120,7 @@ def _build_default_user_manager_validation_kwargs[UP: UserProtocol[Any], ID](
     config: LitestarAuthConfig[UP, ID],
     *,
     backends: tuple[object, ...] = (),
-) -> dict[str, Any]:
+) -> BaseUserManagerConstructorKwargs[UP, ID]:
     """Materialize constructor-shape kwargs without executing runtime validator factories.
 
     Validation only needs the keyword surface, not the runtime validator object.
@@ -130,7 +131,7 @@ def _build_default_user_manager_validation_kwargs[UP: UserProtocol[Any], ID](
     """
     return _build_default_user_manager_contract(
         config,
-        password_helper=object(),
+        password_helper=config.resolve_password_helper(),
         password_validator=None,
         backends=backends,
     ).build_kwargs()

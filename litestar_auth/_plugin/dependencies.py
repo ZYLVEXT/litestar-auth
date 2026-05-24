@@ -1,4 +1,4 @@
-"""Dependency and exception-handler wiring for the auth plugin."""
+"""Dependency wiring for the auth plugin."""
 
 from __future__ import annotations
 
@@ -10,32 +10,36 @@ from typing import TYPE_CHECKING, Any, cast
 from advanced_alchemy.extensions.litestar import async_autocommit_handler_maker
 from litestar.datastructures.state import State
 from litestar.di import Provide
-from litestar.enums import MediaType
-from litestar.exceptions import ClientException
-from litestar.response import Response
 from litestar.types import Scope
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from litestar_auth._plugin._hooks import iter_feature_wiring
 from litestar_auth._plugin.config import (
     DEFAULT_BACKENDS_DEPENDENCY_KEY,
     DEFAULT_CONFIG_DEPENDENCY_KEY,
     DEFAULT_USER_MANAGER_DEPENDENCY_KEY,
     DEFAULT_USER_MODEL_DEPENDENCY_KEY,
     OAUTH_ASSOCIATE_USER_MANAGER_DEPENDENCY_KEY,
-    ExceptionResponseHook,
     LitestarAuthConfig,
 )
+from litestar_auth._plugin.exception_handlers import (
+    authorization_error_handler,  # noqa: F401
+    client_exception_handler,  # noqa: F401
+    register_exception_handlers,  # noqa: F401
+)
 from litestar_auth._plugin.oauth_contract import _build_oauth_route_registration_contract
-from litestar_auth._plugin.scoped_session import SessionFactory, get_or_create_scoped_session
+from litestar_auth._plugin.scoped_session import (
+    SESSION_SCOPE_KEY,
+    SessionFactory,
+    get_or_create_scoped_session,
+)
 from litestar_auth.authentication.backend import AuthenticationBackend
-from litestar_auth.controllers._utils import _is_litestar_auth_route_handler
-from litestar_auth.exceptions import AuthorizationError, ErrorCode, InsufficientRolesError, LitestarAuthError
 from litestar_auth.types import UserProtocol
 
 if TYPE_CHECKING:
     from litestar.config.app import AppConfig
-    from litestar.connection import Request
-    from litestar.types import ControllerRouterHandler
+
+    from litestar_auth._plugin._protocols import DependencyProvider
 
 
 type DbSessionProvider = Callable[[State, Scope], AsyncSession]
@@ -53,205 +57,37 @@ class DependencyProviders:
     oauth_associate_user_manager: object
 
 
-class _PluginRouteAuthError(LitestarAuthError):
-    """Route-scoped auth error wrapper carrying response metadata for custom hooks."""
+@dataclass(frozen=True, slots=True)
+class _DependencyRegistration:
+    """Resolved dependency key and provider pair for app-config registration."""
 
-    if TYPE_CHECKING:
-        required_roles: frozenset[str]
-        user_roles: frozenset[str]
-        require_all: bool
-
-    def __init__(
-        self,
-        *,
-        message: str,
-        code: str,
-        status_code: int,
-        headers: dict[str, str] | None,
-    ) -> None:
-        """Store auth error details plus the originating response metadata."""
-        super().__init__(message=message, code=code)
-        self.status_code = status_code
-        self.headers = headers
-
-
-def _copy_structured_auth_context(source: LitestarAuthError, target: _PluginRouteAuthError) -> None:
-    """Copy structured auth-error context used by custom exception hooks."""
-    if isinstance(source, InsufficientRolesError):
-        target.required_roles = source.required_roles
-        target.user_roles = source.user_roles
-        target.require_all = source.require_all
-
-
-def _wrap_litestar_auth_error(
-    exc: LitestarAuthError,
-    *,
-    status_code: int,
-    headers: dict[str, str] | None = None,
-) -> _PluginRouteAuthError:
-    """Wrap a domain auth error with HTTP response metadata for custom hooks.
-
-    Returns:
-        Wrapped auth error carrying the original message/code plus HTTP metadata.
-    """
-    wrapped_error = _PluginRouteAuthError(
-        message=str(exc),
-        code=exc.code,
-        status_code=status_code,
-        headers=headers,
-    )
-    _copy_structured_auth_context(exc, wrapped_error)
-    return wrapped_error
-
-
-def _resolve_client_exception_code(exc: ClientException) -> str | None:
-    """Return the auth error code embedded in ``exc.extra`` when present."""
-    extra = exc.extra if isinstance(exc.extra, dict) else {}
-    code = extra.get("code")
-    return code if isinstance(code, str) else None
-
-
-def _to_litestar_auth_error(exc: ClientException) -> _PluginRouteAuthError:
-    """Adapt a plugin-owned ``ClientException`` into ``LitestarAuthError`` metadata.
-
-    Returns:
-        A ``LitestarAuthError`` carrying the auth message/code plus the original
-        response status/header metadata needed by custom response hooks.
-    """
-    original_error = exc.__cause__ if isinstance(exc.__cause__, LitestarAuthError) else None
-    if original_error is not None:
-        return _wrap_litestar_auth_error(
-            original_error,
-            status_code=exc.status_code or 400,
-            headers=dict(exc.headers) if exc.headers is not None else None,
-        )
-    return _PluginRouteAuthError(
-        message=exc.detail,
-        code=_resolve_client_exception_code(exc) or LitestarAuthError.default_code,
-        status_code=exc.status_code or 400,
-        headers=dict(exc.headers) if exc.headers is not None else None,
-    )
-
-
-def client_exception_handler(
-    _request: Request[Any, Any, Any],
-    exc: ClientException,
-) -> Response[Any]:
-    """Format ClientException as detail and code for auth responses.
-
-    Returns:
-        JSON error response containing ``detail`` and ``code``.
-    """
-    extra = exc.extra if isinstance(exc.extra, dict) else {}
-    code = extra.get("code", ErrorCode.UNKNOWN)
-    return Response(
-        content={"detail": exc.detail, "code": code},
-        status_code=exc.status_code or 400,
-        media_type=MediaType.JSON,
-        headers=exc.headers,
-    )
-
-
-def _authorization_error_content(exc: AuthorizationError) -> dict[str, object]:
-    """Build the JSON payload for route-scoped authorization failures.
-
-    Returns:
-        JSON-serializable payload matching the plugin auth error contract.
-    """
-    content: dict[str, object] = {
-        "detail": str(exc),
-        "code": exc.code,
-    }
-    return content
-
-
-def authorization_error_handler(
-    _request: Request[Any, Any, Any],
-    exc: AuthorizationError,
-) -> Response[Any]:
-    """Format authorization failures as the auth JSON error contract.
-
-    Returns:
-        JSON response with HTTP 403 semantics for authz failures.
-    """
-    return Response(
-        content=_authorization_error_content(exc),
-        status_code=403,
-        media_type=MediaType.JSON,
-    )
-
-
-def _build_client_exception_handler(
-    exception_response_hook: ExceptionResponseHook | None,
-) -> Callable[[Request[Any, Any, Any], ClientException], Response[Any]]:
-    """Return the route-scoped auth ``ClientException`` handler for plugin routes."""
-    if exception_response_hook is None:
-        return client_exception_handler
-
-    def handle_client_exception(
-        request: Request[Any, Any, Any],
-        exc: ClientException,
-    ) -> Response[Any]:
-        return exception_response_hook(_to_litestar_auth_error(exc), request)
-
-    return handle_client_exception
-
-
-def _build_authorization_error_handler(
-    exception_response_hook: ExceptionResponseHook | None,
-) -> Callable[[Request[Any, Any, Any], AuthorizationError], Response[Any]]:
-    """Return the route-scoped auth authorization-error handler for plugin routes."""
-    if exception_response_hook is None:
-        return authorization_error_handler
-
-    def handle_authorization_error(
-        request: Request[Any, Any, Any],
-        exc: AuthorizationError,
-    ) -> Response[Any]:
-        return exception_response_hook(_wrap_litestar_auth_error(exc, status_code=403), request)
-
-    return handle_authorization_error
-
-
-def register_exception_handlers(
-    route_handlers: Sequence[ControllerRouterHandler],
-    *,
-    exception_response_hook: ExceptionResponseHook | None = None,
-) -> None:
-    """Register auth exception handlers on route handlers passed by the plugin orchestrator."""
-    client_handler = _build_client_exception_handler(exception_response_hook)
-    authorization_handler = _build_authorization_error_handler(exception_response_hook)
-    for route_handler in route_handlers:
-        route_handler_dict = getattr(route_handler, "__dict__", {})
-        existing_handlers = route_handler_dict.get("exception_handlers")
-        existing = dict(existing_handlers) if existing_handlers is not None else {}
-        existing.setdefault(AuthorizationError, cast("Any", authorization_handler))
-        if _is_litestar_auth_route_handler(route_handler):
-            existing.setdefault(ClientException, cast("Any", client_handler))
-        cast("Any", route_handler).exception_handlers = existing
+    key: str
+    provider: object
 
 
 def _make_db_session_provide(
     session_maker: SessionFactory,
+    *,
+    session_scope_key: str,
 ) -> DbSessionProvider:
-    """Build a sync dependency callable matching Advanced Alchemy ``provide_session`` semantics.
-
-    Returns:
-        Callable taking ``(state, scope)`` and returning the shared request ``AsyncSession``.
-    """
-
     def provide_db_session(state: State, scope: Scope) -> AsyncSession:
-        return get_or_create_scoped_session(state, scope, session_maker)
+        return get_or_create_scoped_session(
+            state,
+            scope,
+            session_maker,
+            session_scope_key=session_scope_key,
+        )
 
     return provide_db_session
 
 
-def _make_dependency_signature(parameter_name: str) -> inspect.Signature:
-    """Build a one-parameter signature for Litestar dependency matching.
+def _resolve_session_scope_key[UP: UserProtocol[Any], ID](
+    config: LitestarAuthConfig[UP, ID],
+) -> str:
+    return config.session_scope_key if config.session_scope_key is not None else SESSION_SCOPE_KEY
 
-    Returns:
-        Signature exposing ``parameter_name`` as a positional-or-keyword dependency input.
-    """
+
+def _make_dependency_signature(parameter_name: str) -> inspect.Signature:
     return inspect.Signature(
         parameters=[
             inspect.Parameter(
@@ -269,14 +105,6 @@ def _resolve_dependency_argument(
     args: tuple[object, ...],
     kwargs: dict[str, object],
 ) -> object:
-    """Resolve a single dependency argument with function-call-style errors.
-
-    Returns:
-        Resolved dependency object to pass into the underlying builder.
-
-    Raises:
-        TypeError: If the caller supplies missing, duplicate, or unexpected inputs.
-    """
     if len(args) > 1:
         msg = f"{provider_name}() takes 1 positional argument but {len(args)} were given"
         raise TypeError(msg)
@@ -301,16 +129,6 @@ def _make_user_manager_dependency_provider[TManager](
     build_user_manager: Callable[[AsyncSession], TManager],
     db_session_key: str,
 ) -> Callable[..., AsyncGenerator[TManager, None]]:
-    """Build Litestar DI async generator: one user-manager instance per injected ``AsyncSession``.
-
-    Args:
-        build_user_manager: Callable that builds a manager for a request session (typically
-            ``LitestarAuth._build_user_manager`` bound to the plugin).
-        db_session_key: Dependency key / Python parameter name (must be a valid identifier).
-
-    Returns:
-        Async generator dependency suitable for ``Provide`` (``use_cache=False``).
-    """
     signature = _make_dependency_signature(db_session_key)
 
     async def _yield_user_manager(session: AsyncSession) -> AsyncGenerator[object, None]:  # noqa: RUF029
@@ -325,8 +143,9 @@ def _make_user_manager_dependency_provider[TManager](
         )
         return _yield_user_manager(cast("AsyncSession", session))
 
-    cast("Any", _provide_user_manager).__signature__ = signature
-    cast("Any", _provide_user_manager).__annotations__ = {
+    provider = cast("DependencyProvider", _provide_user_manager)
+    provider.__signature__ = signature
+    provider.__annotations__ = {
         db_session_key: Any,
         "return": AsyncGenerator[object, None],
     }
@@ -338,11 +157,6 @@ def _make_backends_dependency_provider[UP: UserProtocol[Any], ID](
     build_backends: Callable[[AsyncSession], Sequence[AuthenticationBackend[UP, ID]]],
     db_session_key: str,
 ) -> Callable[..., Sequence[AuthenticationBackend[UP, ID]]]:
-    """Build a dependency provider that returns request-scoped backends for the active session.
-
-    Returns:
-        Callable dependency provider whose signature matches ``db_session_key``.
-    """
     signature = _make_dependency_signature(db_session_key)
 
     def _provide_backends(*args: object, **kwargs: object) -> Sequence[AuthenticationBackend[Any, Any]]:
@@ -354,8 +168,9 @@ def _make_backends_dependency_provider[UP: UserProtocol[Any], ID](
         )
         return build_backends(cast("AsyncSession", session))
 
-    cast("Any", _provide_backends).__signature__ = signature
-    cast("Any", _provide_backends).__annotations__ = {
+    provider = cast("DependencyProvider", _provide_backends)
+    provider.__signature__ = signature
+    provider.__annotations__ = {
         db_session_key: Any,
         "return": Sequence[AuthenticationBackend[Any, Any]],
     }
@@ -365,7 +180,6 @@ def _make_backends_dependency_provider[UP: UserProtocol[Any], ID](
 def _resolve_builtin_db_session_provider_factory[UP: UserProtocol[Any], ID](
     config: LitestarAuthConfig[UP, ID],
 ) -> SessionFactory | None:
-    """Return the plugin-owned session factory when it should register a DB session dependency."""
     if config.db_session_dependency_provided_externally:
         return None
     return config.session_maker
@@ -377,14 +191,9 @@ def _wrap_registered_dependency[UP: UserProtocol[Any], ID](
     *,
     config: LitestarAuthConfig[UP, ID],
 ) -> Provide:
-    """Wrap one dependency provider with the required Litestar DI settings.
-
-    Returns:
-        Litestar provider configured for the dependency key being registered.
-    """
     if key == config.db_session_dependency_key and _resolve_builtin_db_session_provider_factory(config) is not None:
         return Provide(
-            cast("Any", provider),
+            cast("DependencyProvider", provider),
             sync_to_thread=False,
             use_cache=False,
         )
@@ -404,47 +213,95 @@ def register_dependencies[UP: UserProtocol[Any], ID](
     Raises:
         ValueError: If the app already defines one of the required dependency keys.
     """
-    dependency_providers = {
-        DEFAULT_CONFIG_DEPENDENCY_KEY: providers.config,
-        DEFAULT_USER_MANAGER_DEPENDENCY_KEY: providers.user_manager,
-        DEFAULT_BACKENDS_DEPENDENCY_KEY: providers.backends,
-        DEFAULT_USER_MODEL_DEPENDENCY_KEY: providers.user_model,
-    }
-    session_maker = _resolve_builtin_db_session_provider_factory(config)
-    if session_maker is not None:
-        dependency_providers[config.db_session_dependency_key] = _make_db_session_provide(session_maker)
-    oauth_contract = _build_oauth_route_registration_contract(
-        auth_path=config.auth_path,
-        oauth_config=config.oauth_config,
-    )
-    if oauth_contract.has_plugin_owned_associate_routes:
-        dependency_providers[OAUTH_ASSOCIATE_USER_MANAGER_DEPENDENCY_KEY] = providers.oauth_associate_user_manager
-    collisions = sorted(set(dependency_providers).intersection(app_config.dependencies))
+    dependency_registrations = tuple(_iter_dependency_registrations(config, providers=providers))
+    dependency_keys = tuple(registration.key for registration in dependency_registrations)
+    collisions = sorted(set(dependency_keys).intersection(app_config.dependencies))
     if collisions:
         msg = f"Auth dependency keys already exist: {', '.join(collisions)}"
         raise ValueError(msg)
 
-    for key, provider in dependency_providers.items():
-        app_config.dependencies[key] = _wrap_registered_dependency(key, provider, config=config)
+    for registration in dependency_registrations:
+        app_config.dependencies[registration.key] = _wrap_registered_dependency(
+            registration.key,
+            registration.provider,
+            config=config,
+        )
 
+    session_maker = _resolve_builtin_db_session_provider_factory(config)
     if session_maker is not None:
-        app_config.before_send.append(async_autocommit_handler_maker())
+        app_config.before_send.append(
+            async_autocommit_handler_maker(session_scope_key=_resolve_session_scope_key(config)),
+        )
+
+
+def _iter_dependency_registrations[UP: UserProtocol[Any], ID](
+    config: LitestarAuthConfig[UP, ID],
+    *,
+    providers: DependencyProviders,
+) -> tuple[_DependencyRegistration, ...]:
+    registrations: list[_DependencyRegistration] = []
+    for wiring in iter_feature_wiring(config):
+        for provider_name in wiring.dependency_providers:
+            registration = _resolve_dependency_registration(provider_name, config=config, providers=providers)
+            if registration is not None:
+                registrations.append(registration)
+    return tuple(registrations)
+
+
+def _resolve_dependency_registration[UP: UserProtocol[Any], ID](
+    provider_name: str,
+    *,
+    config: LitestarAuthConfig[UP, ID],
+    providers: DependencyProviders,
+) -> _DependencyRegistration | None:
+    static_registrations = {
+        "config": _DependencyRegistration(DEFAULT_CONFIG_DEPENDENCY_KEY, providers.config),
+        "user_manager": _DependencyRegistration(DEFAULT_USER_MANAGER_DEPENDENCY_KEY, providers.user_manager),
+        "backends": _DependencyRegistration(DEFAULT_BACKENDS_DEPENDENCY_KEY, providers.backends),
+        "user_model": _DependencyRegistration(DEFAULT_USER_MODEL_DEPENDENCY_KEY, providers.user_model),
+    }
+    static_registration = static_registrations.get(provider_name)
+    if static_registration is not None:
+        return static_registration
+    if provider_name == "db_session":
+        session_maker = _resolve_builtin_db_session_provider_factory(config)
+        if session_maker is None:
+            return None
+        return _DependencyRegistration(
+            config.db_session_dependency_key,
+            _make_db_session_provide(
+                session_maker,
+                session_scope_key=_resolve_session_scope_key(config),
+            ),
+        )
+    if provider_name == "oauth_associate_user_manager":
+        oauth_contract = _build_oauth_route_registration_contract(
+            auth_path=config.auth_path,
+            oauth_config=config.oauth_config,
+        )
+        if not oauth_contract.has_plugin_owned_associate_routes:
+            return None
+        return _DependencyRegistration(
+            OAUTH_ASSOCIATE_USER_MANAGER_DEPENDENCY_KEY,
+            providers.oauth_associate_user_manager,
+        )
+    msg = f"Unknown auth dependency provider wiring: {provider_name}"
+    raise RuntimeError(msg)
 
 
 def _to_dependency_provider(provider: object, *, use_cache: bool | None = None) -> Provide:
-    """Wrap dependency callables in explicit Litestar providers.
-
-    Returns:
-        Litestar provider configured with caching when the callable is not a generator dependency.
-    """
     returns_async_generator = inspect.isasyncgenfunction(provider) or bool(
         getattr(provider, _RETURNS_ASYNC_GENERATOR_MARKER, False),
     )
     effective_use_cache = not returns_async_generator if use_cache is None else use_cache
     is_async = inspect.iscoroutinefunction(provider) or inspect.isasyncgenfunction(provider)
     if is_async:
-        return Provide(cast("Any", provider), use_cache=effective_use_cache)
-    dependency_provider = Provide(cast("Any", provider), use_cache=effective_use_cache, sync_to_thread=False)
+        return Provide(cast("DependencyProvider", provider), use_cache=effective_use_cache)
+    dependency_provider = Provide(
+        cast("DependencyProvider", provider),
+        use_cache=effective_use_cache,
+        sync_to_thread=False,
+    )
     if returns_async_generator:
         dependency_provider.has_async_generator_dependency = True
     return dependency_provider

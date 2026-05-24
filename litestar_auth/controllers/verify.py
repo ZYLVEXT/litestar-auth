@@ -7,9 +7,9 @@ from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
 import msgspec  # noqa: TC002
 from litestar import Controller, Request, post
-from litestar.exceptions import ClientException
 from litestar.status_codes import HTTP_200_OK, HTTP_202_ACCEPTED
 
+from litestar_auth.controllers._error_responses import raise_client_error
 from litestar_auth.controllers._response_timing import DEFAULT_MINIMUM_RESPONSE_SECONDS, await_minimum_response_seconds
 from litestar_auth.controllers._utils import (
     RequestHandler,
@@ -25,7 +25,7 @@ from litestar_auth.schemas import UserRead
 from litestar_auth.types import RoleCapableUserProtocol
 
 if TYPE_CHECKING:
-    from litestar_auth.ratelimit import AuthRateLimitConfig, EndpointRateLimit
+    from litestar_auth.ratelimit import AuthRateLimitConfig
 
 
 class VerifyControllerUserProtocol[ID](RoleCapableUserProtocol[ID], Protocol):
@@ -59,7 +59,7 @@ class _VerifyControllerContext:
     request_verify_before_request: RequestHandler | None
     verify_increment: RequestHandler
     verify_reset: RequestHandler
-    request_verify_rate_limit: EndpointRateLimit | None
+    request_verify_increment: RequestHandler
 
 
 def create_verify_controller[UP: VerifyControllerUserProtocol[Any], ID](  # noqa: PLR0913
@@ -90,6 +90,9 @@ def create_verify_controller[UP: VerifyControllerUserProtocol[Any], ID](  # noqa
     verify_rate_limit = rate_limit_config.verify_token if rate_limit_config else None
     request_verify_rate_limit = rate_limit_config.request_verify_token if rate_limit_config else None
     verify_rate_limit_increment, verify_rate_limit_reset = _create_rate_limit_handlers(verify_rate_limit)
+    request_verify_rate_limit_increment, _request_verify_rate_limit_reset = _create_rate_limit_handlers(
+        request_verify_rate_limit,
+    )
     verify_cls = _define_verify_controller_class(
         _VerifyControllerContext(
             user_read_schema=user_read_schema,
@@ -106,7 +109,7 @@ def create_verify_controller[UP: VerifyControllerUserProtocol[Any], ID](  # noqa
             request_verify_before_request=_create_before_request_handler(request_verify_rate_limit),
             verify_increment=verify_rate_limit_increment,
             verify_reset=verify_rate_limit_reset,
-            request_verify_rate_limit=request_verify_rate_limit,
+            request_verify_increment=request_verify_rate_limit_increment,
         ),
     )
     verify_cls.path = path
@@ -142,11 +145,12 @@ def _define_verify_controller_class(ctx: _VerifyControllerContext) -> type[Contr
                     user = await litestar_auth_user_manager.verify(data.token)
                 except InvalidVerifyTokenError as exc:
                     await ctx.verify_increment(request)
-                    raise ClientException(
+                    raise_client_error(
                         status_code=400,
                         detail="The email verification token is invalid.",
-                        extra={"code": ErrorCode.VERIFY_USER_BAD_TOKEN},
-                    ) from exc
+                        error_code=ErrorCode.VERIFY_USER_BAD_TOKEN,
+                        source=exc,
+                    )
 
                 await ctx.verify_reset(request)
                 return _to_user_schema(user, ctx.user_read_schema, unsafe_testing=ctx.unsafe_testing)
@@ -169,8 +173,7 @@ def _define_verify_controller_class(ctx: _VerifyControllerContext) -> type[Contr
                 try:
                     await litestar_auth_user_manager.request_verify_token(data.email)
                 finally:
-                    if ctx.request_verify_rate_limit is not None:
-                        await ctx.request_verify_rate_limit.increment(request)
+                    await ctx.request_verify_increment(request)
 
             await await_minimum_response_seconds(
                 minimum_seconds=ctx.request_verify_minimum_response_seconds,

@@ -5,7 +5,7 @@ from __future__ import annotations
 import base64
 from dataclasses import FrozenInstanceError, dataclass, field
 from pathlib import Path
-from typing import Any, cast
+from typing import cast
 
 import pytest
 from advanced_alchemy.base import UUIDPrimaryKey, create_registry
@@ -13,12 +13,10 @@ from sqlalchemy import event
 from sqlalchemy.orm import DeclarativeBase
 
 import litestar_auth._oauth_mapper_events as oauth_mapper_events
-import litestar_auth._optional_deps as optional_deps_module
 from litestar_auth import oauth_encryption
 from litestar_auth.models import OAuthAccountMixin, UserAuthRelationshipMixin, UserModelMixin
 from litestar_auth.oauth_encryption import (
     OAuthTokenEncryption,
-    _RawFernetBackend,
     bind_oauth_token_encryption,
     get_bound_oauth_token_encryption,
     require_oauth_token_encryption,
@@ -26,11 +24,6 @@ from litestar_auth.oauth_encryption import (
 from tests.unit.test_definition_file_coverage import load_reloaded_test_alias
 
 pytestmark = pytest.mark.unit
-
-
-def _as_any(value: object) -> Any:  # noqa: ANN401
-    """Return a value through the test-only dynamic type boundary."""
-    return cast("Any", value)
 
 
 def _fernet_key_string(seed: bytes = b"0") -> str:
@@ -211,52 +204,32 @@ def test_oauth_token_encryption_rejects_ambiguous_key_configuration() -> None:
         )
 
 
-def test_oauth_token_encryption_reuses_single_raw_backend_instance(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """``OAuthTokenEncryption`` mounts Fernet once; repeated encrypt/decrypt does not recreate it."""
-    init_calls: list[None] = []
-
-    class TrackingRawFernetBackend(_RawFernetBackend):
-        """Counts ``__init__`` calls for the policy cache assertion."""
-
-        def __init__(self) -> None:
-            init_calls.append(None)
-            super().__init__()
-
-    monkeypatch.setattr(oauth_encryption, "_RawFernetBackend", TrackingRawFernetBackend)
+def test_oauth_token_encryption_reuses_single_keyring_instance() -> None:
+    """``OAuthTokenEncryption`` mounts Fernet once; repeated encrypt/decrypt reuses the keyring."""
     policy = OAuthTokenEncryption(key=_fernet_key_string())
+    keyring = policy._keyring
     first = policy.encrypt("a")
     second = policy.encrypt("b")
     assert policy.decrypt(first) == "a"
     assert policy.decrypt(second) == "b"
-    assert len(init_calls) == 1
+    assert policy._keyring is keyring
 
 
-def test_oauth_token_encryption_keyless_mounts_backend_once(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Plaintext mode still constructs one backend with ``mount_vault(None)``."""
-    init_calls: list[None] = []
-
-    class TrackingRawFernetBackend(_RawFernetBackend):
-        """Counts ``__init__`` calls for the policy cache assertion."""
-
-        def __init__(self) -> None:
-            init_calls.append(None)
-            super().__init__()
-
-    monkeypatch.setattr(oauth_encryption, "_RawFernetBackend", TrackingRawFernetBackend)
+def test_oauth_token_encryption_keyless_mounts_nullable_keyring_once() -> None:
+    """Plaintext mode constructs one nullable keyring."""
     policy = OAuthTokenEncryption(key=None, unsafe_testing=True)
+    keyring = policy._keyring
     assert policy.encrypt("x") == "x"
     assert policy.decrypt("y") == "y"
-    assert len(init_calls) == 1
+    assert policy._keyring is keyring
+    assert not keyring.is_encryption_configured
 
 
 def test_oauth_token_encryption_repr_and_hash_exclude_backend() -> None:
-    """The cached Fernet backend must not affect repr, equality, or hashing."""
+    """The cached Fernet keyring must not affect repr, equality, or hashing."""
     policy = OAuthTokenEncryption(key=None)
     assert "_backend" not in repr(policy)
+    assert "_keyring" not in repr(policy)
     other = OAuthTokenEncryption(key=None)
     assert policy == other
     assert hash(policy) == hash(other)
@@ -372,99 +345,6 @@ def test_require_oauth_token_encryption_allows_keyring_policy() -> None:
     )
 
     assert require_oauth_token_encryption(policy, context="persisting OAuth access and refresh tokens") is policy
-
-
-def test_mount_vault_none_sets_fernet_none() -> None:
-    """``mount_vault(None)`` disables encryption without error."""
-    backend = _RawFernetBackend()
-    backend.mount_vault(None)
-
-    assert backend._keyring is None
-    assert backend.needs_rotation(None) is False
-
-
-def test_init_engine_is_a_no_op() -> None:
-    """``init_engine()`` intentionally does nothing."""
-    backend = _RawFernetBackend()
-
-    assert backend.init_engine("ignored") is None
-
-
-def test_mount_vault_fernet_missing_raises_install_hint(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Missing ``cryptography`` raises ``ImportError`` with the install hint."""
-    backend = _RawFernetBackend()
-
-    def import_module(_name: str) -> object:
-        msg = "missing cryptography"
-        raise ImportError(msg)
-
-    monkeypatch.setattr(optional_deps_module.importlib, "import_module", import_module)
-
-    with pytest.raises(ImportError, match=r"litestar-auth\[oauth,totp\]"):
-        backend.mount_vault(base64.urlsafe_b64encode(b"0" * 32).decode())
-
-
-def test_raw_fernet_backend_round_trips_encrypted_values() -> None:
-    """The raw backend continues to encrypt and decrypt token strings."""
-    backend = _RawFernetBackend()
-    backend.mount_vault(_fernet_key_string())
-    token = backend.encrypt("secret")
-
-    assert token != "secret"
-    assert token.startswith("fernet:v1:default:")
-    assert backend.decrypt(token) == "secret"
-    assert backend.needs_rotation(token) is False
-
-
-def test_raw_fernet_backend_encrypt_plaintext_mode_handles_bytes_and_rejects_other_types() -> None:
-    """Plaintext mode accepts strings or bytes and rejects unsupported values."""
-    backend = _RawFernetBackend()
-    backend.mount_vault(None)
-
-    assert not backend.encrypt(None)
-    assert backend.encrypt(b"plain-token") == "plain-token"
-
-    with pytest.raises(TypeError, match="strings when encryption is disabled"):
-        backend.encrypt(42)
-
-
-def test_raw_fernet_backend_encrypt_rejects_non_strings_when_encrypted() -> None:
-    """Encrypted mode only accepts string inputs."""
-    backend = _RawFernetBackend()
-    backend.mount_vault(_fernet_key_string())
-
-    with pytest.raises(TypeError, match="OAuth token values must be strings"):
-        backend.encrypt(42)
-
-
-def test_raw_fernet_backend_decrypt_plaintext_mode_handles_none_bytes_and_invalid_values() -> None:
-    """Plaintext decrypt supports ``None`` and bytes but rejects other value types."""
-    backend = _RawFernetBackend()
-    backend.mount_vault(None)
-
-    assert not backend.decrypt(None)
-    assert backend.decrypt(b"plain-token") == "plain-token"
-
-    with pytest.raises(TypeError, match="strings when encryption is disabled"):
-        backend.decrypt(42)
-
-
-def test_raw_fernet_backend_decrypt_accepts_bytes_and_rejects_invalid_values_when_encrypted() -> None:
-    """Encrypted decrypt accepts byte payloads and rejects unsupported types."""
-
-    class _FakeKeyring:
-        def decrypt(self, token: str) -> str:
-            """Return a deterministic plaintext token."""
-            assert token == "ciphertext"
-            return "plain-token"
-
-    backend = _RawFernetBackend()
-    backend._keyring = _as_any(_FakeKeyring())
-
-    assert backend.decrypt(b"ciphertext") == "plain-token"
-
-    with pytest.raises(TypeError, match="strings or bytes"):
-        backend.decrypt(42)
 
 
 def test_register_oauth_model_encryption_events_skips_existing_listeners(monkeypatch: pytest.MonkeyPatch) -> None:

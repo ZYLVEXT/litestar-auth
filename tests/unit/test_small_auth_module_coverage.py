@@ -24,7 +24,7 @@ ACCOUNT_IDENTITY_LENGTH = 2
 
 def _current_oauth_client_adapter_module() -> ModuleType:
     """Return the current OAuth client-adapter module after any reloads."""
-    return importlib.import_module("litestar_auth.oauth.client_adapter")
+    return importlib.import_module("litestar_auth.oauth._client")
 
 
 def _current_oauth_router_module() -> ModuleType:

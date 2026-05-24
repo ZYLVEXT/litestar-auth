@@ -36,7 +36,7 @@ OAuth scopes are **server-owned configuration**, not caller input.
 
 Manual/custom OAuth controllers accept any client object that satisfies the supported contract. You do not need to subclass a litestar-auth base class, but the client must fail the same way a normal `httpx-oauth` provider client would.
 
-The typed surface is exposed as structural protocols in `litestar_auth.oauth.client_adapter`:
+The typed surface is exposed as structural protocols in `litestar_auth.oauth._client`:
 `OAuthClientProtocol` covers the supported manual client shapes, with
 `OAuthDirectIdentityClientProtocol`, `OAuthProfileClientProtocol`, and the optional
 `OAuthEmailVerificationAsyncClientProtocol` documenting the async email-verification hook used by the

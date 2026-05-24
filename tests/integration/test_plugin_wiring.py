@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from typing import Any, cast
+from contextlib import contextmanager
+from typing import TYPE_CHECKING, Any, cast
 from uuid import UUID, uuid4
 
 import pytest
@@ -39,6 +40,7 @@ from litestar_auth.plugin import LitestarAuth, LitestarAuthConfig
 from litestar_auth.totp import InMemoryTotpEnrollmentStore, InMemoryUsedTotpCodeStore
 from tests.e2e.conftest import SessionMaker as E2ESessionMaker
 from tests.e2e.conftest import assert_structural_session_factory
+from tests.integration import _di_probes  # noqa: TC001
 
 from .test_orchestrator import (
     DummySessionMaker,
@@ -48,6 +50,21 @@ from .test_orchestrator import (
     InMemoryUserDatabase,
     PluginUserManager,
 )
+
+if TYPE_CHECKING:
+    from collections.abc import Iterator
+
+    from sqlalchemy.engine import Engine
+
+
+@contextmanager
+def _disposing_engine(engine: Engine) -> Iterator[Engine]:
+    """Yield ``engine`` and dispose it on exit so callers avoid a try/finally."""
+    try:
+        yield engine
+    finally:
+        engine.dispose()
+
 
 TOTP_RECOVERY_CODE_LOOKUP_SECRET = "test-recovery-code-lookup-secret-123"
 
@@ -544,9 +561,9 @@ async def test_plugin_respects_public_mount_paths_and_dependency_keys() -> None:
     @get("/contract-probe", sync_to_thread=False)
     def contract_probe(
         litestar_auth_config: object,
-        litestar_auth_user_manager: object,
-        litestar_auth_backends: object,
-        litestar_auth_user_model: object,
+        litestar_auth_user_manager: _di_probes.LitestarAuthUserManagerProbe,
+        litestar_auth_backends: _di_probes.LitestarAuthBackendsProbe,
+        litestar_auth_user_model: _di_probes.LitestarAuthUserModelProbe,
     ) -> dict[str, bool]:
         return {
             "has_config": litestar_auth_config is not None,
@@ -558,7 +575,7 @@ async def test_plugin_respects_public_mount_paths_and_dependency_keys() -> None:
     @get("/di-session-probe", sync_to_thread=False)
     def di_session_probe(
         db_session: object,
-        litestar_auth_user_manager: object,
+        litestar_auth_user_manager: _di_probes.LitestarAuthUserManagerProbe,
     ) -> dict[str, bool]:
         """Assert user_manager DI is wired to the same db_session key as the plugin.
 
@@ -880,7 +897,7 @@ async def test_database_token_preset_backends_dependency_uses_request_session() 
     @get("/preset-backends-probe", sync_to_thread=False)
     def preset_backends_probe(
         db_session: object,
-        litestar_auth_backends: object,
+        litestar_auth_backends: _di_probes.LitestarAuthBackendsProbe,
     ) -> dict[str, object]:
         backends = cast("list[AuthenticationBackend[ExampleUser, UUID]]", litestar_auth_backends)
         backend = backends[0]
@@ -935,7 +952,7 @@ async def test_database_token_preset_accepts_advanced_alchemy_session_maker() ->
     @get("/preset-aa-session-maker-probe", sync_to_thread=False)
     def preset_backends_probe(
         db_session: object,
-        litestar_auth_backends: object,
+        litestar_auth_backends: _di_probes.LitestarAuthBackendsProbe,
     ) -> dict[str, object]:
         backends = cast("list[AuthenticationBackend[ExampleUser, UUID]]", litestar_auth_backends)
         backend = backends[0]
@@ -944,12 +961,13 @@ async def test_database_token_preset_accepts_advanced_alchemy_session_maker() ->
             "strategy_session_is_db_session": getattr(backend.strategy, "session", None) is db_session,
         }
 
-    engine = create_engine(
-        "sqlite+pysqlite:///:memory:",
-        connect_args={"check_same_thread": False},
-        poolclass=StaticPool,
-    )
-    try:
+    with _disposing_engine(
+        create_engine(
+            "sqlite+pysqlite:///:memory:",
+            connect_args={"check_same_thread": False},
+            poolclass=StaticPool,
+        ),
+    ) as engine:
         alchemy = SQLAlchemyAsyncConfig(session_maker=E2ESessionMaker(engine))
         session_maker = alchemy.session_maker
         assert session_maker is not None
@@ -979,8 +997,6 @@ async def test_database_token_preset_accepts_advanced_alchemy_session_maker() ->
 
         async with AsyncTestClient(app=app) as client:
             response = await client.get("/preset-aa-session-maker-probe")
-    finally:
-        engine.dispose()
 
     assert response.status_code == HTTP_OK
     assert response.json() == {

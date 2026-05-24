@@ -10,6 +10,7 @@ from litestar_auth._manager.account_tokens import (
     AccountTokenAudiences,
     AccountTokenSecurityService,
     AccountTokensService,
+    AccountTokensServiceDependencies,
     _AccountTokensManagerProtocol,
 )
 from litestar_auth._manager.api_key_facade import ApiKeyManagerFacade
@@ -23,7 +24,7 @@ from litestar_auth._manager.construction import (
 from litestar_auth._manager.construction import (
     AccountTokenSecrets,
     BaseUserManagerConfig,
-    BaseUserManagerOptions,
+    BaseUserManagerConstructorKwargs,
     ConstructorAttributes,
     get_dummy_hash,
     login_identifier_digest,
@@ -31,11 +32,11 @@ from litestar_auth._manager.construction import (
     resolve_secret_inputs,
     validate_secret_distinctness,
 )
-from litestar_auth._manager.hooks import UserManagerHooks
+from litestar_auth._manager.hooks import ManagerHookBus, UserManagerHooks
 from litestar_auth._manager.security import (
     _SecretValue,
 )
-from litestar_auth._manager.totp_facade import TotpManagerFacade
+from litestar_auth._manager.totp_facade import TotpManagerFacade, TotpStepUpDispatcher, _load_cryptography_fernet
 from litestar_auth._manager.totp_secrets import (
     TotpSecretsService,
     TotpSecretStoragePosture,
@@ -95,7 +96,7 @@ class BaseUserManager[UP: UserProtocol[Any], ID](
     def __init__(  # pragma: no cover
         self,
         user_db: BaseUserStore[UP, ID],
-        **options: Unpack[BaseUserManagerOptions[UP, ID]],
+        **options: Unpack[BaseUserManagerConstructorKwargs[UP, ID]],
     ) -> None:
         pass
 
@@ -104,7 +105,7 @@ class BaseUserManager[UP: UserProtocol[Any], ID](
         self,
         *,
         user_db: BaseUserStore[UP, ID],
-        **options: Unpack[BaseUserManagerOptions[UP, ID]],
+        **options: Unpack[BaseUserManagerConstructorKwargs[UP, ID]],
     ) -> None:
         pass
 
@@ -113,7 +114,7 @@ class BaseUserManager[UP: UserProtocol[Any], ID](
         user_db: BaseUserStore[UP, ID] | None = None,
         *,
         config: BaseUserManagerConfig[UP, ID] | None = None,
-        **options: Unpack[BaseUserManagerOptions[UP, ID]],
+        **options: Unpack[BaseUserManagerConstructorKwargs[UP, ID]],
     ) -> None:
         """Initialize the user manager.
 
@@ -159,6 +160,7 @@ class BaseUserManager[UP: UserProtocol[Any], ID](
                 backends=settings.backends,
                 login_identifier=settings.login_identifier,
                 superuser_role_name=settings.superuser_role_name,
+                field_policy=settings.field_policy,
                 unsafe_testing=settings.unsafe_testing,
             ),
         )
@@ -198,6 +200,7 @@ class BaseUserManager[UP: UserProtocol[Any], ID](
         self.backends: tuple[object, ...] = settings.backends
         self.login_identifier: LoginIdentifier = settings.login_identifier
         self.superuser_role_name = normalize_superuser_role_name(settings.superuser_role_name)
+        self.field_policy = settings.field_policy
         self.unsafe_testing = settings.unsafe_testing
         self.totp_secret_keyring = resolved_security.totp_secret_keyring
 
@@ -207,11 +210,14 @@ class BaseUserManager[UP: UserProtocol[Any], ID](
         self.policy = UserPolicy(
             password_helper=resolved_password_helper,
             password_validator=self.password_validator,
+            field_policy=self.field_policy,
         )
         self.password_helper = self.policy.password_helper
         self._dummy_password_hash: str | None = None
         self._dummy_password_hash_helper: PasswordHelper | None = None
-        self._user_lifecycle = UserLifecycleService(self, policy=self.policy)
+        self._hook_bus = ManagerHookBus(self)
+        self._totp_stepup = TotpStepUpDispatcher.from_backends(self.backends)
+        self._user_lifecycle = UserLifecycleService(self, hook_bus=self._hook_bus, policy=self.policy)
         self._account_token_security = AccountTokenSecurityService(
             self,
             logger=logger,
@@ -219,23 +225,31 @@ class BaseUserManager[UP: UserProtocol[Any], ID](
         )
         self._account_tokens = AccountTokensService(
             self,
-            audiences=AccountTokenAudiences(
-                verify=VERIFY_TOKEN_AUDIENCE,
-                reset_password=RESET_PASSWORD_TOKEN_AUDIENCE,
+            dependencies=AccountTokensServiceDependencies(
+                audiences=AccountTokenAudiences(
+                    verify=VERIFY_TOKEN_AUDIENCE,
+                    reset_password=RESET_PASSWORD_TOKEN_AUDIENCE,
+                ),
+                hook_bus=self._hook_bus,
+                token_security=self._account_token_security,
+                logger=logger,
+                policy=self.policy,
             ),
-            token_security=self._account_token_security,
-            logger=logger,
-            policy=self.policy,
         )
         self._api_keys = ApiKeyManagerService(
             self,
             api_key_store=self.api_key_store,
-            config=cast("Any", self.api_key_config),
+            config=self.api_key_config,
+            hook_bus=self._hook_bus,
         )
         if self.totp_secret_keyring is None:
             self._totp_secrets = cast(
                 "TotpSecretsService[UP]",
-                TotpSecretsService(self, prefix=ENCRYPTED_TOTP_SECRET_PREFIX),
+                TotpSecretsService(
+                    self,
+                    prefix=ENCRYPTED_TOTP_SECRET_PREFIX,
+                    load_cryptography_fernet=_load_cryptography_fernet,
+                ),
             )
         else:
             self._totp_secrets = cast(
@@ -245,6 +259,7 @@ class BaseUserManager[UP: UserProtocol[Any], ID](
                     prefix=ENCRYPTED_TOTP_SECRET_PREFIX,
                     active_key_id=self.totp_secret_keyring.active_key_id,
                     keys=self.totp_secret_keyring.keys,
+                    load_cryptography_fernet=_load_cryptography_fernet,
                 ),
             )
 
@@ -264,6 +279,11 @@ class BaseUserManager[UP: UserProtocol[Any], ID](
         if self._totp_recovery_code_lookup_secret is None:
             return None
         return self._totp_recovery_code_lookup_secret.encode("utf-8")
+
+    @property
+    def hook_bus(self) -> ManagerHookBus[UP]:
+        """Return the lifecycle-hook dispatcher for this manager instance."""
+        return self._hook_bus
 
     @property
     def users(self) -> UserLifecycleService[UP, ID]:
@@ -304,10 +324,11 @@ class BaseUserManager[UP: UserProtocol[Any], ID](
     ) -> UP:
         """Create a new user, hashing the provided password before persistence.
 
-        Privileged fields (``is_active``, ``is_verified``, ``roles``) are
-        silently dropped unless ``allow_privileged=True``. With ``safe=True``
-        (default), any field outside ``{"email", "password"}`` is also
-        dropped.
+        With ``safe=True`` (default), any field outside the manager's
+        ``creatable_fields`` allowlist is dropped. With ``safe=False``,
+        undeclared fields are rejected. Privileged fields (``is_active``,
+        ``is_verified``, ``roles``) are silently dropped unless
+        ``allow_privileged=True``.
 
         Returns:
             The newly created user.
@@ -414,6 +435,8 @@ class BaseUserManager[UP: UserProtocol[Any], ID](
         Privileged fields such as ``is_active``, ``is_verified``, and ``roles``
         are rejected unless
         ``allow_privileged=True`` is passed explicitly.
+        Other fields must be declared in the manager's ``updatable_fields``
+        allowlist.
 
         Returns:
             The updated user, or the original user when there are no changes.

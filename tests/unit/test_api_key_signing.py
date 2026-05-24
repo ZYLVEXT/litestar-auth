@@ -21,7 +21,7 @@ from litestar_auth.authentication.middleware import (
 )
 from litestar_auth.authentication.strategy._api_key_format import digest_api_key_secret
 from litestar_auth.authentication.strategy._api_key_nonce_store import ApiKeyNonceStoreResult, InMemoryApiKeyNonceStore
-from litestar_auth.authentication.strategy.api_key import ApiKeyContext, ApiKeyStrategy
+from litestar_auth.authentication.strategy.api_key import ApiKeyContext, ApiKeyFailureReason, ApiKeyStrategy
 from litestar_auth.authentication.transport._api_key_signing import (
     API_KEY_HMAC_BODY_SHA256_HEADER,
     API_KEY_HMAC_DATE_HEADER,
@@ -631,8 +631,9 @@ async def test_signing_classifies_timestamp_skew_and_nonce_replay() -> None:
     assert await strategy.read_token_with_context(replay_token, UserManager(user)) is not None
     replay_token = read_signed_api_key_request(ASGIConnection(replay_scope))
 
-    assert await strategy.read_token_with_context(replay_token, UserManager(user)) is None
-    assert await strategy.classify_failure_code(replay_token) == ErrorCode.API_KEY_SIGNATURE_NONCE_REPLAY
+    replay_attempt = await strategy.read_token_attempt(replay_token, UserManager(user))
+    assert replay_attempt.result is None
+    assert replay_attempt.failure_reason == ApiKeyFailureReason.SIGNATURE_NONCE_REPLAY
 
 
 async def test_signing_read_skips_nonce_store_when_user_is_missing() -> None:
@@ -659,8 +660,8 @@ async def test_signing_read_skips_nonce_store_when_user_is_missing() -> None:
     assert nonce_store.calls == []
 
 
-async def test_signing_failure_classification_never_marks_nonce_used() -> None:
-    """Signed failure classification reports read-path replay state without writing nonce state."""
+async def test_signing_attempt_reports_nonce_replay_without_contextvar_state() -> None:
+    """Signed read attempts return nonce replay as the typed failure reason."""
     secret = "request-signing-secret"
     keyring = _keyring()
     user = ExampleUser(id=uuid4())
@@ -677,10 +678,12 @@ async def test_signing_failure_classification_never_marks_nonce_used() -> None:
     _authorize_scope(scope, key_id=row.key_id, secret=secret)
     token = read_signed_api_key_request(ASGIConnection(scope))
 
-    assert await strategy.read_token_with_context(token, UserManager(user)) is None
+    attempt = await strategy.read_token_attempt(token, UserManager(user))
+    assert attempt.result is None
+    assert attempt.failure_reason == ApiKeyFailureReason.SIGNATURE_NONCE_REPLAY
     assert nonce_store.calls == [("keyid", "replayed", 600)]
 
-    assert await strategy.classify_failure_code(token) == ErrorCode.API_KEY_SIGNATURE_NONCE_REPLAY
+    assert await strategy.classify_failure_code(token) == ErrorCode.API_KEY_SIGNATURE_INVALID
     assert nonce_store.calls == [("keyid", "replayed", 600)]
 
 

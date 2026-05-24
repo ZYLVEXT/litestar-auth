@@ -26,7 +26,7 @@ from litestar_auth._plugin import (
     OAUTH_ASSOCIATE_USER_MANAGER_DEPENDENCY_KEY,
 )
 from litestar_auth._plugin.config import LitestarAuthConfig, OAuthConfig
-from litestar_auth._plugin.scoped_session import SessionFactory
+from litestar_auth._plugin.scoped_session import SESSION_SCOPE_KEY, SessionFactory
 from litestar_auth.authentication.backend import AuthenticationBackend
 from litestar_auth.authentication.transport.bearer import BearerTransport
 from litestar_auth.controllers._utils import _mark_litestar_auth_route_handler
@@ -279,7 +279,10 @@ def test_register_exception_handlers_adds_authorization_handler_to_non_auth_rout
 def test_make_db_session_provide_reuses_scoped_session_within_scope() -> None:
     """The generated sync provider reuses sessions for structurally compatible factories."""
     session_maker = assert_structural_session_factory(DummySessionMaker())
-    provider = _make_db_session_provide(cast("async_sessionmaker[AsyncSession]", session_maker))
+    provider = _make_db_session_provide(
+        cast("async_sessionmaker[AsyncSession]", session_maker),
+        session_scope_key=SESSION_SCOPE_KEY,
+    )
     state = State()
     scope: dict[str, object] = {}
 
@@ -414,7 +417,7 @@ async def test_register_dependencies_registers_core_providers_and_autocommit_han
     autocommit_handler = object()
     monkeypatch.setattr(
         "litestar_auth._plugin.dependencies.async_autocommit_handler_maker",
-        lambda: autocommit_handler,
+        lambda **_: autocommit_handler,
     )
 
     register_dependencies(app_config, config, providers=_providers())
@@ -476,6 +479,16 @@ def test_register_dependencies_adds_oauth_associate_provider_only_when_configure
     register_dependencies(present_app_config, present_config, providers=_providers())
 
     assert OAUTH_ASSOCIATE_USER_MANAGER_DEPENDENCY_KEY in present_app_config.dependencies
+
+
+def test_unknown_dependency_provider_wiring_fails_loudly() -> None:
+    """Invalid FeatureWiring dependency names are rejected during dependency resolution."""
+    with pytest.raises(RuntimeError, match="unknown_provider"):
+        dependencies_module._resolve_dependency_registration(
+            "unknown_provider",
+            config=_minimal_config(),
+            providers=_providers(),
+        )
 
 
 def test_register_dependencies_skips_db_session_provider_and_autocommit_when_external() -> None:

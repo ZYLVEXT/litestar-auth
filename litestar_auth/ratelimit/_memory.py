@@ -3,13 +3,14 @@
 from __future__ import annotations
 
 import asyncio
-import math
 import time
 from collections import deque
 
 from litestar_auth._clock import Clock, read_clock
 
-from ._helpers import SlidingWindow, _validate_configuration, logger
+from ._client_host import logger
+from ._validation import SlidingWindow, _validate_configuration
+from ._window_math import cutoff_for_now, retry_seconds
 
 
 class InMemoryRateLimiter:
@@ -97,9 +98,7 @@ class InMemoryRateLimiter:
             if timestamps is None or len(timestamps) < self.max_attempts:
                 return 0
 
-            oldest_timestamp = timestamps[0]
-            remaining = self.window_seconds - (now - oldest_timestamp)
-            return max(math.ceil(remaining), 1)
+            return retry_seconds(now, self.window_seconds, timestamps[0])
 
     def _prune(self, key: str, now: float) -> SlidingWindow | None:
         """Remove expired timestamps for ``key`` and return active entries.
@@ -111,7 +110,7 @@ class InMemoryRateLimiter:
         if timestamps is None:
             return None
 
-        cutoff = now - self.window_seconds
+        cutoff = cutoff_for_now(now, self.window_seconds)
         while timestamps and timestamps[0] <= cutoff:
             timestamps.popleft()
 

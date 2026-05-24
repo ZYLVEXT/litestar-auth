@@ -2,21 +2,18 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any
 
 from litestar import Controller, Request, post
 from litestar.response import Response  # noqa: TC002
 
+from litestar_auth.controllers._auth_login import _handle_auth_login
+from litestar_auth.controllers._auth_refresh import _handle_auth_refresh
 from litestar_auth.controllers._utils import (
     RequestBodyErrorConfig,
     _create_request_body_exception_handlers,
 )
-from litestar_auth.controllers.auth import (
-    AuthControllerUserManagerProtocol,
-    _handle_auth_login,
-    _handle_auth_logout,
-    _handle_auth_refresh,
-)
+from litestar_auth.controllers.auth import AuthControllerUserManagerProtocol, _handle_auth_logout
 from litestar_auth.exceptions import ConfigurationError, ErrorCode
 from litestar_auth.guards import is_authenticated
 from litestar_auth.payloads import LoginCredentials, RefreshTokenRequest  # noqa: TC001
@@ -96,7 +93,7 @@ def _define_refresh_auth_controller_class_di[UP: UserProtocol[Any], ID](
         msg = "Refresh strategy is required."
         raise ConfigurationError(msg)
 
-    refresh_base = cast("Any", base_cls)
+    refresh_base: Any = base_cls
 
     class RefreshAuthController(refresh_base):
         """Backend-bound authentication endpoints with refresh-token rotation."""

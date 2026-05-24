@@ -14,13 +14,16 @@ from litestar_auth._plugin.role_admin import (
     RoleAdminUserNotFoundError,
     RoleModelFamily,
     SQLAlchemyRoleAdmin,
+    SystemManagedRoleError,
     _ManagerLifecycleRoleUpdater,
 )
+from litestar_auth._superuser_role import DEFAULT_SUPERUSER_ROLE_NAME
 from litestar_auth.contrib.role_admin._error_responses import (
     _invalid_role_name,
     _normalize_input_role_name,
     _role_assignment_user_not_found,
     _role_not_found,
+    _role_still_assigned,
 )
 from litestar_auth.contrib.role_admin._schemas import RoleRead, UserBrief
 from litestar_auth.contrib.role_admin._session_wiring import (
@@ -88,6 +91,9 @@ def _resolve_role_admin[UP: UserProtocol[Any]](
         model_family=context.model_family,
         session=db_session,
         role_lifecycle_updater=role_lifecycle_updater,
+        superuser_role_name=context.config.superuser_role_name
+        if context.config is not None
+        else DEFAULT_SUPERUSER_ROLE_NAME,
     )
 
 
@@ -226,6 +232,7 @@ async def _unassign_role_user[UP: UserProtocol[Any]](
 
     Raises:
         _role_assignment_user_not_found: If the target user does not exist.
+        _role_still_assigned: If the operation would remove the final configured superuser.
     """
     normalized_role_name = _normalize_input_role_name(role_name)
     parsed_user_id = role_admin.parse_user_id(user_id)
@@ -236,6 +243,8 @@ async def _unassign_role_user[UP: UserProtocol[Any]](
         )
     except RoleAdminUserNotFoundError as exc:
         raise _role_assignment_user_not_found(str(exc)) from exc
+    except SystemManagedRoleError as exc:
+        raise _role_still_assigned(str(exc)) from exc
 
 
 async def _list_role_user_page[UP: UserProtocol[Any]](

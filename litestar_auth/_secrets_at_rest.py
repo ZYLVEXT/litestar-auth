@@ -82,6 +82,7 @@ class FernetKeyring:
 
     active_key_id: str
     keys: Mapping[str, FernetKey] = field(repr=False)
+    nullable: bool = False
     _load_cryptography_fernet: FernetModuleLoader = field(
         default=_load_cryptography_fernet,
         repr=False,
@@ -99,6 +100,12 @@ class FernetKeyring:
         """
         normalized_keys = _normalize_keys(self.keys)
         if not normalized_keys:
+            if self.nullable:
+                object.__setattr__(self, "active_key_id", validate_fernet_key_id(self.active_key_id))
+                object.__setattr__(self, "keys", MappingProxyType({}))
+                object.__setattr__(self, "_fernet_by_key_id", MappingProxyType({}))
+                object.__setattr__(self, "_invalid_token_error", Exception)
+                return
             msg = "Fernet keyring requires at least one configured key."
             raise SecretAtRestError(msg)
 
@@ -124,29 +131,49 @@ class FernetKeyring:
     def __repr__(self) -> str:
         """Return a representation that never exposes raw Fernet keys."""
         masked_keys = dict.fromkeys(self.keys, "***")
+        if self.nullable:
+            return f"{type(self).__name__}(active_key_id={self.active_key_id!r}, keys={masked_keys!r}, nullable=True)"
         return f"{type(self).__name__}(active_key_id={self.active_key_id!r}, keys={masked_keys!r})"
 
     __str__ = __repr__
 
-    def encrypt(self, plaintext: str) -> str:
+    @property
+    def is_encryption_configured(self) -> bool:
+        """Return whether this keyring has mounted Fernet ciphers."""
+        return bool(self._fernet_by_key_id)
+
+    def encrypt(self, plaintext: object) -> str:
         """Encrypt plaintext with the active key and return a versioned storage value.
 
         Returns:
-            A ``fernet:v1:<key_id>:<ciphertext>`` storage value.
+            A ``fernet:v1:<key_id>:<ciphertext>`` storage value, or plaintext
+            when this nullable keyring has no configured keys.
+
+        Raises:
+            TypeError: If encrypted mode receives a non-string plaintext value.
         """
+        if not self.is_encryption_configured:
+            return _coerce_nullable_storage_value(plaintext)
+        if not isinstance(plaintext, str):
+            msg = "Fernet secret values must be strings."
+            raise TypeError(msg)
         ciphertext = self._fernet_by_key_id[self.active_key_id].encrypt(plaintext.encode("utf-8")).decode("utf-8")
         return encode_versioned_fernet_value(key_id=self.active_key_id, ciphertext=ciphertext)
 
-    def decrypt(self, stored: str) -> str:
+    def decrypt(self, stored: object) -> str:
         """Decrypt a versioned storage value with the key id embedded in that value.
 
         Returns:
-            The decrypted plaintext secret.
+            The decrypted plaintext secret, or plaintext when this nullable
+            keyring has no configured keys.
 
         Raises:
             SecretAtRestError: If the value is malformed or cannot be decrypted.
         """
-        parsed = decode_versioned_fernet_value(stored)
+        coerced = _coerce_storage_value(stored)
+        if not self.is_encryption_configured:
+            return coerced
+        parsed = decode_versioned_fernet_value(coerced)
         fernet = self._fernet_for_key_id(parsed.key_id)
         try:
             return fernet.decrypt(parsed.ciphertext.encode("utf-8")).decode("utf-8")
@@ -154,9 +181,11 @@ class FernetKeyring:
             msg = "Fernet secret decryption failed; key may be wrong or data corrupted."
             raise SecretAtRestError(msg) from exc
 
-    def needs_rotation(self, stored: str) -> bool:
+    def needs_rotation(self, stored: object) -> bool:
         """Return whether a stored value should be rewritten with the active key id."""
-        parsed = decode_versioned_fernet_value(stored)
+        if stored is None or not self.is_encryption_configured:
+            return False
+        parsed = decode_versioned_fernet_value(_coerce_storage_value(stored))
         self._fernet_for_key_id(parsed.key_id)
         return parsed.key_id != self.active_key_id
 
@@ -236,3 +265,24 @@ def _normalize_keys(keys: Mapping[str, FernetKey]) -> dict[str, FernetKey]:
 def _coerce_fernet_key(key: FernetKey) -> bytes:
     """Return key material as bytes for ``cryptography.fernet.Fernet``."""
     return key if isinstance(key, bytes) else key.encode("utf-8")
+
+
+def _coerce_storage_value(value: object) -> str:
+    """Return a stored secret value as text.
+
+    Raises:
+        TypeError: If the value is not a string or bytes.
+    """
+    if isinstance(value, str):
+        return value
+    if isinstance(value, bytes):
+        return value.decode("utf-8")
+    msg = "Fernet secret storage values must be strings or bytes."
+    raise TypeError(msg)
+
+
+def _coerce_nullable_storage_value(value: object) -> str:
+    """Return plaintext for a nullable keyring with no configured keys."""
+    if value is None:
+        return ""
+    return _coerce_storage_value(value)

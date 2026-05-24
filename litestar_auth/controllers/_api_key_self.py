@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Annotated, Any, cast
 
 from litestar import Controller, Request, delete, get, patch, post
+from litestar.params import PathParameter
 
 from litestar_auth.controllers._api_key_common import (
     ApiKeysControllerContext,
@@ -14,7 +15,7 @@ from litestar_auth.controllers._api_key_common import (
     to_api_key_read,
     update_api_key_for_request,
 )
-from litestar_auth.controllers._auth_helpers import (
+from litestar_auth.controllers._step_up import (
     TOTP_STEPUP_REQUIRED_OPENAPI_RESPONSE,
     TotpStepUpCheck,
     TotpStepUpVerifierProtocol,
@@ -33,6 +34,8 @@ if TYPE_CHECKING:
     from collections.abc import Callable
 
     from litestar_auth.controllers._utils import RequestBodyRouteHandler
+
+_KeyIdPath = Annotated[str, PathParameter()]
 
 
 def _create_self_api_key_create_handler[ID](ctx: ApiKeysControllerContext[ID]) -> RequestBodyRouteHandler:
@@ -92,7 +95,7 @@ def _create_self_api_key_get_handler[ID](ctx: ApiKeysControllerContext[ID]) -> C
     async def get_api_key(
         self: Controller,
         request: Request[Any, Any, Any],
-        key_id: str,
+        key_id: _KeyIdPath,
         litestar_auth_user_manager: ApiKeysControllerUserManagerProtocol[Any, Any],
     ) -> ApiKeyRead:
         del self
@@ -124,7 +127,7 @@ def _create_self_api_key_update_handler[ID](ctx: ApiKeysControllerContext[ID]) -
     async def update_api_key(
         self: Controller,
         request: Request[Any, Any, Any],
-        key_id: str,
+        key_id: _KeyIdPath,
         data: ApiKeyUpdateRequest,
         litestar_auth_user_manager: ApiKeysControllerUserManagerProtocol[Any, Any],
     ) -> ApiKeyRead:
@@ -158,7 +161,7 @@ def _create_self_api_key_revoke_handler[ID](ctx: ApiKeysControllerContext[ID]) -
     async def revoke_api_key(
         self: Controller,
         request: Request[Any, Any, Any],
-        key_id: str,
+        key_id: _KeyIdPath,
         litestar_auth_user_manager: ApiKeysControllerUserManagerProtocol[Any, Any],
     ) -> ApiKeyRead:
         del self

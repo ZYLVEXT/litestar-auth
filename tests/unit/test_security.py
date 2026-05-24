@@ -62,7 +62,11 @@ def _field_meta(schema_type: type[msgspec.Struct], field_name: str) -> msgspec.M
     annotation = get_type_hints(schema_type, include_extras=True)[field_name]
 
     for candidate in (annotation, *get_args(annotation)):
-        value = getattr(candidate, "__value__", candidate)
+        value = candidate
+        seen: set[int] = set()
+        while (next_value := getattr(value, "__value__", None)) is not None and id(value) not in seen:
+            seen.add(id(value))
+            value = next_value
         if get_origin(value) is not Annotated:
             continue
 

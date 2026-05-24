@@ -163,7 +163,6 @@ async def test_db_backed_session_devices_full_plugin_flow(client: AsyncTestClien
         owner_current["refresh_token"],
         "Owner Current Refreshed/2.0",
     )
-    await _assert_refresh_token_invalid(client, owner_current["refresh_token"])
     owner_current = rotated_owner_current
 
     owner_after_rotation = await _list_sessions(

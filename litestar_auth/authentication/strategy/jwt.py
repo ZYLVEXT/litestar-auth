@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-import hashlib
 import hmac
 import logging
+import math
 import secrets
 import time
 from dataclasses import dataclass
@@ -15,6 +15,7 @@ import jwt
 from jwt import ExpiredSignatureError, InvalidTokenError
 
 from litestar_auth._jwt_headers import JwtDecodeConfig, decode_signed_jwt, jwt_encode_headers
+from litestar_auth._keyed_digest import keyed_hex
 from litestar_auth.authentication.strategy import _jwt_denylist
 from litestar_auth.authentication.strategy._jwt_denylist import (
     JWTDenylistStore,
@@ -54,6 +55,14 @@ _ALLOWED_ALGORITHMS = frozenset(
 _ASYMMETRIC_ALGORITHMS = frozenset({"RS256", "RS384", "RS512", "ES256", "ES384", "ES512"})
 
 
+def _denylist_ttl_seconds(exp: object, *, now: float | None = None) -> int:
+    """Return the denylist TTL for a decoded JWT ``exp`` claim."""
+    if isinstance(exp, bool) or not isinstance(exp, int | float) or not math.isfinite(exp):
+        return 1
+    current_time = time.time() if now is None else now
+    return max(math.ceil(exp - current_time), 1)
+
+
 def _default_session_fingerprint(key: bytes) -> Callable[[object], str | None]:
     """Build a fingerprint getter that changes when user security state changes.
 
@@ -71,7 +80,7 @@ def _default_session_fingerprint(key: bytes) -> Callable[[object], str | None]:
             return None
 
         material = f"{user_id}\x1f{email.casefold()}\x1f{hashed_password}".encode()
-        return hmac.new(key, material, hashlib.sha256).hexdigest()
+        return keyed_hex(key, material)
 
     # Internal marker so plugin startup can detect the library default getter and
     # warn when the configured user model would silently disable token rotation
@@ -388,9 +397,7 @@ class JWTStrategy(Strategy[UP, ID]):
         exp = payload.get("exp")
         if not isinstance(jti, str):
             return
-        ttl_seconds = 1
-        if isinstance(exp, int):
-            ttl_seconds = max(exp - int(time.time()), 1)
+        ttl_seconds = _denylist_ttl_seconds(exp)
         recorded = await self._denylist_store.deny(jti, ttl_seconds=ttl_seconds)
         if not recorded:
             msg = (

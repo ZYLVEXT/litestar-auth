@@ -5,66 +5,53 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Never, cast
 
-from litestar.exceptions import ClientException, NotAuthorizedException
-
 from litestar_auth._totp_enrollment import (
-    _consume_enrollment_secret,
-    _decode_enrollment_token,
     _EnrollmentTokenIssueConfig,
     _issue_enrollment_token,
 )
+from litestar_auth.controllers._error_responses import (
+    INVALID_REQUEST_PAYLOAD_DETAIL,
+    raise_client_error,
+    raise_invalid_login_payload,
+    raise_totp_required,
+    raise_transient_token_error,
+)
+from litestar_auth.controllers._step_up import PasswordStepUpCheck, PasswordStepUpUserProtocol, require_password_step_up
 from litestar_auth.controllers._utils import (
     AccountStateValidatorProvider,
     RequestBodyErrorConfig,
     _decode_request_body,
     _require_account_state,
 )
-from litestar_auth.controllers.auth import INVALID_CREDENTIALS_DETAIL
-from litestar_auth.controllers.totp_contracts import (
-    INVALID_ENROLL_TOKEN_DETAIL,
-    INVALID_TOTP_CODE_DETAIL,
-    TotpUserManagerProtocol,
-    logger,
-)
 from litestar_auth.exceptions import ErrorCode, TokenError
 from litestar_auth.payloads import (
-    TotpConfirmEnableRequest,
-    TotpConfirmEnableResponse,
     TotpEnableRequest,
     TotpEnableResponse,
     TotpRegenerateRecoveryCodesRequest,
 )
 from litestar_auth.totp import (
-    build_recovery_code_index,
-    generate_totp_recovery_codes,
     generate_totp_secret,
     generate_totp_uri,
-    verify_totp,
-)
-from litestar_auth.totp_flow import (
-    InvalidTotpPendingTokenError,
 )
 from litestar_auth.types import TotpUserProtocol, UserProtocol
 
 if TYPE_CHECKING:
     from litestar import Request
 
-    from litestar_auth.controllers.totp_context import (
-        _TotpControllerContext,
-        _TotpControllerRuntimeContext,
-    )
+    from litestar_auth.controllers.totp_context import _TotpControllerContext, _TotpControllerRuntimeContext
+    from litestar_auth.controllers.totp_contracts import TotpUserManagerProtocol
     from litestar_auth.ratelimit import TotpSensitiveEndpoint
 
 
-@dataclass(slots=True)
-class _TotpPasswordStepUpContext[UP: UserProtocol[Any], ID]:
-    """Runtime inputs for current-password step-up checks."""
+@dataclass(frozen=True, slots=True)
+class _TotpPasswordStepUpRequest[UP: UserProtocol[Any], ID]:
+    """Runtime inputs for a TOTP current-password step-up check."""
 
     request: Request[Any, Any, Any]
-    runtime: _TotpControllerRuntimeContext[UP, ID]
     user: TotpUserProtocol[Any]
-    user_manager: TotpUserManagerProtocol[UP, ID]
     endpoint: TotpSensitiveEndpoint
+    user_manager: TotpUserManagerProtocol[UP, ID]
+    ctx: _TotpControllerContext[UP, ID]
 
 
 async def _totp_require_authenticated_user[UP: UserProtocol[Any], ID](
@@ -79,13 +66,10 @@ async def _totp_require_authenticated_user[UP: UserProtocol[Any], ID](
     Returns:
         Authenticated user narrowed to the TOTP protocol.
 
-    Raises:
-        NotAuthorizedException: When the request has no authenticated TOTP user.
     """
     user = request.user
     if not isinstance(user, TotpUserProtocol):
-        msg = "Authentication credentials were not provided."
-        raise NotAuthorizedException(detail=msg)
+        raise_totp_required()
     await _require_account_state(
         user,
         require_verified=ctx.security.requires_verification,
@@ -96,13 +80,8 @@ async def _totp_require_authenticated_user[UP: UserProtocol[Any], ID](
 
 
 def _raise_invalid_totp_payload() -> Never:
-    """Raise the stable invalid TOTP request-body response.
-
-    Raises:
-        ClientException: Always, with ``LOGIN_PAYLOAD_INVALID``.
-    """
-    msg = "Invalid request payload."
-    raise ClientException(status_code=422, detail=msg, extra={"code": ErrorCode.LOGIN_PAYLOAD_INVALID})
+    """Raise the stable invalid TOTP request-body response."""
+    raise_invalid_login_payload(INVALID_REQUEST_PAYLOAD_DETAIL)
 
 
 def _totp_request_body_error_config(
@@ -178,27 +157,19 @@ async def _totp_resolve_regenerate_payload(
 
 
 async def _totp_verify_current_password[UP: UserProtocol[Any], ID](
-    step_up: _TotpPasswordStepUpContext[UP, ID],
+    step_up: _TotpPasswordStepUpRequest[UP, ID],
     *,
     password: str,
 ) -> None:
-    """Verify the authenticated user's current password before sensitive TOTP changes.
-
-    Raises:
-        ClientException: When current-password authentication fails.
-    """
-    authenticated = await step_up.user_manager.authenticate(
-        step_up.user.email,
-        password,
-        login_identifier="email",
+    """Verify the authenticated user's current password before sensitive TOTP changes."""
+    await require_password_step_up(
+        PasswordStepUpCheck(
+            user=cast("PasswordStepUpUserProtocol[Any]", step_up.user),
+            user_manager=step_up.user_manager,
+            current_password=password,
+            on_failure=lambda: step_up.ctx.runtime.rate_limit.on_invalid_attempt(step_up.endpoint, step_up.request),
+        ),
     )
-    if authenticated is None or getattr(authenticated, "id", None) != getattr(step_up.user, "id", None):
-        await step_up.runtime.rate_limit.on_invalid_attempt(step_up.endpoint, step_up.request)
-        raise ClientException(
-            status_code=400,
-            detail=INVALID_CREDENTIALS_DETAIL,
-            extra={"code": ErrorCode.LOGIN_BAD_CREDENTIALS},
-        )
 
 
 async def _totp_raise_already_enabled(
@@ -208,19 +179,15 @@ async def _totp_raise_already_enabled(
     endpoint: TotpSensitiveEndpoint,
     request: Request[Any, Any, Any],
 ) -> None:
-    """Raise the stable already-enabled response when the user has a TOTP secret.
-
-    Raises:
-        ClientException: When TOTP is already enabled.
-    """
+    """Raise the stable already-enabled response when the user has a TOTP secret."""
     if user.totp_secret is None:
         return
     await ctx.enrollment.enrollment_store.clear(user_id=str(user.id))
     await ctx.runtime.rate_limit.on_invalid_attempt(endpoint, request)
-    raise ClientException(
+    raise_client_error(
         status_code=400,
         detail="TOTP is already enabled.",
-        extra={"code": ErrorCode.TOTP_ALREADY_ENABLED},
+        error_code=ErrorCode.TOTP_ALREADY_ENABLED,
     )
 
 
@@ -234,8 +201,6 @@ async def _totp_issue_enable_response(
     Returns:
         Secret, authenticator URI, and single-use enrollment token.
 
-    Raises:
-        ClientException: When enrollment-token issuance fails.
     """
     security = ctx.security
     enrollment = ctx.enrollment
@@ -253,7 +218,7 @@ async def _totp_issue_enable_response(
             ),
         )
     except TokenError as exc:
-        raise ClientException(status_code=503, detail=str(exc), extra={"code": exc.code}) from exc
+        raise_transient_token_error(exc)
     return TotpEnableResponse(secret=secret, uri=uri, enrollment_token=enrollment_token)
 
 
@@ -281,12 +246,12 @@ async def _totp_handle_enable[UP: UserProtocol[Any], ID](
     if security.totp_enable_requires_password:
         payload = await _totp_resolve_enable_payload(request, runtime=runtime, data=data)
         await _totp_verify_current_password(
-            _TotpPasswordStepUpContext(
+            _TotpPasswordStepUpRequest(
                 request=request,
-                runtime=runtime,
                 user=user,
-                user_manager=user_manager,
                 endpoint="enable",
+                user_manager=user_manager,
+                ctx=ctx,
             ),
             password=payload.password,
         )
@@ -297,124 +262,4 @@ async def _totp_handle_enable[UP: UserProtocol[Any], ID](
     return response
 
 
-async def _totp_consume_confirmed_enrollment_secret(
-    request: Request[Any, Any, Any],
-    *,
-    ctx: _TotpControllerContext[Any, Any],
-    data: TotpConfirmEnableRequest,
-    user: TotpUserProtocol[Any],
-) -> str:
-    """Decode and consume the server-side enrollment secret for confirmation.
-
-    Returns:
-        Plain TOTP secret from the consumed enrollment record.
-
-    Raises:
-        ClientException: When the enrollment token is invalid or expired.
-    """
-    try:
-        claims = _decode_enrollment_token(
-            data.enrollment_token,
-            signing_key=ctx.pending_token.totp_pending_secret,
-            expected_user_id=str(user.id),
-            cipher=ctx.enrollment.enrollment_token_cipher,
-        )
-        return await _consume_enrollment_secret(
-            claims,
-            enrollment_store=ctx.enrollment.enrollment_store,
-            cipher=ctx.enrollment.enrollment_token_cipher,
-        )
-    except InvalidTotpPendingTokenError:
-        await ctx.runtime.rate_limit.on_invalid_attempt("confirm_enable", request)
-        raise ClientException(
-            status_code=400,
-            detail=INVALID_ENROLL_TOKEN_DETAIL,
-            extra={"code": ErrorCode.TOTP_ENROLL_BAD_TOKEN},
-        ) from None
-
-
-async def _totp_verify_confirm_enable_code(
-    request: Request[Any, Any, Any],
-    *,
-    ctx: _TotpControllerContext[Any, Any],
-    secret: str,
-    code: str,
-) -> None:
-    """Validate the enrollment confirmation TOTP code.
-
-    Raises:
-        ClientException: When the TOTP code is invalid.
-    """
-    if verify_totp(secret, code, algorithm=ctx.security.totp_algorithm):
-        return
-    await ctx.runtime.rate_limit.on_invalid_attempt("confirm_enable", request)
-    raise ClientException(
-        status_code=400,
-        detail=INVALID_TOTP_CODE_DETAIL,
-        extra={"code": ErrorCode.TOTP_CODE_INVALID},
-    )
-
-
-async def _totp_persist_confirmed_secret[UP: UserProtocol[Any], ID](
-    user: UP,
-    *,
-    secret: str,
-    user_manager: TotpUserManagerProtocol[UP, ID],
-) -> tuple[str, ...]:
-    """Persist a confirmed TOTP secret and new recovery-code hashes.
-
-    Returns:
-        Plaintext recovery codes to show once.
-
-    Raises:
-        RuntimeError: If recovery-code lookup secret configuration is missing.
-    """
-    recovery_codes = generate_totp_recovery_codes()
-    lookup_secret = user_manager.recovery_code_lookup_secret
-    if lookup_secret is None:
-        msg = "totp_recovery_code_lookup_secret is required to persist TOTP recovery codes."
-        raise RuntimeError(msg)
-    recovery_code_index = build_recovery_code_index(
-        recovery_codes,
-        password_helper=user_manager.password_helper,
-        lookup_secret=lookup_secret,
-    )
-    try:
-        updated_user = await user_manager.set_totp_secret(user, secret)
-        await user_manager.set_recovery_code_hashes(updated_user, recovery_code_index)
-    except Exception:
-        await user_manager.set_totp_secret(user, None)
-        raise
-    return recovery_codes
-
-
-async def _totp_handle_confirm_enable[UP: UserProtocol[Any], ID](
-    request: Request[Any, Any, Any],
-    *,
-    ctx: _TotpControllerContext[UP, ID],
-    data: TotpConfirmEnableRequest,
-    user_manager: TotpUserManagerProtocol[UP, ID],
-) -> TotpConfirmEnableResponse:
-    """Confirm TOTP enrollment by validating the enrollment token and a TOTP code.
-
-    Returns:
-        Confirmation response indicating 2FA was enabled plus the one-time
-        plaintext recovery codes.
-    """
-    runtime = ctx.runtime
-    enrollment = ctx.enrollment
-    await runtime.rate_limit.before_request("confirm_enable", request)
-    user = await _totp_require_authenticated_user(
-        request,
-        ctx=ctx,
-        user_manager=user_manager,
-        endpoint="confirm_enable",
-    )
-    await _totp_raise_already_enabled(user, ctx=ctx, endpoint="confirm_enable", request=request)
-    secret = await _totp_consume_confirmed_enrollment_secret(request, ctx=ctx, data=data, user=user)
-    await _totp_verify_confirm_enable_code(request, ctx=ctx, secret=secret, code=data.code)
-    recovery_codes = await _totp_persist_confirmed_secret(cast("UP", user), secret=secret, user_manager=user_manager)
-    await enrollment.enrollment_store.clear(user_id=str(user.id))
-    logger.info("Issued %d TOTP recovery codes for user_id=%s.", len(recovery_codes), user.id)
-    await runtime.rate_limit.on_success("confirm_enable", request)
-    return TotpConfirmEnableResponse(enabled=True, recovery_codes=recovery_codes)
+from litestar_auth.controllers._totp_confirm_handlers import _totp_handle_confirm_enable  # noqa: E402, F401

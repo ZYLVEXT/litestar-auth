@@ -11,14 +11,12 @@ from litestar_auth.controllers._api_key_common import (
     ApiKeysControllerOptions,
     ApiKeysControllerUserManagerProtocol,
 )
-from litestar_auth.controllers._api_key_rate_limit import (
-    create_api_key_create_increment,
-    create_api_key_create_reset,
-    create_api_key_update_increment,
-    create_api_key_update_reset,
-)
 from litestar_auth.controllers._api_key_self import define_self_api_keys_controller
-from litestar_auth.controllers._utils import _create_before_request_handler, _mark_litestar_auth_route_handler
+from litestar_auth.controllers._utils import (
+    _create_before_request_handler,
+    _create_rate_limit_handlers,
+    _mark_litestar_auth_route_handler,
+)
 
 if TYPE_CHECKING:
     from litestar import Controller
@@ -56,14 +54,16 @@ def create_api_keys_controllers[ID](
     settings = ApiKeysControllerConfig(**options) if config is None else config
     create_rate_limit = settings.rate_limit_config.api_key_create if settings.rate_limit_config else None
     update_rate_limit = settings.rate_limit_config.api_key_update if settings.rate_limit_config else None
+    create_rate_limit_increment, create_rate_limit_reset = _create_rate_limit_handlers(create_rate_limit)
+    update_rate_limit_increment, update_rate_limit_reset = _create_rate_limit_handlers(update_rate_limit)
     ctx = ApiKeysControllerContext(
         id_parser=settings.id_parser,
         create_before_request=_create_before_request_handler(create_rate_limit),
-        create_rate_limit_increment=create_api_key_create_increment(create_rate_limit),
-        create_rate_limit_reset=create_api_key_create_reset(create_rate_limit),
+        create_rate_limit_increment=create_rate_limit_increment,
+        create_rate_limit_reset=create_rate_limit_reset,
         update_before_request=_create_before_request_handler(update_rate_limit),
-        update_rate_limit_increment=create_api_key_update_increment(update_rate_limit),
-        update_rate_limit_reset=create_api_key_update_reset(update_rate_limit),
+        update_rate_limit_increment=update_rate_limit_increment,
+        update_rate_limit_reset=update_rate_limit_reset,
         security=settings.security,
         require_step_up_on_create=settings.require_step_up_on_create,
         signing_enabled=settings.signing_enabled,

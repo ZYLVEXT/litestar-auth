@@ -1,3 +1,188 @@
+## Unreleased
+
+### Added
+
+- **Advanced Alchemy coexistence regression with native ``async_sessionmaker``.** Integration coverage now exercises ``SQLAlchemyPlugin`` + ``LitestarAuth`` when both plugins share a real ``aiosqlite``-backed ``async_sessionmaker``, in addition to the existing sync-adapter ``E2ESessionMaker`` probe.
+- **Per-domain error-code enums.** `ErrorCode` is now an aggregate registry composed of
+  `AuthErrorCode`, `TokenErrorCode`, `RoleErrorCode`, `TotpErrorCode`, `OAuthErrorCode`, and
+  `ApiKeyErrorCode`, each documenting the emission site of every member. Wire-format values
+  are byte-identical to the previous flat StrEnum; `ErrorCode.LOGIN_BAD_CREDENTIALS` and all
+  other existing names keep resolving. `ApiKeyNotFoundError` now carries an API-key-specific
+  code instead of falling back to `AUTHORIZATION_DENIED`.
+- **`consumed_token_digests` field on the refresh-token contract.** `RefreshTokenMixin` and
+  the bundled SQLAlchemy `RefreshToken` model expose a nullable JSON column that records
+  keyed digests of refresh tokens already consumed by a prior rotation. Custom refresh-token
+  models passed to `DatabaseTokenModels` must expose the same mapped attribute. See Security.
+- **Per-user invalidation epoch on the Redis token strategy.** `RedisStrategy.write_token` now
+  pairs every persisted token with the current per-user epoch and `read_token` rejects tokens
+  whose stored epoch is behind the live counter. `invalidate_all_tokens()` bumps the epoch
+  atomically (Lua) and sweeps the per-user index in one round trip.
+- **`BaseUserManagerConfig.creatable_fields` and `updatable_fields`.** Explicit per-manager
+  allowlists make `BaseUserManager.create(..., safe=False)` and `update(...)` deny-by-default
+  for any non-privileged field that is not declared. Public registration and OAuth bootstrap
+  paths continue to call `safe=True` and only persist `email`/`password`.
+- **`SystemManagedRoleError`** and **`RoleProtectedError`** exposed from
+  `litestar_auth._plugin.role_admin` for callers that want to differentiate destructive
+  RBAC invariant violations from generic `ValueError`s.
+- **`UnencryptedOAuthTokenBackend`.** Explicit plaintext OAuth-token storage backend wired
+  in only when `OAuthTokenEncryption(unsafe_testing=True)` is constructed without a Fernet
+  keyring. Replaces the implicit plaintext fall-through that lived on `_RawFernetBackend`.
+- **`STATE_COOKIE_MAX_AGE` constant** is now importable from `litestar_auth.oauth._flow_cookie`
+  and reused by both the cookie `max-age` and Fernet server-side `ttl`.
+- **Refresh-token reuse-detection regression tests, JWT denylist float-`exp` boundary tests,
+  Redis orphan-token invalidation tests, and OAuth flow-cookie TTL tests.** New regression
+  coverage for every security fix below.
+
+### Changed
+
+- **Minimum runtime dependencies:** Litestar ≥ 2.22 and Advanced Alchemy ≥ 1.10.
+- **SQLAlchemy user pagination** uses Advanced Alchemy ``get_many_and_count`` instead of the deprecated ``list_and_count``.
+- **Generated plugin routes** declare Litestar 2.22 query and path parameters with explicit ``Annotated[..., QueryParameter/PathParameter(...)]`` metadata (including dynamic paginated user listing).
+- **`LitestarAuthConfig.session_scope_key`:** optional Advanced Alchemy scope key for request sessions. Defaults to Advanced Alchemy's ``SESSION_SCOPE_KEY``. When using ``SQLAlchemyPlugin``, pass ``SQLAlchemyAsyncConfig.session_scope_key`` (for example via ``bind_auth_session_to_alchemy``) so middleware, DI, and ``before_send`` handlers share the same scoped session as Advanced Alchemy.
+- **`bind_auth_session_to_alchemy`` / ``AlchemyAuthSessionBinding``:** helper for wiring ``session_maker`` and ``session_scope_key`` from a constructed ``SQLAlchemyAsyncConfig`` into ``LitestarAuthConfig``.
+
+### Removed
+
+- **`litestar_auth._plugin.feature_configs`, `litestar_auth._plugin.backend_inventory`,
+  and `litestar_auth._plugin._totp_controller` module paths.** All three were thin
+  backward-compatibility shims re-exporting from the canonical `litestar_auth._plugin.features`
+  and `litestar_auth._plugin.totp_controller` packages. The `_plugin/` namespace is
+  private, BC is not a product requirement (AGENTS.md), and the canonical seams are
+  `litestar_auth._plugin.features` and `litestar_auth._plugin.totp_controller`. Any
+  importer of the old `_totp_controller` path must switch to
+  `litestar_auth._plugin.totp_controller`; tests that previously monkey-patched the
+  shim should target `litestar_auth._plugin.totp_controller._core` to retain
+  `_core`-scoped behavior overrides.
+
+### Security
+
+- **DB refresh-token reuse detection.** `rotate_refresh_token` now records the consumed
+  digest atomically alongside the rotation and detects replays of an already-consumed
+  refresh token. A replayed token revokes every refresh-token row sharing the compromised
+  `session_id` (the entire refresh-session chain) instead of silently failing as an
+  ordinary missing token. Closes the stolen-then-rotated theft window within
+  `refresh_max_age`. RFC 6749 §10.4 / OAuth 2.1 §6.1 compliance.
+- **JWT denylist TTL now honors float `exp` claims.** `JWTStrategy.destroy_token` previously
+  used `isinstance(exp, int)`, collapsing the denylist TTL to 1s for any JWT whose `exp` was
+  encoded as a float (legal per RFC 7519 §2 NumericDate) and effectively voiding revocation
+  for externally-minted tokens. The guard now accepts any finite numeric `exp` and falls back
+  safely for missing or non-numeric values.
+- **Redis `invalidate_all_tokens()` is now fail-closed.** A per-user epoch bumped atomically
+  via Lua, plus epoch validation on every `read_token`, means orphan tokens missing from the
+  per-user index are rejected immediately on use instead of surviving until their TTL.
+  "Logout from all devices" is now a hard guarantee under Redis eviction.
+- **Configured superuser role is system-managed.** `delete_role` rejects deletion of the
+  role named by `AuthConfig.superuser_role_name` with `SystemManagedRoleError`, regardless
+  of `force=True`. `unassign_user_roles` and the matching CLI/HTTP paths refuse to remove
+  the last assignment of the superuser role. Closes a destructive admin-lockout vector
+  reachable from the bundled `roles delete --force` and `roles unassign` commands.
+- **OAuth flow cookie enforces server-side TTL.** `_OAuthFlowCookieCipher.decrypt` now
+  passes `ttl=STATE_COOKIE_MAX_AGE` (300s) to `Fernet.decrypt`, so a leaked or replayed
+  state cookie cannot stay cryptographically valid beyond the browser `max-age`.
+- **OAuth callback clears the state cookie on every exit path.** Both login
+  (`/auth/oauth/{provider}/callback`) and associate
+  (`/auth/associate/{provider}/callback`) wrap the callback body in
+  `_clear_state_cookie_on_callback_exit`, so a callback that raises (invalid state,
+  provider error, account-state rejection) still expires the encrypted state+verifier
+  cookie. Previously the cookie was only cleared on the happy path.
+- **OAuth token encryption fails closed at the backend.** `_RawFernetBackend` raises
+  `ConfigurationError` if it is invoked without a configured keyring; production code paths
+  cannot reach a silent plaintext fall-through. Explicit plaintext storage is reachable only
+  through the new `UnencryptedOAuthTokenBackend`, which `OAuthTokenEncryption` selects only
+  when `unsafe_testing=True` is set without a key.
+- **Rate-limit identifier inputs are length-capped before PBKDF2.** `_extract_email` and the
+  HMAC API-key identifier extractor now bound the string fed into the rate-limit key
+  derivation, removing a CPU-amplification vector on every unauthenticated login,
+  forgot-password, and signed-API-key request. The attacker-supplied `Credential=` value in
+  the `LSA1-HMAC-SHA256` Authorization header is no longer used as a rate-limit bucket
+  partition, closing a per-key bucket-pollution / denial-of-service vector against
+  legitimate API-key holders.
+- **API-key authentication failure classification runs before rate-limit increment.** The
+  authentication middleware now classifies the failure code before incrementing the
+  `api_key_use` budget, so unauthenticated requests carrying random or malformed key ids no
+  longer burn the legitimate owner's bucket.
+- **Admin user mutations require admin step-up proof.** Superuser `PATCH /users/{user_id}`
+  requests must include the authenticated admin's `current_password`, and may include
+  `totp_code` when the admin has TOTP enabled. Superuser `DELETE /users/{user_id}` accepts
+  a JSON body with the same admin step-up fields. The target user's password never
+  satisfies this check.
+- **`BaseUserManager.create(..., safe=False)` and `update(...)` reject undeclared custom
+  fields by default.** Single explicit field policy with `creatable_fields` /
+  `updatable_fields` allowlists. Public registration and OAuth bootstrap (`safe=True`) keep
+  accepting only `email`/`password`. Direct `safe=False` create calls and update calls now
+  raise `AuthorizationError` naming any field that is neither in the allowlist nor covered
+  by the privileged-field override. Existing privileged-field behavior is unchanged.
+- **Login response timing parity.** `/auth/login` now wraps failure, pending-2FA, and
+  fully-authenticated branches in `await_minimum_response_seconds` (configurable via
+  `AuthSettings`, default unchanged), restoring branch-timing parity that previously leaked
+  whether the target user had TOTP enrolled.
+
+### Changed
+
+- **Subsystem decomposition (no external behavior change).** Internal modules were split
+  into focused submodules across `_plugin/`, `_manager/`, `controllers/`, `oauth/`,
+  `authentication/strategy/`, `ratelimit/`, `db/`, and the top-level crypto helpers.
+  Public import surfaces are preserved through each package's `__init__.py`. Notable
+  boundaries: `authentication/strategy/db.py` → `db.py` + `_db_refresh.py` +
+  `_db_rotation.py` + `_db_client_metadata.py`; `_plugin/role_admin.py` →
+  `role_admin/{_core,_queries,_mutations,_invariants}.py`; `_plugin/startup.py` →
+  `startup/{_core,_warnings,_requirements}.py`; `_plugin/config.py` →
+  `config/{_core,_protocols,_defaults,_resolvers,_validation}.py`; `_plugin/validation.py`
+  → nine concern-named submodules under `validation/`; `_plugin/features/registry.py` →
+  five submodules; `_plugin/dependencies.py` → `dependencies.py` + `exception_handlers.py`;
+  `oauth/service.py` → authorization issuer + callback resolver + linking policy + account
+  upserter; `_manager/api_keys.py` → `api_key_config.py` + `api_key_secrets.py` +
+  `api_key_service.py` + `api_key_row.py`; `totp.py` →
+  `_totp_primitive.py` + `_totp_recovery.py` + `_totp_verify.py` (lazy Argon2 dummy hash).
+- **Type tightening.** ~50 `cast("Any", ...)` sites removed across `authentication/`,
+  `controllers/`, `db/`, and `_plugin/` via typed Protocols and narrower seams. Zero
+  `# type: ignore` directives in `litestar_auth/`.
+- **Plugin feature wiring is table-driven.** A `FeatureWiring` descriptor list replaces
+  per-feature procedural branches in `_plugin/_hooks.py` and `_plugin/startup/`; adding a
+  feature is a single descriptor row.
+- **Validation kernel.** `_plugin/validation/` now shares an `IssueCollector` /
+  `ValidationIssue` kernel across `general`, `api_key`, `oauth`, `totp`, `roles`,
+  `credentials`, `request_security`, `session`, and `login_identifier` validators.
+- **API-key failure classification.** The contextvar-based nonce-failure shuttle is gone;
+  `ApiKeyStrategy` returns a typed `ApiKeyFailureReason` enum alongside the `None` result
+  and the middleware maps that single value to the public ErrorCode.
+- **Account-state helpers** collapsed into a single `AccountStatePolicy` with domain-error
+  and client-error tiers (`require` / `require_for_client`). The
+  `LOGIN_ACCOUNT_UNAVAILABLE` wire mapping is unchanged.
+- **Schema field aliases** consolidated in `litestar_auth/_schema_fields.py`; the public
+  `UserEmailField` and `UserPasswordField` remain importable from `litestar_auth.schemas`.
+- **OAuth associate-callback factory** is now one shared primitive that drives both the
+  direct-manager and dependency-key handler variants.
+- **Fernet keyring** is a single shared abstraction; OAuth token encryption and TOTP
+  enrollment secrets use the same nullable-keyring policy.
+
+### Migration
+
+- **Add the `consumed_token_digests` column.** Deployments using the bundled
+  `refresh_token` table must add a nullable JSON column. SQLite/PostgreSQL recipes are in
+  `docs/migration.md`. Custom refresh-token models passed to `DatabaseTokenModels` must
+  expose a mapped `consumed_token_digests` attribute; composing `RefreshTokenMixin` is the
+  recommended path.
+- **Declare custom manager fields explicitly.** If you call
+  `BaseUserManager.create(..., safe=False)` or `update(...)` with non-standard fields,
+  pass `creatable_fields=...` / `updatable_fields=...` to `BaseUserManager(...)` or
+  `BaseUserManagerConfig(...)`. The deny-by-default policy raises `AuthorizationError`
+  naming the rejected field.
+- **Admin user mutation requests must include admin step-up proof.** Clients calling
+  `PATCH /users/{user_id}` must add the authenticated admin's `current_password` to the
+  update body. Clients calling `DELETE /users/{user_id}` must send a JSON body such as
+  `{ "current_password": "admin-password" }`. Enrolled admins can send `totp_code` inline
+  or satisfy the recent-TOTP marker policy.
+- **Internal `_plugin/` import paths reorganized.** Anything that imported from the
+  removed `_plugin.feature_configs` or `_plugin.backend_inventory` must switch to
+  `litestar_auth._plugin.features`. Code that reached into `_plugin/{role_admin, startup,
+  config, totp_controller, controllers}.py` privates must switch to the new submodule
+  paths or — preferably — go through the package's public surface.
+- **Per-domain error-code enums are optional.** Wire-format values and `ErrorCode.<NAME>`
+  imports are byte-identical. Callers that want clearer intent can now also import
+  `AuthErrorCode`, `TokenErrorCode`, `RoleErrorCode`, `TotpErrorCode`, `OAuthErrorCode`,
+  or `ApiKeyErrorCode`.
+
 ## 3.3.0 (2026-05-17)
 
 ### Added

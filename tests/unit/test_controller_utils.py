@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import inspect
 import logging
+from dataclasses import FrozenInstanceError
 from typing import TYPE_CHECKING, Any, cast
 from unittest.mock import AsyncMock
 from uuid import uuid4
@@ -158,6 +159,52 @@ def test_error_responses_module_exports_domain_error_helpers() -> None:
     assert error_responses_module._domain_error_public_detail(RuntimeError("boom")) == "boom"
 
 
+def test_error_response_raise_helpers_preserve_public_exception_contracts() -> None:
+    """Centralized raise helpers keep the historical exception classes and payloads."""
+    with pytest.raises(ClientException) as bad_credentials:
+        error_responses_module.raise_wrong_current_password()
+    assert bad_credentials.value.status_code == STATUS_BAD_REQUEST
+    assert bad_credentials.value.detail == "Invalid credentials."
+    assert bad_credentials.value.extra == {"code": ErrorCode.LOGIN_BAD_CREDENTIALS}
+
+    with pytest.raises(NotAuthorizedException) as not_authorized:
+        error_responses_module.raise_totp_required()
+    assert not_authorized.value.detail == "Authentication credentials were not provided."
+
+    cause = RuntimeError("auth source")
+    with pytest.raises(NotAuthorizedException) as sourced_not_authorized:
+        error_responses_module.raise_not_authorized(source=cause)
+    assert sourced_not_authorized.value.__cause__ is cause
+
+    with pytest.raises(ClientException) as login_unavailable:
+        error_responses_module.raise_login_unavailable()
+    assert login_unavailable.value.status_code == STATUS_BAD_REQUEST
+    assert login_unavailable.value.detail == "Account is not available for sign-in."
+    assert login_unavailable.value.extra == {"code": ErrorCode.LOGIN_ACCOUNT_UNAVAILABLE}
+
+
+def test_error_response_openapi_examples_cover_helper_error_codes() -> None:
+    """Every ErrorCode emitted through the centralized helpers has a local OpenAPI example."""
+    emitted_codes = {
+        ErrorCode.LOGIN_BAD_CREDENTIALS,
+        ErrorCode.LOGIN_ACCOUNT_UNAVAILABLE,
+        ErrorCode.LOGIN_PAYLOAD_INVALID,
+        ErrorCode.OAUTH_STATE_INVALID,
+        ErrorCode.REFRESH_SESSION_NOT_FOUND,
+        ErrorCode.REFRESH_TOKEN_INVALID,
+        ErrorCode.REQUEST_BODY_INVALID,
+        ErrorCode.SESSION_MANAGEMENT_UNSUPPORTED,
+        ErrorCode.SUPERUSER_CANNOT_DELETE_SELF,
+        ErrorCode.TOTP_ALREADY_ENABLED,
+        ErrorCode.TOTP_CODE_INVALID,
+        ErrorCode.TOTP_ENROLL_BAD_TOKEN,
+        ErrorCode.TOTP_PENDING_BAD_TOKEN,
+        ErrorCode.TOTP_STEPUP_REQUIRED,
+        ErrorCode.VERIFY_USER_BAD_TOKEN,
+    }
+    assert emitted_codes <= set(error_responses_module.ERROR_RESPONSE_OPENAPI_EXAMPLES)
+
+
 def test_user_schema_module_strips_sensitive_fields_when_serializing() -> None:
     """The user-schema helper drops sensitive fields when materializing user reads."""
     assert frozenset({"hashed_password", "totp_secret", "password"}) == user_schema_module._SENSITIVE_FIELD_BLOCKLIST
@@ -222,6 +269,87 @@ def test_shared_account_state_client_error_helper_maps_inactive_users() -> None:
                 unverified_error=UnverifiedUserError,
             ),
         )
+
+    assert exc_info.value.status_code == STATUS_BAD_REQUEST
+    assert exc_info.value.detail == account_state_module._GENERIC_ACCOUNT_UNAVAILABLE_DETAIL
+    assert exc_info.value.extra == {"code": ErrorCode.LOGIN_ACCOUNT_UNAVAILABLE}
+
+
+def test_account_state_policy_is_frozen_and_slots_backed() -> None:
+    """The policy object is immutable and does not carry a per-instance dict."""
+    policy = account_state_module.AccountStatePolicy(
+        inactive_error=InactiveUserError,
+        unverified_error=UnverifiedUserError,
+    )
+
+    assert not hasattr(policy, "__dict__")
+    with pytest.raises(FrozenInstanceError):
+        policy.user_manager = object()
+
+
+def test_account_state_policy_require_raises_domain_errors() -> None:
+    """The cohesive policy API preserves domain exception behavior."""
+    policy = account_state_module.AccountStatePolicy(
+        inactive_error=InactiveUserError,
+        unverified_error=UnverifiedUserError,
+    )
+
+    with pytest.raises(InactiveUserError):
+        policy.require(_DummyUser(is_active=False), require_verified=True)
+
+    with pytest.raises(UnverifiedUserError):
+        policy.require(_DummyUser(is_verified=False), require_verified=True)
+
+
+def test_account_state_policy_require_delegates_to_manager_validator() -> None:
+    """The policy object keeps the explicit manager validator seam."""
+
+    class _Manager:
+        def __init__(self) -> None:
+            self.calls: list[tuple[object, bool]] = []
+
+        def require_account_state(self, user: object, *, require_verified: bool) -> None:
+            self.calls.append((user, require_verified))
+
+    manager = _Manager()
+    user = _DummyUser()
+    policy = account_state_module.AccountStatePolicy(
+        inactive_error=InactiveUserError,
+        unverified_error=UnverifiedUserError,
+        user_manager=manager,
+    )
+
+    policy.require(user, require_verified=False)
+
+    assert manager.calls == [(user, False)]
+
+
+@pytest.mark.parametrize(
+    ("failure", "manager_error"),
+    [
+        pytest.param("inactive", InactiveUserError, id="inactive"),
+        pytest.param("unverified", UnverifiedUserError, id="unverified"),
+    ],
+)
+def test_account_state_policy_require_for_client_maps_domain_errors(
+    failure: account_state_module.AccountStateFailure,
+    manager_error: type[BaseException],
+) -> None:
+    """Client-facing policy validation preserves the opaque account-unavailable payload."""
+
+    class _Manager:
+        def require_account_state(self, user: object, *, require_verified: bool) -> None:
+            del user, require_verified
+            raise manager_error
+
+    policy = account_state_module.AccountStatePolicy(
+        inactive_error=InactiveUserError,
+        unverified_error=UnverifiedUserError,
+        user_manager=_Manager(),
+    )
+
+    with pytest.raises(ClientException) as exc_info:
+        policy.require_for_client(_DummyUser(), require_verified=failure == "unverified")
 
     assert exc_info.value.status_code == STATUS_BAD_REQUEST
     assert exc_info.value.detail == account_state_module._GENERIC_ACCOUNT_UNAVAILABLE_DETAIL

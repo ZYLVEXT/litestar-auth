@@ -102,7 +102,7 @@ rate_limits = AuthRateLimitConfig(
 | ---- | ---- | ---- |
 | `enabled` | `False` | Adds the backend, routes, DI wiring, and OpenAPI security scheme. |
 | `environment_marker` | `"prod"` | Embedded in issued credentials and checked during authentication. |
-| `max_keys_per_user` | `5` | Active-key cap; exceeding it raises `API_KEY_LIMIT_REACHED`. |
+| `max_keys_per_user` | `20` | Active-key cap; exceeding it raises `API_KEY_LIMIT_REACHED`. |
 | `default_ttl` | 365 days | Applied when create requests omit `expires_at`; `None` creates non-expiring keys and emits a security warning. |
 | `require_step_up_on_create` | `True` | Requires `current_password` on self-service create requests. Setting it to `False` keeps `requires_password_session` but skips password re-verification for create. |
 | `allowed_scopes` | `()` | Scope catalog used by create/update validation when `scope_subset_check=True`. |

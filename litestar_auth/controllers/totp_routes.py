@@ -3,18 +3,21 @@
 from __future__ import annotations
 
 import inspect
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Annotated, Any, cast
 
 import msgspec  # noqa: TC002
 from litestar import Controller, Request, post
+from litestar.params import Dependency
 
-from litestar_auth.controllers._auth_helpers import TOTP_STEPUP_REQUIRED_OPENAPI_RESPONSE
+from litestar_auth.controllers._step_up import TOTP_STEPUP_REQUIRED_OPENAPI_RESPONSE
 from litestar_auth.controllers._utils import (
     RequestBodyErrorConfig,
     RequestBodyRouteHandler,
+    _attach_handler_signature,
     _configure_request_body_handler,
+    _controller_route_handler,
 )
-from litestar_auth.controllers.totp_contracts import TotpUserManagerProtocol  # noqa: TC001
+from litestar_auth.controllers.totp_contracts import TotpUserManagerProtocol
 from litestar_auth.controllers.totp_handlers import (
     _totp_handle_confirm_enable,
     _totp_handle_enable,
@@ -46,18 +49,21 @@ if TYPE_CHECKING:
     from litestar_auth.controllers.totp_context import _TotpControllerContext
 
 
+_TotpUserManagerDep = Annotated[TotpUserManagerProtocol[Any, Any], Dependency()]
+
+
 def _remove_request_body_handler_data_parameter(route_handler: RequestBodyRouteHandler) -> None:
     """Remove ``data`` from a handler signature when no request body is accepted."""
     handler_fn = route_handler.fn
     signature = inspect.signature(handler_fn)
-    adapted_handler = cast("Any", handler_fn)
-    adapted_handler.__signature__ = inspect.Signature(
-        parameters=[parameter for parameter in signature.parameters.values() if parameter.name != "data"],
-        return_annotation=signature.return_annotation,
+    _attach_handler_signature(
+        handler_fn,
+        signature=inspect.Signature(
+            parameters=[parameter for parameter in signature.parameters.values() if parameter.name != "data"],
+            return_annotation=signature.return_annotation,
+        ),
+        annotations={key: value for key, value in getattr(handler_fn, "__annotations__", {}).items() if key != "data"},
     )
-    adapted_handler.__annotations__ = {
-        key: value for key, value in getattr(handler_fn, "__annotations__", {}).items() if key != "data"
-    }
 
 
 def _create_totp_enable_handler[UP: UserProtocol[Any], ID](
@@ -74,7 +80,7 @@ def _create_totp_enable_handler[UP: UserProtocol[Any], ID](
     async def enable(
         self: object,
         request: Request[Any, Any, Any],
-        litestar_auth_user_manager: TotpUserManagerProtocol[Any, Any],
+        litestar_auth_user_manager: _TotpUserManagerDep,
         data: msgspec.Struct | None = None,
     ) -> TotpEnableResponse:
         del self
@@ -103,7 +109,7 @@ def _create_totp_confirm_enable_handler[UP: UserProtocol[Any], ID](
         self: object,
         request: Request[Any, Any, Any],
         data: TotpConfirmEnableRequest,
-        litestar_auth_user_manager: TotpUserManagerProtocol[Any, Any],
+        litestar_auth_user_manager: _TotpUserManagerDep,
     ) -> TotpConfirmEnableResponse:
         del self
         return await _totp_handle_confirm_enable(
@@ -131,7 +137,7 @@ def _create_totp_verify_handler[UP: UserProtocol[Any], ID](
         self: object,
         request: Request[Any, Any, Any],
         data: TotpVerifyRequest,
-        litestar_auth_user_manager: TotpUserManagerProtocol[Any, Any],
+        litestar_auth_user_manager: _TotpUserManagerDep,
     ) -> object:
         del self
         return await _totp_handle_verify(
@@ -164,7 +170,7 @@ def _create_totp_disable_handler[UP: UserProtocol[Any], ID](
         self: object,
         request: Request[Any, Any, Any],
         data: TotpDisableRequest,
-        litestar_auth_user_manager: TotpUserManagerProtocol[Any, Any],
+        litestar_auth_user_manager: _TotpUserManagerDep,
     ) -> None:
         del self
         await _totp_handle_disable(
@@ -196,7 +202,7 @@ def _create_totp_regenerate_recovery_codes_handler[UP: UserProtocol[Any], ID](
     async def regenerate_recovery_codes(
         self: object,
         request: Request[Any, Any, Any],
-        litestar_auth_user_manager: TotpUserManagerProtocol[Any, Any],
+        litestar_auth_user_manager: _TotpUserManagerDep,
         data: msgspec.Struct | None = None,
     ) -> TotpRecoveryCodesResponse:
         del self
@@ -255,7 +261,6 @@ def _define_totp_controller_class_di[UP: UserProtocol[Any], ID](
         totp_verify_before_request=totp_verify_before_request,
         security=security,
     )
-    controller = cast("Any", controller_cls)
 
     async def _on_regenerate_request_body_error(request: Request[Any, Any, Any]) -> None:
         await ctx.runtime.rate_limit.on_invalid_attempt("regenerate_recovery_codes", request)
@@ -266,7 +271,7 @@ def _define_totp_controller_class_di[UP: UserProtocol[Any], ID](
             await ctx.runtime.rate_limit.on_invalid_attempt("enable", request)
 
         _configure_request_body_handler(
-            controller.enable,
+            _controller_route_handler(controller_cls, "enable"),
             schema=TotpEnableRequest,
             error_config=RequestBodyErrorConfig(
                 validation_code=ErrorCode.LOGIN_PAYLOAD_INVALID,
@@ -275,10 +280,10 @@ def _define_totp_controller_class_di[UP: UserProtocol[Any], ID](
             ),
         )
     else:
-        _remove_request_body_handler_data_parameter(controller.enable)
+        _remove_request_body_handler_data_parameter(_controller_route_handler(controller_cls, "enable"))
 
     _configure_request_body_handler(
-        controller.regenerate_recovery_codes,
+        _controller_route_handler(controller_cls, "regenerate_recovery_codes"),
         schema=TotpRegenerateRecoveryCodesRequest,
         error_config=RequestBodyErrorConfig(
             validation_code=ErrorCode.LOGIN_PAYLOAD_INVALID,

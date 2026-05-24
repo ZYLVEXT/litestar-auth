@@ -2,10 +2,9 @@
 
 from __future__ import annotations
 
-import hashlib
-import hmac
 import secrets
 
+from litestar_auth._keyed_digest import keyed_hex
 from litestar_auth.exceptions import ConfigurationError
 
 MIN_TOKEN_BYTES = 16
@@ -28,11 +27,7 @@ def validate_token_bytes(token_bytes: int, *, label: str) -> None:
 
 def digest_opaque_token(*, token_hash_secret: bytes, token: str) -> str:
     """Return the keyed digest stored for a raw opaque token."""
-    return hmac.new(
-        token_hash_secret,
-        token.encode(),
-        hashlib.sha256,
-    ).hexdigest()
+    return keyed_hex(token_hash_secret, token.encode())
 
 
 def mint_opaque_token(*, token_bytes: int, token_hash_secret: bytes) -> tuple[str, str]:

@@ -5,9 +5,10 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Never, Protocol, TypedDict, Unpack, cast, runtime_checkable
 
-from litestar.exceptions import ClientException, NotFoundException
+from litestar.exceptions import NotFoundException
 
-from litestar_auth.controllers._auth_helpers import (
+from litestar_auth.controllers._error_responses import raise_request_body_invalid
+from litestar_auth.controllers._step_up import (
     TotpStepUpCheck,
     TotpStepUpPolicyMode,
     TotpStepUpVerifierProtocol,
@@ -37,7 +38,7 @@ if TYPE_CHECKING:
     from litestar.openapi.spec import SecurityRequirement
 
     from litestar_auth._manager.api_key_creation import ApiKeyCreateOptions
-    from litestar_auth._manager.api_keys import ApiKeyRowProtocol
+    from litestar_auth._manager.api_keys import ApiKeyCreateResult, ApiKeyRowProtocol
     from litestar_auth.controllers._utils import RequestHandler
     from litestar_auth.ratelimit import AuthRateLimitConfig
     from litestar_auth.types import UserProtocol
@@ -58,7 +59,7 @@ class ApiKeysControllerUserManagerProtocol[UP: UserProtocol[Any], ID](Protocol):
         self,
         user: UP,
         **options: Unpack[ApiKeyCreateOptions],
-    ) -> object:
+    ) -> ApiKeyCreateResult[ApiKeyRowProtocol]:
         """Create an API key and return the manager creation result."""
 
     async def list_api_keys(self, user: UP, *, include_inactive: bool = False) -> list[ApiKeyRowProtocol]:
@@ -151,12 +152,8 @@ def to_api_key_read(api_key: ApiKeyRowProtocol) -> ApiKeyRead:
 
 
 def raise_invalid_api_key_create_payload(detail: str) -> Never:
-    """Raise a normalized API-key request-body error.
-
-    Raises:
-        ClientException: Always.
-    """
-    raise ClientException(status_code=400, detail=detail, extra={"code": ErrorCode.REQUEST_BODY_INVALID})
+    """Raise a normalized API-key request-body error."""
+    raise_request_body_invalid(detail)
 
 
 async def load_user_or_404[UP: UserProtocol[Any], ID](
@@ -227,9 +224,7 @@ async def create_api_key_for_user[UP: UserProtocol[Any], ID](
             created_via="http",
         )
     await ctx.create_rate_limit_reset(request)
-    api_key = cast("Any", created).api_key
-    secret = cast("Any", created).secret.get_secret_value()
-    return ApiKeyCreateResponse(api_key=secret, key=to_api_key_read(cast("ApiKeyRowProtocol", api_key)))
+    return ApiKeyCreateResponse(api_key=created.secret.get_secret_value(), key=to_api_key_read(created.api_key))
 
 
 def current_password_for_create_payload(data: ApiKeyCreateRequest | ApiKeyAdminCreateRequest) -> str | None:

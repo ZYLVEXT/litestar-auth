@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
-import hashlib
 import hmac
 import re
 from dataclasses import dataclass
+
+from litestar_auth._keyed_digest import keyed_bytes
 
 MAX_API_KEY_LENGTH = 4096
 MAX_API_KEY_SECRET_LENGTH = 1024
@@ -80,7 +81,7 @@ def _has_valid_public_segments(
 
 def digest_api_key_secret(*, api_key_hash_secret: bytes, secret: str) -> bytes:
     """Return the keyed HMAC-SHA-256 digest stored for an API-key secret."""
-    return hmac.new(api_key_hash_secret, secret.encode(), hashlib.sha256).digest()
+    return keyed_bytes(api_key_hash_secret, secret.encode())
 
 
 def api_key_secret_matches(*, stored_digest: bytes, api_key_hash_secret: bytes, secret: str) -> bool:

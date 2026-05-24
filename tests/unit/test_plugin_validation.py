@@ -22,7 +22,19 @@ import litestar_auth._plugin.security_policy as plugin_security_policy_module
 import litestar_auth._plugin.startup as startup_module
 import litestar_auth._plugin.user_manager_builder as user_manager_builder_module
 import litestar_auth._plugin.validation as validation_module
+import litestar_auth._plugin.validation.request_security as request_security_validation_module
+from litestar_auth._plugin import api_key_validation, oauth_validation, totp_validation
 from litestar_auth._plugin.middleware import build_csrf_config, get_cookie_transports
+from litestar_auth._plugin.validation._core import (
+    IssueCollector,
+    ValidationIssue,
+    format_configuration_message,
+    format_validation_issues,
+    raise_configuration_error,
+    require_callable,
+    require_non_empty,
+    require_secret_length,
+)
 from litestar_auth.authentication.backend import AuthenticationBackend
 from litestar_auth.authentication.strategy import InMemoryApiKeyNonceStore
 from litestar_auth.authentication.strategy.db import DatabaseTokenStrategy
@@ -98,6 +110,75 @@ RESET_PASSWORD_SECRET = "76543210fedcba98" * 4
 TOTP_SECRET_KEY = "456789abcdef0123" * 4
 TOTP_PENDING_SECRET = "3210fedcba987654" * 4
 TOTP_RECOVERY_CODE_LOOKUP_SECRET = "13579bdf02468ace" * 4
+
+
+def test_validation_issue_collector_formats_single_and_multiple_configuration_errors() -> None:
+    """Shared validation kernel preserves single-message wording and combines multiple issues."""
+    collector = IssueCollector()
+    collector.add("first setting is invalid.", field="first")
+
+    with pytest.raises(ConfigurationError, match=r"^first setting is invalid\.$"):
+        collector.raise_if_any()
+
+    message = format_validation_issues(
+        (
+            ValidationIssue("first setting is invalid.", field="first"),
+            ValidationIssue("second setting is invalid.", field="second"),
+        ),
+    )
+
+    assert message == "Invalid LitestarAuth configuration:\n- first setting is invalid.\n- second setting is invalid."
+
+
+def test_validation_issue_collector_allows_empty_and_extended_issue_sets() -> None:
+    """The shared collector supports empty, extended, and explicit one-shot formatting paths."""
+    collector = IssueCollector()
+    collector.raise_if_any()
+    collector.extend((ValidationIssue("extended setting is invalid.", field="extended"),))
+
+    with pytest.raises(ConfigurationError, match=r"^extended setting is invalid\.$"):
+        collector.raise_if_any()
+
+    assert format_validation_issues(()) == "Invalid LitestarAuth configuration."
+    assert format_configuration_message("one setting is invalid.", field="one") == "one setting is invalid."
+    with pytest.raises(ConfigurationError, match=r"^raised setting is invalid\.$"):
+        raise_configuration_error("raised setting is invalid.", field="raised")
+
+
+def test_validation_core_predicates_collect_expected_issues() -> None:
+    """Common validation predicates add issues without raising until the caller decides."""
+    collector = IssueCollector()
+
+    require_non_empty(collector, "", field="empty_setting")
+    require_callable(collector, object(), field="callable_setting")
+    require_secret_length(collector, "short", field="secret_setting", minimum_length=8)
+
+    assert collector.issues == (
+        ValidationIssue("empty_setting must be configured.", field="empty_setting"),
+        ValidationIssue("callable_setting must be callable.", field="callable_setting"),
+        ValidationIssue("secret_setting must be at least 8 characters.", field="secret_setting"),
+    )
+
+
+def test_validation_core_predicates_accept_valid_values_without_issues() -> None:
+    """Common validation predicates are no-ops for valid inputs."""
+    collector = IssueCollector()
+
+    require_non_empty(collector, "value", field="empty_setting")
+    require_callable(collector, lambda: None, field="callable_setting")
+    require_secret_length(collector, b"long-enough", field="secret_setting", minimum_length=8)
+
+    assert collector.issues == ()
+
+
+def test_legacy_feature_validation_modules_reexport_package_implementations() -> None:
+    """Legacy validation module imports remain stable after moving implementation into the package."""
+    assert api_key_validation.validate_api_key_config is validation_module.validate_api_key_config
+    assert (
+        oauth_validation.validate_oauth_route_registration_config.__module__ == "litestar_auth._plugin.validation.oauth"
+    )
+    assert totp_validation.validate_totp_config is validation_module.validate_totp_config
+    assert totp_validation.validate_totp_sub_config is validation_module.validate_totp_sub_config
 
 
 def _fernet_key() -> str:
@@ -1172,7 +1253,7 @@ def test_default_user_manager_contract_keeps_runtime_and_validation_surfaces_ali
     )
     validation_contract = user_manager_builder_module._build_default_user_manager_contract(
         config,
-        password_helper=object(),
+        password_helper=PasswordHelper(),
         password_validator=None,
         backends=("bound-backend",),
     )
@@ -1194,7 +1275,9 @@ def test_default_user_manager_contract_keeps_runtime_and_validation_surfaces_ali
         assert "id_parser" not in validation_kwargs
     else:
         assert runtime_kwargs["security"] == validation_kwargs["security"]
-        assert runtime_kwargs["security"].id_parser is UUID
+        security = runtime_kwargs["security"]
+        assert security is not None
+        assert security.id_parser is UUID
         assert "id_parser" not in runtime_kwargs
         assert "id_parser" not in validation_kwargs
 
@@ -2445,8 +2528,11 @@ def test_has_configured_oauth_provider_helpers_report_expected_state() -> None:
     assert has_configured_oauth_providers_for(login_and_associate_config) is True
 
 
-def test_require_secure_oauth_redirect_in_production_accepts_public_https_origin() -> None:
+def test_require_secure_oauth_redirect_in_production_accepts_public_https_origin(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """Production startup accepts public HTTPS plugin redirect origins."""
+    monkeypatch.setattr(startup_module, "_is_unsafe_redirect_host", lambda _host: False)
     config = _minimal_config(
         oauth_config=OAuthConfig(
             oauth_providers=[_oauth_provider(name="github", client=object())],
@@ -2851,8 +2937,8 @@ def test_validate_request_security_config_checks_rate_limit_before_cookie_auth(
     def _record_cookie(config_arg: object) -> None:
         calls.append(("cookie", config_arg))
 
-    monkeypatch.setattr(validation_module, "validate_rate_limit_config", _record_rate_limit)
-    monkeypatch.setattr(validation_module, "validate_cookie_auth_config", _record_cookie)
+    monkeypatch.setattr(request_security_validation_module, "validate_rate_limit_config", _record_rate_limit)
+    monkeypatch.setattr(request_security_validation_module, "validate_cookie_auth_config", _record_cookie)
 
     validation_module.validate_request_security_config(config)
 

@@ -12,6 +12,19 @@ if TYPE_CHECKING:
 DEFAULT_MINIMUM_RESPONSE_SECONDS = 0.4
 
 
+def validate_minimum_response_seconds(value: float, *, field_name: str) -> float:
+    """Return a non-negative response timing floor.
+
+    Raises:
+        ValueError: If ``value`` is negative.
+    """
+    if value >= 0:
+        return value
+
+    msg = f"{field_name} must be non-negative."
+    raise ValueError(msg)
+
+
 async def await_minimum_response_seconds[T](
     *,
     minimum_seconds: float,

@@ -12,8 +12,10 @@ from uuid import UUID
 import pytest
 from cryptography.fernet import Fernet
 
+import litestar_auth._manager as manager_exports
 from litestar_auth._manager.api_keys import (
     ApiKeyConfigProtocol,
+    ApiKeyCreateResult,
     ApiKeyManagerConfig,
     ApiKeyManagerService,
     ApiKeyRowProtocol,
@@ -22,7 +24,7 @@ from litestar_auth._manager.api_keys import (
 from litestar_auth._manager.api_keys import (
     secrets as api_key_secrets,
 )
-from litestar_auth._plugin.feature_configs import DEFAULT_API_KEY_LAST_USED_THROTTLE_SECONDS
+from litestar_auth._plugin.features import DEFAULT_API_KEY_LAST_USED_THROTTLE_SECONDS
 from litestar_auth._secrets_at_rest import FernetKeyring
 from litestar_auth.authentication.strategy._api_key_format import api_key_secret_matches, parse_api_key
 from litestar_auth.exceptions import (
@@ -47,6 +49,16 @@ pytestmark = pytest.mark.unit
 
 API_KEY_HASH_SECRET = "api-key-hash-secret-0123456789abcdef"
 MIN_GENERATED_SECRET_LENGTH = 32
+
+
+def test_api_key_manager_public_symbols_remain_importable_from_prior_paths() -> None:
+    """API-key refactors keep existing internal public import paths stable."""
+    assert manager_exports.ApiKeyConfigProtocol is ApiKeyConfigProtocol
+    assert manager_exports.ApiKeyCreateResult is ApiKeyCreateResult
+    assert manager_exports.ApiKeyManagerConfig is ApiKeyManagerConfig
+    assert manager_exports.ApiKeyManagerService is ApiKeyManagerService
+    assert manager_exports.ApiKeyRowProtocol is ApiKeyRowProtocol
+    assert manager_exports.ApiKeySecret is ApiKeySecret
 
 
 def test_api_key_manager_config_uses_canonical_last_used_throttle_default() -> None:

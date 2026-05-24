@@ -3,27 +3,27 @@
 from __future__ import annotations
 
 import hmac
+from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, NoReturn
 from urllib.parse import urlsplit
 
-from litestar.exceptions import ClientException
+from litestar.datastructures import Cookie
+from litestar.exceptions import HTTPException
 
 from litestar_auth._plugin._redirect_validation import _is_unsafe_redirect_host
+from litestar_auth.controllers._error_responses import raise_client_error
 from litestar_auth.exceptions import ConfigurationError, ErrorCode
-from litestar_auth.oauth.service import (
-    _require_verified_email_evidence as _service_require_verified_email_evidence,
-)
+from litestar_auth.oauth._flow_cookie import STATE_COOKIE_MAX_AGE
+from litestar_auth.oauth._linking import require_verified_email_evidence
 
 if TYPE_CHECKING:
-    from collections.abc import Sequence
+    from collections.abc import AsyncIterator, Callable, Sequence
 
     from litestar import Request
     from litestar.response import Response
 
     from litestar_auth.oauth._flow_cookie import _OAuthFlowCookie, _OAuthFlowCookieCipher
-
-STATE_COOKIE_MAX_AGE = 300
 
 
 @dataclass(frozen=True, slots=True)
@@ -116,17 +116,12 @@ def _normalize_oauth_scopes(scopes: Sequence[str] | None) -> tuple[str, ...] | N
 
 
 def _reject_runtime_oauth_scope_override(request: Request[Any, Any, Any]) -> None:
-    """Reject caller-controlled scope overrides on OAuth authorize endpoints.
-
-    Raises:
-        ClientException: If the request attempts to override OAuth scopes.
-    """
+    """Reject caller-controlled scope overrides on OAuth authorize endpoints."""
     query_params = getattr(request, "query_params", None)
     if query_params is None or query_params.get("scopes") is None:
         return
 
-    msg = "OAuth scopes must be configured on the server."
-    raise ClientException(status_code=400, detail=msg)
+    raise_client_error(status_code=400, detail="OAuth scopes must be configured on the server.")
 
 
 def _build_cookie_path(*, path: str, provider_name: str) -> str:
@@ -175,6 +170,83 @@ def _clear_state_cookie(
     )
 
 
+def _clear_state_cookie_header(
+    *,
+    cookie_name: str,
+    cookie_path: str,
+    cookie_secure: bool,
+) -> str:
+    """Return the Set-Cookie value that expires the provider-scoped OAuth state cookie."""
+    cookie = Cookie(
+        key=cookie_name,
+        value="",
+        max_age=0,
+        path=cookie_path,
+        secure=cookie_secure,
+        httponly=True,
+        samesite="lax",
+    )
+    return cookie.to_encoded_header()[1].decode("latin-1")
+
+
+def _attach_clear_state_cookie_header(
+    exc: HTTPException,
+    *,
+    cookie_name: str,
+    cookie_path: str,
+    cookie_secure: bool,
+) -> None:
+    """Attach the state-cookie expiry header to an OAuth callback error response."""
+    headers = dict(exc.headers or {})
+    headers["set-cookie"] = _clear_state_cookie_header(
+        cookie_name=cookie_name,
+        cookie_path=cookie_path,
+        cookie_secure=cookie_secure,
+    )
+    exc.headers = headers
+
+
+@asynccontextmanager
+async def _clear_state_cookie_on_callback_exit(
+    *,
+    cookie_name: str,
+    cookie_path: str,
+    cookie_secure: bool,
+) -> AsyncIterator[Callable[[Response[Any]], None]]:
+    """Clear the provider-scoped state cookie on successful and client-error callback exits.
+
+    Yields:
+        Callback that marks the successful callback response for state-cookie clearing.
+
+    Raises:
+        HTTPException: Re-raises callback client errors after attaching the state-cookie clearing header.
+    """
+    success_response: Response[Any] | None = None
+
+    def clear_on_success(response: Response[Any]) -> None:
+        nonlocal success_response
+        success_response = response
+
+    try:
+        yield clear_on_success
+    except HTTPException as exc:
+        _attach_clear_state_cookie_header(
+            exc,
+            cookie_name=cookie_name,
+            cookie_path=cookie_path,
+            cookie_secure=cookie_secure,
+        )
+        raise
+    finally:
+        if success_response is not None:
+            _clear_state_cookie(
+                success_response,
+                cookie_name=cookie_name,
+                cookie_path=cookie_path,
+                cookie_secure=cookie_secure,
+            )
+
+
 def _encode_oauth_flow_cookie(
     flow_cookie: _OAuthFlowCookie,
     *,
@@ -206,15 +278,10 @@ def _validate_state(cookie_state: str | None, query_state: str) -> None:
 
 
 def _raise_invalid_oauth_state() -> NoReturn:
-    """Raise the stable invalid OAuth state response.
-
-    Raises:
-        ClientException: Always raised with the public invalid-state response shape.
-    """
-    msg = "Invalid OAuth state."
-    raise ClientException(status_code=400, detail=msg, extra={"code": ErrorCode.OAUTH_STATE_INVALID})
+    """Raise the stable invalid OAuth state response."""
+    raise_client_error(status_code=400, detail="Invalid OAuth state.", error_code=ErrorCode.OAUTH_STATE_INVALID)
 
 
 def _require_verified_email_evidence(*, email_verified: bool | None) -> None:
     """Require explicit provider-verified email evidence for new-account OAuth sign-in."""
-    _service_require_verified_email_evidence(email_verified=email_verified)
+    require_verified_email_evidence(email_verified=email_verified)

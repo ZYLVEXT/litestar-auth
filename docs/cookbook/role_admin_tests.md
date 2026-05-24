@@ -71,7 +71,7 @@ def controller_cls():
 
 @pytest.mark.anyio
 async def test_list_roles_returns_items(controller_cls):
-    """list_roles delegates to RoleService.list_and_count."""
+    """list_roles delegates to RoleService.get_many_and_count."""
     role_a, role_b = _make_role("admin"), _make_role("editor", "Editor")
 
     with patch.object(

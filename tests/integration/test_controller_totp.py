@@ -30,7 +30,7 @@ import litestar_auth.controllers.totp_handlers as totp_handlers_module
 import litestar_auth.controllers.totp_session_handlers as totp_session_handlers_module
 import litestar_auth.totp as _totp_mod
 from litestar_auth._plugin.config import DEFAULT_USER_MANAGER_DEPENDENCY_KEY, TotpConfig
-from litestar_auth._secrets_at_rest import decode_versioned_fernet_value
+from litestar_auth._secrets_at_rest import FernetKeyring, decode_versioned_fernet_value
 from litestar_auth.authentication.authenticator import Authenticator
 from litestar_auth.authentication.backend import AuthenticationBackend
 from litestar_auth.authentication.middleware import LitestarAuthMiddleware
@@ -55,7 +55,6 @@ from tests.integration.test_controller_api_keys import API_KEY_HASH_SECRET, InMe
 _DEFAULT_TOTP_FERNET_KEY_ID = totp_enrollment_module._DEFAULT_TOTP_FERNET_KEY_ID
 _consume_enrollment_secret = totp_enrollment_module._consume_enrollment_secret
 _decode_enrollment_token = totp_enrollment_module._decode_enrollment_token
-_EnrollmentTokenCipher = totp_enrollment_module._EnrollmentTokenCipher
 _EnrollmentTokenIssueConfig = totp_enrollment_module._EnrollmentTokenIssueConfig
 _issue_enrollment_token = totp_enrollment_module._issue_enrollment_token
 _sign_enrollment_token = totp_enrollment_module._sign_enrollment_token
@@ -75,6 +74,7 @@ _current_counter = _totp_mod._current_counter
 _generate_totp_code = _totp_mod._generate_totp_code
 
 if TYPE_CHECKING:
+    from litestar_auth._manager.api_keys import ApiKeyConfigProtocol
     from litestar_auth.authentication.strategy.base import Strategy
     from litestar_auth.db.base import BaseUserStore
     from tests._helpers import AsyncFakeRedis
@@ -95,7 +95,12 @@ TWO_CALLS = 2
 TOTP_PENDING_SECRET = "test-totp-pending-secret-thirty-two!"  # ≥ 32 bytes
 TOTP_RECOVERY_CODE_LOOKUP_SECRET = "test-recovery-code-lookup-secret-123"
 TOTP_SECRET_KEY = Fernet.generate_key().decode()
-_TEST_ENROLLMENT_CIPHER = _EnrollmentTokenCipher.from_keyring(
+_PLAINTEXT_ENROLLMENT_CIPHER = FernetKeyring(
+    active_key_id=_DEFAULT_TOTP_FERNET_KEY_ID,
+    keys={},
+    nullable=True,
+)
+_TEST_ENROLLMENT_CIPHER = FernetKeyring(
     active_key_id=_DEFAULT_TOTP_FERNET_KEY_ID,
     keys={_DEFAULT_TOTP_FERNET_KEY_ID: TOTP_SECRET_KEY},
 )
@@ -133,7 +138,7 @@ class TrackingUserManager(BaseUserManager[ExampleUser, UUID]):
         *,
         backends: tuple[object, ...] = (),
         api_key_store: InMemoryApiKeyStore | None = None,
-        api_key_config: object | None = None,
+        api_key_config: ApiKeyConfigProtocol | None = None,
         login_identifier: Literal["email", "username"] = "email",
         totp_secret_key: str | None = TOTP_SECRET_KEY,
         unsafe_testing: bool = False,
@@ -572,7 +577,7 @@ def test_sign_and_decode_enrollment_token_round_trip_plaintext() -> None:
         token,
         signing_key=TOTP_PENDING_SECRET,
         expected_user_id="user-123",
-        cipher=None,
+        cipher=_PLAINTEXT_ENROLLMENT_CIPHER,
     )
     assert claims.user_id == "user-123"
     assert claims.jti == "a" * PENDING_JTI_HEX_LENGTH
@@ -590,7 +595,7 @@ def test_enrollment_cipher_reports_missing_cryptography(monkeypatch: pytest.Monk
 
     monkeypatch.setattr(optional_deps_module.importlib, "import_module", fail_import)
 
-    with pytest.raises(ImportError, match=r"litestar-auth\[totp\]"):
+    with pytest.raises(ImportError, match=r"litestar-auth\[oauth,totp\]"):
         totp_enrollment_module._load_cryptography_fernet()
 
 
@@ -642,7 +647,7 @@ async def test_issue_and_consume_enrollment_token_round_trip_plaintext() -> None
         secret="totp-secret",
         config=_EnrollmentTokenIssueConfig(
             signing_key=TOTP_PENDING_SECRET,
-            cipher=None,
+            cipher=_PLAINTEXT_ENROLLMENT_CIPHER,
             enrollment_store=enrollment_store,
             lifetime_seconds=120,
         ),
@@ -658,12 +663,19 @@ async def test_issue_and_consume_enrollment_token_round_trip_plaintext() -> None
         token,
         signing_key=TOTP_PENDING_SECRET,
         expected_user_id="user-123",
-        cipher=None,
+        cipher=_PLAINTEXT_ENROLLMENT_CIPHER,
     )
 
     assert payload["enc"] == "plain"
     assert "totp_secret" not in payload
-    assert await _consume_enrollment_secret(claims, enrollment_store=enrollment_store, cipher=None) == "totp-secret"
+    assert (
+        await _consume_enrollment_secret(
+            claims,
+            enrollment_store=enrollment_store,
+            cipher=_PLAINTEXT_ENROLLMENT_CIPHER,
+        )
+        == "totp-secret"
+    )
 
 
 async def test_issue_enrollment_token_raises_when_store_rejects_write() -> None:
@@ -674,7 +686,7 @@ async def test_issue_enrollment_token_raises_when_store_rejects_write() -> None:
             secret="totp-secret",
             config=_EnrollmentTokenIssueConfig(
                 signing_key=TOTP_PENDING_SECRET,
-                cipher=None,
+                cipher=_PLAINTEXT_ENROLLMENT_CIPHER,
                 enrollment_store=await _full_enrollment_store(),
             ),
         )
@@ -719,13 +731,13 @@ def test_decode_enrollment_token_rejects_encoding_mismatch() -> None:
             encrypted_token,
             signing_key=TOTP_PENDING_SECRET,
             expected_user_id="user-123",
-            cipher=None,
+            cipher=_PLAINTEXT_ENROLLMENT_CIPHER,
         )
 
 
 async def test_consume_enrollment_token_rejects_wrong_cipher_key() -> None:
     """Enrollment state encrypted with another Fernet key cannot be consumed."""
-    other_cipher = _EnrollmentTokenCipher.from_keyring(
+    other_cipher = FernetKeyring(
         active_key_id=_DEFAULT_TOTP_FERNET_KEY_ID,
         keys={_DEFAULT_TOTP_FERNET_KEY_ID: Fernet.generate_key().decode()},
     )
@@ -760,8 +772,8 @@ def test_enrollment_keyring_cipher_reads_non_active_key_values() -> None:
         "current": Fernet.generate_key().decode(),
         "old": Fernet.generate_key().decode(),
     }
-    old_cipher = _EnrollmentTokenCipher.from_keyring(active_key_id="old", keys=keys)
-    current_cipher = _EnrollmentTokenCipher.from_keyring(active_key_id="current", keys=keys)
+    old_cipher = FernetKeyring(active_key_id="old", keys=keys)
+    current_cipher = FernetKeyring(active_key_id="current", keys=keys)
 
     stored = old_cipher.encrypt("totp-secret")
 
@@ -799,7 +811,7 @@ def test_decode_enrollment_token_rejects_invalid_jti() -> None:
             token,
             signing_key=TOTP_PENDING_SECRET,
             expected_user_id="user-123",
-            cipher=None,
+            cipher=_PLAINTEXT_ENROLLMENT_CIPHER,
         )
 
 
@@ -817,7 +829,7 @@ def test_decode_enrollment_token_rejects_mismatched_subject() -> None:
             token,
             signing_key=TOTP_PENDING_SECRET,
             expected_user_id="different-user",
-            cipher=None,
+            cipher=_PLAINTEXT_ENROLLMENT_CIPHER,
         )
 
 
@@ -842,7 +854,7 @@ def test_decode_enrollment_token_rejects_missing_encoding() -> None:
             token,
             signing_key=TOTP_PENDING_SECRET,
             expected_user_id="user-123",
-            cipher=None,
+            cipher=_PLAINTEXT_ENROLLMENT_CIPHER,
         )
 
 

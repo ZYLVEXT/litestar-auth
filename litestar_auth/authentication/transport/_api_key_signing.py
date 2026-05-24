@@ -7,9 +7,10 @@ import hashlib
 import hmac
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any
 from urllib.parse import parse_qsl, quote, urlencode
 
+from litestar_auth._keyed_digest import keyed_hex
 from litestar_auth.exceptions import ErrorCode
 
 if TYPE_CHECKING:
@@ -52,6 +53,14 @@ class _SignedAuthorizationParts:
     signature: str
 
 
+@dataclass(frozen=True, slots=True)
+class _RequiredSigningHeaders:
+    """Validated signing headers required by signed API-key auth."""
+
+    date: str
+    nonce: str
+
+
 def get_current_signed_api_key_request() -> SignedApiKeyRequest | None:
     """Return the signing request parsed for the current authentication attempt."""
     return _SIGNING_REQUEST.get()
@@ -77,17 +86,21 @@ def read_signed_api_key_request(connection: ASGIConnection[Any, Any, Any, Any]) 
     if authorization_parts is None:
         return _reject_signed_api_key_request()
 
-    date_header, nonce = _read_required_signing_headers(connection)
-    if _invalid_required_signing_headers(date_header, nonce, authorization_parts.signed_headers):
+    signing_headers = _read_required_signing_headers(connection)
+    signing_headers = _validate_required_signing_headers(signing_headers, authorization_parts.signed_headers)
+    if signing_headers is None:
         return _reject_signed_api_key_request()
-    date_header = cast("str", date_header)
-    nonce = cast("str", nonce)
 
-    date = _parse_request_datetime(date_header)
+    date = _parse_request_datetime(signing_headers.date)
     if date is None:
         return _reject_signed_api_key_request()
 
-    _store_signed_api_key_request(connection, authorization_parts=authorization_parts, date=date, nonce=nonce)
+    _store_signed_api_key_request(
+        connection,
+        authorization_parts=authorization_parts,
+        date=date,
+        nonce=signing_headers.nonce,
+    )
     return API_KEY_HMAC_SCHEME
 
 
@@ -109,20 +122,68 @@ def _parse_signed_authorization_parts(parameters: Mapping[str, str]) -> _SignedA
     key_id = parameters.get("credential")
     signed_headers_value = parameters.get("signedheaders")
     signature = parameters.get("signature")
+    authorization_parts = _validate_authorization_parts(
+        key_id=key_id,
+        signed_headers_value=signed_headers_value,
+        signature=signature,
+    )
+    if authorization_parts is None:
+        return None
+    signed_headers = tuple(
+        dict.fromkeys(
+            header.strip().lower() for header in authorization_parts.signed_headers_value.split(";") if header.strip()
+        ),
+    )
+    return _SignedAuthorizationParts(
+        key_id=authorization_parts.key_id,
+        signed_headers=signed_headers,
+        signature=authorization_parts.signature,
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class _ValidatedAuthorizationParts:
+    """Non-empty signed Authorization fields after validation."""
+
+    key_id: str
+    signed_headers_value: str
+    signature: str
+
+
+def _validate_authorization_parts(
+    *,
+    key_id: str | None,
+    signed_headers_value: str | None,
+    signature: str | None,
+) -> _ValidatedAuthorizationParts | None:
+    """Return validated string Authorization fields."""
+    if key_id is None or signed_headers_value is None or signature is None:
+        return None
     if _invalid_authorization_parts(key_id, signed_headers_value, signature):
         return None
-    key_id = cast("str", key_id)
-    signed_headers_value = cast("str", signed_headers_value)
-    signature = cast("str", signature)
-    signed_headers = tuple(
-        dict.fromkeys(header.strip().lower() for header in signed_headers_value.split(";") if header.strip()),
+    return _ValidatedAuthorizationParts(
+        key_id=key_id,
+        signed_headers_value=signed_headers_value,
+        signature=signature,
     )
-    return _SignedAuthorizationParts(key_id=key_id, signed_headers=signed_headers, signature=signature)
 
 
 def _read_required_signing_headers(connection: ASGIConnection[Any, Any, Any, Any]) -> tuple[str | None, str | None]:
     """Return the required signed request date and nonce headers."""
     return connection.headers.get(API_KEY_HMAC_DATE_HEADER), connection.headers.get(API_KEY_HMAC_NONCE_HEADER)
+
+
+def _validate_required_signing_headers(
+    headers: tuple[str | None, str | None],
+    signed_headers: tuple[str, ...],
+) -> _RequiredSigningHeaders | None:
+    """Return required signing headers after structural validation."""
+    date_header, nonce = headers
+    if date_header is None or nonce is None:
+        return None
+    if _invalid_required_signing_headers(date_header, nonce, signed_headers):
+        return None
+    return _RequiredSigningHeaders(date=date_header, nonce=nonce)
 
 
 def _store_signed_api_key_request(
@@ -175,40 +236,9 @@ def build_canonical_request(
     return "\n".join((method, path, query, headers, ";".join(signed_headers), body_digest.lower()))
 
 
-def _invalid_authorization_parts(
-    key_id: str | None,
-    signed_headers_value: str | None,
-    signature: str | None,
-) -> bool:
-    return (
-        key_id is None
-        or signed_headers_value is None
-        or signature is None
-        or not key_id
-        or not signature
-        or len(signature) > _MAX_SIGNATURE_LENGTH
-    )
-
-
-def _invalid_required_signing_headers(
-    date_header: str | None,
-    nonce: str | None,
-    signed_headers: tuple[str, ...],
-) -> bool:
-    return (
-        date_header is None
-        or nonce is None
-        or not nonce
-        or len(nonce) > _MAX_NONCE_LENGTH
-        or "host" not in signed_headers
-        or API_KEY_HMAC_DATE_HEADER.lower() not in signed_headers
-        or API_KEY_HMAC_NONCE_HEADER.lower() not in signed_headers
-    )
-
-
 def sign_canonical_request(*, secret: str, canonical_request: str) -> str:
     """Return a hex HMAC-SHA-256 signature for a canonical request."""
-    return hmac.new(secret.encode("utf-8"), canonical_request.encode("utf-8"), hashlib.sha256).hexdigest()
+    return keyed_hex(secret.encode("utf-8"), canonical_request.encode("utf-8"))
 
 
 def signature_matches(*, secret: str, canonical_request: str, signature: str) -> bool:
@@ -270,6 +300,37 @@ def _canonical_headers(
         if name in header_values:
             header_values[name].append(" ".join(raw_value.decode("latin-1").strip().split()))
     return "\n".join(f"{name}:{','.join(header_values[name])}" for name in signed_headers)
+
+
+def _invalid_authorization_parts(
+    key_id: str | None,
+    signed_headers_value: str | None,
+    signature: str | None,
+) -> bool:
+    return (
+        key_id is None
+        or signed_headers_value is None
+        or signature is None
+        or not key_id
+        or not signature
+        or len(signature) > _MAX_SIGNATURE_LENGTH
+    )
+
+
+def _invalid_required_signing_headers(
+    date_header: str | None,
+    nonce: str | None,
+    signed_headers: tuple[str, ...],
+) -> bool:
+    return (
+        date_header is None
+        or nonce is None
+        or not nonce
+        or len(nonce) > _MAX_NONCE_LENGTH
+        or "host" not in signed_headers
+        or API_KEY_HMAC_DATE_HEADER.lower() not in signed_headers
+        or API_KEY_HMAC_NONCE_HEADER.lower() not in signed_headers
+    )
 
 
 __all__ = (

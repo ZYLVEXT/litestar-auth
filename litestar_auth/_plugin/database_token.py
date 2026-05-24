@@ -13,6 +13,7 @@ if TYPE_CHECKING:
 
     from sqlalchemy.ext.asyncio import AsyncSession  # pragma: no cover
 
+    from litestar_auth._plugin._protocols import StrategyProto  # pragma: no cover
     from litestar_auth._plugin.config import (  # pragma: no cover
         DatabaseTokenAuthConfig,
         LitestarAuthConfig,
@@ -22,7 +23,6 @@ if TYPE_CHECKING:
     from litestar_auth.authentication.strategy import DatabaseTokenModels  # pragma: no cover
     from litestar_auth.authentication.strategy.base import UserManagerProtocol  # pragma: no cover
     from litestar_auth.authentication.strategy.db import AsyncSessionT  # pragma: no cover
-    from litestar_auth.types import StrategyProtocol  # pragma: no cover
 
 
 def _raise_startup_only_database_token_runtime_error() -> Never:
@@ -85,10 +85,10 @@ class _StartupOnlyDatabaseTokenStrategy[UP: UserProtocol[Any], ID]:
         del self
         return _raise_startup_only_database_token_runtime_error()
 
-    def with_session(self, session: AsyncSessionT) -> StrategyProtocol[UP, ID]:
+    def with_session(self, session: AsyncSessionT) -> StrategyProto[UP, ID]:
         """Return a request-bound strategy for ``session``."""
         return cast(
-            "StrategyProtocol[UP, ID]",
+            "StrategyProto[UP, ID]",
             self.runtime_strategy_cls(
                 session=session,
                 token_hash_secret=self.settings.token_hash_secret,
@@ -171,7 +171,7 @@ def _build_startup_only_database_token_strategy[UP: UserProtocol[Any], ID](
     database_token_auth: DatabaseTokenAuthConfig,
     *,
     unsafe_testing: bool = False,
-) -> StrategyProtocol[UP, ID]:
+) -> StrategyProto[UP, ID]:
     """Build a startup-only DB-token strategy that fails closed until session binding.
 
     Returns:
@@ -188,7 +188,7 @@ def _build_startup_only_database_token_strategy[UP: UserProtocol[Any], ID](
         unsafe_testing=unsafe_testing,
     )
     return cast(
-        "StrategyProtocol[UP, ID]",
+        "StrategyProto[UP, ID]",
         _StartupOnlyDatabaseTokenStrategy(
             settings=settings,
             token_models=DatabaseTokenModels(),
@@ -216,7 +216,7 @@ def _build_database_token_backend[UP: UserProtocol[Any], ID](
     from litestar_auth.authentication.strategy.db import DatabaseTokenStrategy  # noqa: PLC0415
     from litestar_auth.authentication.transport.bearer import BearerTransport  # noqa: PLC0415
 
-    strategy: StrategyProtocol[UP, ID]
+    strategy: StrategyProto[UP, ID]
     if session is None:
         strategy = _build_startup_only_database_token_strategy(
             database_token_auth,
@@ -224,7 +224,7 @@ def _build_database_token_backend[UP: UserProtocol[Any], ID](
         )
     else:
         strategy = cast(
-            "StrategyProtocol[UP, ID]",
+            "StrategyProto[UP, ID]",
             DatabaseTokenStrategy(
                 session=session,
                 token_hash_secret=database_token_auth.token_hash_secret,
@@ -238,7 +238,7 @@ def _build_database_token_backend[UP: UserProtocol[Any], ID](
     return AuthenticationBackend[UP, ID](
         name=database_token_auth.backend_name,
         transport=BearerTransport(),
-        strategy=cast("Any", strategy),
+        strategy=strategy,
     )
 
 

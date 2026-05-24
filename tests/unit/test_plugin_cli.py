@@ -19,6 +19,8 @@ except ImportError:
 
 from litestar.cli._utils import LitestarGroup
 
+import litestar_auth._plugin.startup as startup_module
+from litestar_auth._plugin.role_admin_contracts import SystemManagedRoleError
 from litestar_auth._plugin.role_cli import (
     _ROLE_CLI_CONTEXT_KEY,
     RoleCLIContext,
@@ -143,19 +145,23 @@ def test_on_cli_init_registers_roles_group_without_changing_on_app_init(
     assert "roles" in root_cli.commands
 
     monkeypatch.setattr(
-        "litestar_auth.plugin.warn_insecure_plugin_startup_defaults",
+        startup_module,
+        "warn_insecure_plugin_startup_defaults",
         lambda _config: calls.append("warn"),
     )
     monkeypatch.setattr(
-        "litestar_auth.plugin.require_oauth_token_encryption_for_configured_providers",
+        startup_module,
+        "require_oauth_token_encryption_for_configured_providers",
         lambda **_kwargs: calls.append("require-oauth-key"),
     )
     monkeypatch.setattr(
-        "litestar_auth.plugin.require_secure_oauth_redirect_in_production",
+        startup_module,
+        "require_secure_oauth_redirect_in_production",
         lambda **_kwargs: calls.append("require-oauth-redirect"),
     )
     monkeypatch.setattr(
-        "litestar_auth.plugin.bootstrap_bundled_token_orm_models",
+        startup_module,
+        "bootstrap_bundled_token_orm_models",
         lambda _config: calls.append("bootstrap-token-models"),
     )
     monkeypatch.setattr(plugin, "_register_dependencies", lambda _app_config: calls.append("dependencies"))
@@ -321,3 +327,57 @@ def test_role_commands_delegate_to_role_admin_operations(
         ("unassign", "member@example.com", (" Billing ", "support")),
         ("delete", "admin", True),
     ]
+
+
+@pytest.mark.parametrize(
+    ("command", "expected_call"),
+    [
+        pytest.param(
+            ["delete", "--force", "admin"],
+            ("delete", "admin", True),
+            id="delete-system-role",
+        ),
+        pytest.param(
+            ["unassign", "--email", "admin@example.com", "admin"],
+            ("unassign", "admin@example.com", ("admin",)),
+            id="unassign-final-superuser",
+        ),
+    ],
+)
+def test_role_commands_surface_system_managed_role_errors(
+    monkeypatch: pytest.MonkeyPatch,
+    command: list[str],
+    expected_call: tuple[str, object, object],
+) -> None:
+    """System-managed role invariants surface as clear non-zero CLI failures."""
+    root_cli = _build_root_cli()
+    config = _minimal_config(user_model=User)
+    plugin = LitestarAuth(config)
+    calls: list[tuple[str, object, object]] = []
+
+    class FakeRoleAdmin:
+        """Minimal role-admin stub raising the invariant error through CLI commands."""
+
+        async def unassign_user_roles(self, *, email: str, roles: tuple[str, ...]) -> object:
+            calls.append(("unassign", email, roles))
+            msg = "Role admin will not remove the final assignment of system-managed superuser role 'admin'."
+            raise SystemManagedRoleError(msg)
+
+        async def delete_role(self, *, role: str, force: bool = False) -> list[str]:
+            calls.append(("delete", role, force))
+            msg = "Role admin will not modify system-managed superuser role 'admin'."
+            raise SystemManagedRoleError(msg)
+
+    fake_role_admin = FakeRoleAdmin()
+    monkeypatch.setattr(
+        "litestar_auth._plugin.role_cli._resolve_role_cli_context",
+        lambda _ctx, cfg: RoleCLIContext(config=cfg, role_admin=cast("Any", fake_role_admin)),
+    )
+    plugin.on_cli_init(root_cli)
+
+    result = CliRunner().invoke(root_cli, ["roles", *command])
+
+    assert result.exit_code == 1
+    assert "system-managed" in result.output
+    assert "Traceback" not in result.output
+    assert calls == [expected_call]

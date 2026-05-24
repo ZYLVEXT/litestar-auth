@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Annotated, Any, cast
 
 from litestar import Controller, Request, get
-from litestar.params import Parameter
+from litestar.params import Dependency, QueryParameter
 from litestar.response import Response  # noqa: TC002
 
 from litestar_auth._plugin.config import (
@@ -15,9 +16,12 @@ from litestar_auth._plugin.config import (
     StartupBackendInventory,
     resolve_backend_inventory,
 )
+from litestar_auth._plugin.controller_factory import ControllerFactoryKit
 from litestar_auth._plugin.oauth_contract import _build_oauth_route_registration_contract
+from litestar_auth.authentication.backend import AuthenticationBackend
 from litestar_auth.controllers.oauth import (
     _OAUTH_OPENAPI_RESPONSES,
+    OAuthControllerUserManagerProtocol,
     _OAuthAssociateControllerSettings,
     _OAuthClientBinding,
     _OAuthControllerAssembly,
@@ -44,13 +48,17 @@ from litestar_auth.controllers.oauth import (
 from litestar_auth.types import UserProtocol
 
 if TYPE_CHECKING:
-    from collections.abc import Sequence
-
     from litestar.openapi.spec import SecurityRequirement
     from litestar.types import ControllerRouterHandler
 
-    from litestar_auth.controllers._auth_helpers import TotpStepUpPolicyMode
-    from litestar_auth.oauth.client_adapter import OAuthClientProtocol
+    from litestar_auth.controllers._step_up import TotpStepUpPolicyMode
+    from litestar_auth.oauth._client import OAuthClientProtocol
+
+
+_OAuthCodeQuery = Annotated[str, QueryParameter()]
+_OAuthStateQuery = Annotated[str, QueryParameter(name="state")]
+_OAuthUserManagerDep = Annotated[OAuthControllerUserManagerProtocol[Any, Any], Dependency()]
+_OAuthBackendsDep = Annotated[Sequence[AuthenticationBackend[Any, Any]], Dependency()]
 
 
 @dataclass(frozen=True, slots=True)
@@ -111,13 +119,17 @@ def create_oauth_login_controller[UP: UserProtocol[Any], ID](
 ) -> type[Controller]:
     """Return a plugin-owned OAuth login controller bound to request DI."""
     assembly = _build_plugin_oauth_login_assembly(settings)
+    factory_kit: ControllerFactoryKit[UP, ID] = ControllerFactoryKit(
+        backend_inventory=settings.backend_inventory,
+        backend_index=settings.backend_index,
+    )
     return _create_plugin_oauth_controller_type(
         assembly=assembly,
         authorize_handler=_create_plugin_oauth_authorize_handler(
             assembly=assembly,
             responses=_OAUTH_OPENAPI_RESPONSES,
         ),
-        callback_handler=_create_plugin_oauth_login_callback(settings=settings, assembly=assembly),
+        callback_handler=_create_plugin_oauth_login_callback(factory_kit=factory_kit, assembly=assembly),
         docstring="Provider-specific OAuth authorize/callback endpoints.",
     )
 
@@ -154,7 +166,7 @@ def _build_plugin_oauth_login_assembly[UP: UserProtocol[Any], ID](
 
 def _create_plugin_oauth_login_callback[UP: UserProtocol[Any], ID](
     *,
-    settings: _PluginOAuthLoginControllerSettings[UP, ID],
+    factory_kit: ControllerFactoryKit[UP, ID],
     assembly: _OAuthControllerAssembly[UP, ID],
 ) -> object:
     """Create the request-DI callback handler for plugin-owned OAuth login.
@@ -167,16 +179,12 @@ def _create_plugin_oauth_login_callback[UP: UserProtocol[Any], ID](
     async def callback(  # noqa: PLR0913, PLR0917
         self: object,
         request: Request[Any, Any, Any],
-        code: str,
-        litestar_auth_user_manager: Any,  # noqa: ANN401
-        litestar_auth_backends: Any,  # noqa: ANN401
-        oauth_state: str = Parameter(query="state"),
+        code: _OAuthCodeQuery,
+        litestar_auth_user_manager: _OAuthUserManagerDep,
+        litestar_auth_backends: _OAuthBackendsDep,
+        oauth_state: _OAuthStateQuery,
     ) -> Response[Any]:
         del self
-        request_backend = settings.backend_inventory.resolve_request_backend(
-            litestar_auth_backends,
-            backend_index=settings.backend_index,
-        )
         return await _complete_oauth_login_callback(
             assembly=assembly,
             callback_inputs=_OAuthLoginCallbackInputs(
@@ -184,7 +192,7 @@ def _create_plugin_oauth_login_callback[UP: UserProtocol[Any], ID](
                 code=code,
                 oauth_state=oauth_state,
                 user_manager=litestar_auth_user_manager,
-                backend=request_backend,
+                backend=factory_kit.resolve_backend(litestar_auth_backends),
             ),
         )
 

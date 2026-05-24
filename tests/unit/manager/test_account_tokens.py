@@ -71,6 +71,44 @@ async def test_forgot_password_existing_user_calls_hook_with_valid_reset_token()
     assert payload["password_fingerprint"] == manager.tokens.password_fingerprint(user.hashed_password)
 
 
+def test_write_verify_token_decodes_without_password_fingerprint() -> None:
+    """Verification tokens do not carry reset-password fingerprint claims."""
+    user_db = AsyncMock()
+    password_helper = PasswordHelper()
+    manager = TrackingUserManager(user_db, password_helper)
+    user = _build_user(password_helper)
+
+    token = manager._account_tokens.write_verify_token(user)
+
+    payload = jwt.decode(
+        token,
+        manager.verification_token_secret.get_secret_value(),
+        algorithms=["HS256"],
+        audience=VERIFY_TOKEN_AUDIENCE,
+    )
+    assert payload["sub"] == str(user.id)
+    assert "password_fingerprint" not in payload
+
+
+def test_write_reset_password_token_decodes_with_current_password_fingerprint() -> None:
+    """Reset-password tokens carry the fingerprint for the current password hash."""
+    user_db = AsyncMock()
+    password_helper = PasswordHelper()
+    manager = TrackingUserManager(user_db, password_helper)
+    user = _build_user(password_helper)
+
+    token = manager._account_tokens.write_reset_password_token(user, dummy_hash=manager._get_dummy_hash())
+
+    payload = jwt.decode(
+        token,
+        manager.reset_password_token_secret.get_secret_value(),
+        algorithms=["HS256"],
+        audience=RESET_PASSWORD_TOKEN_AUDIENCE,
+    )
+    assert payload["sub"] == str(user.id)
+    assert payload["password_fingerprint"] == manager.tokens.password_fingerprint(user.hashed_password)
+
+
 def test_write_token_subject_includes_expected_typ_header() -> None:
     """Manager-issued account tokens advertise the expected JWT type."""
     user_db = AsyncMock()
@@ -85,6 +123,45 @@ def test_write_token_subject_includes_expected_typ_header() -> None:
     )
 
     assert jwt.get_unverified_header(token)["typ"] == EXPECTED_JWT_TYPE
+
+
+def test_security_write_token_keeps_compatibility_kwargs() -> None:
+    """The token-security compatibility writer still signs the provided subject."""
+    user_db = AsyncMock()
+    password_helper = PasswordHelper()
+    manager = TrackingUserManager(user_db, password_helper)
+
+    token = manager.tokens.security.write_token(
+        subject="user-123",
+        secret=manager.verification_token_secret.get_secret_value(),
+        audience=VERIFY_TOKEN_AUDIENCE,
+        lifetime=manager.verification_token_lifetime,
+    )
+
+    payload = jwt.decode(
+        token,
+        manager.verification_token_secret.get_secret_value(),
+        algorithms=["HS256"],
+        audience=VERIFY_TOKEN_AUDIENCE,
+    )
+    assert payload["sub"] == "user-123"
+
+
+def test_token_writer_requires_fingerprint_source_for_reset_password_tokens() -> None:
+    """Reset-password requests fail closed when no fingerprint source is available."""
+    user_db = AsyncMock()
+    password_helper = PasswordHelper()
+    manager = TrackingUserManager(user_db, password_helper)
+
+    with pytest.raises(ValueError, match="fingerprint source"):
+        manager.tokens.security.token_writer.write(
+            account_tokens_module.TokenWriteRequest(
+                subject="user-123",
+                secret=manager.reset_password_token_secret.get_secret_value(),
+                audience=RESET_PASSWORD_TOKEN_AUDIENCE,
+                lifetime=manager.reset_password_token_lifetime,
+            ),
+        )
 
 
 @pytest.mark.parametrize("verified_state", ["unverified", "verified"])

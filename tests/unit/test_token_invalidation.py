@@ -93,6 +93,7 @@ async def test_manager_update_invalidates_tokens_only_on_email_or_password_chang
             reset_password_token_secret="fedcba9876543210" * 4,
             id_parser=UUID,
         ),
+        updatable_fields=frozenset({"email", "password", "bio"}),
     )
     user = _User(id=uuid4(), email="user@example.com", hashed_password=password_helper.hash("old-password"))
 

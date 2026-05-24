@@ -12,8 +12,8 @@ from sqlalchemy import select
 from sqlalchemy.dialects import postgresql
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
+from litestar_auth._locks import _BoundedAsyncLockRegistry
 from litestar_auth.db import ApiKeyData, BaseApiKeyStore
-from litestar_auth.db._sqlalchemy_api_keys import _ApiKeyCreateLockRegistry
 from litestar_auth.db.sqlalchemy import SQLAlchemyApiKeyStore
 from litestar_auth.exceptions import ConfigurationError
 from litestar_auth.models import ApiKey, User
@@ -120,6 +120,10 @@ async def test_sqlalchemy_api_key_store_crud_active_filters(session: SASession) 
     assert scopes_only is active
     assert scopes_only.name == "Name only"
     assert scopes_only.scopes == ["read"]
+    unchanged = await store.update(active.key_id)
+    assert unchanged is active
+    assert unchanged.name == "Name only"
+    assert unchanged.scopes == ["read"]
     assert await store.update(expired.key_id, name="Expired key") is None
 
     used_at = datetime.now(tz=UTC)
@@ -233,15 +237,9 @@ async def test_sqlalchemy_api_key_store_locks_owner_before_limited_create(
     assert events[:2] == ["lock", "list"]
 
 
-def test_sqlalchemy_api_key_create_lock_registry_rejects_empty_bound() -> None:
-    """The bounded create-lock registry requires at least one retained lock."""
-    with pytest.raises(ValueError, match="max_size must be at least 1"):
-        _ApiKeyCreateLockRegistry(max_size=0)
-
-
 async def test_sqlalchemy_api_key_create_locks_are_bounded(monkeypatch: pytest.MonkeyPatch) -> None:
     """Limited API-key creation retains only the most recent idle create locks."""
-    registry = _ApiKeyCreateLockRegistry(max_size=2)
+    registry = _BoundedAsyncLockRegistry[tuple[type[object], UUID]](max_size=2)
     store = SQLAlchemyApiKeyStore(session=cast("Any", object()), api_key_model=ApiKey)
 
     async def lock_api_key_owner(user_id: UUID) -> None:
@@ -271,7 +269,7 @@ async def test_sqlalchemy_api_key_create_locks_are_bounded(monkeypatch: pytest.M
 
 async def test_sqlalchemy_api_key_create_locks_keep_in_flight_entry(monkeypatch: pytest.MonkeyPatch) -> None:
     """A held API-key create lock is not evicted by create attempts for other users."""
-    registry = _ApiKeyCreateLockRegistry(max_size=1)
+    registry = _BoundedAsyncLockRegistry[tuple[type[object], UUID]](max_size=1)
     store = SQLAlchemyApiKeyStore(session=cast("Any", object()), api_key_model=ApiKey)
     locked_user_id = uuid4()
     lock_key = (cast("type[object]", ApiKey), locked_user_id)

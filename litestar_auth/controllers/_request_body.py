@@ -12,7 +12,7 @@ from litestar import Request
 from litestar.background_tasks import BackgroundTask
 from litestar.exceptions import ClientException, ValidationException
 
-from litestar_auth.controllers._error_responses import _create_error_response
+from litestar_auth.controllers._error_responses import _create_error_response, raise_client_error
 from litestar_auth.exceptions import ErrorCode
 
 if TYPE_CHECKING:
@@ -43,39 +43,39 @@ class RequestBodyRouteHandler(Protocol):
     exception_handlers: ExceptionHandlersMap | None
 
 
-async def _decode_request_body(
+async def _decode_request_body[SchemaT: msgspec.Struct](
     request: Request[Any, Any, Any],
     *,
-    schema: type[msgspec.Struct],
+    schema: type[SchemaT],
     error_config: RequestBodyErrorConfig | None = None,
-) -> msgspec.Struct:
+) -> SchemaT:
     """Decode a JSON request body into the configured msgspec schema.
 
     Returns:
         The decoded request-body struct.
 
-    Raises:
-        ClientException: If the request body cannot be decoded into ``schema``.
     """
     config = error_config or RequestBodyErrorConfig()
     try:
-        return msgspec.json.decode(await request.body(), type=cast("Any", schema))
+        return msgspec.json.decode(await request.body(), type=schema)
     except msgspec.ValidationError as exc:
         if config.on_validation_error is not None:
             await config.on_validation_error(request)
-        raise ClientException(
+        raise_client_error(
             status_code=422,
             detail=config.validation_detail,
-            extra={"code": config.validation_code},
-        ) from exc
+            error_code=config.validation_code,
+            source=exc,
+        )
     except msgspec.DecodeError as exc:
         if config.on_decode_error is not None:
             await config.on_decode_error(request)
-        raise ClientException(
+        raise_client_error(
             status_code=_HTTP_BAD_REQUEST,
             detail=config.decode_detail,
-            extra={"code": config.decode_code},
-        ) from exc
+            error_code=config.decode_code,
+            source=exc,
+        )
 
 
 def _create_request_body_exception_handlers(
@@ -145,6 +145,11 @@ def _configure_request_body_handler(
     }
 
 
+def _controller_route_handler(controller_cls: type[object], name: str) -> RequestBodyRouteHandler:
+    """Return a generated controller route handler by class dictionary name."""
+    return cast("RequestBodyRouteHandler", vars(controller_cls)[name])
+
+
 def _set_data_parameter_annotation(
     handler_fn: Callable[..., Any],
     *,
@@ -170,12 +175,26 @@ def _set_data_parameter_annotation(
         msg = "Request-body handlers must declare a `data` parameter."
         raise TypeError(msg)
 
-    adapted_handler = cast("Any", handler_fn)
-    adapted_handler.__signature__ = inspect.Signature(
-        parameters=parameters,
-        return_annotation=signature.return_annotation,
+    _attach_handler_signature(
+        handler_fn,
+        signature=inspect.Signature(
+            parameters=parameters,
+            return_annotation=signature.return_annotation,
+        ),
+        annotations={
+            **getattr(handler_fn, "__annotations__", {}),
+            "data": schema,
+        },
     )
-    adapted_handler.__annotations__ = {
-        **getattr(handler_fn, "__annotations__", {}),
-        "data": schema,
-    }
+
+
+def _attach_handler_signature(
+    handler_fn: Callable[..., Any],
+    *,
+    signature: inspect.Signature,
+    annotations: Mapping[str, object],
+) -> None:
+    """Attach runtime signature metadata for Litestar-generated handlers."""
+    adapted_handler = cast("Any", handler_fn)
+    adapted_handler.__signature__ = signature
+    adapted_handler.__annotations__ = dict(annotations)

@@ -130,6 +130,11 @@ high-entropy `key_id`, separate codes let clients choose the correct remediation
 Do not depend on the specific code to grant access. All three outcomes are authentication failures
 and must remain non-authorizing.
 
+When `AuthRateLimitConfig.api_key_use` is configured, malformed and unknown API-key credentials are
+classified without consuming the API-key-use limiter. Resolved unusable key rows, such as revoked,
+expired, timestamp-skewed, or nonce-replayed keys, still consume the limiter before the structured
+401 response is returned.
+
 ## Limitations (by design)
 
 - No built-in **email** sending — you must implement hooks.

@@ -98,6 +98,25 @@ def test_get_or_create_scoped_session_reuses_existing_scoped_session() -> None:
     assert session_maker.call_count == 1
 
 
+def test_get_or_create_scoped_session_honors_custom_scope_key() -> None:
+    """It stores and reuses sessions under a caller-provided scope key."""
+    session_maker = assert_structural_session_factory(DummySessionMaker())
+    scope = _build_scope()
+    custom_key = "_sqlalchemy_db_session_1"
+
+    session = get_or_create_scoped_session(
+        State(),
+        scope,
+        cast("async_sessionmaker[AsyncSession]", session_maker),
+        session_scope_key=custom_key,
+    )
+
+    assert isinstance(session, DummySession)
+    namespace = cast("dict[str, Any]", _scope_dict(scope)[_AA_SCOPE_NAMESPACE])
+    assert namespace[custom_key] is session
+    assert SESSION_SCOPE_KEY not in namespace
+
+
 def test_get_aa_namespace_creates_namespace_when_absent() -> None:
     """It creates the Advanced Alchemy namespace on demand."""
     scope = _build_scope()

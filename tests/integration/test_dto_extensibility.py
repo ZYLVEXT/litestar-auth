@@ -69,6 +69,8 @@ class ExtendedUserUpdate(msgspec.Struct, omit_defaults=True, forbid_unknown_fiel
     is_verified: bool | None = None
     roles: list[str] | None = None
     bio: str | None = None
+    current_password: UserPasswordField | None = None
+    totp_code: str | None = None
 
 
 class UsersControllerManager(BaseUserManager[ExampleUser, UUID]):
@@ -107,6 +109,7 @@ def build_app() -> tuple[
             verification_token_secret=VERIFICATION_TOKEN_SECRET,
             reset_password_token_secret="fedcba9876543210" * 4,
         ),
+        updatable_fields=frozenset({"email", "password", "bio"}),
     )
     strategy = InMemoryTokenStrategy()
     backend = AuthenticationBackend[ExampleUser, UUID](
@@ -265,7 +268,7 @@ async def test_custom_msgspec_schemas_extend_register_and_users_responses(
     admin_patch_response = await test_client.patch(
         f"/users/{created_user.id}",
         headers=admin_headers,
-        json={"roles": [" Support ", "ADMIN"]},
+        json={"roles": [" Support ", "ADMIN"], "current_password": "admin-password"},
     )
     assert admin_patch_response.status_code == HTTP_OK
     assert admin_patch_response.json()["roles"] == ["admin", "support"]

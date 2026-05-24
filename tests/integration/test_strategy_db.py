@@ -2,13 +2,16 @@
 
 from __future__ import annotations
 
+import asyncio
 from datetime import UTC, datetime, timedelta, timezone, tzinfo
 from typing import TYPE_CHECKING, Any
+from unittest.mock import AsyncMock
 from uuid import UUID
 
 import pytest
 from advanced_alchemy.base import UUIDPrimaryKey, create_registry
-from sqlalchemy import select
+from sqlalchemy import select, update
+from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlalchemy.orm import DeclarativeBase
 
 import litestar_auth.authentication.strategy.db as db_strategy_module
@@ -24,24 +27,29 @@ from litestar_auth.models import (
     UserAuthRelationshipMixin,
     UserModelMixin,
 )
+from tests.integration.conftest import enable_aiosqlite_foreign_keys
 
 DatabaseTokenStrategy = db_strategy_module.DatabaseTokenStrategy
 
 if TYPE_CHECKING:
-    from collections.abc import Iterable, Mapping, Sequence
+    from collections.abc import AsyncIterator, Iterable, Mapping, Sequence
+    from pathlib import Path
 
     from sqlalchemy.engine import Connection, Engine
-    from sqlalchemy.ext.asyncio import AsyncSession
+    from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
     from sqlalchemy.orm import Session
     from sqlalchemy.orm import Session as SASession
     from sqlalchemy.orm.session import ForUpdateParameter
     from sqlalchemy.schema import MetaData
     from sqlalchemy.sql.base import Executable
 
+    from litestar_auth.authentication.strategy._db_rotation import _RefreshTokenRow
+
 pytestmark = pytest.mark.integration
 EXPECTED_CLEANUP_DELETIONS = 2
 EXPECTED_REVOKED_SESSIONS_WITHOUT_CURRENT = 2
 _TOKEN_HASH_SECRET = "test-token-hash-secret-1234567890-1234567890"
+CONCURRENT_REFRESH_ROTATION_COUNT = 2
 
 
 class CustomTokenBase(DeclarativeBase):
@@ -137,6 +145,29 @@ def sqlalchemy_metadata() -> tuple[MetaData, ...]:
         Metadata collections created for this module's SQLite session fixture.
     """
     return User.metadata, CustomTokenUser.metadata, PasswordHashColumnUser.metadata
+
+
+@pytest.fixture
+async def async_sqlite_session_maker(
+    tmp_path: Path,
+    sqlalchemy_metadata: tuple[MetaData, ...],
+) -> AsyncIterator[async_sessionmaker[AsyncSession]]:
+    """Create an aiosqlite-backed async session maker for DB-token concurrency tests.
+
+    Yields:
+        Async session maker bound to an isolated SQLite database.
+    """
+    database_path = tmp_path / "database-token-concurrency.sqlite"
+    engine: AsyncEngine = create_async_engine(f"sqlite+aiosqlite:///{database_path}")
+    enable_aiosqlite_foreign_keys(engine)
+    async with engine.begin() as connection:
+        for metadata in sqlalchemy_metadata:
+            await connection.run_sync(metadata.create_all)
+
+    try:
+        yield async_sessionmaker(engine, expire_on_commit=False)
+    finally:
+        await engine.dispose()
 
 
 class AsyncSessionAdapter:
@@ -961,6 +992,172 @@ async def test_database_token_strategy_rotate_refresh_token_returns_none_when_mi
     )
 
     assert await strategy.rotate_refresh_token("missing-refresh-token", UnusedUserManager()) is None
+
+
+async def test_database_token_strategy_refresh_token_replay_revokes_session_chain(session: Session) -> None:
+    """Replaying a consumed refresh token revokes the active refresh session."""
+    user = _create_user(session, email="refresh-replay@example.com")
+    strategy = DatabaseTokenStrategy(
+        session=_strategy_session(session),
+        token_hash_secret=_TOKEN_HASH_SECRET,
+    )
+    refresh_token = await strategy.write_refresh_token(user)
+    persisted_refresh_token = session.scalar(select(RefreshToken).where(RefreshToken.user_id == user.id))
+    assert persisted_refresh_token is not None
+    session_id = persisted_refresh_token.session_id
+
+    rotation = await strategy.rotate_refresh_token(refresh_token, UnusedUserManager())
+    replay_rotation = await strategy.rotate_refresh_token(refresh_token, UnusedUserManager())
+
+    assert rotation is not None
+    assert replay_rotation is None
+    assert session.scalar(select(RefreshToken).where(RefreshToken.session_id == session_id)) is None
+
+
+async def test_database_token_strategy_concurrent_refresh_rotation_has_single_winner(
+    async_sqlite_session_maker: async_sessionmaker[AsyncSession],
+) -> None:
+    """Concurrent refresh-token rotations against one token produce one rotation and revoke the session."""
+    async with async_sqlite_session_maker() as setup_session:
+        user = User(email="refresh-concurrent@example.com", hashed_password="hashed-password")
+        setup_session.add(user)
+        await setup_session.commit()
+        await setup_session.refresh(user)
+        strategy = DatabaseTokenStrategy(
+            session=setup_session,
+            token_hash_secret=_TOKEN_HASH_SECRET,
+        )
+        refresh_token = await strategy.write_refresh_token(user)
+        await setup_session.commit()
+        user_id = user.id
+
+    barrier = asyncio.Barrier(CONCURRENT_REFRESH_ROTATION_COUNT)
+
+    class _SynchronizedDatabaseTokenStrategy(DatabaseTokenStrategy[User, UUID]):
+        async def _replace_refresh_token_digest(
+            self,
+            persisted_token: _RefreshTokenRow,
+            *,
+            consumed_token_digest: str,
+            client_metadata: dict[str, str] | None,
+        ) -> str | None:
+            await barrier.wait()
+            return await super()._replace_refresh_token_digest(
+                persisted_token,
+                consumed_token_digest=consumed_token_digest,
+                client_metadata=client_metadata,
+            )
+
+    async def rotate_once() -> tuple[User, str] | None:
+        async with async_sqlite_session_maker() as rotation_session:
+            strategy = _SynchronizedDatabaseTokenStrategy(
+                session=rotation_session,
+                token_hash_secret=_TOKEN_HASH_SECRET,
+            )
+            rotation = await strategy.rotate_refresh_token(refresh_token, UnusedUserManager())
+            await rotation_session.commit()
+            return rotation
+
+    rotations = await asyncio.gather(*(rotate_once() for _ in range(CONCURRENT_REFRESH_ROTATION_COUNT)))
+    successful_rotations = [rotation for rotation in rotations if rotation is not None]
+
+    assert len(successful_rotations) == 1
+    assert rotations.count(None) == 1
+
+    async with async_sqlite_session_maker() as verification_session:
+        result = await verification_session.execute(select(RefreshToken).where(RefreshToken.user_id == user_id))
+        assert result.scalars().all() == []
+
+
+async def test_database_token_strategy_identify_consumed_refresh_token_revokes_session_chain(
+    session: Session,
+) -> None:
+    """Presenting a consumed refresh token for session lookup revokes the active refresh session."""
+    user = _create_user(session, email="refresh-identify-replay@example.com")
+    strategy = DatabaseTokenStrategy(
+        session=_strategy_session(session),
+        token_hash_secret=_TOKEN_HASH_SECRET,
+    )
+    refresh_token = await strategy.write_refresh_token(user)
+    persisted_refresh_token = session.scalar(select(RefreshToken).where(RefreshToken.user_id == user.id))
+    assert persisted_refresh_token is not None
+    session_id = persisted_refresh_token.session_id
+    assert await strategy.rotate_refresh_token(refresh_token, UnusedUserManager()) is not None
+
+    identified_session_id = await strategy.identify_refresh_session(user, refresh_token)
+
+    assert identified_session_id is None
+    assert session.scalar(select(RefreshToken).where(RefreshToken.session_id == session_id)) is None
+
+
+async def test_database_token_strategy_stale_refresh_rotation_does_not_succeed(session: Session) -> None:
+    """A stale rotation attempt cannot replace a token already consumed by another rotation."""
+    user = _create_user(session, email="refresh-stale@example.com")
+    strategy = DatabaseTokenStrategy(
+        session=_strategy_session(session),
+        token_hash_secret=_TOKEN_HASH_SECRET,
+    )
+    refresh_token = await strategy.write_refresh_token(user)
+    stale_row = await strategy._load_refresh_token_for_rotation(refresh_token)
+    assert stale_row is not None
+    session.expunge(stale_row)
+
+    first_rotation = await strategy.rotate_refresh_token(refresh_token, UnusedUserManager())
+    stale_rotation = await strategy._replace_refresh_token_digest(
+        stale_row,
+        consumed_token_digest=digest_opaque_token(token_hash_secret=_TOKEN_HASH_SECRET.encode(), token=refresh_token),
+        client_metadata=None,
+    )
+
+    assert first_rotation is not None
+    assert stale_rotation is None
+
+
+async def test_database_token_strategy_stale_refresh_rotation_without_consumed_marker_returns_none(
+    session: Session,
+) -> None:
+    """A stale rotation fails closed even if no consumed marker can identify the session."""
+    user = _create_user(session, email="refresh-stale-unmarked@example.com")
+    strategy = DatabaseTokenStrategy(
+        session=_strategy_session(session),
+        token_hash_secret=_TOKEN_HASH_SECRET,
+    )
+    refresh_token = await strategy.write_refresh_token(user)
+    stale_row = await strategy._load_refresh_token_for_rotation(refresh_token)
+    assert stale_row is not None
+    session.expunge(stale_row)
+    session.execute(
+        update(RefreshToken)
+        .where(RefreshToken.token == stale_row.token)
+        .values(token="externally-replaced-refresh-digest"),
+    )
+    session.commit()
+
+    stale_rotation = await strategy._replace_refresh_token_digest(
+        stale_row,
+        consumed_token_digest=digest_opaque_token(token_hash_secret=_TOKEN_HASH_SECRET.encode(), token=refresh_token),
+        client_metadata=None,
+    )
+
+    assert stale_rotation is None
+    assert session.scalar(select(RefreshToken).where(RefreshToken.user_id == user.id)) is not None
+
+
+async def test_database_token_strategy_rotate_returns_none_when_atomic_replace_loses(
+    session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The public rotation path returns ``None`` when the atomic digest replacement loses a race."""
+    user = _create_user(session, email="refresh-atomic-loss@example.com")
+    strategy = DatabaseTokenStrategy(
+        session=_strategy_session(session),
+        token_hash_secret=_TOKEN_HASH_SECRET,
+    )
+    refresh_token = await strategy.write_refresh_token(user)
+
+    monkeypatch.setattr(strategy, "_replace_refresh_token_digest", AsyncMock(return_value=None))
+
+    assert await strategy.rotate_refresh_token(refresh_token, UnusedUserManager()) is None
 
 
 async def test_database_token_strategy_rotate_refresh_token_deletes_expired_rows(session: Session) -> None:

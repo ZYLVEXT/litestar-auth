@@ -23,11 +23,16 @@ from litestar_auth.authentication.middleware import (
     LitestarAuthMiddlewareConfig,
     _cookie_header_contains_any_cookie_name,
     _request_supplied_auth_credentials,
-    _resolve_api_key_failure_code,
+    _resolve_api_key_failure_reason,
 )
 from litestar_auth.authentication.middleware import logger as middleware_logger
 from litestar_auth.authentication.strategy._api_key_format import digest_api_key_secret
-from litestar_auth.authentication.strategy.api_key import ApiKeyContext, ApiKeyStrategy
+from litestar_auth.authentication.strategy.api_key import (
+    ApiKeyContext,
+    ApiKeyFailureReason,
+    ApiKeyStrategy,
+    api_key_failure_reason_to_error_code,
+)
 from litestar_auth.authentication.transport._api_key_signing import (
     API_KEY_SIGNED_BODY_SCOPE_KEY,
     build_canonical_request,
@@ -92,6 +97,29 @@ class DummySessionMaker:
         """
         self.call_count += 1
         return self.session
+
+
+class MissingUserManager:
+    """User manager fixture that never resolves a user."""
+
+    async def get(self, user_id: UUID) -> ExampleUser | None:
+        """Return no user."""
+        del user_id
+        return None
+
+
+class ResolvingUserManager:
+    """User manager fixture that resolves one configured user."""
+
+    def __init__(self, user: ExampleUser) -> None:
+        """Store the user to return for matching ids."""
+        self.user = user
+
+    async def get(self, user_id: UUID) -> ExampleUser | None:
+        """Return the configured user when ids match."""
+        if user_id == self.user.id:
+            return self.user
+        return None
 
 
 class DummyRouteHandler:
@@ -626,7 +654,7 @@ async def test_middleware_logs_failed_token_validation_for_configured_auth_cooki
     assert leaked_cookie_text not in aggregated
 
 
-async def test_api_key_failure_code_helper_handles_active_valid_secret_branch() -> None:
+async def test_api_key_failure_reason_helper_handles_active_valid_secret_branch() -> None:
     """The API-key failure helper keeps active valid rows mapped to the generic invalid code."""
     store = InMemoryApiKeyStore()
     key_id = "valid-branch"
@@ -652,9 +680,50 @@ async def test_api_key_failure_code_helper_handles_active_valid_secret_branch() 
         unsafe_testing=True,
     )
 
-    code = await _resolve_api_key_failure_code(f"ak_prod_{key_id}.{secret}", strategy)
+    reason = await _resolve_api_key_failure_reason(
+        f"ak_prod_{key_id}.{secret}",
+        strategy,
+        user_manager=MissingUserManager(),
+    )
 
-    assert code == ErrorCode.API_KEY_INVALID
+    assert reason == ApiKeyFailureReason.INVALID
+    assert api_key_failure_reason_to_error_code(reason) == ErrorCode.API_KEY_INVALID
+
+
+async def test_api_key_failure_reason_helper_falls_back_when_attempt_succeeds() -> None:
+    """The middleware helper still returns a failure reason if invoked for a valid token."""
+    store = InMemoryApiKeyStore()
+    user = ExampleUser(id=uuid4())
+    key_id = "valid-user-branch"
+    secret = "secret"
+    await store.create(
+        ApiKeyData(
+            key_id=key_id,
+            user_id=user.id,
+            hashed_secret=digest_api_key_secret(api_key_hash_secret=API_KEY_HASH_SECRET.encode(), secret=secret),
+            encrypted_secret=None,
+            name="Valid",
+            scopes=[],
+            prefix_env="prod",
+            signing_required=False,
+            expires_at=None,
+            created_via="test",
+        ),
+    )
+    strategy = ApiKeyStrategy[ExampleUser, UUID](
+        api_key_store=store,
+        api_key_hash_secret=API_KEY_HASH_SECRET,
+        prefix_env="prod",
+        unsafe_testing=True,
+    )
+
+    reason = await _resolve_api_key_failure_reason(
+        f"ak_prod_{key_id}.{secret}",
+        strategy,
+        user_manager=ResolvingUserManager(user),
+    )
+
+    assert reason == ApiKeyFailureReason.INVALID
 
 
 def test_request_supplied_auth_credentials_detects_bearer_header() -> None:

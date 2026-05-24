@@ -734,8 +734,16 @@ async def test_jwt_strategy_destroy_token_derives_ttl_from_numeric_expiry(
     assert store.calls == [("ttl-jti", 120)]
 
 
-async def test_jwt_strategy_destroy_token_uses_minimum_ttl_for_non_numeric_expiry() -> None:
-    """Non-integer ``exp`` claims fall back to the minimum denylist TTL."""
+async def test_jwt_strategy_destroy_token_derives_ttl_from_float_expiry(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Destroying a token uses finite float ``exp`` when computing the denylist TTL."""
+    fake_now = 4_000.25
+
+    def fake_time() -> float:
+        return fake_now
+
+    monkeypatch.setattr("litestar_auth.authentication.strategy.jwt.time.time", fake_time)
     user = ExampleUser(id=uuid4())
     store = _RecordingDenylistStore()
     strategy = JWTStrategy(secret=DEFAULT_SECRET, denylist_store=store)
@@ -743,16 +751,87 @@ async def test_jwt_strategy_destroy_token_uses_minimum_ttl_for_non_numeric_expir
         payload={
             "sub": str(user.id),
             "aud": JWT_ACCESS_TOKEN_AUDIENCE,
-            "iat": datetime.now(tz=UTC),
-            "nbf": datetime.now(tz=UTC),
-            "exp": "not-a-timestamp",
-            "jti": "minimum-ttl-jti",
+            "iat": datetime.fromtimestamp(fake_now, tz=UTC),
+            "nbf": datetime.fromtimestamp(fake_now, tz=UTC),
+            "exp": fake_now + 120.5,
+            "jti": "float-ttl-jti",
         },
     )
 
     await strategy.destroy_token(token, user)
 
-    assert store.calls == [("minimum-ttl-jti", 1)]
+    assert store.calls == [("float-ttl-jti", 121)]
+
+
+@pytest.mark.parametrize(
+    ("exp", "expected_jti"),
+    [
+        pytest.param("not-a-timestamp", "minimum-ttl-string-jti", id="string"),
+        pytest.param(True, "minimum-ttl-bool-jti", id="bool"),
+        pytest.param(float("inf"), "minimum-ttl-infinite-jti", id="infinite"),
+        pytest.param(None, "minimum-ttl-missing-jti", id="missing"),
+    ],
+)
+async def test_jwt_strategy_destroy_token_uses_minimum_ttl_for_non_numeric_expiry(
+    exp: object,
+    expected_jti: str,
+) -> None:
+    """Missing and non-numeric ``exp`` claims fall back to the minimum denylist TTL."""
+    user = ExampleUser(id=uuid4())
+    store = _RecordingDenylistStore()
+    strategy = JWTStrategy(secret=DEFAULT_SECRET, denylist_store=store)
+    payload: dict[str, object] = {
+        "sub": str(user.id),
+        "aud": JWT_ACCESS_TOKEN_AUDIENCE,
+        "iat": datetime.now(tz=UTC),
+        "nbf": datetime.now(tz=UTC),
+        "jti": expected_jti,
+    }
+    if exp is not None:
+        payload["exp"] = exp
+    token = _make_token(payload=payload)
+
+    await strategy.destroy_token(token, user)
+
+    assert store.calls == [(expected_jti, 1)]
+
+
+async def test_jwt_strategy_read_token_rejects_revoked_float_exp_token_until_expiry(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A revoked token with float ``exp`` stays denied for the encoded remaining lifetime."""
+    fake_now = datetime.now(tz=UTC).timestamp()
+
+    def fake_time() -> float:
+        return fake_now
+
+    monkeypatch.setattr("litestar_auth.authentication.strategy.jwt.time.time", fake_time)
+    monkeypatch.setattr("litestar_auth.authentication.strategy._jwt_denylist.time.time", fake_time)
+    user = ExampleUser(id=uuid4())
+    user_manager = ExampleUserManager(user)
+    strategy = JWTStrategy[ExampleUser, UUID](
+        secret=DEFAULT_SECRET,
+        subject_decoder=UUID,
+        allow_inmemory_denylist=True,
+        session_fingerprint_getter=lambda _: None,
+    )
+    token = _make_token(
+        payload={
+            "sub": str(user.id),
+            "aud": JWT_ACCESS_TOKEN_AUDIENCE,
+            "iat": datetime.fromtimestamp(fake_now, tz=UTC),
+            "nbf": datetime.fromtimestamp(fake_now, tz=UTC),
+            "exp": fake_now + 120.5,
+            "jti": "revoked-float-exp-jti",
+        },
+    )
+
+    assert await strategy.read_token(token, user_manager) is user
+
+    await strategy.destroy_token(token, user)
+    fake_now += 120.0
+
+    assert await strategy.read_token(token, user_manager) is None
 
 
 async def test_jwt_strategy_destroy_token_clamps_expired_numeric_ttl_to_minimum(

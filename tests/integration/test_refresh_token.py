@@ -152,6 +152,11 @@ def _strategy_session(session: Session) -> AsyncSession:
     return AsyncSessionAdapter(session)  # ty: ignore[invalid-return-type]
 
 
+def _token_digest(token: str) -> str:
+    """Return the stored digest for a raw opaque token."""
+    return hmac.new(_TOKEN_HASH_SECRET.encode(), token.encode(), hashlib.sha256).hexdigest()
+
+
 def build_app(
     session: Session,
     *,
@@ -222,16 +227,8 @@ async def test_login_and_refresh_rotate_refresh_tokens(
     assert isinstance(login_payload["refresh_token"], str)
 
     first_refresh_token = login_payload["refresh_token"]
-    first_refresh_digest = hmac.new(
-        _TOKEN_HASH_SECRET.encode(),
-        first_refresh_token.encode(),
-        hashlib.sha256,
-    ).hexdigest()
-    access_digest = hmac.new(
-        _TOKEN_HASH_SECRET.encode(),
-        login_payload["access_token"].encode(),
-        hashlib.sha256,
-    ).hexdigest()
+    first_refresh_digest = _token_digest(first_refresh_token)
+    access_digest = _token_digest(login_payload["access_token"])
     persisted_login_refresh_token = session.scalar(
         select(RefreshToken).where(RefreshToken.token == first_refresh_digest),
     )
@@ -265,12 +262,7 @@ async def test_login_and_refresh_rotate_refresh_tokens(
     assert session.scalar(select(RefreshToken).where(RefreshToken.token == first_refresh_digest)) is None
     rotated_persisted_refresh_token = session.scalar(
         select(RefreshToken).where(
-            RefreshToken.token
-            == hmac.new(
-                _TOKEN_HASH_SECRET.encode(),
-                refresh_payload["refresh_token"].encode(),
-                hashlib.sha256,
-            ).hexdigest(),
+            RefreshToken.token == _token_digest(refresh_payload["refresh_token"]),
         ),
     )
     assert rotated_persisted_refresh_token is not None
@@ -278,10 +270,7 @@ async def test_login_and_refresh_rotate_refresh_tokens(
     assert rotated_persisted_refresh_token.created_at == login_created_at
     assert rotated_persisted_refresh_token.last_used_at is not None
     assert rotated_persisted_refresh_token.client_metadata == {"user_agent": "LitestarAuth Refresh Test/2.0"}
-    session.expire_all()
-    user_after_refresh = session.scalar(select(User).where(User.email == "user@example.com"))
-    assert user_after_refresh is not None
-    assert first_refresh_digest not in {token.token for token in user_after_refresh.refresh_tokens}
+    assert rotated_persisted_refresh_token.consumed_token_digests == [first_refresh_digest]
 
     replay_response = await test_client.post("/auth/refresh", json={"refresh_token": first_refresh_token})
 
@@ -290,6 +279,7 @@ async def test_login_and_refresh_rotate_refresh_tokens(
     assert replay_payload["detail"] == "The refresh token is invalid."
     replay_code = replay_payload.get("code") or (replay_payload.get("extra") or {}).get("code")
     assert replay_code == ErrorCode.REFRESH_TOKEN_INVALID
+    assert session.scalar(select(RefreshToken).where(RefreshToken.session_id == login_session_id)) is None
 
 
 async def test_refresh_rejects_expired_refresh_tokens(session: Session) -> None:
@@ -304,8 +294,7 @@ async def test_refresh_rejects_expired_refresh_tokens(session: Session) -> None:
         refresh_token = login_response.json()["refresh_token"]
         persisted_refresh_token = session.scalar(
             select(RefreshToken).where(
-                RefreshToken.token
-                == hmac.new(_TOKEN_HASH_SECRET.encode(), refresh_token.encode(), hashlib.sha256).hexdigest(),
+                RefreshToken.token == _token_digest(refresh_token),
             ),
         )
         assert persisted_refresh_token is not None

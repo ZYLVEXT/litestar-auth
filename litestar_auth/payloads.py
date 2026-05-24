@@ -8,20 +8,16 @@ them from this module so imports stay explicit for readers and tooling.
 from __future__ import annotations
 
 from datetime import datetime  # noqa: TC003
-from typing import Annotated
 
 import msgspec
 
-import litestar_auth._schema_fields as schema_fields  # noqa: TC001
+import litestar_auth._schema_fields as schema_fields
 
-type SessionClientMetadataKey = Annotated[
-    str,
-    msgspec.Meta(min_length=1, max_length=64, pattern=r"^[a-z][a-z0-9_]*$"),
-]
-type SessionClientMetadataValue = Annotated[str, msgspec.Meta(min_length=1, max_length=255)]
-type ApiKeyNameField = Annotated[str, msgspec.Meta(min_length=1, max_length=120)]
-type ApiKeyScopeField = Annotated[str, msgspec.Meta(min_length=1, max_length=120, pattern=r"^[A-Za-z0-9:_-]+$")]
-type ApiKeyIdField = Annotated[str, msgspec.Meta(min_length=1, max_length=128)]
+type SessionClientMetadataKey = schema_fields.SessionClientMetadataKey
+type SessionClientMetadataValue = schema_fields.SessionClientMetadataValue
+type ApiKeyNameField = schema_fields.ApiKeyNameField
+type ApiKeyScopeField = schema_fields.ApiKeyScopeField
+type ApiKeyIdField = schema_fields.ApiKeyIdField
 
 
 class LoginCredentials(msgspec.Struct):

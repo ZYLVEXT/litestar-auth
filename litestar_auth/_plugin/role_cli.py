@@ -188,8 +188,12 @@ def _run_role_cli_operation[T](operation: Coroutine[Any, Any, T]) -> T:
     Raises:
         ClickException: If the role-admin operation fails with an operator-facing error.
     """
+    from litestar_auth._plugin.role_admin_contracts import SystemManagedRoleError  # noqa: PLC0415
+
     try:
         return asyncio.run(operation)
+    except SystemManagedRoleError as exc:
+        raise ClickException(str(exc)) from exc
     except (ConfigurationError, LookupError, ValueError) as exc:
         raise ClickException(str(exc)) from exc
 

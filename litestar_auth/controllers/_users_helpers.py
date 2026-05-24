@@ -5,10 +5,14 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any
 
 import msgspec
-from litestar.exceptions import ClientException, TooManyRequestsException
+from litestar.exceptions import TooManyRequestsException
 
-from litestar_auth.exceptions import AuthorizationError, ErrorCode
-from litestar_auth.ratelimit._helpers import _client_host, _safe_key_part, logger
+from litestar_auth.controllers._error_responses import raise_request_body_invalid
+from litestar_auth.controllers._step_up_payloads import AdminUserDeleteStepUpRequest  # noqa: F401
+from litestar_auth.exceptions import AuthorizationError
+from litestar_auth.ratelimit._client_host import _client_host, logger
+from litestar_auth.ratelimit._key_derivation import _safe_key_part
+from litestar_auth.ratelimit._protocol import RateLimitKey
 
 if TYPE_CHECKING:
     from litestar import Request
@@ -23,7 +27,7 @@ _SELF_UPDATE_BLOCKED_FIELDS = SELF_UPDATE_FORBIDDEN_FIELDS | frozenset({"hashed_
 async def _build_change_password_rate_limit_key(
     rate_limit: EndpointRateLimit,
     request: Request[Any, Any, Any],
-) -> str:
+) -> RateLimitKey:
     """Build the rate-limit key for password rotation attempts.
 
     ``ChangePasswordRequest`` intentionally does not carry an email field. For
@@ -46,11 +50,13 @@ async def _build_change_password_rate_limit_key(
         trusted_proxy=rate_limit.trusted_proxy,
         trusted_headers=rate_limit.trusted_headers,
     )
-    return ":".join(
-        (
-            rate_limit.namespace,
-            _safe_key_part(host),
-            _safe_key_part(user_email.strip().casefold()),
+    return RateLimitKey(
+        ":".join(
+            (
+                rate_limit.namespace,
+                _safe_key_part(host),
+                _safe_key_part(user_email.strip().casefold()),
+            ),
         ),
     )
 
@@ -102,11 +108,7 @@ def _build_blocked_self_update_detail(blocked_fields: frozenset[str]) -> str:
 
 
 async def _reject_blocked_self_update_fields(request: Request[Any, Any, Any]) -> None:
-    """Reject blocked self-update fields before schema validation can silently diverge.
-
-    Raises:
-        ClientException: If the request body includes blocked self-update fields.
-    """
+    """Reject blocked self-update fields before schema validation can silently diverge."""
     try:
         decoded_body = msgspec.json.decode(await request.body())
     except msgspec.DecodeError:
@@ -117,11 +119,7 @@ async def _reject_blocked_self_update_fields(request: Request[Any, Any, Any]) ->
     if not blocked_fields:
         return
     detail = _build_blocked_self_update_detail(blocked_fields)
-    raise ClientException(
-        status_code=400,
-        detail=detail,
-        extra={"code": ErrorCode.REQUEST_BODY_INVALID},
-    ) from AuthorizationError(detail)
+    raise_request_body_invalid(detail, source=AuthorizationError(detail))
 
 
 async def _self_update_includes_email(request: Request[Any, Any, Any]) -> bool:

@@ -124,10 +124,9 @@ If you intentionally disable plugin-managed OpenAPI security, register `auth_con
 Compose them with `AuthenticationBackend`. This keeps cookie CSRF concerns and JWT claim validation independent.
 
 For Redis-backed opaque tokens, `RedisTokenStrategy.invalidate_all_tokens(user)` invalidates tokens
-through the per-user Redis index written by current `write_token(...)` calls. It does not perform a
-global keyspace scan, so token keys created by older deployments without that index remain valid only
-until their Redis TTL expires. Flush or rotate those pre-index keys during an upgrade if immediate
-revocation is required.
+by atomically bumping a per-user Redis epoch and deleting the indexed token and TOTP step-up marker
+keys. Token reads check that epoch, so token keys missing from the per-user index are rejected on
+their next use after invalidation without requiring a global keyspace scan.
 
 ## Cookie authentication and CSRF
 

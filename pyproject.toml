@@ -24,10 +24,10 @@ classifiers = [
 ]
 requires-python = "<3.15.0,>=3.12.0"
 dependencies = [
-    "litestar>=2.21.1,<3.0",
-    "advanced-alchemy>=1.9.3,<2.0",
+    "litestar>=2.22.0,<3.0",
+    "advanced-alchemy>=1.10.0,<2.0",
     "pwdlib[argon2]>=0.3.0,<0.4.0",
-    "pyjwt>=2.12.1,<3.0",
+    "pyjwt>=2.13.0,<3.0",
 ]
 
 [project.urls]
@@ -54,17 +54,17 @@ dev = [
     "python-dotenv>=1.2.2",
     "pytest-timeout>=2.4.0",
     "pytest-xdist>=3.8.0",
-    "ruff>=0.15.13",
+    "ruff>=0.15.14",
     "rust-just>=1.51.0",
-    "ty>=0.0.37",
+    "ty>=0.0.39",
     "deptry>=0.25.1",
-    "prek>=0.4.0",
+    "prek>=0.4.1",
     "fakeredis[lua]>=2.35.1",
 ]
 docs = [
     "mkdocstrings[python]>=1.0.4",
     "pymdown-extensions>=10.21.3",
-    "zensical>=0.0.42",
+    "zensical>=0.0.43",
 ]
 
 [tool.ty.environment]
@@ -156,6 +156,8 @@ filterwarnings = [
     "error",
     "error:::litestar_auth",
     "ignore::litestar_auth.totp.SecurityWarning",
+    # AA still emits deprecations from plugin internals (e.g. set_async_context in
+    # provide_session) that litestar-auth cannot remove until AA 2.0.
     "ignore::DeprecationWarning:advanced_alchemy",
 ]
 markers = """

@@ -183,6 +183,29 @@ def test_fernet_keyring_decrypts_present_non_active_key_and_detects_rotation() -
     assert current_keyring.needs_rotation(current_stored) is False
 
 
+def test_nullable_fernet_keyring_preserves_plaintext_when_unconfigured() -> None:
+    """Nullable keyrings provide the explicit unsafe-testing plaintext path."""
+    keyring = FernetKeyring(active_key_id="default", keys={}, nullable=True, _load_cryptography_fernet=_fake_loader)
+
+    assert keyring.is_encryption_configured is False
+    assert not keyring.encrypt(None)
+    assert keyring.encrypt("plain-secret") == "plain-secret"
+    assert keyring.decrypt(b"plain-secret") == "plain-secret"
+    assert keyring.needs_rotation("plain-secret") is False
+    assert "nullable=True" in repr(keyring)
+
+    with pytest.raises(TypeError, match="strings or bytes"):
+        keyring.decrypt(42)
+
+
+def test_fernet_keyring_encrypt_rejects_non_string_values_when_configured() -> None:
+    """Configured keyrings only encrypt explicit string plaintext."""
+    keyring = _build_keyring()
+
+    with pytest.raises(TypeError, match="Fernet secret values must be strings"):
+        keyring.encrypt(42)
+
+
 @pytest.mark.parametrize(
     ("stored", "match"),
     [

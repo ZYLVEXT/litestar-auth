@@ -555,7 +555,12 @@ async def test_users_crud_flow_via_plugin(
     response = await test_client.patch(
         f"/users/{user_ids['member']}",
         headers=admin_headers,
-        json={"email": "vip@example.com", "is_verified": False, "roles": [" Billing ", "ADMIN"]},
+        json={
+            "email": "vip@example.com",
+            "is_verified": False,
+            "roles": [" Billing ", "ADMIN"],
+            "current_password": "admin-password",
+        },
     )
     assert response.status_code == HTTP_OK
     _assert_public_user(
@@ -595,7 +600,12 @@ async def test_users_crud_flow_via_plugin(
         },
     ]
 
-    response = await test_client.delete(f"/users/{user_ids['member']}", headers=admin_headers)
+    response = await test_client.request(
+        "DELETE",
+        f"/users/{user_ids['member']}",
+        headers=admin_headers,
+        json={"current_password": "admin-password"},
+    )
     assert response.status_code == HTTP_OK
     _assert_public_user(
         response.json(),
@@ -733,7 +743,12 @@ async def test_users_me_rejects_deactivated_user_with_existing_session(
         password="admin-password",
     )
 
-    deactivate_response = await test_client.delete(f"/users/{user_ids['member']}", headers=admin_headers)
+    deactivate_response = await test_client.request(
+        "DELETE",
+        f"/users/{user_ids['member']}",
+        headers=admin_headers,
+        json={"current_password": "admin-password"},
+    )
     assert deactivate_response.status_code == HTTP_OK
     assert deactivate_response.json()["is_active"] is False
 
@@ -762,7 +777,7 @@ async def test_role_guards_and_request_user_roles_survive_relational_storage(
     patch_response = await test_client.patch(
         f"/users/{user_ids['member']}",
         headers=admin_headers,
-        json={"roles": [" Billing ", "ADMIN"]},
+        json={"roles": [" Billing ", "ADMIN"], "current_password": "admin-password"},
     )
     any_response = await test_client.get("/role-guarded/any", headers=member_headers)
     all_response = await test_client.get("/role-guarded/all", headers=member_headers)

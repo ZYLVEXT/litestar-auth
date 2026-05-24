@@ -20,7 +20,7 @@ from litestar_auth._jwt_headers import JwtDecodeConfig, decode_signed_jwt, jwt_e
 from litestar_auth.config import TOTP_PENDING_AUDIENCE
 from litestar_auth.exceptions import ConfigurationError, TokenError
 from litestar_auth.password import PasswordHelper
-from litestar_auth.ratelimit._helpers import _client_host
+from litestar_auth.ratelimit._client_host import _client_host
 from litestar_auth.totp import (
     SecurityWarning,
     TotpAlgorithm,

@@ -1179,7 +1179,7 @@ async def test_contrib_redis_preset_builds_shared_client_auth_components(
     def load_optional_redis() -> object:
         return object()
 
-    monkeypatch.setattr("litestar_auth.ratelimit._helpers._load_redis_asyncio", load_optional_redis)
+    monkeypatch.setattr("litestar_auth.ratelimit._redis._load_redis_asyncio", load_optional_redis)
     monkeypatch.setattr("litestar_auth._totp_stores._load_used_totp_redis_asyncio", load_optional_redis)
     monkeypatch.setattr("litestar_auth._totp_stores._load_enrollment_redis_asyncio", load_optional_redis)
     monkeypatch.setattr("litestar_auth.authentication.strategy._jwt_denylist._load_redis_asyncio", load_optional_redis)
@@ -1266,7 +1266,7 @@ def test_contrib_redis_preset_covers_optional_identity_and_proxy_header_branches
     def load_optional_redis() -> object:
         return object()
 
-    monkeypatch.setattr("litestar_auth.ratelimit._helpers._load_redis_asyncio", load_optional_redis)
+    monkeypatch.setattr("litestar_auth.ratelimit._redis._load_redis_asyncio", load_optional_redis)
     preset = RedisAuthPreset(redis=cast_fakeredis(async_fakeredis, RedisAuthClientProtocol))
 
     config_with_headers = preset.build_rate_limit_config(
@@ -1310,7 +1310,7 @@ def test_contrib_redis_preset_preserves_rate_limit_lazy_dependency_error(
         msg = "Install litestar-auth[redis] to use RedisRateLimiter"
         raise ImportError(msg)
 
-    monkeypatch.setattr("litestar_auth.ratelimit._helpers._load_redis_asyncio", fail_load_redis)
+    monkeypatch.setattr("litestar_auth.ratelimit._redis._load_redis_asyncio", fail_load_redis)
     preset = RedisAuthPreset(redis=cast_fakeredis(async_fakeredis, RedisAuthClientProtocol))
 
     with pytest.raises(ImportError, match="Install litestar-auth\\[redis\\] to use RedisRateLimiter"):

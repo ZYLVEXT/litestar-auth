@@ -136,6 +136,14 @@ Install extras only when you need those features:
 - `litestar-auth[totp]` for built-in TOTP helpers.
 - `litestar-auth[all]` for `redis`, `oauth`, and `totp` together.
 
+## Requirements
+
+- Python 3.12+
+- [Litestar](https://litestar.dev/) ≥ 2.22
+- [Advanced Alchemy](https://docs.advanced-alchemy.dev/) ≥ 1.10
+
+See the [Migration Guide](https://zylvext.github.io/litestar-auth/migration/) for Litestar 2.22 route-parameter conventions and Advanced Alchemy 1.10 repository API changes.
+
 Password hashing defaults are now Argon2-only. Unsupported stored password hashes fail closed
 under the library default, so rotate or reset those credentials before upgrading; see the
 [Migration Guide](https://zylvext.github.io/litestar-auth/migration/).

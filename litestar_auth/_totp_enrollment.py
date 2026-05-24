@@ -6,24 +6,20 @@ import hmac
 import secrets
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from functools import partial
-from typing import TYPE_CHECKING, Any, Self, cast
+from typing import TYPE_CHECKING, Any, cast
 
 import jwt
 from jwt import ExpiredSignatureError, InvalidTokenError
 
 from litestar_auth._jwt_headers import JwtDecodeConfig, decode_signed_jwt, jwt_encode_headers
-from litestar_auth._optional_deps import require_cryptography_fernet
-from litestar_auth._secrets_at_rest import FernetKeyring, SecretAtRestError
+from litestar_auth._secrets_at_rest import FernetKeyring, SecretAtRestError, _load_cryptography_fernet
 from litestar_auth.config import TOTP_ENROLL_AUDIENCE
 from litestar_auth.exceptions import ConfigurationError, TokenError
 from litestar_auth.totp_flow import InvalidTotpPendingTokenError
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Mapping
-    from types import ModuleType
+    from collections.abc import Mapping
 
-    from litestar_auth._secrets_at_rest import FernetKey
     from litestar_auth.manager import FernetKeyringConfig
     from litestar_auth.totp import TotpEnrollmentStore
 
@@ -32,55 +28,6 @@ _DEFAULT_TOTP_FERNET_KEY_ID = "default"
 _ENROLLMENT_ENCODING_CLAIM = "enc"
 _ENROLLMENT_ENCODING_FERNET = "fernet"
 _ENROLLMENT_ENCODING_PLAIN = "plain"
-_TOTP_ENROLLMENT_FERNET_INSTALL_HINT = "Install litestar-auth[totp] to use TOTP enrollment-token encryption."
-
-
-_load_cryptography_fernet = cast(
-    "Callable[[], ModuleType]",
-    partial(require_cryptography_fernet, install_hint=_TOTP_ENROLLMENT_FERNET_INSTALL_HINT),
-)
-
-
-@dataclass(frozen=True, slots=True)
-class _EnrollmentTokenCipher:
-    """Fernet cipher dedicated to server-side TOTP enrollment secret values."""
-
-    _keyring: FernetKeyring
-
-    @classmethod
-    def from_keyring(
-        cls,
-        *,
-        active_key_id: str,
-        keys: Mapping[str, FernetKey],
-    ) -> Self:
-        """Build a cipher from a versioned Fernet keyring.
-
-        Returns:
-            A cipher bound to the provided keyring for enrollment-token claims.
-        """
-        keyring = FernetKeyring(
-            active_key_id=active_key_id,
-            keys=keys,
-            _load_cryptography_fernet=cast("Any", _load_cryptography_fernet),
-        )
-        return cls(_keyring=keyring)
-
-    def encrypt(self, plaintext: str) -> str:
-        """Return a Fernet token string for the provided plaintext secret.
-
-        Returns:
-            Fernet-encrypted ciphertext decoded as a UTF-8 string.
-        """
-        return self._keyring.encrypt(plaintext)
-
-    def decrypt(self, ciphertext: str) -> str:
-        """Decrypt a Fernet token string.
-
-        Returns:
-            The plaintext secret.
-        """
-        return self._keyring.decrypt(ciphertext)
 
 
 def _resolve_enrollment_token_cipher(
@@ -88,12 +35,13 @@ def _resolve_enrollment_token_cipher(
     totp_secret_key: str | None,
     totp_secret_keyring: FernetKeyringConfig | None = None,
     unsafe_testing: bool,
-) -> _EnrollmentTokenCipher | None:
+) -> FernetKeyring:
     """Build the enrollment secret-value cipher, enforcing production posture.
 
     Returns:
         A cipher when ``totp_secret_keyring`` or ``totp_secret_key`` is configured,
-        otherwise ``None`` (only allowed in explicit ``unsafe_testing`` mode).
+        otherwise a nullable plaintext keyring (only allowed in explicit
+        ``unsafe_testing`` mode).
 
     Raises:
         ConfigurationError: If key inputs are ambiguous or missing outside explicit
@@ -103,17 +51,24 @@ def _resolve_enrollment_token_cipher(
         msg = "Configure TOTP enrollment encryption with totp_secret_key or totp_secret_keyring, not both."
         raise ConfigurationError(msg)
     if totp_secret_keyring is not None:
-        return _EnrollmentTokenCipher.from_keyring(
+        return FernetKeyring(
             active_key_id=totp_secret_keyring.active_key_id,
             keys=totp_secret_keyring.keys,
+            _load_cryptography_fernet=_load_cryptography_fernet,
         )
     if totp_secret_key is not None:
-        return _EnrollmentTokenCipher.from_keyring(
+        return FernetKeyring(
             active_key_id=_DEFAULT_TOTP_FERNET_KEY_ID,
             keys={_DEFAULT_TOTP_FERNET_KEY_ID: totp_secret_key},
+            _load_cryptography_fernet=_load_cryptography_fernet,
         )
     if unsafe_testing:
-        return None
+        return FernetKeyring(
+            active_key_id=_DEFAULT_TOTP_FERNET_KEY_ID,
+            keys={},
+            nullable=True,
+            _load_cryptography_fernet=_load_cryptography_fernet,
+        )
 
     msg = (
         "totp_secret_keyring or totp_secret_key is required when unsafe_testing=False. "
@@ -157,23 +112,21 @@ def _sign_enrollment_token(
     return jwt.encode(payload, signing_key, algorithm="HS256", headers=jwt_encode_headers())
 
 
-def _encode_enrollment_secret(secret: str, *, cipher: _EnrollmentTokenCipher | None) -> tuple[str, str]:
+def _encode_enrollment_secret(secret: str, *, cipher: FernetKeyring) -> tuple[str, str]:
     """Return the server-side enrollment-store value and its encoding marker."""
-    if cipher is None:
-        return secret, _ENROLLMENT_ENCODING_PLAIN
-    return cipher.encrypt(secret), _ENROLLMENT_ENCODING_FERNET
+    encoding = _ENROLLMENT_ENCODING_FERNET if cipher.is_encryption_configured else _ENROLLMENT_ENCODING_PLAIN
+    return cipher.encrypt(secret), encoding
 
 
 def _decode_enrollment_secret(
     encoded_secret: str,
     *,
-    cipher: _EnrollmentTokenCipher | None,
+    cipher: FernetKeyring,
     encoding: str,
 ) -> str | None:
     """Return the plain-text enrollment secret from a server-side store value."""
-    if cipher is None:
-        return encoded_secret if encoding == _ENROLLMENT_ENCODING_PLAIN else None
-    if encoding != _ENROLLMENT_ENCODING_FERNET:
+    expected_encoding = _ENROLLMENT_ENCODING_FERNET if cipher.is_encryption_configured else _ENROLLMENT_ENCODING_PLAIN
+    if encoding != expected_encoding:
         return None
     try:
         return cipher.decrypt(encoded_secret)
@@ -184,7 +137,7 @@ def _decode_enrollment_secret(
 @dataclass(frozen=True, slots=True)
 class _EnrollmentTokenIssueConfig:
     signing_key: str
-    cipher: _EnrollmentTokenCipher | None
+    cipher: FernetKeyring
     enrollment_store: TotpEnrollmentStore
     lifetime_seconds: int = _TOTP_ENROLL_TOKEN_LIFETIME_SECONDS
 
@@ -231,13 +184,13 @@ def _decode_enrollment_token(
     *,
     signing_key: str,
     expected_user_id: str,
-    cipher: _EnrollmentTokenCipher | None,
+    cipher: FernetKeyring,
 ) -> _EnrollmentTokenClaims:
     """Decode and validate an enrollment JWT.
 
-    The ``enc`` claim must match the currently configured cipher posture:
-    tokens minted in plaintext mode are rejected when a cipher is active, and
-    Fernet-encoded tokens are rejected when no cipher is configured.
+    The ``enc`` claim must match the currently configured keyring posture:
+    tokens minted in plaintext mode are rejected when encryption is active, and
+    Fernet-encoded tokens are rejected when the nullable keyring is unconfigured.
 
     Returns:
         Validated enrollment claims used to consume server-side state.
@@ -320,7 +273,7 @@ def _validate_enrollment_token_jti(payload: Mapping[str, Any]) -> str:
 def _validate_enrollment_token_encoding(
     payload: Mapping[str, Any],
     *,
-    cipher: _EnrollmentTokenCipher | None,
+    cipher: FernetKeyring,
 ) -> str:
     """Return the enrollment secret encoding when it matches the configured cipher posture.
 
@@ -330,7 +283,7 @@ def _validate_enrollment_token_encoding(
     Raises:
         InvalidTotpPendingTokenError: If the encoding claim does not match the configured cipher.
     """
-    expected_encoding = _ENROLLMENT_ENCODING_FERNET if cipher is not None else _ENROLLMENT_ENCODING_PLAIN
+    expected_encoding = _ENROLLMENT_ENCODING_FERNET if cipher.is_encryption_configured else _ENROLLMENT_ENCODING_PLAIN
     encoding = payload.get(_ENROLLMENT_ENCODING_CLAIM)
     if encoding != expected_encoding:
         raise InvalidTotpPendingTokenError
@@ -341,7 +294,7 @@ async def _consume_enrollment_secret(
     claims: _EnrollmentTokenClaims,
     *,
     enrollment_store: TotpEnrollmentStore,
-    cipher: _EnrollmentTokenCipher | None,
+    cipher: FernetKeyring,
 ) -> str:
     """Consume server-side enrollment state and return the plain-text TOTP secret.
 

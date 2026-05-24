@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any, cast
 
 from litestar_auth._plugin.role_admin import RoleModelFamily, SQLAlchemyRoleAdmin
+from litestar_auth._superuser_role import DEFAULT_SUPERUSER_ROLE_NAME
 from litestar_auth.exceptions import ConfigurationError
 from litestar_auth.types import UserProtocol
 
@@ -91,10 +92,12 @@ def _build_request_bound_role_admin[UP: UserProtocol[Any]](
     model_family: RoleModelFamily[UP],
     session: AsyncSession,
     role_lifecycle_updater: object,
+    superuser_role_name: str = DEFAULT_SUPERUSER_ROLE_NAME,
 ) -> SQLAlchemyRoleAdmin[UP]:
     """Return a helper that reuses the current request-scoped session."""
     return SQLAlchemyRoleAdmin(
         model_family=model_family,
         _session_maker=cast("Any", _RequestSessionMaker(session)),
         _role_lifecycle_updater=cast("Any", role_lifecycle_updater),
+        _superuser_role_name=superuser_role_name,
     )

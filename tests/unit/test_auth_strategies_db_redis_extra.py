@@ -126,6 +126,24 @@ async def test_database_token_strategy_cleanup_expired_tokens_uses_rowcount_and_
     assert "refresh_token" in stmt_text
 
 
+async def test_database_token_strategy_execute_delete_defaults_missing_rowcount_to_zero() -> None:
+    """_execute_delete() should handle result objects that do not expose rowcount."""
+
+    class _NoRowcountSession(_FakeSession):
+        async def execute(self, statement: Any, *args: Any, **kwargs: Any) -> object:  # noqa: ANN401
+            del args, kwargs
+            self.executed.append(statement)
+            return object()
+
+    session = _NoRowcountSession()
+    strategy = DatabaseTokenStrategy(
+        session=cast("Any", session),
+        token_hash_secret="test-token-hash-secret-1234567890-1234567890",
+    )
+
+    assert await strategy._execute_delete(cast("Any", object())) == 0
+
+
 async def test_redis_token_strategy_read_token_none_and_invalidate_all_tokens(
     async_fakeredis: AsyncFakeRedis,
 ) -> None:
@@ -148,7 +166,8 @@ async def test_redis_token_strategy_read_token_none_and_invalidate_all_tokens(
 
     await strategy.invalidate_all_tokens(user)
 
-    assert await async_fakeredis.get(strategy._key(token)) == str(user.id).encode()
+    assert await async_fakeredis.get(strategy._key(token)) == f"v1:0:{user.id}".encode()
+    assert await strategy.read_token(token, user_manager) is None
 
 
 async def test_redis_token_strategy_invalidate_all_tokens_uses_index_when_present(
@@ -209,4 +228,4 @@ async def test_redis_token_strategy_invalidate_all_tokens_without_index_leaves_f
 
     await strategy.invalidate_all_tokens(user)
 
-    assert await async_fakeredis.get(strategy._key(token)) == str(other_user.id).encode()
+    assert await async_fakeredis.get(strategy._key(token)) == f"v1:0:{other_user.id}".encode()

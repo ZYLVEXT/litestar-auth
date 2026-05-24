@@ -37,11 +37,18 @@ from ._config import (
     SharedRateLimitConfigOptions,
 )
 from ._endpoint import RateLimitScope
-from ._helpers import DEFAULT_KEY_PREFIX, RedisScriptResult, SlidingWindow
+from ._key_derivation import DEFAULT_KEY_PREFIX
 from ._memory import InMemoryRateLimiter
 from ._orchestrator import TotpRateLimitOrchestrator, TotpSensitiveEndpoint
-from ._protocol import RateLimiterBackend, RedisClientProtocol, RedisPipelineProtocol
+from ._protocol import (
+    KnownRateLimitConnection,
+    RateLimiterBackend,
+    RateLimitKey,
+    RedisClientProtocol,
+    RedisPipelineProtocol,
+)
 from ._redis import RedisRateLimiter
+from ._validation import RedisScriptResult, SlidingWindow
 
 __all__ = (
     "DEFAULT_KEY_PREFIX",
@@ -50,6 +57,8 @@ __all__ = (
     "AuthRateLimitSlot",
     "EndpointRateLimit",
     "InMemoryRateLimiter",
+    "KnownRateLimitConnection",
+    "RateLimitKey",
     "RateLimitScope",
     "RateLimiterBackend",
     "RedisClientProtocol",

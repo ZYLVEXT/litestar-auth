@@ -81,7 +81,6 @@ def test_manager_constructor_inputs_build_typed_defaults_without_explicit_securi
     assert effective_security.reset_password_token_secret is None
     assert effective_security.totp_secret_key is None
     assert effective_security.id_parser is UUID
-    assert inputs._build_manager_id_parser_kwargs() == {"id_parser": UUID}
 
     kwargs = inputs.build_kwargs()
 
@@ -106,8 +105,6 @@ def test_manager_constructor_inputs_inject_top_level_password_validator_and_id_p
         id_parser=UUID,
     )
 
-    assert inputs._build_manager_id_parser_kwargs() == {"id_parser": UUID}
-
     kwargs = inputs.build_kwargs()
     effective_security = inputs.effective_security
 
@@ -117,7 +114,9 @@ def test_manager_constructor_inputs_inject_top_level_password_validator_and_id_p
     assert effective_security.id_parser is UUID
     assert kwargs["password_validator"] is generated_password_validator
     assert kwargs["security"] == effective_security
-    assert kwargs["security"].id_parser is UUID
+    security = kwargs["security"]
+    assert security is not None
+    assert security.id_parser is UUID
     assert kwargs["login_identifier"] == "username"
     assert kwargs["backends"] == ("bound-backend",)
 
@@ -202,9 +201,6 @@ def test_manager_constructor_inputs_build_security_kwarg_from_canonical_bundle()
     assert "verification_token_secret" not in kwargs
     assert "reset_password_token_secret" not in kwargs
     assert "totp_secret_key" not in kwargs
-
-    no_parser_inputs = ManagerConstructorInputs[UUID](manager_security=security)
-    assert no_parser_inputs._build_manager_id_parser_kwargs() == {}
 
 
 def test_manager_constructor_inputs_keep_single_typed_security_kwarg_when_only_one_secret_is_set() -> None:

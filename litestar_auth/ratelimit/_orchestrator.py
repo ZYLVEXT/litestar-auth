@@ -3,12 +3,11 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Literal
+from typing import TYPE_CHECKING, Literal
 
 if TYPE_CHECKING:
-    from litestar.connection import Request
-
     from ._config import EndpointRateLimit
+    from ._protocol import KnownRateLimitConnection
 
 type TotpSensitiveEndpoint = Literal["enable", "confirm_enable", "verify", "disable", "regenerate_recovery_codes"]
 
@@ -48,22 +47,26 @@ class TotpRateLimitOrchestrator:
             if limiter is not None
         }
 
-    async def before_request(self, endpoint: TotpSensitiveEndpoint, request: Request[Any, Any, Any]) -> None:
+    async def before_request(self, endpoint: TotpSensitiveEndpoint, request: KnownRateLimitConnection) -> None:
         """Run endpoint-specific before-request checks."""
         if limiter := self._limiters.get(endpoint):
             await limiter.before_request(request)
 
-    async def on_invalid_attempt(self, endpoint: TotpSensitiveEndpoint, request: Request[Any, Any, Any]) -> None:
+    async def on_invalid_attempt(self, endpoint: TotpSensitiveEndpoint, request: KnownRateLimitConnection) -> None:
         """Record endpoint-specific invalid attempt failures."""
         if limiter := self._limiters.get(endpoint):
             await limiter.increment(request)
 
-    async def on_account_state_failure(self, endpoint: TotpSensitiveEndpoint, request: Request[Any, Any, Any]) -> None:
+    async def on_account_state_failure(
+        self,
+        endpoint: TotpSensitiveEndpoint,
+        request: KnownRateLimitConnection,
+    ) -> None:
         """Apply endpoint-specific account-state failure behavior."""
         if endpoint in self._ACCOUNT_STATE_RESET_ENDPOINTS and (limiter := self._limiters.get(endpoint)):
             await limiter.reset(request)
 
-    async def on_success(self, endpoint: TotpSensitiveEndpoint, request: Request[Any, Any, Any]) -> None:
+    async def on_success(self, endpoint: TotpSensitiveEndpoint, request: KnownRateLimitConnection) -> None:
         """Apply endpoint-specific success behavior."""
         if limiter := self._limiters.get(endpoint):
             await limiter.reset(request)

@@ -19,9 +19,12 @@ from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 import litestar_auth._auth_model_mixins as auth_model_mixins_module
 import litestar_auth._manager._protocols as manager_protocols_module
+import litestar_auth._plugin._protocols as plugin_protocols_module
 import litestar_auth._roles as roles_module
 import litestar_auth.authentication.strategy.base as strategy_base_module
 import litestar_auth.authentication.transport.base as transport_base_module
+import litestar_auth.controllers._step_up_payloads as step_up_payloads_module
+import litestar_auth.controllers._users_helpers as users_helpers_module
 import litestar_auth.db.base as db_base_module
 import litestar_auth.models.mixins as model_mixins_module
 import litestar_auth.payloads as payloads_module
@@ -164,6 +167,14 @@ def test_types_module_preserves_protocol_exports() -> None:
     assert isinstance(_RoleCapableUser(), types_module.RoleCapableUserProtocol)
 
 
+def test_plugin_protocol_module_preserves_private_contract_names() -> None:
+    """Plugin assembly protocol names remain importable for type-only boundaries."""
+    assert plugin_protocols_module.StrategyProto.__name__ == "StrategyProto"
+    assert plugin_protocols_module.AuthBackendProto.__name__ == "AuthBackendProto"
+    assert plugin_protocols_module.RouteHandlerWithHandlers.__name__ == "RouteHandlerWithHandlers"
+    assert plugin_protocols_module.DependencyProvider.__name__ == "DependencyProvider"
+
+
 def test_roles_module_preserves_normalized_roles_contract() -> None:
     """The roles helper module still exercises its public normalization surface."""
     assert roles_module.normalize_roles([" Billing ", "admin", "ADMIN"]) == ["admin", "billing"]
@@ -198,10 +209,23 @@ def test_schemas_module_preserves_struct_definitions() -> None:
         "is_active",
         "is_verified",
         "roles",
+        "current_password",
+        "totp_code",
     )
     assert user_read_hints["roles"] == list[str]
     assert get_args(admin_update_hints["roles"])[0] == list[str]
     assert get_args(admin_update_hints["roles"])[1] is type(None)
+
+
+def test_controller_local_step_up_payloads_reuse_one_field_contract() -> None:
+    """Controller-local step-up request bodies keep one source for proof fields."""
+    assert users_helpers_module.AdminUserDeleteStepUpRequest is step_up_payloads_module.AdminUserDeleteStepUpRequest
+    assert step_up_payloads_module.AdminUserDeleteStepUpRequest.__struct_fields__ == ("current_password", "totp_code")
+    assert (
+        step_up_payloads_module.AdminUserDeleteStepUpRequest.__mro__[1]
+        is step_up_payloads_module._AdminCurrentPasswordStepUpRequest
+    )
+    assert step_up_payloads_module._AdminCurrentPasswordStepUpRequest.__struct_fields__ == ("current_password",)
 
 
 def test_payloads_module_preserves_refresh_session_response_contract() -> None:
@@ -386,8 +410,10 @@ def test_internal_auth_model_mixins_module_preserves_contract_exports(
     assert reloaded_module.RefreshTokenMixin.auth_user_back_populates == "refresh_tokens"
     assert reloaded_module.AccessTokenMixin.__mro__[1].__name__ == "_TokenModelMixin"
     assert reloaded_module.RefreshTokenMixin.__mro__[1].__name__ == "_TokenModelMixin"
-    assert reloaded_module._TokenModelMixin.__annotations__["user_id"] == "Mapped[uuid.UUID]"
-    assert reloaded_module._TokenModelMixin.__annotations__["user"] == "Mapped[Any]"
+    assert reloaded_module._TokenModelMixin.__mro__[1].__name__ == "_UserOwnedMixin"
+    assert reloaded_module.UserRoleAssociationMixin.__mro__[1].__name__ == "_UserOwnedMixin"
+    assert reloaded_module._UserOwnedMixin.__annotations__["user_id"] == "Mapped[uuid.UUID]"
+    assert reloaded_module._UserOwnedMixin.__annotations__["user"] == "Mapped[Any]"
 
 
 def test_auth_model_mixins_cover_full_and_partial_relationship_contracts() -> None:

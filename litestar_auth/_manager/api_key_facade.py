@@ -10,7 +10,7 @@ if TYPE_CHECKING:
     from datetime import datetime
 
     from litestar_auth._manager.api_key_creation import ApiKeyCreateOptions
-    from litestar_auth._manager.api_keys import ApiKeyManagerService, ApiKeyRowProtocol, CreatedApiKey
+    from litestar_auth._manager.api_keys import ApiKeyCreateResult, ApiKeyManagerService, ApiKeyRowProtocol
 
 
 class ApiKeyManagerFacade[UP: UserProtocol[Any], ID]:
@@ -27,7 +27,7 @@ class ApiKeyManagerFacade[UP: UserProtocol[Any], ID]:
         self,
         user: UP,
         **options: Unpack[ApiKeyCreateOptions],
-    ) -> CreatedApiKey[ApiKeyRowProtocol]:
+    ) -> ApiKeyCreateResult[ApiKeyRowProtocol]:
         """Create an API key and return the one-time raw credential.
 
         Returns:

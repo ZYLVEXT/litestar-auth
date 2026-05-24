@@ -631,6 +631,65 @@ async def test_successful_api_key_use_updates_last_used_without_consuming_invali
         assert second_use.status_code == HTTP_OK
 
 
+async def test_unknown_api_key_ids_do_not_consume_use_rate_limit_budget(
+    async_test_client_factory: Any,  # noqa: ANN401
+) -> None:
+    """Malformed and unknown API-key credentials are classified without rate-limit accounting."""
+    backend = InMemoryRateLimiter(max_attempts=1, window_seconds=60)
+    rate_limit_config = AuthRateLimitConfig(
+        api_key_use=EndpointRateLimit(backend=backend, scope="api_key_id", namespace="api-key-use"),
+    )
+    app, _store, _strategy, _owner, _other = build_app(rate_limit_config=rate_limit_config)
+
+    async with async_test_client_factory(app) as test_client:
+        responses = [
+            await test_client.get("/protected", headers={"Authorization": "Bearer ak_badformat"}),
+            await test_client.get("/protected", headers={"Authorization": "Bearer ak_prod_missing.secret"}),
+            await test_client.get("/protected", headers={"Authorization": "Bearer ak_prod_other.secret"}),
+        ]
+
+    assert [response.status_code for response in responses] == [HTTP_UNAUTHORIZED, HTTP_UNAUTHORIZED, HTTP_UNAUTHORIZED]
+    assert [_error_code(response) for response in responses] == [
+        ErrorCode.API_KEY_INVALID,
+        ErrorCode.API_KEY_INVALID,
+        ErrorCode.API_KEY_INVALID,
+    ]
+    assert backend._windows == {}
+
+
+async def test_expired_api_key_use_still_consumes_rate_limit_budget(
+    async_test_client_factory: Any,  # noqa: ANN401
+) -> None:
+    """Resolved unusable API keys still consume the API-key-use limiter."""
+    backend = InMemoryRateLimiter(max_attempts=1, window_seconds=60)
+    rate_limit_config = AuthRateLimitConfig(
+        api_key_use=EndpointRateLimit(backend=backend, scope="api_key_id", namespace="api-key-use"),
+    )
+    app, _store, strategy, owner, _other = build_app(rate_limit_config=rate_limit_config)
+
+    async with async_test_client_factory(app) as test_client:
+        bearer_headers = await _login(test_client, owner, strategy)
+        expired_create = await test_client.post(
+            "/api-keys",
+            headers=bearer_headers,
+            json={
+                "name": "Expired",
+                "scopes": ["read"],
+                "current_password": "owner-password",
+                "expires_at": "2020-01-01T00:00:00Z",
+            },
+        )
+        expired_key = expired_create.json()["api_key"]
+
+        first_expired = await test_client.get("/protected", headers={"X-API-Key": expired_key})
+        second_expired = await test_client.get("/protected", headers={"X-API-Key": expired_key})
+
+    assert first_expired.status_code == HTTP_UNAUTHORIZED
+    assert _error_code(first_expired) == ErrorCode.API_KEY_EXPIRED
+    assert second_expired.status_code == HTTP_TOO_MANY_REQUESTS
+    assert second_expired.headers["Retry-After"].isdigit()
+
+
 async def test_signing_required_api_key_authenticates_signed_request_and_rejects_bearer(
     async_test_client_factory: Any,  # noqa: ANN401
 ) -> None:

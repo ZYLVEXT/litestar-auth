@@ -36,6 +36,14 @@ controller factories must do the same. Undeclared keys therefore fail request
 validation with `ErrorCode.REQUEST_BODY_INVALID` instead of being silently
 ignored. Assign the configured superuser role to grant elevated access.
 
+Direct manager calls use an explicit field policy as a second line of defense.
+`BaseUserManager.create(..., safe=True)` keeps the public registration/OAuth
+bootstrap behavior and drops fields outside `creatable_fields` before
+persistence. `create(..., safe=False)` and `update(...)` reject undeclared
+custom fields with `AuthorizationError`. Apps with custom user columns can opt
+those names in through `BaseUserManager(..., creatable_fields={...},
+updatable_fields={...})` or the same fields on `BaseUserManagerConfig(...)`.
+
 `BaseUserManager.update(...)` also fails closed on privileged fields by default. Direct callers
 must pass `allow_privileged=True` when they intentionally mutate `is_active`, `is_verified`, or
 `roles`. Public self-service HTTP flows never set those fields; admin-only routes, OAuth

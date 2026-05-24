@@ -10,7 +10,7 @@ These helpers cover the supported manual OAuth client contract used by `create_p
 For direct provider-login assembly, `ProviderOAuthControllerConfig(...)` carries the same settings accepted by
 `create_provider_oauth_controller(...)` as keyword arguments.
 
-- Typed contract: `litestar_auth.oauth.client_adapter.OAuthClientProtocol` with the narrower
+- Typed contract: `litestar_auth.oauth._client.OAuthClientProtocol` with the narrower
   `OAuthDirectIdentityClientProtocol`, `OAuthProfileClientProtocol`, and optional
   `OAuthEmailVerificationAsyncClientProtocol` capability protocols. Wrap sync-only verification clients with
   `make_async_email_verification_client()`.

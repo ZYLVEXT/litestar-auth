@@ -56,7 +56,7 @@ if TYPE_CHECKING:
 
     from litestar_auth.authentication.backend import AuthenticationBackend
     from litestar_auth.authentication.strategy.jwt import JWTDenylistStore
-    from litestar_auth.controllers._auth_helpers import TotpStepUpPolicyMode
+    from litestar_auth.controllers._step_up import TotpStepUpPolicyMode
     from litestar_auth.manager import FernetKeyringConfig
     from litestar_auth.ratelimit import AuthRateLimitConfig
     from litestar_auth.totp import TotpAlgorithm, TotpEnrollmentStore, UsedTotpCodeStore

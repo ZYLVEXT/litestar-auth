@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Annotated, Any, cast
 
 from litestar import Controller, Request, delete, get, post
+from litestar.params import PathParameter
 
 from litestar_auth.controllers._api_key_common import (
     ApiKeysControllerContext,
@@ -14,7 +15,7 @@ from litestar_auth.controllers._api_key_common import (
     raise_api_key_not_found,
     to_api_key_read,
 )
-from litestar_auth.controllers._auth_helpers import (
+from litestar_auth.controllers._step_up import (
     TOTP_STEPUP_REQUIRED_OPENAPI_RESPONSE,
     TotpStepUpCheck,
     TotpStepUpVerifierProtocol,
@@ -30,6 +31,9 @@ if TYPE_CHECKING:
 
     from litestar_auth.controllers._utils import RequestBodyRouteHandler
 
+_UserIdPath = Annotated[str, PathParameter()]
+_KeyIdPath = Annotated[str, PathParameter()]
+
 
 def _create_admin_api_key_create_handler[ID](ctx: ApiKeysControllerContext[ID]) -> RequestBodyRouteHandler:
     """Return the admin API-key create handler."""
@@ -44,7 +48,7 @@ def _create_admin_api_key_create_handler[ID](ctx: ApiKeysControllerContext[ID]) 
     async def create_user_api_key(
         self: Controller,
         request: Request[Any, Any, Any],
-        user_id: str,
+        user_id: _UserIdPath,
         data: ApiKeyAdminCreateRequest,
         litestar_auth_user_manager: ApiKeysControllerUserManagerProtocol[Any, Any],
     ) -> ApiKeyCreateResponse:
@@ -76,7 +80,7 @@ def _create_admin_api_key_list_handler[ID](ctx: ApiKeysControllerContext[ID]) ->
     @get("/{user_id:str}/api-keys", guards=[is_superuser, requires_password_session], security=ctx.security)
     async def list_user_api_keys(
         self: Controller,
-        user_id: str,
+        user_id: _UserIdPath,
         litestar_auth_user_manager: ApiKeysControllerUserManagerProtocol[Any, Any],
     ) -> ApiKeyListResponse:
         del self
@@ -100,8 +104,8 @@ def _create_admin_api_key_revoke_handler[ID](ctx: ApiKeysControllerContext[ID]) 
     async def revoke_user_api_key(
         self: Controller,
         request: Request[Any, Any, Any],
-        user_id: str,
-        key_id: str,
+        user_id: _UserIdPath,
+        key_id: _KeyIdPath,
         litestar_auth_user_manager: ApiKeysControllerUserManagerProtocol[Any, Any],
     ) -> ApiKeyRead:
         del self

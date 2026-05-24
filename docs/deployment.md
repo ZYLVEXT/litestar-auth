@@ -142,17 +142,21 @@ metadata columns:
 - `session_id` — unique non-sensitive public id for the refresh session;
 - `created_at` — original row creation timestamp;
 - `last_used_at` — nullable timestamp updated on successful refresh rotation;
-- `client_metadata` — nullable bounded JSON for safe hints such as normalized User-Agent.
+- `client_metadata` — nullable bounded JSON for safe hints such as normalized User-Agent;
+- `consumed_token_digests` — nullable JSON list of already-rotated keyed refresh-token digests used
+  to detect replay.
 
 For bundled models, these fields come from `RefreshTokenMixin`. Existing installations must run an
 application-owned migration before rollout: add missing columns, backfill each existing row with a
 unique UUID-style `session_id`, leave `last_used_at` null for historical sessions, and only store
-bounded non-secret metadata. Custom refresh-token models must expose the same mapped attributes or
+bounded non-secret metadata. Leave `consumed_token_digests` null for historical rows; new rotations
+populate it automatically. Custom refresh-token models must expose the same mapped attributes or
 `DatabaseTokenModels` validation fails at startup.
 
 Do not migrate by copying raw token values into public metadata. The API exposes only `session_id`
 and safe metadata; raw access tokens, raw refresh tokens, stored token digests, and keyed token
-digests must remain server-side storage details.
+digests must remain server-side storage details. Stored consumed digests are not public metadata and
+must not be logged or returned by application APIs.
 
 ## Versioned Fernet key rotation
 

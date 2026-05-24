@@ -3,24 +3,26 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Literal
+from typing import Literal
 
-from litestar.connection import Request  # noqa: TC002
 from litestar.exceptions import TooManyRequestsException
 
-from ._helpers import (
-    _DEFAULT_TRUSTED_HEADERS,
-    _client_host,
+from litestar_auth._schema_fields import EMAIL_MAX_LENGTH
+
+from ._client_host import _DEFAULT_TRUSTED_HEADERS, _client_host, logger
+from ._identifier_extraction import (
+    _API_KEY_ID_LENGTH,
     _extract_api_key_id,
     _extract_email,
-    _safe_key_part,
-    logger,
+    _has_hmac_api_key_authorization,
 )
-from ._protocol import RateLimiterBackend  # noqa: TC001
+from ._key_derivation import _bounded_hash_part, _safe_key_part
+from ._protocol import KnownRateLimitConnection, RateLimiterBackend, RateLimitKey
 
 type RateLimitScope = Literal["api_key_id", "ip", "ip_email"]
 
 _DEFAULT_IDENTITY_FIELDS = ("identifier", "username", "email")
+_SIGNED_API_KEY_BUCKET_PART = "signed"
 
 
 @dataclass(slots=True, frozen=True)
@@ -34,7 +36,7 @@ class EndpointRateLimit:
     identity_fields: tuple[str, ...] = _DEFAULT_IDENTITY_FIELDS
     trusted_headers: tuple[str, ...] = _DEFAULT_TRUSTED_HEADERS
 
-    async def before_request(self, request: Request[Any, Any, Any]) -> None:
+    async def before_request(self, request: KnownRateLimitConnection) -> None:
         """Reject the request with 429 when its key is over the configured limit.
 
         Security:
@@ -66,15 +68,15 @@ class EndpointRateLimit:
             headers={"Retry-After": str(max(retry_after, 1))},
         )
 
-    async def increment(self, request: Request[Any, Any, Any]) -> None:
+    async def increment(self, request: KnownRateLimitConnection) -> None:
         """Record a failed or rate-limited attempt for the current request."""
         await self.backend.increment(await self.build_key(request))
 
-    async def reset(self, request: Request[Any, Any, Any]) -> None:
+    async def reset(self, request: KnownRateLimitConnection) -> None:
         """Clear stored attempts for the current request key."""
         await self.backend.reset(await self.build_key(request))
 
-    async def build_key(self, request: Request[Any, Any, Any]) -> str:
+    async def build_key(self, request: KnownRateLimitConnection) -> RateLimitKey:
         """Build the backend key for the given request.
 
         Returns:
@@ -85,10 +87,16 @@ class EndpointRateLimit:
         if self.scope == "ip_email":
             email = await _extract_email(request, identity_fields=self.identity_fields)
             if email:
-                parts.append(_safe_key_part(email))
+                email_part = _bounded_hash_part(email, max_length=EMAIL_MAX_LENGTH)
+                if email_part is not None:
+                    parts.append(email_part)
         if self.scope == "api_key_id":
             key_id = _extract_api_key_id(request)
             if key_id:
-                parts.append(_safe_key_part(key_id))
+                key_id_part = _bounded_hash_part(key_id, max_length=_API_KEY_ID_LENGTH)
+                if key_id_part is not None:
+                    parts.append(key_id_part)
+            elif _has_hmac_api_key_authorization(request):
+                parts.append(_safe_key_part(_SIGNED_API_KEY_BUCKET_PART))
 
-        return ":".join(parts)
+        return RateLimitKey(":".join(parts))

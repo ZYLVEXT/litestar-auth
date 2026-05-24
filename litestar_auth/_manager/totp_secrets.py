@@ -1,14 +1,20 @@
 """Internal TOTP-secret service for ``BaseUserManager``."""
-# ruff: noqa: ANN401, DOC201, DOC501
+# ruff: noqa: DOC201, DOC501
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Literal, Protocol, Self
+from typing import TYPE_CHECKING, Literal, Protocol, Self
 
 from litestar_auth._manager._protocols import UserDatabaseManagerProtocol
-from litestar_auth._secrets_at_rest import FernetKey, FernetKeyring, SecretAtRestError
+from litestar_auth._secrets_at_rest import (
+    FernetKey,
+    FernetKeyring,
+    FernetModuleLoader,
+    SecretAtRestError,
+    _load_cryptography_fernet,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
@@ -90,101 +96,72 @@ class TotpSecretsService[UP]:
         prefix: str,
         active_key_id: str = _DEFAULT_TOTP_FERNET_KEY_ID,
         keys: Mapping[str, FernetKey] | None = None,
+        load_cryptography_fernet: FernetModuleLoader = _load_cryptography_fernet,
     ) -> None:
         """Bind the facade manager and encrypted-secret prefix."""
         self._manager = manager
         self._prefix = prefix
         self._active_key_id = active_key_id
         self._keys = None if keys is None else MappingProxyType(dict(keys))
+        self._load_cryptography_fernet = load_cryptography_fernet
 
     @property
     def storage_posture(self) -> TotpSecretStoragePosture:
         """Return the explicit storage posture for the manager's current key."""
         return TotpSecretStoragePosture.fernet_encrypted(key_configured=self._has_configured_keyring())
 
-    async def set_secret(
-        self,
-        user: UP,
-        secret: str | None,
-        *,
-        load_cryptography_fernet: Any,
-    ) -> UP:
+    async def set_secret(self, user: UP, secret: str | None) -> UP:
         """Persist a TOTP secret using the manager's configured storage format."""
         return await self._manager.user_db.update(
             user,
-            {"totp_secret": self.prepare_secret_for_storage(secret, load_cryptography_fernet=load_cryptography_fernet)},
+            {"totp_secret": self.prepare_secret_for_storage(secret)},
         )
 
-    async def read_secret(
-        self,
-        secret: str | None,
-        *,
-        load_cryptography_fernet: Any,
-    ) -> str | None:
+    async def read_secret(self, secret: str | None) -> str | None:
         """Return a plain-text TOTP secret from storage."""
         if secret is None:
             return None
-        return self._read_secret_from_storage(secret, load_cryptography_fernet=load_cryptography_fernet)
+        return self._read_secret_from_storage(secret)
 
-    def prepare_secret_for_storage(
-        self,
-        secret: str | None,
-        *,
-        load_cryptography_fernet: Any,
-    ) -> str | None:
+    def prepare_secret_for_storage(self, secret: str | None) -> str | None:
         """Return the database representation for a TOTP secret."""
         if secret is None:
             return secret
 
-        return self._build_keyring(load_cryptography_fernet=load_cryptography_fernet).encrypt(secret)
+        return self._build_keyring().encrypt(secret)
 
-    def requires_reencrypt(
-        self,
-        stored: str | None,
-        *,
-        load_cryptography_fernet: Any,
-    ) -> bool:
+    def requires_reencrypt(self, stored: str | None) -> bool:
         """Return whether a stored TOTP secret should be rewritten with the active key."""
         if stored is None:
             return False
         self._require_encrypted_storage_value(stored)
         try:
-            return self._build_keyring(load_cryptography_fernet=load_cryptography_fernet).needs_rotation(stored)
+            return self._build_keyring().needs_rotation(stored)
         except SecretAtRestError as exc:
             raise _totp_secret_runtime_error(exc) from exc
 
-    def reencrypt_secret_for_storage(
-        self,
-        stored: str | None,
-        *,
-        load_cryptography_fernet: Any,
-    ) -> str | None:
+    def reencrypt_secret_for_storage(self, stored: str | None) -> str | None:
         """Rewrite a stored TOTP secret with the active Fernet key id."""
         if stored is None:
             return None
-        plaintext = self._read_secret_from_storage(stored, load_cryptography_fernet=load_cryptography_fernet)
-        return self.prepare_secret_for_storage(plaintext, load_cryptography_fernet=load_cryptography_fernet)
+        plaintext = self._read_secret_from_storage(stored)
+        return self.prepare_secret_for_storage(plaintext)
 
-    def _read_secret_from_storage(
-        self,
-        secret: str,
-        *,
-        load_cryptography_fernet: Any,
-    ) -> str:
+    def _read_secret_from_storage(self, secret: str) -> str:
         """Return a plain-text TOTP secret from a non-null storage value."""
         self._require_encrypted_storage_value(secret)
         try:
-            return self._build_keyring(load_cryptography_fernet=load_cryptography_fernet).decrypt(secret)
+            return self._build_keyring().decrypt(secret)
         except SecretAtRestError as exc:
             raise _totp_secret_runtime_error(exc) from exc
 
-    def _build_keyring(self, *, load_cryptography_fernet: Any) -> FernetKeyring:
+    def _build_keyring(self) -> FernetKeyring:
         """Return the Fernet keyring configured for persisted TOTP secrets."""
         if self._keys is not None:
             return FernetKeyring(
                 active_key_id=self._active_key_id,
                 keys=self._keys,
-                _load_cryptography_fernet=load_cryptography_fernet,
+                _load_cryptography_fernet=self._load_cryptography_fernet,
             )
 
         totp_secret_key = self._manager.totp_secret_key
@@ -194,7 +171,7 @@ class TotpSecretsService[UP]:
         return FernetKeyring(
             active_key_id=_DEFAULT_TOTP_FERNET_KEY_ID,
             keys={_DEFAULT_TOTP_FERNET_KEY_ID: totp_secret_key},
-            _load_cryptography_fernet=load_cryptography_fernet,
+            _load_cryptography_fernet=self._load_cryptography_fernet,
         )
 
     def _has_configured_keyring(self) -> bool:

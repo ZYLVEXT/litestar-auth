@@ -12,6 +12,8 @@ if TYPE_CHECKING:
     from collections.abc import Mapping, Sequence
     from datetime import datetime
 
+    from litestar_auth.types import StrategyProtocol
+
 
 @dataclass(frozen=True, slots=True)
 class RefreshSession:
@@ -62,7 +64,7 @@ class ContextualStrategy[UP: UserProtocol[Any], ID, AuthT](Protocol):
 class SessionBindable[UP: UserProtocol[Any], ID, S](Protocol):
     """Protocol for strategies that can be rebound to a request-local session."""
 
-    def with_session(self, session: S) -> Strategy[UP, ID]:
+    def with_session(self, session: S) -> StrategyProtocol[UP, ID]:
         """Return a strategy instance bound to the provided session."""
 
 

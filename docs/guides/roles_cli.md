@@ -34,6 +34,9 @@ catalog and assignment changes.
 - `create`, `assign`, and `unassign` are idempotent against already-normalized state.
 - `delete` fails closed when users still hold the role. Use `--force` only when you intentionally
   want to remove that role from every affected user as part of the delete.
+- The configured `LitestarAuthConfig.superuser_role_name` is system-managed: `delete` refuses to
+  remove that catalog row even with `--force`, and `unassign` refuses to remove the final user
+  assignment for that role.
 - User-targeted commands select the target by `--email`. This CLI does not introduce user lookup by
   ID, username, or arbitrary filters.
 
@@ -67,9 +70,11 @@ $ litestar roles delete admin
 Error: Role admin will not delete role 'admin' while assignments still exist. Re-run with --force to remove dependent user-role assignments.
 ```
 
+`--force` still cannot delete the configured superuser role:
+
 ```bash
 $ litestar roles delete --force admin
-[]
+Error: Role admin will not modify system-managed superuser role 'admin'.
 ```
 
 ## User-role commands
@@ -87,6 +92,13 @@ is safe:
 ```bash
 $ litestar roles unassign --email member@example.com billing support
 member@example.com: ['admin', 'member']
+```
+
+Removing the final configured-superuser assignment fails closed:
+
+```bash
+$ litestar roles unassign --email admin@example.com admin
+Error: Role admin will not remove the final assignment of system-managed superuser role 'admin'.
 ```
 
 Read the current normalized membership for one user:

@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, Protocol, Self, runtime_checkable
+from collections.abc import Mapping  # noqa: TC003
+from typing import TYPE_CHECKING, NewType, Protocol, Self, runtime_checkable
 
 from litestar_auth._redis_protocols import (
     RedisDeleteClient,
@@ -13,6 +14,34 @@ from litestar_auth._redis_protocols import (
 
 if TYPE_CHECKING:
     from types import TracebackType
+
+RateLimitKey = NewType("RateLimitKey", str)
+type RedisPipelineExecuteResult = tuple[int, bool]
+
+
+class RateLimitClientAddress(Protocol):
+    """Client address data needed for rate-limit key derivation."""
+
+    host: str | None
+
+
+class KnownRateLimitConnection(Protocol):
+    """Minimal request-like surface used by rate-limit key derivation."""
+
+    @property
+    def headers(self) -> Mapping[str, str]:
+        """Return request headers."""
+
+    @property
+    def client(self) -> RateLimitClientAddress | None:
+        """Return the direct client address, when Litestar exposes one."""
+
+    @property
+    def scope(self) -> Mapping[str, object]:
+        """Return the ASGI connection scope."""
+
+    async def json(self) -> object:
+        """Parse and return the request JSON body."""
 
 
 class RedisPipelineProtocol(Protocol):
@@ -47,7 +76,7 @@ class RedisPipelineProtocol(Protocol):
             The pipeline instance.
         """
 
-    async def execute(self) -> list[Any]:
+    async def execute(self) -> RedisPipelineExecuteResult:
         """Execute queued pipeline commands."""
 
 
@@ -67,14 +96,14 @@ class RateLimiterBackend(Protocol):
     def is_shared_across_workers(self) -> bool:
         """Return whether backend state is shared across worker processes."""
 
-    async def check(self, key: str) -> bool:
+    async def check(self, key: RateLimitKey) -> bool:
         """Return whether another attempt is allowed for ``key``."""
 
-    async def increment(self, key: str) -> None:
+    async def increment(self, key: RateLimitKey) -> None:
         """Record an attempt for ``key``."""
 
-    async def reset(self, key: str) -> None:
+    async def reset(self, key: RateLimitKey) -> None:
         """Clear tracked attempts for ``key``."""
 
-    async def retry_after(self, key: str) -> int:
+    async def retry_after(self, key: RateLimitKey) -> int:
         """Return the number of seconds until ``key`` can try again."""

@@ -16,10 +16,9 @@ import pytest
 from cryptography.fernet import Fernet
 
 import litestar_auth._plugin.api_key as api_key_module
-import litestar_auth._plugin.backend_inventory as backend_inventory_module
 import litestar_auth._plugin.config as plugin_config_module
 import litestar_auth._plugin.database_token as database_token_module
-import litestar_auth._plugin.feature_configs as feature_configs_module
+import litestar_auth._plugin.features as plugin_features_module
 import litestar_auth.guards._api_key_guards as api_key_guards_module
 from litestar_auth import DEFAULT_SUPERUSER_ROLE_NAME
 from litestar_auth._plugin.oauth_contract import _build_oauth_route_registration_contract
@@ -36,7 +35,7 @@ from litestar_auth.authentication.strategy.db import DatabaseTokenStrategy
 from litestar_auth.authentication.strategy.db_models import AccessToken, RefreshToken
 from litestar_auth.authentication.transport.bearer import BearerTransport
 from litestar_auth.authentication.transport.cookie import CookieTransport
-from litestar_auth.config import DEFAULT_MINIMUM_PASSWORD_LENGTH, OAuthProviderConfig, require_password_length
+from litestar_auth.config import DEFAULT_MINIMUM_PASSWORD_LENGTH, UNSET, OAuthProviderConfig, require_password_length
 from litestar_auth.exceptions import ConfigurationError, InvalidPasswordError
 from litestar_auth.manager import BaseUserManager, FernetKeyringConfig, UserManagerSecurity
 from litestar_auth.password import PasswordHelper
@@ -58,6 +57,7 @@ from tests.integration.test_orchestrator import (
 _DB_TOKEN_STARTUP_ONLY_FAIL_CLOSED = re.escape("LitestarAuthConfig.resolve_backends(session)")
 _API_KEY_STARTUP_ONLY_FAIL_CLOSED = re.escape("LitestarAuthConfig.resolve_backends(session)")
 DEFAULT_REGISTER_MINIMUM_RESPONSE_SECONDS = plugin_config_module.DEFAULT_REGISTER_MINIMUM_RESPONSE_SECONDS
+DEFAULT_LOGIN_MINIMUM_RESPONSE_SECONDS = plugin_config_module.DEFAULT_LOGIN_MINIMUM_RESPONSE_SECONDS
 DEFAULT_VERIFY_MINIMUM_RESPONSE_SECONDS = plugin_config_module.DEFAULT_VERIFY_MINIMUM_RESPONSE_SECONDS
 DEFAULT_REQUEST_VERIFY_MINIMUM_RESPONSE_SECONDS = plugin_config_module.DEFAULT_REQUEST_VERIFY_MINIMUM_RESPONSE_SECONDS
 API_KEY_HASH_SECRET = "api-key-hash-secret-0123456789abcdef"
@@ -101,20 +101,20 @@ def _oauth_provider(*, name: str, client: object) -> OAuthProviderConfig:
 
 def test_plugin_config_reexports_feature_config_contracts() -> None:
     """Historical config-module imports resolve to the relocated feature config classes."""
-    assert plugin_config_module.ApiKeyConfig is feature_configs_module.ApiKeyConfig
-    assert plugin_config_module.DatabaseTokenAuthConfig is feature_configs_module.DatabaseTokenAuthConfig
-    assert plugin_config_module.OAuthConfig is feature_configs_module.OAuthConfig
-    assert plugin_config_module.TotpConfig is feature_configs_module.TotpConfig
+    assert plugin_config_module.ApiKeyConfig is plugin_features_module.ApiKeyConfig
+    assert plugin_config_module.DatabaseTokenAuthConfig is plugin_features_module.DatabaseTokenAuthConfig
+    assert plugin_config_module.OAuthConfig is plugin_features_module.OAuthConfig
+    assert plugin_config_module.TotpConfig is plugin_features_module.TotpConfig
 
 
 def test_backend_inventory_resolve_returns_consistent_inventory() -> None:
-    """The backend-inventory facade returns a usable inventory with isinstance-stable rows."""
+    """The config resolver returns a usable inventory with isinstance-stable rows."""
     config = _minimal_config()
-    inventory = backend_inventory_module.resolve_backend_inventory(config)
+    inventory = plugin_config_module.resolve_backend_inventory(config)
     startup_backend = inventory.startup_backends()[0]
 
-    assert backend_inventory_module.StartupBackendTemplate.__name__ == "StartupBackendTemplate"
-    assert backend_inventory_module.StartupBackendInventory.__name__ == "StartupBackendInventory"
+    assert plugin_features_module.StartupBackendTemplate.__name__ == "StartupBackendTemplate"
+    assert plugin_features_module.StartupBackendInventory.__name__ == "StartupBackendInventory"
     same_backend = startup_backend
     assert startup_backend == same_backend
     assert startup_backend != object()
@@ -157,8 +157,8 @@ def test_backend_inventory_appends_api_key_backend_only_when_enabled() -> None:
         ),
     )
 
-    disabled_backends = backend_inventory_module.resolve_backend_inventory(disabled_config).startup_backends()
-    enabled_backends = backend_inventory_module.resolve_backend_inventory(enabled_config).startup_backends()
+    disabled_backends = plugin_config_module.resolve_backend_inventory(disabled_config).startup_backends()
+    enabled_backends = plugin_config_module.resolve_backend_inventory(enabled_config).startup_backends()
 
     assert [backend.name for backend in disabled_backends] == ["primary"]
     assert [backend.name for backend in enabled_backends] == ["primary", "api_key"]
@@ -174,6 +174,78 @@ def test_backend_inventory_skips_api_key_backend_until_secret_is_available() -> 
 
     assert [backend.name for backend in no_security_config.resolve_startup_backends()] == ["primary"]
     assert [backend.name for backend in no_hash_secret_config.resolve_startup_backends()] == ["primary"]
+
+
+def test_feature_registry_captures_feature_configs_and_backend_inventory_once() -> None:
+    """FeatureRegistry is the canonical cached source for enabled features and startup backends."""
+    config = _minimal_config(
+        api_keys=ApiKeyConfig(enabled=True, allowed_scopes=("read",)),
+        totp_config=TotpConfig(totp_pending_secret=TOTP_PENDING_SECRET),
+        user_manager_security=UserManagerSecurity[UUID](
+            verification_token_secret=VERIFICATION_SECRET,
+            reset_password_token_secret=RESET_PASSWORD_SECRET,
+            api_key_hash_secret=API_KEY_HASH_SECRET,
+        ),
+    )
+    oauth_config = OAuthConfig(
+        oauth_providers=(_oauth_provider(name="github", client=object()),),
+        oauth_redirect_base_url="https://example.com/auth/oauth",
+        oauth_flow_cookie_secret=OAUTH_FLOW_COOKIE_SECRET,
+    )
+    config.oauth_config = oauth_config
+
+    registry = config.resolve_feature_registry()
+
+    assert config.resolve_feature_registry() is registry
+    assert registry.config_for("api_key") is config.api_keys
+    assert registry.config_for("totp") is config.totp_config
+    assert registry.config_for("oauth") is oauth_config
+    assert registry.config_for("database_token") is None
+    assert registry.is_enabled("api_key") is True
+    assert registry.is_enabled("totp") is True
+    assert registry.is_enabled("oauth") is True
+    assert registry.is_enabled("database_token") is False
+    assert [backend.name for backend in registry.startup_backends()] == ["primary", "api_key"]
+    assert registry.backend_by_feature["api_key"] == (1, registry.startup_backends()[1])
+    assert plugin_config_module.resolve_backend_inventory(config) is registry.backend_inventory
+
+
+def test_feature_registry_enabled_disabled_permutations() -> None:
+    """FeatureRegistry reports enabled optional features without changing backend assembly."""
+    disabled_registry = _minimal_config().resolve_feature_registry()
+    api_key_registry = _minimal_config(
+        api_keys=ApiKeyConfig(enabled=True, allowed_scopes=("read",)),
+        user_manager_security=UserManagerSecurity[UUID](
+            verification_token_secret=VERIFICATION_SECRET,
+            reset_password_token_secret=RESET_PASSWORD_SECRET,
+            api_key_hash_secret=API_KEY_HASH_SECRET,
+        ),
+    ).resolve_feature_registry()
+    database_token_registry = LitestarAuthConfig[ExampleUser, UUID](
+        backends=(),
+        database_token_auth=DatabaseTokenAuthConfig(token_hash_secret="0123456789abcdef" * 4),
+        user_model=ExampleUser,
+        user_manager_class=PluginUserManager,
+        session_maker=cast(
+            "async_sessionmaker[AsyncSession]",
+            assert_structural_session_factory(DummySessionMaker()),
+        ),
+        user_db_factory=lambda _session: InMemoryUserDatabase([]),
+        user_manager_security=UserManagerSecurity[UUID](
+            verification_token_secret=VERIFICATION_SECRET,
+            reset_password_token_secret=RESET_PASSWORD_SECRET,
+        ),
+    ).resolve_feature_registry()
+
+    assert disabled_registry.enabled_features == frozenset()
+    assert api_key_registry.enabled_features == frozenset({plugin_features_module.API_KEY_FEATURE})
+    assert [backend.name for backend in api_key_registry.startup_backends()] == ["primary", "api_key"]
+    assert database_token_registry.enabled_features == frozenset({plugin_features_module.DATABASE_TOKEN_FEATURE})
+    assert [backend.name for backend in database_token_registry.startup_backends()] == ["database"]
+    assert database_token_registry.backend_by_feature["database_token"] == (
+        0,
+        database_token_registry.startup_backends()[0],
+    )
 
 
 def test_resolve_backends_binds_api_key_store_factory_to_request_session() -> None:
@@ -244,9 +316,9 @@ def test_resolve_backends_preserves_custom_api_key_scope_authority() -> None:
 
 def test_feature_configs_module_constructors_apply_documented_defaults() -> None:
     """Feature config constructors apply documented defaults and reject conflicting OAuth keys."""
-    totp_config_type = feature_configs_module.TotpConfig
-    oauth_config_type = feature_configs_module.OAuthConfig
-    database_token_config_type = feature_configs_module.DatabaseTokenAuthConfig
+    totp_config_type = plugin_features_module.TotpConfig
+    oauth_config_type = plugin_features_module.OAuthConfig
+    database_token_config_type = plugin_features_module.DatabaseTokenAuthConfig
 
     assert totp_config_type(totp_pending_secret=TOTP_PENDING_SECRET).totp_algorithm == "SHA256"
     assert oauth_config_type().has_oauth_token_encryption is False
@@ -358,6 +430,76 @@ def test_api_key_config_defaults_match_plugin_contract() -> None:
     assert api_key_config.secret_encryption_keyring is None
 
 
+def test_litestar_auth_config_resolved_defaults_snapshot_is_coherent() -> None:
+    """Resolved plugin defaults have one startup snapshot and preserve explicit feature values."""
+    config = _minimal_config(
+        api_keys=ApiKeyConfig(
+            enabled=True,
+            backend_name="custom-api-key",
+            allowed_scopes=("read",),
+            default_ttl=None,
+        ),
+        totp_config=TotpConfig(totp_pending_secret=TOTP_PENDING_SECRET),
+        user_manager_security=UserManagerSecurity[UUID](
+            verification_token_secret=VERIFICATION_SECRET,
+            reset_password_token_secret=RESET_PASSWORD_SECRET,
+            api_key_hash_secret=API_KEY_HASH_SECRET,
+        ),
+    )
+    config.oauth_config = OAuthConfig(oauth_cookie_secure=False)
+
+    defaults = config.resolve_defaults()
+
+    assert not UNSET
+    assert {
+        "user_db_factory": "explicit" if defaults.user_db_factory is not UNSET else "default",
+        "id_parser": "unset" if defaults.id_parser is UNSET else "explicit",
+        "database_token": {
+            "enabled": defaults.features.database_token.config is not None,
+            "backend_name": "unset"
+            if defaults.features.database_token.backend_name is UNSET
+            else defaults.features.database_token.backend_name,
+        },
+        "api_key": {
+            "enabled": defaults.features.api_key.enabled,
+            "backend_name": defaults.features.api_key.backend_name,
+            "default_ttl": defaults.features.api_key.config.default_ttl,
+            "hash_secret": "set" if defaults.features.api_key.hash_secret is not UNSET else "unset",
+        },
+        "totp": {
+            "enabled": defaults.features.totp.config is not None,
+            "backend_name": "unset"
+            if defaults.features.totp.backend_name is UNSET
+            else defaults.features.totp.backend_name,
+            "stepup_ttl_seconds": defaults.features.totp.stepup_ttl_seconds,
+            "stepup_allow_recovery": defaults.features.totp.stepup_allow_recovery,
+        },
+        "oauth": {
+            "enabled": defaults.features.oauth.config is not None,
+            "cookie_secure": defaults.features.oauth.config.oauth_cookie_secure
+            if defaults.features.oauth.config
+            else None,
+        },
+    } == {
+        "user_db_factory": "explicit",
+        "id_parser": "unset",
+        "database_token": {"enabled": False, "backend_name": "unset"},
+        "api_key": {
+            "enabled": True,
+            "backend_name": "custom-api-key",
+            "default_ttl": None,
+            "hash_secret": "set",
+        },
+        "totp": {
+            "enabled": True,
+            "backend_name": "unset",
+            "stepup_ttl_seconds": 300,
+            "stepup_allow_recovery": False,
+        },
+        "oauth": {"enabled": True, "cookie_secure": False},
+    }
+
+
 @pytest.mark.parametrize("signed_body_max_messages", [0, -1])
 def test_api_key_config_rejects_non_positive_signed_body_message_limit(signed_body_max_messages: int) -> None:
     """API-key signing body frame limits must fail closed when enabled."""
@@ -450,6 +592,11 @@ def test_litestar_auth_config_declares_register_minimum_response_seconds_field()
     dataclass_fields = LitestarAuthConfig.__dataclass_fields__
 
     assert "register_minimum_response_seconds" in dataclass_fields
+    assert "login_minimum_response_seconds" in dataclass_fields
+    assert dataclass_fields["login_minimum_response_seconds"].type == "float"
+    assert dataclass_fields["login_minimum_response_seconds"].default == pytest.approx(
+        DEFAULT_LOGIN_MINIMUM_RESPONSE_SECONDS,
+    )
     assert dataclass_fields["register_minimum_response_seconds"].type == "float"
     assert dataclass_fields["register_minimum_response_seconds"].default == pytest.approx(
         DEFAULT_REGISTER_MINIMUM_RESPONSE_SECONDS,
@@ -484,6 +631,12 @@ def test_litestar_auth_config_login_identifier_defaults_to_email() -> None:
 
 def test_litestar_auth_config_rejects_negative_register_minimum_response_seconds() -> None:
     """Negative endpoint timing envelopes fail during config construction."""
+    with pytest.raises(ConfigurationError, match="login_minimum_response_seconds must be non-negative"):
+        LitestarAuthConfig[ExampleUser, UUID](
+            user_model=ExampleUser,
+            user_manager_class=PluginUserManager,
+            login_minimum_response_seconds=-0.001,
+        )
     with pytest.raises(ConfigurationError, match="register_minimum_response_seconds must be non-negative"):
         LitestarAuthConfig[ExampleUser, UUID](
             user_model=ExampleUser,

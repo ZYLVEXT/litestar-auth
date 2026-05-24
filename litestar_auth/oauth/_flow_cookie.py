@@ -17,6 +17,7 @@ _OAUTH_FLOW_COOKIE_SEPARATOR = "."
 _OAUTH_FLOW_COOKIE_FERNET_KEY_BYTES = 32
 _OAUTH_FLOW_COOKIE_HKDF_SALT = b"litestar-auth:oauth-flow-cookie:v2"
 _OAUTH_FLOW_COOKIE_HKDF_INFO = b"litestar-auth OAuth flow-cookie Fernet key"
+STATE_COOKIE_MAX_AGE = 300
 
 
 @dataclass(frozen=True, slots=True)
@@ -88,7 +89,7 @@ class _OAuthFlowCookieCipher:
 
         try:
             padding = "=" * (-len(token) % 4)
-            payload = self._fernet.decrypt(f"{token}{padding}".encode("ascii"))
+            payload = self._fernet.decrypt(f"{token}{padding}".encode("ascii"), ttl=STATE_COOKIE_MAX_AGE)
             flow_cookie = msgspec.json.decode(payload, type=_OAuthFlowCookie)
         except (UnicodeEncodeError, ValueError, self._invalid_token_type, msgspec.DecodeError):
             _raise_invalid_oauth_state()

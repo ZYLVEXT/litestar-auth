@@ -132,16 +132,12 @@ async def test_set_secret_delegates_to_user_store_with_encrypted_value() -> None
     """set_secret() should encrypt, prefix, and pass the payload to the user store."""
     user_db = AsyncMock()
     manager = _Manager(user_db=user_db, totp_secret_key="test-key")
-    service = TotpSecretsService(manager, prefix=PREFIX)
+    service = TotpSecretsService(manager, prefix=PREFIX, load_cryptography_fernet=_build_fake_fernet_module)
     user = ExampleUser(id=uuid4())
     updated_user = ExampleUser(id=user.id, totp_secret=f"{PREFIX}v1:{DEFAULT_KEY_ID}:enc:test-key:plain-secret")
     user_db.update.return_value = updated_user
 
-    result = await service.set_secret(
-        user,
-        "plain-secret",
-        load_cryptography_fernet=_build_fake_fernet_module,
-    )
+    result = await service.set_secret(user, "plain-secret")
 
     assert result is updated_user
     user_db.update.assert_awaited_once_with(
@@ -154,12 +150,12 @@ async def test_set_secret_requires_key_for_non_null_secret() -> None:
     """set_secret() fails closed instead of storing plaintext when no key is configured."""
     user_db = AsyncMock()
     manager = _Manager(user_db=user_db)
-    service = TotpSecretsService(manager, prefix=PREFIX)
     user = ExampleUser(id=uuid4())
     loader = Mock(side_effect=AssertionError("loader should not be used"))
+    service = TotpSecretsService(manager, prefix=PREFIX, load_cryptography_fernet=loader)
 
     with pytest.raises(RuntimeError, match="totp_secret_key is required"):
-        await service.set_secret(user, "plain-secret", load_cryptography_fernet=loader)
+        await service.set_secret(user, "plain-secret")
 
     user_db.update.assert_not_awaited()
     loader.assert_not_called()
@@ -167,61 +163,62 @@ async def test_set_secret_requires_key_for_non_null_secret() -> None:
 
 async def test_read_secret_returns_none_without_loader() -> None:
     """read_secret() should return ``None`` unchanged."""
-    service = TotpSecretsService(_Manager(user_db=AsyncMock()), prefix=PREFIX)
     loader = Mock(side_effect=AssertionError("loader should not be used"))
+    service = TotpSecretsService(_Manager(user_db=AsyncMock()), prefix=PREFIX, load_cryptography_fernet=loader)
 
-    assert await service.read_secret(None, load_cryptography_fernet=loader) is None
+    assert await service.read_secret(None) is None
     loader.assert_not_called()
 
 
 async def test_read_secret_rejects_unprefixed_plaintext_values() -> None:
     """read_secret() fails closed for legacy plaintext persisted values."""
-    service = TotpSecretsService(_Manager(user_db=AsyncMock(), totp_secret_key="test-key"), prefix=PREFIX)
     loader = Mock(side_effect=AssertionError("loader should not be used"))
+    service = TotpSecretsService(
+        _Manager(user_db=AsyncMock(), totp_secret_key="test-key"),
+        prefix=PREFIX,
+        load_cryptography_fernet=loader,
+    )
 
     with pytest.raises(RuntimeError, match="encrypted at rest"):
-        await service.read_secret("plain-secret", load_cryptography_fernet=loader)
+        await service.read_secret("plain-secret")
     loader.assert_not_called()
 
 
 async def test_read_secret_decrypts_prefixed_value() -> None:
     """read_secret() should decrypt values that use the encrypted prefix."""
-    service = TotpSecretsService(_Manager(user_db=AsyncMock(), totp_secret_key="test-key"), prefix=PREFIX)
-    encrypted_secret = service.prepare_secret_for_storage(
-        "plain-secret",
+    service = TotpSecretsService(
+        _Manager(user_db=AsyncMock(), totp_secret_key="test-key"),
+        prefix=PREFIX,
         load_cryptography_fernet=_build_fake_fernet_module,
     )
+    encrypted_secret = service.prepare_secret_for_storage("plain-secret")
 
     assert encrypted_secret is not None
-    assert (
-        await service.read_secret(
-            encrypted_secret,
-            load_cryptography_fernet=_build_fake_fernet_module,
-        )
-        == "plain-secret"
-    )
+    assert await service.read_secret(encrypted_secret) == "plain-secret"
 
 
 async def test_read_secret_requires_key_for_encrypted_values() -> None:
     """read_secret() should fail clearly when encrypted data is stored without a key."""
-    service = TotpSecretsService(_Manager(user_db=AsyncMock()), prefix=PREFIX)
+    service = TotpSecretsService(
+        _Manager(user_db=AsyncMock()),
+        prefix=PREFIX,
+        load_cryptography_fernet=_build_fake_fernet_module,
+    )
 
     with pytest.raises(RuntimeError, match="totp_secret_key"):
-        await service.read_secret(
-            f"{PREFIX}v1:{DEFAULT_KEY_ID}:encrypted-value",
-            load_cryptography_fernet=_build_fake_fernet_module,
-        )
+        await service.read_secret(f"{PREFIX}v1:{DEFAULT_KEY_ID}:encrypted-value")
 
 
 async def test_read_secret_raises_runtime_error_for_corrupted_data() -> None:
     """Invalid encrypted payloads should raise a stable RuntimeError with the original cause."""
-    service = TotpSecretsService(_Manager(user_db=AsyncMock(), totp_secret_key="test-key"), prefix=PREFIX)
+    service = TotpSecretsService(
+        _Manager(user_db=AsyncMock(), totp_secret_key="test-key"),
+        prefix=PREFIX,
+        load_cryptography_fernet=_build_fake_fernet_module,
+    )
 
     with pytest.raises(RuntimeError, match="TOTP secret decryption failed") as exc_info:
-        await service.read_secret(
-            f"{PREFIX}v1:{DEFAULT_KEY_ID}:enc:other-key:plain-secret",
-            load_cryptography_fernet=_build_fake_fernet_module,
-        )
+        await service.read_secret(f"{PREFIX}v1:{DEFAULT_KEY_ID}:enc:other-key:plain-secret")
 
     cause = exc_info.value.__cause__
     assert isinstance(cause, RuntimeError)
@@ -230,42 +227,46 @@ async def test_read_secret_raises_runtime_error_for_corrupted_data() -> None:
 
 def test_prepare_secret_for_storage_encrypts_and_prefixes_values() -> None:
     """prepare_secret_for_storage() should prefix deterministic Fernet output."""
-    service = TotpSecretsService(_Manager(user_db=AsyncMock(), totp_secret_key="test-key"), prefix=PREFIX)
+    service = TotpSecretsService(
+        _Manager(user_db=AsyncMock(), totp_secret_key="test-key"),
+        prefix=PREFIX,
+        load_cryptography_fernet=_build_fake_fernet_module,
+    )
 
     assert (
-        service.prepare_secret_for_storage(
-            "plain-secret",
-            load_cryptography_fernet=_build_fake_fernet_module,
-        )
-        == f"{PREFIX}v1:{DEFAULT_KEY_ID}:enc:test-key:plain-secret"
+        service.prepare_secret_for_storage("plain-secret") == f"{PREFIX}v1:{DEFAULT_KEY_ID}:enc:test-key:plain-secret"
     )
 
 
 def test_prepare_secret_for_storage_returns_none_without_loader() -> None:
     """prepare_secret_for_storage() should preserve ``None`` without loading cryptography."""
-    service = TotpSecretsService(_Manager(user_db=AsyncMock()), prefix=PREFIX)
     loader = Mock(side_effect=AssertionError("loader should not be used"))
+    service = TotpSecretsService(_Manager(user_db=AsyncMock()), prefix=PREFIX, load_cryptography_fernet=loader)
 
-    assert service.prepare_secret_for_storage(None, load_cryptography_fernet=loader) is None
+    assert service.prepare_secret_for_storage(None) is None
     loader.assert_not_called()
 
 
 def test_prepare_secret_for_storage_requires_key_for_non_null_secret() -> None:
     """prepare_secret_for_storage() fails closed instead of returning plaintext."""
-    service = TotpSecretsService(_Manager(user_db=AsyncMock()), prefix=PREFIX)
     loader = Mock(side_effect=AssertionError("loader should not be used"))
+    service = TotpSecretsService(_Manager(user_db=AsyncMock()), prefix=PREFIX, load_cryptography_fernet=loader)
 
     with pytest.raises(RuntimeError, match="totp_secret_key is required"):
-        service.prepare_secret_for_storage("plain-secret", load_cryptography_fernet=loader)
+        service.prepare_secret_for_storage("plain-secret")
     loader.assert_not_called()
 
 
 def test_prepare_secret_for_storage_propagates_invalid_fernet_key_errors() -> None:
     """Invalid configured Fernet keys should surface a stable runtime error."""
-    service = TotpSecretsService(_Manager(user_db=AsyncMock(), totp_secret_key="invalid-key"), prefix=PREFIX)
+    service = TotpSecretsService(
+        _Manager(user_db=AsyncMock(), totp_secret_key="invalid-key"),
+        prefix=PREFIX,
+        load_cryptography_fernet=_build_fake_fernet_module,
+    )
 
     with pytest.raises(RuntimeError, match="key material is invalid") as exc_info:
-        service.prepare_secret_for_storage("plain-secret", load_cryptography_fernet=_build_fake_fernet_module)
+        service.prepare_secret_for_storage("plain-secret")
 
     assert "invalid-key" not in str(exc_info.value)
 
@@ -278,30 +279,24 @@ def test_read_secret_decrypts_present_non_active_key_and_detects_rotation() -> N
         prefix=PREFIX,
         active_key_id="old",
         keys=keys,
+        load_cryptography_fernet=_build_fake_fernet_module,
     )
     current_service = TotpSecretsService(
         _Manager(user_db=AsyncMock()),
         prefix=PREFIX,
         active_key_id="current",
         keys=keys,
-    )
-    old_stored = old_service.prepare_secret_for_storage(
-        "plain-secret",
         load_cryptography_fernet=_build_fake_fernet_module,
     )
-    current_stored = current_service.prepare_secret_for_storage(
-        "plain-secret",
-        load_cryptography_fernet=_build_fake_fernet_module,
-    )
+    old_stored = old_service.prepare_secret_for_storage("plain-secret")
+    current_stored = current_service.prepare_secret_for_storage("plain-secret")
 
     assert old_stored is not None
     assert current_stored is not None
     assert old_stored.startswith(f"{PREFIX}v1:old:")
     assert current_stored.startswith(f"{PREFIX}v1:current:")
-    assert current_service.requires_reencrypt(old_stored, load_cryptography_fernet=_build_fake_fernet_module) is True
-    assert (
-        current_service.requires_reencrypt(current_stored, load_cryptography_fernet=_build_fake_fernet_module) is False
-    )
+    assert current_service.requires_reencrypt(old_stored) is True
+    assert current_service.requires_reencrypt(current_stored) is False
 
 
 def test_reencrypt_secret_for_storage_rewrites_non_active_key_values() -> None:
@@ -312,35 +307,31 @@ def test_reencrypt_secret_for_storage_rewrites_non_active_key_values() -> None:
         prefix=PREFIX,
         active_key_id="old",
         keys=keys,
+        load_cryptography_fernet=_build_fake_fernet_module,
     )
     current_service = TotpSecretsService(
         _Manager(user_db=AsyncMock()),
         prefix=PREFIX,
         active_key_id="current",
         keys=keys,
-    )
-    old_stored = old_service.prepare_secret_for_storage(
-        "plain-secret",
         load_cryptography_fernet=_build_fake_fernet_module,
     )
+    old_stored = old_service.prepare_secret_for_storage("plain-secret")
 
-    rewritten = current_service.reencrypt_secret_for_storage(
-        old_stored,
-        load_cryptography_fernet=_build_fake_fernet_module,
-    )
+    rewritten = current_service.reencrypt_secret_for_storage(old_stored)
 
     assert rewritten is not None
     assert rewritten.startswith(f"{PREFIX}v1:current:")
-    assert current_service.requires_reencrypt(rewritten, load_cryptography_fernet=_build_fake_fernet_module) is False
+    assert current_service.requires_reencrypt(rewritten) is False
 
 
 def test_rotation_helpers_preserve_none_without_loading_crypto() -> None:
     """Disabled TOTP values should not require cryptography for rotation helpers."""
-    service = TotpSecretsService(_Manager(user_db=AsyncMock()), prefix=PREFIX)
     loader = Mock(side_effect=AssertionError("loader should not be used"))
+    service = TotpSecretsService(_Manager(user_db=AsyncMock()), prefix=PREFIX, load_cryptography_fernet=loader)
 
-    assert service.requires_reencrypt(None, load_cryptography_fernet=loader) is False
-    assert service.reencrypt_secret_for_storage(None, load_cryptography_fernet=loader) is None
+    assert service.requires_reencrypt(None) is False
+    assert service.reencrypt_secret_for_storage(None) is None
     loader.assert_not_called()
 
 
@@ -354,9 +345,13 @@ def test_rotation_helpers_preserve_none_without_loading_crypto() -> None:
 )
 def test_versioned_totp_storage_errors_are_stable_and_secret_free(stored: str, match: str) -> None:
     """Malformed and unknown-key values fail closed without echoing stored data."""
-    service = TotpSecretsService(_Manager(user_db=AsyncMock(), totp_secret_key="test-key"), prefix=PREFIX)
+    service = TotpSecretsService(
+        _Manager(user_db=AsyncMock(), totp_secret_key="test-key"),
+        prefix=PREFIX,
+        load_cryptography_fernet=_build_fake_fernet_module,
+    )
 
     with pytest.raises(RuntimeError, match=match) as exc_info:
-        service.requires_reencrypt(stored, load_cryptography_fernet=_build_fake_fernet_module)
+        service.requires_reencrypt(stored)
 
     assert stored not in str(exc_info.value)

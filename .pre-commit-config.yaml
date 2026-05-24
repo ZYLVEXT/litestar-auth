@@ -86,7 +86,8 @@ repos:
         args: ['--pytest-test-first']
         exclude: |
           (?x)^(
-            tests/_helpers\.py
+            tests/_helpers\.py|
+            tests/integration/_di_probes\.py
           )$
       - id: no-commit-to-branch
         args: [--branch, main]
@@ -102,7 +103,7 @@ repos:
 
   - repo: https://github.com/astral-sh/uv-pre-commit
     # uv version.
-    rev: ae1ad165e7cbd3806258775dcc5b25da4da6f493  # frozen: 0.11.14
+    rev: f19149a31a5aad375f89df042b796688201d6840  # frozen: 0.11.16
     hooks:
       # Update the uv lockfile
       - id: uv-lock

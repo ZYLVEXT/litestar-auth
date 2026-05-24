@@ -13,6 +13,7 @@ import warnings
 from collections import Counter
 from dataclasses import dataclass
 from re import fullmatch
+from typing import Final
 
 from litestar_auth._secret_roles import (
     JWT_ACCESS_TOKEN_AUDIENCE,
@@ -50,9 +51,11 @@ __all__ = (
     "RESET_PASSWORD_TOKEN_AUDIENCE",
     "TOTP_ENROLL_AUDIENCE",
     "TOTP_PENDING_AUDIENCE",
+    "UNSET",
     "VERIFY_TOKEN_AUDIENCE",
     "OAuthProviderConfig",
     "SecretRoleValues",
+    "UnsetType",
     "require_password_length",
     "resolve_trusted_proxy_setting",
     "validate_oauth_provider_name",
@@ -61,6 +64,22 @@ __all__ = (
     "validate_secret_roles_are_distinct",
     "validate_secret_strength",
 )
+
+
+@dataclass(frozen=True, slots=True)
+class UnsetType:
+    """Typed marker for omitted config values that need default resolution."""
+
+    def __bool__(self) -> bool:
+        """Treat the sentinel as false in legacy truth-value checks.
+
+        Returns:
+            Always ``False``.
+        """
+        return False
+
+
+UNSET: Final = UnsetType()
 
 
 def validate_oauth_provider_name(name: str, *, label: str = "OAuth provider name") -> str:

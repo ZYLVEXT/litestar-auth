@@ -14,11 +14,14 @@ import jwt
 
 from litestar_auth._jwt_headers import JwtDecodeConfig, decode_signed_jwt, jwt_encode_headers
 from litestar_auth._manager._coercions import _managed_user
-from litestar_auth._manager._protocols import UserDatabaseManagerProtocol, UserManagerHooksProtocol
+from litestar_auth._manager._protocols import UserDatabaseManagerProtocol
 from litestar_auth.exceptions import InvalidResetPasswordTokenError, InvalidVerifyTokenError, UserNotExistsError
 
 if TYPE_CHECKING:
+    from collections.abc import Callable, Mapping
+
     from litestar_auth._manager.construction import AccountTokenSecrets
+    from litestar_auth._manager.hooks import ManagerHookBus
     from litestar_auth._manager.user_policy import UserPolicy
 
 type _InvalidTokenError = type[InvalidVerifyTokenError | InvalidResetPasswordTokenError]
@@ -32,6 +35,97 @@ class AccountTokenAudiences:
     reset_password: str
 
 
+@dataclass(frozen=True, slots=True)
+class TokenWriteRequest:
+    """Input for signing account-scoped manager tokens."""
+
+    subject: str
+    audience: str
+    secret: str
+    lifetime: timedelta
+    extra_claims: Mapping[str, Any] | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class AccountTokensServiceDependencies[UP, ID]:
+    """Dependencies required by account-token flow orchestration."""
+
+    audiences: AccountTokenAudiences
+    hook_bus: ManagerHookBus[UP]
+    token_security: AccountTokenSecurityService[UP, ID]
+    logger: Any
+    policy: UserPolicy
+
+
+class TokenWriter:
+    """Canonical account-token writer with reset-password fingerprint handling."""
+
+    def __init__(
+        self,
+        *,
+        reset_password_audience: str,
+        password_fingerprint: Callable[[str], str],
+    ) -> None:
+        """Bind reset-password token policy."""
+        self._reset_password_audience = reset_password_audience
+        self._password_fingerprint = password_fingerprint
+
+    def write(
+        self,
+        request: TokenWriteRequest,
+        *,
+        password_fingerprint_source: str | None = None,
+    ) -> str:
+        """Sign an account token after applying account-token claim policy."""
+        return self.write_token_subject(
+            TokenWriteRequest(
+                subject=request.subject,
+                secret=request.secret,
+                audience=request.audience,
+                lifetime=request.lifetime,
+                extra_claims=self._extra_claims_for_request(
+                    request,
+                    password_fingerprint_source=password_fingerprint_source,
+                ),
+            ),
+        )
+
+    def _extra_claims_for_request(
+        self,
+        request: TokenWriteRequest,
+        *,
+        password_fingerprint_source: str | None,
+    ) -> dict[str, Any] | None:
+        """Return extra claims with reset-password fingerprint policy applied."""
+        token_claims = dict(request.extra_claims or {})
+        if request.audience != self._reset_password_audience:
+            token_claims.pop("password_fingerprint", None)
+            return token_claims or None
+
+        if "password_fingerprint" not in token_claims:
+            if password_fingerprint_source is None:
+                msg = "reset-password tokens require a password fingerprint source"
+                raise ValueError(msg)
+            token_claims["password_fingerprint"] = self._password_fingerprint(password_fingerprint_source)
+        return token_claims
+
+    @staticmethod
+    def write_token_subject(request: TokenWriteRequest) -> str:
+        """Sign a short-lived JWT bound to an arbitrary subject string."""
+        issued_at = datetime.now(tz=UTC)
+        payload: dict[str, Any] = {
+            "sub": request.subject,
+            "aud": request.audience,
+            "iat": issued_at,
+            "nbf": issued_at,
+            "exp": issued_at + request.lifetime,
+            "jti": secrets.token_hex(16),
+        }
+        if request.extra_claims:
+            payload.update(request.extra_claims)
+        return jwt.encode(payload, request.secret, algorithm="HS256", headers=jwt_encode_headers())
+
+
 class _AccountTokenSecurityManagerProtocol[ID](Protocol):
     """Manager surface required by token security operations."""
 
@@ -42,7 +136,6 @@ class _AccountTokenSecurityManagerProtocol[ID](Protocol):
 class _AccountTokensManagerProtocol[UP, ID](
     UserDatabaseManagerProtocol[UP],
     _AccountTokenSecurityManagerProtocol[ID],
-    UserManagerHooksProtocol[UP],
     Protocol,
 ):
     """Manager surface required by verify/reset token flows."""
@@ -68,6 +161,15 @@ class AccountTokenSecurityService[UP, ID]:
         self._manager = manager
         self._logger = logger
         self._reset_password_token_audience = reset_password_token_audience
+        self._token_writer = TokenWriter(
+            reset_password_audience=reset_password_token_audience,
+            password_fingerprint=self.password_fingerprint,
+        )
+
+    @property
+    def token_writer(self) -> TokenWriter:
+        """Return the canonical account-token writer."""
+        return self._token_writer
 
     def password_fingerprint(self, hashed_password: str) -> str:
         """Compute the password fingerprint used by reset-password tokens."""
@@ -77,8 +179,8 @@ class AccountTokenSecurityService[UP, ID]:
             hashlib.sha256,
         ).hexdigest()
 
+    @staticmethod
     def write_token(
-        self,
         *,
         subject: str,
         secret: str,
@@ -87,12 +189,14 @@ class AccountTokenSecurityService[UP, ID]:
         extra_claims: dict[str, Any] | None = None,
     ) -> str:
         """Sign a short-lived JWT bound to an arbitrary subject string."""
-        return self.write_token_subject(
-            subject=subject,
-            secret=secret,
-            audience=audience,
-            lifetime=lifetime,
-            extra_claims=extra_claims,
+        return TokenWriter.write_token_subject(
+            TokenWriteRequest(
+                subject=subject,
+                secret=secret,
+                audience=audience,
+                lifetime=lifetime,
+                extra_claims=extra_claims,
+            ),
         )
 
     @staticmethod
@@ -105,18 +209,15 @@ class AccountTokenSecurityService[UP, ID]:
         extra_claims: dict[str, Any] | None = None,
     ) -> str:
         """Sign a short-lived JWT bound to an arbitrary subject string."""
-        issued_at = datetime.now(tz=UTC)
-        payload: dict[str, Any] = {
-            "sub": subject,
-            "aud": audience,
-            "iat": issued_at,
-            "nbf": issued_at,
-            "exp": issued_at + lifetime,
-            "jti": secrets.token_hex(16),
-        }
-        if extra_claims:
-            payload.update(extra_claims)
-        return jwt.encode(payload, secret, algorithm="HS256", headers=jwt_encode_headers())
+        return TokenWriter.write_token_subject(
+            TokenWriteRequest(
+                subject=subject,
+                secret=secret,
+                audience=audience,
+                lifetime=lifetime,
+                extra_claims=extra_claims,
+            ),
+        )
 
     def decode_token(
         self,
@@ -234,22 +335,32 @@ class AccountTokensService[UP, ID]:
         self,
         manager: _AccountTokensManagerProtocol[UP, ID],
         *,
-        audiences: AccountTokenAudiences,
-        token_security: AccountTokenSecurityService[UP, ID],
-        logger: Any,
-        policy: UserPolicy,
+        dependencies: AccountTokensServiceDependencies[UP, ID],
     ) -> None:
         """Bind service dependencies."""
         self._manager = manager
-        self._audiences = audiences
-        self._token_security = token_security
-        self._logger = logger
-        self._policy = policy
+        self._audiences = dependencies.audiences
+        self._hook_bus = dependencies.hook_bus
+        self._token_security = dependencies.token_security
+        self._logger = dependencies.logger
+        self._policy = dependencies.policy
 
     @property
     def security(self) -> AccountTokenSecurityService[UP, ID]:
         """Return the low-level JWT and fingerprint helper surface."""
         return self._token_security
+
+    def _write_token(
+        self,
+        request: TokenWriteRequest,
+        *,
+        password_fingerprint_source: str | None = None,
+    ) -> str:
+        """Write an account token through the canonical token writer."""
+        return self._token_security.token_writer.write(
+            request,
+            password_fingerprint_source=password_fingerprint_source,
+        )
 
     async def verify(self, token: str) -> UP:
         """Mark the token subject as verified."""
@@ -266,7 +377,7 @@ class AccountTokensService[UP, ID]:
             raise InvalidVerifyTokenError(msg)
 
         updated_user = await self._manager.user_db.update(user, {"is_verified": True})
-        await self._manager.on_after_verify(updated_user)
+        await self._hook_bus.fire("after_verify", updated_user)
         return updated_user
 
     async def request_verify_token(self, email: str) -> None:
@@ -277,15 +388,18 @@ class AccountTokensService[UP, ID]:
         token = (
             self.write_verify_token(user)
             if deliverable
-            else self._token_security.write_token(
-                subject="verification-placeholder",
-                secret=self._manager.account_token_secrets.verification_token_secret.get_secret_value(),
-                audience=self._audiences.verify,
-                lifetime=self._manager.verification_token_lifetime,
+            else self._write_token(
+                TokenWriteRequest(
+                    subject="verification-placeholder",
+                    secret=self._manager.account_token_secrets.verification_token_secret.get_secret_value(),
+                    audience=self._audiences.verify,
+                    lifetime=self._manager.verification_token_lifetime,
+                ),
             )
         )
 
-        await self._manager.on_after_request_verify_token(
+        await self._hook_bus.fire(
+            "after_request_verify_token",
             user if deliverable else None,
             token if deliverable else None,
         )
@@ -296,7 +410,8 @@ class AccountTokensService[UP, ID]:
         user = await self._manager.user_db.get_by_email(email)
         token = self.write_reset_password_token(user, dummy_hash=dummy_hash)
 
-        await self._manager.on_after_forgot_password(
+        await self._hook_bus.fire(
+            "after_forgot_password",
             user,
             token if user is not None else None,
         )
@@ -334,7 +449,7 @@ class AccountTokensService[UP, ID]:
         update_dict = {"hashed_password": self._policy.password_helper.hash(password)}
         updated_user = await self._manager.user_db.update(user, update_dict)
         await self._manager._invalidate_all_tokens(updated_user)
-        await self._manager.on_after_reset_password(updated_user)
+        await self._hook_bus.fire("after_reset_password", updated_user)
         return updated_user
 
     def write_verify_token(self, user: UP) -> str:
@@ -354,14 +469,15 @@ class AccountTokensService[UP, ID]:
             managed_user = _managed_user(user)
             subject = str(managed_user.id)
             fingerprint_source = managed_user.hashed_password
-        extra_claims = {"password_fingerprint": self.password_fingerprint(fingerprint_source)}
 
-        return self._token_security.write_token(
-            subject=subject,
-            secret=self._manager.account_token_secrets.reset_password_token_secret.get_secret_value(),
-            audience=self._audiences.reset_password,
-            lifetime=self._manager.reset_password_token_lifetime,
-            extra_claims=extra_claims,
+        return self._write_token(
+            TokenWriteRequest(
+                subject=subject,
+                secret=self._manager.account_token_secrets.reset_password_token_secret.get_secret_value(),
+                audience=self._audiences.reset_password,
+                lifetime=self._manager.reset_password_token_lifetime,
+            ),
+            password_fingerprint_source=fingerprint_source,
         )
 
     def password_fingerprint(self, hashed_password: str) -> str:
@@ -378,16 +494,14 @@ class AccountTokensService[UP, ID]:
         extra_claims: dict[str, Any] | None = None,
     ) -> str:
         """Sign a short-lived JWT for a user."""
-        token_claims = dict(extra_claims or {})
-        if audience == self._audiences.reset_password and "password_fingerprint" not in token_claims:
-            token_claims["password_fingerprint"] = self.password_fingerprint(
-                _managed_user(user).hashed_password,
-            )
-
-        return self._token_security.write_token(
-            subject=str(_managed_user(user).id),
-            secret=secret,
-            audience=audience,
-            lifetime=lifetime,
-            extra_claims=token_claims or None,
+        managed_user = _managed_user(user)
+        return self._write_token(
+            TokenWriteRequest(
+                subject=str(managed_user.id),
+                secret=secret,
+                audience=audience,
+                lifetime=lifetime,
+                extra_claims=extra_claims,
+            ),
+            password_fingerprint_source=managed_user.hashed_password,
         )

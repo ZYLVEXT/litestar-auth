@@ -65,6 +65,14 @@ class _RecordingRedisClient:
         self.setex_calls.append((name, time, value))
         return await self.redis.setex(name, time, value)
 
+    async def get(self, name: str, /) -> object:
+        """Delegate value reads to fakeredis.
+
+        Returns:
+            The wrapped fakeredis ``get`` result.
+        """
+        return await self.redis.get(name)
+
     async def sadd(self, name: str, *values: str) -> int:
         """Delegate set membership writes to fakeredis.
 
@@ -183,6 +191,10 @@ def test_redis_strategy_initializes_custom_configuration(
     assert strategy._user_index_key("user-123") == f"custom-prefix:user:{_safe_key_part('user-123')}"
     assert strategy._decode_user_id(b"user-123") == "user-123"
     assert strategy._decode_user_id("user-123") == "user-123"
+    assert strategy._decode_token_payload("v1:3:user-123") == (3, "user-123")
+    assert strategy._decode_token_payload("user-123") == (0, "user-123")
+    assert strategy._decode_token_payload("v1:3") == (0, "v1:3")
+    assert strategy._decode_token_payload("v1:not-int:user-123") == (0, "v1:not-int:user-123")
 
 
 def test_redis_strategy_user_index_key_hashes_subject_text(
@@ -226,7 +238,7 @@ async def test_redis_strategy_write_token_persists_token_and_updates_user_index(
     token_key = _token_key(token)
     index_key = strategy._user_index_key(str(user.id))
     assert token == "token-write"
-    assert await async_fakeredis.get(token_key) == str(user.id).encode()
+    assert await async_fakeredis.get(token_key) == f"v1:0:{user.id}".encode()
     assert await async_fakeredis.smembers(index_key) == {token_key.encode()}  # ty: ignore[invalid-await]
     assert FIVE_MINUTES_TTL_FLOOR <= await async_fakeredis.ttl(token_key) <= FIVE_MINUTES_TTL_SECONDS
     assert FIVE_MINUTES_TTL_FLOOR <= await async_fakeredis.ttl(index_key) <= FIVE_MINUTES_TTL_SECONDS
@@ -254,7 +266,7 @@ async def test_redis_strategy_write_token_enforces_minimum_ttl(
 
     token_key = _token_key("token-min-ttl")
     index_key = strategy._user_index_key(str(user.id))
-    assert recording_redis.setex_calls == [(token_key, MINIMUM_TTL_SECONDS, str(user.id))]
+    assert recording_redis.setex_calls == [(token_key, MINIMUM_TTL_SECONDS, f"v1:0:{user.id}")]
     assert recording_redis.expire_calls == [(index_key, MINIMUM_TTL_SECONDS)]
 
 
@@ -270,7 +282,7 @@ async def test_redis_strategy_read_token_returns_user_from_stored_subject(
     user_manager = ExampleUserManager(user)
     redis = async_fakeredis_factory(decode_responses=response_mode == "str")
     token_key = _token_key("token-read")
-    assert await redis.set(token_key, str(user.id)) is True
+    assert await redis.set(token_key, f"v1:0:{user.id}") is True
     strategy = RedisTokenStrategy[ExampleUser, UUID](
         config=RedisTokenStrategyConfig(
             redis=cast_fakeredis(redis, RedisClientProtocol),
@@ -313,7 +325,7 @@ async def test_redis_strategy_read_token_returns_none_when_subject_decoder_fails
     _disable_optional_import(monkeypatch)
     redis = async_fakeredis_factory(decode_responses=True)
     token_key = _token_key("token-invalid-subject")
-    assert await redis.set(token_key, "not-a-uuid") is True
+    assert await redis.set(token_key, "v1:0:not-a-uuid") is True
     strategy = RedisTokenStrategy[ExampleUser, UUID](
         config=RedisTokenStrategyConfig(
             redis=cast_fakeredis(redis, RedisClientProtocol),
@@ -331,6 +343,28 @@ async def test_redis_strategy_read_token_returns_none_when_subject_decoder_fails
             raise AssertionError(msg)
 
     assert await strategy.read_token("token-invalid-subject", ShouldNotBeCalledUserManager()) is None
+
+
+async def test_redis_strategy_read_token_returns_none_when_epoch_is_corrupt(
+    monkeypatch: pytest.MonkeyPatch,
+    async_fakeredis_factory: AsyncFakeRedisFactory,
+) -> None:
+    """read_token() should fail closed when the stored user epoch is not an integer."""
+    _disable_optional_import(monkeypatch)
+    redis = async_fakeredis_factory(decode_responses=True)
+    user = ExampleUser(id=uuid4())
+    token_key = _token_key("token-corrupt-epoch")
+    strategy = RedisTokenStrategy[ExampleUser, UUID](
+        config=RedisTokenStrategyConfig(
+            redis=cast_fakeredis(redis, RedisClientProtocol),
+            token_hash_secret=TOKEN_HASH_SECRET,
+            subject_decoder=UUID,
+        ),
+    )
+    assert await redis.set(token_key, f"v1:0:{user.id}") is True
+    assert await redis.set(strategy._user_epoch_key(str(user.id)), "not-int") is True
+
+    assert await strategy.read_token("token-corrupt-epoch", ExampleUserManager(user)) is None
 
 
 async def test_redis_strategy_destroy_token_removes_token_key_and_user_index_entry(
@@ -383,6 +417,8 @@ async def test_redis_strategy_invalidate_all_tokens_returns_after_index_delete(
     assert await async_fakeredis.get(token_key) is None
     assert await async_fakeredis.exists(index_key) == 0
     assert await async_fakeredis.get(extra_key) == str(user.id).encode()
+    assert await strategy.read_token("token-outside-index", ExampleUserManager(user)) is None
+    assert await async_fakeredis.get(strategy._user_epoch_key(str(user.id))) == b"1"
 
 
 async def test_redis_strategy_invalidate_all_tokens_uses_per_user_index(
@@ -418,7 +454,7 @@ async def test_redis_strategy_invalidate_all_tokens_uses_per_user_index(
     index_key = strategy._user_index_key(str(user.id))
     assert await async_fakeredis.get(first_key) is None
     assert await async_fakeredis.get(second_key) is None
-    assert await async_fakeredis.get(other_key) == str(other_user.id).encode()
+    assert await async_fakeredis.get(other_key) == f"v1:0:{other_user.id}".encode()
     assert await async_fakeredis.exists(index_key) == 0
 
 
@@ -476,17 +512,18 @@ async def test_redis_strategy_issue_totp_stepup_non_positive_ttl_deletes_marker_
     assert await async_fakeredis.smembers(index_key) == set()  # ty: ignore[invalid-await]
 
 
-async def test_redis_strategy_invalidate_all_tokens_without_index_leaves_orphaned_tokens(
+async def test_redis_strategy_invalidate_all_tokens_without_index_rejects_orphaned_tokens(
     monkeypatch: pytest.MonkeyPatch,
     async_fakeredis_factory: AsyncFakeRedisFactory,
 ) -> None:
-    """invalidate_all_tokens() should not inspect tokens when the per-user index is missing."""
+    """invalidate_all_tokens() should reject orphaned tokens even when the per-user index is missing."""
     _disable_optional_import(monkeypatch)
     redis = async_fakeredis_factory(decode_responses=True)
     strategy = RedisTokenStrategy[ExampleUser, UUID](
         config=RedisTokenStrategyConfig(
             redis=cast_fakeredis(redis, RedisClientProtocol),
             token_hash_secret=TOKEN_HASH_SECRET,
+            subject_decoder=UUID,
         ),
     )
     user = ExampleUser(id=uuid4())
@@ -496,14 +533,48 @@ async def test_redis_strategy_invalidate_all_tokens_without_index_leaves_orphane
     foreign_key = strategy._key("orphan-other")
     ignored_prefix_key = "other-prefix:orphan-ignored"
 
-    assert await redis.set(matching_key_one, str(user.id)) is True
-    assert await redis.set(matching_key_two, str(user.id)) is True
-    assert await redis.set(foreign_key, str(other_user.id)) is True
+    assert await redis.set(matching_key_one, f"v1:0:{user.id}") is True
+    assert await redis.set(matching_key_two, f"v1:0:{user.id}") is True
+    assert await redis.set(foreign_key, f"v1:0:{other_user.id}") is True
     assert await redis.set(ignored_prefix_key, str(user.id)) is True
 
     await strategy.invalidate_all_tokens(user)
 
-    assert await redis.get(matching_key_one) == str(user.id)
-    assert await redis.get(matching_key_two) == str(user.id)
-    assert await redis.get(foreign_key) == str(other_user.id)
+    assert await redis.get(matching_key_one) == f"v1:0:{user.id}"
+    assert await redis.get(matching_key_two) == f"v1:0:{user.id}"
+    assert await redis.get(foreign_key) == f"v1:0:{other_user.id}"
     assert await redis.get(ignored_prefix_key) == str(user.id)
+    assert await strategy.read_token("orphan-a", ExampleUserManager(user)) is None
+    assert await strategy.read_token("orphan-b", ExampleUserManager(user)) is None
+    assert await strategy.read_token("orphan-other", ExampleUserManager(other_user)) == other_user
+
+
+async def test_redis_strategy_write_token_after_invalidation_uses_current_epoch(
+    monkeypatch: pytest.MonkeyPatch,
+    async_fakeredis: AsyncFakeRedis,
+) -> None:
+    """Tokens issued after invalidate_all_tokens() should validate against the bumped epoch."""
+    _disable_optional_import(monkeypatch)
+    token_values = iter(["token-before", "token-after"])
+    monkeypatch.setattr(
+        opaque_tokens_module.secrets,
+        "token_urlsafe",
+        lambda _nbytes: next(token_values),
+    )
+    user = ExampleUser(id=uuid4())
+    user_manager = ExampleUserManager(user)
+    strategy = RedisTokenStrategy[ExampleUser, UUID](
+        config=RedisTokenStrategyConfig(
+            redis=cast_fakeredis(async_fakeredis, RedisClientProtocol),
+            token_hash_secret=TOKEN_HASH_SECRET,
+            token_bytes=16,
+            subject_decoder=UUID,
+        ),
+    )
+
+    before_token = await strategy.write_token(user)
+    await strategy.invalidate_all_tokens(user)
+    after_token = await strategy.write_token(user)
+
+    assert await strategy.read_token(before_token, user_manager) is None
+    assert await strategy.read_token(after_token, user_manager) == user

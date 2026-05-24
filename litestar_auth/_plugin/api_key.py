@@ -12,11 +12,11 @@ from litestar_auth.types import UserProtocol
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
 
+    from litestar_auth._plugin._protocols import StrategyProto
     from litestar_auth._plugin.config import StartupBackendTemplate
-    from litestar_auth._plugin.feature_configs import ApiKeyConfig, ApiKeyScopeAuthority, ApiKeyStoreFactory
+    from litestar_auth._plugin.features import ApiKeyConfig, ApiKeyScopeAuthority, ApiKeyStoreFactory
     from litestar_auth.authentication.strategy.base import UserManagerProtocol
     from litestar_auth.db import BaseApiKeyStore
-    from litestar_auth.types import StrategyProtocol
 
 
 def _build_default_api_key_store(session: AsyncSession) -> BaseApiKeyStore[Any, Any]:
@@ -78,12 +78,12 @@ class _StartupOnlyApiKeyStrategy[UP: UserProtocol[Any], ID](Strategy[UP, ID]):
                 keys=keyring_config.keys,
             )
 
-    def with_session(self, session: AsyncSession) -> StrategyProtocol[UP, ID]:
+    def with_session(self, session: AsyncSession) -> StrategyProto[UP, ID]:
         """Return a request-bound API-key strategy for ``session``."""
         from litestar_auth.authentication.strategy.api_key import ApiKeyStrategy  # noqa: PLC0415
 
         return cast(
-            "StrategyProtocol[UP, ID]",
+            "StrategyProto[UP, ID]",
             ApiKeyStrategy[UP, ID](
                 api_key_store=self.store_factory(session),
                 api_key_hash_secret=self.api_key_hash_secret,
@@ -140,7 +140,7 @@ def build_api_key_backend_template[UP: UserProtocol[Any], ID](
         name=api_key_config.backend_name,
         transport=ApiKeyTransport(prefix=api_key_config.prefix),
         strategy=cast(
-            "Any",
+            "StrategyProto[UP, ID]",
             _StartupOnlyApiKeyStrategy[UP, ID](
                 api_key_config=api_key_config,
                 api_key_hash_secret=api_key_hash_secret,

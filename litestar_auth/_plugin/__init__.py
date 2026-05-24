@@ -1,7 +1,9 @@
 """Internal-only plugin implementation modules.
 
 `litestar_auth.plugin` is the stable public entry point for plugin consumers.
-Names exported from this package exist for internal composition only.
+Names exported from this package exist for internal composition only. Handler
+helpers live in ``litestar_auth._plugin.exception_handlers`` and dependency
+helpers live in ``litestar_auth._plugin.dependencies``.
 """
 
 from litestar_auth._plugin.config import (

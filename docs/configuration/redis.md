@@ -92,14 +92,15 @@ preset default, and `None` preserves each low-level store's current built-in pre
 
 `RedisTokenStrategy` writes each opaque token under a TTL-backed token key and records that key in a
 per-user Redis set. Use `RedisTokenStrategyConfig(...)` when the shared Redis client and token
-settings should travel as one typed object. `invalidate_all_tokens(user)` uses only that per-user set:
-indexed tokens and the index key are deleted together, and the strategy does not scan the broader
-keyspace.
+settings should travel as one typed object. `invalidate_all_tokens(user)` atomically bumps a per-user
+invalidation epoch and deletes indexed tokens plus indexed TOTP step-up markers in one Redis script.
+Token reads compare the token's stored epoch with the current user epoch, so out-of-index orphan
+tokens are rejected on their next use without scanning the broader keyspace.
 
 If you are upgrading from a version that created Redis token keys without the per-user index, those
-orphaned keys are not force-invalidated by `invalidate_all_tokens(...)`; they remain valid only
-until their existing Redis TTL expires. Rotate or flush pre-index token keys before upgrading if you
-need immediate global invalidation of those sessions.
+orphaned keys are not deleted by `invalidate_all_tokens(...)`, but the epoch check rejects them after
+the user's next all-token invalidation. Rotate or flush pre-index token keys during upgrade if those
+sessions need to be invalidated before a user-specific epoch bump occurs.
 
 The shared builder itself exposes typed public identifiers from
 `litestar_auth.ratelimit`:

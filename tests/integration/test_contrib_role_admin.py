@@ -16,7 +16,7 @@ from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 from sqlalchemy.orm import Session as SASession
 from sqlalchemy.pool import StaticPool
 
-from litestar_auth._plugin.role_admin import SQLAlchemyRoleAdmin
+from litestar_auth._plugin.role_admin import SQLAlchemyRoleAdmin, SystemManagedRoleError
 from litestar_auth.authentication.backend import AuthenticationBackend
 from litestar_auth.authentication.strategy.jwt import JWTStrategy
 from litestar_auth.authentication.transport.bearer import BearerTransport
@@ -580,18 +580,25 @@ async def test_role_admin_delete_fails_closed_when_assignments_exist_and_succeed
     """Delete defaults to fail closed when assignments exist and returns 204 when they do not."""
     test_client, engine, _ = client
     admin_headers = await _login_headers(test_client, email="admin@example.com", password="admin-password")
+    member_id = _load_user_id(engine, email="member@example.com")
 
-    delete_assigned_response = await test_client.delete(f"{ROLE_ROUTE_PREFIX}/admin", headers=admin_headers)
+    await test_client.post(
+        ROLE_ROUTE_PREFIX,
+        headers=admin_headers,
+        json={"name": "assigned-role", "description": "Assigned role"},
+    )
+    await test_client.post(f"{ROLE_ROUTE_PREFIX}/assigned-role/users/{member_id}", headers=admin_headers)
+    delete_assigned_response = await test_client.delete(f"{ROLE_ROUTE_PREFIX}/assigned-role", headers=admin_headers)
 
     assert delete_assigned_response.status_code == HTTP_CONFLICT
     assert delete_assigned_response.json() == {
         "detail": (
-            "Role admin will not delete role 'admin' while assignments still exist. "
+            "Role admin will not delete role 'assigned-role' while assignments still exist. "
             "Re-run with --force to remove dependent user-role assignments."
         ),
         "code": ErrorCode.ROLE_STILL_ASSIGNED,
     }
-    assert _load_role_assignments(engine, email="admin@example.com") == ["admin"]
+    assert _load_role_assignments(engine, email="member@example.com") == ["assigned-role"]
 
     await test_client.post(
         ROLE_ROUTE_PREFIX,
@@ -605,11 +612,77 @@ async def test_role_admin_delete_fails_closed_when_assignments_exist_and_succeed
     assert delete_unassigned_response.content == b""
     assert final_list_response.status_code == HTTP_OK
     assert final_list_response.json() == {
-        "items": [{"name": "admin", "description": None}],
-        "total": 1,
+        "items": [
+            {"name": "admin", "description": None},
+            {"name": "assigned-role", "description": "Assigned role"},
+        ],
+        "total": 2,
         "limit": 50,
         "offset": 0,
     }
+
+
+@pytest.mark.parametrize("force", [False, True], ids=["without-force", "with-force"])
+async def test_role_admin_delete_refuses_configured_superuser_role_even_with_force(
+    client: tuple[AsyncTestClient[Litestar], Engine, LitestarAuthConfig[User, UUID]],
+    force: object,
+) -> None:
+    """The configured superuser role is system-managed and cannot be deleted."""
+    _, engine, config = client
+    role_admin = SQLAlchemyRoleAdmin.from_config(config)
+
+    with pytest.raises(SystemManagedRoleError, match="system-managed superuser role 'admin'"):
+        await role_admin.delete_role(role="admin", force=cast("bool", force))
+
+    assert await role_admin.list_roles() == ["admin"]
+    assert _load_role_assignments(engine, email="admin@example.com") == ["admin"]
+
+
+async def test_role_admin_unassign_refuses_to_remove_final_superuser_assignment(
+    client: tuple[AsyncTestClient[Litestar], Engine, LitestarAuthConfig[User, UUID]],
+) -> None:
+    """Removing the last configured-superuser assignment would lock out admin access."""
+    _, engine, config = client
+    role_admin = SQLAlchemyRoleAdmin.from_config(config)
+
+    with pytest.raises(SystemManagedRoleError, match="final assignment of system-managed superuser role 'admin'"):
+        await role_admin.unassign_user_roles(email="admin@example.com", roles=["admin"])
+
+    assert _load_role_assignments(engine, email="admin@example.com") == ["admin"]
+
+
+async def test_role_admin_http_unassign_refuses_to_remove_final_superuser_assignment(
+    client: tuple[AsyncTestClient[Litestar], Engine, LitestarAuthConfig[User, UUID]],
+) -> None:
+    """The HTTP assignment route maps last-superuser protection to an operator-facing error."""
+    test_client, engine, _ = client
+    admin_headers = await _login_headers(test_client, email="admin@example.com", password="admin-password")
+    admin_id = _load_user_id(engine, email="admin@example.com")
+
+    response = await test_client.delete(f"{ROLE_ROUTE_PREFIX}/admin/users/{admin_id}", headers=admin_headers)
+
+    assert response.status_code == HTTP_CONFLICT
+    assert response.json() == {
+        "detail": "Role admin will not remove the final assignment of system-managed superuser role 'admin'.",
+        "code": ErrorCode.ROLE_STILL_ASSIGNED,
+    }
+    assert _load_role_assignments(engine, email="admin@example.com") == ["admin"]
+
+
+async def test_role_admin_unassign_superuser_role_succeeds_when_another_superuser_exists(
+    client: tuple[AsyncTestClient[Litestar], Engine, LitestarAuthConfig[User, UUID]],
+) -> None:
+    """The invariant preserves non-final superuser removals for normal admin maintenance."""
+    _, engine, config = client
+    role_admin = SQLAlchemyRoleAdmin.from_config(config)
+
+    await role_admin.assign_user_roles(email="member@example.com", roles=["admin"])
+    membership = await role_admin.unassign_user_roles(email="admin@example.com", roles=["admin"])
+
+    assert membership.email == "admin@example.com"
+    assert membership.roles == []
+    assert _load_role_assignments(engine, email="admin@example.com") == []
+    assert _load_role_assignments(engine, email="member@example.com") == ["admin"]
 
 
 async def test_role_admin_assignment_routes_use_manager_lifecycle_and_stay_idempotent(

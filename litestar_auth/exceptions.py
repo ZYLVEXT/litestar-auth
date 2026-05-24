@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from litestar.exceptions import ClientException
 
-from litestar_auth._error_codes import ErrorCode, UserIdentifier
+from litestar_auth._error_codes import ApiKeyErrorCode, ErrorCode, UserIdentifier
 
 
 class LitestarAuthError(Exception):
@@ -104,19 +104,21 @@ class ApiKeyError(LitestarAuthError):
     """Raised when an API-key manager operation fails."""
 
     default_message = "API-key operation failed."
-    default_code = ErrorCode.AUTHORIZATION_DENIED
+    default_code = ApiKeyErrorCode.API_KEY_INVALID
 
 
 class ApiKeyNotFoundError(ApiKeyError):
     """Raised when an API key cannot be found in the caller's ownership scope."""
 
     default_message = "API key not found."
+    default_code = ApiKeyErrorCode.API_KEY_INVALID
 
 
 class ApiKeyScopeDeniedError(ApiKeyError):
     """Raised when requested API-key scopes are outside the configured whitelist."""
 
     default_message = "One or more requested API-key scopes are not allowed."
+    default_code = ApiKeyErrorCode.API_KEY_SCOPE_DENIED
 
     def __init__(
         self,
@@ -134,6 +136,7 @@ class ApiKeyLimitReachedError(ApiKeyError):
     """Raised when a user has reached the configured active API-key limit."""
 
     default_message = "API-key limit reached."
+    default_code = ApiKeyErrorCode.API_KEY_LIMIT_REACHED
 
     def __init__(
         self,

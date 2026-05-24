@@ -6,8 +6,9 @@ from typing import TYPE_CHECKING, Annotated, Any, cast
 
 import msgspec  # noqa: TC002
 from litestar import Request, delete, get, patch, post
-from litestar.params import Parameter
+from litestar.params import Dependency, PathParameter, QueryParameter
 from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from litestar_auth.contrib.role_admin._controller_handler_utils import (
     RoleAdminControllerBase,
@@ -29,16 +30,20 @@ from litestar_auth.contrib.role_admin._error_responses import (
 )
 from litestar_auth.contrib.role_admin._schemas import RoleCreate, RoleRead, RoleUpdate  # noqa: TC001
 from litestar_auth.exceptions import ConfigurationError
+from litestar_auth.manager import BaseUserManager
+from litestar_auth.types import UserProtocol
 
 if TYPE_CHECKING:
-    from sqlalchemy.ext.asyncio import AsyncSession
-
     from litestar_auth.controllers._utils import RequestBodyRouteHandler
 
 _DEFAULT_LIMIT = 50
 _MAX_LIMIT = 100
-_LimitQuery = Annotated[int, Parameter(query="limit", ge=1, le=_MAX_LIMIT)]
-_OffsetQuery = Annotated[int, Parameter(query="offset", ge=0)]
+_LimitQuery = Annotated[int, QueryParameter(name="limit", ge=1, le=_MAX_LIMIT)]
+_OffsetQuery = Annotated[int, QueryParameter(name="offset", ge=0)]
+_RoleNamePath = Annotated[str, PathParameter()]
+_UserIdPath = Annotated[str, PathParameter()]
+_DbSessionDep = Annotated[AsyncSession | None, Dependency()]
+_OptionalUserManagerDep = Annotated[BaseUserManager[UserProtocol[Any], Any] | None, Dependency()]
 
 
 def create_list_roles_handler() -> RequestBodyRouteHandler:
@@ -51,7 +56,7 @@ def create_list_roles_handler() -> RequestBodyRouteHandler:
     @get()
     async def list_roles(
         self: RoleAdminControllerBase,
-        db_session: AsyncSession | None = None,
+        db_session: _DbSessionDep = None,
         limit: _LimitQuery = _DEFAULT_LIMIT,
         offset: _OffsetQuery = 0,
     ) -> msgspec.Struct:
@@ -79,7 +84,7 @@ def create_create_role_handler() -> RequestBodyRouteHandler:
     async def create_role(
         self: RoleAdminControllerBase,
         data: msgspec.Struct,
-        db_session: AsyncSession | None = None,
+        db_session: _DbSessionDep = None,
     ) -> RoleRead:
         """Create a role and return its summary.
 
@@ -122,8 +127,8 @@ def create_get_role_handler() -> RequestBodyRouteHandler:
     @get("/{role_name:str}")
     async def get_role(
         self: RoleAdminControllerBase,
-        role_name: str,
-        db_session: AsyncSession | None = None,
+        role_name: _RoleNamePath,
+        db_session: _DbSessionDep = None,
     ) -> RoleRead:
         """Return one role by name."""
         context = _role_admin_context(self)
@@ -145,9 +150,9 @@ def create_update_role_handler() -> RequestBodyRouteHandler:
     async def update_role(
         self: RoleAdminControllerBase,
         request: Request[Any, Any, Any],
-        role_name: str,
+        role_name: _RoleNamePath,
         data: msgspec.Struct,
-        db_session: AsyncSession | None = None,
+        db_session: _DbSessionDep = None,
     ) -> RoleRead:
         """Update mutable role fields and return the updated role.
 
@@ -193,8 +198,8 @@ def create_delete_role_handler() -> RequestBodyRouteHandler:
     @delete("/{role_name:str}", status_code=204)
     async def delete_role(
         self: RoleAdminControllerBase,
-        role_name: str,
-        db_session: AsyncSession | None = None,
+        role_name: _RoleNamePath,
+        db_session: _DbSessionDep = None,
     ) -> None:
         """Delete a role by name.
 
@@ -226,10 +231,10 @@ def create_assign_role_handler() -> RequestBodyRouteHandler:
     @post("/{role_name:str}/users/{user_id:str}", status_code=200)
     async def assign_role(
         self: RoleAdminControllerBase,
-        role_name: str,
-        user_id: str,
-        db_session: AsyncSession | None = None,
-        litestar_auth_user_manager: object | None = None,
+        role_name: _RoleNamePath,
+        user_id: _UserIdPath,
+        db_session: _DbSessionDep = None,
+        litestar_auth_user_manager: _OptionalUserManagerDep = None,
     ) -> RoleRead:
         """Assign a role to a user and return the role summary.
 
@@ -257,10 +262,10 @@ def create_unassign_role_handler() -> RequestBodyRouteHandler:
     @delete("/{role_name:str}/users/{user_id:str}", status_code=204)
     async def unassign_role(
         self: RoleAdminControllerBase,
-        role_name: str,
-        user_id: str,
-        db_session: AsyncSession | None = None,
-        litestar_auth_user_manager: object | None = None,
+        role_name: _RoleNamePath,
+        user_id: _UserIdPath,
+        db_session: _DbSessionDep = None,
+        litestar_auth_user_manager: _OptionalUserManagerDep = None,
     ) -> None:
         """Remove a role assignment from a user."""
         context = _role_admin_context(self)
@@ -284,8 +289,8 @@ def create_list_role_users_handler() -> RequestBodyRouteHandler:
     @get("/{role_name:str}/users")
     async def list_role_users(
         self: RoleAdminControllerBase,
-        role_name: str,
-        db_session: AsyncSession | None = None,
+        role_name: _RoleNamePath,
+        db_session: _DbSessionDep = None,
         limit: _LimitQuery = _DEFAULT_LIMIT,
         offset: _OffsetQuery = 0,
     ) -> msgspec.Struct:

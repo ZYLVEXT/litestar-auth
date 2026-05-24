@@ -41,15 +41,21 @@ session metadata required by session/device management:
 - `last_used_at` — nullable timestamp set when a refresh token is successfully rotated.
 - `client_metadata` — nullable bounded JSON metadata derived from login/refresh requests. The built-in
   controller stores only a normalized `user_agent` value capped at 255 characters.
+- `consumed_token_digests` — nullable JSON list of keyed refresh-token digests that were previously
+  rotated within this session and are retained only for replay detection.
 
-Refresh rotation keeps the same `session_id` and `created_at`, replaces only the token digest, updates
-`last_used_at`, and refreshes `client_metadata` when request metadata is available.
+Refresh rotation keeps the same `session_id` and `created_at`, atomically replaces only the token digest,
+records the consumed digest, updates `last_used_at`, and refreshes `client_metadata` when request metadata
+is available. Re-presenting any consumed refresh token is treated as a compromise signal and revokes the
+entire refresh-session chain.
 
 Existing deployments using the bundled `refresh_token` table must add `session_id`, `last_used_at`, and
-`client_metadata` columns before using this version. Backfill `session_id` with a unique non-sensitive UUID
-per existing row. Existing custom refresh-token models passed through `DatabaseTokenModels` must expose
-mapped `session_id`, `last_used_at`, and `client_metadata` attributes; otherwise configuration fails fast
-with `ConfigurationError`.
+`client_metadata` columns before using this version. Deployments upgrading to refresh-token reuse detection
+must also add nullable `consumed_token_digests` JSON storage. Backfill `session_id` with a unique
+non-sensitive UUID per existing row and leave `consumed_token_digests` null for historical rows. Existing
+custom refresh-token models passed through `DatabaseTokenModels` must expose mapped `session_id`,
+`last_used_at`, `client_metadata`, and `consumed_token_digests` attributes; otherwise configuration fails
+fast with `ConfigurationError`.
 
 ## `api_key` shape
 

@@ -25,11 +25,16 @@ from litestar_auth.payloads import (
     ApiKeyAdminCreateRequest,
     ApiKeyCreateRequest,
     ApiKeyCreateResponse,
+    ApiKeyIdField,
     ApiKeyListResponse,
+    ApiKeyNameField,
     ApiKeyRead,
+    ApiKeyScopeField,
     ApiKeyUpdateRequest,
     RefreshSessionListResponse,
     RefreshSessionRead,
+    SessionClientMetadataKey,
+    SessionClientMetadataValue,
 )
 from litestar_auth.schemas import AdminUserUpdate, UserCreate, UserEmailField, UserPasswordField, UserRead, UserUpdate
 
@@ -51,7 +56,11 @@ def _annotation_meta(annotation: object, *, label: str) -> msgspec.Meta:
         AssertionError: If the annotation does not expose ``msgspec.Meta``.
     """
     for candidate in (annotation, *get_args(annotation)):
-        value = getattr(candidate, "__value__", candidate)
+        value = candidate
+        seen: set[int] = set()
+        while (next_value := getattr(value, "__value__", None)) is not None and id(value) not in seen:
+            seen.add(id(value))
+            value = next_value
         if get_origin(value) is not Annotated:
             continue
 
@@ -214,7 +223,15 @@ def test_user_update_field_order_uses_roles_as_authorization_surface() -> None:
 
 def test_admin_user_update_field_order_matches_user_update_surface() -> None:
     """AdminUserUpdate preserves the current privileged update surface."""
-    assert AdminUserUpdate.__struct_fields__ == ("password", "email", "is_active", "is_verified", "roles")
+    assert AdminUserUpdate.__struct_fields__ == (
+        "password",
+        "email",
+        "is_active",
+        "is_verified",
+        "roles",
+        "current_password",
+        "totp_code",
+    )
 
 
 def test_user_create_decodes_plain_text_password_payload() -> None:
@@ -426,6 +443,28 @@ def test_public_email_alias_reuses_internal_metadata_source() -> None:
     )
 
     assert public_meta is internal_meta
+
+
+@pytest.mark.parametrize(
+    ("public_alias", "internal_alias", "label"),
+    [
+        (ApiKeyIdField, schema_fields_module.ApiKeyIdField, "ApiKeyIdField"),
+        (ApiKeyNameField, schema_fields_module.ApiKeyNameField, "ApiKeyNameField"),
+        (ApiKeyScopeField, schema_fields_module.ApiKeyScopeField, "ApiKeyScopeField"),
+        (SessionClientMetadataKey, schema_fields_module.SessionClientMetadataKey, "SessionClientMetadataKey"),
+        (SessionClientMetadataValue, schema_fields_module.SessionClientMetadataValue, "SessionClientMetadataValue"),
+    ],
+)
+def test_public_payload_aliases_reuse_internal_metadata_source(
+    public_alias: object,
+    internal_alias: object,
+    label: str,
+) -> None:
+    """The public payload aliases keep the shared internal ``msgspec.Meta`` contracts."""
+    assert _annotation_meta(public_alias, label=label) is _annotation_meta(
+        internal_alias,
+        label=f"litestar_auth._schema_fields.{label}",
+    )
 
 
 def test_user_update_omits_unset_optional_fields() -> None:

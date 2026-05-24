@@ -2,19 +2,21 @@
 
 from __future__ import annotations
 
+import asyncio
 import importlib
 import inspect
 import logging
 import warnings
 from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Any, Literal, cast
-from unittest.mock import AsyncMock, patch
+from unittest.mock import ANY, AsyncMock, Mock, patch
 from uuid import UUID, uuid4
 
 import jwt
 import pytest
 from cryptography.fernet import Fernet
 
+import litestar_auth._manager.account_tokens as account_tokens_module
 import litestar_auth._manager.totp_facade as totp_facade_module
 import litestar_auth._optional_deps as optional_deps_module
 import litestar_auth.manager as manager_module
@@ -51,6 +53,8 @@ manager_logger = manager_module.logger
 if TYPE_CHECKING:
     from collections.abc import Callable
 
+    from litestar_auth._manager.api_keys import ApiKeyConfigProtocol
+    from litestar_auth._manager.hooks import ManagerHookEvent
     from litestar_auth.db import OAuthAccountData
 
 JTI_HEX_LENGTH = 32
@@ -61,6 +65,24 @@ EXPECTED_SHARED_HELPER_DUMMY_HASH_CALLS = 2
 LOGIN_IDENTIFIER_TELEMETRY_SECRET = "login-telemetry-secret-1234567890"
 
 pytestmark = pytest.mark.unit
+
+
+def _assert_account_token_service_dependencies(
+    account_tokens: Mock,
+    manager: BaseUserManager[Any, Any],
+    token_security_service: object,
+) -> None:
+    """Assert account-token service dependencies are wired through the grouped contract."""
+    account_tokens.assert_called_once_with(manager, dependencies=ANY)
+    dependencies = account_tokens.call_args.kwargs["dependencies"]
+    assert dependencies.audiences == manager_module.AccountTokenAudiences(
+        verify=manager_module.VERIFY_TOKEN_AUDIENCE,
+        reset_password=RESET_PASSWORD_TOKEN_AUDIENCE,
+    )
+    assert dependencies.hook_bus is manager.hook_bus
+    assert dependencies.token_security is token_security_service
+    assert dependencies.logger is manager_logger
+    assert dependencies.policy is manager.policy
 
 
 def _as_any(value: object) -> Any:  # noqa: ANN401
@@ -98,8 +120,10 @@ class TrackingUserManager(BaseUserManager[ExampleUser, UUID]):
         login_identifier: Literal["email", "username"] = "email",
         login_identifier_telemetry_secret: str | None = LOGIN_IDENTIFIER_TELEMETRY_SECRET,
         api_key_store: object | None = None,
-        api_key_config: object | None = None,
+        api_key_config: ApiKeyConfigProtocol | None = None,
         api_key_hash_secret: str | None = None,
+        creatable_fields: frozenset[str] = frozenset({"email", "password"}),
+        updatable_fields: frozenset[str] = frozenset({"email", "password"}),
     ) -> None:
         """Initialize the tracking manager with predictable secrets."""
         super().__init__(
@@ -118,6 +142,8 @@ class TrackingUserManager(BaseUserManager[ExampleUser, UUID]):
             reset_verification_on_email_change=reset_verification_on_email_change,
             backends=backends,
             login_identifier=login_identifier,
+            creatable_fields=creatable_fields,
+            updatable_fields=updatable_fields,
         )
         self.registered_users: list[ExampleUser] = []
         self.registration_events: list[tuple[ExampleUser, str]] = []
@@ -275,6 +301,41 @@ async def test_create_logs_register_event(caplog: pytest.LogCaptureFixture) -> N
     assert events == ["register"]
     assert getattr(caplog.records[0], "user_id", None) == str(created_user.id)
     assert "password" not in caplog.records[0].getMessage().lower()
+
+
+async def test_hook_bus_subscriber_records_service_dispatched_events_without_subclassing() -> None:
+    """Subscribers can observe service lifecycle events without manager subclass hooks."""
+    user_db = AsyncMock()
+    password_helper = PasswordHelper()
+    manager = BaseUserManager(
+        user_db,
+        password_helper=password_helper,
+        security=UserManagerSecurity[UUID](
+            verification_token_secret="0123456789abcdef" * 4,
+            reset_password_token_secret="fedcba9876543210" * 4,
+            id_parser=UUID,
+        ),
+    )
+    created_user = _build_user(password_helper)
+    user_db.get_by_email.return_value = None
+    user_db.create.return_value = created_user
+    events: list[ManagerHookEvent] = []
+
+    async def record(event: ManagerHookEvent) -> None:
+        await asyncio.sleep(0)
+        events.append(event)
+
+    unsubscribe = manager.hook_bus.subscribe(record)
+    result = await manager.create(UserCreate(email=created_user.email, password="test-password"))
+    unsubscribe()
+
+    assert result is created_user
+    assert len(events) == 1
+    event = events[0]
+    assert event.name == "after_register"
+    event_user, token = event.args
+    assert event_user is created_user
+    assert isinstance(token, str)
 
 
 async def test_create_register_hook_token_is_valid_for_verify_flow() -> None:
@@ -1005,27 +1066,19 @@ def test_manager_init_wires_services_and_configuration() -> None:
     assert manager.tokens is account_tokens_service
     assert manager.tokens.security is token_security_service
     assert manager.totp is totp_secrets_service
-    user_lifecycle_service.assert_called_once_with(manager, policy=manager.policy)
+    user_lifecycle_service.assert_called_once_with(manager, hook_bus=manager.hook_bus, policy=manager.policy)
     account_token_security_service.assert_called_once_with(
         manager,
         logger=manager_logger,
         reset_password_token_audience=RESET_PASSWORD_TOKEN_AUDIENCE,
     )
-    account_tokens.assert_called_once_with(
-        manager,
-        audiences=manager_module.AccountTokenAudiences(
-            verify=manager_module.VERIFY_TOKEN_AUDIENCE,
-            reset_password=RESET_PASSWORD_TOKEN_AUDIENCE,
-        ),
-        token_security=token_security_service,
-        logger=manager_logger,
-        policy=manager.policy,
-    )
+    _assert_account_token_service_dependencies(account_tokens, manager, token_security_service)
     totp_secrets.assert_called_once_with(
         manager,
         prefix=manager_module.ENCRYPTED_TOTP_SECRET_PREFIX,
         active_key_id="current",
         keys=totp_keyring.keys,
+        load_cryptography_fernet=manager_module._load_cryptography_fernet,
     )
 
 
@@ -1127,11 +1180,38 @@ async def test_create_defaults_to_safe_and_strips_non_safe_fields() -> None:
     assert create_payload["email"] == created_user.email
 
 
-async def test_create_safe_false_still_strips_privilege_fields_by_default() -> None:
-    """Unsafe create preserves custom fields but strips privileged fields unless explicitly allowed."""
+async def test_create_safe_false_rejects_undeclared_fields_by_default() -> None:
+    """Unsafe create fails closed on fields outside the manager policy."""
     user_db = AsyncMock()
     password_helper = PasswordHelper()
     manager = TrackingUserManager(user_db, password_helper)
+    created_user = _build_user(password_helper)
+    user_db.get_by_email.return_value = None
+    user_db.create.return_value = created_user
+
+    payload: dict[str, object] = {
+        "email": created_user.email,
+        "password": "test-password",
+        "nickname": "visible",
+        "is_active": False,
+        "is_verified": True,
+        "roles": [" Billing ", "admin", "ADMIN"],
+    }
+    with pytest.raises(AuthorizationError, match="nickname"):
+        await manager.create(payload, safe=False)
+
+    user_db.create.assert_not_awaited()
+
+
+async def test_create_safe_false_accepts_declared_custom_fields() -> None:
+    """Manager-specific create policies opt custom user fields into persistence."""
+    user_db = AsyncMock()
+    password_helper = PasswordHelper()
+    manager = TrackingUserManager(
+        user_db,
+        password_helper,
+        creatable_fields=frozenset({"email", "password", "nickname"}),
+    )
     created_user = _build_user(password_helper)
     user_db.get_by_email.return_value = None
     user_db.create.return_value = created_user
@@ -1535,7 +1615,11 @@ async def test_forgot_password_uses_dummy_fingerprint_for_missing_users() -> Non
     manager = TrackingUserManager(user_db, password_helper)
     user_db.get_by_email.return_value = None
 
-    with patch.object(manager.tokens, "password_fingerprint", wraps=manager.tokens.password_fingerprint) as fingerprint:
+    with patch.object(
+        manager.tokens.security.token_writer,
+        "_password_fingerprint",
+        wraps=manager.tokens.security.token_writer._password_fingerprint,
+    ) as fingerprint:
         assert await manager.forgot_password("missing@example.com") is None
 
     fingerprint.assert_called_once_with(manager._get_dummy_hash())
@@ -1551,7 +1635,11 @@ async def test_forgot_password_uses_real_fingerprint_for_existing_users() -> Non
     user = _build_user(password_helper)
     user_db.get_by_email.return_value = user
 
-    with patch.object(manager.tokens, "password_fingerprint", wraps=manager.tokens.password_fingerprint) as fingerprint:
+    with patch.object(
+        manager.tokens.security.token_writer,
+        "_password_fingerprint",
+        wraps=manager.tokens.security.token_writer._password_fingerprint,
+    ) as fingerprint:
         assert await manager.forgot_password(user.email) is None
 
     fingerprint.assert_called_once_with(user.hashed_password)
@@ -1948,6 +2036,40 @@ async def test_update_rejects_privileged_fields_without_explicit_opt_in() -> Non
     assert manager.after_update_events == []
 
 
+async def test_update_rejects_undeclared_fields_by_default() -> None:
+    """Manager updates fail closed on non-privileged fields outside the policy."""
+    user_db = AsyncMock()
+    password_helper = PasswordHelper()
+    manager = TrackingUserManager(user_db, password_helper)
+    user = _build_user(password_helper)
+
+    with pytest.raises(AuthorizationError, match="nickname"):
+        await manager.update({"nickname": "visible"}, user)
+
+    user_db.update.assert_not_awaited()
+    assert manager.after_update_events == []
+
+
+async def test_update_accepts_declared_custom_fields() -> None:
+    """Manager-specific update policies opt custom user fields into persistence."""
+    user_db = AsyncMock()
+    password_helper = PasswordHelper()
+    manager = TrackingUserManager(
+        user_db,
+        password_helper,
+        updatable_fields=frozenset({"email", "password", "nickname"}),
+    )
+    user = _build_user(password_helper)
+    updated_user = replace(user)
+    user_db.update.return_value = updated_user
+
+    result = await manager.update({"nickname": "visible"}, user)
+
+    assert result is updated_user
+    user_db.update.assert_awaited_once_with(user, {"nickname": "visible"})
+    assert manager.after_update_events == [(updated_user, {"nickname": "visible"})]
+
+
 async def test_update_normalizes_roles_from_mapping_payload() -> None:
     """Explicit privileged mapping updates still normalize roles before persistence."""
     user_db = AsyncMock()
@@ -2128,7 +2250,7 @@ async def test_public_token_services_delegate_to_account_token_security_service(
     expected_user_id = uuid4()
 
     with (
-        patch.object(manager.tokens.security, "write_token", return_value="signed-token") as write_token,
+        patch.object(manager.tokens.security.token_writer, "write", return_value="signed-token") as write_token,
         patch.object(
             manager.tokens.security,
             "get_user_from_token",
@@ -2164,11 +2286,13 @@ async def test_public_token_services_delegate_to_account_token_security_service(
     assert resolved_user is expected_user
     assert resolved_user_id is expected_user_id
     write_token.assert_called_once_with(
-        subject=str(expected_user.id),
-        secret=manager.verification_token_secret.get_secret_value(),
-        audience=manager_module.VERIFY_TOKEN_AUDIENCE,
-        lifetime=manager.verification_token_lifetime,
-        extra_claims=None,
+        account_tokens_module.TokenWriteRequest(
+            subject=str(expected_user.id),
+            secret=manager.verification_token_secret.get_secret_value(),
+            audience=manager_module.VERIFY_TOKEN_AUDIENCE,
+            lifetime=manager.verification_token_lifetime,
+        ),
+        password_fingerprint_source=expected_user.hashed_password,
     )
     get_user_from_token.assert_awaited_once_with(
         "signed-token",
@@ -2315,7 +2439,7 @@ async def test_set_totp_secret_requires_key_for_non_null_secret() -> None:
 
 
 async def test_totp_secret_helpers_delegate_to_totp_service() -> None:
-    """TOTP helper methods should delegate to TotpSecretsService with the loader callback."""
+    """TOTP helper methods should delegate to the constructor-bound TotpSecretsService."""
     user_db = AsyncMock()
     password_helper = PasswordHelper()
     manager = TrackingUserManager(user_db, password_helper)
@@ -2333,23 +2457,10 @@ async def test_totp_secret_helpers_delegate_to_totp_service() -> None:
         assert manager.totp_secret_requires_reencrypt("encrypted-value") is True
         assert manager.reencrypt_totp_secret_for_storage("encrypted-value") == "rewritten-secret"
 
-    set_secret.assert_awaited_once_with(
-        user,
-        None,
-        load_cryptography_fernet=totp_facade_module._load_cryptography_fernet,
-    )
-    read_secret.assert_awaited_once_with(
-        "encrypted-value",
-        load_cryptography_fernet=totp_facade_module._load_cryptography_fernet,
-    )
-    requires_reencrypt.assert_called_once_with(
-        "encrypted-value",
-        load_cryptography_fernet=totp_facade_module._load_cryptography_fernet,
-    )
-    reencrypt_secret.assert_called_once_with(
-        "encrypted-value",
-        load_cryptography_fernet=totp_facade_module._load_cryptography_fernet,
-    )
+    set_secret.assert_awaited_once_with(user, None)
+    read_secret.assert_awaited_once_with("encrypted-value")
+    requires_reencrypt.assert_called_once_with("encrypted-value")
+    reencrypt_secret.assert_called_once_with("encrypted-value")
 
 
 async def test_recovery_code_hash_helpers_delegate_to_user_store() -> None:
@@ -2414,10 +2525,6 @@ async def test_read_totp_secret_rejects_unprefixed_plaintext_value() -> None:
 
 async def test_read_totp_secret_raises_when_decryption_fails(monkeypatch: pytest.MonkeyPatch) -> None:
     """Decryption failures are surfaced as RuntimeError with a stable message."""
-    user_db = AsyncMock()
-    password_helper = PasswordHelper()
-    manager = TrackingUserManager(user_db, password_helper)
-    manager.totp_secret_key = "89abcdef01234567" * 4
 
     class FakeInvalidTokenError(Exception):
         pass
@@ -2431,6 +2538,11 @@ async def test_read_totp_secret_raises_when_decryption_fails(monkeypatch: pytest
 
     fake_module = type("FakeFernetModule", (), {"Fernet": FakeFernet, "InvalidToken": FakeInvalidTokenError})()
     monkeypatch.setattr(totp_facade_module, "_load_cryptography_fernet", lambda: fake_module)
+    monkeypatch.setattr(manager_module, "_load_cryptography_fernet", lambda: fake_module)
+    user_db = AsyncMock()
+    password_helper = PasswordHelper()
+    manager = TrackingUserManager(user_db, password_helper)
+    manager.totp_secret_key = "89abcdef01234567" * 4
 
     with pytest.raises(RuntimeError, match="TOTP secret decryption failed"):
         await manager.read_totp_secret(f"{manager_module.ENCRYPTED_TOTP_SECRET_PREFIX}v1:default:encrypted")
@@ -2438,10 +2550,6 @@ async def test_read_totp_secret_raises_when_decryption_fails(monkeypatch: pytest
 
 def test_prepare_totp_secret_encrypts_and_prefixes_when_key_set(monkeypatch: pytest.MonkeyPatch) -> None:
     """Encrypted TOTP storage prefixes values and uses Fernet.encrypt()."""
-    user_db = AsyncMock()
-    password_helper = PasswordHelper()
-    manager = TrackingUserManager(user_db, password_helper)
-    manager.totp_secret_key = "89abcdef01234567" * 4
 
     class FakeFernet:
         def __init__(self, _: bytes) -> None:
@@ -2452,14 +2560,16 @@ def test_prepare_totp_secret_encrypts_and_prefixes_when_key_set(monkeypatch: pyt
 
     fake_module = type("FakeFernetModule", (), {"Fernet": FakeFernet, "InvalidToken": Exception})()
     monkeypatch.setattr(totp_facade_module, "_load_cryptography_fernet", lambda: fake_module)
+    monkeypatch.setattr(manager_module, "_load_cryptography_fernet", lambda: fake_module)
+    user_db = AsyncMock()
+    password_helper = PasswordHelper()
+    manager = TrackingUserManager(user_db, password_helper)
+    manager.totp_secret_key = "89abcdef01234567" * 4
 
     stored = manager._prepare_totp_secret_for_storage("secret")
     assert stored == f"{manager_module.ENCRYPTED_TOTP_SECRET_PREFIX}v1:default:encrypted-value"
 
-    stored_via_service = manager.totp.prepare_secret_for_storage(
-        "secret",
-        load_cryptography_fernet=totp_facade_module._load_cryptography_fernet,
-    )
+    stored_via_service = manager.totp.prepare_secret_for_storage("secret")
     assert stored_via_service == f"{manager_module.ENCRYPTED_TOTP_SECRET_PREFIX}v1:default:encrypted-value"
 
 
@@ -2503,6 +2613,61 @@ async def test_base_hooks_are_noops() -> None:
     assert await manager.on_after_api_key_created(user, object()) is None
     assert await manager.on_after_api_key_revoked(user, object()) is None
     assert await manager.on_after_api_key_used(object()) is None
+
+
+async def test_hook_bus_fires_named_events_with_argument_shapes() -> None:
+    """Hook bus subscribers receive canonical names and positional hook arguments."""
+    user_db = AsyncMock()
+    password_helper = PasswordHelper()
+    manager = BaseUserManager(
+        user_db,
+        password_helper=password_helper,
+        security=UserManagerSecurity[UUID](
+            verification_token_secret="0123456789abcdef" * 4,
+            reset_password_token_secret="fedcba9876543210" * 4,
+            id_parser=UUID,
+        ),
+    )
+    user = _build_user(password_helper)
+    api_key = object()
+    update_dict = {"email": user.email}
+    events: list[ManagerHookEvent] = []
+
+    async def record(event: ManagerHookEvent) -> None:
+        await asyncio.sleep(0)
+        events.append(event)
+
+    manager.hook_bus.subscribe(record)
+
+    await manager.hook_bus.fire("after_register", user, "verify-token")
+    await manager.hook_bus.fire("after_register_duplicate", user)
+    await manager.hook_bus.fire("after_login", user)
+    await manager.hook_bus.fire("after_verify", user)
+    await manager.hook_bus.fire("after_request_verify_token", user, "verify-token")
+    await manager.hook_bus.fire("after_forgot_password", None, None)
+    await manager.hook_bus.fire("after_reset_password", user)
+    await manager.hook_bus.fire("after_update", user, update_dict)
+    await manager.hook_bus.fire("before_delete", user)
+    await manager.hook_bus.fire("after_delete", user)
+    await manager.hook_bus.fire("after_api_key_created", user, api_key)
+    await manager.hook_bus.fire("after_api_key_revoked", user, api_key)
+    await manager.hook_bus.fire("after_api_key_used", api_key)
+
+    assert [(event.name, event.args) for event in events] == [
+        ("after_register", (user, "verify-token")),
+        ("after_register_duplicate", (user,)),
+        ("after_login", (user,)),
+        ("after_verify", (user,)),
+        ("after_request_verify_token", (user, "verify-token")),
+        ("after_forgot_password", (None, None)),
+        ("after_reset_password", (user,)),
+        ("after_update", (user, update_dict)),
+        ("before_delete", (user,)),
+        ("after_delete", (user,)),
+        ("after_api_key_created", (user, api_key)),
+        ("after_api_key_revoked", (user, api_key)),
+        ("after_api_key_used", (api_key,)),
+    ]
 
 
 def test_require_account_state_raises_for_inactive_user() -> None:

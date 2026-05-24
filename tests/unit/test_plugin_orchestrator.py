@@ -19,6 +19,7 @@ from litestar.config.csrf import CSRFConfig
 from litestar.exceptions import ClientException
 from litestar.middleware import DefineMiddleware
 
+import litestar_auth._plugin._hooks as plugin_hooks_module
 import litestar_auth._plugin.database_token as database_token_module
 import litestar_auth._plugin.startup as startup_module
 import litestar_auth._plugin.user_manager_builder as user_manager_builder_module
@@ -196,33 +197,35 @@ def test_litestar_auth_init_delegates_to_validate_config() -> None:
 
 
 def test_on_app_init_runs_lifecycle_steps_in_order(monkeypatch: pytest.MonkeyPatch) -> None:
-    """App init runs startup warnings, key validation, and registration steps in order."""
+    """App init follows the registered table-driven hook order."""
     plugin = LitestarAuth(_minimal_config())
     app_config = AppConfig()
     calls: list[str] = []
 
     monkeypatch.setattr(
-        "litestar_auth.plugin.require_shared_rate_limit_backends_for_multiworker",
+        startup_module,
+        "require_shared_rate_limit_backends_for_multiworker",
         lambda _config: calls.append("require-shared-rate-limit"),
     )
     monkeypatch.setattr(
-        "litestar_auth.plugin.require_refreshable_strategy_when_enable_refresh",
+        startup_module,
+        "require_refreshable_strategy_when_enable_refresh",
         lambda _config: calls.append("require-refreshable-strategy"),
     )
+    monkeypatch.setattr(startup_module, "warn_insecure_plugin_startup_defaults", lambda _config: calls.append("warn"))
     monkeypatch.setattr(
-        "litestar_auth.plugin.warn_insecure_plugin_startup_defaults",
-        lambda _config: calls.append("warn"),
-    )
-    monkeypatch.setattr(
-        "litestar_auth.plugin.require_oauth_token_encryption_for_configured_providers",
+        startup_module,
+        "require_oauth_token_encryption_for_configured_providers",
         lambda **_kwargs: calls.append("require-oauth-key"),
     )
     monkeypatch.setattr(
-        "litestar_auth.plugin.require_secure_oauth_redirect_in_production",
+        startup_module,
+        "require_secure_oauth_redirect_in_production",
         lambda **_kwargs: calls.append("require-oauth-redirect"),
     )
     monkeypatch.setattr(
-        "litestar_auth.plugin.bootstrap_bundled_token_orm_models",
+        startup_module,
+        "bootstrap_bundled_token_orm_models",
         lambda _config: calls.append("bootstrap-token-models"),
     )
     monkeypatch.setattr(plugin, "_register_dependencies", lambda _app_config: calls.append("dependencies"))
@@ -254,6 +257,45 @@ def test_on_app_init_runs_lifecycle_steps_in_order(monkeypatch: pytest.MonkeyPat
         "openapi-security",
         "controllers",
         "exceptions",
+    ]
+
+
+def test_feature_wiring_snapshots_registered_hook_order() -> None:
+    """FeatureWiring is the canonical startup and app-init ordering table."""
+    registered_order = [
+        (
+            wiring.order,
+            wiring.feature,
+            wiring.before_startup,
+            wiring.dependency_providers,
+            wiring.after_startup,
+            wiring.exception_handlers,
+        )
+        for wiring in plugin_hooks_module.FEATURE_WIRING
+    ]
+
+    assert registered_order == [
+        (
+            10,
+            "core",
+            (
+                "require_shared_rate_limit_backends_for_multiworker",
+                "require_refreshable_strategy_when_enable_refresh",
+                "warn_insecure_plugin_startup_defaults",
+            ),
+            ("config", "user_manager", "backends", "user_model", "db_session"),
+            ("register_dependencies", "register_middleware", "register_openapi_security", "register_controllers"),
+            ("register_exception_handlers",),
+        ),
+        (
+            20,
+            "oauth",
+            ("require_oauth_token_encryption_for_configured_providers", "require_secure_oauth_redirect_in_production"),
+            ("oauth_associate_user_manager",),
+            (),
+            (),
+        ),
+        (30, "database_token", ("bootstrap_bundled_token_orm_models",), (), (), ()),
     ]
 
 
@@ -337,7 +379,7 @@ def test_on_app_init_bootstraps_bundled_token_models_for_db_token_preset(
     def _record_bootstrap(configured_config: object) -> None:
         bootstrap_calls.append(configured_config)
 
-    monkeypatch.setattr("litestar_auth.plugin.bootstrap_bundled_token_orm_models", _record_bootstrap)
+    monkeypatch.setattr(startup_module, "bootstrap_bundled_token_orm_models", _record_bootstrap)
 
     plugin.on_app_init(AppConfig())
 
@@ -391,6 +433,7 @@ def test_bundled_token_bootstrap_detection_skips_custom_token_models() -> None:
         session_id = None
         last_used_at = None
         client_metadata = None
+        consumed_token_digests = None
 
     custom_strategy = DatabaseTokenStrategy(
         session=cast("Any", object()),
@@ -553,7 +596,7 @@ def test_on_app_init_does_not_warn_for_redis_rate_limiter(
     def load_redis_asyncio() -> object:
         return object()
 
-    monkeypatch.setattr("litestar_auth.ratelimit._helpers._load_redis_asyncio", load_redis_asyncio)
+    monkeypatch.setattr("litestar_auth.ratelimit._redis._load_redis_asyncio", load_redis_asyncio)
 
     config = _minimal_config()
     config.deployment_worker_count = 2
@@ -1022,10 +1065,7 @@ def test_on_app_init_registers_exception_handlers_for_all_app_route_handlers() -
     new_controllers = [cast("Any", "plugin-controller")]
 
     with (
-        patch("litestar_auth.plugin.warn_insecure_plugin_startup_defaults"),
-        patch("litestar_auth.plugin.require_oauth_token_encryption_for_configured_providers"),
-        patch("litestar_auth.plugin.require_secure_oauth_redirect_in_production"),
-        patch("litestar_auth.plugin.bootstrap_bundled_token_orm_models"),
+        patch("litestar_auth.plugin.run_before_startup_wiring"),
         patch.object(plugin, "_register_dependencies"),
         patch.object(plugin, "_register_middleware"),
         patch("litestar_auth.plugin.build_controllers", return_value=new_controllers),

@@ -9,6 +9,7 @@ Use this page for CSRF settings, token downgrade policy, schemas, dependency key
 | `csrf_secret` | `None` | Enables Litestar CSRF config when cookie transports are used. |
 | `csrf_header_name` | `"X-CSRF-Token"` | Header Litestar expects for CSRF token. |
 | `unsafe_testing` | `False` | Explicit per-config test-only override for generated fallback secrets, single-process validation shortcuts, and startup-warning suppression. Never enable it for production traffic. |
+| `login_minimum_response_seconds` | `0.4` | Minimum wall-clock duration for plugin-owned `POST /auth/login` account-state failure, pending-TOTP, and success responses. |
 | `register_minimum_response_seconds` | `0.4` | Minimum wall-clock duration for plugin-owned `POST /auth/register` success and domain-failure responses. This is defense-in-depth against registration timing enumeration and is independent of rate limiting. |
 | `verify_minimum_response_seconds` | `0.4` | Minimum wall-clock duration for plugin-owned `POST /auth/verify` success and invalid-token responses. |
 | `request_verify_minimum_response_seconds` | `0.4` | Minimum wall-clock duration for plugin-owned `POST /auth/request-verify-token` responses, including manager failures after rate-limit accounting runs. |
@@ -83,6 +84,7 @@ password policy is fully application-owned and outside the library default descr
 | `user_update_schema` | `None` | msgspec struct for user PATCH bodies on the self-service `/users/me` route. The built-in `UserUpdate` accepts `email` plus `current_password` proof for email changes — privileged fields (`is_active`, `is_verified`, `roles`) live on `AdminUserUpdate` for the privileged `PATCH /users/{id}` route, and self-service requests that include them are rejected at msgspec decode (`forbid_unknown_fields=True`). |
 | `db_session_dependency_key` | `"db_session"` | Litestar DI key for `AsyncSession`. Must be a valid non-keyword Python identifier because Litestar matches dependency keys to callable parameter names. |
 | `db_session_dependency_provided_externally` | `False` | Skip plugin session provider when your app already registers the key. |
+| `session_scope_key` | `None` (uses Advanced Alchemy `SESSION_SCOPE_KEY`) | Advanced Alchemy scope key for the request session. When using `SQLAlchemyPlugin`, prefer `bind_auth_session_to_alchemy(alchemy_config)` or set this to `SQLAlchemyAsyncConfig.session_scope_key` after the config is constructed. |
 
 `user_*_schema` customizes registration and user CRUD surfaces. It does not rename the built-in auth lifecycle request structs: `LoginCredentials`, `RefreshTokenRequest`, `RequestVerifyToken`, `VerifyToken`, `ForgotPassword`, `ResetPassword`, or the TOTP payloads.
 

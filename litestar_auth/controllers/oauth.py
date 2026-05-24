@@ -8,15 +8,12 @@ that envelope, validate ``state`` in constant time, and pass the verifier into t
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, NotRequired, Required, TypedDict, Unpack, cast, overload
+from typing import TYPE_CHECKING, Any, NotRequired, Required, TypedDict, Unpack, overload
 
-from litestar import Controller, Request, get
+from litestar import Controller
 from litestar.openapi.datastructures import ResponseSpec
 from litestar.openapi.spec import Example
-from litestar.params import Parameter
-from litestar.response import Response
 
-from litestar_auth.controllers._auth_helpers import TOTP_STEPUP_REQUIRED_OPENAPI_RESPONSE, TotpStepUpPolicyMode
 from litestar_auth.controllers._oauth_assembly import (
     _build_associate_user_manager_binding,
     _build_direct_user_manager_binding,
@@ -25,7 +22,7 @@ from litestar_auth.controllers._oauth_assembly import (
     _OAuthClientBinding,
     _OAuthControllerAssembly,
     _OAuthControllerAssemblySettings,
-    _OAuthLoginCallbackInputs,
+    _OAuthLoginCallbackInputs,  # noqa: F401
     _OAuthLoginControllerSettings,
     _OAuthServiceSettings,
 )
@@ -41,11 +38,16 @@ from litestar_auth.controllers._oauth_helpers import (
     _set_state_cookie,
     _validate_state,
 )
+from litestar_auth.controllers._oauth_login_handlers import (  # noqa: F401
+    _complete_login_callback,
+    _create_login_callback_handler,
+)
+from litestar_auth.controllers._step_up import TOTP_STEPUP_REQUIRED_OPENAPI_RESPONSE, TotpStepUpPolicyMode
 from litestar_auth.controllers._utils import _mark_litestar_auth_route_handler
 from litestar_auth.exceptions import ErrorCode
 from litestar_auth.guards import is_authenticated
 from litestar_auth.oauth import service as _oauth_service
-from litestar_auth.oauth.client_adapter import OAuthClientProtocol, _build_oauth_client_adapter
+from litestar_auth.oauth._client import OAuthClientProtocol, _build_oauth_client_adapter
 from litestar_auth.types import UserProtocol
 
 OAuthControllerUserManagerProtocol = _oauth_service.OAuthServiceUserManagerProtocol
@@ -68,7 +70,6 @@ if TYPE_CHECKING:
     from collections.abc import Sequence
 
     from litestar.openapi.spec import SecurityRequirement
-    from litestar.response import Response
 
     from litestar_auth.authentication.backend import AuthenticationBackend
 
@@ -190,75 +191,6 @@ def _create_oauth_controller_type(
     return _mark_litestar_auth_route_handler(OAuthController)
 
 
-async def _complete_login_callback[UP: UserProtocol[Any], ID](
-    *,
-    assembly: _OAuthControllerAssembly[UP, ID],
-    callback_inputs: _OAuthLoginCallbackInputs[UP, ID],
-) -> Response[Any]:
-    """Complete the PKCE-bound OAuth login callback using the shared assembly state.
-
-    Returns:
-        Login response produced by the configured local authentication backend.
-    """
-    flow_cookie = _decode_oauth_flow_cookie(
-        callback_inputs.request.cookies.get(assembly.cookie_name),
-        flow_cookie_cipher=assembly.flow_cookie_cipher,
-    )
-    _validate_state(flow_cookie.state, callback_inputs.oauth_state)
-    user = await assembly.oauth_service.complete_login(
-        code=callback_inputs.code,
-        redirect_uri=assembly.callback_url,
-        code_verifier=flow_cookie.code_verifier,
-        user_manager=callback_inputs.user_manager,
-    )
-    response = await callback_inputs.backend.login(user)
-    await callback_inputs.user_manager.on_after_login(user)
-    _clear_state_cookie(
-        response,
-        cookie_name=assembly.cookie_name,
-        cookie_path=assembly.cookie_path,
-        cookie_secure=assembly.cookie_secure,
-    )
-    return response
-
-
-def _create_login_callback_handler[UP: UserProtocol[Any], ID](
-    *,
-    assembly: _OAuthControllerAssembly[UP, ID],
-    backend: AuthenticationBackend[UP, ID],
-) -> object:
-    """Create the callback route handler for OAuth login controllers.
-
-    Returns:
-        Decorated Litestar route handler for the provider callback endpoint.
-    """
-    user_manager = cast(
-        "OAuthControllerUserManagerProtocol[UP, ID]",
-        assembly.user_manager_binding.user_manager,
-    )
-
-    @get("/callback", responses=_OAUTH_OPENAPI_RESPONSES)
-    async def callback(
-        self: object,
-        request: Request[Any, Any, Any],
-        code: str,
-        oauth_state: str = Parameter(query="state"),
-    ) -> Response[Any]:
-        del self
-        return await _complete_login_callback(
-            assembly=assembly,
-            callback_inputs=_OAuthLoginCallbackInputs(
-                request=request,
-                code=code,
-                oauth_state=oauth_state,
-                user_manager=user_manager,
-                backend=backend,
-            ),
-        )
-
-    return callback
-
-
 def _create_login_oauth_controller[UP: UserProtocol[Any], ID](
     settings: _OAuthLoginControllerSettings[UP, ID],
 ) -> type[Controller]:
@@ -291,6 +223,7 @@ def _create_login_oauth_controller[UP: UserProtocol[Any], ID](
         callback_handler=_create_login_callback_handler(
             assembly=assembly,
             backend=settings.backend,
+            responses=_OAUTH_OPENAPI_RESPONSES,
         ),
         docstring="Provider-specific OAuth authorize/callback endpoints.",
     )

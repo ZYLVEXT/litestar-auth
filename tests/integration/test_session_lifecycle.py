@@ -17,6 +17,7 @@ from litestar_auth.authentication.transport.bearer import BearerTransport
 from litestar_auth.manager import UserManagerSecurity
 from litestar_auth.password import PasswordHelper
 from litestar_auth.plugin import LitestarAuth, LitestarAuthConfig
+from tests.integration import _di_probes  # noqa: TC001
 from tests.integration.conftest import CountingSessionMaker, ExampleUser, InMemoryUserDatabase
 from tests.integration.test_orchestrator import (
     InMemoryRefreshTokenStrategy,
@@ -35,9 +36,9 @@ HTTP_OK = 200
 @get("/testing-session-contract", sync_to_thread=False)
 def session_contract_route(
     request: Request[Any, Any, Any],
-    db_session: object,
-    litestar_auth_backends: object,
-    litestar_auth_user_manager: object,
+    db_session: _di_probes.DbSessionIdentityProbe,
+    litestar_auth_backends: _di_probes.LitestarAuthBackendsProbe,
+    litestar_auth_user_manager: _di_probes.LitestarAuthUserManagerProbe,
 ) -> dict[str, int | str | None]:
     """Expose same-request session bindings across middleware and handler DI.
 
@@ -45,17 +46,20 @@ def session_contract_route(
         Authenticated user email plus the session identifiers seen by handler dependencies.
     """
     user = cast("ExampleUser | None", request.user)
-    backends = cast("list[Any]", litestar_auth_backends)
-    user_manager = cast("Any", litestar_auth_user_manager)
-    backend_strategy = backends[0].strategy
-    manager_backend_strategy = user_manager.backends[0].strategy
-    session = cast("Any", db_session)
-    session_id = cast("int", session.session_id)
+    backend_strategy = cast("_PresetSessionStrategy", litestar_auth_backends[0].strategy)
+    manager_backend = cast(
+        "AuthenticationBackend[ExampleUser, UUID]",
+        litestar_auth_user_manager.backends[0],
+    )
+    manager_backend_strategy = cast("_PresetSessionStrategy", manager_backend.strategy)
+    backend_session = cast("_PresetSession", backend_strategy._session)
+    manager_session = cast("_PresetSession", manager_backend_strategy._session)
+    session_id = db_session.session_id
     return {
         "email": user.email if user is not None else None,
         "db_session_id": session_id,
-        "backend_session_id": cast("int", backend_strategy._session.session_id),
-        "manager_session_id": cast("int", manager_backend_strategy._session.session_id),
+        "backend_session_id": backend_session.session_id,
+        "manager_session_id": manager_session.session_id,
     }
 
 

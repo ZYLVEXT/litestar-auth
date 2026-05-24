@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from functools import lru_cache
-from typing import Any, Protocol, cast
+from typing import TYPE_CHECKING, Any, ClassVar, Protocol, cast
 from uuid import UUID
 
 from advanced_alchemy.base import ModelProtocol
@@ -13,9 +13,18 @@ from sqlalchemy.exc import NoInspectionAvailable
 
 from litestar_auth.types import UserProtocol
 
+if TYPE_CHECKING:
+    from sqlalchemy.orm import InstrumentedAttribute
+
 
 class SQLAlchemyUserModelProtocol(ModelProtocol, UserProtocol[UUID], Protocol):
     """Protocol for SQLAlchemy user models handled by this adapter."""
+
+
+class _RoleAssignableUserModel(Protocol):
+    """User model shape for optional role-assignment eager loading."""
+
+    role_assignments: ClassVar[InstrumentedAttribute[list[Any]]]
 
 
 type UserModelT[UP: SQLAlchemyUserModelProtocol] = type[UP]
@@ -71,4 +80,4 @@ def _build_user_load[UP: SQLAlchemyUserModelProtocol](
         return ()
     if "role_assignments" not in relationships:
         return ()
-    return (cast("Any", user_model).role_assignments,)
+    return (cast("type[_RoleAssignableUserModel]", user_model).role_assignments,)

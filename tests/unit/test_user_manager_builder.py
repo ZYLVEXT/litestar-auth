@@ -105,7 +105,7 @@ def test_default_builder_contract_materializes_canonical_kwargs() -> None:
             DEFAULT_MINIMUM_PASSWORD_LENGTH + CUSTOM_VALIDATOR_MIN_LENGTH_OFFSET,
         )
 
-    password_helper = object()
+    password_helper = PasswordHelper()
     totp_keyring = FernetKeyringConfig(active_key_id="current", keys={"current": _generate_fernet_key()})
     config = _minimal_config(
         user_manager_security=UserManagerSecurity[UUID](
@@ -140,10 +140,12 @@ def test_default_builder_contract_materializes_canonical_kwargs() -> None:
     assert kwargs["login_identifier"] == "username"
     assert kwargs["superuser_role_name"] == "superuser"
     assert kwargs["unsafe_testing"] is False
-    assert kwargs["security"].verification_token_secret == "0123456789abcdef" * 4
-    assert kwargs["security"].reset_password_token_secret == "fedcba9876543210" * 4
-    assert kwargs["security"].totp_secret_keyring is totp_keyring
-    assert kwargs["security"].id_parser is UUID
+    security = kwargs["security"]
+    assert security is not None
+    assert security.verification_token_secret == "0123456789abcdef" * 4
+    assert security.reset_password_token_secret == "fedcba9876543210" * 4
+    assert security.totp_secret_keyring is totp_keyring
+    assert security.id_parser is UUID
 
 
 def test_validation_kwargs_keep_password_validator_slot_without_runtime_factory() -> None:
@@ -160,7 +162,9 @@ def test_validation_kwargs_keep_password_validator_slot_without_runtime_factory(
     assert kwargs["login_identifier"] == "email"
     assert kwargs["superuser_role_name"] == "superuser"
     assert kwargs["unsafe_testing"] is False
-    assert kwargs["security"].id_parser is UUID
+    security = kwargs["security"]
+    assert security is not None
+    assert security.id_parser is UUID
 
 
 def test_resolve_password_validator_prefers_factory_over_default() -> None:

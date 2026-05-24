@@ -32,6 +32,7 @@ import litestar_auth.controllers.verify as verify_controller_module
 import litestar_auth.db as db_module
 import litestar_auth.models as models_module
 import litestar_auth.oauth as oauth_package_module
+import litestar_auth.oauth._client as oauth_client_module
 import litestar_auth.payloads as payloads_module
 import litestar_auth.plugin as plugin_module
 import litestar_auth.ratelimit as ratelimit_module
@@ -58,7 +59,7 @@ from litestar_auth.exceptions import (
     UserAlreadyExistsError,
     UserNotExistsError,
 )
-from litestar_auth.oauth.client_adapter import (
+from litestar_auth.oauth._client import (
     OAuthEmailVerificationAsyncClientProtocol,
     OAuthEmailVerificationSyncClientProtocol,
     make_async_email_verification_client,
@@ -292,7 +293,11 @@ def _field_meta(schema_type: type[msgspec.Struct], field_name: str) -> msgspec.M
     annotation = get_type_hints(schema_type, include_extras=True)[field_name]
 
     for candidate in (annotation, *get_args(annotation)):
-        value = getattr(candidate, "__value__", candidate)
+        value = candidate
+        seen: set[int] = set()
+        while (next_value := getattr(value, "__value__", None)) is not None and id(value) not in seen:
+            seen.add(id(value))
+            value = next_value
         if get_origin(value) is not Annotated:
             continue
 
@@ -480,6 +485,9 @@ def test_admin_user_update_schema_reuse_surface_stays_importable() -> None:
     admin_user_update_roles_annotation = get_type_hints(AdminUserUpdate, include_extras=True)["roles"]
     admin_user_update_email_annotation = get_type_hints(AdminUserUpdate, include_extras=True)["email"]
     admin_user_update_annotation = get_type_hints(AdminUserUpdate, include_extras=True)["password"]
+    admin_user_update_current_password_annotation = get_type_hints(AdminUserUpdate, include_extras=True)[
+        "current_password"
+    ]
     email_field_value = getattr(schemas_module.UserEmailField, "__value__", schemas_module.UserEmailField)
     password_field_value = getattr(schemas_module.UserPasswordField, "__value__", schemas_module.UserPasswordField)
 
@@ -498,6 +506,12 @@ def test_admin_user_update_schema_reuse_surface_stays_importable() -> None:
         get_args(admin_user_update_annotation)[0],
     ) == (password_field_value)
     assert get_args(admin_user_update_annotation)[1] is type(None)
+    assert getattr(
+        get_args(admin_user_update_current_password_annotation)[0],
+        "__value__",
+        get_args(admin_user_update_current_password_annotation)[0],
+    ) == (password_field_value)
+    assert get_args(admin_user_update_current_password_annotation)[1] is type(None)
     assert get_args(admin_user_update_roles_annotation)[0] == list[str]
     assert get_args(admin_user_update_roles_annotation)[1] is type(None)
     assert admin_user_update_email_meta.max_length == EMAIL_MAX_LENGTH
@@ -702,6 +716,12 @@ def test_oauth_package_exposes_canonical_login_helper_and_not_advanced_controlle
     )
     assert oauth_package_module.OAuthEmailVerificationAsyncClientProtocol is OAuthEmailVerificationAsyncClientProtocol
     assert oauth_package_module.OAuthEmailVerificationSyncClientProtocol is OAuthEmailVerificationSyncClientProtocol
+    assert oauth_package_module.OAuthEmailVerificationAsyncClientProtocol is (
+        oauth_client_module.OAuthEmailVerificationAsyncClientProtocol
+    )
+    assert oauth_package_module.OAuthEmailVerificationSyncClientProtocol is (
+        oauth_client_module.OAuthEmailVerificationSyncClientProtocol
+    )
     assert oauth_package_module.ProviderOAuthControllerConfig.__module__ == "litestar_auth.oauth.router"
     assert oauth_package_module.ProviderOAuthControllerConfig.__name__ == "ProviderOAuthControllerConfig"
     assert oauth_package_module.create_provider_oauth_controller.__module__ == "litestar_auth.oauth.router"
@@ -709,6 +729,9 @@ def test_oauth_package_exposes_canonical_login_helper_and_not_advanced_controlle
     assert oauth_package_module.load_httpx_oauth_client.__module__ == "litestar_auth.oauth.router"
     assert oauth_package_module.load_httpx_oauth_client.__name__ == load_httpx_oauth_client.__name__
     assert oauth_package_module.make_async_email_verification_client is make_async_email_verification_client
+    assert oauth_package_module.make_async_email_verification_client is (
+        oauth_client_module.make_async_email_verification_client
+    )
     assert not hasattr(litestar_auth, "create_provider_oauth_controller")
     assert not hasattr(litestar_auth, "load_httpx_oauth_client")
     assert not hasattr(oauth_package_module, "create_oauth_controller")
@@ -763,7 +786,6 @@ def test_ratelimit_module_exposes_canonical_shared_backend_builder() -> None:
     assert "EndpointRateLimit" in ratelimit_module.__all__
     assert "InMemoryRateLimiter" in ratelimit_module.__all__
     assert "RedisRateLimiter" in ratelimit_module.__all__
-    assert not hasattr(ratelimit_module, "_client_host")
     assert not hasattr(ratelimit_module, "_extract_email")
     assert not hasattr(ratelimit_module, "_load_redis_asyncio")
     assert not hasattr(ratelimit_module, "_safe_key_part")
@@ -801,7 +823,7 @@ async def test_root_package_supports_documented_redis_migration_recipe_and_totp_
     def load_optional_redis() -> object:
         return object()
 
-    monkeypatch.setattr("litestar_auth.ratelimit._helpers._load_redis_asyncio", load_optional_redis)
+    monkeypatch.setattr("litestar_auth.ratelimit._redis._load_redis_asyncio", load_optional_redis)
     monkeypatch.setattr(totp_module._totp_stores, "_load_used_totp_redis_asyncio", load_optional_redis)
     monkeypatch.setattr(totp_module._totp_stores, "_load_enrollment_redis_asyncio", load_optional_redis)
 
@@ -952,7 +974,7 @@ async def test_contrib_redis_preset_supports_documented_shared_client_recipe(
     def load_optional_redis() -> object:
         return object()
 
-    monkeypatch.setattr("litestar_auth.ratelimit._helpers._load_redis_asyncio", load_optional_redis)
+    monkeypatch.setattr("litestar_auth.ratelimit._redis._load_redis_asyncio", load_optional_redis)
     monkeypatch.setattr(totp_module._totp_stores, "_load_used_totp_redis_asyncio", load_optional_redis)
     monkeypatch.setattr(totp_module._totp_stores, "_load_enrollment_redis_asyncio", load_optional_redis)
     monkeypatch.setattr("litestar_auth.authentication.strategy._jwt_denylist._load_redis_asyncio", load_optional_redis)
@@ -1274,7 +1296,15 @@ def test_root_package_does_not_reexport_secondary_surfaces() -> None:
     assert SQLAlchemyUserDatabase is not None
     assert UserRead.__struct_fields__ == ("id", "email", "is_active", "is_verified", "roles")
     assert UserCreate.__struct_fields__ == ("email", "password")
-    assert AdminUserUpdate.__struct_fields__ == ("password", "email", "is_active", "is_verified", "roles")
+    assert AdminUserUpdate.__struct_fields__ == (
+        "password",
+        "email",
+        "is_active",
+        "is_verified",
+        "roles",
+        "current_password",
+        "totp_code",
+    )
     assert ChangePasswordRequest.__struct_fields__ == ("current_password", "new_password")
     assert UserUpdate.__struct_fields__ == ("email", "current_password", "totp_code")
     assert callable(create_provider_oauth_controller)
@@ -1305,6 +1335,7 @@ def test_root_package_does_not_export_compat_aliases() -> None:
 def test_plugin_module_public_exports_no_compat_shims() -> None:
     """Plugin module exposes ``LitestarAuth``, ``LitestarAuthConfig``, config dataclasses; legacy shims removed."""
     assert plugin_module.__all__ == (
+        "AlchemyAuthSessionBinding",
         "ApiKeyConfig",
         "DatabaseTokenAuthConfig",
         "FernetKeyringConfig",
@@ -1314,12 +1345,13 @@ def test_plugin_module_public_exports_no_compat_shims() -> None:
         "OAuthProviderConfig",
         "StartupBackendTemplate",
         "TotpConfig",
+        "bind_auth_session_to_alchemy",
     )
     assert plugin_module.ApiKeyConfig is litestar_auth.ApiKeyConfig
     assert plugin_module.DatabaseTokenAuthConfig is litestar_auth.DatabaseTokenAuthConfig
     assert plugin_module.FernetKeyringConfig is litestar_auth.FernetKeyringConfig
     assert plugin_module.LitestarAuthConfig is plugin_internals.LitestarAuthConfig
-    assert plugin_module.StartupBackendTemplate.__module__ == "litestar_auth._plugin.backend_inventory"
+    assert plugin_module.StartupBackendTemplate.__module__ == "litestar_auth._plugin.features._backends"
     assert not hasattr(litestar_auth, "StartupBackendTemplate")
     assert "AuthPlugin" not in plugin_module.__all__
     assert not hasattr(plugin_module, "AuthPlugin")

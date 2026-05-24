@@ -2,12 +2,16 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import replace
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Annotated, Any, cast
 
 import msgspec  # noqa: TC002
 from litestar import Controller, Request, post
+from litestar.params import Dependency
 
+from litestar_auth._plugin.controller_factory import ControllerFactoryKit
+from litestar_auth.authentication.backend import AuthenticationBackend
 from litestar_auth.controllers._utils import (
     RequestBodyErrorConfig,
     RequestBodyRouteHandler,
@@ -21,6 +25,7 @@ from litestar_auth.controllers.totp import (
     _totp_handle_verify,
     _TotpControllerContext,
 )
+from litestar_auth.controllers.totp_contracts import TotpUserManagerProtocol
 from litestar_auth.exceptions import ErrorCode
 from litestar_auth.guards import is_authenticated
 from litestar_auth.payloads import (
@@ -36,19 +41,20 @@ from litestar_auth.payloads import (
 from litestar_auth.types import UserProtocol
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Sequence
+    from collections.abc import Callable
 
     from litestar.openapi.spec import SecurityRequirement
 
-    from litestar_auth._plugin.backend_inventory import StartupBackendInventory
+    from litestar_auth._plugin.features import StartupBackendInventory
 
 
-def _plugin_runtime_context[UP: UserProtocol[Any], ID](
+_TotpUserManagerDep = Annotated[TotpUserManagerProtocol[Any, Any], Dependency()]
+_TotpBackendsDep = Annotated[Sequence[AuthenticationBackend[Any, Any]], Dependency()]
+
+
+def _plugin_runtime_context_factory[UP: UserProtocol[Any], ID](
     startup_ctx: _TotpControllerContext[UP, ID],
-    *,
-    backend_inventory: StartupBackendInventory[UP, ID],
-    backend_index: int,
-    request_backends: object,
+    request_backend: AuthenticationBackend[UP, ID],
 ) -> _TotpControllerContext[UP, ID]:
     """Return request-scoped TOTP context with the resolved backend.
 
@@ -59,10 +65,7 @@ def _plugin_runtime_context[UP: UserProtocol[Any], ID](
         startup_ctx,
         runtime=replace(
             startup_ctx.runtime,
-            backend=backend_inventory.resolve_request_backend(
-                request_backends,
-                backend_index=backend_index,
-            ),
+            backend=request_backend,
         ),
     )
 
@@ -82,7 +85,7 @@ def _create_plugin_totp_confirm_enable_handler[UP: UserProtocol[Any], ID](
         self: object,
         request: Request[Any, Any, Any],
         data: TotpConfirmEnableRequest,
-        litestar_auth_user_manager: Any,  # noqa: ANN401
+        litestar_auth_user_manager: _TotpUserManagerDep,
     ) -> TotpConfirmEnableResponse:
         del self
         return await _totp_handle_confirm_enable(
@@ -96,10 +99,8 @@ def _create_plugin_totp_confirm_enable_handler[UP: UserProtocol[Any], ID](
 
 
 def _create_plugin_totp_verify_handler[UP: UserProtocol[Any], ID](
-    startup_ctx: _TotpControllerContext[UP, ID],
     *,
-    backend_inventory: StartupBackendInventory[UP, ID],
-    backend_index: int,
+    factory_kit: ControllerFactoryKit[UP, ID],
     totp_verify_before_request: Callable[[Request[Any, Any, Any]], object] | None,
 ) -> object:
     """Create the plugin-owned TOTP pending-login verification route handler.
@@ -113,18 +114,13 @@ def _create_plugin_totp_verify_handler[UP: UserProtocol[Any], ID](
         self: object,
         request: Request[Any, Any, Any],
         data: TotpVerifyRequest,
-        litestar_auth_user_manager: Any,  # noqa: ANN401
-        litestar_auth_backends: Any,  # noqa: ANN401
+        litestar_auth_user_manager: _TotpUserManagerDep,
+        litestar_auth_backends: _TotpBackendsDep,
     ) -> object:
         del self
         return await _totp_handle_verify(
             request,
-            ctx=_plugin_runtime_context(
-                startup_ctx,
-                backend_inventory=backend_inventory,
-                backend_index=backend_index,
-                request_backends=litestar_auth_backends,
-            ),
+            ctx=factory_kit.runtime_context(litestar_auth_backends),
             data=data,
             user_manager=litestar_auth_user_manager,
         )
@@ -147,7 +143,7 @@ def _create_plugin_totp_disable_handler[UP: UserProtocol[Any], ID](
         self: object,
         request: Request[Any, Any, Any],
         data: TotpDisableRequest,
-        litestar_auth_user_manager: Any,  # noqa: ANN401
+        litestar_auth_user_manager: _TotpUserManagerDep,
     ) -> None:
         del self
         await _totp_handle_disable(
@@ -174,7 +170,7 @@ def _create_plugin_totp_enable_handler[UP: UserProtocol[Any], ID](
     async def enable(
         self: object,
         request: Request[Any, Any, Any],
-        litestar_auth_user_manager: Any,  # noqa: ANN401
+        litestar_auth_user_manager: _TotpUserManagerDep,
         data: msgspec.Struct | None = None,
     ) -> TotpEnableResponse:
         del self
@@ -202,7 +198,7 @@ def _create_plugin_totp_regenerate_handler[UP: UserProtocol[Any], ID](
     async def regenerate_recovery_codes(
         self: object,
         request: Request[Any, Any, Any],
-        litestar_auth_user_manager: Any,  # noqa: ANN401
+        litestar_auth_user_manager: _TotpUserManagerDep,
         data: msgspec.Struct | None = None,
     ) -> TotpRecoveryCodesResponse:
         del self
@@ -230,7 +226,7 @@ def _create_plugin_totp_enable_no_body_handler[UP: UserProtocol[Any], ID](
     async def enable(
         self: object,
         request: Request[Any, Any, Any],
-        litestar_auth_user_manager: Any,  # noqa: ANN401
+        litestar_auth_user_manager: _TotpUserManagerDep,
     ) -> TotpEnableResponse:
         del self
         return await _totp_handle_enable(
@@ -256,7 +252,7 @@ def _create_plugin_totp_regenerate_no_body_handler[UP: UserProtocol[Any], ID](
     async def regenerate_recovery_codes(
         self: object,
         request: Request[Any, Any, Any],
-        litestar_auth_user_manager: Any,  # noqa: ANN401
+        litestar_auth_user_manager: _TotpUserManagerDep,
     ) -> TotpRecoveryCodesResponse:
         del self
         return await _totp_handle_regenerate_recovery_codes(
@@ -271,8 +267,7 @@ def _create_plugin_totp_regenerate_no_body_handler[UP: UserProtocol[Any], ID](
 def _plugin_totp_controller_attrs[UP: UserProtocol[Any], ID](
     startup_ctx: _TotpControllerContext[UP, ID],
     *,
-    backend_inventory: StartupBackendInventory[UP, ID],
-    backend_index: int,
+    factory_kit: ControllerFactoryKit[UP, ID],
     totp_verify_before_request: Callable[[Request[Any, Any, Any]], object] | None,
     security: Sequence[SecurityRequirement] | None = None,
 ) -> dict[str, object]:
@@ -286,9 +281,7 @@ def _plugin_totp_controller_attrs[UP: UserProtocol[Any], ID](
         "__doc__": "TOTP 2FA management endpoints.",
         "confirm_enable": _create_plugin_totp_confirm_enable_handler(startup_ctx, security),
         "verify": _create_plugin_totp_verify_handler(
-            startup_ctx,
-            backend_inventory=backend_inventory,
-            backend_index=backend_index,
+            factory_kit=factory_kit,
             totp_verify_before_request=totp_verify_before_request,
         ),
         "disable": _create_plugin_totp_disable_handler(startup_ctx, security),
@@ -318,18 +311,20 @@ def define_plugin_totp_controller_class[UP: UserProtocol[Any], ID](
     Returns:
         Controller subclass whose verify route resolves the request-scoped backend from DI.
     """
-    controller_cls = type(
-        "TotpController",
-        (Controller,),
-        _plugin_totp_controller_attrs(
+    factory_kit: ControllerFactoryKit[UP, ID] = ControllerFactoryKit(
+        backend_inventory=backend_inventory,
+        backend_index=backend_index,
+        runtime_context_factory=lambda request_backend: _plugin_runtime_context_factory(startup_ctx, request_backend),
+    )
+    controller_cls = ControllerFactoryKit.create_controller_type(
+        name="TotpController",
+        attrs=_plugin_totp_controller_attrs(
             startup_ctx,
-            backend_inventory=backend_inventory,
-            backend_index=backend_index,
+            factory_kit=factory_kit,
             totp_verify_before_request=totp_verify_before_request,
             security=security,
         ),
     )
-    controller = cast("Any", controller_cls)
 
     if startup_ctx.security.totp_enable_requires_password:
 
@@ -340,7 +335,7 @@ def define_plugin_totp_controller_class[UP: UserProtocol[Any], ID](
             await startup_ctx.runtime.rate_limit.on_invalid_attempt("regenerate_recovery_codes", request)
 
         _configure_request_body_handler(
-            controller.enable,
+            ControllerFactoryKit.controller_handler(controller_cls, "enable"),
             schema=TotpEnableRequest,
             error_config=RequestBodyErrorConfig(
                 validation_code=ErrorCode.LOGIN_PAYLOAD_INVALID,
@@ -349,7 +344,7 @@ def define_plugin_totp_controller_class[UP: UserProtocol[Any], ID](
             ),
         )
         _configure_request_body_handler(
-            controller.regenerate_recovery_codes,
+            ControllerFactoryKit.controller_handler(controller_cls, "regenerate_recovery_codes"),
             schema=TotpRegenerateRecoveryCodesRequest,
             error_config=RequestBodyErrorConfig(
                 validation_code=ErrorCode.LOGIN_PAYLOAD_INVALID,

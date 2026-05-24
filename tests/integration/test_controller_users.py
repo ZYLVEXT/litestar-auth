@@ -33,6 +33,7 @@ from litestar_auth.ratelimit import (
     RedisClientProtocol,
     RedisRateLimiter,
 )
+from litestar_auth.totp import _current_counter, _generate_totp_code, generate_totp_secret
 from tests._helpers import auth_middleware_get_request_session, cast_fakeredis, litestar_app_with_user_manager
 from tests.integration.conftest import (
     DummySessionMaker,
@@ -50,6 +51,7 @@ if TYPE_CHECKING:
     from litestar.openapi.spec import OpenAPIResponse
     from litestar.testing import AsyncTestClient
 
+    from litestar_auth._manager.api_keys import ApiKeyConfigProtocol
     from tests._helpers import AsyncFakeRedis
 
 pytestmark = pytest.mark.integration
@@ -96,7 +98,7 @@ class UsersControllerManager(BaseUserManager[ExampleUser, UUID]):
         password_helper: PasswordHelper,
         backends: tuple[object, ...] = (),
         api_key_store: InMemoryApiKeyStore | None = None,
-        api_key_config: object | None = None,
+        api_key_config: ApiKeyConfigProtocol | None = None,
     ) -> None:
         """Initialize the manager and track hard-delete hooks."""
         super().__init__(
@@ -367,6 +369,8 @@ def test_users_mutation_routes_publish_request_body_and_response_contracts_in_op
     assert "email" in (admin_update_schema.properties or {})
     assert "password" in (admin_update_schema.properties or {})
     assert "roles" in (admin_update_schema.properties or {})
+    assert "current_password" in (admin_update_schema.properties or {})
+    assert "totp_code" in (admin_update_schema.properties or {})
 
     responses = change_password_post.responses
     assert {"204", "400", "401", "422", "429"}.issubset(responses)
@@ -719,7 +723,7 @@ async def test_change_password_redis_rate_limit_returns_429_after_invalid_curren
     def load_optional_redis() -> object:
         return object()
 
-    monkeypatch.setattr("litestar_auth.ratelimit._helpers._load_redis_asyncio", load_optional_redis)
+    monkeypatch.setattr("litestar_auth.ratelimit._redis._load_redis_asyncio", load_optional_redis)
     redis_backend = RedisRateLimiter(
         redis=cast_fakeredis(async_fakeredis, RedisClientProtocol),
         max_attempts=2,
@@ -1006,7 +1010,7 @@ async def test_update_user_maps_user_manager_errors(
     exists_response = await test_client.patch(
         f"/users/{regular_user.id}",
         headers=headers,
-        json={"email": "dup@example.com"},
+        json={"email": "dup@example.com", "current_password": "admin-password"},
     )
     assert exists_response.status_code == HTTP_BAD_REQUEST
     assert (exists_response.json().get("extra") or {}).get("code") == ErrorCode.UPDATE_USER_EMAIL_ALREADY_EXISTS
@@ -1020,10 +1024,116 @@ async def test_update_user_maps_user_manager_errors(
     password_response = await test_client.patch(
         f"/users/{regular_user.id}",
         headers=headers,
-        json={"password": "invalid-password"},
+        json={"password": "invalid-password", "current_password": "admin-password"},
     )
     assert password_response.status_code == HTTP_BAD_REQUEST
     assert (password_response.json().get("extra") or {}).get("code") == ErrorCode.UPDATE_USER_INVALID_PASSWORD
+
+
+async def test_admin_update_requires_admin_current_password_step_up(
+    client: tuple[
+        AsyncTestClient[Litestar],
+        InMemoryUserDatabase,
+        UsersControllerManager,
+        InMemoryTokenStrategy,
+        ExampleUser,
+        ExampleUser,
+    ],
+) -> None:
+    """PATCH /users/{id} re-authenticates the admin before mutating the target user."""
+    test_client, user_db, _, strategy, admin_user, regular_user = client
+    headers = {"Authorization": f"Bearer {await strategy.write_token(admin_user)}"}
+
+    missing_response = await test_client.patch(
+        f"/users/{regular_user.id}",
+        headers=headers,
+        json={"email": "admin-updated@example.com"},
+    )
+    wrong_response = await test_client.patch(
+        f"/users/{regular_user.id}",
+        headers=headers,
+        json={"email": "admin-updated@example.com", "current_password": "wrong-password"},
+    )
+
+    assert missing_response.status_code == HTTP_BAD_REQUEST
+    assert (missing_response.json().get("extra") or {}).get("code") == ErrorCode.LOGIN_BAD_CREDENTIALS
+    assert wrong_response.status_code == HTTP_BAD_REQUEST
+    assert wrong_response.json()["detail"] == INVALID_CREDENTIALS_DETAIL
+    assert (wrong_response.json().get("extra") or {}).get("code") == ErrorCode.LOGIN_BAD_CREDENTIALS
+    stored_user = await user_db.get(regular_user.id)
+    assert stored_user is not None
+    assert stored_user.email == regular_user.email
+
+
+async def test_admin_delete_requires_admin_current_password_step_up(
+    client: tuple[
+        AsyncTestClient[Litestar],
+        InMemoryUserDatabase,
+        UsersControllerManager,
+        InMemoryTokenStrategy,
+        ExampleUser,
+        ExampleUser,
+    ],
+) -> None:
+    """DELETE /users/{id} re-authenticates the admin before soft deleting the target user."""
+    test_client, user_db, _, strategy, admin_user, regular_user = client
+    headers = {"Authorization": f"Bearer {await strategy.write_token(admin_user)}"}
+
+    missing_response = await test_client.request("DELETE", f"/users/{regular_user.id}", headers=headers, json={})
+    wrong_response = await test_client.request(
+        "DELETE",
+        f"/users/{regular_user.id}",
+        headers=headers,
+        json={"current_password": "wrong-password"},
+    )
+
+    assert missing_response.status_code == HTTP_BAD_REQUEST
+    assert (missing_response.json().get("extra") or {}).get("code") == ErrorCode.LOGIN_BAD_CREDENTIALS
+    assert wrong_response.status_code == HTTP_BAD_REQUEST
+    assert wrong_response.json()["detail"] == INVALID_CREDENTIALS_DETAIL
+    assert (wrong_response.json().get("extra") or {}).get("code") == ErrorCode.LOGIN_BAD_CREDENTIALS
+    stored_user = await user_db.get(regular_user.id)
+    assert stored_user is not None
+    assert stored_user.is_active is True
+
+
+async def test_admin_update_requires_totp_step_up_when_admin_is_enrolled(
+    client: tuple[
+        AsyncTestClient[Litestar],
+        InMemoryUserDatabase,
+        UsersControllerManager,
+        InMemoryTokenStrategy,
+        ExampleUser,
+        ExampleUser,
+    ],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Enrolled admins need recent or inline TOTP proof before privileged user updates."""
+    test_client, user_db, user_manager, strategy, admin_user, regular_user = client
+    secret = generate_totp_secret()
+    await user_db.update(admin_user, {"totp_secret": secret})
+    monkeypatch.setattr(user_manager, "read_totp_secret", AsyncMock(return_value=secret))
+    headers = {"Authorization": f"Bearer {await strategy.write_token(admin_user)}"}
+
+    missing_totp_response = await test_client.patch(
+        f"/users/{regular_user.id}",
+        headers=headers,
+        json={"is_verified": False, "current_password": "admin-password"},
+    )
+    inline_totp_response = await test_client.patch(
+        f"/users/{regular_user.id}",
+        headers=headers,
+        json={
+            "is_verified": False,
+            "current_password": "admin-password",
+            "totp_code": _generate_totp_code(secret, _current_counter()),
+        },
+    )
+
+    assert missing_totp_response.status_code == HTTP_FORBIDDEN
+    assert (missing_totp_response.json().get("extra") or {}).get("code") == ErrorCode.TOTP_STEPUP_REQUIRED
+    assert inline_totp_response.status_code == HTTP_OK
+    assert inline_totp_response.json()["is_verified"] is False
 
 
 async def test_admin_user_lookup_returns_404_for_unparseable_ids(
@@ -1042,7 +1152,12 @@ async def test_admin_user_lookup_returns_404_for_unparseable_ids(
     headers = {"Authorization": f"Bearer {token}"}
 
     get_response = await test_client.get("/users/not-a-uuid", headers=headers)
-    delete_response = await test_client.delete("/users/not-a-uuid", headers=headers)
+    delete_response = await test_client.request(
+        "DELETE",
+        "/users/not-a-uuid",
+        headers=headers,
+        json={"current_password": "admin-password"},
+    )
 
     assert get_response.status_code == HTTP_NOT_FOUND
     assert get_response.json()["detail"] == "User not found."
@@ -1096,7 +1211,12 @@ async def test_soft_delete_calls_update_and_skips_hard_delete(
     monkeypatch.setattr(user_manager, "update", update_spy)
     monkeypatch.setattr(user_manager, "delete", delete_spy)
 
-    response = await test_client.delete(f"/users/{regular_user.id}", headers=headers)
+    response = await test_client.request(
+        "DELETE",
+        f"/users/{regular_user.id}",
+        headers=headers,
+        json={"current_password": "admin-password"},
+    )
     assert response.status_code == HTTP_OK
     assert update_spy.await_count == 1
     call = update_spy.await_args_list[0]
@@ -1121,7 +1241,12 @@ async def test_admin_endpoints_require_superuser(
 
     get_response = await test_client.get(f"/users/{admin_user.id}", headers=headers)
     list_response = await test_client.get("/users", headers=headers)
-    delete_response = await test_client.delete(f"/users/{admin_user.id}", headers=headers)
+    delete_response = await test_client.request(
+        "DELETE",
+        f"/users/{admin_user.id}",
+        headers=headers,
+        json={"current_password": "admin-password"},
+    )
 
     assert get_response.status_code == HTTP_FORBIDDEN
     assert list_response.status_code == HTTP_FORBIDDEN
@@ -1175,7 +1300,7 @@ async def test_admin_role_updates_feed_request_user_role_contract_at_runtime(
     patch_response = await test_client.patch(
         f"/users/{regular_user.id}",
         headers=admin_headers,
-        json={"roles": [" Billing ", "ADMIN"]},
+        json={"roles": [" Billing ", "ADMIN"], "current_password": "admin-password"},
     )
     member_headers = {"Authorization": f"Bearer {await strategy.write_token(regular_user)}"}
     runtime_response = await test_client.get("/role-guarded/runtime", headers=member_headers)
@@ -1212,6 +1337,7 @@ async def test_superuser_update_accepts_admin_user_update_fields_including_passw
             "is_active": False,
             "is_verified": False,
             "roles": [" Billing ", "ADMIN"],
+            "current_password": "admin-password",
         },
     )
 
@@ -1251,9 +1377,14 @@ async def test_superuser_can_read_update_and_soft_delete_users(
     patch_response = await test_client.patch(
         f"/users/{regular_user.id}",
         headers=headers,
-        json={"is_verified": False, "roles": [" Billing ", "admin", "ADMIN"]},
+        json={"is_verified": False, "roles": [" Billing ", "admin", "ADMIN"], "current_password": "admin-password"},
     )
-    delete_response = await test_client.delete(f"/users/{regular_user.id}", headers=headers)
+    delete_response = await test_client.request(
+        "DELETE",
+        f"/users/{regular_user.id}",
+        headers=headers,
+        json={"current_password": "admin-password"},
+    )
 
     assert get_response.status_code == HTTP_OK
     assert get_response.json()["email"] == regular_user.email
@@ -1288,7 +1419,12 @@ async def test_superuser_cannot_delete_their_own_account(
     token = await strategy.write_token(admin_user)
     headers = {"Authorization": f"Bearer {token}"}
 
-    response = await test_client.delete(f"/users/{admin_user.id}", headers=headers)
+    response = await test_client.request(
+        "DELETE",
+        f"/users/{admin_user.id}",
+        headers=headers,
+        json={"current_password": "admin-password"},
+    )
 
     assert response.status_code == HTTP_FORBIDDEN
     data = response.json()
@@ -1315,7 +1451,12 @@ async def test_superuser_can_hard_delete_users(
     token = await strategy.write_token(admin_user)
     headers = {"Authorization": f"Bearer {token}"}
 
-    delete_response = await test_client.delete(f"/users/{regular_user.id}", headers=headers)
+    delete_response = await test_client.request(
+        "DELETE",
+        f"/users/{regular_user.id}",
+        headers=headers,
+        json={"current_password": "admin-password"},
+    )
 
     assert delete_response.status_code == HTTP_OK
     assert delete_response.json() == {

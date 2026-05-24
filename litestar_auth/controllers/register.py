@@ -13,8 +13,11 @@ from litestar.openapi.spec import Example
 from litestar_auth.controllers._response_timing import DEFAULT_MINIMUM_RESPONSE_SECONDS, await_minimum_response_seconds
 from litestar_auth.controllers._utils import (
     RequestBodyRouteHandler,
+    RequestHandler,
     _configure_request_body_handler,
+    _controller_route_handler,
     _create_before_request_handler,
+    _create_rate_limit_handlers,
     _map_domain_exceptions,
     _mark_litestar_auth_route_handler,
     _require_msgspec_struct,
@@ -25,7 +28,7 @@ from litestar_auth.schemas import UserCreate, UserRead
 from litestar_auth.types import RoleCapableUserProtocol
 
 if TYPE_CHECKING:
-    from litestar_auth.ratelimit import AuthRateLimitConfig, EndpointRateLimit
+    from litestar_auth.ratelimit import AuthRateLimitConfig
 
 REGISTER_FAILURE_DETAIL = "Registration could not be completed."
 DEFAULT_REGISTER_MINIMUM_RESPONSE_SECONDS = DEFAULT_MINIMUM_RESPONSE_SECONDS
@@ -118,8 +121,9 @@ class RegisterControllerUserManagerProtocol[UP: RegisterControllerUserProtocol[A
 class _RegisterControllerSettings:
     """Resolved settings for the generated registration controller."""
 
-    register_rate_limit: EndpointRateLimit | None
-    register_before_request: Any
+    register_before_request: RequestHandler | None
+    register_rate_limit_increment: RequestHandler
+    register_rate_limit_reset: RequestHandler
     path: str
     user_read_schema: type[msgspec.Struct]
     user_create_schema: type[msgspec.Struct]
@@ -163,21 +167,12 @@ def _validate_register_minimum_response_seconds(value: float) -> float:
     raise ValueError(msg)
 
 
-async def _increment_register_rate_limit(
-    register_rate_limit: EndpointRateLimit | None,
-    request: Request[Any, Any, Any],
-) -> None:
-    """Increment the registration limiter when one is configured."""
-    if register_rate_limit is not None:
-        await register_rate_limit.increment(request)
-
-
 async def _create_user_or_register_failure(
     data: msgspec.Struct,
     *,
     request: Request[Any, Any, Any],
     user_manager: RegisterControllerUserManagerProtocol[Any, Any],
-    register_rate_limit: EndpointRateLimit | None,
+    register_rate_limit_increment: RequestHandler,
 ) -> RegisterControllerUserProtocol[Any]:
     """Create a user while collapsing domain failures to the public register response.
 
@@ -186,7 +181,7 @@ async def _create_user_or_register_failure(
     """
 
     async def _increment_rate_limit() -> None:
-        await _increment_register_rate_limit(register_rate_limit, request)
+        await register_rate_limit_increment(request)
 
     async with _map_domain_exceptions(
         {
@@ -198,15 +193,6 @@ async def _create_user_or_register_failure(
         detail=REGISTER_FAILURE_DETAIL,
     ):
         return await user_manager.create(data, safe=True)
-
-
-async def _reset_register_rate_limit(
-    register_rate_limit: EndpointRateLimit | None,
-    request: Request[Any, Any, Any],
-) -> None:
-    """Reset the registration limiter after a successful registration."""
-    if register_rate_limit is not None:
-        await register_rate_limit.reset(request)
 
 
 def _create_register_handler(settings: _RegisterControllerSettings) -> RequestBodyRouteHandler:
@@ -230,9 +216,9 @@ def _create_register_handler(settings: _RegisterControllerSettings) -> RequestBo
                 data,
                 request=request,
                 user_manager=litestar_auth_user_manager,
-                register_rate_limit=settings.register_rate_limit,
+                register_rate_limit_increment=settings.register_rate_limit_increment,
             )
-            await _reset_register_rate_limit(settings.register_rate_limit, request)
+            await settings.register_rate_limit_reset(request)
             return _to_user_schema(user, settings.user_read_schema, unsafe_testing=settings.unsafe_testing)
 
         return await await_minimum_response_seconds(
@@ -259,7 +245,10 @@ def _create_register_controller_type(settings: _RegisterControllerSettings) -> t
         },
     )
     register_cls.__qualname__ = register_cls.__name__
-    _configure_request_body_handler(cast("Any", register_cls).register, schema=settings.user_create_schema)
+    _configure_request_body_handler(
+        _controller_route_handler(register_cls, "register"),
+        schema=settings.user_create_schema,
+    )
     register_cls.path = settings.path
     return _mark_litestar_auth_route_handler(cast("type[Controller]", register_cls))
 
@@ -308,10 +297,12 @@ def create_register_controller[UP: RegisterControllerUserProtocol[Any], ID](
         require_forbid_unknown_fields=True,
     )
     register_rate_limit = settings.rate_limit_config.register if settings.rate_limit_config else None
+    register_rate_limit_increment, register_rate_limit_reset = _create_rate_limit_handlers(register_rate_limit)
     return _create_register_controller_type(
         _RegisterControllerSettings(
-            register_rate_limit=register_rate_limit,
             register_before_request=_create_before_request_handler(register_rate_limit),
+            register_rate_limit_increment=register_rate_limit_increment,
+            register_rate_limit_reset=register_rate_limit_reset,
             path=settings.path,
             user_read_schema=settings.user_read_schema,
             user_create_schema=settings.user_create_schema,

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import time
 from typing import TYPE_CHECKING, Any, Literal, cast
 from uuid import UUID, uuid4
 
@@ -36,11 +37,14 @@ from tests.integration.conftest import (
 )
 
 pytestmark = [pytest.mark.integration]
+HTTP_ACCEPTED = 202
 HTTP_CREATED = 201
 HTTP_OK = 200
 HTTP_BAD_REQUEST = 400
 HTTP_FORBIDDEN = 403
 HTTP_UNPROCESSABLE_ENTITY = 422
+TIMING_MINIMUM_SECONDS = 0.12
+TIMING_TOLERANCE_SECONDS = 0.25
 
 _LOGIN_TEST_EMAIL = "user@example.com"
 _LOGIN_TEST_USERNAME = "testuser"
@@ -131,6 +135,7 @@ def build_app(  # noqa: PLR0913
     enable_refresh: bool = False,
     totp_pending_secret: str | None = None,
     initial_totp_secret: str | None = None,
+    login_minimum_response_seconds: float = 0,
 ) -> tuple[Litestar, InMemoryTokenStrategy | InMemoryRefreshTokenStrategy, TrackingUserManager]:
     """Create an application wired with the generated auth controller.
 
@@ -145,6 +150,7 @@ def build_app(  # noqa: PLR0913
         enable_refresh: Whether the generated auth controller exposes refresh-token flows.
         totp_pending_secret: Optional TOTP pending secret enabling 2FA pending-login responses.
         initial_totp_secret: Optional persisted TOTP secret for the seeded user.
+        login_minimum_response_seconds: Minimum wall-clock duration for login responses.
 
     Returns:
         Litestar application, the backing token strategy, and the tracking manager.
@@ -178,6 +184,7 @@ def build_app(  # noqa: PLR0913
         enable_refresh=enable_refresh,
         requires_verification=requires_verification,
         login_identifier=login_identifier,
+        login_minimum_response_seconds=login_minimum_response_seconds,
         totp_pending_secret=totp_pending_secret,
     )
     middleware = DefineMiddleware(
@@ -193,6 +200,17 @@ def build_app(  # noqa: PLR0913
         middleware=[middleware],
     )
     return app, strategy, user_manager
+
+
+async def _timed_login(
+    client: AsyncTestClient[Litestar],
+    *,
+    identifier: str = _LOGIN_TEST_EMAIL,
+    password: str = "correct-password",
+) -> tuple[int, float]:
+    started_at = time.perf_counter()
+    response = await client.post("/auth/login", json={"identifier": identifier, "password": password})
+    return response.status_code, time.perf_counter() - started_at
 
 
 def build_cookie_refresh_app() -> tuple[Litestar, InMemoryRefreshTokenStrategy]:
@@ -469,6 +487,38 @@ async def test_login_returns_pending_token_when_totp_is_enabled() -> None:
     assert response.json().get("access_token") is None
     assert strategy.tokens == {}
     assert user_manager.logged_in_users == []
+
+
+async def test_login_minimum_response_duration_covers_failure_pending_totp_and_success() -> None:
+    """Login account-state failure, pending-2FA, and success share the configured timing floor."""
+    failure_app, _, _ = build_app(
+        initial_is_active=False,
+        login_minimum_response_seconds=TIMING_MINIMUM_SECONDS,
+    )
+    pending_app, _, _ = build_app(
+        totp_pending_secret=TOTP_PENDING_SECRET,
+        initial_totp_secret="JBSWY3DPEHPK3PXP",
+        login_minimum_response_seconds=TIMING_MINIMUM_SECONDS,
+    )
+    success_app, _, _ = build_app(login_minimum_response_seconds=TIMING_MINIMUM_SECONDS)
+    timings: list[float] = []
+
+    async with AsyncTestClient(app=failure_app) as client:
+        failure_status, failure_elapsed = await _timed_login(client)
+        timings.append(failure_elapsed)
+    async with AsyncTestClient(app=pending_app) as client:
+        pending_status, pending_elapsed = await _timed_login(client)
+        timings.append(pending_elapsed)
+    async with AsyncTestClient(app=success_app) as client:
+        success_status, success_elapsed = await _timed_login(client)
+        timings.append(success_elapsed)
+
+    assert failure_status == HTTP_BAD_REQUEST
+    assert pending_status == HTTP_ACCEPTED
+    assert success_status == HTTP_CREATED
+    for elapsed in timings:
+        assert elapsed >= TIMING_MINIMUM_SECONDS - 0.01
+    assert max(timings) - min(timings) <= TIMING_TOLERANCE_SECONDS
 
 
 async def test_login_email_mode_accepts_case_insensitive_identifier() -> None:

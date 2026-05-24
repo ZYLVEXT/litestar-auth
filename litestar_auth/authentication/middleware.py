@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass
@@ -11,24 +12,42 @@ from typing import TYPE_CHECKING, Any, NotRequired, Required, TypedDict, Unpack,
 from litestar.datastructures.state import State
 from litestar.exceptions import ClientException, NotAuthorizedException
 from litestar.middleware.authentication import AbstractAuthenticationMiddleware, AuthenticationResult
-from litestar.types import ASGIApp, Method, Receive, Scope, Scopes, Send
+from litestar.types import (
+    ASGIApp,
+    HTTPDisconnectEvent,
+    HTTPRequestEvent,
+    Method,
+    Receive,
+    Scope,
+    Scopes,
+    Send,
+    WebSocketConnectEvent,
+    WebSocketDisconnectEvent,
+    WebSocketReceiveEvent,
+)
 
 from litestar_auth._superuser_role import (
     DEFAULT_SUPERUSER_ROLE_NAME,
     normalize_superuser_role_name,
     set_scope_superuser_role_name,
 )
-from litestar_auth.authentication.strategy.api_key import ApiKeyContext, ApiKeyStrategy
+from litestar_auth.authentication.strategy.api_key import (
+    ApiKeyContext,
+    ApiKeyFailureReason,
+    ApiKeyStrategy,
+    api_key_failure_reason_to_error_code,
+)
 from litestar_auth.authentication.transport._api_key_signing import API_KEY_SIGNED_BODY_SCOPE_KEY
 from litestar_auth.authentication.transport.api_key import API_KEY_HEADER_NAME, ApiKeyTransport
 from litestar_auth.exceptions import ErrorCode
 from litestar_auth.types import UserProtocol
 
 if TYPE_CHECKING:
-    from litestar.connection import ASGIConnection
+    from litestar.connection import ASGIConnection, Request
     from sqlalchemy.ext.asyncio import AsyncSession
 
     from litestar_auth.authentication.authenticator import Authenticator
+    from litestar_auth.authentication.strategy.base import UserManagerProtocol
     from litestar_auth.ratelimit import EndpointRateLimit
 else:  # pragma: no cover
     # Runtime fallback to avoid importing SQLAlchemy just for type aliases.
@@ -41,6 +60,14 @@ logger = logging.getLogger(__name__)
 _DEFAULT_API_KEY_SIGNED_BODY_MAX_BYTES = 1024 * 1024
 _DEFAULT_API_KEY_SIGNED_BODY_MAX_MESSAGES = 1024
 _HTTP_REQUEST_ENTITY_TOO_LARGE = 413
+_COUNTED_API_KEY_FAILURE_CODES = frozenset(
+    {
+        ErrorCode.API_KEY_REVOKED,
+        ErrorCode.API_KEY_EXPIRED,
+        ErrorCode.API_KEY_SIGNATURE_TIMESTAMP_SKEW,
+        ErrorCode.API_KEY_SIGNATURE_NONCE_REPLAY,
+    },
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -141,13 +168,15 @@ class LitestarAuthMiddleware[UP: UserProtocol[Any], ID](AbstractAuthenticationMi
                 max_body_bytes=self.api_key_signed_body_max_bytes,
                 max_messages=self.api_key_signed_body_max_messages,
             )
-            cast("dict[str, Any]", scope)[API_KEY_SIGNED_BODY_SCOPE_KEY] = body
+            # Litestar Scope is a TypedDict statically, but ASGI scopes are mutable dicts at runtime.
+            _set_signed_body_scope(cast("dict[object, object]", scope), body)
             buffered_signed_body = True
         try:
             await super().__call__(scope, receive, send)
         finally:
             if buffered_signed_body:
-                cast("dict[str, Any]", scope).pop(API_KEY_SIGNED_BODY_SCOPE_KEY, None)
+                # Litestar Scope is a TypedDict statically, but ASGI scopes are mutable dicts at runtime.
+                _discard_signed_body_scope(cast("dict[object, object]", scope))
 
     @override
     async def authenticate_request(
@@ -216,15 +245,50 @@ async def _raise_api_key_authentication_failure_if_applicable[UP: UserProtocol[A
         token = await backend.transport.read_token(connection)
         if token is None:
             continue
+        failure_reason = await _resolve_api_key_failure_reason(
+            token,
+            backend.strategy,
+            user_manager=authenticator.user_manager,
+        )
+        code = api_key_failure_reason_to_error_code(failure_reason)
         if api_key_use_rate_limit is not None:
-            await api_key_use_rate_limit.before_request(cast("Any", connection))
-            await api_key_use_rate_limit.increment(cast("Any", connection))
-        code = await _resolve_api_key_failure_code(token, backend.strategy)
+            await _record_counted_api_key_failure_if_applicable(
+                connection,
+                api_key_use_rate_limit=api_key_use_rate_limit,
+                code=code,
+            )
         raise NotAuthorizedException(detail="API-key authentication failed.", extra={"code": code})
 
 
-async def _resolve_api_key_failure_code(token: str, strategy: ApiKeyStrategy[Any, Any]) -> ErrorCode:
-    return await strategy.classify_failure_code(token)
+async def _record_counted_api_key_failure_if_applicable(
+    connection: ASGIConnection[Any, Any, Any, Any],
+    *,
+    api_key_use_rate_limit: EndpointRateLimit,
+    code: ErrorCode,
+) -> None:
+    """Apply API-key use failure accounting for failures tied to a known key row."""
+    if not _should_count_api_key_failure(code):
+        return
+    request = cast("Request[Any, Any, Any]", connection)
+    await api_key_use_rate_limit.before_request(request)
+    await api_key_use_rate_limit.increment(request)
+
+
+def _should_count_api_key_failure(code: ErrorCode) -> bool:
+    """Return whether an API-key auth failure should consume use-attempt budget."""
+    return code in _COUNTED_API_KEY_FAILURE_CODES
+
+
+async def _resolve_api_key_failure_reason[UP: UserProtocol[Any], ID](
+    token: str,
+    strategy: ApiKeyStrategy[UP, ID],
+    *,
+    user_manager: UserManagerProtocol[UP, ID],
+) -> ApiKeyFailureReason:
+    attempt = await strategy.read_token_attempt(token, user_manager=user_manager)
+    if attempt.failure_reason is not None:
+        return attempt.failure_reason
+    return await strategy.classify_failure_reason(token)
 
 
 def _request_supplied_auth_credentials(
@@ -254,6 +318,17 @@ def _has_signed_api_key_authorization_header(headers: Iterable[tuple[bytes, byte
     return any(name.lower() == b"authorization" and value.startswith(b"LSA1-HMAC-SHA256 ") for name, value in headers)
 
 
+def _set_signed_body_scope(scope: dict[object, object], body: bytes) -> None:
+    """Store the buffered signed body on Litestar's mutable ASGI scope."""
+    scope[API_KEY_SIGNED_BODY_SCOPE_KEY] = body
+
+
+def _discard_signed_body_scope(scope: dict[object, object]) -> None:
+    """Remove the buffered signed body from Litestar's mutable ASGI scope."""
+    with contextlib.suppress(KeyError):
+        del scope[API_KEY_SIGNED_BODY_SCOPE_KEY]
+
+
 def _cookie_header_contains_any_cookie_name(cookie_header: bytes, cookie_names: frozenset[bytes]) -> bool:
     """Return whether the cookie header contains at least one of the provided cookie names."""
     for raw_pair in cookie_header.split(b";"):
@@ -277,7 +352,13 @@ async def _buffer_body_for_signature(
     Raises:
         ClientException: If the signed request body exceeds ``max_body_bytes``.
     """
-    messages: list[Any] = []
+    messages: list[
+        HTTPRequestEvent
+        | HTTPDisconnectEvent
+        | WebSocketConnectEvent
+        | WebSocketReceiveEvent
+        | WebSocketDisconnectEvent
+    ] = []
     chunks: list[bytes] = []
     buffered_size = 0
     while True:
@@ -307,10 +388,16 @@ async def _buffer_body_for_signature(
         else:
             break
 
-    async def replay_receive() -> object:
+    async def replay_receive() -> (
+        HTTPRequestEvent
+        | HTTPDisconnectEvent
+        | WebSocketConnectEvent
+        | WebSocketReceiveEvent
+        | WebSocketDisconnectEvent
+    ):
         await asyncio.sleep(0)
         if messages:
             return messages.pop(0)
         return {"type": "http.request", "body": b"", "more_body": False}
 
-    return b"".join(chunks), cast("Receive", replay_receive)
+    return b"".join(chunks), replay_receive

@@ -220,7 +220,7 @@ def create_role_admin_controller(
         ) -> list[RoleRead]:
             """List all roles with pagination."""
             async with RoleService.new(session=db_session) as svc:
-                roles, _total = await svc.list_and_count(
+                roles, _total = await svc.get_many_and_count(
                     LimitOffset(limit=limit, offset=offset),
                 )
                 return [_role_read(r) for r in roles]
@@ -399,7 +399,7 @@ def create_role_admin_controller(
                         detail=f"Role '{normalized}' not found",
                     ) from None
 
-                assignments, _ = await ur_repo.list_and_count(
+                assignments, _ = await ur_repo.get_many_and_count(
                     cast("Any", user_role_model).role_name == normalized,
                     LimitOffset(limit=limit, offset=offset),
                 )

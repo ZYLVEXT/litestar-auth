@@ -7,8 +7,8 @@ from dataclasses import dataclass, fields
 from enum import StrEnum
 from typing import Any, ClassVar, Self, cast
 
+from ._client_host import _DEFAULT_TRUSTED_HEADERS
 from ._endpoint import _DEFAULT_IDENTITY_FIELDS, EndpointRateLimit
-from ._helpers import _DEFAULT_TRUSTED_HEADERS
 from ._memory import InMemoryRateLimiter
 from ._protocol import RateLimiterBackend  # noqa: TC001
 from ._redis import RedisRateLimiter

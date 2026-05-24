@@ -25,6 +25,7 @@ import litestar_auth.ratelimit._config as ratelimit_config_module
 import litestar_auth.ratelimit._endpoint as ratelimit_endpoint_module
 import litestar_auth.ratelimit._helpers as ratelimit_helpers_module
 import litestar_auth.ratelimit._slot_catalog as ratelimit_slot_catalog_module
+import litestar_auth.ratelimit._window_math as ratelimit_window_math_module
 from litestar_auth._clock import read_clock
 from litestar_auth.authentication.strategy.api_key import ApiKeyContext
 from litestar_auth.authentication.strategy.redis import RedisClientProtocol as RedisTokenClientProtocol
@@ -44,6 +45,8 @@ AuthRateLimitEndpointGroup = ratelimit_module.AuthRateLimitEndpointGroup
 AuthRateLimitSlot = ratelimit_module.AuthRateLimitSlot
 EndpointRateLimit = ratelimit_module.EndpointRateLimit
 InMemoryRateLimiter = ratelimit_module.InMemoryRateLimiter
+KnownRateLimitConnection = ratelimit_module.KnownRateLimitConnection
+RateLimitKey = ratelimit_module.RateLimitKey
 RateLimiterBackend = ratelimit_module.RateLimiterBackend
 RedisClientProtocol = ratelimit_module.RedisClientProtocol
 RedisRateLimiter = ratelimit_module.RedisRateLimiter
@@ -224,6 +227,7 @@ async def test_ratelimit_module_exposes_public_limiter_api() -> None:
 async def test_api_key_rate_limit_scope_uses_key_id_from_supported_headers() -> None:
     """The api_key_id scope keys parsed bearer and X-API-Key credentials by key id."""
     backend = InMemoryRateLimiter(max_attempts=2, window_seconds=10)
+    hmac_scheme_bucket_part = ratelimit_helpers_module._safe_key_part("signed")
     bearer_request = cast(
         "Request[Any, Any, Any]",
         JsonRequestStub(
@@ -319,15 +323,13 @@ async def test_api_key_rate_limit_scope_uses_key_id_from_supported_headers() -> 
         f"{ratelimit_helpers_module._safe_key_part('fallback-id')}"
     )
     assert await limiter.build_key(hmac_request) == (
-        "api-key-use:"
-        f"{ratelimit_helpers_module._safe_key_part('127.0.0.1')}:"
-        f"{ratelimit_helpers_module._safe_key_part('signed-header-id')}"
+        f"api-key-use:{ratelimit_helpers_module._safe_key_part('127.0.0.1')}:{hmac_scheme_bucket_part}"
     )
     assert await limiter.build_key(hmac_without_credential_request) == (
-        f"api-key-use:{ratelimit_helpers_module._safe_key_part('127.0.0.1')}"
+        f"api-key-use:{ratelimit_helpers_module._safe_key_part('127.0.0.1')}:{hmac_scheme_bucket_part}"
     )
     assert await limiter.build_key(hmac_empty_credential_request) == (
-        f"api-key-use:{ratelimit_helpers_module._safe_key_part('127.0.0.1')}"
+        f"api-key-use:{ratelimit_helpers_module._safe_key_part('127.0.0.1')}:{hmac_scheme_bucket_part}"
     )
     assert (
         await limiter.build_key(empty_request) == f"api-key-use:{ratelimit_helpers_module._safe_key_part('127.0.0.1')}"
@@ -481,12 +483,10 @@ def test_endpoint_rate_limit_annotations_are_runtime_resolvable() -> None:
     build_key_hints = get_type_hints(EndpointRateLimit.build_key)
 
     assert endpoint_hints["backend"] is RateLimiterBackend
-    assert get_origin(before_request_hints["request"]) is Request
-    assert get_args(before_request_hints["request"]) == (Any, Any, Any)
+    assert before_request_hints["request"] is KnownRateLimitConnection
     assert before_request_hints["return"] is type(None)
-    assert get_origin(build_key_hints["request"]) is Request
-    assert get_args(build_key_hints["request"]) == (Any, Any, Any)
-    assert build_key_hints["return"] is str
+    assert build_key_hints["request"] is KnownRateLimitConnection
+    assert build_key_hints["return"] is RateLimitKey
     assert ratelimit_config_module.EndpointRateLimit is ratelimit_endpoint_module.EndpointRateLimit
 
 
@@ -1464,8 +1464,34 @@ async def test_endpoint_rate_limit_shared_backend_preserves_namespace_and_scope_
             id="_helpers",
         ),
         pytest.param(
+            "litestar_auth.ratelimit._client_host",
+            ("_DEFAULT_TRUSTED_HEADERS", "_client_host", "logger"),
+            id="_client_host",
+        ),
+        pytest.param(
+            "litestar_auth.ratelimit._identifier_extraction",
+            ("_API_KEY_ID_LENGTH", "_extract_api_key_id", "_extract_email"),
+            id="_identifier_extraction",
+        ),
+        pytest.param(
+            "litestar_auth.ratelimit._key_derivation",
+            ("DEFAULT_KEY_PREFIX", "_bounded_hash_part", "_safe_key_part"),
+            id="_key_derivation",
+        ),
+        pytest.param(
+            "litestar_auth.ratelimit._validation",
+            ("RedisScriptResult", "SlidingWindow", "_validate_configuration"),
+            id="_validation",
+        ),
+        pytest.param(
             "litestar_auth.ratelimit._protocol",
-            ("RateLimiterBackend", "RedisClientProtocol", "RedisPipelineProtocol"),
+            (
+                "KnownRateLimitConnection",
+                "RateLimitKey",
+                "RateLimiterBackend",
+                "RedisClientProtocol",
+                "RedisPipelineProtocol",
+            ),
             id="_protocol",
         ),
         pytest.param(
@@ -1475,7 +1501,7 @@ async def test_endpoint_rate_limit_shared_backend_preserves_namespace_and_scope_
         ),
         pytest.param(
             "litestar_auth.ratelimit._redis",
-            ("RedisRateLimiter", "_load_package_redis_asyncio"),
+            ("RedisRateLimiter", "_load_redis_asyncio"),
             id="_redis",
         ),
         pytest.param(
@@ -1506,6 +1532,8 @@ async def test_endpoint_rate_limit_shared_backend_preserves_namespace_and_scope_
                 "AuthRateLimitSlot",
                 "EndpointRateLimit",
                 "InMemoryRateLimiter",
+                "KnownRateLimitConnection",
+                "RateLimitKey",
                 "RateLimitScope",
                 "RedisRateLimiter",
                 "TotpRateLimitOrchestrator",
@@ -1531,7 +1559,6 @@ def test_public_ratelimit_all_lists_only_documented_exports() -> None:
     assert all(not symbol.startswith("_") for symbol in ratelimit_module.__all__)
     for symbol in (
         "_DEFAULT_TRUSTED_HEADERS",
-        "_client_host",
         "_extract_email",
         "_load_redis_asyncio",
         "_safe_key_part",
@@ -1639,6 +1666,12 @@ async def test_memory_rate_limiter_reports_retry_after_and_supports_reset() -> N
     await limiter.reset("127.0.0.1")
     assert await limiter.check("127.0.0.1") is True
     assert await limiter.retry_after("127.0.0.1") == 0
+
+
+def test_rate_limit_window_math_documents_retry_after_policy() -> None:
+    """Shared sliding-window math keeps retry-after non-zero while a full window blocks."""
+    assert ratelimit_window_math_module.cutoff_for_now(now=15.0, window=5.0) == pytest.approx(FULL_RETRY_AFTER)
+    assert ratelimit_window_math_module.retry_seconds(now=10.0, window=5.0, oldest=5.1) == 1
 
 
 async def test_memory_rate_limiter_is_async_safe_under_concurrent_increments() -> None:
@@ -2091,6 +2124,50 @@ async def test_redis_rate_limiter_retry_after_and_reset_delegate_to_redis(
     assert await limiter.check("127.0.0.1") is True
 
 
+@pytest.mark.parametrize(
+    ("elapsed_seconds", "expected_retry_after"),
+    [
+        (0.0, REDIS_WINDOW_SECONDS),
+        (1.2, REDIS_RETRY_AFTER),
+        (4.9, 1),
+        (5.0, 0),
+    ],
+)
+async def test_memory_and_redis_rate_limiters_share_retry_after_window_policy(
+    async_fakeredis: AsyncFakeRedis,
+    patch_redis_loader: None,
+    elapsed_seconds: float,
+    expected_retry_after: int,
+) -> None:
+    """Both bundled backends expose the same retry-after result for matching inputs."""
+    key = f"parity:{elapsed_seconds}"
+    memory_clock = FakeClock(now=100.0)
+    redis_clock = FakeClock(now=100.0)
+    memory_limiter = InMemoryRateLimiter(
+        max_attempts=2,
+        window_seconds=REDIS_WINDOW_SECONDS,
+        clock=memory_clock,
+    )
+    redis_limiter = RedisRateLimiter(
+        redis=cast_fakeredis(async_fakeredis, RedisClientProtocol),
+        max_attempts=2,
+        window_seconds=REDIS_WINDOW_SECONDS,
+        clock=redis_clock,
+    )
+
+    await memory_limiter.increment(key)
+    await redis_limiter.increment(key)
+    memory_clock.advance(0.5)
+    redis_clock.advance(0.5)
+    await memory_limiter.increment(key)
+    await redis_limiter.increment(key)
+    memory_clock.now = 100.0 + elapsed_seconds
+    redis_clock.now = 100.0 + elapsed_seconds
+
+    assert await memory_limiter.retry_after(key) == expected_retry_after
+    assert await redis_limiter.retry_after(key) == expected_retry_after
+
+
 async def test_redis_rate_limiter_prunes_expired_entries_like_in_memory_backend(
     async_fakeredis: AsyncFakeRedis,
     patch_redis_loader: None,
@@ -2268,6 +2345,164 @@ async def test_endpoint_rate_limit_build_key_ip_email_normalizes_identifier() ->
         "login:"
         f"{ratelimit_helpers_module._safe_key_part('10.0.0.1')}:"
         f"{ratelimit_helpers_module._safe_key_part('user@example.com')}"
+    )
+
+
+async def test_endpoint_rate_limit_omits_oversize_identifier_before_hashing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Oversize body identifiers fall back to the host bucket without PBKDF2 work."""
+    hashed_values: list[str] = []
+
+    def record_safe_key_part(value: str) -> str:
+        hashed_values.append(value)
+        return f"hashed-{len(value)}"
+
+    monkeypatch.setattr(ratelimit_endpoint_module, "_safe_key_part", record_safe_key_part)
+    monkeypatch.setattr(ratelimit_helpers_module, "_safe_key_part", record_safe_key_part)
+
+    limiter = EndpointRateLimit(
+        backend=InMemoryRateLimiter(max_attempts=1, window_seconds=10),
+        scope="ip_email",
+        namespace="login",
+    )
+    request = cast(
+        "Request[Any, Any, Any]",
+        JsonRequestStub(
+            payload={"identifier": "a" * (ratelimit_helpers_module.EMAIL_MAX_LENGTH + 1)},
+            client=ClientStub(host="10.0.0.1"),
+        ),
+    )
+
+    key = await limiter.build_key(request)
+
+    assert key == "login:hashed-8"
+    assert hashed_values == ["10.0.0.1"]
+
+
+async def test_hmac_api_key_rate_limit_ignores_untrusted_credential_value() -> None:
+    """Signed API-key buckets depend on scheme presence, not forgeable Credential text."""
+    backend = InMemoryRateLimiter(max_attempts=1, window_seconds=10)
+    limiter = EndpointRateLimit(backend=backend, scope="api_key_id", namespace="api-key-use")
+    giant_credential_request = cast(
+        "Request[Any, Any, Any]",
+        JsonRequestStub(
+            payload={},
+            client=ClientStub(host="10.0.0.1"),
+            headers={
+                "Authorization": (
+                    f"LSA1-HMAC-SHA256 Credential={'a' * (ratelimit_helpers_module._API_KEY_ID_LENGTH + 10)}, "
+                    "SignedHeaders=x-auth-date;x-auth-nonce, Signature=abc123"
+                ),
+            },
+        ),
+    )
+    missing_credential_request = cast(
+        "Request[Any, Any, Any]",
+        JsonRequestStub(
+            payload={},
+            client=ClientStub(host="10.0.0.1"),
+            headers={"Authorization": "LSA1-HMAC-SHA256 SignedHeaders=x-auth-date;x-auth-nonce, Signature=abc123"},
+        ),
+    )
+
+    assert await limiter.build_key(giant_credential_request) == await limiter.build_key(missing_credential_request)
+
+
+async def test_api_key_rate_limit_omits_malformed_bearer_token() -> None:
+    """Malformed bearer API-key tokens do not contribute an API-key id part."""
+    limiter = EndpointRateLimit(
+        backend=InMemoryRateLimiter(max_attempts=1, window_seconds=10),
+        scope="api_key_id",
+        namespace="api-key-use",
+    )
+    request = cast(
+        "Request[Any, Any, Any]",
+        JsonRequestStub(
+            payload={},
+            client=ClientStub(host="10.0.0.1"),
+            headers={"Authorization": "Bearer ak_badformat"},
+        ),
+    )
+
+    assert await limiter.build_key(request) == f"api-key-use:{ratelimit_helpers_module._safe_key_part('10.0.0.1')}"
+
+
+async def test_endpoint_rate_limit_omits_oversize_api_key_id_before_hashing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """API-key ids over the persistence cap are not passed into rate-limit hashing."""
+    hashed_values: list[str] = []
+
+    def record_safe_key_part(value: str) -> str:
+        hashed_values.append(value)
+        return f"hashed-{len(value)}"
+
+    monkeypatch.setattr(ratelimit_endpoint_module, "_safe_key_part", record_safe_key_part)
+    monkeypatch.setattr(ratelimit_helpers_module, "_safe_key_part", record_safe_key_part)
+
+    limiter = EndpointRateLimit(
+        backend=InMemoryRateLimiter(max_attempts=1, window_seconds=10),
+        scope="api_key_id",
+        namespace="api-key-use",
+    )
+    request = cast(
+        "Request[Any, Any, Any]",
+        JsonRequestStub(
+            payload={},
+            client=ClientStub(host="10.0.0.1"),
+            scope={
+                "auth": ApiKeyContext(
+                    key_id="a" * (ratelimit_helpers_module._API_KEY_ID_LENGTH + 1),
+                    scopes=(),
+                    prefix_env="prod",
+                ),
+            },
+        ),
+    )
+
+    key = await limiter.build_key(request)
+
+    assert key == "api-key-use:hashed-8"
+    assert hashed_values == ["10.0.0.1"]
+
+
+async def test_endpoint_rate_limit_defensively_omits_over_cap_extracted_parts(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Key building rechecks extracted identities before hashing them."""
+
+    async def over_cap_email(
+        request: Request[Any, Any, Any],
+        *,
+        identity_fields: tuple[str, ...],
+    ) -> str:
+        del request, identity_fields
+        await asyncio.sleep(0)
+        return "a" * (ratelimit_helpers_module.EMAIL_MAX_LENGTH + 1)
+
+    def over_cap_key_id(request: Request[Any, Any, Any]) -> str:
+        del request
+        return "a" * (ratelimit_helpers_module._API_KEY_ID_LENGTH + 1)
+
+    monkeypatch.setattr(ratelimit_endpoint_module, "_extract_email", over_cap_email)
+    monkeypatch.setattr(ratelimit_endpoint_module, "_extract_api_key_id", over_cap_key_id)
+
+    ip_email_limiter = EndpointRateLimit(
+        backend=InMemoryRateLimiter(max_attempts=1, window_seconds=10),
+        scope="ip_email",
+        namespace="login",
+    )
+    api_key_limiter = EndpointRateLimit(
+        backend=InMemoryRateLimiter(max_attempts=1, window_seconds=10),
+        scope="api_key_id",
+        namespace="api-key-use",
+    )
+    request = _build_request()
+
+    assert await ip_email_limiter.build_key(request) == f"login:{ratelimit_helpers_module._safe_key_part('127.0.0.1')}"
+    assert await api_key_limiter.build_key(request) == (
+        f"api-key-use:{ratelimit_helpers_module._safe_key_part('127.0.0.1')}"
     )
 
 

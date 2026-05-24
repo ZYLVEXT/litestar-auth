@@ -16,9 +16,15 @@ from litestar_auth.authentication.strategy._api_key_format import (
     digest_api_key_secret,
     parse_api_key,
 )
-from litestar_auth.authentication.strategy.api_key import ApiKeyContext, ApiKeyStrategy, ApiKeyStrategyConfig
+from litestar_auth.authentication.strategy.api_key import (
+    ApiKeyContext,
+    ApiKeyFailureReason,
+    ApiKeyStrategy,
+    ApiKeyStrategyConfig,
+    api_key_failure_reason_to_error_code,
+)
 from litestar_auth.authentication.transport.api_key import ApiKeyTransport
-from litestar_auth.exceptions import ConfigurationError, TokenError
+from litestar_auth.exceptions import ConfigurationError, ErrorCode, TokenError
 from tests._helpers import ExampleUser
 
 if TYPE_CHECKING:
@@ -339,6 +345,136 @@ async def test_api_key_strategy_rejects_invalid_revoked_expired_or_unknown_keys(
     strategy, _store = _strategy(row)
 
     assert await strategy.read_token(token, UserManager(user)) is None
+
+
+@pytest.mark.parametrize(
+    ("row", "token", "expected_reason"),
+    [
+        pytest.param(None, "ak_prod_keyid.raw-secret", ApiKeyFailureReason.INVALID, id="unknown-key-id"),
+        pytest.param(
+            ApiKeyRow(user_id=uuid4(), key_id="keyid", hashed_secret=_digest("other"), scopes=[]),
+            "ak_prod_keyid.raw-secret",
+            ApiKeyFailureReason.INVALID,
+            id="wrong-digest",
+        ),
+        pytest.param(
+            ApiKeyRow(
+                user_id=uuid4(),
+                key_id="keyid",
+                hashed_secret=_digest(),
+                scopes=[],
+                revoked_at=datetime.now(tz=UTC),
+            ),
+            "ak_prod_keyid.raw-secret",
+            ApiKeyFailureReason.REVOKED,
+            id="revoked",
+        ),
+        pytest.param(
+            ApiKeyRow(
+                user_id=uuid4(),
+                key_id="keyid",
+                hashed_secret=_digest(),
+                scopes=[],
+                expires_at=datetime.now(tz=UTC).replace(tzinfo=None) - timedelta(seconds=1),
+            ),
+            "ak_prod_keyid.raw-secret",
+            ApiKeyFailureReason.EXPIRED,
+            id="expired",
+        ),
+        pytest.param(
+            ApiKeyRow(user_id=uuid4(), key_id="keyid", hashed_secret=_digest(), scopes=[], prefix_env="dev"),
+            "ak_prod_keyid.raw-secret",
+            ApiKeyFailureReason.INVALID,
+            id="wrong-prefix-env",
+        ),
+    ],
+)
+async def test_api_key_strategy_attempt_returns_failure_reason_for_bearer_rejections(
+    row: ApiKeyRow | None,
+    token: str,
+    expected_reason: ApiKeyFailureReason,
+) -> None:
+    """Bearer API-key attempts expose a deterministic typed failure reason."""
+    strategy, _store = _strategy(row)
+
+    attempt = await strategy.read_token_attempt(token, UserManager(ExampleUser(id=uuid4())))
+
+    assert attempt.result is None
+    assert attempt.failure_reason == expected_reason
+
+
+def test_api_key_failure_reason_mapping_preserves_public_error_codes() -> None:
+    """Internal API-key failure reasons map to the stable public error-code taxonomy."""
+    assert api_key_failure_reason_to_error_code(ApiKeyFailureReason.INVALID) == ErrorCode.API_KEY_INVALID
+    assert api_key_failure_reason_to_error_code(ApiKeyFailureReason.REVOKED) == ErrorCode.API_KEY_REVOKED
+    assert api_key_failure_reason_to_error_code(ApiKeyFailureReason.EXPIRED) == ErrorCode.API_KEY_EXPIRED
+    assert (
+        api_key_failure_reason_to_error_code(ApiKeyFailureReason.SIGNATURE_INVALID)
+        == ErrorCode.API_KEY_SIGNATURE_INVALID
+    )
+    assert (
+        api_key_failure_reason_to_error_code(ApiKeyFailureReason.SIGNATURE_TIMESTAMP_SKEW)
+        == ErrorCode.API_KEY_SIGNATURE_TIMESTAMP_SKEW
+    )
+    assert (
+        api_key_failure_reason_to_error_code(ApiKeyFailureReason.SIGNATURE_NONCE_REPLAY)
+        == ErrorCode.API_KEY_SIGNATURE_NONCE_REPLAY
+    )
+
+
+@pytest.mark.parametrize(
+    ("row", "token", "expected_reason"),
+    [
+        pytest.param(None, None, ApiKeyFailureReason.INVALID, id="missing-token"),
+        pytest.param(None, "not-an-api-key", ApiKeyFailureReason.INVALID, id="malformed-token"),
+        pytest.param(None, "ak_prod_keyid.raw-secret", ApiKeyFailureReason.INVALID, id="unknown-key-id"),
+        pytest.param(
+            ApiKeyRow(user_id=uuid4(), key_id="keyid", hashed_secret=_digest(), scopes=[], prefix_env="dev"),
+            "ak_prod_keyid.raw-secret",
+            ApiKeyFailureReason.INVALID,
+            id="wrong-prefix-env",
+        ),
+        pytest.param(
+            ApiKeyRow(user_id=uuid4(), key_id="keyid", hashed_secret=_digest(), scopes=[]),
+            "ak_prod_keyid.wrong-secret",
+            ApiKeyFailureReason.INVALID,
+            id="wrong-secret",
+        ),
+        pytest.param(
+            ApiKeyRow(
+                user_id=uuid4(),
+                key_id="keyid",
+                hashed_secret=_digest(),
+                scopes=[],
+                revoked_at=datetime.now(tz=UTC),
+            ),
+            "ak_prod_keyid.raw-secret",
+            ApiKeyFailureReason.REVOKED,
+            id="revoked",
+        ),
+        pytest.param(
+            ApiKeyRow(
+                user_id=uuid4(),
+                key_id="keyid",
+                hashed_secret=_digest(),
+                scopes=[],
+                expires_at=datetime.now(tz=UTC) - timedelta(seconds=1),
+            ),
+            "ak_prod_keyid.raw-secret",
+            ApiKeyFailureReason.EXPIRED,
+            id="expired",
+        ),
+    ],
+)
+async def test_api_key_strategy_classifies_bearer_failure_reasons(
+    row: ApiKeyRow | None,
+    token: str | None,
+    expected_reason: ApiKeyFailureReason,
+) -> None:
+    """Bearer failure classification covers each stable rejection branch."""
+    strategy, _store = _strategy(row)
+
+    assert await strategy.classify_failure_reason(token) == expected_reason
 
 
 async def test_api_key_strategy_rejects_user_lookup_miss() -> None:

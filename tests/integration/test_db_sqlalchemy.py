@@ -63,6 +63,14 @@ class MyUser(UserModelMixin, UUIDBase):
     bio: Mapped[str] = mapped_column(String(length=255), default="", nullable=False)
 
 
+class UsernameUser(UserModelMixin, UUIDBase):
+    """Custom user model with a username login identifier."""
+
+    __tablename__ = "username_user"
+
+    username: Mapped[str] = mapped_column(String(length=150), unique=True, index=True)
+
+
 class CustomAuthBase(DeclarativeBase):
     """App-owned registry for mixin-composed auth models."""
 
@@ -249,7 +257,7 @@ def sqlalchemy_metadata() -> tuple[MetaData, ...]:
     Returns:
         Metadata collections that should be created for this module's session fixture.
     """
-    return User.metadata, MyUser.metadata, MyOAuthUser.metadata
+    return User.metadata, MyUser.metadata, UsernameUser.metadata, MyOAuthUser.metadata
 
 
 def create_database(
@@ -758,6 +766,23 @@ async def test_sqlalchemy_user_database_hydrates_relation_backed_roles_on_create
             select(UserRole.role_name).where(UserRole.user_id == created_user.id).order_by(UserRole.role_name),
         ).scalars(),
     ) == ["admin", "billing"]
+
+
+async def test_sqlalchemy_user_database_get_by_field_supports_username(session: SASession) -> None:
+    """The adapter can look up custom user models by username."""
+    database = create_database(session, user_model=UsernameUser)
+    created_user = await database.create(
+        {
+            "email": "username-login@example.com",
+            "hashed_password": "hashed-password",
+            "username": "username-login",
+        },
+    )
+
+    fetched_user = await database.get_by_field("username", "username-login")
+
+    assert fetched_user is not None
+    assert fetched_user.id == created_user.id
 
 
 async def test_sqlalchemy_user_database_update_replaces_role_assignments_without_duplicates(session: SASession) -> None:

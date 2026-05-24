@@ -132,8 +132,10 @@ def _build_lifespan(engine: AsyncEngine) -> AsyncIterator[None]:
         configure_mappers()
         async with engine.begin() as connection:
             await connection.run_sync(User.metadata.create_all)
-        yield
-        await engine.dispose()
+        try:
+            yield
+        finally:
+            await engine.dispose()
 
     return lifespan
 

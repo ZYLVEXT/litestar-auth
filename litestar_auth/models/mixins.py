@@ -2,21 +2,21 @@
 
 from __future__ import annotations
 
-import uuid  # noqa: TC003 - SQLAlchemy resolves mapped annotations at runtime.
-from typing import TYPE_CHECKING, Any, ClassVar, cast
+from typing import TYPE_CHECKING, ClassVar
 
-from sqlalchemy import ForeignKey, String, UniqueConstraint
-from sqlalchemy.orm import Mapped, declared_attr, mapped_column, relationship
+from sqlalchemy import String, UniqueConstraint
+from sqlalchemy.orm import Mapped, declared_attr, mapped_column
 
+from litestar_auth._api_key_model_mixin import ApiKeyMixin
 from litestar_auth._auth_model_mixins import (
     AccessTokenMixin,
-    ApiKeyMixin,
     RefreshTokenMixin,
     RoleMixin,
     UserAuthRelationshipMixin,
     UserModelMixin,
     UserRoleAssociationMixin,
     UserRoleRelationshipMixin,
+    _UserOwnedMixin,
 )
 from litestar_auth.models._oauth_encrypted_types import oauth_access_token_type, oauth_refresh_token_type
 from litestar_auth.oauth_encryption import register_oauth_model_encryption_events
@@ -36,18 +36,15 @@ __all__ = (
 _OAUTH_EVENTS_REGISTERED_ATTR = "_litestar_auth_oauth_events_registered"
 
 
-class OAuthAccountMixin:
+class OAuthAccountMixin(_UserOwnedMixin):
     """Shared columns and relationship wiring for OAuth account models."""
 
     if TYPE_CHECKING:
         __tablename__: ClassVar[str]
 
-    auth_user_model: ClassVar[str] = "User"
-    auth_user_table: ClassVar[str] = "user"
     auth_user_back_populates: ClassVar[str] = "oauth_accounts"
+    auth_user_relationship_foreign_keys: ClassVar[bool] = True
     auth_provider_identity_constraint_name: ClassVar[str | None] = None
-    user_id: Mapped[uuid.UUID]
-    user: Mapped[Any]
 
     def __init_subclass__(cls, **kwargs: object) -> None:
         """Register OAuth token encryption hooks when an OAuth model family is declared."""
@@ -70,16 +67,6 @@ class OAuthAccountMixin:
             constraint_name = f"uq_{cls.__tablename__}_provider_identity"
         return (UniqueConstraint("oauth_name", "account_id", name=constraint_name),)
 
-    @declared_attr
-    @classmethod
-    def user_id(cls) -> Mapped[uuid.UUID]:
-        """Map the foreign key to the configured user table.
-
-        Returns:
-            The mapped ``user_id`` foreign-key column.
-        """
-        return mapped_column(ForeignKey(f"{cls.auth_user_table}.id", ondelete="CASCADE"), nullable=False)
-
     oauth_name: Mapped[str] = mapped_column(String(length=100))
     account_id: Mapped[str] = mapped_column(String(length=255))
     account_email: Mapped[str] = mapped_column(String(length=320))
@@ -92,20 +79,6 @@ class OAuthAccountMixin:
         nullable=True,
     )
     """OAuth provider refresh token. Fernet-encrypted at rest when configured."""
-
-    @declared_attr
-    @classmethod
-    def user(cls) -> Mapped[Any]:
-        """Map the relationship back to the configured user model.
-
-        Returns:
-            The relationship descriptor for the configured user model.
-        """
-        return relationship(
-            cls.auth_user_model,
-            back_populates=cls.auth_user_back_populates,
-            foreign_keys=lambda: [cast("Mapped[Any]", cls.user_id)],
-        )
 
 
 def _inherits_registered_oauth_hooks(model_class: type[OAuthAccountMixin]) -> bool:

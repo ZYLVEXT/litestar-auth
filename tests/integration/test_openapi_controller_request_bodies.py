@@ -186,6 +186,16 @@ def _response_body_ref(app: Litestar, *, path: str, method_name: str, status_cod
     return media_type.schema.ref
 
 
+def _route_table_snapshot(app: Litestar) -> tuple[tuple[str, tuple[str, ...]], ...]:
+    """Return a stable path/method snapshot from the generated OpenAPI schema."""
+    paths = cast("Any", app.openapi_schema.paths)
+    method_names = ("delete", "get", "patch", "post", "put")
+    return tuple(
+        (path, tuple(method_name for method_name in method_names if getattr(path_item, method_name, None) is not None))
+        for path, path_item in sorted(paths.items())
+    )
+
+
 def _assert_request_body_component_ref(
     app: Litestar,
     *,
@@ -285,6 +295,20 @@ def test_plugin_mounted_auth_routes_publish_expected_request_bodies_and_componen
     assert "/auth/login" not in paths
     assert path in paths
     _assert_request_body_component_contract(plugin_app, path=path, method_name="post", schema_ref=schema_ref)
+
+
+def test_plugin_mounted_auth_routes_keep_stable_route_table(plugin_app: Litestar) -> None:
+    """Plugin-mounted auth routes retain their generated OpenAPI path and method table."""
+    assert _route_table_snapshot(plugin_app) == (
+        ("/auth/jwt/forgot-password", ("post",)),
+        ("/auth/jwt/login", ("post",)),
+        ("/auth/jwt/logout", ("post",)),
+        ("/auth/jwt/refresh", ("post",)),
+        ("/auth/jwt/register", ("post",)),
+        ("/auth/jwt/request-verify-token", ("post",)),
+        ("/auth/jwt/reset-password", ("post",)),
+        ("/auth/jwt/verify", ("post",)),
+    )
 
 
 @pytest.mark.parametrize(

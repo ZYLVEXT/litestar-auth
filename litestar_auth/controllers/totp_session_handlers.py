@@ -5,9 +5,14 @@ from __future__ import annotations
 from functools import partial
 from typing import TYPE_CHECKING, Any, cast
 
-from litestar.exceptions import ClientException, NotAuthorizedException
-
-from litestar_auth.controllers._auth_helpers import TotpStepUpCheck, require_totp_stepup
+from litestar_auth.controllers._error_responses import (
+    INVALID_REQUEST_PAYLOAD_DETAIL,
+    raise_client_error,
+    raise_invalid_login_payload,
+    raise_not_authorized,
+    raise_transient_token_error,
+)
+from litestar_auth.controllers._step_up import TotpStepUpCheck, require_totp_stepup
 from litestar_auth.controllers._utils import AccountStateValidatorProvider, _require_account_state
 from litestar_auth.controllers.totp_contracts import (
     INVALID_TOTP_CODE_DETAIL,
@@ -19,7 +24,7 @@ from litestar_auth.controllers.totp_handlers import (
     _totp_require_authenticated_user,
     _totp_resolve_regenerate_payload,
     _totp_verify_current_password,
-    _TotpPasswordStepUpContext,
+    _TotpPasswordStepUpRequest,
 )
 from litestar_auth.exceptions import ErrorCode, TokenError
 from litestar_auth.payloads import (
@@ -66,23 +71,19 @@ async def _totp_fail_invalid_pending(
     *,
     totp_rate_limit: TotpRateLimitOrchestrator,
 ) -> None:
-    """Record a failed verify attempt and raise a pending-token client error.
-
-    Raises:
-        ClientException: Always, with ``TOTP_PENDING_BAD_TOKEN``.
-    """
+    """Record a failed verify attempt and raise a pending-token client error."""
     await totp_rate_limit.on_invalid_attempt("verify", request)
-    raise ClientException(
+    raise_client_error(
         status_code=400,
         detail=INVALID_TOTP_TOKEN_DETAIL,
-        extra={"code": ErrorCode.TOTP_PENDING_BAD_TOKEN},
+        error_code=ErrorCode.TOTP_PENDING_BAD_TOKEN,
     )
 
 
 def _build_totp_login_flow[ID](
     *,
     ctx: _TotpControllerContext[Any, ID],
-    user_manager: TotpUserManagerProtocol[Any, ID],
+    user_manager: TotpUserManagerProtocol[TotpUserProtocol[Any], ID],
 ) -> TotpLoginFlowService[TotpUserProtocol[Any], ID]:
     """Build the pending-login TOTP service for a verify request.
 
@@ -92,7 +93,7 @@ def _build_totp_login_flow[ID](
     security = ctx.security
     pending_token = ctx.pending_token
     return TotpLoginFlowService[TotpUserProtocol[Any], ID](
-        user_manager=cast("Any", user_manager),
+        user_manager=user_manager,
         config=TotpLoginFlowConfig(
             totp_pending_secret=pending_token.totp_pending_secret,
             totp_algorithm=security.totp_algorithm,
@@ -154,13 +155,14 @@ async def _totp_handle_verify[UP: UserProtocol[Any], ID](
     Returns:
         Backend login response for the verified user.
 
-    Raises:
-        ClientException: On invalid pending tokens, codes, or token-store errors.
     """
     runtime = ctx.runtime
     pending_token = ctx.pending_token
     totp_rate_limit = runtime.rate_limit
-    totp_login_flow = _build_totp_login_flow(ctx=ctx, user_manager=user_manager)
+    totp_login_flow = _build_totp_login_flow(
+        ctx=ctx,
+        user_manager=cast("TotpUserManagerProtocol[TotpUserProtocol[Any], ID]", user_manager),
+    )
 
     try:
         completed_login = await totp_login_flow.authenticate_pending_login_with_method(
@@ -178,18 +180,14 @@ async def _totp_handle_verify[UP: UserProtocol[Any], ID](
         await _totp_fail_invalid_pending(request, totp_rate_limit=totp_rate_limit)
     except InvalidTotpCodeError:
         await totp_rate_limit.on_invalid_attempt("verify", request)
-        msg = INVALID_TOTP_CODE_DETAIL
-        raise ClientException(
+        raise_client_error(
             status_code=400,
-            detail=msg,
-            extra={"code": ErrorCode.TOTP_CODE_INVALID},
-        ) from None
+            detail=INVALID_TOTP_CODE_DETAIL,
+            error_code=ErrorCode.TOTP_CODE_INVALID,
+            suppress_context=True,
+        )
     except TokenError as exc:
-        raise ClientException(
-            status_code=503,
-            detail=str(exc),
-            extra={"code": exc.code},
-        ) from exc
+        raise_transient_token_error(exc)
 
     verified_user = cast("UP", completed_login.user)
     await totp_rate_limit.on_success("verify", request)
@@ -212,20 +210,14 @@ async def _totp_handle_disable[UP: UserProtocol[Any], ID](
     data: TotpDisableRequest,
     user_manager: TotpUserManagerProtocol[UP, ID],
 ) -> None:
-    """Disable TOTP after verifying the current code.
-
-    Raises:
-        ClientException: When the TOTP code cannot be verified.
-        NotAuthorizedException: When the request lacks an authenticated user with TOTP fields.
-    """
+    """Disable TOTP after verifying the current code."""
     runtime = ctx.runtime
     security = ctx.security
     enrollment = ctx.enrollment
     await runtime.rate_limit.before_request("disable", request)
     user = request.user
     if not isinstance(user, TotpUserProtocol):
-        msg = "Authentication credentials were not provided."
-        raise NotAuthorizedException(detail=msg)
+        raise_not_authorized()
     await _require_account_state(
         user,
         require_verified=security.requires_verification,
@@ -253,8 +245,7 @@ async def _totp_handle_disable[UP: UserProtocol[Any], ID](
     )
     if not totp_verified and not recovery_code_verified:
         await runtime.rate_limit.on_invalid_attempt("disable", request)
-        msg = INVALID_TOTP_CODE_DETAIL
-        raise ClientException(status_code=400, detail=msg, extra={"code": ErrorCode.TOTP_CODE_INVALID})
+        raise_client_error(status_code=400, detail=INVALID_TOTP_CODE_DETAIL, error_code=ErrorCode.TOTP_CODE_INVALID)
     if not recovery_code_verified:
         await require_totp_stepup(
             request,
@@ -286,7 +277,6 @@ async def _totp_handle_regenerate_recovery_codes[UP: UserProtocol[Any], ID](
         retrieved again.
 
     Raises:
-        ClientException: If the request payload or TOTP step-up proof is invalid.
         RuntimeError: If recovery-code lookup secret configuration is missing.
     """
     runtime = ctx.runtime
@@ -303,15 +293,14 @@ async def _totp_handle_regenerate_recovery_codes[UP: UserProtocol[Any], ID](
         payload = await _totp_resolve_regenerate_payload(request, runtime=runtime, data=data)
         if payload.current_password is None:
             await runtime.rate_limit.on_invalid_attempt("regenerate_recovery_codes", request)
-            msg = "Invalid request payload."
-            raise ClientException(status_code=422, detail=msg, extra={"code": ErrorCode.LOGIN_PAYLOAD_INVALID})
+            raise_invalid_login_payload(INVALID_REQUEST_PAYLOAD_DETAIL)
         await _totp_verify_current_password(
-            _TotpPasswordStepUpContext(
+            _TotpPasswordStepUpRequest(
                 request=request,
-                runtime=runtime,
                 user=user,
-                user_manager=user_manager,
                 endpoint="regenerate_recovery_codes",
+                user_manager=user_manager,
+                ctx=ctx,
             ),
             password=payload.current_password,
         )

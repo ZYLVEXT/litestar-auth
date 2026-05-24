@@ -10,11 +10,14 @@ from uuid import UUID, uuid4
 import pytest
 from litestar.exceptions import ClientException, PermissionDeniedException
 
+import litestar_auth.oauth._account_state as oauth_account_state_module
+import litestar_auth.oauth._accounts as oauth_accounts_module
+import litestar_auth.oauth._linking as oauth_linking_module
 import litestar_auth.oauth._pkce as pkce_module
 import litestar_auth.oauth.service as oauth_service_module
 from litestar_auth.db import OAuthAccountData
-from litestar_auth.exceptions import AuthenticationError, ErrorCode
-from litestar_auth.oauth.client_adapter import OAuthClientAdapter
+from litestar_auth.exceptions import AuthenticationError, ErrorCode, InactiveUserError, OAuthAccountAlreadyLinkedError
+from litestar_auth.oauth._client import OAuthClientAdapter
 from tests._helpers import ExampleUser
 from tests.unit.test_definition_file_coverage import load_reloaded_test_alias
 
@@ -84,34 +87,55 @@ def test_oauth_service_module_reload_preserves_behavioral_error_contract(monkeyp
         source_path=Path(oauth_service_module.__file__).resolve(),
         monkeypatch=monkeypatch,
     )
-    service = reloaded_module.OAuthService(
-        provider_name="github",
-        client=OAuthClientAdapter(AsyncMock()),
-        trust_provider_email_verified=True,
+    assert reloaded_module.OAuthService.__name__ == oauth_service_module.OAuthService.__name__
+    assert reloaded_module.OAuthAuthorization.__name__ == "OAuthAuthorization"
+
+
+def test_oauth_account_state_module_reload_preserves_behavioral_error_contract(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Reload coverage keeps OAuth account-state error mapping stable."""
+    assert oauth_account_state_module.__file__ is not None
+    reloaded_module = load_reloaded_test_alias(
+        alias_name="_coverage_alias_oauth_account_state",
+        source_path=Path(oauth_account_state_module.__file__).resolve(),
+        monkeypatch=monkeypatch,
     )
+
+    manager = MagicMock()
+    manager.require_account_state.side_effect = InactiveUserError()
+
+    with pytest.raises(ClientException) as client_exc_info:
+        reloaded_module.require_account_state(
+            ExampleUser(id=uuid4(), email="inactive@example.com"),
+            user_manager=manager,
+        )
+
+    extra = client_exc_info.value.extra
+    assert (extra.get("code") if isinstance(extra, dict) else None) == ErrorCode.LOGIN_ACCOUNT_UNAVAILABLE
+    assert client_exc_info.value.detail == reloaded_module._shared_account_state._GENERIC_ACCOUNT_UNAVAILABLE_DETAIL
+
+
+def test_oauth_linking_module_reload_preserves_provider_signal_error_contract(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Reload coverage keeps linking-policy configuration errors stable."""
+    assert oauth_linking_module.__file__ is not None
+    reloaded_module = load_reloaded_test_alias(
+        alias_name="_coverage_alias_oauth_linking",
+        source_path=Path(oauth_linking_module.__file__).resolve(),
+        monkeypatch=monkeypatch,
+    )
+    policy = reloaded_module.OAuthLinkingPolicy(trust_provider_email_verified=True)
 
     with pytest.raises(
         Exception,
         match="trust_provider_email_verified=True requires the OAuth provider to assert",
     ) as exc_info:
-        service._require_provider_verification_signal(email_verified=None)
+        policy.require_provider_verification_signal(email_verified=None)
 
-    manager = MagicMock()
-    manager.require_account_state.side_effect = reloaded_module.InactiveUserError()
-
-    with pytest.raises(ClientException) as client_exc_info:
-        reloaded_module._require_account_state(
-            ExampleUser(id=uuid4(), email="inactive@example.com"),
-            user_manager=manager,
-        )
-
-    assert reloaded_module.OAuthService.__name__ == oauth_service_module.OAuthService.__name__
-    assert reloaded_module.OAuthAuthorization.__name__ == "OAuthAuthorization"
     assert type(exc_info.value).__name__ == "ConfigurationError"
     assert getattr(exc_info.value, "code", None) == ErrorCode.CONFIGURATION_INVALID
-    extra = client_exc_info.value.extra
-    assert (extra.get("code") if isinstance(extra, dict) else None) == ErrorCode.LOGIN_ACCOUNT_UNAVAILABLE
-    assert client_exc_info.value.detail == reloaded_module._shared_account_state._GENERIC_ACCOUNT_UNAVAILABLE_DETAIL
 
 
 def test_pkce_module_reload_preserves_generation_contract(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -169,11 +193,11 @@ async def test_authorize_returns_state_verifier_and_provider_url(monkeypatch: py
         client=cast("OAuthClientAdapter", oauth_client),
     )
     monkeypatch.setattr(
-        "litestar_auth.oauth.service.secrets.token_urlsafe",
+        "litestar_auth.oauth._authorization.secrets.token_urlsafe",
         lambda _size: "fixed-state",
     )
     monkeypatch.setattr(
-        "litestar_auth.oauth.service._generate_pkce_material",
+        "litestar_auth.oauth._authorization._generate_pkce_material",
         lambda: pkce_module.PkceMaterial(
             code_verifier=_FIXED_PKCE_VERIFIER,
             code_challenge="1T7aemN8mcx_tWbZbp-hCb8VxHhBCj9etNTE4mzQgfY",
@@ -236,7 +260,7 @@ async def test_complete_login_bootstraps_user_and_links_account(monkeypatch: pyt
     verified_user = ExampleUser(id=created_user.id, email=created_user.email, is_verified=True)
     manager.create.return_value = created_user
     manager.update.return_value = verified_user
-    monkeypatch.setattr("litestar_auth.oauth.service.secrets.token_urlsafe", lambda _size: "generated-password")
+    monkeypatch.setattr("litestar_auth.oauth._linking.secrets.token_urlsafe", lambda _size: "generated-password")
 
     user = await service.complete_login(
         code="provider-code",
@@ -302,17 +326,13 @@ async def test_complete_login_rejects_existing_email_without_association() -> No
 
 def test_require_provider_verification_signal_rejects_missing_signal_in_strict_mode() -> None:
     """Strict verification mode requires a provider verification signal."""
-    service = oauth_service_module.OAuthService(
-        provider_name="github",
-        client=OAuthClientAdapter(AsyncMock()),
-        trust_provider_email_verified=True,
-    )
+    policy = oauth_linking_module.OAuthLinkingPolicy(trust_provider_email_verified=True)
 
     with pytest.raises(
         Exception,
         match="trust_provider_email_verified=True requires the OAuth provider to assert",
     ) as exc_info:
-        service._require_provider_verification_signal(email_verified=None)
+        policy.require_provider_verification_signal(email_verified=None)
 
     assert type(exc_info.value).__name__ == "ConfigurationError"
     assert getattr(exc_info.value, "code", None) == ErrorCode.CONFIGURATION_INVALID
@@ -323,9 +343,10 @@ async def test_resolve_candidate_user_prefers_existing_oauth_link() -> None:
     linked_user = ExampleUser(id=uuid4(), email="linked@example.com")
     manager = _build_manager()
     manager.oauth_account_store.get_by_oauth_account.return_value = linked_user
-    service = oauth_service_module.OAuthService(provider_name="github", client=OAuthClientAdapter(AsyncMock()))
+    policy = oauth_linking_module.OAuthLinkingPolicy()
 
-    user, existing_by_email = await service._resolve_candidate_user(
+    user, existing_by_email = await policy.resolve_candidate_user(
+        provider_name="github",
         user_manager=manager,
         oauth_account_store=manager.oauth_account_store,
         account_id="provider-user",
@@ -340,12 +361,12 @@ async def test_resolve_candidate_user_prefers_existing_oauth_link() -> None:
 async def test_materialize_or_validate_user_creates_new_user_when_missing(monkeypatch: pytest.MonkeyPatch) -> None:
     """The service delegates new-user materialization to the OAuth bootstrap helper."""
     manager = _build_manager()
-    service = oauth_service_module.OAuthService(provider_name="github", client=OAuthClientAdapter(AsyncMock()))
+    policy = oauth_linking_module.OAuthLinkingPolicy()
     created_user = ExampleUser(id=uuid4(), email="new@example.com")
     create_user_from_oauth = AsyncMock(return_value=created_user)
-    monkeypatch.setattr(service, "_create_user_from_oauth", create_user_from_oauth)
+    monkeypatch.setattr(policy, "create_user_from_oauth", create_user_from_oauth)
 
-    user = await service._materialize_or_validate_user(
+    user = await policy.materialize_or_validate_user(
         user_manager=manager,
         user=None,
         existing_by_email=None,
@@ -365,9 +386,9 @@ async def test_materialize_or_validate_user_returns_existing_link_without_email_
     """Linked users are returned directly when there is no email collision."""
     linked_user = ExampleUser(id=uuid4(), email="linked@example.com")
     manager = _build_manager()
-    service = oauth_service_module.OAuthService(provider_name="github", client=OAuthClientAdapter(AsyncMock()))
+    policy = oauth_linking_module.OAuthLinkingPolicy()
 
-    user = await service._materialize_or_validate_user(
+    user = await policy.materialize_or_validate_user(
         user_manager=manager,
         user=linked_user,
         existing_by_email=None,
@@ -382,11 +403,11 @@ async def test_materialize_or_validate_user_validates_email_link_policy(monkeypa
     """Existing email matches invoke the configured linking policy validator."""
     existing_user = ExampleUser(id=uuid4(), email="existing@example.com")
     manager = _build_manager()
-    service = oauth_service_module.OAuthService(provider_name="github", client=OAuthClientAdapter(AsyncMock()))
+    policy = oauth_linking_module.OAuthLinkingPolicy()
     validate_existing_email_link_policy = MagicMock()
-    monkeypatch.setattr(service, "_validate_existing_email_link_policy", validate_existing_email_link_policy)
+    monkeypatch.setattr(policy, "validate_existing_email_link_policy", validate_existing_email_link_policy)
 
-    user = await service._materialize_or_validate_user(
+    user = await policy.materialize_or_validate_user(
         user_manager=manager,
         user=existing_user,
         existing_by_email=existing_user,
@@ -411,7 +432,7 @@ def test_require_account_state_rejects_user_without_guarded_protocol_on_attribut
     manager.require_account_state = "not-callable"
 
     with pytest.raises(PermissionDeniedException) as exc_info:
-        oauth_service_module._require_account_state(_MinimalUser(), user_manager=manager)
+        oauth_account_state_module.require_account_state(_MinimalUser(), user_manager=manager)
 
     assert "account state" in (exc_info.value.detail or "").lower()
 
@@ -419,10 +440,10 @@ def test_require_account_state_rejects_user_without_guarded_protocol_on_attribut
 def test_require_account_state_maps_unverified_user_error() -> None:
     """Unverified-user failures are translated to the stable client-facing code."""
     manager = MagicMock()
-    manager.require_account_state.side_effect = oauth_service_module.UnverifiedUserError()
+    manager.require_account_state.side_effect = oauth_account_state_module.UnverifiedUserError()
 
     with pytest.raises(ClientException) as exc_info:
-        oauth_service_module._require_account_state(
+        oauth_account_state_module.require_account_state(
             ExampleUser(id=uuid4(), email="user@example.com"),
             user_manager=manager,
         )
@@ -437,7 +458,7 @@ def test_require_account_state_rejects_inactive_guarded_user_without_validator()
     manager.require_account_state = None
 
     with pytest.raises(ClientException) as exc_info:
-        oauth_service_module._require_account_state(
+        oauth_account_state_module.require_account_state(
             ExampleUser(id=uuid4(), email="inactive@example.com", is_active=False),
             user_manager=manager,
         )
@@ -451,7 +472,7 @@ def test_require_account_state_allows_active_guarded_user_without_validator() ->
     manager = MagicMock()
     manager.require_account_state = None
 
-    oauth_service_module._require_account_state(
+    oauth_account_state_module.require_account_state(
         ExampleUser(id=uuid4(), email="active@example.com", is_active=True),
         user_manager=manager,
     )
@@ -462,7 +483,7 @@ async def test_complete_login_maps_inactive_user_to_client_error() -> None:
     inactive_user = ExampleUser(id=uuid4(), email="inactive@example.com", is_active=False)
     manager = _build_manager()
     manager.oauth_account_store.get_by_oauth_account.return_value = inactive_user
-    manager.require_account_state.side_effect = oauth_service_module.InactiveUserError()
+    manager.require_account_state.side_effect = InactiveUserError()
     oauth_client = AsyncMock()
     oauth_client.get_access_token.return_value = {"access_token": "provider-access-token"}
     oauth_client.get_id_email.return_value = ("provider-user", "inactive@example.com")
@@ -487,14 +508,10 @@ async def test_complete_login_maps_inactive_user_to_client_error() -> None:
 
 def test_validate_existing_email_link_policy_rejects_association_without_provider_trust() -> None:
     """Association by email is rejected unless provider verification is trusted."""
-    service = oauth_service_module.OAuthService(
-        provider_name="github",
-        client=OAuthClientAdapter(AsyncMock()),
-        associate_by_email=True,
-    )
+    policy = oauth_linking_module.OAuthLinkingPolicy(associate_by_email=True)
 
     with pytest.raises(ClientException) as exc_info:
-        service._validate_existing_email_link_policy(email_verified=True)
+        policy.validate_existing_email_link_policy(email_verified=True)
 
     extra = exc_info.value.extra
     assert (extra.get("code") if isinstance(extra, dict) else None) == ErrorCode.OAUTH_USER_ALREADY_EXISTS
@@ -502,15 +519,13 @@ def test_validate_existing_email_link_policy_rejects_association_without_provide
 
 def test_validate_existing_email_link_policy_rejects_unverified_email_in_trusted_mode() -> None:
     """Trusted association still requires an explicit verified-email signal."""
-    service = oauth_service_module.OAuthService(
-        provider_name="github",
-        client=OAuthClientAdapter(AsyncMock()),
+    policy = oauth_linking_module.OAuthLinkingPolicy(
         associate_by_email=True,
         trust_provider_email_verified=True,
     )
 
     with pytest.raises(ClientException) as exc_info:
-        service._validate_existing_email_link_policy(email_verified=False)
+        policy.validate_existing_email_link_policy(email_verified=False)
 
     extra = exc_info.value.extra
     assert (extra.get("code") if isinstance(extra, dict) else None) == ErrorCode.OAUTH_EMAIL_NOT_VERIFIED
@@ -518,10 +533,10 @@ def test_validate_existing_email_link_policy_rejects_unverified_email_in_trusted
 
 def test_validate_existing_email_link_policy_rejects_when_association_disabled() -> None:
     """Existing email collisions remain rejected when association by email is disabled."""
-    service = oauth_service_module.OAuthService(provider_name="github", client=OAuthClientAdapter(AsyncMock()))
+    policy = oauth_linking_module.OAuthLinkingPolicy()
 
     with pytest.raises(ClientException) as exc_info:
-        service._validate_existing_email_link_policy(email_verified=True)
+        policy.validate_existing_email_link_policy(email_verified=True)
 
     extra = exc_info.value.extra
     assert (extra.get("code") if isinstance(extra, dict) else None) == ErrorCode.OAUTH_USER_ALREADY_EXISTS
@@ -529,14 +544,12 @@ def test_validate_existing_email_link_policy_rejects_when_association_disabled()
 
 def test_validate_existing_email_link_policy_allows_verified_association() -> None:
     """Verified emails can be linked when the provider signal is trusted."""
-    service = oauth_service_module.OAuthService(
-        provider_name="github",
-        client=OAuthClientAdapter(AsyncMock()),
+    policy = oauth_linking_module.OAuthLinkingPolicy(
         associate_by_email=True,
         trust_provider_email_verified=True,
     )
 
-    service._validate_existing_email_link_policy(email_verified=True)
+    policy.validate_existing_email_link_policy(email_verified=True)
 
 
 async def test_associate_account_rejects_cross_user_link() -> None:
@@ -652,7 +665,7 @@ async def test_associate_account_maps_store_link_conflict_to_client_error() -> N
     """Store-level linked-account conflicts keep the stable client-facing error."""
     user = ExampleUser(id=uuid4(), email="user@example.com")
     manager = _build_manager()
-    manager.oauth_account_store.upsert_oauth_account.side_effect = oauth_service_module.OAuthAccountAlreadyLinkedError(
+    manager.oauth_account_store.upsert_oauth_account.side_effect = OAuthAccountAlreadyLinkedError(
         provider="github",
         account_id="provider-user",
         existing_user_id=user.id,
@@ -742,4 +755,4 @@ def test_require_oauth_account_store_returns_explicit_store() -> None:
     """OAuth-account store helper returns the configured store contract."""
     manager = _build_manager()
 
-    assert oauth_service_module._require_oauth_account_store(manager) is manager.oauth_account_store
+    assert oauth_accounts_module.require_oauth_account_store(manager) is manager.oauth_account_store

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from functools import partial
 from typing import TYPE_CHECKING, Any, cast
 
@@ -10,23 +11,45 @@ from litestar_auth.authentication.strategy.base import TotpStepUpStrategy
 from litestar_auth.types import UserProtocol
 
 if TYPE_CHECKING:
+    from collections.abc import Iterable
+
     from litestar_auth._manager.totp_secrets import TotpSecretsService
+    from litestar_auth._secrets_at_rest import FernetModuleLoader
 
 _TOTP_SECRET_FERNET_INSTALL_HINT = "Install litestar-auth[totp] to use TOTP secret encryption."  # noqa: S105
-_load_cryptography_fernet = cast(
-    "Any",
+_load_cryptography_fernet: FernetModuleLoader = cast(
+    "FernetModuleLoader",
     partial(require_cryptography_fernet, install_hint=_TOTP_SECRET_FERNET_INSTALL_HINT),
 )
 
 
-def _iter_totp_stepup_strategies(backends: tuple[object, ...]) -> tuple[TotpStepUpStrategy[Any], ...]:
-    """Return configured backend strategies that can persist TOTP step-up markers."""
-    strategies: list[TotpStepUpStrategy[Any]] = []
-    for backend in backends:
-        strategy = getattr(backend, "strategy", None)
-        if isinstance(strategy, TotpStepUpStrategy):
-            strategies.append(strategy)
-    return tuple(strategies)
+@dataclass(frozen=True, slots=True)
+class TotpStepUpDispatcher:
+    """Dispatch TOTP step-up markers to configured backend strategies."""
+
+    strategies: tuple[TotpStepUpStrategy[Any], ...]
+
+    @classmethod
+    def from_backends(cls, backends: Iterable[object]) -> TotpStepUpDispatcher:
+        """Return a dispatcher containing configured step-up strategies."""
+        strategies: list[TotpStepUpStrategy[Any]] = []
+        for backend in backends:
+            strategy = getattr(backend, "strategy", None)
+            if isinstance(strategy, TotpStepUpStrategy):
+                strategies.append(strategy)
+        return cls(tuple(strategies))
+
+    async def issue(self, user: UserProtocol[Any], session_id: str, *, ttl_seconds: int) -> None:
+        """Store a recent TOTP verification marker for all capable strategies."""
+        for strategy in self.strategies:
+            await strategy.issue_totp_stepup(user, session_id, ttl_seconds=ttl_seconds)
+
+    async def has_recent_verification(self, user: UserProtocol[Any], session_id: str) -> bool:
+        """Return whether any capable strategy has a live step-up marker."""
+        for strategy in self.strategies:
+            if await strategy.has_recent_totp_verification(user, session_id):
+                return True
+        return False
 
 
 class TotpManagerFacade[UP: UserProtocol[Any]]:
@@ -34,6 +57,7 @@ class TotpManagerFacade[UP: UserProtocol[Any]]:
 
     user_db: Any
     _totp_secrets: TotpSecretsService[UP]
+    _totp_stepup: TotpStepUpDispatcher
     backends: tuple[object, ...]
     unsafe_testing: bool
 
@@ -47,11 +71,7 @@ class TotpManagerFacade[UP: UserProtocol[Any]]:
         Returns:
             The updated user instance.
         """
-        return await self._totp_secrets.set_secret(
-            user,
-            secret,
-            load_cryptography_fernet=_load_cryptography_fernet,
-        )
+        return await self._totp_secrets.set_secret(user, secret)
 
     async def read_totp_secret(self, secret: str | None) -> str | None:
         """Return a plain-text TOTP secret from storage.
@@ -59,21 +79,15 @@ class TotpManagerFacade[UP: UserProtocol[Any]]:
         Returns:
             Plain-text secret, or ``None`` when 2FA is disabled.
         """
-        return await self._totp_secrets.read_secret(secret, load_cryptography_fernet=_load_cryptography_fernet)
+        return await self._totp_secrets.read_secret(secret)
 
     def totp_secret_requires_reencrypt(self, secret: str | None) -> bool:
         """Return whether a stored TOTP secret should be rewritten with the active key."""
-        return self._totp_secrets.requires_reencrypt(
-            secret,
-            load_cryptography_fernet=_load_cryptography_fernet,
-        )
+        return self._totp_secrets.requires_reencrypt(secret)
 
     def reencrypt_totp_secret_for_storage(self, secret: str | None) -> str | None:
         """Return a stored TOTP secret rewritten with the active key."""
-        return self._totp_secrets.reencrypt_secret_for_storage(
-            secret,
-            load_cryptography_fernet=_load_cryptography_fernet,
-        )
+        return self._totp_secrets.reencrypt_secret_for_storage(secret)
 
     async def set_recovery_code_hashes(self, user: UP, code_index: dict[str, str]) -> UP:
         """Replace the active TOTP recovery-code lookup index for a user.
@@ -97,22 +111,12 @@ class TotpManagerFacade[UP: UserProtocol[Any]]:
 
     async def issue_totp_stepup_verification(self, user: UP, session_id: str, *, ttl_seconds: int) -> None:
         """Store a recent TOTP verification marker for the current authenticated session."""
-        strategies = _iter_totp_stepup_strategies(self.backends)
-        if not strategies:
-            return
-        for strategy in strategies:
-            await strategy.issue_totp_stepup(user, session_id, ttl_seconds=ttl_seconds)
+        await self._totp_stepup.issue(user, session_id, ttl_seconds=ttl_seconds)
 
     async def has_recent_totp_verification(self, user: UP, session_id: str) -> bool:
         """Return whether the user's current session has a live TOTP step-up marker."""
-        for strategy in _iter_totp_stepup_strategies(self.backends):
-            if await strategy.has_recent_totp_verification(user, session_id):
-                return True
-        return False
+        return await self._totp_stepup.has_recent_verification(user, session_id)
 
     def _prepare_totp_secret_for_storage(self, secret: str | None) -> str | None:
         """Return the database representation for a TOTP secret."""
-        return self._totp_secrets.prepare_secret_for_storage(
-            secret,
-            load_cryptography_fernet=_load_cryptography_fernet,
-        )
+        return self._totp_secrets.prepare_secret_for_storage(secret)

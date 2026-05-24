@@ -6,7 +6,9 @@ from functools import cache
 from typing import Any
 
 from advanced_alchemy.repository import SQLAlchemyAsyncRepository
+from sqlalchemy.ext.asyncio import AsyncSession, async_scoped_session
 
+type AsyncSessionT = AsyncSession | async_scoped_session[AsyncSession]
 type TokenRepositoryType = type[SQLAlchemyAsyncRepository[Any]]
 
 

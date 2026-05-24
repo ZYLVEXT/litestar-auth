@@ -13,8 +13,9 @@ import pytest
 from litestar.exceptions import ClientException
 from litestar.status_codes import HTTP_400_BAD_REQUEST
 
-from litestar_auth.oauth import _client_features
-from litestar_auth.oauth import client_adapter as client_adapter_module
+import litestar_auth.oauth._client as client_adapter_module
+from litestar_auth.exceptions import ConfigurationError, ErrorCode
+from litestar_auth.oauth._client import features as client_features
 
 pytestmark = pytest.mark.unit
 
@@ -200,13 +201,13 @@ async def test_make_async_email_verification_client_rejects_non_bool_sync_return
 
     async_client = client_adapter_module.make_async_email_verification_client(_SyncClient())
 
-    with pytest.raises(client_adapter_module.ConfigurationError, match="verification"):
+    with pytest.raises(ConfigurationError, match="verification"):
         await async_client.get_email_verified("access-token")
 
 
 async def test_get_authorization_url_requires_provider_method() -> None:
     """Manual OAuth clients must expose ``get_authorization_url()`` for login redirects."""
-    with pytest.raises(client_adapter_module.ConfigurationError, match="get_authorization_url"):
+    with pytest.raises(ConfigurationError, match="get_authorization_url"):
         await _build_adapter(object()).get_authorization_url(
             redirect_uri="https://app.example/callback",
             state="state",
@@ -217,7 +218,7 @@ def test_oauth_adapter_validation_error_rejects_non_callable_profile() -> None:
     """Advertised profile hooks must be callable at construction time."""
     oauth_client = _make_oauth_client(get_profile={"id": "provider-id"})
 
-    with pytest.raises(client_adapter_module.ConfigurationError, match="get_profile must be callable"):
+    with pytest.raises(ConfigurationError, match="get_profile must be callable"):
         _build_adapter(oauth_client)
 
 
@@ -226,7 +227,7 @@ def test_oauth_adapter_validation_error_rejects_non_callable_email_verification(
     oauth_client = _make_oauth_client(get_email_verified=True)
 
     with pytest.raises(
-        client_adapter_module.ConfigurationError,
+        ConfigurationError,
         match=r"OAuthEmailVerificationAsyncClientProtocol|make_async_email_verification_client",
     ):
         _build_adapter(oauth_client)
@@ -237,7 +238,7 @@ def test_oauth_adapter_validation_error_rejects_sync_email_verification() -> Non
     oauth_client = _make_oauth_client(get_email_verified=lambda _access_token: True)
 
     with pytest.raises(
-        client_adapter_module.ConfigurationError,
+        ConfigurationError,
         match=r"OAuthEmailVerificationAsyncClientProtocol|make_async_email_verification_client",
     ):
         _build_adapter(oauth_client)
@@ -247,7 +248,7 @@ def test_oauth_adapter_validation_error_rejects_non_callable_authorization_url()
     """Advertised authorization URL hooks must be callable for PKCE validation."""
     oauth_client = _make_oauth_client(get_authorization_url="https://provider.example/authorize")
 
-    with pytest.raises(client_adapter_module.ConfigurationError, match="get_authorization_url must be callable"):
+    with pytest.raises(ConfigurationError, match="get_authorization_url must be callable"):
         _build_adapter(oauth_client)
 
 
@@ -261,7 +262,7 @@ def test_oauth_adapter_validation_error_rejects_authorization_url_without_pkce_k
 
     oauth_client = _make_oauth_client(get_authorization_url=get_authorization_url)
 
-    with pytest.raises(client_adapter_module.ConfigurationError, match=r"PKCE.*code_challenge.*code_challenge_method"):
+    with pytest.raises(ConfigurationError, match=r"PKCE.*code_challenge.*code_challenge_method"):
         _build_adapter(oauth_client)
 
 
@@ -275,7 +276,7 @@ def test_oauth_adapter_validation_error_rejects_access_token_without_pkce_kwargs
 
     oauth_client = _make_oauth_client(get_access_token=get_access_token)
 
-    with pytest.raises(client_adapter_module.ConfigurationError, match=r"PKCE.*code_verifier"):
+    with pytest.raises(ConfigurationError, match=r"PKCE.*code_verifier"):
         _build_adapter(oauth_client)
 
 
@@ -286,7 +287,7 @@ def test_oauth_adapter_validation_error_rejects_factory_client_with_non_callable
     def oauth_client_factory() -> client_adapter_module.OAuthClientProtocol:
         return cast("client_adapter_module.OAuthClientProtocol", oauth_client)
 
-    with pytest.raises(client_adapter_module.ConfigurationError, match="get_profile must be callable"):
+    with pytest.raises(ConfigurationError, match="get_profile must be callable"):
         client_adapter_module._build_oauth_client_adapter(oauth_client_factory=oauth_client_factory)
 
 
@@ -303,7 +304,7 @@ def test_oauth_adapter_validation_error_rejects_loaded_client_with_non_callable_
         return cast("client_adapter_module.OAuthClientProtocol", oauth_client)
 
     with pytest.raises(
-        client_adapter_module.ConfigurationError,
+        ConfigurationError,
         match=r"OAuthEmailVerificationAsyncClientProtocol|make_async_email_verification_client",
     ):
         client_adapter_module._build_oauth_client_adapter(
@@ -415,7 +416,7 @@ async def test_get_authorization_url_rejects_invalid_provider_response(authoriza
         get_authorization_url=AsyncMock(return_value=authorization_url),
     )
 
-    with pytest.raises(client_adapter_module.ConfigurationError, match="invalid authorization URL"):
+    with pytest.raises(ConfigurationError, match="invalid authorization URL"):
         await _build_adapter(oauth_client).get_authorization_url(
             redirect_uri="https://app.example/callback",
             state="state",
@@ -424,7 +425,7 @@ async def test_get_authorization_url_rejects_invalid_provider_response(authoriza
 
 async def test_get_access_token_requires_provider_method() -> None:
     """Manual OAuth clients must expose ``get_access_token()`` for callback exchange."""
-    with pytest.raises(client_adapter_module.ConfigurationError, match="get_access_token"):
+    with pytest.raises(ConfigurationError, match="get_access_token"):
         await _build_adapter(object()).get_access_token(
             code="provider-code",
             redirect_uri="https://app.example/callback",
@@ -528,7 +529,7 @@ async def test_get_access_token_rejects_invalid_payload_shapes(
         get_access_token=AsyncMock(return_value=payload),
     )
 
-    with pytest.raises(client_adapter_module.ConfigurationError, match=expected_message):
+    with pytest.raises(ConfigurationError, match=expected_message):
         await _build_adapter(oauth_client).get_access_token(
             code="provider-code",
             redirect_uri="https://app.example/callback",
@@ -576,7 +577,7 @@ async def test_get_account_identity_raises_for_malformed_direct_contract_payload
         get_id_email=AsyncMock(return_value=("provider-id",)),
     )
 
-    with pytest.raises(client_adapter_module.ConfigurationError, match="invalid account identity"):
+    with pytest.raises(ConfigurationError, match="invalid account identity"):
         await _build_adapter(oauth_client).get_account_identity("access-token")
 
 
@@ -584,13 +585,13 @@ async def test_get_identity_from_profile_rejects_non_mapping_payload() -> None:
     """Profile payloads must be convertible to mappings."""
     oauth_client = _make_oauth_client(get_profile=AsyncMock(return_value=object()))
 
-    with pytest.raises(client_adapter_module.ConfigurationError, match="invalid profile payload"):
+    with pytest.raises(ConfigurationError, match="invalid profile payload"):
         await _build_adapter(oauth_client)._get_identity_from_profile("access-token")
 
 
 async def test_get_account_identity_requires_direct_or_profile_contract() -> None:
     """Manual OAuth clients must expose ``get_id_email()`` or ``get_profile()``."""
-    with pytest.raises(client_adapter_module.ConfigurationError, match=r"get_id_email\(\) or get_profile\(\)"):
+    with pytest.raises(ConfigurationError, match=r"get_id_email\(\) or get_profile\(\)"):
         await _build_adapter(object()).get_account_identity("access-token")
 
 
@@ -603,16 +604,14 @@ async def test_get_identity_from_profile_raises_when_email_missing() -> None:
 
     extra = exc_info.value.extra
     assert exc_info.value.status_code == HTTP_400_BAD_REQUEST
-    assert (
-        extra.get("code") if isinstance(extra, dict) else None
-    ) == client_adapter_module.ErrorCode.OAUTH_NOT_AVAILABLE_EMAIL
+    assert (extra.get("code") if isinstance(extra, dict) else None) == ErrorCode.OAUTH_NOT_AVAILABLE_EMAIL
 
 
 async def test_get_identity_from_profile_raises_when_account_id_missing() -> None:
     """Profile parsing requires a stable non-empty account identifier."""
     oauth_client = _make_oauth_client(get_profile=AsyncMock(return_value={"email": "user@example.com"}))
 
-    with pytest.raises(client_adapter_module.ConfigurationError, match="account id"):
+    with pytest.raises(ConfigurationError, match="account id"):
         await _build_adapter(oauth_client)._get_identity_from_profile("access-token")
 
 
@@ -637,27 +636,27 @@ def test_supports_async_email_verified_detects_only_coroutine_contract() -> None
     async_client = _make_oauth_client(get_email_verified=AsyncMock(return_value=True))
     sync_client = _make_oauth_client(get_email_verified=lambda _access_token: True)
 
-    assert _client_features._supports_async_email_verified(async_client)
-    assert not _client_features._supports_async_email_verified(sync_client)
+    assert client_features.supports_async_email_verified(async_client)
+    assert not client_features.supports_async_email_verified(sync_client)
 
 
 def test_supports_email_verified_rejects_sync_only_contract() -> None:
     """Only async verification clients satisfy the supported verification surface."""
     oauth_client = _make_oauth_client(get_email_verified=lambda _access_token: True)
 
-    assert not client_adapter_module._supports_email_verified(oauth_client)
+    assert not client_features.supports_email_verified(oauth_client)
 
 
 def test_supports_email_verified_rejects_missing_contract() -> None:
     """Verification support is false when the provider exposes no helper."""
-    assert not client_adapter_module._supports_email_verified(object())
+    assert not client_features.supports_email_verified(object())
 
 
 def test_supports_email_verified_accepts_async_contract() -> None:
     """Canonical async verification support remains detected."""
     oauth_client = _make_oauth_client(get_email_verified=AsyncMock(return_value=True))
 
-    assert client_adapter_module._supports_email_verified(oauth_client)
+    assert client_features.supports_email_verified(oauth_client)
 
 
 @pytest.mark.parametrize("verified", [True, False])
@@ -679,7 +678,7 @@ def test_get_email_verified_rejects_sync_helper_without_wrapper() -> None:
     )
 
     with pytest.raises(
-        client_adapter_module.ConfigurationError,
+        ConfigurationError,
         match=r"OAuthEmailVerificationAsyncClientProtocol|make_async_email_verification_client",
     ):
         _build_adapter(oauth_client)
@@ -691,7 +690,7 @@ async def test_get_email_verified_rejects_invalid_dedicated_helper_value() -> No
         get_email_verified=AsyncMock(return_value="sometimes"),
     )
 
-    with pytest.raises(client_adapter_module.ConfigurationError, match="verification"):
+    with pytest.raises(ConfigurationError, match="verification"):
         await _build_adapter(oauth_client).get_email_verified("access-token")
 
 
@@ -701,7 +700,7 @@ async def test_get_email_verified_rejects_invalid_profile_value() -> None:
         get_profile=AsyncMock(return_value={"email_verified": 123}),
     )
 
-    with pytest.raises(client_adapter_module.ConfigurationError, match="email_verified"):
+    with pytest.raises(ConfigurationError, match="email_verified"):
         await _build_adapter(oauth_client).get_email_verified("access-token")
 
 
@@ -826,7 +825,7 @@ async def test_get_account_identity_and_email_verified_requires_profile_fallback
     """Combined fallback still fails loudly without ``get_profile()``."""
     oauth_client = _make_oauth_client(get_id_email=AsyncMock(return_value=None))
 
-    with pytest.raises(client_adapter_module.ConfigurationError, match="get_id_email\\(\\) or get_profile\\(\\)"):
+    with pytest.raises(ConfigurationError, match="get_id_email\\(\\) or get_profile\\(\\)"):
         await _build_adapter(oauth_client).get_account_identity_and_email_verified("access-token")
 
 
@@ -843,13 +842,13 @@ def test_parse_email_verified_from_profile_parses_strings(
     expected: object,
 ) -> None:
     """Profile parsing normalizes booleans and absent values."""
-    assert client_adapter_module._parse_email_verified_from_profile(profile) is expected
+    assert client_features.parse_email_verified_from_profile(profile) is expected
 
 
 def test_parse_email_verified_from_profile_rejects_invalid_string() -> None:
     """Unsupported string values are configuration errors."""
-    with pytest.raises(client_adapter_module.ConfigurationError, match="email_verified"):
-        client_adapter_module._parse_email_verified_from_profile({"email_verified": "sometimes"})
+    with pytest.raises(ConfigurationError, match="email_verified"):
+        client_features.parse_email_verified_from_profile({"email_verified": "sometimes"})
 
 
 def test_as_mapping_uses_object_dict_fallback() -> None:
@@ -860,7 +859,7 @@ def test_as_mapping_uses_object_dict_fallback() -> None:
             self.access_token = "token"
             self.refresh_token = "refresh"
 
-    payload = client_adapter_module._as_mapping(_Payload(), message="invalid")
+    payload = client_features.as_mapping(_Payload(), message="invalid")
 
     assert payload == {"access_token": "token", "refresh_token": "refresh"}
 
@@ -879,4 +878,4 @@ def test_as_mapping_uses_object_dict_fallback() -> None:
 )
 def test_as_account_identity_tuple_rejects_invalid_payloads(account_identity: object) -> None:
     """Only non-empty two-item string tuples satisfy the direct contract."""
-    assert client_adapter_module._as_account_identity_tuple(account_identity) is None
+    assert client_features.as_account_identity_tuple(account_identity) is None

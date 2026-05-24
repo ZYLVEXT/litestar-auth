@@ -12,6 +12,7 @@ from litestar_auth._redis_protocols import (
     RedisDeleteClient,
     RedisExpiringValueWriteClient,
     RedisKeyExpiryClient,
+    RedisScriptEvalClient,
     RedisSetMembershipClient,
     RedisStoredValue,
     RedisValueReadClient,
@@ -24,7 +25,7 @@ from litestar_auth.authentication.strategy._opaque_tokens import (
 from litestar_auth.authentication.strategy.base import Strategy, UserManagerProtocol
 from litestar_auth.config import validate_production_secret
 from litestar_auth.exceptions import ConfigurationError
-from litestar_auth.ratelimit._helpers import _safe_key_part
+from litestar_auth.ratelimit._key_derivation import _safe_key_part
 from litestar_auth.types import ID, UP
 
 if TYPE_CHECKING:
@@ -34,6 +35,25 @@ DEFAULT_KEY_PREFIX = "litestar_auth:token:"
 DEFAULT_LIFETIME = timedelta(hours=1)
 DEFAULT_TOKEN_BYTES = 32
 _TOTP_STEPUP_SEGMENT = "totp_stepup"
+_PAYLOAD_FORMAT_VERSION = "v1"
+
+_REDIS_INVALIDATE_USER_TOKENS_SCRIPT = """
+redis.call("INCR", KEYS[1])
+
+local token_keys = redis.call("SMEMBERS", KEYS[2])
+if #token_keys > 0 then
+    redis.call("DEL", unpack(token_keys))
+end
+redis.call("DEL", KEYS[2])
+
+local stepup_keys = redis.call("SMEMBERS", KEYS[3])
+if #stepup_keys > 0 then
+    redis.call("DEL", unpack(stepup_keys))
+end
+redis.call("DEL", KEYS[3])
+
+return 1
+"""
 
 _load_redis_asyncio = partial(_require_redis_asyncio, feature_name="RedisTokenStrategy")
 
@@ -44,6 +64,7 @@ class RedisClientProtocol(
     RedisDeleteClient,
     RedisSetMembershipClient,
     RedisKeyExpiryClient,
+    RedisScriptEvalClient,
     Protocol,
 ):
     """Minimal async Redis client interface used by the token strategy."""
@@ -138,6 +159,10 @@ class RedisTokenStrategy(Strategy[UP, ID]):
         """Return the Redis key for the per-user token index."""
         return f"{self.key_prefix}user:{_safe_key_part(user_id)}"
 
+    def _user_epoch_key(self, user_id: str) -> str:
+        """Return the Redis key for the per-user invalidation epoch."""
+        return f"{self.key_prefix}user_epoch:{_safe_key_part(user_id)}"
+
     def _totp_stepup_key(self, user_id: str, session_id: str) -> str:
         """Return the Redis key for a TOTP step-up marker."""
         return f"{self.key_prefix}{_TOTP_STEPUP_SEGMENT}:{_safe_key_part(user_id)}:{_safe_key_part(session_id)}"
@@ -156,6 +181,40 @@ class RedisTokenStrategy(Strategy[UP, ID]):
         if isinstance(value, bytes):
             return value.decode()
         return value
+
+    @staticmethod
+    def _encode_token_payload(*, epoch: int, user_id: str) -> str:
+        """Return the Redis value stored for a token."""
+        return f"{_PAYLOAD_FORMAT_VERSION}:{epoch}:{user_id}"
+
+    @classmethod
+    def _decode_token_payload(cls, value: RedisStoredValue) -> tuple[int, str]:
+        """Return the stored invalidation epoch and user id.
+
+        Legacy token values were stored as the raw user id. Treat those values as
+        epoch ``0`` so they are rejected after the user's first epoch bump.
+        """
+        payload = cls._decode_user_id(value)
+        version, separator, remainder = payload.partition(":")
+        if version != _PAYLOAD_FORMAT_VERSION or not separator:
+            return 0, payload
+        epoch_text, epoch_separator, user_id = remainder.partition(":")
+        if not epoch_separator:
+            return 0, payload
+        try:
+            return int(epoch_text), user_id
+        except ValueError:
+            return 0, payload
+
+    async def _current_user_epoch(self, user_id: str) -> int:
+        """Return the current invalidation epoch for ``user_id``."""
+        stored_epoch = await self.redis.get(self._user_epoch_key(user_id))
+        if stored_epoch is None:
+            return 0
+        try:
+            return int(self._decode_user_id(stored_epoch))
+        except ValueError:
+            return -1
 
     @property
     def _ttl_seconds(self) -> int:
@@ -181,7 +240,9 @@ class RedisTokenStrategy(Strategy[UP, ID]):
         if stored_user_id is None:
             return None
 
-        user_id_text = self._decode_user_id(stored_user_id)
+        token_epoch, user_id_text = self._decode_token_payload(stored_user_id)
+        if token_epoch != await self._current_user_epoch(user_id_text):
+            return None
 
         try:
             user_id = self.subject_decoder(user_id_text) if self.subject_decoder is not None else user_id_text
@@ -199,7 +260,8 @@ class RedisTokenStrategy(Strategy[UP, ID]):
         """
         token, token_key = self._mint_token_key()
         user_id = str(user.id)
-        await self.redis.setex(token_key, self._ttl_seconds, user_id)
+        epoch = await self._current_user_epoch(user_id)
+        await self.redis.setex(token_key, self._ttl_seconds, self._encode_token_payload(epoch=epoch, user_id=user_id))
         index_key = self._user_index_key(user_id)
         await self.redis.sadd(index_key, token_key)
         await self.redis.expire(index_key, self._ttl_seconds)
@@ -214,25 +276,21 @@ class RedisTokenStrategy(Strategy[UP, ID]):
         await self.redis.delete(token_key)
         await self.redis.srem(index_key, token_key)
 
-    async def _invalidate_via_index(self, user_id: str) -> None:
-        """Invalidate tokens using the per-user Redis set index."""
-        index_key = self._user_index_key(user_id)
-        members = await self.redis.smembers(index_key)
-        token_keys = [self._decode_user_id(member) for member in members] if members else []
-        if not token_keys:
-            return
-        await self.redis.delete(*token_keys, index_key)
-
     async def invalidate_all_tokens(self, user: UP) -> None:
         """Delete all Redis-backed tokens associated with the given user.
 
-        This uses a per-user index to delete only the keys associated with the
-        user, avoiding keyspace scans under the global prefix. Tokens that do
-        not have a per-user index entry are left to expire naturally by TTL.
+        This bumps a per-user invalidation epoch before deleting indexed token
+        and step-up marker keys, so out-of-index tokens are rejected on their
+        next read without requiring a keyspace scan.
         """
         user_id = str(user.id)
-        await self._invalidate_via_index(user_id)
-        await self._invalidate_stepup_markers(user_id)
+        await self.redis.eval(
+            _REDIS_INVALIDATE_USER_TOKENS_SCRIPT,
+            3,
+            self._user_epoch_key(user_id),
+            self._user_index_key(user_id),
+            self._totp_stepup_index_key(user_id),
+        )
 
     async def issue_totp_stepup(self, user: UP, session_id: str, *, ttl_seconds: int) -> None:
         """Store a short-lived TOTP step-up marker for a Redis-backed session."""
@@ -250,12 +308,3 @@ class RedisTokenStrategy(Strategy[UP, ID]):
     async def has_recent_totp_verification(self, user: UP, session_id: str) -> bool:
         """Return whether a Redis-backed session has a live TOTP step-up marker."""
         return await self.redis.get(self._totp_stepup_key(str(user.id), session_id)) is not None
-
-    async def _invalidate_stepup_markers(self, user_id: str) -> None:
-        """Delete indexed TOTP step-up markers for ``user_id``."""
-        index_key = self._totp_stepup_index_key(user_id)
-        members = await self.redis.smembers(index_key)
-        marker_keys = [self._decode_user_id(member) for member in members] if members else []
-        if not marker_keys:
-            return
-        await self.redis.delete(*marker_keys, index_key)

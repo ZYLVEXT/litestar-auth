@@ -4,18 +4,20 @@ from __future__ import annotations
 
 import hashlib
 import secrets
-from collections.abc import Callable
+from collections.abc import Callable, Collection
 from dataclasses import dataclass, replace
 from datetime import timedelta
 from typing import TYPE_CHECKING, Any, Protocol, TypedDict
 
 from litestar_auth._manager.security import validate_user_manager_security_secret_roles_are_distinct
+from litestar_auth._manager.user_policy import DEFAULT_CREATABLE_FIELDS, DEFAULT_UPDATABLE_FIELDS, UserFieldPolicy
 from litestar_auth._superuser_role import DEFAULT_SUPERUSER_ROLE_NAME
 from litestar_auth.config import _resolve_token_secret, validate_production_secret
 from litestar_auth.db.base import BaseOAuthAccountStore
 from litestar_auth.types import LoginIdentifier, UserProtocol
 
 if TYPE_CHECKING:
+    from litestar_auth._manager.api_key_config import ApiKeyConfigProtocol, ApiKeyManagerConfig
     from litestar_auth._manager.security import UserManagerSecurity
     from litestar_auth.db.base import BaseApiKeyStore, BaseUserStore
     from litestar_auth.password import PasswordHelper
@@ -61,7 +63,7 @@ class ConstructorAttributes[UP: UserProtocol[Any], ID]:
     user_db: BaseUserStore[UP, ID]
     oauth_account_store: BaseOAuthAccountStore[UP, ID] | None
     api_key_store: BaseApiKeyStore[Any, ID] | None
-    api_key_config: object | None
+    api_key_config: ApiKeyManagerConfig | ApiKeyConfigProtocol | None
     resolved_secret_inputs: ResolvedSecretInputs[ID]
     verification_token_lifetime: timedelta
     reset_password_token_lifetime: timedelta
@@ -70,6 +72,7 @@ class ConstructorAttributes[UP: UserProtocol[Any], ID]:
     backends: tuple[object, ...]
     login_identifier: LoginIdentifier
     superuser_role_name: str
+    field_policy: UserFieldPolicy
     unsafe_testing: bool
 
 
@@ -80,7 +83,7 @@ class BaseUserManagerConfig[UP: UserProtocol[Any], ID]:
     user_db: BaseUserStore[UP, ID]
     oauth_account_store: BaseOAuthAccountStore[UP, ID] | None = None
     api_key_store: BaseApiKeyStore[Any, ID] | None = None
-    api_key_config: object | None = None
+    api_key_config: ApiKeyManagerConfig | ApiKeyConfigProtocol | None = None
     password_helper: PasswordHelper | None = None
     security: UserManagerSecurity[ID] | None = None
     verification_token_lifetime: timedelta = DEFAULT_VERIFY_TOKEN_LIFETIME
@@ -90,15 +93,25 @@ class BaseUserManagerConfig[UP: UserProtocol[Any], ID]:
     backends: tuple[object, ...] = ()
     login_identifier: LoginIdentifier = "email"
     superuser_role_name: str = DEFAULT_SUPERUSER_ROLE_NAME
+    creatable_fields: Collection[str] = DEFAULT_CREATABLE_FIELDS
+    updatable_fields: Collection[str] = DEFAULT_UPDATABLE_FIELDS
     unsafe_testing: bool = False
 
+    @property
+    def field_policy(self) -> UserFieldPolicy:
+        """Return the explicit user-field policy declared for this manager."""
+        return UserFieldPolicy(
+            creatable_fields=frozenset(self.creatable_fields),
+            updatable_fields=frozenset(self.updatable_fields),
+        )
 
-class BaseUserManagerOptions[UP: UserProtocol[Any], ID](TypedDict, total=False):
+
+class BaseUserManagerConstructorKwargs[UP: UserProtocol[Any], ID](TypedDict, total=False):
     """Keyword options accepted by :class:`~litestar_auth.manager.BaseUserManager`."""
 
     oauth_account_store: BaseOAuthAccountStore[UP, ID] | None
     api_key_store: BaseApiKeyStore[Any, ID] | None
-    api_key_config: object | None
+    api_key_config: ApiKeyManagerConfig | ApiKeyConfigProtocol | None
     password_helper: PasswordHelper | None
     security: UserManagerSecurity[ID] | None
     verification_token_lifetime: timedelta
@@ -108,6 +121,8 @@ class BaseUserManagerOptions[UP: UserProtocol[Any], ID](TypedDict, total=False):
     backends: tuple[object, ...]
     login_identifier: LoginIdentifier
     superuser_role_name: str
+    creatable_fields: Collection[str]
+    updatable_fields: Collection[str]
     unsafe_testing: bool
 
 
@@ -298,13 +313,7 @@ class ManagerConstructorInputs[ID]:
         """Return the ``security=`` bundle for :class:`~litestar_auth.manager.BaseUserManager`."""
         return self.effective_security
 
-    def _build_manager_id_parser_kwargs(self) -> dict[str, Any]:
-        """Return the explicit ``id_parser`` kwarg when the default contract needs it."""
-        if self.manager_security is not None or self.id_parser is None:
-            return {}
-        return {"id_parser": self.id_parser}
-
-    def build_kwargs(self) -> dict[str, Any]:
+    def build_kwargs(self) -> BaseUserManagerConstructorKwargs[Any, ID]:
         """Materialize constructor kwargs for the target manager class.
 
         The default plugin builder now assumes the default ``BaseUserManager``-style
@@ -315,7 +324,7 @@ class ManagerConstructorInputs[ID]:
         Returns:
             A concrete kwargs dictionary ready for ``user_manager_class(...)``.
         """
-        constructor_kwargs: dict[str, Any] = {
+        constructor_kwargs: BaseUserManagerConstructorKwargs[Any, ID] = {
             "security": self._materialize_security_for_constructor(),
             "backends": self.backends,
         }

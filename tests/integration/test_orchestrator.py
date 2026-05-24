@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import is_dataclass
 from functools import partial
-from typing import TYPE_CHECKING, Any, Self, cast
+from typing import TYPE_CHECKING, Annotated, Any, Self, cast
 from uuid import UUID, uuid4
 
 import msgspec
@@ -12,6 +12,7 @@ import pytest
 from cryptography.fernet import Fernet
 from litestar import Litestar, Request, get
 from litestar.exceptions import ClientException
+from litestar.params import Dependency
 from litestar.plugins import InitPlugin
 from litestar.testing import AsyncTestClient
 
@@ -35,9 +36,12 @@ _current_counter = _totp_mod._current_counter
 _generate_totp_code = _totp_mod._generate_totp_code
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
     from types import TracebackType
 
-    from litestar_auth.db.base import BaseUserStore
+    from litestar_auth._manager.api_keys import ApiKeyConfigProtocol
+    from litestar_auth.db.base import BaseApiKeyStore, BaseUserStore
+    from litestar_auth.types import LoginIdentifier
 
 pytestmark = [pytest.mark.integration]
 TOTP_RECOVERY_CODE_LOOKUP_SECRET = "test-recovery-code-lookup-secret-123"
@@ -52,6 +56,35 @@ TOTAL_USERS = 3
 
 class PluginUserManager(BaseUserManager[ExampleUser, UUID]):
     """Concrete manager exposing paginated listings for plugin tests."""
+
+    def __init__(  # noqa: PLR0913
+        self,
+        user_db: BaseUserStore[ExampleUser, UUID],
+        *,
+        password_helper: PasswordHelper | None = None,
+        security: UserManagerSecurity[UUID] | None = None,
+        password_validator: Callable[[str], None] | None = None,
+        backends: tuple[object, ...] = (),
+        login_identifier: LoginIdentifier = "email",
+        superuser_role_name: str = "admin",
+        api_key_store: BaseApiKeyStore[Any, UUID] | None = None,
+        api_key_config: ApiKeyConfigProtocol | None = None,
+        unsafe_testing: bool = False,
+    ) -> None:
+        """Initialize the manager with the custom DTO field policy used by this module."""
+        super().__init__(
+            user_db,
+            password_helper=password_helper,
+            security=security,
+            password_validator=password_validator,
+            backends=backends,
+            login_identifier=login_identifier,
+            superuser_role_name=superuser_role_name,
+            api_key_store=api_key_store,
+            api_key_config=api_key_config,
+            unsafe_testing=unsafe_testing,
+            updatable_fields=frozenset({"email", "password", "bio"}),
+        )
 
     async def list_users(self, *, offset: int, limit: int) -> tuple[list[ExampleUser], int]:
         """Return users ordered by insertion with total count metadata."""
@@ -214,9 +247,12 @@ class DummySessionMaker:
         return DummySession()
 
 
+_LitestarAuthUserManagerProbe = Annotated[PluginUserManager, Dependency()]
+
+
 @get("/dependency-probe", sync_to_thread=False)
 def dependency_probe(
-    litestar_auth_user_manager: object,
+    litestar_auth_user_manager: _LitestarAuthUserManagerProbe,
     litestar_auth_config: object,
 ) -> dict[str, bool]:
     """Expose whether the plugin registered DI providers.
@@ -739,9 +775,11 @@ async def _register_update_and_delete_user(
     assert update_response.json()["bio"] == "Updated via plugin"
     assert not created_user.bio
 
-    delete_response = await client.delete(
+    delete_response = await client.request(
+        "DELETE",
         f"/users/{created_user.id}",
         headers={"Authorization": "Bearer plugin-2"},
+        json={"current_password": "admin-password"},
     )
     assert delete_response.status_code == HTTP_OK
     assert not delete_response.json()["bio"]

@@ -252,7 +252,6 @@ def test_ratelimit_reexport_module_keeps_private_helpers_internal() -> None:
     assert tuple(ratelimit_module.AuthRateLimitSlot) == tuple(AuthRateLimitSlot)
     assert not hasattr(ratelimit_module, "AuthRateLimitEndpointSlot")
     assert not hasattr(ratelimit_module, "_DEFAULT_TRUSTED_HEADERS")
-    assert not hasattr(ratelimit_module, "_client_host")
     assert not hasattr(ratelimit_module, "_extract_email")
     assert not hasattr(ratelimit_module, "_load_redis_asyncio")
     assert not hasattr(ratelimit_module, "_safe_key_part")

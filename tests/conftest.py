@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import socket
 import sqlite3
 import tomllib
 from contextlib import asynccontextmanager
@@ -15,6 +16,7 @@ from sqlalchemy import create_engine, event
 from sqlalchemy.orm import Session as SASession
 from sqlalchemy.pool import StaticPool
 
+from litestar_auth._plugin import _redirect_validation
 from litestar_auth.models import User
 from tests._helpers import (
     DEFAULT_FAKEREDIS_VERSION,
@@ -34,6 +36,75 @@ if TYPE_CHECKING:
     from sqlalchemy.schema import MetaData
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent
+
+# Suffixes for hostnames reserved by RFC 6761 (Special-Use Domain Names) and
+# RFC 2606 (Reserved Top Level DNS Names). Recursive resolvers SHOULD return
+# NXDOMAIN for these, but operator-controlled resolvers (Cloudflare WARP,
+# NextDNS, captive-portal DNS) frequently synthesize answers in the
+# 198.18.0.0/15 benchmark range, which Python's ``ipaddress`` module classifies
+# as private. That synthesis flips ``_is_unsafe_redirect_host`` from "safe"
+# (gaierror falls open) to "unsafe" (resolved-IP-is-private fails closed),
+# which breaks every OAuth fixture using ``app.example`` / ``app.example.com``
+# / ``provider.example`` etc. on those resolvers without indicating any real
+# regression in the validator.
+_RFC_RESERVED_DNS_SUFFIXES: tuple[str, ...] = (
+    ".example",
+    ".example.com",
+    ".example.net",
+    ".example.org",
+    ".test",
+    ".invalid",
+)
+
+
+@pytest.fixture(autouse=True)
+def _hermetic_reserved_dns_for_redirect_validation(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Force ``socket.getaddrinfo`` to raise ``gaierror`` for RFC 6761/2606 hostnames.
+
+    The redirect-origin validator at
+    ``litestar_auth._plugin._redirect_validation._hostname_resolves_to_unsafe_ip``
+    treats ``gaierror`` as fail-open (matches the RFC-compliant NXDOMAIN
+    behaviour and intentionally avoids spurious validation errors in offline
+    CI). Resolvers that synthesize captive answers for reserved suffixes
+    therefore flip the validator's verdict on shared test fixtures such as
+    ``https://app.example/auth/oauth``. This fixture re-establishes the
+    RFC-compliant resolver behaviour for reserved suffixes only, leaving
+    every other hostname (including the validator's own per-test
+    ``getaddrinfo`` mocks at ``tests/unit/test_plugin_validation.py``) to
+    take precedence via their own ``monkeypatch.setattr`` calls.
+    """
+    real_getaddrinfo = _redirect_validation.socket.getaddrinfo
+
+    def _hermetic_getaddrinfo(  # noqa: PLR0913 — mirrors the stdlib ``socket.getaddrinfo`` signature.
+        host: bytes | str | None,
+        port: bytes | str | int | None,
+        *,
+        family: int = 0,
+        type: int = 0,  # noqa: A002 — matches the stdlib ``socket.getaddrinfo`` signature.
+        proto: int = 0,
+        flags: int = 0,
+    ) -> list[tuple[socket.AddressFamily, socket.SocketKind, int, str, tuple[Any, ...]]]:
+        """Raise ``gaierror`` for reserved test hostnames; delegate everything else.
+
+        Returns:
+            Whatever the real ``socket.getaddrinfo`` returns for non-reserved hosts.
+
+        Raises:
+            socket.gaierror: When ``host`` falls under an RFC 6761/2606 reserved
+                suffix; the validator treats this as fail-open (NXDOMAIN) as it
+                does in compliant resolvers.
+        """
+        decoded_host = host.decode("ascii", errors="ignore") if isinstance(host, bytes) else host or ""
+        normalized_host = decoded_host.casefold().rstrip(".")
+        if any(
+            normalized_host == suffix.lstrip(".") or normalized_host.endswith(suffix)
+            for suffix in _RFC_RESERVED_DNS_SUFFIXES
+        ):
+            msg = f"hermetic-test resolver: {decoded_host!r} treated as NXDOMAIN per RFC 6761/2606"
+            raise socket.gaierror(socket.EAI_NONAME, msg)
+        return real_getaddrinfo(host, port, family, type, proto, flags)
+
+    monkeypatch.setattr(_redirect_validation.socket, "getaddrinfo", _hermetic_getaddrinfo)
 
 
 def project_version_from_pyproject() -> str:

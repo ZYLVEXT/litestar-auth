@@ -10,9 +10,10 @@ from types import SimpleNamespace
 from typing import Any, cast
 from unittest.mock import AsyncMock, MagicMock
 
+import msgspec
 import pytest
-from litestar import Litestar, Router
-from litestar.exceptions import ClientException
+from litestar import Litestar, Request, Router
+from litestar.exceptions import ClientException, HTTPException
 from litestar.openapi.config import OpenAPIConfig
 from litestar.response import Redirect, Response
 from litestar.status_codes import HTTP_400_BAD_REQUEST
@@ -20,8 +21,13 @@ from litestar.status_codes import HTTP_400_BAD_REQUEST
 import litestar_auth.controllers._utils as controller_utils_module
 import litestar_auth.controllers.oauth as oauth_module
 import litestar_auth.oauth._flow_cookie as flow_cookie_module
+from litestar_auth.controllers._oauth_associate_routes import (
+    _OAuthCodeQuery,
+    _OAuthStateQuery,
+)
 from litestar_auth.controllers._oauth_helpers import (
     STATE_COOKIE_MAX_AGE,
+    _clear_state_cookie_on_callback_exit,
     _encode_oauth_flow_cookie,
     _require_verified_email_evidence,
 )
@@ -74,6 +80,14 @@ def _flow_cookie(state: str = "secure-state", code_verifier: str = "secure-code-
     return _OAuthFlowCookie(state=state, code_verifier=code_verifier)
 
 
+def _assert_invalid_oauth_state(exc: ClientException) -> None:
+    """Assert the stable invalid OAuth state exception shape."""
+    assert exc.status_code == HTTP_400_BAD_REQUEST
+    assert exc.detail == "Invalid OAuth state."
+    extra = exc.extra
+    assert (extra.get("code") if isinstance(extra, dict) else None) == ErrorCode.OAUTH_STATE_INVALID
+
+
 # --- _validate_state ---
 
 
@@ -121,9 +135,34 @@ def test_oauth_flow_cookie_rejects_wrong_secret() -> None:
     with pytest.raises(ClientException) as exc_info:
         _decode_oauth_flow_cookie(encoded, flow_cookie_cipher=_flow_cookie_cipher(WRONG_OAUTH_FLOW_COOKIE_SECRET))
 
-    assert exc_info.value.status_code == HTTP_400_BAD_REQUEST
-    extra = exc_info.value.extra
-    assert (extra.get("code") if isinstance(extra, dict) else None) == ErrorCode.OAUTH_STATE_INVALID
+    _assert_invalid_oauth_state(exc_info.value)
+
+
+def test_oauth_flow_cookie_rejects_expired_envelope() -> None:
+    """Encrypted OAuth flow cookies expire server-side at the cookie max-age boundary."""
+    cipher = _flow_cookie_cipher()
+    old_payload = msgspec.json.encode(_flow_cookie())
+    old_token = cipher._fernet.encrypt_at_time(old_payload, current_time=1).decode("ascii").rstrip("=")
+    encoded = f"v2.{old_token}"
+
+    with pytest.raises(ClientException) as exc_info:
+        _decode_oauth_flow_cookie(encoded, flow_cookie_cipher=cipher)
+
+    _assert_invalid_oauth_state(exc_info.value)
+
+
+def test_oauth_flow_cookie_rejects_tampered_envelope_body() -> None:
+    """Tampered encrypted OAuth flow cookies share the stable invalid-state response."""
+    encoded = _encode_oauth_flow_cookie(_flow_cookie(), flow_cookie_cipher=_flow_cookie_cipher())
+    version, separator, token = encoded.partition(".")
+    tamper_index = len(token) // 2
+    replacement = "A" if token[tamper_index] != "A" else "B"
+    tampered = f"{version}{separator}{token[:tamper_index]}{replacement}{token[tamper_index + 1 :]}"
+
+    with pytest.raises(ClientException) as exc_info:
+        _decode_oauth_flow_cookie(tampered, flow_cookie_cipher=_flow_cookie_cipher())
+
+    _assert_invalid_oauth_state(exc_info.value)
 
 
 @pytest.mark.parametrize(
@@ -140,9 +179,7 @@ def test_oauth_flow_cookie_rejects_empty_decrypted_fields(flow_cookie: _OAuthFlo
     with pytest.raises(ClientException) as exc_info:
         _decode_oauth_flow_cookie(encoded, flow_cookie_cipher=_flow_cookie_cipher())
 
-    assert exc_info.value.status_code == HTTP_400_BAD_REQUEST
-    extra = exc_info.value.extra
-    assert (extra.get("code") if isinstance(extra, dict) else None) == ErrorCode.OAUTH_STATE_INVALID
+    _assert_invalid_oauth_state(exc_info.value)
 
 
 def test_oauth_flow_cookie_crypto_dependency_error(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -190,6 +227,27 @@ def test_oauth_flow_cookie_decrypt_reuses_constructed_crypto(monkeypatch: pytest
     assert cipher.decrypt(encoded) == _flow_cookie()
 
 
+def test_oauth_flow_cookie_decrypt_passes_cookie_max_age_as_fernet_ttl() -> None:
+    """Decrypt enforces the same server-side TTL as the HTTP cookie max-age."""
+
+    class RecordingFernet:
+        """Minimal Fernet surface that records decrypt TTL."""
+
+        ttl: int | None = None
+
+        def decrypt(self, token: bytes, *, ttl: int) -> bytes:
+            """Return a valid payload and record the requested TTL."""
+            self.ttl = ttl
+            assert token == b"abc="
+            return msgspec.json.encode(_flow_cookie())
+
+    fernet = RecordingFernet()
+    cipher = _OAuthFlowCookieCipher(_fernet=fernet, _invalid_token_type=ValueError)
+
+    assert cipher.decrypt("v2.abc") == _flow_cookie()
+    assert fernet.ttl == STATE_COOKIE_MAX_AGE
+
+
 def test_oauth_flow_cookie_module_reload_preserves_cipher_contract(monkeypatch: pytest.MonkeyPatch) -> None:
     """Reloading the extracted flow-cookie module preserves encrypted envelope behavior."""
     assert flow_cookie_module.__file__ is not None
@@ -224,10 +282,7 @@ def test_oauth_flow_cookie_decode_rejects_malformed_or_incomplete_values(cookie_
     with pytest.raises(ClientException) as exc_info:
         _decode_oauth_flow_cookie(cookie_value, flow_cookie_cipher=_flow_cookie_cipher())
 
-    assert exc_info.value.status_code == HTTP_400_BAD_REQUEST
-    assert exc_info.value.detail == "Invalid OAuth state."
-    extra = exc_info.value.extra
-    assert (extra.get("code") if isinstance(extra, dict) else None) == ErrorCode.OAUTH_STATE_INVALID
+    _assert_invalid_oauth_state(exc_info.value)
 
 
 def test_clear_state_cookie_uses_expected_cookie_settings() -> None:
@@ -249,6 +304,59 @@ def test_clear_state_cookie_uses_expected_cookie_settings() -> None:
     assert cookie.secure is False
     assert cookie.httponly is True
     assert cookie.samesite == "lax"
+
+
+@pytest.mark.asyncio
+async def test_clear_state_cookie_on_callback_exit_without_success_marker() -> None:
+    """Callback exit without a success marker leaves the response untouched."""
+    response = Response(content=None)
+
+    async with _clear_state_cookie_on_callback_exit(
+        cookie_name="__oauth_state_github",
+        cookie_path="/auth/oauth/github",
+        cookie_secure=False,
+    ):
+        pass
+
+    assert response.cookies == []
+
+
+@pytest.mark.asyncio
+async def test_clear_state_cookie_on_callback_exit_clears_cookie_on_success() -> None:
+    """Successful callback exit clears the provider-scoped state cookie."""
+    response = Response(content=None)
+
+    async with _clear_state_cookie_on_callback_exit(
+        cookie_name="__oauth_state_github",
+        cookie_path="/auth/oauth/github",
+        cookie_secure=False,
+    ) as mark_success:
+        mark_success(response)
+
+    cookie = response.cookies[0]
+    assert cookie.key == "__oauth_state_github"
+    assert not cookie.value
+    assert cookie.max_age == 0
+
+
+@pytest.mark.asyncio
+async def test_clear_state_cookie_on_callback_exit_attaches_header_on_http_exception() -> None:
+    """Client-error callback exit attaches the state-cookie expiry header before re-raising.
+
+    Raises:
+        HTTPException: Re-raised after attaching the Set-Cookie header.
+    """
+    with pytest.raises(HTTPException) as exc_info:
+        async with _clear_state_cookie_on_callback_exit(
+            cookie_name="__oauth_state_github",
+            cookie_path="/auth/oauth/github",
+            cookie_secure=False,
+        ):
+            raise HTTPException(status_code=HTTP_400_BAD_REQUEST, detail="Invalid OAuth state.")
+
+    headers = exc_info.value.headers or {}
+    assert "set-cookie" in headers
+    assert "__oauth_state_github=" in headers["set-cookie"]
 
 
 def test_validate_state_passes_when_cookie_matches_query() -> None:
@@ -1167,10 +1275,11 @@ async def test_oauth_associate_di_callback_rejects_duplicate_injected_manager_in
 
 
 def test_oauth_associate_di_callback_exposes_configured_dependency_parameter_name() -> None:
-    """DI-key associate callbacks expose the configured Litestar dependency parameter name."""
+    """DI-key associate callbacks expose the previous Litestar signature and annotations."""
+    dependency_parameter_name = "custom_manager_key"
     controller = create_oauth_associate_controller(
         provider_name="github",
-        user_manager_dependency_key="custom_manager_key",
+        user_manager_dependency_key=dependency_parameter_name,
         oauth_client=_make_oauth_client(),
         redirect_base_url="https://app.example/auth/associate",
         oauth_flow_cookie_secret=OAUTH_FLOW_COOKIE_SECRET,
@@ -1179,8 +1288,67 @@ def test_oauth_associate_di_callback_exposes_configured_dependency_parameter_nam
     )
 
     callback_handler = cast("Any", controller).callback.fn
+    signature = inspect.signature(callback_handler)
 
-    assert "custom_manager_key" in inspect.signature(callback_handler).parameters
+    assert tuple(signature.parameters) == (
+        "self",
+        "request",
+        "code",
+        dependency_parameter_name,
+        "oauth_state",
+    )
+    assert signature.parameters["self"].annotation is object
+    assert signature.parameters["request"].annotation == Request[Any, Any, Any]
+    assert signature.parameters["code"].annotation == _OAuthCodeQuery
+    assert (
+        signature.parameters[dependency_parameter_name].annotation
+        == oauth_module.OAuthControllerUserManagerProtocol[
+            Any,
+            Any,
+        ]
+    )
+    oauth_state_parameter = signature.parameters["oauth_state"]
+    assert oauth_state_parameter.annotation == _OAuthStateQuery
+    assert signature.return_annotation == Response[Any]
+    assert callback_handler.__annotations__ == {
+        "self": object,
+        "request": Request[Any, Any, Any],
+        "code": _OAuthCodeQuery,
+        dependency_parameter_name: oauth_module.OAuthControllerUserManagerProtocol[Any, Any],
+        "oauth_state": _OAuthStateQuery,
+        "return": Response[Any],
+    }
+
+
+def test_oauth_associate_direct_callback_keeps_previous_signature_and_annotations() -> None:
+    """Direct-manager associate callbacks keep the previous Litestar signature and annotations."""
+    controller = create_oauth_associate_controller(
+        provider_name="github",
+        user_manager=cast("Any", MagicMock()),
+        oauth_client=_make_oauth_client(),
+        redirect_base_url="https://app.example/auth/associate",
+        oauth_flow_cookie_secret=OAUTH_FLOW_COOKIE_SECRET,
+        path="/auth/associate",
+        cookie_secure=True,
+    )
+
+    callback_handler = cast("Any", controller).callback.fn
+    signature = inspect.signature(callback_handler)
+
+    assert tuple(signature.parameters) == ("self", "request", "code", "oauth_state")
+    assert signature.parameters["self"].annotation is object
+    assert signature.parameters["request"].annotation == Request[Any, Any, Any]
+    assert signature.parameters["code"].annotation == _OAuthCodeQuery
+    oauth_state_parameter = signature.parameters["oauth_state"]
+    assert oauth_state_parameter.annotation == _OAuthStateQuery
+    assert signature.return_annotation == Response[Any]
+    assert callback_handler.__annotations__ == {
+        "self": object,
+        "request": Request[Any, Any, Any],
+        "code": _OAuthCodeQuery,
+        "oauth_state": _OAuthStateQuery,
+        "return": Response[Any],
+    }
 
 
 def test_create_oauth_associate_controller_applies_openapi_security_to_both_protected_routes() -> None:
