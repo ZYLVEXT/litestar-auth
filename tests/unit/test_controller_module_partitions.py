@@ -13,7 +13,6 @@ import pytest
     [
         "litestar_auth.controllers._auth_helpers",
         "litestar_auth.controllers._oauth_assembly",
-        "litestar_auth.controllers._oauth_associate_routes",
         "litestar_auth.controllers._oauth_helpers",
         "litestar_auth.controllers._users_helpers",
     ],

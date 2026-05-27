@@ -21,15 +21,15 @@ from litestar.status_codes import HTTP_400_BAD_REQUEST
 import litestar_auth.controllers._utils as controller_utils_module
 import litestar_auth.controllers.oauth as oauth_module
 import litestar_auth.oauth._flow_cookie as flow_cookie_module
-from litestar_auth.controllers._oauth_associate_routes import (
-    _OAuthCodeQuery,
-    _OAuthStateQuery,
-)
 from litestar_auth.controllers._oauth_helpers import (
     STATE_COOKIE_MAX_AGE,
     _clear_state_cookie_on_callback_exit,
     _encode_oauth_flow_cookie,
     _require_verified_email_evidence,
+)
+from litestar_auth.controllers.oauth import (
+    _OAuthCodeQuery,
+    _OAuthStateQuery,
 )
 from litestar_auth.exceptions import (
     ConfigurationError,
