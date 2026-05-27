@@ -24,6 +24,7 @@ from litestar_auth.controllers._step_up import (
 from litestar_auth.controllers._users_helpers import (
     AdminUserDeleteStepUpRequest,
     _build_change_password_rate_limit_key,
+    _build_safe_self_update,
     _reject_blocked_self_update_fields,
     _self_update_includes_email,
 )
@@ -36,7 +37,6 @@ from litestar_auth.schemas import AdminUserUpdate, ChangePasswordRequest, UserRe
 from litestar_auth.totp import _current_counter, _generate_totp_code, generate_totp_secret
 
 UsersControllerConfig = users_module.UsersControllerConfig
-_build_safe_self_update = users_module._build_safe_self_update
 _users_get_user_or_404 = users_module._users_get_user_or_404
 _users_handle_change_password = users_module._users_handle_change_password
 _users_handle_delete_user = users_module._users_handle_delete_user
@@ -890,7 +890,7 @@ async def test_users_handle_update_user_rejects_non_mapping_update_payload(
     user = DummyUser(id=uuid4(), email="user@example.com", is_verified=True, roles=["member"])
     admin_user = DummyUser(id=uuid4(), email="admin@example.com", is_verified=True, roles=["superuser"])
     manager = RecordingUserManager(user_to_get=user, authenticated_user=admin_user)
-    monkeypatch.setattr("litestar_auth.controllers._users_handlers.msgspec.to_builtins", lambda _value: ["bad"])
+    monkeypatch.setattr("litestar_auth.controllers.users.msgspec.to_builtins", lambda _value: ["bad"])
 
     with pytest.raises(TypeError, match="Expected a mapping from msgspec\\.to_builtins\\."):
         await _users_handle_update_user(
