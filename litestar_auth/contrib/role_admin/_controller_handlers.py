@@ -98,19 +98,17 @@ def create_create_role_handler() -> RequestBodyRouteHandler:
         role_admin = _resolve_role_admin(context, db_session=db_session)
         payload = cast("RoleCreate", data)
         normalized_role_name = _normalize_input_role_name(payload.name)
+        from sqlalchemy.exc import IntegrityError  # noqa: PLC0415
+
         try:
             await role_admin.create_role(
                 role=normalized_role_name,
                 description=payload.description,
                 fail_if_exists=True,
             )
-        except Exception as exc:
-            from sqlalchemy.exc import IntegrityError  # noqa: PLC0415
-
-            if isinstance(exc, IntegrityError):
-                msg = f"Role {normalized_role_name!r} already exists."
-                raise _role_already_exists(msg) from exc
-            raise
+        except IntegrityError as exc:
+            msg = f"Role {normalized_role_name!r} already exists."
+            raise _role_already_exists(msg) from exc
         role = await _load_role_row(role_admin, normalized_role_name=normalized_role_name)
         return _to_role_read(role)
 
