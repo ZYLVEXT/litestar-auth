@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
-from typing import Any, Literal, Protocol, overload
+from typing import Any, Literal, overload
 
 type ManagerHookName = Literal[
     "after_register",
@@ -32,49 +32,6 @@ class ManagerHookEvent:
 
 
 type ManagerHookSubscriber = Callable[[ManagerHookEvent], Awaitable[None]]
-
-
-class ManagerHookTarget[UP](Protocol):
-    """Hook methods implemented by the owning manager or hook mixin."""
-
-    async def on_after_register(self, user: UP, token: str) -> None:  # pragma: no cover
-        """Run after a new user has been persisted and a verification token has been issued."""
-
-    async def on_after_register_duplicate(self, user: UP) -> None:  # pragma: no cover
-        """Run after duplicate registration handling completes for an existing user."""
-
-    async def on_after_login(self, user: UP) -> None:  # pragma: no cover
-        """Run after a user successfully authenticates."""
-
-    async def on_after_verify(self, user: UP) -> None:  # pragma: no cover
-        """Run after a user's email verification succeeds."""
-
-    async def on_after_request_verify_token(self, user: UP | None, token: str | None) -> None:  # pragma: no cover
-        """Run after verification-token request handling, including enumeration-safe misses."""
-
-    async def on_after_forgot_password(self, user: UP | None, token: str | None) -> None:  # pragma: no cover
-        """Run after forgot-password handling, including enumeration-safe misses."""
-
-    async def on_after_reset_password(self, user: UP) -> None:  # pragma: no cover
-        """Run after a user's password has been reset."""
-
-    async def on_after_update(self, user: UP, update_dict: dict[str, Any]) -> None:  # pragma: no cover
-        """Run after a user update has been persisted."""
-
-    async def on_before_delete(self, user: UP) -> None:  # pragma: no cover
-        """Run before deleting a user."""
-
-    async def on_after_delete(self, user: UP) -> None:  # pragma: no cover
-        """Run after deleting a user."""
-
-    async def on_after_api_key_created(self, user: UP, api_key: object) -> None:  # pragma: no cover
-        """Run after an API key has been created."""
-
-    async def on_after_api_key_revoked(self, user: UP, api_key: object) -> None:  # pragma: no cover
-        """Run after an API key has been revoked."""
-
-    async def on_after_api_key_used(self, api_key: object) -> None:  # pragma: no cover
-        """Run after an API-key last-used write is persisted."""
 
 
 class ManagerHookBus[UP]:
