@@ -59,7 +59,6 @@ class ApiKeyStore:
 
     async def create(self, data: object) -> ApiKeyRow:
         """Unused protocol method for this strategy-only fixture."""
-        del data
         raise NotImplementedError
 
     async def create_for_user_with_limit(self, data: object, *, max_keys_per_user: int) -> ApiKeyRow | None:
@@ -68,7 +67,6 @@ class ApiKeyStore:
         Returns:
             ``None`` because tests never exercise API-key creation through this fixture.
         """
-        del data, max_keys_per_user
         return None
 
     async def get_by_key_id(self, key_id: str, *, include_inactive: bool = False) -> ApiKeyRow | None:
@@ -82,7 +80,6 @@ class ApiKeyStore:
         Returns:
             Empty list because tests never exercise listing through this fixture.
         """
-        del user_id, include_inactive
         return []
 
     async def delete_for_user(self, user_id: UUID) -> int:
@@ -91,7 +88,6 @@ class ApiKeyStore:
         Returns:
             ``0`` because tests never exercise hard-delete cleanup through this fixture.
         """
-        del user_id
         return 0
 
     async def revoke(self, key_id: str, *, revoked_at: datetime) -> ApiKeyRow | None:
@@ -100,7 +96,6 @@ class ApiKeyStore:
         Returns:
             ``None`` because tests never exercise revocation through this fixture.
         """
-        del key_id, revoked_at
         return None
 
     async def update(
@@ -115,7 +110,6 @@ class ApiKeyStore:
         Returns:
             ``None`` because tests never exercise metadata updates through this fixture.
         """
-        del key_id, name, scopes
         return None
 
     async def update_last_used_at(self, key_id: str, *, last_used_at: datetime) -> ApiKeyRow | None:
@@ -124,7 +118,6 @@ class ApiKeyStore:
         Returns:
             ``None`` because tests never exercise last-used writes through this fixture.
         """
-        del key_id, last_used_at
         return None
 
     async def list_signing_keys_requiring_reencrypt(
@@ -138,7 +131,6 @@ class ApiKeyStore:
         Returns:
             Empty list because tests never exercise rotation scans through this fixture.
         """
-        del requires_reencrypt, include_inactive
         return []
 
     async def replace_signing_key_encrypted_secret(
@@ -152,7 +144,6 @@ class ApiKeyStore:
         Returns:
             ``None`` because tests never exercise secret replacement through this fixture.
         """
-        del key_id, encrypted_secret
         return None
 
 
@@ -538,15 +529,13 @@ async def test_api_key_backend_exposes_context_while_non_contextual_backend_uses
 
     class StaticStrategy:
         async def read_token(self, token: str | None, user_manager: object) -> ExampleUser:
-            del token, user_manager
             return user
 
         async def write_token(self, user: ExampleUser) -> str:
-            del user
             return "token"
 
         async def destroy_token(self, token: str, user: ExampleUser) -> None:
-            del token, user
+            pass
 
     bearer_backend = AuthenticationBackend[ExampleUser, UUID](
         name="bearer-jwt",

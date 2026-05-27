@@ -70,12 +70,10 @@ class TrackingAsyncSession:
         traceback: TracebackType | None,
     ) -> None:
         """Exit the async session context."""
-        del exc_type, exc, traceback
         self.exit_count += 1
 
     def add(self, instance: object) -> None:
         """Match ``AsyncSession.add()`` for contract validation."""
-        del instance
 
     async def execute(self, statement: object) -> None:
         """Match ``AsyncSession.execute()`` for contract validation."""
@@ -83,11 +81,9 @@ class TrackingAsyncSession:
 
     async def scalar(self, statement: object) -> None:
         """Match ``AsyncSession.scalar()`` for contract validation."""
-        del statement
 
     async def scalars(self, statement: object) -> None:
         """Match ``AsyncSession.scalars()`` for contract validation."""
-        del statement
 
     async def flush(self) -> None:
         """Match ``AsyncSession.flush()`` for contract validation."""
@@ -98,7 +94,6 @@ class TrackingAsyncSession:
         Returns:
             One placeholder merged instance.
         """
-        del instance, load
         return object()
 
     async def commit(self) -> None:
@@ -117,7 +112,6 @@ class TrackingAsyncSession:
         with_for_update: object | None = None,
     ) -> None:
         """Match ``AsyncSession.refresh()`` for contract validation."""
-        del instance, attribute_names, with_for_update
 
     @property
     def no_autoflush(self) -> object:
@@ -157,7 +151,6 @@ class MissingMethodsAsyncSession:
         traceback: TracebackType | None,
     ) -> None:
         """Exit the async context."""
-        del exc_type, exc, traceback
 
 
 class MissingMethodsSessionMaker:
@@ -839,7 +832,6 @@ async def test_sqlalchemy_role_admin_unassign_user_roles_checks_role_catalog_whe
     update_calls: list[list[str]] = []
 
     async def _fake_require_role_by_name(self: SQLAlchemyRoleAdmin[User], session: object, *, role_name: str) -> object:
-        del self, session
         await asyncio.sleep(0)
         required_roles.append(role_name)
         return object()
@@ -851,7 +843,6 @@ async def test_sqlalchemy_role_admin_unassign_user_roles_checks_role_catalog_whe
         email: str | None = None,
         user_id: object | None = None,
     ) -> User:
-        del self, session, email, user_id
         await asyncio.sleep(0)
         return user
 
@@ -862,7 +853,6 @@ async def test_sqlalchemy_role_admin_unassign_user_roles_checks_role_catalog_whe
         user: User,
         roles: object,
     ) -> User:
-        del self, manager, user
         await asyncio.sleep(0)
         normalized_roles = normalize_roles(roles)
         update_calls.append(normalized_roles)
@@ -927,7 +917,6 @@ async def test_sqlalchemy_role_admin_delete_role_force_uses_manager_updates_befo
     ]
 
     async def _fake_require_role_by_name(self: SQLAlchemyRoleAdmin[User], session: object, *, role_name: str) -> object:
-        del self, session
         await asyncio.sleep(0)
         captured_role_names.append(("require", role_name))
         return object()
@@ -938,7 +927,6 @@ async def test_sqlalchemy_role_admin_delete_role_force_uses_manager_updates_befo
         *,
         role_name: str,
     ) -> list[User]:
-        del self, session
         await asyncio.sleep(0)
         captured_role_names.append(("load", role_name))
         return users
@@ -950,7 +938,6 @@ async def test_sqlalchemy_role_admin_delete_role_force_uses_manager_updates_befo
         user: User,
         roles: object,
     ) -> User:
-        del manager
         await asyncio.sleep(0)
         normalized_roles = self.normalized_role_names(roles)
         update_calls.append((user.email, normalized_roles))
@@ -958,7 +945,6 @@ async def test_sqlalchemy_role_admin_delete_role_force_uses_manager_updates_befo
         return user
 
     async def _fake_list_role_names(self: SQLAlchemyRoleAdmin[User], session: object) -> list[str]:
-        del self, session
         await asyncio.sleep(0)
         return ["billing"]
 

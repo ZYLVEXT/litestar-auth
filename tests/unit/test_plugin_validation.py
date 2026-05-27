@@ -229,11 +229,9 @@ def _current_inmemory_totp_enrollment_store() -> object:
 
 class _DurableDenylistStore:
     async def deny(self, jti: str, *, ttl_seconds: int) -> bool:
-        del jti, ttl_seconds
         return True
 
     async def is_denied(self, jti: str) -> bool:
-        del jti
         return False
 
 
@@ -251,15 +249,13 @@ class _DurableEnrollmentStore:
         return True
 
     async def save(self, *, user_id: str, jti: str, secret: str, ttl_seconds: int) -> bool:
-        del user_id, jti, secret, ttl_seconds
         return True
 
     async def consume(self, *, user_id: str, jti: str) -> str | None:
-        del user_id, jti
         return None
 
     async def clear(self, *, user_id: str) -> None:
-        del user_id
+        pass
 
 
 def _configured_totp_config(
@@ -293,17 +289,15 @@ class _SharedRateLimitBackend:
         return True
 
     async def check(self, key: str) -> bool:
-        del key
         return True
 
     async def increment(self, key: str) -> None:
-        del key
+        pass
 
     async def reset(self, key: str) -> None:
-        del key
+        pass
 
     async def retry_after(self, key: str) -> int:
-        del key
         return 0
 
 
@@ -314,17 +308,15 @@ class _ProcessLocalRateLimitBackend:
         return False
 
     async def check(self, key: str) -> bool:
-        del key
         return True
 
     async def increment(self, key: str) -> None:
-        del key
+        pass
 
     async def reset(self, key: str) -> None:
-        del key
+        pass
 
     async def retry_after(self, key: str) -> int:
-        del key
         return 0
 
 
@@ -610,7 +602,6 @@ def test_warn_insecure_plugin_startup_defaults_warns_for_current_jwt_strategy(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """JWT denylist warnings use current strategy posture objects."""
-    del monkeypatch
     strategy = _current_jwt_strategy()
     config = _minimal_config(
         backends=[
@@ -871,7 +862,6 @@ def test_validate_backend_strategy_security_allows_explicit_inmemory_jwt_revocat
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """JWTStrategy owns the explicit process-local revocation opt-in."""
-    del monkeypatch
     config = _minimal_config(backends=[_jwt_backend()])
 
     _validate_backend_strategy_security(config)
@@ -1112,11 +1102,11 @@ def test_validate_config_allows_factory_owned_noncanonical_manager_surface() -> 
 
     class _FactoryOwnedManager:
         def __init__(self, user_db: object, *, legacy_dependency: object) -> None:
-            del user_db, legacy_dependency
+            pass
 
         @staticmethod
         async def authenticate(identifier: str, password: str) -> None:
-            del identifier, password
+            pass
 
     config = _minimal_config()
     config.user_manager_class = cast("type[Any]", _FactoryOwnedManager)
@@ -1131,7 +1121,7 @@ def test_validate_password_validator_config_does_not_probe_manager_signature() -
 
     class _ManagerWithoutPasswordValidator:
         def __init__(self, user_db: object) -> None:
-            del user_db
+            pass
 
     config = _minimal_config()
     config.password_validator_factory = lambda _config: None
@@ -1834,7 +1824,6 @@ def test_validate_totp_encryption_key_requires_secret_in_production(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Production TOTP validation requires an at-rest encryption key."""
-    del monkeypatch
     config = _minimal_config(totp_config=TotpConfig(totp_pending_secret=TOTP_PENDING_SECRET))
 
     with pytest.raises(
@@ -1915,7 +1904,6 @@ def test_validate_totp_encryption_key_rejects_empty_secret_in_production(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """An empty typed TOTP secret still fails the production encryption check."""
-    del monkeypatch
     config = _minimal_config(
         totp_config=TotpConfig(totp_pending_secret=TOTP_PENDING_SECRET),
         user_manager_security=UserManagerSecurity[UUID](
@@ -2346,7 +2334,6 @@ def test_validate_totp_sub_config_rejects_missing_enrollment_store_in_production
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Pending enrollment state requires a configured store outside explicit unsafe testing."""
-    del monkeypatch
     with pytest.raises(ValueError, match="totp_enrollment_store is required"):
         validate_totp_sub_config(
             TotpConfig(

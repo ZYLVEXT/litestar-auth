@@ -171,16 +171,14 @@ def _restore_oauth_token_snapshots_after_rollback(session: object, *_args: objec
         _restore_oauth_token_snapshot(target)
 
 
-def _encrypt_oauth_tokens_before_insert(mapper: object, connection: object, target: object) -> None:
+def _encrypt_oauth_tokens_before_insert(mapper: object, connection: object, target: object) -> None:  # noqa: ARG001
     """Encrypt OAuth token fields immediately before INSERT statements."""
-    del mapper, connection
     policy = _require_instance_oauth_token_encryption(target)
     _snapshot_and_encrypt_oauth_tokens(target, field_names=_OAUTH_TOKEN_FIELDS, policy=policy)
 
 
-def _encrypt_oauth_tokens_before_update(mapper: object, connection: object, target: object) -> None:
+def _encrypt_oauth_tokens_before_update(mapper: object, connection: object, target: object) -> None:  # noqa: ARG001
     """Encrypt changed OAuth token fields immediately before UPDATE statements."""
-    del mapper, connection
     state: Any = sa_inspect(target)
     changed_fields = tuple(
         field_name for field_name in _OAUTH_TOKEN_FIELDS if state.attrs[field_name].history.has_changes()
@@ -191,7 +189,6 @@ def _encrypt_oauth_tokens_before_update(mapper: object, connection: object, targ
     _snapshot_and_encrypt_oauth_tokens(target, field_names=changed_fields, policy=policy)
 
 
-def _restore_oauth_tokens_after_write(mapper: object, connection: object, target: object) -> None:
+def _restore_oauth_tokens_after_write(mapper: object, connection: object, target: object) -> None:  # noqa: ARG001
     """Restore plaintext OAuth token fields after a successful INSERT/UPDATE."""
-    del mapper, connection
     _restore_oauth_token_snapshot(target)

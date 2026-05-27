@@ -2077,7 +2077,6 @@ async def test_handle_confirm_enable_rolls_back_totp_secret_when_recovery_code_p
             Returns:
                 The updated user.
             """
-            del self
             managed_user.totp_secret = managed_secret
             return managed_user
 
@@ -2101,7 +2100,6 @@ async def test_handle_confirm_enable_rolls_back_totp_secret_when_recovery_code_p
             Raises:
                 RuntimeError: Always, to simulate recovery-code storage failure.
             """
-            del self, managed_user, code_index
             msg = "recovery-code persistence failed"
             raise RuntimeError(msg)
 
@@ -2145,7 +2143,6 @@ async def test_handle_confirm_enable_requires_recovery_code_lookup_secret_direct
             Returns:
                 The updated user.
             """
-            del self
             managed_user.totp_secret = managed_secret
             return managed_user
 
@@ -2201,7 +2198,6 @@ async def test_handle_confirm_enable_logs_recovery_code_count_without_plaintext(
             Returns:
                 The updated user.
             """
-            del self
             managed_user.totp_secret = managed_secret
             return managed_user
 
@@ -2225,7 +2221,6 @@ async def test_handle_confirm_enable_logs_recovery_code_count_without_plaintext(
             Returns:
                 The updated user.
             """
-            del self
             managed_user.recovery_codes = dict(code_index) or None
             return managed_user
 

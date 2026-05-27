@@ -168,14 +168,13 @@ def _define_plugin_auth_controller_class[UP: UserProtocol[Any], ID](
             before_request=assembly.login_before,
             exception_handlers=assembly.login_exception_handlers,
         )
-        async def login(
+        async def login(  # noqa: PLR6301
             self,
             request: Request[Any, Any, Any],
             data: LoginCredentials,
             litestar_auth_user_manager: _AuthUserManagerDep,
             litestar_auth_backends: _AuthBackendsDep,
         ) -> object:
-            del self
             return await _handle_auth_login(
                 request,
                 data,
@@ -184,12 +183,11 @@ def _define_plugin_auth_controller_class[UP: UserProtocol[Any], ID](
             )
 
         @post("/logout", guards=[is_authenticated], security=assembly.settings.security)
-        async def logout(
+        async def logout(  # noqa: PLR6301
             self,
             request: Request[Any, Any, Any],
             litestar_auth_backends: _AuthBackendsDep,
         ) -> object:
-            del self
             return await _handle_auth_logout(
                 request,
                 ctx=assembly.factory_kit.runtime_context(litestar_auth_backends),
@@ -213,14 +211,13 @@ def _define_plugin_refresh_auth_controller_class[UP: UserProtocol[Any], ID](
         """Backend-bound authentication endpoints with refresh-token rotation."""
 
         @post("/refresh", before_request=assembly.refresh_before)
-        async def refresh(
+        async def refresh(  # noqa: PLR6301
             self,
             request: Request[Any, Any, Any],
             data: RefreshTokenRequest,
             litestar_auth_user_manager: _AuthUserManagerDep,
             litestar_auth_backends: _AuthBackendsDep,
         ) -> Response[Any]:
-            del self
             return await _handle_auth_refresh(
                 request,
                 ctx=assembly.factory_kit.runtime_context(litestar_auth_backends),

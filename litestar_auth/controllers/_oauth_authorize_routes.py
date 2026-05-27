@@ -69,10 +69,9 @@ def _create_authorize_handler[UP: UserProtocol[Any], ID](
 
     @get("/authorize", security=security, responses=responses)
     async def authorize(
-        self: object,
+        self: object,  # noqa: ARG001
         request: Request[Any, Any, Any],
     ) -> Redirect:
-        del self
         return await _perform_authorize_redirect(request, assembly=assembly)
 
     return authorize
@@ -93,10 +92,9 @@ def _create_associate_authorize_handler[UP: UserProtocol[Any], ID](
 
     @post("/authorize", guards=guards, security=security, responses=responses)
     async def authorize(
-        self: object,
+        self: object,  # noqa: ARG001
         request: Request[Any, Any, Any],
     ) -> Redirect:
-        del self
         return await _perform_authorize_redirect(request, assembly=assembly)
 
     return authorize

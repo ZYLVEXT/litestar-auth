@@ -190,11 +190,10 @@ def _create_get_me_handler[UP: UsersControllerUserProtocol[Any], ID](
 
     @get("/me", guards=[is_authenticated])
     async def get_me(
-        self: object,
+        self: object,  # noqa: ARG001
         request: Request[Any, Any, Any],
         litestar_auth_user_manager: UsersControllerUserManagerProtocol[Any, Any],
     ) -> msgspec.Struct:
-        del self
         return await _users_handle_get_me(request, ctx=ctx, user_manager=litestar_auth_user_manager)
 
     return cast("RequestBodyRouteHandler", get_me)
@@ -221,12 +220,11 @@ def _create_update_me_handler[UP: UsersControllerUserProtocol[Any], ID](
         responses={403: TOTP_STEPUP_REQUIRED_OPENAPI_RESPONSE},
     )
     async def update_me(
-        self: object,
+        self: object,  # noqa: ARG001
         request: Request[Any, Any, Any],
         data: msgspec.Struct,
         litestar_auth_user_manager: UsersControllerUserManagerProtocol[Any, Any],
     ) -> msgspec.Struct:
-        del self
         return await _users_handle_update_me(
             request,
             data,
@@ -254,12 +252,11 @@ def _create_change_password_handler[UP: UsersControllerUserProtocol[Any], ID](
         responses=_CHANGE_PASSWORD_OPENAPI_RESPONSES,
     )
     async def change_password(
-        self: object,
+        self: object,  # noqa: ARG001
         request: Request[Any, Any, Any],
         data: msgspec.Struct,
         litestar_auth_user_manager: UsersControllerUserManagerProtocol[Any, Any],
     ) -> None:
-        del self
         await _users_handle_change_password(
             request,
             data,
@@ -281,11 +278,10 @@ def _create_get_user_handler[UP: UsersControllerUserProtocol[Any], ID](
 
     @get("/{user_id:str}", guards=[is_superuser])
     async def get_user(
-        self: object,
+        self: object,  # noqa: ARG001
         user_id: _UserIdPath,
         litestar_auth_user_manager: UsersControllerUserManagerProtocol[Any, Any],
     ) -> msgspec.Struct:
-        del self
         return await _users_handle_get_user(
             user_id,
             ctx=ctx,
@@ -306,13 +302,12 @@ def _create_update_user_handler[UP: UsersControllerUserProtocol[Any], ID](
 
     @patch("/{user_id:str}", guards=[is_superuser])
     async def update_user(
-        self: object,
+        self: object,  # noqa: ARG001
         request: Request[Any, Any, Any],
         user_id: _UserIdPath,
         data: msgspec.Struct,
         litestar_auth_user_manager: UsersControllerUserManagerProtocol[Any, Any],
     ) -> msgspec.Struct:
-        del self
         return await _users_handle_update_user(
             user_id,
             request,
@@ -335,13 +330,12 @@ def _create_delete_user_handler[UP: UsersControllerUserProtocol[Any], ID](
 
     @delete("/{user_id:str}", guards=[is_superuser], status_code=200)
     async def delete_user(
-        self: object,
+        self: object,  # noqa: ARG001
         user_id: _UserIdPath,
         request: Request[Any, Any, Any],
         data: AdminUserDeleteStepUpRequest,
         litestar_auth_user_manager: UsersControllerUserManagerProtocol[Any, Any],
     ) -> msgspec.Struct:
-        del self
         return await _users_handle_delete_user(
             user_id,
             request,

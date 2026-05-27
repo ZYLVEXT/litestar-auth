@@ -18,29 +18,25 @@ if TYPE_CHECKING:
 @dataclass(slots=True)
 class _StructuralUserStore:
     async def get(self, user_id: UUID) -> ExampleUser | None:
-        del user_id
         return None
 
     async def get_by_email(self, email: str) -> ExampleUser | None:
-        del email
         return None
 
     async def get_by_field(self, field_name: LoginIdentifier, value: str) -> ExampleUser | None:
-        del field_name, value
         return None
 
     async def create(self, user_dict: Mapping[str, Any]) -> ExampleUser:
         raise NotImplementedError(user_dict)
 
     async def list_users(self, *, offset: int, limit: int) -> tuple[list[ExampleUser], int]:
-        del offset, limit
         return [], 0
 
     async def update(self, user: ExampleUser, update_dict: Mapping[str, Any]) -> ExampleUser:
         raise NotImplementedError((user, update_dict))
 
     async def delete(self, user_id: UUID) -> None:
-        del user_id
+        pass
 
 
 def test_base_user_store_exposes_runtime_checkable_method_contract() -> None:
@@ -55,24 +51,21 @@ def test_base_user_store_rejects_missing_methods_at_runtime() -> None:
     @dataclass(slots=True)
     class _IncompleteUserStore:
         async def get(self, user_id: UUID) -> ExampleUser | None:
-            del user_id
             return None
 
         async def get_by_email(self, email: str) -> ExampleUser | None:
-            del email
             return None
 
         async def create(self, user_dict: Mapping[str, Any]) -> ExampleUser:
             raise NotImplementedError(user_dict)
 
         async def list_users(self, *, offset: int, limit: int) -> tuple[list[ExampleUser], int]:
-            del offset, limit
             return [], 0
 
         async def update(self, user: ExampleUser, update_dict: Mapping[str, Any]) -> ExampleUser:
             raise NotImplementedError((user, update_dict))
 
         async def delete(self, user_id: UUID) -> None:
-            del user_id
+            pass
 
     assert isinstance(_IncompleteUserStore(), BaseUserStore) is False

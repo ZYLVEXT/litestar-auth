@@ -1344,7 +1344,6 @@ def test_session_bound_user_manager_uses_explicit_account_state_validator_contra
 
     class _TrackingManager(PluginUserManager):
         def require_account_state(self, user: ExampleUser, *, require_verified: bool = False) -> None:
-            del self
             calls.append((user, require_verified))
 
     plugin = LitestarAuth(_minimal_config(user_manager_class=_TrackingManager))
@@ -1537,7 +1536,7 @@ def test_resolve_account_state_validator_delegates_to_shared_validation_helper(
     plugin = LitestarAuth(_minimal_config())
 
     def _sentinel_validator(_user: ExampleUser, *, require_verified: bool = False) -> None:
-        del _user, require_verified
+        pass
 
     seen_manager_classes: list[type[object]] = []
 
@@ -1579,7 +1578,7 @@ def test_resolve_account_state_validator_returns_callable_account_state_contract
 
         @staticmethod
         async def authenticate(identifier: str, password: str) -> None:
-            del identifier, password
+            pass
 
         @staticmethod
         def require_account_state(user: ExampleUser, *, require_verified: bool = False) -> None:

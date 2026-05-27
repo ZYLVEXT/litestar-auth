@@ -90,9 +90,8 @@ def validate_user_manager_security_config[UP: UserProtocol[Any], ID](config: Lit
     )
 
 
-def validate_password_validator_config[UP: UserProtocol[Any], ID](config: LitestarAuthConfig[UP, ID]) -> None:
+def validate_password_validator_config[UP: UserProtocol[Any], ID](_config: LitestarAuthConfig[UP, ID]) -> None:
     """Validate password-validator wiring for the configured user-manager builder."""
-    del config
 
 
 def validate_default_user_manager_constructor_contract[UP: UserProtocol[Any], ID](

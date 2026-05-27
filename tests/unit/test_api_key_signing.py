@@ -72,7 +72,6 @@ class SignedApiKeyStore:
 
     async def get_by_key_id(self, key_id: str, *, include_inactive: bool = False) -> SignedApiKeyRow | None:
         """Return the fixture row when ``key_id`` matches."""
-        del include_inactive
         if key_id == self.row.key_id:
             return self.row
         return None
@@ -83,7 +82,6 @@ class MissingApiKeyStore(SignedApiKeyStore):
 
     async def get_by_key_id(self, key_id: str, *, include_inactive: bool = False) -> SignedApiKeyRow | None:
         """Return no rows."""
-        del key_id, include_inactive
         return None
 
 
@@ -106,7 +104,6 @@ class MissingUserManager(UserManager):
 
     async def get(self, user_id: UUID) -> ExampleUser | None:
         """Return no user."""
-        del user_id
         return None
 
 

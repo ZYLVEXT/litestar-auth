@@ -138,17 +138,16 @@ class _DatabaseRefreshTokenRotationMixin[UP: UserProtocol[Any], ID](
             return None
         return rotated_refresh_token
 
-    async def rotate_refresh_token(
+    async def rotate_refresh_token(  # noqa: ARG002, RUF100
         self,
         refresh_token: str,
-        user_manager: UserManagerProtocol[UP, ID],
+        user_manager: UserManagerProtocol[UP, ID],  # noqa: ARG002
     ) -> tuple[UP, str] | None:
         """Rotate a refresh token and return the related user plus replacement.
 
         Returns:
             Tuple of the resolved user and rotated refresh token, or ``None`` when invalid.
         """
-        del user_manager
         client_metadata = self._consume_refresh_token_request_metadata()
         token_digest = self._token_digest(refresh_token)
         persisted_token = await self._load_refresh_token_for_rotation(refresh_token)

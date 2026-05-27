@@ -279,15 +279,13 @@ def test_backend_with_session_rebinds_strategy_when_supported() -> None:
             self.with_session = Mock(return_value=rebound_strategy)
 
         async def read_token(self, token: str | None, user_manager: object) -> object:
-            del token, user_manager
             return None
 
         async def write_token(self, user: object) -> str:
-            del user
             return "token"
 
         async def destroy_token(self, token: str, user: object) -> None:
-            del token, user
+            pass
 
     original_strategy = StrategyWithSession()
     backend = AuthenticationBackend[ExampleUser, UUID](
@@ -311,15 +309,13 @@ def test_backend_with_session_returns_self_for_non_bindable_strategy() -> None:
 
     class StrategyWithoutSession:
         async def read_token(self, token: str | None, user_manager: object) -> object:
-            del token, user_manager
             return None
 
         async def write_token(self, user: object) -> str:
-            del user
             return "token"
 
         async def destroy_token(self, token: str, user: object) -> None:
-            del token, user
+            pass
 
     strategy = StrategyWithoutSession()
     backend = AuthenticationBackend[ExampleUser, UUID](
@@ -341,15 +337,13 @@ def test_bind_strategy_session_uses_with_session_when_callable() -> None:
             self.with_session = Mock(return_value=sentinel_strategy)
 
         async def read_token(self, token: str | None, user_manager: object) -> object:
-            del token, user_manager
             return None
 
         async def write_token(self, user: object) -> str:
-            del user
             return "token"
 
         async def destroy_token(self, token: str, user: object) -> None:
-            del token, user
+            pass
 
     strategy = StrategyWithSession()
 
@@ -364,15 +358,13 @@ def test_bind_strategy_session_leaves_non_bindable_strategy_unchanged() -> None:
 
     class StrategyWithoutSession:
         async def read_token(self, token: str | None, user_manager: object) -> object:
-            del token, user_manager
             return None
 
         async def write_token(self, user: object) -> str:
-            del user
             return "token"
 
         async def destroy_token(self, token: str, user: object) -> None:
-            del token, user
+            pass
 
     strategy = StrategyWithoutSession()
 
@@ -452,15 +444,13 @@ async def test_invalidate_refresh_artifacts_is_noop_for_non_capable_strategy() -
 
     class StrategyWithoutRefreshInvalidation:
         async def read_token(self, token: str | None, user_manager: object) -> object:
-            del token, user_manager
             return None
 
         async def write_token(self, user: object) -> str:
-            del user
             return "token"
 
         async def destroy_token(self, token: str, user: object) -> None:
-            del token, user
+            pass
 
     strategy = StrategyWithoutRefreshInvalidation()
     user = ExampleUser(id=uuid4())

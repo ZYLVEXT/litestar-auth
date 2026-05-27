@@ -65,7 +65,6 @@ class _StructurallyCompatiblePolicy:
 
     def require_configured(self, *, context: str = "OAuth token persistence") -> None:
         """Pretend to satisfy the policy surface without being accepted."""
-        del context
 
     def encrypt(self, value: str | None) -> str | None:
         """Return a deterministic encrypted-looking value."""

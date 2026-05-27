@@ -166,8 +166,7 @@ def _build_static_context[UP: UserProtocol[Any], ID](
         Context builder using the configured strategy.
     """
 
-    def _build_context(request_backends: object | None = None) -> _SessionDevicesControllerContext[UP]:
-        del request_backends
+    def _build_context(request_backends: object | None = None) -> _SessionDevicesControllerContext[UP]:  # noqa: ARG001
         strategy = backend.strategy
         transport = getattr(backend, "transport", None)
         return _SessionDevicesControllerContext(
@@ -187,11 +186,10 @@ def _create_list_refresh_sessions_handler[UP: UserProtocol[Any]](
 
     @get("/sessions", guards=[is_authenticated], security=security, responses=_SESSION_DEVICES_OPENAPI_RESPONSES)
     async def list_refresh_sessions(
-        self: Controller,
+        self: Controller,  # noqa: ARG001
         request: Request[Any, Any, Any],
         litestar_auth_backends: _OptionalBackendsDep = None,
     ) -> RefreshSessionListResponse:
-        del self
         ctx = build_context(litestar_auth_backends)
         return await _handle_list_refresh_sessions(request, None, ctx=ctx)
 
@@ -213,12 +211,11 @@ def _create_list_refresh_sessions_with_token_handler[UP: UserProtocol[Any]](
         responses=_SESSION_DEVICES_OPENAPI_RESPONSES,
     )
     async def list_refresh_sessions_with_refresh_token(
-        self: Controller,
+        self: Controller,  # noqa: ARG001
         request: Request[Any, Any, Any],
         data: RefreshTokenRequest,
         litestar_auth_backends: _OptionalBackendsDep = None,
     ) -> RefreshSessionListResponse:
-        del self
         ctx = build_context(litestar_auth_backends)
         return await _handle_list_refresh_sessions(request, data, ctx=ctx)
 
@@ -240,12 +237,11 @@ def _create_revoke_refresh_session_handler[UP: UserProtocol[Any]](
         responses=_SESSION_DEVICES_OPENAPI_RESPONSES,
     )
     async def revoke_refresh_session(
-        self: Controller,
+        self: Controller,  # noqa: ARG001
         request: Request[Any, Any, Any],
         session_id: _SessionIdPath,
         litestar_auth_backends: _OptionalBackendsDep = None,
     ) -> None:
-        del self
         ctx = build_context(litestar_auth_backends)
         await _handle_revoke_refresh_session(request, session_id, ctx=ctx)
 
@@ -267,12 +263,11 @@ def _create_revoke_other_refresh_sessions_handler[UP: UserProtocol[Any]](
         responses=_SESSION_DEVICES_OPENAPI_RESPONSES,
     )
     async def revoke_other_refresh_sessions(
-        self: Controller,
+        self: Controller,  # noqa: ARG001
         request: Request[Any, Any, Any],
         litestar_auth_backends: _OptionalBackendsDep = None,
         data: RefreshTokenRequest | None = None,
     ) -> None:
-        del self
         ctx = build_context(litestar_auth_backends)
         await _handle_revoke_other_refresh_sessions(request, data, ctx=ctx)
 

@@ -825,13 +825,12 @@ def test_auth_rate_limit_config_lenient_preset_rejects_unknown_backend_types() -
             return True
 
         async def increment(self, key: str) -> None:
-            del key
+            pass
 
         async def reset(self, key: str) -> None:
-            del key
+            pass
 
         async def retry_after(self, key: str) -> int:
-            del key
             return 0
 
     with pytest.raises(TypeError, match="built-in InMemoryRateLimiter or RedisRateLimiter"):
@@ -1142,7 +1141,6 @@ async def test_contrib_redis_preset_builds_rate_limit_config_with_shared_client_
     patch_redis_loader: None,
 ) -> None:
     """The contrib preset preserves group tiers, overrides, and the TOTP Redis store builders."""
-    del patch_redis_loader
 
     def load_optional_redis() -> object:
         return object()
@@ -2477,12 +2475,10 @@ async def test_endpoint_rate_limit_defensively_omits_over_cap_extracted_parts(
         *,
         identity_fields: tuple[str, ...],
     ) -> str:
-        del request, identity_fields
         await asyncio.sleep(0)
         return "a" * (ratelimit_helpers_module.EMAIL_MAX_LENGTH + 1)
 
     def over_cap_key_id(request: Request[Any, Any, Any]) -> str:
-        del request
         return "a" * (ratelimit_helpers_module._API_KEY_ID_LENGTH + 1)
 
     monkeypatch.setattr(ratelimit_endpoint_module, "_extract_email", over_cap_email)

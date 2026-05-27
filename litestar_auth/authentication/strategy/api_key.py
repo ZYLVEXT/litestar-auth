@@ -79,8 +79,7 @@ class ApiKeyFailureReason(StrEnum):
     """Internal API-key authentication failure taxonomy."""
 
     @staticmethod
-    def _generate_next_value_(name: str, start: int, count: int, last_values: list[str]) -> str:
-        del start, count, last_values
+    def _generate_next_value_(name: str, start: int, count: int, last_values: list[str]) -> str:  # noqa: ARG004, RUF100
         return name
 
     INVALID = auto()
@@ -254,20 +253,18 @@ class ApiKeyStrategy[UP: UserProtocol[Any], ID](Strategy[UP, ID]):
         return None if result is None else result.user
 
     @override
-    async def write_token(self, user: UP) -> str:
+    async def write_token(self, user: UP) -> str:  # noqa: ARG002, RUF100
         """Reject login-token issuance because API keys are manager-issued credentials.
 
         Raises:
             TokenError: Always, because API keys are not login-flow tokens.
         """
-        del user
         msg = "ApiKeyStrategy does not issue login tokens."
         raise TokenError(msg)
 
     @override
-    async def destroy_token(self, token: str, user: UP) -> None:
+    async def destroy_token(self, token: str, user: UP) -> None:  # noqa: ARG002, RUF100
         """Do nothing because API-key revocation is handled by API-key management flows."""
-        del token, user
 
     async def _read_signed_request(
         self,

@@ -120,7 +120,6 @@ async def probe(request: Request[Any, Any, Any]) -> dict[str, str | None]:
 async def guarded(request: Request[Any, Any, Any]) -> dict[str, bool]:
     """Return ok when the request has an active user."""
     await asyncio.sleep(0)
-    del request
     return {"ok": True}
 
 
@@ -331,7 +330,6 @@ def build_cookie_plugin_app(*, login_identifier: Literal["email", "username"] = 
         config: LitestarAuthConfig[ExampleUser, UUID],
         backends: tuple[object, ...] = (),
     ) -> TrackingUserManager:
-        del session
         security = config.user_manager_security
         assert security is not None
         return TrackingUserManager(

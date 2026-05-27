@@ -94,7 +94,6 @@ async def test_async_email_verification_protocol_return_value_is_propagated(*, v
 
     class _AsyncEmailVerificationClient:
         async def get_email_verified(self, access_token: str) -> bool:
-            del access_token
             return verified
 
     assert await _build_adapter(_AsyncEmailVerificationClient()).get_email_verified("access-token") is verified
@@ -169,7 +168,6 @@ async def test_make_async_email_verification_client_preserves_bool_return_values
 
     class _SyncClient:
         def get_email_verified(self, access_token: str) -> bool:
-            del access_token
             return verified
 
     async_client = client_adapter_module.make_async_email_verification_client(_SyncClient())
@@ -196,7 +194,6 @@ async def test_make_async_email_verification_client_rejects_non_bool_sync_return
 
     class _SyncClient:
         def get_email_verified(self, access_token: str) -> bool:
-            del access_token
             return cast("bool", "sometimes")
 
     async_client = client_adapter_module.make_async_email_verification_client(_SyncClient())
@@ -257,7 +254,6 @@ def test_oauth_adapter_validation_error_rejects_authorization_url_without_pkce_k
 
     async def get_authorization_url(redirect_uri: str, state: str, *, scope: str | None = None) -> str:
         await asyncio.sleep(0)
-        del redirect_uri, state, scope
         return "https://provider.example/authorize"
 
     oauth_client = _make_oauth_client(get_authorization_url=get_authorization_url)
@@ -271,7 +267,6 @@ def test_oauth_adapter_validation_error_rejects_access_token_without_pkce_kwargs
 
     async def get_access_token(code: str, redirect_uri: str) -> dict[str, str]:
         await asyncio.sleep(0)
-        del code, redirect_uri
         return {"access_token": "provider-access-token"}
 
     oauth_client = _make_oauth_client(get_access_token=get_access_token)
@@ -300,7 +295,6 @@ def test_oauth_adapter_validation_error_rejects_loaded_client_with_non_callable_
         /,
         **client_kwargs: object,
     ) -> client_adapter_module.OAuthClientProtocol:
-        del oauth_client_class, client_kwargs
         return cast("client_adapter_module.OAuthClientProtocol", oauth_client)
 
     with pytest.raises(
@@ -772,7 +766,7 @@ async def test_get_account_identity_and_email_verified_profile_fallback_calls_ge
             self.get_profile_calls: list[str] = []
 
         async def get_id_email(self, access_token: str) -> None:
-            del access_token
+            pass
 
         async def get_profile(self, access_token: str) -> dict[str, object]:
             self.get_profile_calls.append(access_token)
@@ -801,10 +795,9 @@ async def test_get_account_identity_and_email_verified_profile_fallback_never_ob
             self.profile_call_count = 0
 
         async def get_id_email(self, access_token: str) -> None:
-            del access_token
+            pass
 
         async def get_profile(self, access_token: str) -> dict[str, object]:
-            del access_token
             self.profile_call_count += 1
             if self.profile_call_count == 1:
                 return {"id": "first-provider-id", "email": "first@example.com", "email_verified": True}

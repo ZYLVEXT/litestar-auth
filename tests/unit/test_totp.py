@@ -101,7 +101,6 @@ def test_importing_totp_does_not_eagerly_hash_dummy_recovery_code(monkeypatch: p
 
     def record_hash(self: PasswordHelper, password: str) -> str:
         nonlocal hash_calls
-        del self, password
         hash_calls += 1
         return "unused-hash"
 
@@ -142,7 +141,6 @@ class _RecoveryCodeManager:
 
     async def find_recovery_code_hash_by_lookup(self, user: object, lookup_hex: str) -> str | None:
         """Return the indexed hash for ``lookup_hex``."""
-        del user
         return self.code_index.get(lookup_hex)
 
     async def consume_recovery_code_by_lookup(self, user: object, lookup_hex: str) -> bool:
@@ -151,7 +149,6 @@ class _RecoveryCodeManager:
         Returns:
             ``True`` when the lookup was active.
         """
-        del user
         if lookup_hex not in self.code_index:
             return False
         self.consumed_lookups.append(lookup_hex)
@@ -842,15 +839,12 @@ async def test_redis_totp_enrollment_store_coerces_non_bytes_eval_result(
 
     class _StringEvalRedisClient:
         async def setex(self, name: str, time: int, value: str) -> object:
-            del name, time, value
             return True
 
         async def eval(self, script: str, numkeys: int, *keys_and_args: object) -> object:
-            del script, numkeys, keys_and_args
             return "secret"
 
         async def delete(self, *names: str) -> int:
-            del names
             return 1
 
     monkeypatch.setattr(totp._totp_stores, "_load_enrollment_redis_asyncio", lambda: None)
@@ -868,7 +862,6 @@ async def test_redis_totp_enrollment_store_save_returns_false_when_setex_signals
 
     class _RefusingRedisClient:
         async def setex(self, name: str, time: int, value: str) -> object:
-            del name, time, value
             return None
 
         async def eval(self, script: str, numkeys: int, *keys_and_args: object) -> object:

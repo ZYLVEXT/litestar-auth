@@ -219,20 +219,15 @@ async def test_logout_clears_cookie_auth_and_refresh_cookies() -> None:
             token: str | None,
             user_manager: UserManagerProtocol[_MinimalUser, UUID],
         ) -> _MinimalUser | None:
-            del token
-            del user_manager
             return None
 
         async def write_token(self, user: _MinimalUser) -> str:
-            del user
             return "access-token"
 
         async def destroy_token(self, token: str, user: _MinimalUser) -> None:
-            del token
-            del user
+            pass
 
         async def write_refresh_token(self, user: _MinimalUser) -> str:
-            del user
             return "refresh-token"
 
         async def rotate_refresh_token(
@@ -240,8 +235,6 @@ async def test_logout_clears_cookie_auth_and_refresh_cookies() -> None:
             refresh_token: str,
             user_manager: UserManagerProtocol[_MinimalUser, UUID],
         ) -> tuple[_MinimalUser, str] | None:
-            del refresh_token
-            del user_manager
             return None
 
     transport = CookieTransport(cookie_name="litestar_auth")
@@ -397,17 +390,13 @@ async def test_login_rate_limit_before_request_is_a_noop_when_rate_limit_cell_is
             token: str | None,
             user_manager: UserManagerProtocol[_MinimalUser, UUID],
         ) -> _MinimalUser | None:
-            del token
-            del user_manager
             return None
 
         async def write_token(self, user: _MinimalUser) -> str:
-            del user
             return "access-token"
 
         async def destroy_token(self, token: str, user: _MinimalUser) -> None:
-            del token
-            del user
+            pass
 
     rate_limit = MagicMock()
     rate_limit.before_request = AsyncMock()
@@ -442,20 +431,15 @@ async def test_refresh_rate_limit_before_request_is_a_noop_when_rate_limit_cell_
             token: str | None,
             user_manager: UserManagerProtocol[_MinimalUser, UUID],
         ) -> _MinimalUser | None:
-            del token
-            del user_manager
             return None
 
         async def write_token(self, user: _MinimalUser) -> str:
-            del user
             return "access-token"
 
         async def destroy_token(self, token: str, user: _MinimalUser) -> None:
-            del token
-            del user
+            pass
 
         async def write_refresh_token(self, user: _MinimalUser) -> str:
-            del user
             return "refresh-token"
 
         async def rotate_refresh_token(
@@ -463,8 +447,6 @@ async def test_refresh_rate_limit_before_request_is_a_noop_when_rate_limit_cell_
             refresh_token: str,
             user_manager: UserManagerProtocol[_MinimalUser, UUID],
         ) -> tuple[_MinimalUser, str] | None:
-            del refresh_token
-            del user_manager
             return _MinimalUser(), "rotated-refresh-token"
 
     rate_limit = MagicMock()
@@ -501,20 +483,15 @@ async def test_refresh_rejects_inactive_user_without_global_invalidation_hook() 
             token: str | None,
             user_manager: UserManagerProtocol[_MinimalUser, UUID],
         ) -> _MinimalUser | None:
-            del token
-            del user_manager
             return None
 
         async def write_token(self, user: _MinimalUser) -> str:
-            del user
             return "access-token"
 
         async def destroy_token(self, token: str, user: _MinimalUser) -> None:
-            del token
-            del user
+            pass
 
         async def write_refresh_token(self, user: _MinimalUser) -> str:
-            del user
             return "refresh-token"
 
         async def rotate_refresh_token(
@@ -522,8 +499,6 @@ async def test_refresh_rejects_inactive_user_without_global_invalidation_hook() 
             refresh_token: str,
             user_manager: UserManagerProtocol[_MinimalUser, UUID],
         ) -> tuple[_MinimalUser, str] | None:
-            del refresh_token
-            del user_manager
             user = _MinimalUser()
             user.is_active = False
             return user, "rotated-refresh-token"
@@ -565,20 +540,15 @@ async def test_refresh_invalidates_all_tokens_for_protocol_matching_strategy() -
             token: str | None,
             user_manager: UserManagerProtocol[_MinimalUser, UUID],
         ) -> _MinimalUser | None:
-            del token
-            del user_manager
             return None
 
         async def write_token(self, user: _MinimalUser) -> str:
-            del user
             return "access-token"
 
         async def destroy_token(self, token: str, user: _MinimalUser) -> None:
-            del token
-            del user
+            pass
 
         async def write_refresh_token(self, user: _MinimalUser) -> str:
-            del user
             return "refresh-token"
 
         async def rotate_refresh_token(
@@ -586,8 +556,6 @@ async def test_refresh_invalidates_all_tokens_for_protocol_matching_strategy() -
             refresh_token: str,
             user_manager: UserManagerProtocol[_MinimalUser, UUID],
         ) -> tuple[_MinimalUser, str] | None:
-            del refresh_token
-            del user_manager
             user = _MinimalUser()
             user.is_active = False
             return user, "rotated-refresh-token"
@@ -628,17 +596,13 @@ async def test_login_uses_manager_account_state_validator_when_available() -> No
             token: str | None,
             user_manager: UserManagerProtocol[_MinimalUser, UUID],
         ) -> _MinimalUser | None:
-            del token
-            del user_manager
             return None
 
         async def write_token(self, user: _MinimalUser) -> str:
-            del user
             return "access-token"
 
         async def destroy_token(self, token: str, user: _MinimalUser) -> None:
-            del token
-            del user
+            pass
 
     backend = AuthenticationBackend(
         name="test",
@@ -861,20 +825,15 @@ async def test_refresh_rejects_invalid_token_and_increments_rate_limit() -> None
             token: str | None,
             user_manager: UserManagerProtocol[_MinimalUser, UUID],
         ) -> _MinimalUser | None:
-            del token
-            del user_manager
             return None
 
         async def write_token(self, user: _MinimalUser) -> str:
-            del user
             return "access-token"
 
         async def destroy_token(self, token: str, user: _MinimalUser) -> None:
-            del token
-            del user
+            pass
 
         async def write_refresh_token(self, user: _MinimalUser) -> str:
-            del user
             return "refresh-token"
 
         async def rotate_refresh_token(
@@ -882,8 +841,6 @@ async def test_refresh_rejects_invalid_token_and_increments_rate_limit() -> None
             refresh_token: str,
             user_manager: UserManagerProtocol[_MinimalUser, UUID],
         ) -> tuple[_MinimalUser, str] | None:
-            del refresh_token
-            del user_manager
             return None
 
     refresh_rate_limit = MagicMock()
@@ -930,20 +887,15 @@ async def test_refresh_success_returns_rotated_tokens_and_resets_rate_limit() ->
             token: str | None,
             user_manager: UserManagerProtocol[_MinimalUser, UUID],
         ) -> _MinimalUser | None:
-            del token
-            del user_manager
             return None
 
         async def write_token(self, user: _MinimalUser) -> str:
-            del user
             return "new-access-token"
 
         async def destroy_token(self, token: str, user: _MinimalUser) -> None:
-            del token
-            del user
+            pass
 
         async def write_refresh_token(self, user: _MinimalUser) -> str:
-            del user
             return "refresh-token"
 
         async def rotate_refresh_token(
@@ -951,8 +903,6 @@ async def test_refresh_success_returns_rotated_tokens_and_resets_rate_limit() ->
             refresh_token: str,
             user_manager: UserManagerProtocol[_MinimalUser, UUID],
         ) -> tuple[_MinimalUser, str] | None:
-            del refresh_token
-            del user_manager
             return _MinimalUser(), "rotated-refresh-token"
 
     refresh_rate_limit = MagicMock()

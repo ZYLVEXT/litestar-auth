@@ -82,12 +82,11 @@ def _create_plugin_totp_confirm_enable_handler[UP: UserProtocol[Any], ID](
 
     @post("/enable/confirm", guards=[is_authenticated], security=security)
     async def confirm_enable(
-        self: object,
+        self: object,  # noqa: ARG001
         request: Request[Any, Any, Any],
         data: TotpConfirmEnableRequest,
         litestar_auth_user_manager: _TotpUserManagerDep,
     ) -> TotpConfirmEnableResponse:
-        del self
         return await _totp_handle_confirm_enable(
             request,
             ctx=startup_ctx,
@@ -111,13 +110,12 @@ def _create_plugin_totp_verify_handler[UP: UserProtocol[Any], ID](
 
     @post("/verify", before_request=totp_verify_before_request)
     async def verify(
-        self: object,
+        self: object,  # noqa: ARG001
         request: Request[Any, Any, Any],
         data: TotpVerifyRequest,
         litestar_auth_user_manager: _TotpUserManagerDep,
         litestar_auth_backends: _TotpBackendsDep,
     ) -> object:
-        del self
         return await _totp_handle_verify(
             request,
             ctx=factory_kit.runtime_context(litestar_auth_backends),
@@ -140,12 +138,11 @@ def _create_plugin_totp_disable_handler[UP: UserProtocol[Any], ID](
 
     @post("/disable", guards=[is_authenticated], security=security)
     async def disable(
-        self: object,
+        self: object,  # noqa: ARG001
         request: Request[Any, Any, Any],
         data: TotpDisableRequest,
         litestar_auth_user_manager: _TotpUserManagerDep,
     ) -> None:
-        del self
         await _totp_handle_disable(
             request,
             ctx=startup_ctx,
@@ -168,12 +165,11 @@ def _create_plugin_totp_enable_handler[UP: UserProtocol[Any], ID](
 
     @post("/enable", guards=[is_authenticated], security=security)
     async def enable(
-        self: object,
+        self: object,  # noqa: ARG001
         request: Request[Any, Any, Any],
         litestar_auth_user_manager: _TotpUserManagerDep,
         data: msgspec.Struct | None = None,
     ) -> TotpEnableResponse:
-        del self
         return await _totp_handle_enable(
             request,
             ctx=startup_ctx,
@@ -196,12 +192,11 @@ def _create_plugin_totp_regenerate_handler[UP: UserProtocol[Any], ID](
 
     @post("/recovery-codes/regenerate", guards=[is_authenticated], security=security)
     async def regenerate_recovery_codes(
-        self: object,
+        self: object,  # noqa: ARG001
         request: Request[Any, Any, Any],
         litestar_auth_user_manager: _TotpUserManagerDep,
         data: msgspec.Struct | None = None,
     ) -> TotpRecoveryCodesResponse:
-        del self
         return await _totp_handle_regenerate_recovery_codes(
             request,
             ctx=startup_ctx,
@@ -224,11 +219,10 @@ def _create_plugin_totp_enable_no_body_handler[UP: UserProtocol[Any], ID](
 
     @post("/enable", guards=[is_authenticated], security=security)
     async def enable(
-        self: object,
+        self: object,  # noqa: ARG001
         request: Request[Any, Any, Any],
         litestar_auth_user_manager: _TotpUserManagerDep,
     ) -> TotpEnableResponse:
-        del self
         return await _totp_handle_enable(
             request,
             ctx=startup_ctx,
@@ -250,11 +244,10 @@ def _create_plugin_totp_regenerate_no_body_handler[UP: UserProtocol[Any], ID](
 
     @post("/recovery-codes/regenerate", guards=[is_authenticated], security=security)
     async def regenerate_recovery_codes(
-        self: object,
+        self: object,  # noqa: ARG001
         request: Request[Any, Any, Any],
         litestar_auth_user_manager: _TotpUserManagerDep,
     ) -> TotpRecoveryCodesResponse:
-        del self
         return await _totp_handle_regenerate_recovery_codes(
             request,
             ctx=startup_ctx,

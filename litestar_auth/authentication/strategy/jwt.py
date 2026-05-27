@@ -368,7 +368,7 @@ class JWTStrategy(Strategy[UP, ID]):
         return jwt.encode(payload, self.secret, algorithm=self.algorithm, headers=jwt_encode_headers())
 
     @override
-    async def destroy_token(self, token: str, user: UP) -> None:
+    async def destroy_token(self, token: str, user: UP) -> None:  # noqa: ARG002, RUF100
         """Revoke the given token by adding its ``jti`` to the configured denylist.
 
         Tokens without a ``jti`` claim, or tokens that fail to decode, are ignored.
@@ -377,8 +377,6 @@ class JWTStrategy(Strategy[UP, ID]):
             TokenError: When the denylist refuses a new revocation (for example, the
                 compatibility in-memory store is at ``max_entries`` with no reclaimable slots).
         """
-        del user
-
         try:
             payload = decode_signed_jwt(
                 token,

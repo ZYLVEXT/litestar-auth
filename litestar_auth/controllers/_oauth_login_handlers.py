@@ -80,12 +80,11 @@ def _create_login_callback_handler[UP: UserProtocol[Any], ID](
 
     @get("/callback", responses=responses)
     async def callback(
-        self: object,
+        self: object,  # noqa: ARG001
         request: Request[Any, Any, Any],
         code: _OAuthCodeQuery,
         oauth_state: _OAuthStateQuery,
     ) -> Response[Any]:
-        del self
         return await _complete_login_callback(
             assembly=assembly,
             callback_inputs=_OAuthLoginCallbackInputs(

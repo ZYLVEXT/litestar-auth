@@ -21,8 +21,7 @@ class _DocumentedErrorCode(StrEnum):
     """Base ``StrEnum`` for documented machine-readable error-code groups."""
 
     @staticmethod
-    def _generate_next_value_(name: str, start: int, count: int, last_values: list[str]) -> str:
-        del start, count, last_values
+    def _generate_next_value_(name: str, start: int, count: int, last_values: list[str]) -> str:  # noqa: ARG004
         return name
 
     def __new__(cls, value: str, doc: str = "") -> Self:

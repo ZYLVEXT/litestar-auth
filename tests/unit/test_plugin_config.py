@@ -2010,7 +2010,7 @@ def test_resolve_password_validator_uses_fixed_default_builder_contract() -> Non
 
     class _ManagerWithoutPasswordValidator:
         def __init__(self, user_db: object) -> None:
-            del user_db
+            pass
 
     config = _minimal_config(user_manager_class=cast("type[Any]", _ManagerWithoutPasswordValidator))
 

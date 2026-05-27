@@ -315,9 +315,8 @@ class FakeOAuthClient:
         self.id_email_calls.append(access_token)
         return self.account_id, self.email
 
-    async def get_profile(self, access_token: str) -> dict[str, object]:
+    async def get_profile(self, access_token: str) -> dict[str, object]:  # noqa: ARG002, RUF100
         """Return a deterministic provider profile payload."""
-        del access_token
         return {"email_verified": self.email_verified}
 
 
@@ -777,8 +776,7 @@ async def test_oauth_callback_rejects_invalid_state(
     client: tuple[AsyncTestClient[Litestar], AppState],
 ) -> None:
     """OAuth callback rejects a mismatched state cookie."""
-    test_client, state = client
-    del state
+    test_client, _state = client
     test_client.cookies.set(
         "__oauth_state_github",
         "cookie-state",

@@ -143,13 +143,12 @@ class RoleMixin:
     name: Mapped[str] = mapped_column(String(length=_ROLE_NAME_LENGTH), primary_key=True)
 
     @validates("name")
-    def _normalize_name(self, key: str, value: str) -> str:  # noqa: PLR6301
+    def _normalize_name(self, key: str, value: str) -> str:  # noqa: ARG002, PLR6301
         """Normalize role names before persisting them.
 
         Returns:
             The normalized role name.
         """
-        del key
         return normalize_role_name(value)
 
     @declared_attr
@@ -240,7 +239,7 @@ class ApiKeyMixin(_UserOwnedMixin):
     @validates("client_metadata")
     def _validate_client_metadata(  # noqa: PLR6301
         self,
-        key: str,
+        key: str,  # noqa: ARG002
         value: dict[str, str] | None,
     ) -> dict[str, str] | None:
         """Validate bounded API-key client metadata before persistence.
@@ -251,7 +250,6 @@ class ApiKeyMixin(_UserOwnedMixin):
         Raises:
             ValueError: If metadata keys or values exceed the public session metadata bounds.
         """
-        del key
         if value is None:
             return None
         invalid_keys = [
@@ -303,13 +301,12 @@ class UserRoleAssociationMixin(_UserOwnedMixin):
         )
 
     @validates("role_name")
-    def _normalize_role_name(self, key: str, value: str) -> str:  # noqa: PLR6301
+    def _normalize_role_name(self, key: str, value: str) -> str:  # noqa: ARG002, PLR6301
         """Normalize role names before persisting the association row.
 
         Returns:
             The normalized role name.
         """
-        del key
         return normalize_role_name(value)
 
     @declared_attr
@@ -330,12 +327,10 @@ class UserRoleAssociationMixin(_UserOwnedMixin):
 @event.listens_for(ORMSession, "before_flush")
 def _materialize_missing_role_rows(
     session: ORMSession,
-    flush_context: object,
-    instances: object,
+    flush_context: object,  # noqa: ARG001
+    instances: object,  # noqa: ARG001
 ) -> None:
     """Create missing role catalog rows before association rows are flushed."""
-    del flush_context, instances
-
     role_names_by_model: dict[type[Any], set[str]] = {}
     for candidate in [*session.new, *session.dirty]:
         if not isinstance(candidate, UserRoleAssociationMixin):

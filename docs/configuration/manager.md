@@ -172,7 +172,6 @@ def build_user_manager(
     config: LitestarAuthConfig[User, UUID],
     backends: tuple[object, ...] = (),
 ) -> UserManager:
-    del session
     security = config.user_manager_security
     if security is None:
         msg = "UserManagerSecurity is required for this manager factory."

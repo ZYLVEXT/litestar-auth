@@ -52,13 +52,12 @@ def _define_auth_controller_class_di[UP: UserProtocol[Any], ID](
             before_request=ctx.login_before,
             exception_handlers=login_exception_handlers,
         )
-        async def login(
-            self,
+        async def login(  # noqa: PLR6301
+            self: Controller,
             request: Request[Any, Any, Any],
             data: LoginCredentials,
             litestar_auth_user_manager: AuthControllerUserManagerProtocol[Any, Any],
         ) -> object:
-            del self
             return await _handle_auth_login(
                 request,
                 data,
@@ -67,8 +66,10 @@ def _define_auth_controller_class_di[UP: UserProtocol[Any], ID](
             )
 
         @post("/logout", guards=[is_authenticated], security=security)
-        async def logout(self, request: Request[Any, Any, Any]) -> object:
-            del self
+        async def logout(  # noqa: PLR6301
+            self: Controller,
+            request: Request[Any, Any, Any],
+        ) -> object:
             return await _handle_auth_logout(request, ctx=ctx)
 
     auth_cls = AuthController
@@ -99,13 +100,12 @@ def _define_refresh_auth_controller_class_di[UP: UserProtocol[Any], ID](
         """Backend-bound authentication endpoints with refresh-token rotation."""
 
         @post("/refresh", before_request=ctx.refresh_before)
-        async def refresh(
-            self,
+        async def refresh(  # noqa: PLR6301
+            self: Controller,
             request: Request[Any, Any, Any],
             data: RefreshTokenRequest,
             litestar_auth_user_manager: AuthControllerUserManagerProtocol[Any, Any],
         ) -> Response[Any]:
-            del self
             return await _handle_auth_refresh(
                 request,
                 ctx=ctx,

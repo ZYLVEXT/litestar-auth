@@ -93,9 +93,8 @@ def _create_request_body_exception_handlers(
 
     def handle_validation(
         request: Request[Any, Any, Any],
-        exc: ValidationException,
+        _exc: ValidationException,
     ) -> Response[dict[str, object]]:
-        del exc
         return _create_error_response(
             status_code=422,
             detail=config.validation_detail,

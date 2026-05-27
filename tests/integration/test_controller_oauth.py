@@ -230,7 +230,6 @@ class InMemoryTokenStrategy:
 
     async def destroy_token(self, token: str, user: ExampleUser) -> None:
         """Remove a stored token."""
-        del user
         self.tokens.pop(token, None)
 
 
@@ -402,7 +401,6 @@ class _DummySession:
         traceback: TracebackType | None,
     ) -> None:
         """Exit async context (no-op)."""
-        del exc_type, exc, traceback
 
     async def close(self) -> None:
         """No-op close for ``before_send`` handlers."""
@@ -441,7 +439,6 @@ class TrackingUserManager(BaseUserManager[ExampleUser, UUID]):
 
     async def on_after_register(self, user: ExampleUser, token: str) -> None:
         """Track newly created users."""
-        del token
         self.created_users.append(user)
 
     async def on_after_login(self, user: ExampleUser) -> None:
@@ -1096,7 +1093,6 @@ async def test_callback_maps_oauth_account_already_linked_error_on_upsert() -> N
         *,
         account: OAuthAccountData,
     ) -> None:
-        del user, account
         await asyncio.sleep(0)
         raise OAuthAccountAlreadyLinkedError(
             provider="github",
@@ -1938,7 +1934,6 @@ async def test_associate_maps_oauth_account_already_linked_error_from_upsert() -
         *,
         account: OAuthAccountData,
     ) -> None:
-        del user, account
         await asyncio.sleep(0)
         raise OAuthAccountAlreadyLinkedError(
             provider="github",

@@ -84,12 +84,11 @@ class AsyncSessionAdapter:
 
     async def __aexit__(
         self,
-        exc_type: type[BaseException] | None,
-        exc: BaseException | None,
-        traceback: TracebackType | None,
+        _exc_type: type[BaseException] | None,
+        _exc: BaseException | None,
+        _traceback: TracebackType | None,
     ) -> None:
         """Close when leaving ``async with`` (mirrors SQLAlchemy ``AsyncSession``)."""
-        del exc_type, exc, traceback
         await self.close()
 
     @property

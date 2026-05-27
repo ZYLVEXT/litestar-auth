@@ -133,7 +133,6 @@ class _AsyncSessionAdapter:
         traceback: TracebackType | None,
     ) -> None:
         """Mirror SQLAlchemy session cleanup semantics for the test adapter."""
-        del exc, traceback
         if exc_type is None:
             await self.commit()
         else:

@@ -46,7 +46,6 @@ class _FakeSession:
         self.committed = False
 
     async def execute(self, statement: Any, *args: Any, **kwargs: Any) -> Any:  # noqa: ANN401
-        del args, kwargs
         self.executed.append(statement)
 
         class _Result:
@@ -131,7 +130,6 @@ async def test_database_token_strategy_execute_delete_defaults_missing_rowcount_
 
     class _NoRowcountSession(_FakeSession):
         async def execute(self, statement: Any, *args: Any, **kwargs: Any) -> object:  # noqa: ANN401
-            del args, kwargs
             self.executed.append(statement)
             return object()
 

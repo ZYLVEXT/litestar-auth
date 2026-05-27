@@ -962,7 +962,6 @@ def test_resolve_oauth_account_store_returns_matching_protocol_instance() -> Non
 
     class DummyOAuthAccountStore:
         async def get_by_oauth_account(self, oauth_name: str, account_id: str) -> ExampleUser | None:
-            del oauth_name, account_id
             return None
 
         async def upsert_oauth_account(
@@ -971,7 +970,7 @@ def test_resolve_oauth_account_store_returns_matching_protocol_instance() -> Non
             *,
             account: OAuthAccountData,
         ) -> None:
-            del user, account
+            pass
 
     store = DummyOAuthAccountStore()
 
@@ -997,8 +996,6 @@ def test_manager_init_wires_services_and_configuration() -> None:
 
     class DummyOAuthAccountStore:
         async def get_by_oauth_account(self, oauth_name: str, account_id: str) -> ExampleUser | None:
-            del oauth_name
-            del account_id
             return None
 
         async def upsert_oauth_account(
@@ -1007,8 +1004,7 @@ def test_manager_init_wires_services_and_configuration() -> None:
             *,
             account: OAuthAccountData,
         ) -> None:
-            del user
-            del account
+            pass
 
     oauth_account_store = DummyOAuthAccountStore()
 

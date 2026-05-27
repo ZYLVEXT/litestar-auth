@@ -53,13 +53,11 @@ class _RecordingDenylistStore:
         return True
 
     async def is_denied(self, jti: str) -> bool:
-        del jti
         return False
 
 
 class _MissingUserManager:
     async def get(self, user_id: Any) -> _User | None:  # noqa: ANN401
-        del user_id
         return None
 
 

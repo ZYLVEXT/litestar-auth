@@ -65,7 +65,6 @@ class _RoleCLIUserManager[UP: SQLAlchemyUserModelProtocol](BaseUserManager[UP, U
 
     async def list_users(self, *, offset: int, limit: int) -> tuple[list[UP], int]:
         """Return an empty page; list-users behavior is irrelevant to these tests."""
-        del offset, limit
         return [], 0
 
 
@@ -369,17 +368,14 @@ class _RoleCLITokenStrategy[UP: SQLAlchemyUserModelProtocol](Strategy[UP, UUID])
         user_manager: UserManagerProtocol[UP, UUID],
     ) -> UP | None:
         """Return no user; the CLI never authenticates requests."""
-        del token, user_manager
         return None
 
     async def write_token(self, user: UP) -> str:
         """Return a deterministic placeholder token."""
-        del user
         return "role-cli-token"
 
     async def destroy_token(self, token: str, user: UP) -> None:
         """Discard token-destruction inputs for CLI coverage."""
-        del token, user
 
 
 def _build_fake_aiosqlite_module() -> ModuleType:
@@ -401,13 +397,12 @@ def _build_fake_aiosqlite_module() -> ModuleType:
     return module
 
 
-def _unexpected_aiosqlite_connect(*args: object, **kwargs: object) -> None:
+def _unexpected_aiosqlite_connect(*_args: object, **_kwargs: object) -> None:
     """Fail fast if the fake driver is used without ``async_creator``.
 
     Raises:
         AssertionError: Always, because these tests require ``async_creator``.
     """
-    del args, kwargs
     msg = "Role CLI async regression tests must provide an explicit async_creator."
     raise AssertionError(msg)
 
@@ -430,7 +425,6 @@ class _RoleCLIAsyncSessionAdapter:
         traceback: TracebackType | None,
     ) -> None:
         """Mirror SQLAlchemy session cleanup semantics for the test adapter."""
-        del exc, traceback
         if exc_type is None:
             await self.commit()
         else:
@@ -692,7 +686,6 @@ def _build_tracking_roles_cli[UP: SQLAlchemyUserModelProtocol](
         config: LitestarAuthConfig[UP, UUID],
         backends: tuple[object, ...] = (),
     ) -> BaseUserManager[UP, UUID]:
-        del session
         security = config.user_manager_security
         assert security is not None
         return _TrackingRoleCLIUserManager(

@@ -64,8 +64,8 @@ class AsyncSessionAdapter:
     async def __aexit__(
         self,
         exc_type: type[BaseException] | None,
-        exc: BaseException | None,
-        traceback: TracebackType | None,
+        _exc: BaseException | None,
+        _traceback: TracebackType | None,
     ) -> None:
         """Close when leaving ``async with`` (mirrors SQLAlchemy ``AsyncSession``).
 
@@ -77,7 +77,6 @@ class AsyncSessionAdapter:
             await self.commit()
         else:
             await self.rollback()
-        del exc_type, exc, traceback
         await self.close()
 
     @property

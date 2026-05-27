@@ -105,19 +105,16 @@ class _StartupOnlyApiKeyStrategy[UP: UserProtocol[Any], ID](Strategy[UP, ID]):
         user_manager: UserManagerProtocol[UP, ID],
     ) -> UP | None:
         """Reject request-time reads until a request ``AsyncSession`` is bound."""
-        del token, user_manager
         _raise_startup_only_api_key_runtime_error()
 
     @override
     async def write_token(self, user: UP) -> str:
         """Reject login-token issuance for startup-only API-key backends."""
-        del user
         _raise_startup_only_api_key_runtime_error()
 
     @override
     async def destroy_token(self, token: str, user: UP) -> None:
         """Reject token destruction for startup-only API-key backends."""
-        del token, user
         _raise_startup_only_api_key_runtime_error()
 
 

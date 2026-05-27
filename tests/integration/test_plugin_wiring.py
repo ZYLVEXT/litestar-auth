@@ -92,7 +92,6 @@ class _OpenAPIOAuthClient:
         code_challenge: str | None = None,
         code_challenge_method: str | None = None,
     ) -> str:
-        del redirect_uri, state, scope, code_challenge, code_challenge_method
         return "https://provider.example/authorize"
 
     async def get_access_token(
@@ -102,11 +101,9 @@ class _OpenAPIOAuthClient:
         *,
         code_verifier: str | None = None,
     ) -> dict[str, str]:
-        del code, redirect_uri, code_verifier
         return {"access_token": "provider-access-token"}
 
     async def get_id_email(self, access_token: str) -> tuple[str, str]:
-        del access_token
         return "provider-user", "oauth@example.com"
 
 

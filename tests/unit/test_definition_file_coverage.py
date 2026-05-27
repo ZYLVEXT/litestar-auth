@@ -80,7 +80,6 @@ def load_reloaded_test_alias(
             path: object,
             target: object = None,
         ) -> importlib.machinery.ModuleSpec | None:
-            del path, target
             if fullname != alias_name:
                 return None
             return importlib.util.spec_from_file_location(alias_name, source_path)

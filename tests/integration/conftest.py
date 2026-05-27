@@ -214,7 +214,6 @@ class InMemoryTokenStrategy(Strategy[ExampleUser, UUID]):
     @override
     async def destroy_token(self, token: str, user: ExampleUser) -> None:
         """Delete a token."""
-        del user
         self.tokens.pop(token, None)
 
 
@@ -236,7 +235,6 @@ class DummySession:
         traceback: TracebackType | None,
     ) -> None:
         """Exit async context (no-op)."""
-        del exc_type, exc, traceback
 
     async def close(self) -> None:
         """No-op close for ``before_send`` handlers."""

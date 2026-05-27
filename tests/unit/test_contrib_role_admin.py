@@ -260,18 +260,15 @@ async def test_contrib_role_admin_assignment_helpers_map_missing_role_and_user_e
             raise RoleAdminUserNotFoundError(msg)
 
         async def unassign_user_roles(self, **kwargs: object) -> object:
-            del kwargs
             msg = "Role admin could not find a user with id 'parsed:missing-user'."
             raise RoleAdminUserNotFoundError(msg)
 
         async def list_role_users(self, *, role: str) -> list[object]:
-            del role
             msg = "Role admin could not find role 'missing' in the configured catalog."
             raise RoleAdminRoleNotFoundError(msg)
 
     async def _load_role_row_stub(role_admin: object, normalized_role_name: str) -> object:
         await asyncio.sleep(0)
-        del role_admin, normalized_role_name
         return SimpleNamespace(name="billing", description="Docs")
 
     monkeypatch.setattr(role_admin_controller_handler_utils_module, "_load_role_row", _load_role_row_stub)

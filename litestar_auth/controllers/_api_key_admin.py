@@ -46,13 +46,12 @@ def _create_admin_api_key_create_handler[ID](ctx: ApiKeysControllerContext[ID]) 
         responses={403: TOTP_STEPUP_REQUIRED_OPENAPI_RESPONSE},
     )
     async def create_user_api_key(
-        self: Controller,
+        self: Controller,  # noqa: ARG001
         request: Request[Any, Any, Any],
         user_id: _UserIdPath,
         data: ApiKeyAdminCreateRequest,
         litestar_auth_user_manager: ApiKeysControllerUserManagerProtocol[Any, Any],
     ) -> ApiKeyCreateResponse:
-        del self
         await require_totp_stepup(
             request,
             TotpStepUpCheck(
@@ -79,11 +78,10 @@ def _create_admin_api_key_list_handler[ID](ctx: ApiKeysControllerContext[ID]) ->
 
     @get("/{user_id:str}/api-keys", guards=[is_superuser, requires_password_session], security=ctx.security)
     async def list_user_api_keys(
-        self: Controller,
+        self: Controller,  # noqa: ARG001
         user_id: _UserIdPath,
         litestar_auth_user_manager: ApiKeysControllerUserManagerProtocol[Any, Any],
     ) -> ApiKeyListResponse:
-        del self
         user = await load_user_or_404(user_id, ctx=ctx, user_manager=litestar_auth_user_manager)
         api_keys = await litestar_auth_user_manager.list_api_keys(user)
         return ApiKeyListResponse(api_keys=[to_api_key_read(api_key) for api_key in api_keys])
@@ -102,13 +100,12 @@ def _create_admin_api_key_revoke_handler[ID](ctx: ApiKeysControllerContext[ID]) 
         responses={403: TOTP_STEPUP_REQUIRED_OPENAPI_RESPONSE},
     )
     async def revoke_user_api_key(
-        self: Controller,
+        self: Controller,  # noqa: ARG001
         request: Request[Any, Any, Any],
         user_id: _UserIdPath,
         key_id: _KeyIdPath,
         litestar_auth_user_manager: ApiKeysControllerUserManagerProtocol[Any, Any],
     ) -> ApiKeyRead:
-        del self
         await require_totp_stepup(
             request,
             TotpStepUpCheck(

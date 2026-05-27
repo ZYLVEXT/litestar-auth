@@ -27,7 +27,7 @@ def _get_aa_namespace(scope: Scope) -> dict[str, Any]:
 
 
 def get_or_create_scoped_session(
-    state: State,
+    _state: State,
     scope: Scope,
     session_maker: SessionFactory,
     *,
@@ -42,7 +42,7 @@ def get_or_create_scoped_session(
     Alchemy).
 
     Args:
-        state: Application state (reserved for parity with ``provide_session``; unused when the
+        _state: Application state (reserved for parity with ``provide_session``; unused when the
             factory is supplied via closure).
         scope: ASGI connection scope.
         session_maker: Callable request-session factory returning an AsyncSession-compatible object.
@@ -52,7 +52,6 @@ def get_or_create_scoped_session(
     Returns:
         The shared ``AsyncSession`` for this request.
     """
-    del state
     namespace = _get_aa_namespace(scope)
     session: AsyncSession | None = namespace.get(session_scope_key)
     if session is None:

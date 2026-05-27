@@ -42,12 +42,10 @@ class _RouterTestTransport:
 
     async def read_token(self, connection: ASGIConnection[Any, Any, Any, Any]) -> str | None:
         """Return no token for tests that only exercise router assembly."""
-        del connection
         return None
 
     def set_login_token(self, response: Response[Any], token: str) -> Response[Any]:
         """Return the response unchanged."""
-        del token
         return response
 
     def set_logout(self, response: Response[Any]) -> Response[Any]:
@@ -60,17 +58,14 @@ class _RouterTestStrategy:
 
     async def read_token(self, token: str | None, user_manager: object) -> _RouterTestUser | None:
         """Return no user for tests that only exercise router assembly."""
-        del token, user_manager
         return None
 
     async def write_token(self, user: _RouterTestUser) -> str:
         """Return a deterministic token for protocol completeness."""
-        del user
         return "token"
 
     async def destroy_token(self, token: str, user: _RouterTestUser) -> None:
         """Accept token invalidation requests without side effects."""
-        del token, user
 
 
 def _make_backend() -> AuthenticationBackend[_RouterTestUser, object]:

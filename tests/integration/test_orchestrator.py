@@ -164,7 +164,6 @@ class InMemoryTokenStrategy(Strategy[ExampleUser, UUID]):
 
     async def destroy_token(self, token: str, user: ExampleUser) -> None:
         """Remove a token from storage."""
-        del user
         self.tokens.pop(token, None)
 
 
@@ -227,7 +226,6 @@ class DummySession:
         traceback: TracebackType | None,
     ) -> None:
         """Exit async context (no-op)."""
-        del exc_type, exc, traceback
 
     async def close(self) -> None:
         """No-op close for ``before_send`` handlers."""
@@ -534,8 +532,7 @@ def test_plugin_uses_dataclass_config_and_init_plugin_protocol() -> None:
     with pytest.raises(ValueError, match="at least one authentication backend"):
         LitestarAuth(invalid_config)
 
-    app, user_db, primary_strategy, secondary_strategy = build_app()
-    del app, user_db, primary_strategy, secondary_strategy
+    build_app()
 
     valid_config = LitestarAuthConfig[ExampleUser, UUID](
         backends=[
@@ -670,7 +667,7 @@ async def test_plugin_enforces_default_minimum_password_length() -> None:
 
 async def test_plugin_allows_overriding_minimum_password_length() -> None:
     """Applications can override the default password validator via config."""
-    app, user_db, primary_strategy, secondary_strategy = build_app_with_security_overrides(
+    app, _user_db, _primary_strategy, _secondary_strategy = build_app_with_security_overrides(
         {"password_validator": partial(require_password_length, minimum_length=8)},
     )
     async with AsyncTestClient(app=app) as client:
@@ -679,8 +676,6 @@ async def test_plugin_allows_overriding_minimum_password_length() -> None:
             json={"email": "override@example.com", "password": "123456789012"},
         )
         assert response.status_code == HTTP_CREATED
-
-    del user_db, primary_strategy, secondary_strategy
 
 
 @pytest.mark.filterwarnings("ignore::litestar_auth.totp.SecurityWarning")

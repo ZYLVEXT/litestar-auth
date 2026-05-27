@@ -76,17 +76,14 @@ class _CLIInMemoryTokenStrategy[UP: _EmailUserProtocol](Strategy[UP, UUID]):
         user_manager: UserManagerProtocol[UP, UUID],
     ) -> UP | None:
         """Return no user; CLI wiring tests do not authenticate requests."""
-        del token, user_manager
         return None
 
     async def write_token(self, user: UP) -> str:
         """Return a deterministic placeholder token."""
-        del user
         return "plugin-cli-token"
 
     async def destroy_token(self, token: str, user: UP) -> None:
         """Discard token-destruction inputs for test coverage."""
-        del token, user
 
 
 def _build_root_cli() -> Group:

@@ -24,14 +24,13 @@ class _RequestSessionContextManager:
         """Return the shared request session."""
         return self._session
 
-    async def __aexit__(
+    async def __aexit__(  # noqa: ARG002, RUF100
         self,
         exc_type: type[BaseException] | None,
         exc: BaseException | None,
         traceback: object,
     ) -> None:
         """Leave session lifecycle management to the surrounding request scope."""
-        del exc_type, exc, traceback
 
 
 class _RequestSessionMaker:
@@ -50,14 +49,13 @@ class _UnusedRoleLifecycleUpdater:
     """Sentinel lifecycle updater for request-bound helpers that never force delete."""
 
     @staticmethod
-    def build_manager(session: AsyncSession) -> object:
+    def build_manager(_session: AsyncSession) -> object:
         """Fail closed if a code path unexpectedly requests lifecycle updates.
 
         Raises:
             AssertionError: Always, because the HTTP role-catalog surface does
                 not support forced deletes.
         """
-        del session
         msg = "HTTP role catalog handlers never build manager lifecycle updates without an explicit force operation."
         raise AssertionError(msg)
 
@@ -69,14 +67,13 @@ class _ProvidedUserManagerLifecycleUpdater:
         """Store the optional request-scoped user manager dependency."""
         self._user_manager = user_manager
 
-    def build_manager(self, session: AsyncSession) -> object:
+    def build_manager(self, _session: AsyncSession) -> object:
         """Return the injected manager or fail closed for assignment handlers.
 
         Raises:
             ConfigurationError: If no manager dependency was provided for an
                 explicit-model request-bound controller.
         """
-        del session
         if self._user_manager is not None:
             return self._user_manager
 

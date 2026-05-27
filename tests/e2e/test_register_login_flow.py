@@ -146,8 +146,7 @@ def app() -> Iterator[tuple[Litestar, VerificationTracker]]:
         user_db: object,
         config: LitestarAuthConfig[User, UUID],
         backends: tuple[object, ...] = (),
-    ) -> E2EUserManager:
-        del session
+    ) -> E2EUserManager:  # noqa: ARG001, RUF100
         security = config.user_manager_security
         assert security is not None
         return E2EUserManager(

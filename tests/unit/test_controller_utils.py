@@ -339,7 +339,6 @@ def test_account_state_policy_require_for_client_maps_domain_errors(
 
     class _Manager:
         def require_account_state(self, user: object, *, require_verified: bool) -> None:
-            del user, require_verified
             raise manager_error
 
     policy = account_state_module.AccountStatePolicy(
@@ -470,8 +469,6 @@ def test_configure_request_body_handler_updates_data_signature_and_handlers() ->
     """Request-body helper rewrites the ``data`` annotation and installs controller error handlers."""
 
     def handler(self: object, request: object, data: msgspec.Struct) -> msgspec.Struct:
-        del self
-        del request
         return data
 
     route_handler = _MockRouteHandler(handler)
@@ -489,8 +486,7 @@ def test_configure_request_body_handler_requires_data_parameter() -> None:
     """Request-body helper rejects handlers that do not expose a ``data`` parameter."""
 
     def handler(self: object, request: object) -> None:
-        del self
-        del request
+        pass
 
     route_handler = _MockRouteHandler(handler)
 
@@ -913,7 +909,6 @@ async def test_require_account_state_maps_inactive_manager_errors() -> None:
 
     class _Manager:
         def require_account_state(self, user: object, *, require_verified: bool) -> None:
-            del user, require_verified
             raise InactiveUserError
 
     with pytest.raises(ClientException) as exc_info:
@@ -930,7 +925,6 @@ async def test_require_account_state_maps_unverified_manager_errors() -> None:
 
     class _Manager:
         def require_account_state(self, user: object, *, require_verified: bool) -> None:
-            del user, require_verified
             raise UnverifiedUserError
 
     with pytest.raises(ClientException) as exc_info:

@@ -46,22 +46,18 @@ class _TypingUserStore(BaseUserStore[ExampleUser, UUID]):
 
     async def create(self, user_dict: Mapping[str, Any]) -> ExampleUser:
         """Return the stored user for shape-only tests."""
-        del user_dict
         return self._user
 
     async def list_users(self, *, offset: int, limit: int) -> tuple[list[ExampleUser], int]:
         """Return a page containing the stored user."""
-        del offset, limit
         return [self._user], 1
 
     async def update(self, user: ExampleUser, update_dict: Mapping[str, Any]) -> ExampleUser:
         """Return the supplied user for shape-only tests."""
-        del update_dict
         return user
 
     async def delete(self, user_id: UUID) -> None:
         """Accept deletion calls for shape-only tests."""
-        del user_id
 
 
 class _TypingUserManager(BaseUserManager[ExampleUser, UUID]):

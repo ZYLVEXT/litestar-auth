@@ -222,7 +222,7 @@ class DatabaseTokenStrategy[UP: UserProtocol[Any], ID](
         return access_rowcount + refresh_rowcount
 
     @override
-    async def read_token(
+    async def read_token(  # noqa: ARG002, RUF100
         self,
         token: str | None,
         user_manager: UserManagerProtocol[UP, ID],
@@ -232,7 +232,6 @@ class DatabaseTokenStrategy[UP: UserProtocol[Any], ID](
         Returns:
             Related user when the token exists and is not expired, otherwise ``None``.
         """
-        del user_manager
         if token is None:
             return None
 
@@ -266,9 +265,8 @@ class DatabaseTokenStrategy[UP: UserProtocol[Any], ID](
         return token
 
     @override
-    async def destroy_token(self, token: str, user: UP) -> None:
+    async def destroy_token(self, token: str, user: UP) -> None:  # noqa: ARG002, RUF100
         """Delete a persisted token."""
-        del user
         token_digest = self._token_digest(token)
         await self._repository(self._access_token_repository_type).delete_where(token=token_digest, auto_commit=False)
         await self.session.commit()

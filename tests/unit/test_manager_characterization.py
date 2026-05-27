@@ -78,7 +78,6 @@ class CharacterizationManager(BaseUserManager[ExampleUser, UUID]):
 
     async def on_after_update(self, user: ExampleUser, update_dict: dict[str, Any]) -> None:
         """Record update payloads without exposing internal helper details."""
-        del update_dict
         self.events.append(("update", user.id))
 
     async def on_before_delete(self, user: ExampleUser) -> None:

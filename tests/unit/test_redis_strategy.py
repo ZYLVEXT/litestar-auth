@@ -338,7 +338,6 @@ async def test_redis_strategy_read_token_returns_none_when_subject_decoder_fails
         """Fail the test if `get()` is reached after decoder failure."""
 
         async def get(self, user_id: object) -> ExampleUser | None:
-            del user_id
             msg = "user manager should not be called for invalid token subjects"
             raise AssertionError(msg)
 

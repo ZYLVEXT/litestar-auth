@@ -100,7 +100,6 @@ class _PresetSession:
         traceback: object,
     ) -> None:
         """Exit async context (no-op)."""
-        del exc_type, exc, traceback
 
     async def close(self) -> None:
         """Match ``AsyncSession.close()`` for before-send hooks."""
@@ -188,7 +187,6 @@ class _PresetSessionStrategy:
 
     async def destroy_token(self, token: str, user: ExampleUser) -> None:
         """Delete an access token and record the request session used."""
-        del user
         self._state.destroy_session_ids.append(self._session_id())
         self._state.access_tokens.pop(token, None)
 
@@ -339,7 +337,6 @@ def _install_preset_backend_builder(
         Returns:
             Authentication backend that shares the preset's in-memory token state.
         """
-        del unsafe_testing
         state = states.setdefault(id(database_token_auth), _PresetStrategyState())
         strategy = _PresetSessionStrategy(
             state=state,

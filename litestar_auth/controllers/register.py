@@ -204,13 +204,11 @@ def _create_register_handler(settings: _RegisterControllerSettings) -> RequestBo
 
     @post("/register", before_request=settings.register_before_request, responses=_REGISTER_OPENAPI_RESPONSES)
     async def register(
-        self: object,
+        self: object,  # noqa: ARG001
         request: Request[Any, Any, Any],
         data: msgspec.Struct,
         litestar_auth_user_manager: RegisterControllerUserManagerProtocol[Any, Any],
     ) -> msgspec.Struct:
-        del self
-
         async def _register_work() -> msgspec.Struct:
             user = await _create_user_or_register_failure(
                 data,

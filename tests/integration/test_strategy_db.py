@@ -259,13 +259,12 @@ class UnusedUserManager:
     """Placeholder user manager for the shared strategy interface."""
 
     @staticmethod
-    async def get(user_id: object) -> User | None:
+    async def get(user_id: object) -> User | None:  # noqa: ARG004
         """Return ``None`` because the DB strategy resolves users directly.
 
         Returns:
             Always ``None``.
         """
-        del user_id
         return None
 
 
@@ -273,13 +272,12 @@ class UnusedCustomUserManager:
     """Placeholder user manager for custom-user strategy tests."""
 
     @staticmethod
-    async def get(user_id: object) -> CustomTokenUser | None:
+    async def get(user_id: object) -> CustomTokenUser | None:  # noqa: ARG004
         """Return ``None`` because the DB strategy resolves custom users directly.
 
         Returns:
             Always ``None``.
         """
-        del user_id
         return None
 
 
@@ -287,13 +285,12 @@ class UnusedPasswordHashColumnUserManager:
     """Placeholder user manager for custom password-column strategy tests."""
 
     @staticmethod
-    async def get(user_id: object) -> PasswordHashColumnUser | None:
+    async def get(user_id: object) -> PasswordHashColumnUser | None:  # noqa: ARG004
         """Return ``None`` because the DB strategy resolves custom users directly.
 
         Returns:
             Always ``None``.
         """
-        del user_id
         return None
 
 

@@ -216,13 +216,12 @@ def build_fake_aiosqlite_module() -> ModuleType:
     return module
 
 
-def _unexpected_aiosqlite_connect(*args: object, **kwargs: object) -> None:
+def _unexpected_aiosqlite_connect(*_args: object, **_kwargs: object) -> None:
     """Fail fast if the fake driver is used without ``async_creator``.
 
     Raises:
         AssertionError: Always, because these test helpers require ``async_creator``.
     """
-    del args, kwargs
     msg = "Tests using the fake aiosqlite module must provide create_async_engine(..., async_creator=...)."
     raise AssertionError(msg)
 
@@ -302,17 +301,16 @@ async def aclose_fakeredis_clients(clients: Iterable[AsyncFakeRedis]) -> None:
         await client.aclose()
 
 
-def cast_fakeredis[T](redis: AsyncFakeRedis, protocol: type[T]) -> T:
+def cast_fakeredis[T](redis: AsyncFakeRedis, _protocol: type[T]) -> T:
     """Cast an async fakeredis client to a narrow Redis protocol type.
 
     Args:
         redis: Async fakeredis client to cast.
-        protocol: Target protocol type (used only for type narrowing).
+        _protocol: Target protocol type (used only for type narrowing).
 
     Returns:
         The same client instance typed as the target protocol.
     """
-    del protocol
     return cast("T", redis)
 
 

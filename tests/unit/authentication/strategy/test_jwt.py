@@ -80,7 +80,6 @@ class _MissingUserManager:
 
     async def get(self, user_id: object) -> None:
         """Always return ``None`` to simulate a deleted user."""
-        del user_id
 
 
 def _subject_decoder_returns_none(_: str) -> None:

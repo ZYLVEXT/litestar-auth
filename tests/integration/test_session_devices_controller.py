@@ -64,7 +64,6 @@ class _SessionManagementStrategy(Strategy[ExampleUser, UUID]):
         user_manager: UserManagerProtocol[ExampleUser, UUID],
     ) -> ExampleUser | None:
         """Return no user; route tests call management methods directly."""
-        del token, user_manager
         return None
 
     async def write_token(self, user: ExampleUser) -> str:
@@ -73,12 +72,10 @@ class _SessionManagementStrategy(Strategy[ExampleUser, UUID]):
         Returns:
             Placeholder token.
         """
-        del user
         return "access-token"
 
     async def destroy_token(self, token: str, user: ExampleUser) -> None:
         """Ignore access-token destruction for the management-only test strategy."""
-        del token, user
 
     async def list_refresh_sessions(self, user: ExampleUser) -> list[RefreshSession]:
         """Return one public refresh session for ``user``.
@@ -103,13 +100,16 @@ class _SessionManagementStrategy(Strategy[ExampleUser, UUID]):
         """
         return session_id == f"session-{user.id}"
 
-    async def revoke_other_refresh_sessions(self, user: ExampleUser, current_session_id: str | None) -> int:
+    async def revoke_other_refresh_sessions(
+        self,
+        user: ExampleUser,
+        current_session_id: str | None,
+    ) -> int:
         """Record no state and report one revoked session.
 
         Returns:
             Number of revoked sessions.
         """
-        del user, current_session_id
         return 1
 
 

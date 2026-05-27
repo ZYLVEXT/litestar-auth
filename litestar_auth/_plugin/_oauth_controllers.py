@@ -177,14 +177,13 @@ def _create_plugin_oauth_login_callback[UP: UserProtocol[Any], ID](
 
     @get("/callback")
     async def callback(  # noqa: PLR0913, PLR0917
-        self: object,
+        self: object,  # noqa: ARG001
         request: Request[Any, Any, Any],
         code: _OAuthCodeQuery,
         litestar_auth_user_manager: _OAuthUserManagerDep,
         litestar_auth_backends: _OAuthBackendsDep,
         oauth_state: _OAuthStateQuery,
     ) -> Response[Any]:
-        del self
         return await _complete_oauth_login_callback(
             assembly=assembly,
             callback_inputs=_OAuthLoginCallbackInputs(

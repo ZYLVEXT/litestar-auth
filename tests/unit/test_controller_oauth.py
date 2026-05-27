@@ -882,7 +882,6 @@ async def test_oauth_associate_authorize_sets_state_cookie_and_redirects(monkeyp
         redirect_uri: str,
         scopes: list[str] | None = None,
     ) -> OAuthAuthorization:
-        del self
         await asyncio.sleep(0)
         seen["redirect_uri"] = redirect_uri
         seen["scopes"] = scopes
@@ -988,7 +987,6 @@ async def test_oauth_associate_callback_links_authenticated_user_and_clears_cook
         code_verifier: str,
         user_manager: object,
     ) -> None:
-        del self
         await asyncio.sleep(0)
         seen["user"] = user
         seen["code"] = code
@@ -1112,7 +1110,6 @@ async def test_oauth_associate_callback_propagates_already_linked_error(
         code_verifier: str,
         user_manager: object,
     ) -> None:
-        del self, user, code, redirect_uri, code_verifier, user_manager
         await asyncio.sleep(0)
         raise OAuthAccountAlreadyLinkedError(
             provider="github",
@@ -1156,7 +1153,6 @@ async def test_oauth_associate_di_callback_uses_injected_manager(monkeypatch: py
         code_verifier: str,
         user_manager: object,
     ) -> None:
-        del self, user, code, redirect_uri
         await asyncio.sleep(0)
         seen["code_verifier"] = code_verifier
         seen["user_manager"] = user_manager
@@ -1385,7 +1381,6 @@ async def test_oauth_login_authorize_sets_state_cookie_and_redirects(monkeypatch
         redirect_uri: str,
         scopes: list[str] | None = None,
     ) -> OAuthAuthorization:
-        del self
         await asyncio.sleep(0)
         seen["redirect_uri"] = redirect_uri
         seen["scopes"] = scopes
@@ -1456,7 +1451,6 @@ async def test_oauth_login_callback_logs_in_and_clears_state_cookie(monkeypatch:
         code_verifier: str,
         user_manager: object,
     ) -> object:
-        del self
         await asyncio.sleep(0)
         seen["code"] = code
         seen["redirect_uri"] = redirect_uri

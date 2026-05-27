@@ -91,7 +91,6 @@ class _RecordingPasswordHelper(PasswordHelper):
         self.seen_hashes: list[str] = []
 
     def verify(self, password: str, hashed: str) -> bool:
-        del password
         self.seen_hashes.append(hashed)
         return hashed == self.matching_hash
 

@@ -69,7 +69,6 @@ class DummySession:
         traceback: TracebackType | None,
     ) -> None:
         """Exit async context (no-op)."""
-        del exc_type, exc, traceback
 
     async def close(self) -> None:
         """No-op for lifecycle parity."""
@@ -104,7 +103,6 @@ class MissingUserManager:
 
     async def get(self, user_id: UUID) -> ExampleUser | None:
         """Return no user."""
-        del user_id
         return None
 
 
@@ -225,9 +223,6 @@ async def _send(_: HTTPSendMessage) -> None:
 
 async def _app(scope: Scope, receive: Receive, send: Send) -> None:
     """No-op ASGI app used by the middleware under test."""
-    del scope
-    del receive
-    del send
     await asyncio.sleep(0)
 
 
@@ -237,9 +232,6 @@ async def _raising_app(scope: Scope, receive: Receive, send: Send) -> None:
     Raises:
         RuntimeError: Always raised to exercise middleware cleanup.
     """
-    del scope
-    del receive
-    del send
     await asyncio.sleep(0)
     msg = "downstream boom"
     raise RuntimeError(msg)

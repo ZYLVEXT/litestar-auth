@@ -90,7 +90,6 @@ class ExampleStrategy:
 
     async def read_token(self, token: str | None, user_manager: object) -> ExampleUser | None:
         """Return no user because this test never authenticates."""
-        del token, user_manager
         return None
 
     async def write_token(self, user: ExampleUser) -> str:
@@ -99,7 +98,6 @@ class ExampleStrategy:
 
     async def destroy_token(self, token: str, user: ExampleUser) -> None:
         """No-op token invalidation for tests."""
-        del token, user
 
 
 class ExampleUserManager(OAuthControllerUserManagerProtocol[ExampleUser, str]):
@@ -115,7 +113,6 @@ class ExampleUserManager(OAuthControllerUserManagerProtocol[ExampleUser, str]):
         allow_privileged: bool = False,
     ) -> ExampleUser:
         """Return a placeholder user because this path is never reached."""
-        del user_create, safe, allow_privileged
         return ExampleUser(id=uuid4())
 
     async def update(
@@ -126,12 +123,10 @@ class ExampleUserManager(OAuthControllerUserManagerProtocol[ExampleUser, str]):
         allow_privileged: bool = False,
     ) -> ExampleUser:
         """Return the provided user because this path is never reached."""
-        del user_update, allow_privileged
         return user
 
     async def on_after_login(self, user: ExampleUser) -> None:
         """No-op login hook for protocol conformance."""
-        del user
 
 
 def test_contrib_packages_reexport_public_symbols() -> None:
@@ -416,11 +411,9 @@ async def test_contrib_role_admin_internal_helpers_cover_listing_loading_and_sig
 
     class SessionStub:
         async def scalar(self, statement: object) -> object:
-            del statement
             return SimpleNamespace(name="billing", description="Docs")
 
         async def scalars(self, statement: object) -> list[object]:
-            del statement
             return [
                 SimpleNamespace(name="admin", description=None),
                 SimpleNamespace(name="billing", description="Docs"),
@@ -473,7 +466,6 @@ async def test_contrib_role_admin_internal_helpers_cover_listing_loading_and_sig
 
     class MissingSessionStub(SessionStub):
         async def scalar(self, statement: object) -> object | None:
-            del statement
             return None
 
     class MissingRoleAdminStub(RoleAdminStub):
@@ -554,7 +546,6 @@ async def test_contrib_role_admin_assignment_helpers_cover_success_and_paging(  
 
     async def _load_role_row_stub(role_admin: object, normalized_role_name: str) -> object:
         await asyncio.sleep(0)
-        del role_admin
         return SimpleNamespace(name=normalized_role_name, description="Docs")
 
     monkeypatch.setattr(role_admin_controller_handler_utils_module, "_load_role_row", _load_role_row_stub)
@@ -627,12 +618,10 @@ async def test_contrib_role_admin_assignment_helpers_cover_error_mapping(
             raise RoleAdminUserNotFoundError(msg)
 
         async def unassign_user_roles(self, **kwargs: object) -> object:
-            del kwargs
             msg = "Role admin could not find a user with id 'parsed:missing-user'."
             raise RoleAdminUserNotFoundError(msg)
 
         async def list_role_users(self, *, role: str) -> list[object]:
-            del role
             msg = "Role admin could not find role 'missing' in the configured catalog."
             raise RoleAdminRoleNotFoundError(msg)
 
@@ -640,7 +629,6 @@ async def test_contrib_role_admin_assignment_helpers_cover_error_mapping(
 
     async def _load_role_row_stub(role_admin: object, normalized_role_name: str) -> object:
         await asyncio.sleep(0)
-        del role_admin, normalized_role_name
         return SimpleNamespace(name="billing", description="Docs")
 
     monkeypatch.setattr(role_admin_controller_handler_utils_module, "_load_role_row", _load_role_row_stub)
@@ -702,7 +690,6 @@ async def test_contrib_role_admin_controller_handlers_cover_config_and_request_b
         db_session: object | None = None,
         request_user_manager: object | None = None,
     ) -> RuntimeFailureRoleAdmin:
-        del context, db_session, request_user_manager
         return RuntimeFailureRoleAdmin()
 
     monkeypatch.setattr(
@@ -722,7 +709,6 @@ async def test_contrib_role_admin_controller_handlers_cover_config_and_request_b
             self.commit_calls = 0
 
         async def scalar(self, statement: object) -> object | None:
-            del statement
             return self._role
 
         async def commit(self) -> None:
@@ -739,7 +725,6 @@ async def test_contrib_role_admin_controller_handlers_cover_config_and_request_b
             yield self._session
 
         async def delete_role(self, *, role: str) -> list[str]:
-            del role
             msg = "missing"
             raise LookupError(msg)
 
@@ -756,7 +741,6 @@ async def test_contrib_role_admin_controller_handlers_cover_config_and_request_b
         db_session: object | None = None,
         request_user_manager: object | None = None,
     ) -> ConfigBranchRoleAdminStub:
-        del context, db_session, request_user_manager
         return config_branch_role_admin
 
     monkeypatch.setattr(role_admin_controller_handlers_module, "_resolve_role_admin", _config_branch_resolver)
@@ -816,7 +800,6 @@ async def test_contrib_role_admin_controller_handlers_cover_config_and_request_b
             self.commit_calls = 0
 
         async def scalar(self, statement: object) -> object | None:
-            del statement
             return self._role
 
         async def commit(self) -> None:
@@ -897,14 +880,12 @@ async def test_contrib_role_admin_controller_handlers_cover_config_and_request_b
         db_session: object | None = None,
         request_user_manager: object | None = None,
     ) -> ConfigRoleAdminStub:
-        del context, db_session, request_user_manager
         return role_admin_stub
 
     monkeypatch.setattr(role_admin_controller_handlers_module, "_resolve_role_admin", _role_admin_resolver)
 
     async def _load_role_row_stub(role_admin: object, normalized_role_name: str) -> object:
         await asyncio.sleep(0)
-        del role_admin
         return SimpleNamespace(name=normalized_role_name, description="Docs")
 
     monkeypatch.setattr(role_admin_controller_handlers_module, "_load_role_row", _load_role_row_stub)
@@ -935,7 +916,6 @@ async def test_contrib_role_admin_controller_handlers_cover_config_and_request_b
         db_session: object | None = None,
         request_user_manager: object | None = None,
     ) -> NoConfigRuntimeFailureRoleAdmin:
-        del context, db_session, request_user_manager
         return NoConfigRuntimeFailureRoleAdmin()
 
     monkeypatch.setattr(

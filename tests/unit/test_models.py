@@ -340,7 +340,6 @@ def test_insert_missing_role_row_ignores_duplicate_role_race_when_role_now_exist
             return self
 
         def __exit__(self, exc_type: object, exc: object, traceback: object) -> bool:
-            del exc_type, exc, traceback
             return False
 
     class _Connection:
@@ -348,7 +347,6 @@ def test_insert_missing_role_row_ignores_duplicate_role_race_when_role_now_exist
             return _Savepoint()
 
         def execute(self, statement: object) -> None:
-            del statement
             statement_text = "INSERT INTO role (name) VALUES (?)"
             raise IntegrityError(statement_text, {"name": "admin"}, sqlite3.IntegrityError())
 
@@ -357,7 +355,6 @@ def test_insert_missing_role_row_ignores_duplicate_role_race_when_role_now_exist
             return _Connection()
 
         def scalar(self, statement: object) -> str:
-            del statement
             return "admin"
 
     auth_model_mixins_module._insert_missing_role_row(
@@ -376,7 +373,6 @@ def test_insert_missing_role_row_reraises_non_duplicate_integrity_errors() -> No
             return self
 
         def __exit__(self, exc_type: object, exc: object, traceback: object) -> bool:
-            del exc_type, exc, traceback
             return False
 
     class _Connection:
@@ -384,7 +380,6 @@ def test_insert_missing_role_row_reraises_non_duplicate_integrity_errors() -> No
             return _Savepoint()
 
         def execute(self, statement: object) -> None:
-            del statement
             statement_text = "INSERT INTO role (name) VALUES (?)"
             raise IntegrityError(statement_text, {"name": "admin"}, sqlite3.IntegrityError())
 
@@ -393,7 +388,7 @@ def test_insert_missing_role_row_reraises_non_duplicate_integrity_errors() -> No
             return _Connection()
 
         def scalar(self, statement: object) -> None:
-            del statement
+            pass
 
     with pytest.raises(IntegrityError):
         auth_model_mixins_module._insert_missing_role_row(

@@ -117,22 +117,14 @@ class NoopStrategy:
         Returns:
             Always ``None``.
         """
-        del self
-        del token
-        del user_manager
         return None
 
     async def write_token(self, user: ExampleUser) -> str:
         """Return a deterministic test token."""
-        del self
-        del user
         return "test-token"
 
     async def destroy_token(self, token: str, user: ExampleUser) -> None:
         """Discard the supplied token."""
-        del self
-        del token
-        del user
 
 
 def build_app(

@@ -45,13 +45,12 @@ class ApiKeyTransport(Transport):
         return token
 
     @override
-    def set_login_token(self, response: Response[Any], token: str) -> Response[Any]:
+    def set_login_token(self, response: Response[Any], token: str) -> Response[Any]:  # noqa: ARG002, RUF100
         """Reject login issuance because API keys are not login-flow tokens.
 
         Raises:
             TokenError: Always, because API keys are not issued by login.
         """
-        del response, token
         msg = "API-key transport cannot issue login tokens."
         raise TokenError(msg)
 

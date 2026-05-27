@@ -78,8 +78,6 @@ class DummyUserManager:
         Raises:
             UnverifiedUserError: Always, to exercise the controller helper mapping.
         """
-        del user
-        del require_verified
         msg = "The user account is not verified."
         raise UnverifiedUserError(msg)
 
@@ -168,7 +166,6 @@ class RecordingUserManager:
 
     async def has_recent_totp_verification(self, user: DummyUser, session_id: str) -> bool:
         """Return no recent marker for direct helper tests."""
-        del user, session_id
         return False
 
 
@@ -191,12 +188,10 @@ class MarkerUserManager(RecordingUserManager):
 
     async def read_totp_secret(self, secret: str | None) -> str | None:
         """Return the configured plain secret result."""
-        del secret
         return self.secret_result
 
     async def has_recent_totp_verification(self, user: DummyUser, session_id: str) -> bool:
         """Return whether the supplied session matches the configured marker."""
-        del user
         return session_id == self.marker_session_id
 
 

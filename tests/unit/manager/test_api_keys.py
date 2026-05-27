@@ -261,12 +261,10 @@ class NoneUpdatingApiKeyStore(ApiKeyStore):
         scopes: list[str] | None = None,
     ) -> ApiKeyRow | None:
         """Return ``None`` after the pre-update lookup succeeds."""
-        del key_id, name, scopes
         return None
 
     async def update_last_used_at(self, key_id: str, *, last_used_at: datetime) -> ApiKeyRow | None:
         """Return ``None`` after the pre-write lookup succeeds."""
-        del key_id, last_used_at
         return None
 
 
@@ -275,7 +273,6 @@ class ForeignRevokingApiKeyStore(ApiKeyStore):
 
     async def revoke(self, key_id: str, *, revoked_at: datetime) -> ApiKeyRow | None:
         """Return a row owned by another user."""
-        del key_id, revoked_at
         return ApiKeyRow(
             key_id="foreign",
             user_id=UUID("00000000-0000-0000-0000-000000000099"),
@@ -295,7 +292,6 @@ class NoneReplacingApiKeyStore(ApiKeyStore):
         encrypted_secret: bytes,
     ) -> ApiKeyRow | None:
         """Return ``None`` after the rotation preconditions have succeeded."""
-        del key_id, encrypted_secret
         return None
 
 
@@ -312,12 +308,10 @@ class StringSecretManager:
 
     async def on_after_api_key_created(self, user: ExampleUser, api_key: object) -> None:
         """Record API-key creation."""
-        del user
         self.created.append(api_key)
 
     async def on_after_api_key_revoked(self, user: ExampleUser, api_key: object) -> None:
         """Record API-key revocation."""
-        del user
         self.revoked.append(api_key)
 
     async def on_after_api_key_used(self, api_key: object) -> None:

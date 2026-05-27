@@ -55,7 +55,6 @@ class DummyUserManager:
 
     async def verify(self, token: str) -> DummyUser:
         """Return a verified user or raise the configured error."""
-        del token
         if self.error is not None:
             raise self.error
         return DummyUser(id=uuid4(), email="verified@example.com", is_verified=True)

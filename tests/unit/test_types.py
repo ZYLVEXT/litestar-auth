@@ -72,7 +72,6 @@ class ExampleStrategy:
         Returns:
             A user when a token is present, otherwise ``None``.
         """
-        del user_manager
         if token is None:
             return None
         return ExampleUser(id=UUID(token.removeprefix(self.token_prefix)))
@@ -88,7 +87,6 @@ class ExampleStrategy:
     async def destroy_token(self, token: str, user: ExampleUser) -> None:
         """Accept token invalidation without side effects."""
         assert token.startswith(self.token_prefix)
-        del user
 
 
 class AccountStateOnlyUser:

@@ -106,7 +106,6 @@ def test_build_controllers_combines_auth_and_optional_controllers(monkeypatch: p
         security: object | None = None,
     ) -> list[str]:
         nonlocal auth_inventory
-        del config, security
         auth_inventory = backend_inventory
         return ["auth-controller"]
 
@@ -119,7 +118,6 @@ def test_build_controllers_combines_auth_and_optional_controllers(monkeypatch: p
         backend_inventory: object | None = None,
         security: object | None = None,
     ) -> None:
-        del security
         optional_calls.append((list(controllers), config, backend_inventory))
         controllers.append("optional-controller")
 
