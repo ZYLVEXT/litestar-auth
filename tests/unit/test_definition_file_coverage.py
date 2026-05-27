@@ -24,7 +24,6 @@ import litestar_auth._roles as roles_module
 import litestar_auth.authentication.strategy.base as strategy_base_module
 import litestar_auth.authentication.transport.base as transport_base_module
 import litestar_auth.controllers._step_up_payloads as step_up_payloads_module
-import litestar_auth.controllers._users_helpers as users_helpers_module
 import litestar_auth.db.base as db_base_module
 import litestar_auth.models.mixins as model_mixins_module
 import litestar_auth.payloads as payloads_module
@@ -216,9 +215,8 @@ def test_schemas_module_preserves_struct_definitions() -> None:
     assert get_args(admin_update_hints["roles"])[1] is type(None)
 
 
-def test_controller_local_step_up_payloads_reuse_one_field_contract() -> None:
-    """Controller-local step-up request bodies keep one source for proof fields."""
-    assert users_helpers_module.AdminUserDeleteStepUpRequest is step_up_payloads_module.AdminUserDeleteStepUpRequest
+def test_admin_step_up_payload_field_contract() -> None:
+    """Admin step-up request body preserves its (current_password, totp_code) field contract."""
     assert step_up_payloads_module.AdminUserDeleteStepUpRequest.__struct_fields__ == ("current_password", "totp_code")
     assert (
         step_up_payloads_module.AdminUserDeleteStepUpRequest.__mro__[1]

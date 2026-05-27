@@ -8,7 +8,6 @@ import msgspec
 from litestar.exceptions import TooManyRequestsException
 
 from litestar_auth.controllers._error_responses import raise_request_body_invalid
-from litestar_auth.controllers._step_up_payloads import AdminUserDeleteStepUpRequest  # noqa: F401
 from litestar_auth.exceptions import AuthorizationError
 from litestar_auth.ratelimit._client_host import _client_host, logger
 from litestar_auth.ratelimit._key_derivation import _safe_key_part

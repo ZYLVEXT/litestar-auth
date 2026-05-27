@@ -21,8 +21,8 @@ from litestar_auth.controllers._step_up import (
     require_password_step_up,
     require_totp_stepup,
 )
+from litestar_auth.controllers._step_up_payloads import AdminUserDeleteStepUpRequest
 from litestar_auth.controllers._users_helpers import (
-    AdminUserDeleteStepUpRequest,
     _build_change_password_rate_limit_key,
     _build_safe_self_update,
     _reject_blocked_self_update_fields,

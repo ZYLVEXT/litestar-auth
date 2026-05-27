@@ -25,11 +25,11 @@ from litestar_auth.controllers._step_up import (
     require_password_step_up,
     require_totp_stepup,
 )
+from litestar_auth.controllers._step_up_payloads import AdminUserDeleteStepUpRequest
 from litestar_auth.controllers._users_helpers import (
     SELF_UPDATE_FORBIDDEN_FIELDS as _USERS_SELF_UPDATE_FORBIDDEN_FIELDS,
 )
 from litestar_auth.controllers._users_helpers import (
-    AdminUserDeleteStepUpRequest,
     _build_safe_self_update,
     _create_change_password_rate_limit_handlers,
     _reject_blocked_self_update_fields,
