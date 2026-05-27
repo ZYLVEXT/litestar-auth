@@ -195,8 +195,7 @@ class SQLAlchemyApiKeyStore[AK: _ApiKeyRow](BaseApiKeyStore[AK, UUID]):
         """Return API keys for a user, excluding revoked or expired rows by default."""
         api_key_columns = self._columns()
         statement = (
-            self
-            ._active_statement(select(self.api_key_model), include_inactive=include_inactive)
+            self._active_statement(select(self.api_key_model), include_inactive=include_inactive)
             .where(api_key_columns.user_id == user_id)
             .order_by(api_key_columns.created_at, api_key_columns.key_id)
         )
@@ -263,8 +262,7 @@ class SQLAlchemyApiKeyStore[AK: _ApiKeyRow](BaseApiKeyStore[AK, UUID]):
         """Return signing API-key rows whose encrypted secret needs keyring rotation."""
         api_key_columns = self._columns()
         statement = (
-            self
-            ._active_statement(select(self.api_key_model), include_inactive=include_inactive)
+            self._active_statement(select(self.api_key_model), include_inactive=include_inactive)
             .where(
                 api_key_columns.signing_required.is_(True),
                 api_key_columns.encrypted_secret.is_not(None),
