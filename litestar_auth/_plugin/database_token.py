@@ -9,20 +9,20 @@ from typing import TYPE_CHECKING, Any, Never, cast
 from litestar_auth.types import UserProtocol
 
 if TYPE_CHECKING:
-    from datetime import timedelta  # pragma: no cover
+    from datetime import timedelta
 
-    from sqlalchemy.ext.asyncio import AsyncSession  # pragma: no cover
+    from sqlalchemy.ext.asyncio import AsyncSession
 
-    from litestar_auth._plugin._protocols import StrategyProto  # pragma: no cover
-    from litestar_auth._plugin.config import (  # pragma: no cover
+    from litestar_auth._plugin._protocols import StrategyProto
+    from litestar_auth._plugin.config import (
         DatabaseTokenAuthConfig,
         LitestarAuthConfig,
         StartupBackendTemplate,
     )
-    from litestar_auth.authentication.backend import AuthenticationBackend  # pragma: no cover
-    from litestar_auth.authentication.strategy import DatabaseTokenModels  # pragma: no cover
-    from litestar_auth.authentication.strategy.base import UserManagerProtocol  # pragma: no cover
-    from litestar_auth.authentication.strategy.db import AsyncSessionT  # pragma: no cover
+    from litestar_auth.authentication.backend import AuthenticationBackend
+    from litestar_auth.authentication.strategy import DatabaseTokenModels
+    from litestar_auth.authentication.strategy.base import UserManagerProtocol
+    from litestar_auth.authentication.strategy.db import AsyncSessionT
 
 
 def _raise_startup_only_database_token_runtime_error() -> Never:

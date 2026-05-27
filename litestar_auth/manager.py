@@ -90,10 +90,10 @@ class BaseUserManager[UP: UserProtocol[Any], ID](
 
     @overload
     def __init__(self, *, config: BaseUserManagerConfig[UP, ID]) -> None:
-        pass  # pragma: no cover
+        pass
 
     @overload
-    def __init__(  # pragma: no cover
+    def __init__(
         self,
         user_db: BaseUserStore[UP, ID],
         **options: Unpack[BaseUserManagerConstructorKwargs[UP, ID]],
@@ -101,7 +101,7 @@ class BaseUserManager[UP: UserProtocol[Any], ID](
         pass
 
     @overload
-    def __init__(  # pragma: no cover
+    def __init__(
         self,
         *,
         user_db: BaseUserStore[UP, ID],

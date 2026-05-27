@@ -602,14 +602,14 @@ def create_oauth_controller[UP: UserProtocol[Any], ID](
     *,
     config: OAuthControllerConfig[UP, ID],
 ) -> type[Controller]:
-    pass  # pragma: no cover
+    pass  # pragma: no cover - overload signature - implementation is exercised
 
 
 @overload
 def create_oauth_controller[UP: UserProtocol[Any], ID](
     **options: Unpack[OAuthControllerOptions[UP, ID]],
 ) -> type[Controller]:
-    pass  # pragma: no cover
+    pass  # pragma: no cover - overload signature - implementation is exercised
 
 
 def create_oauth_controller[UP: UserProtocol[Any], ID](
@@ -705,14 +705,14 @@ def create_oauth_associate_controller[UP: UserProtocol[Any], ID](
     *,
     config: OAuthAssociateControllerConfig[UP, ID],
 ) -> type[Controller]:
-    pass  # pragma: no cover
+    pass  # pragma: no cover - overload signature - implementation is exercised
 
 
 @overload
 def create_oauth_associate_controller[UP: UserProtocol[Any], ID](
     **options: Unpack[OAuthAssociateControllerOptions[UP, ID]],
 ) -> type[Controller]:
-    pass  # pragma: no cover
+    pass  # pragma: no cover - overload signature - implementation is exercised
 
 
 def create_oauth_associate_controller[UP: UserProtocol[Any], ID](

@@ -25,7 +25,7 @@ class PasswordValidatorFactory[UP: UserProtocol[Any], ID](Protocol):
         config: LitestarAuthConfig[UP, ID],
         /,
     ) -> Callable[[str], None] | None:
-        pass  # pragma: no cover
+        pass  # pragma: no cover - Protocol method body - pure type contract
 
 
 class UserManagerFactory[UP: UserProtocol[Any], ID](Protocol):
@@ -47,4 +47,4 @@ class UserManagerFactory[UP: UserProtocol[Any], ID](Protocol):
         config: LitestarAuthConfig[UP, ID],
         backends: tuple[object, ...] = (),
     ) -> BaseUserManager[UP, ID]:
-        pass  # pragma: no cover
+        pass  # pragma: no cover - Protocol method body - pure type contract

@@ -882,14 +882,14 @@ def create_users_controller[UP: UsersControllerUserProtocol[Any], ID](
     *,
     config: UsersControllerConfig[ID],
 ) -> type[Controller]:
-    pass  # pragma: no cover
+    pass  # pragma: no cover - overload signature - implementation is exercised
 
 
 @overload
 def create_users_controller[UP: UsersControllerUserProtocol[Any], ID](
     **options: Unpack[UsersControllerOptions[ID]],
 ) -> type[Controller]:
-    pass  # pragma: no cover
+    pass  # pragma: no cover - overload signature - implementation is exercised
 
 
 def create_users_controller[UP: UsersControllerUserProtocol[Any], ID](

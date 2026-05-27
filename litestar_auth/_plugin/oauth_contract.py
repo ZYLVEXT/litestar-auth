@@ -8,9 +8,9 @@ from typing import TYPE_CHECKING
 from litestar_auth.config import OAuthProviderConfig
 
 if TYPE_CHECKING:
-    from collections.abc import Mapping, Sequence  # pragma: no cover
+    from collections.abc import Mapping, Sequence
 
-    from litestar_auth._plugin.config import OAuthConfig  # pragma: no cover
+    from litestar_auth._plugin.config import OAuthConfig
 
 
 @dataclass(frozen=True, slots=True)

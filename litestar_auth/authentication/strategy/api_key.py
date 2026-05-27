@@ -134,11 +134,11 @@ class ApiKeyStrategy[UP: UserProtocol[Any], ID](Strategy[UP, ID]):
 
     @overload
     def __init__(self, *, config: ApiKeyStrategyConfig) -> None:
-        pass  # pragma: no cover
+        pass  # pragma: no cover - overload signature - implementation is exercised
 
     @overload
     def __init__(self, **options: Unpack[ApiKeyStrategyOptions]) -> None:
-        pass  # pragma: no cover
+        pass  # pragma: no cover - overload signature - implementation is exercised
 
     def __init__(
         self,

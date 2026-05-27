@@ -98,11 +98,11 @@ class RedisTokenStrategy(Strategy[UP, ID]):
 
     @overload
     def __init__(self, *, config: RedisTokenStrategyConfig[ID]) -> None:
-        pass  # pragma: no cover
+        pass  # pragma: no cover - overload signature - implementation is exercised
 
     @overload
     def __init__(self, **options: Unpack[RedisTokenStrategyOptions[ID]]) -> None:
-        pass  # pragma: no cover
+        pass  # pragma: no cover - overload signature - implementation is exercised
 
     def __init__(
         self,

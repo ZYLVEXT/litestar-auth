@@ -26,7 +26,7 @@ class _RoleLifecycleManager[UP: UserProtocol[Any]](Protocol):
         allow_privileged: bool = False,
     ) -> UP:
         """Apply a role-related update through the normal manager lifecycle hooks."""
-        # pragma: no cover
+        # pragma: no cover - Protocol method body - pure type contract
 
 
 class _RoleAdminMutationMixin[UP: UserProtocol[Any]]:

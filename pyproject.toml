@@ -190,6 +190,9 @@ exclude_lines = [
     "except ImportError:",
     # Don't check for typing-only code
     "if TYPE_CHECKING:",
+    # Don't check overload-only signatures
+    "^\\s*@overload\\b",
+    "@(typing\\.)?overload",
     # Don't check for code that only runs itself
     "if __name__ == .__main__.:",
 ]

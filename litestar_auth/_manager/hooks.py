@@ -56,19 +56,19 @@ class ManagerHookBus[UP]:
         return unsubscribe
 
     @overload
-    async def fire(self, name: Literal["after_register"], user: UP, token: str) -> None: ...  # pragma: no cover
+    async def fire(self, name: Literal["after_register"], user: UP, token: str) -> None: ...
 
     @overload
-    async def fire(self, name: Literal["after_register_duplicate"], user: UP) -> None: ...  # pragma: no cover
+    async def fire(self, name: Literal["after_register_duplicate"], user: UP) -> None: ...
 
     @overload
-    async def fire(self, name: Literal["after_login"], user: UP) -> None: ...  # pragma: no cover
+    async def fire(self, name: Literal["after_login"], user: UP) -> None: ...
 
     @overload
-    async def fire(self, name: Literal["after_verify"], user: UP) -> None: ...  # pragma: no cover
+    async def fire(self, name: Literal["after_verify"], user: UP) -> None: ...
 
     @overload
-    async def fire(  # pragma: no cover
+    async def fire(
         self,
         name: Literal["after_request_verify_token"],
         user: UP | None,
@@ -76,7 +76,7 @@ class ManagerHookBus[UP]:
     ) -> None: ...
 
     @overload
-    async def fire(  # pragma: no cover
+    async def fire(
         self,
         name: Literal["after_forgot_password"],
         user: UP | None,
@@ -84,10 +84,10 @@ class ManagerHookBus[UP]:
     ) -> None: ...
 
     @overload
-    async def fire(self, name: Literal["after_reset_password"], user: UP) -> None: ...  # pragma: no cover
+    async def fire(self, name: Literal["after_reset_password"], user: UP) -> None: ...
 
     @overload
-    async def fire(  # pragma: no cover
+    async def fire(
         self,
         name: Literal["after_update"],
         user: UP,
@@ -95,13 +95,13 @@ class ManagerHookBus[UP]:
     ) -> None: ...
 
     @overload
-    async def fire(self, name: Literal["before_delete"], user: UP) -> None: ...  # pragma: no cover
+    async def fire(self, name: Literal["before_delete"], user: UP) -> None: ...
 
     @overload
-    async def fire(self, name: Literal["after_delete"], user: UP) -> None: ...  # pragma: no cover
+    async def fire(self, name: Literal["after_delete"], user: UP) -> None: ...
 
     @overload
-    async def fire(  # pragma: no cover
+    async def fire(
         self,
         name: Literal["after_api_key_created"],
         user: UP,
@@ -109,7 +109,7 @@ class ManagerHookBus[UP]:
     ) -> None: ...
 
     @overload
-    async def fire(  # pragma: no cover
+    async def fire(
         self,
         name: Literal["after_api_key_revoked"],
         user: UP,
@@ -117,7 +117,7 @@ class ManagerHookBus[UP]:
     ) -> None: ...
 
     @overload
-    async def fire(self, name: Literal["after_api_key_used"], api_key: object) -> None: ...  # pragma: no cover
+    async def fire(self, name: Literal["after_api_key_used"], api_key: object) -> None: ...
 
     async def fire(self, name: ManagerHookName, *args: object) -> None:
         """Dispatch one lifecycle hook, then notify event subscribers."""

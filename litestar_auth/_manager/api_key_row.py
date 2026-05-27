@@ -28,13 +28,24 @@ class ApiKeyRowProtocol(Protocol):
 class _ApiKeyManagerHooks[UP](Protocol):  # noqa: PYI046
     """Lifecycle hooks invoked by API-key manager operations."""
 
-    async def on_after_api_key_created(self, user: UP, api_key: object) -> None:  # pragma: no cover
+    async def on_after_api_key_created(
+        self,
+        user: UP,
+        api_key: object,
+    ) -> None:  # pragma: no cover - Protocol method body - pure type contract
         """Run after an API key has been created."""
 
-    async def on_after_api_key_revoked(self, user: UP, api_key: object) -> None:  # pragma: no cover
+    async def on_after_api_key_revoked(
+        self,
+        user: UP,
+        api_key: object,
+    ) -> None:  # pragma: no cover - Protocol method body - pure type contract
         """Run after an API key has been revoked."""
 
-    async def on_after_api_key_used(self, api_key: object) -> None:  # pragma: no cover
+    async def on_after_api_key_used(
+        self,
+        api_key: object,
+    ) -> None:  # pragma: no cover - Protocol method body - pure type contract
         """Run after an API-key last-used write is persisted."""
 
 

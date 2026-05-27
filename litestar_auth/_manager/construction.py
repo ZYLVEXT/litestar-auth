@@ -32,7 +32,7 @@ LOGIN_IDENTIFIER_DIGEST_SIZE = 16
 class SecretValueProtocol(Protocol):
     """Structural contract for masked secret wrappers."""
 
-    def get_secret_value(self) -> str:  # pragma: no cover
+    def get_secret_value(self) -> str:  # pragma: no cover - Protocol method body - pure type contract
         """Return the underlying plaintext secret for cryptographic use."""
 
 

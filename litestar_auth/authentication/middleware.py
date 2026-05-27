@@ -49,7 +49,7 @@ if TYPE_CHECKING:
     from litestar_auth.authentication.authenticator import Authenticator
     from litestar_auth.authentication.strategy.base import UserManagerProtocol
     from litestar_auth.ratelimit import EndpointRateLimit
-else:  # pragma: no cover
+else:  # pragma: no cover - optional dependency - import-time fallback
     # Runtime fallback to avoid importing SQLAlchemy just for type aliases.
     AsyncSession = Any
 
@@ -110,10 +110,10 @@ class LitestarAuthMiddleware[UP: UserProtocol[Any], ID](AbstractAuthenticationMi
 
     @overload
     def __init__(self, app: ASGIApp, *, config: LitestarAuthMiddlewareConfig[UP, ID]) -> None:
-        pass  # pragma: no cover
+        pass
 
     @overload
-    def __init__(  # pragma: no cover
+    def __init__(
         self,
         app: ASGIApp,
         **options: Unpack[LitestarAuthMiddlewareOptions[UP, ID]],

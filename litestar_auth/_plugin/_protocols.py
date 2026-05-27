@@ -17,13 +17,21 @@ if TYPE_CHECKING:
 class StrategyProto[UP: UserProtocol[Any], ID](Protocol):
     """Narrow strategy contract consumed by plugin backend factories."""
 
-    async def read_token(self, token: str | None, user_manager: object) -> UP | None:  # pragma: no cover
+    async def read_token(
+        self,
+        token: str | None,
+        user_manager: object,
+    ) -> UP | None:  # pragma: no cover - Protocol method body - pure type contract
         """Resolve a user from a transport token."""
 
-    async def write_token(self, user: UP) -> str:  # pragma: no cover
+    async def write_token(self, user: UP) -> str:  # pragma: no cover - Protocol method body - pure type contract
         """Create a transport token for ``user``."""
 
-    async def destroy_token(self, token: str, user: UP) -> None:  # pragma: no cover
+    async def destroy_token(
+        self,
+        token: str,
+        user: UP,
+    ) -> None:  # pragma: no cover - Protocol method body - pure type contract
         """Invalidate ``token`` for ``user``."""
 
 
@@ -47,5 +55,9 @@ class DependencyProvider(Protocol):
     __signature__: inspect.Signature
     __annotations__: dict[str, object]
 
-    def __call__(self, *args: object, **kwargs: object) -> object:  # pragma: no cover
+    def __call__(
+        self,
+        *args: object,
+        **kwargs: object,
+    ) -> object:  # pragma: no cover - Protocol method body - pure type contract
         """Return the dependency value."""

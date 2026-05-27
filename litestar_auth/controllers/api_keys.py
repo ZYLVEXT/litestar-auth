@@ -27,12 +27,12 @@ def create_api_keys_controllers[ID](
     *,
     config: ApiKeysControllerConfig[ID],
 ) -> list[type[Controller]]:
-    pass  # pragma: no cover
+    pass  # pragma: no cover - overload signature - implementation is exercised
 
 
 @overload
 def create_api_keys_controllers[ID](**options: Unpack[ApiKeysControllerOptions[ID]]) -> list[type[Controller]]:
-    pass  # pragma: no cover
+    pass  # pragma: no cover - overload signature - implementation is exercised
 
 
 def create_api_keys_controllers[ID](

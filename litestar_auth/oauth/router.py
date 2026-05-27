@@ -72,7 +72,7 @@ def create_provider_oauth_controller[UP: UserProtocol[Any], ID](  # noqa: D418
     config: ProviderOAuthControllerConfig[UP, ID],
 ) -> type[Controller]:
     """Build a provider OAuth controller from grouped settings."""
-    # pragma: no cover
+    # pragma: no cover - overload signature - implementation is exercised
 
 
 @overload
@@ -80,7 +80,7 @@ def create_provider_oauth_controller[UP: UserProtocol[Any], ID](  # noqa: D418
     **options: Unpack[ProviderOAuthControllerOptions[UP, ID]],
 ) -> type[Controller]:
     """Build a provider OAuth controller from keyword settings."""
-    # pragma: no cover
+    # pragma: no cover - overload signature - implementation is exercised
 
 
 def create_provider_oauth_controller[UP: UserProtocol[Any], ID](

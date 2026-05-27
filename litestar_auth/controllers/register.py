@@ -256,14 +256,14 @@ def create_register_controller[UP: RegisterControllerUserProtocol[Any], ID](
     *,
     config: RegisterControllerConfig,
 ) -> type[Controller]:
-    pass  # pragma: no cover
+    pass  # pragma: no cover - overload signature - implementation is exercised
 
 
 @overload
 def create_register_controller[UP: RegisterControllerUserProtocol[Any], ID](
     **options: Unpack[RegisterControllerOptions],
 ) -> type[Controller]:
-    pass  # pragma: no cover
+    pass  # pragma: no cover - overload signature - implementation is exercised
 
 
 def create_register_controller[UP: RegisterControllerUserProtocol[Any], ID](

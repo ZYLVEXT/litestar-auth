@@ -33,7 +33,7 @@ class _BuilderNamesValidator(Protocol):
         parameter_name: str,
         item_name: str,
     ) -> None:
-        pass  # pragma: no cover
+        pass  # pragma: no cover - Protocol method body - pure type contract
 
 
 class AuthRateLimitSlot(StrEnum):

@@ -529,14 +529,14 @@ def create_auth_controller[UP: UserProtocol[Any], ID](
     *,
     config: AuthControllerConfig[UP, ID],
 ) -> type[Controller]:
-    pass  # pragma: no cover
+    pass  # pragma: no cover - overload signature - implementation is exercised
 
 
 @overload
 def create_auth_controller[UP: UserProtocol[Any], ID](
     **options: Unpack[AuthControllerOptions[UP, ID]],
 ) -> type[Controller]:
-    pass  # pragma: no cover
+    pass  # pragma: no cover - overload signature - implementation is exercised
 
 
 def create_auth_controller[UP: UserProtocol[Any], ID](

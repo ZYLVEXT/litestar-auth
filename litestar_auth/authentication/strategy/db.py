@@ -97,11 +97,11 @@ class DatabaseTokenStrategy[UP: UserProtocol[Any], ID](
 
     @overload
     def __init__(self, *, config: DatabaseTokenStrategyConfig) -> None:
-        pass  # pragma: no cover
+        pass  # pragma: no cover - overload signature - implementation is exercised
 
     @overload
     def __init__(self, **options: Unpack[DatabaseTokenStrategyOptions]) -> None:
-        pass  # pragma: no cover
+        pass  # pragma: no cover - overload signature - implementation is exercised
 
     def __init__(
         self,

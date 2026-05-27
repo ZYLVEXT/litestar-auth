@@ -19,7 +19,11 @@ class _DatabaseTokenTimeMixin:
             return value.replace(tzinfo=UTC)
         return value.astimezone(UTC)
 
-    def _is_token_expired(self, created_at: datetime, max_age: timedelta) -> bool:  # pragma: no cover
+    def _is_token_expired(
+        self,
+        created_at: datetime,
+        max_age: timedelta,
+    ) -> bool:  # pragma: no cover - Protocol method body - pure type contract
         """Return whether a token created at ``created_at`` exceeds ``max_age``."""
         normalized = self._normalize_timestamp(created_at)
         expires_at = normalized + max_age
