@@ -53,7 +53,7 @@ a process-local backend such as `InMemoryRateLimiter`. Use `RedisRateLimiter` or
   copy stored in `api_key.encrypted_secret`; bearer keys do not use it and remain digest-only.
 - Keep **`verification_token_secret`**, **`reset_password_token_secret`**,
   **`login_identifier_telemetry_secret`** when configured, **`totp_pending_secret`**, every
-  configured TOTP Fernet key, and **`oauth_flow_cookie_secret`** distinct. Production configuration now
+  configured TOTP Fernet key, and **`oauth_flow_cookie_secret`** distinct. Production configuration
   rejects reuse with `ConfigurationError`; only explicit `unsafe_testing=True` test setups bypass
   this validation. For plugin-managed apps the error is raised during `LitestarAuth(config)`
   validation; direct `BaseUserManager(...)` construction enforces the same rule for its
@@ -66,7 +66,7 @@ a process-local backend such as `InMemoryRateLimiter`. Use `RedisRateLimiter` or
 For non-keyring secrets (`verification_token_secret`, `reset_password_token_secret`,
 `login_identifier_telemetry_secret`, `csrf_secret`, `totp_pending_secret`,
 `oauth_flow_cookie_secret`, and opaque-token hash secrets), write an application runbook before
-production. Rotation is intentionally role-specific: verification/reset/TOTP pending JWT secret
+production. Rotation is role-specific: verification/reset/TOTP pending JWT secret
 rotation invalidates outstanding tokens for that flow, OAuth flow-cookie rotation invalidates
 in-progress OAuth handshakes, CSRF secret rotation affects active browser sessions, and login
 telemetry rotation starts a new digest correlation window. Keep token lifetimes short enough that
@@ -104,7 +104,7 @@ protection because browsers automatically attach those cookies to cross-origin r
 
 For plugin-owned cookie auth, configure `LitestarAuthConfig.csrf_secret`; production validation fails
 closed when `CookieTransport` is used without it unless you explicitly opt into a non-browser or
-externally managed CSRF posture. The escape valves are intentionally narrow:
+externally managed CSRF posture. The escape valves are narrow by design:
 `CookieTransportConfig.allow_insecure_cookie_auth=True` / `CookieTransport.allow_insecure_cookie_auth`
 for controlled non-browser cookie use, or manual route setups that set
 `csrf_protection_managed_externally=True` only when app-owned CSRF middleware protects unsafe methods.
@@ -170,7 +170,7 @@ Generate a Fernet key with:
 python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
 ```
 
-Configure production keyrings with explicit ids instead of treating one unversioned key as the
+Configure production keyrings with named ids instead of treating one unversioned key as the
 long-term shape:
 
 ```python
@@ -204,7 +204,7 @@ No-downtime rotation is a staged data migration:
 1. Generate a new Fernet key and add it to the relevant keyring while keeping the current key id
    active. This proves every running instance can read both old and new key ids.
 2. Deploy the same key map with `active_key_id` changed to the new key id. New OAuth and TOTP writes
-   now store `fernet:v1:<new_key_id>:...`; old rows remain readable because the old key id is still
+   store `fernet:v1:<new_key_id>:...`; old rows remain readable because the old key id is still
    configured.
 3. Run an application-owned migration job over stored OAuth `access_token` / `refresh_token`
    columns, stored TOTP secret columns, and API-key signing rows with non-null `encrypted_secret`.
@@ -220,7 +220,7 @@ No-downtime rotation is a staged data migration:
    is clean. Keeping retired keys indefinitely is not a rotation strategy.
 
 Legacy unversioned Fernet rows such as `fernet:<ciphertext>` do not carry a key id and are not the
-normal runtime compatibility path. If you have them from an older release, migrate them with explicit
+normal runtime compatibility path. If you have them from an older release, migrate them with known
 knowledge of the old key material and rewrite them to `fernet:v1:<key_id>:<ciphertext>` before relying
 on the versioned keyring. Plaintext persisted TOTP secrets are still unsupported; clear those rows or
 encrypt them before production rollout.
@@ -237,7 +237,7 @@ For no-downtime rotation:
 
 1. Deploy a keyring that includes both the retired id and the new id, while the old id is still
    active. Confirm every application instance can read existing signing rows.
-2. Deploy the same key map with `active_key_id` set to the new id. New signing-required API keys now
+2. Deploy the same key map with `active_key_id` set to the new id. New signing-required API keys
    write `fernet:v1:<new_key_id>:...` envelopes.
 3. Run an operator-owned job that scans signing-required rows with non-null `encrypted_secret`,
    checks each row with `BaseUserManager.api_key_signing_secret_requires_reencrypt(row)`, and calls
@@ -248,7 +248,7 @@ For no-downtime rotation:
 
 The SQLAlchemy store exposes `list_signing_keys_requiring_reencrypt(...)` for candidate discovery,
 and custom stores should provide the same row-level behavior. Keep batching, locking, retries, and
-operator audit logs in application-owned migration tooling; the library intentionally does not own a
+operator audit logs in application-owned migration tooling; the library does not own a
 global sweep or built-in audit-log table.
 
 ```python
@@ -263,7 +263,7 @@ async def rotate_api_key_signing_secrets(manager: BaseUserManager, api_key_store
 
 Do not log raw API keys, `encrypted_secret` ciphertexts, decrypted signing secrets, or exception
 payloads from failed rotation. Unknown key ids, malformed envelopes, rows missing `encrypted_secret`,
-or bearer rows passed to the helper are fail-closed conditions that need explicit data cleanup before
+or bearer rows passed to the helper are fail-closed conditions that need data cleanup before
 old Fernet key ids are removed.
 
 ## Redis (recommended for scaled deployments)
@@ -306,8 +306,8 @@ When `rate_limit_config` is set, throttled endpoints return **429** with **`Retr
 - Set **`oauth_token_encryption_keyring`** for any configured providers, or the one-key
   **`oauth_token_encryption_key`** for a single active key.
 - Set **`oauth_flow_cookie_secret`** for any configured providers. This value is HKDF-derived into the Fernet key that protects the short-lived flow cookie containing OAuth state and the PKCE verifier; keep it high-entropy and distinct from every other auth secret.
-- Plugin-owned OAuth startup now fails closed unless **`oauth_redirect_base_url`** uses a public **`https://...`** origin. Plain HTTP and loopback hosts are only supported behind explicit local/test overrides such as `AppConfig(debug=True)` or `unsafe_testing=True`.
-- Manual/custom OAuth controllers now use the same public **`https://...`** baseline for `redirect_base_url`, but they enforce it at controller construction time with no localhost or plain-HTTP override.
+- Plugin-owned OAuth startup fails closed unless **`oauth_redirect_base_url`** uses a public **`https://...`** origin. Plain HTTP and loopback hosts are only supported behind local/test overrides such as `AppConfig(debug=True)` or `unsafe_testing=True`.
+- Manual/custom OAuth controllers require the same public **`https://...`** baseline for `redirect_base_url`, enforced at controller construction time with no localhost or plain-HTTP override.
 - **`oauth_associate_by_email`**: keep `False` unless you understand identity linking risk. If `True` on the plugin-owned route table, pair it with **`oauth_trust_provider_email_verified=True`** only for providers that cryptographically assert email ownership. Manual OAuth controllers use the lower-level **`trust_provider_email_verified=True`** flag instead (see [OAuth guide](guides/oauth.md)).
 
 ## Cookies

@@ -34,9 +34,9 @@ catalog and assignment changes.
 - `create`, `assign`, and `unassign` are idempotent against already-normalized state.
 - `delete` fails closed when users still hold the role. Use `--force` only when you intentionally
   want to remove that role from every affected user as part of the delete.
-- The configured `LitestarAuthConfig.superuser_role_name` is system-managed: `delete` refuses to
-  remove that catalog row even with `--force`, and `unassign` refuses to remove the final user
-  assignment for that role.
+- The configured `LitestarAuthConfig.superuser_role_name` (default `"superuser"`) is
+  system-managed: `delete` refuses to remove that catalog row even with `--force`, and `unassign`
+  refuses to remove the final user assignment for that role.
 - User-targeted commands select the target by `--email`. This CLI does not introduce user lookup by
   ID, username, or arbitrary filters.
 
@@ -73,8 +73,8 @@ Error: Role admin will not delete role 'admin' while assignments still exist. Re
 `--force` still cannot delete the configured superuser role:
 
 ```bash
-$ litestar roles delete --force admin
-Error: Role admin will not modify system-managed superuser role 'admin'.
+$ litestar roles delete --force superuser
+Error: Role admin will not modify system-managed superuser role 'superuser'.
 ```
 
 ## User-role commands
@@ -83,7 +83,7 @@ Assign roles to a user selected by email. Inputs are normalized before persisten
 
 ```bash
 $ litestar roles assign --email member@example.com " Billing " admin ADMIN
-member@example.com: ['admin', 'billing', 'member']
+member@example.com: ['admin', 'billing']
 ```
 
 Remove selected roles from the same user. Unrelated roles stay unchanged, and repeating the command
@@ -97,8 +97,8 @@ member@example.com: ['admin', 'member']
 Removing the final configured-superuser assignment fails closed:
 
 ```bash
-$ litestar roles unassign --email admin@example.com admin
-Error: Role admin will not remove the final assignment of system-managed superuser role 'admin'.
+$ litestar roles unassign --email admin@example.com superuser
+Error: Role admin will not remove the final assignment of system-managed superuser role 'superuser'.
 ```
 
 Read the current normalized membership for one user:
@@ -141,7 +141,7 @@ surfaces only; the CLI is intentionally unavailable for that configuration.
 
 ## Related
 
-- [Manager customization](../configuration/manager.md#plugin-role-cli) — `litestar-auth roles` and related flags
+- [Manager customization](../configuration/manager.md#plugin-role-cli) — `litestar roles` and related flags
 - [Extending](extending.md)
 - [HTTP role administration](role_admin_http.md)
 - [HTTP API](../http_api.md)

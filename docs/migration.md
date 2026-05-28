@@ -2,7 +2,7 @@
 
 ## User hard-delete cascade
 
-Bundled user-owned auth tables now declare `ON DELETE CASCADE` on foreign keys that point at the
+Bundled user-owned auth tables declare `ON DELETE CASCADE` on foreign keys that point at the
 user table. `BaseUserManager.delete()` also invalidates configured token strategies and deletes
 SQL-backed API keys before removing the user row, so hard delete removes per-user secrets and
 session artifacts instead of leaving orphan rows.
@@ -71,7 +71,7 @@ to compose `RefreshTokenMixin`, which includes the column.
 
 ## API-key persistence table
 
-API-key storage now has a dedicated `api_key` table. Import the bundled model from
+API-key storage uses a dedicated `api_key` table. Import the bundled model from
 `litestar_auth.models` or `litestar_auth.models.api_key`; do not import ORM models from the
 package root or `litestar_auth.db`. The SQLAlchemy store lives at
 `litestar_auth.db.sqlalchemy.SQLAlchemyApiKeyStore`, while the structural store protocol is
@@ -168,23 +168,23 @@ application-owned migration and observability tooling when your deployment needs
 
 ## Argon2-only default password helper
 
-The library default password-helper policy is now Argon2-only. `PasswordHelper.from_defaults()`,
+The library default password-helper policy is Argon2-only. `PasswordHelper.from_defaults()`,
 bare `PasswordHelper()`, `BaseUserManager(..., password_helper=None)`, and
 `LitestarAuthConfig.resolve_password_helper()` all use that default.
 
-Unsupported stored password hashes now fail closed under that policy: verification returns `False`
+Unsupported stored password hashes fail closed under that policy: verification returns `False`
 and `verify_and_update()` does not emit a replacement hash for an unsupported stored value.
 
 Before upgrading a deployment that still depends on unsupported stored password hashes:
 
 1. Re-hash or reset those credentials out of band while the previous release is still serving
    traffic.
-2. Confirm the persisted hashes now match your intended Argon2 policy.
+2. Confirm the persisted hashes match your intended Argon2 policy.
 3. Deploy the new release only after those credentials no longer depend on unsupported formats.
 
 ## Self-service password rotation endpoint
 
-Self-service profile updates and password rotation are now separate contracts. `UserUpdate`
+Self-service profile updates and password rotation are separate contracts. `UserUpdate`
 no longer includes `password`, and requests that try to set `password` on the self-service
 profile update path are rejected with `REQUEST_BODY_INVALID`.
 
@@ -227,13 +227,13 @@ Update clients accordingly:
 If you previously customised `user_update_schema=...` to add app-specific safe fields, declare
 those same names in the manager's `updatable_fields` allowlist. The runtime
 `_build_safe_self_update` deny-list still rejects the privileged field names as defense-in-depth
-for custom schemas, and the manager now also rejects any non-privileged field that was not declared
+for custom schemas, and the manager also rejects any non-privileged field that was not declared
 in its explicit field policy. For custom registration fields passed through direct
 `create(..., safe=False)` calls, add them to `creatable_fields`.
 
 ## Superuser boolean to role membership
 
-Superuser status is now derived from role membership. The public
+Superuser status is derived from role membership. The public
 `is_superuser` guard still exists, but it checks whether `user.roles` contains
 the configured `superuser_role_name` (default `"superuser"`) instead of reading
 `user.is_superuser`.
@@ -272,7 +272,7 @@ Code changes to make at the same time:
 - Remove `is_superuser` from custom SQLAlchemy user models and DTOs.
 - Stop passing `is_superuser` to `BaseUserManager.create(...)`,
   `BaseUserManager.update(...)`, `/auth/register`, and `/users/*` payloads.
-  The generated register and users request schemas now reject undeclared keys
+  The generated register and users request schemas reject undeclared keys
   during request decoding with `ErrorCode.REQUEST_BODY_INVALID`, so stale
   clients surface immediately instead of being silently accepted.
 - Grant or revoke superuser access by mutating the normalized `roles`
@@ -295,13 +295,13 @@ behavior change is required either way.
 
 The typing-only API was tightened so downstream annotations describe the same
 runtime contracts the library already expects. Runtime behavior is unchanged,
-but type checkers may now surface code that relied on broad `Any`-based bounds,
+but type checkers may surface code that relied on broad `Any`-based bounds,
 helper-based config construction, manual generic parameters, or plain `str`
 dependency keys.
 
 ### `LitestarAuthConfig.create()` to direct construction
 
-Construct `LitestarAuthConfig` directly. The dataclass now owns the full public
+Construct `LitestarAuthConfig` directly. The dataclass owns the full public
 configuration surface without separate wrapper helpers.
 
 Before:
@@ -334,7 +334,7 @@ config = LitestarAuthConfig[User, UUID](
 
 ### `UP bound=UserProtocol[Any]` consumer code
 
-The library's public `UP` type variable is now bounded to `UserProtocol` instead
+The library's public `UP` type variable is bounded to `UserProtocol` instead
 of `UserProtocol[Any]`. Code that mirrors the old broad bound can usually drop
 the `Any` parameter, or can bind the user and ID together with Python 3.12
 generic parameter syntax when the ID type matters.
@@ -374,7 +374,7 @@ type through its return values or collaborators.
 ### TOTP user-model validation moves to startup
 
 Apps with `totp_config` enabled must use a `user_model` that exposes the
-`TotpUserProtocol` fields: `email` and `totp_secret`. The plugin now checks that
+`TotpUserProtocol` fields: `email` and `totp_secret`. The plugin checks that
 contract during startup, so a misconfigured app fails before routes are mounted.
 Previously, the same misconfiguration could surface only after a login reached
 the pending-2FA branch.

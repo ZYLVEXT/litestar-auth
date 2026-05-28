@@ -5,7 +5,7 @@
 - **Python** 3.12 up to &lt; 3.15 (see `requires-python` in the package metadata).
 - **Litestar** 2.x (declared as a core dependency).
 - **Advanced Alchemy** and **SQLAlchemy** — used by the default user model and `SQLAlchemyUserDatabase`.
-- **msgspec** — request/response structs for OpenAPI and decoding (pulled in by Litestar usage patterns in your app; the library is msgspec-oriented, not Pydantic).
+- **msgspec** — auth payloads and schemas are `msgspec.Struct` types (installed with Litestar; the library does not use Pydantic).
 
 Install the package from PyPI or your index:
 
@@ -47,6 +47,10 @@ uv add "litestar-auth[totp]"    # TOTP helpers if not already via oauth
 # or
 uv add "litestar-auth[all]"
 ```
+
+=== "API keys"
+
+No extra is required. Enable `ApiKeyConfig` on `LitestarAuthConfig` (see [API keys](guides/api_keys.md)).
 
 ## What is not included
 

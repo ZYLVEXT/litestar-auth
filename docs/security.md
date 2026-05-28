@@ -1,6 +1,6 @@
 # Security model
 
-This page summarizes protections and **conscious trade-offs** shipped by the library.
+This page summarizes protections and practical security trade-offs shipped by the library.
 
 ## Operator checklist {#operator-checklist}
 
@@ -42,7 +42,7 @@ Before production rollout, verify the deployment-owned security contract in
 
 ## Plugin-managed security posture paths
 
-The plugin keeps these security-sensitive paths explicit and ties them to the same runtime posture contracts used by startup warnings and fail-closed validation where applicable:
+The plugin keeps these security-sensitive paths aligned with the same runtime posture contracts used by startup warnings and fail-closed validation where applicable:
 
 --8<-- "docs/snippets/plugin_security_tradeoffs.md"
 
@@ -51,12 +51,12 @@ The plugin keeps these security-sensitive paths explicit and ties them to the sa
 When you assemble `JWTStrategy` or `BaseUserManager` yourself, inspect the runtime posture objects directly instead of inferring security behavior from constructor kwargs later:
 
 - `JWTStrategy(secret=..., denylist_store=RedisJWTDenylistStore(...))` reports the durable `shared_store` posture.
-- `JWTStrategy(secret=..., allow_inmemory_denylist=True)` reports the explicit process-local `in_memory` posture. `revocation_is_durable` stays `False` and logout / revoke remains single-process.
+- `JWTStrategy(secret=..., allow_inmemory_denylist=True)` reports the process-local `in_memory` posture. `revocation_is_durable` stays `False` and logout / revoke remains single-process.
 - Plugin-managed JWT revocation notices consume the live `JWTRevocationPosture` exported from
   `litestar_auth.authentication.strategy.jwt` and returned by `JWTStrategy.revocation_posture`;
   posture-shaped wrappers or objects retained from earlier module identities are ignored.
-- `BaseUserManager.totp_secret_storage_posture` reports the `fernet_encrypted` persisted-secret contract. Supplying `totp_secret_keyring=FernetKeyringConfig(...)` on `UserManagerSecurity(...)` lets direct/custom integrations store and read encrypted TOTP secrets with an active key id and configured old keys. The one-key `totp_secret_key` field remains a deliberate ergonomic shortcut and is encoded under the `default` key id.
-- New persisted TOTP secret writes use `fernet:v1:<key_id>:<ciphertext>` values. `BaseUserManager.totp_secret_requires_reencrypt(...)` and `BaseUserManager.reencrypt_totp_secret_for_storage(...)` are the manager helpers for explicit at-rest rotation jobs.
+- `BaseUserManager.totp_secret_storage_posture` reports the `fernet_encrypted` persisted-secret contract. Supplying `totp_secret_keyring=FernetKeyringConfig(...)` on `UserManagerSecurity(...)` lets direct/custom integrations store and read encrypted TOTP secrets with an active key id and configured old keys. The one-key `totp_secret_key` field remains an ergonomic shortcut and is encoded under the `default` key id.
+- New persisted TOTP secret writes use `fernet:v1:<key_id>:<ciphertext>` values. `BaseUserManager.totp_secret_requires_reencrypt(...)` and `BaseUserManager.reencrypt_totp_secret_for_storage(...)` are the manager helpers for at-rest rotation jobs.
 - With `totp_secret_keyring` and `totp_secret_key` omitted, `None` still represents disabled 2FA, but non-null TOTP secret writes and unprefixed legacy plaintext reads fail closed. Encrypt, rotate, or clear existing plaintext TOTP secret rows before upgrading.
 - TOTP step-up for sensitive operations is documented in
   [TOTP step-up for sensitive operations](configuration/totp.md#totp-step-up-for-sensitive-operations),
@@ -93,11 +93,11 @@ Unknown key ids, malformed Fernet envelopes, missing `encrypted_secret` values o
 bearer rows must be treated as migration errors or explicit data-cleanup cases. Do not catch and
 ignore those failures while removing an old key id.
 
-Legacy unversioned Fernet values must be handled as explicit migration input because they do not
+Legacy unversioned Fernet values must be handled as migration input because they do not
 identify the decrypting key. They are not a general runtime compatibility mode. Plaintext persisted
 TOTP secrets remain fail-closed and must be cleared or encrypted before production use.
 
-Additional explicit opt-ins to weaker behavior:
+Additional opt-ins to weaker behavior:
 
 | Surface | Risk |
 | ---- | ---- |
@@ -139,9 +139,9 @@ expired, timestamp-skewed, or nonce-replayed keys, still consume the limiter bef
 
 - No built-in **email** sending — you must implement hooks.
 - No **RBAC** or **WebAuthn** in core — the built-in role guards are flat membership checks only; extend in your application for permission matrices or object-level policy.
-- **Durable JWT revocation** requires an explicit shared store — `JWTStrategy(secret=...)` without `denylist_store` or `allow_inmemory_denylist=True` fails closed at construction time. Use Redis (or equivalent) denylist for multi-worker production if you rely on revoke; reserve `allow_inmemory_denylist=True` for single-process development or tests.
+- **Durable JWT revocation** requires a shared store — `JWTStrategy(secret=...)` without `denylist_store` or `allow_inmemory_denylist=True` fails closed at construction time. Use Redis (or equivalent) denylist for multi-worker production if you rely on revoke; reserve `allow_inmemory_denylist=True` for single-process development or tests.
 - **API keys** are user-owned delegated credentials only. Service-account-only keys, HKDF child keys,
-  IP allowlists, per-key audit tables, and mTLS binding are intentionally outside this release.
+  IP allowlists, per-key audit tables, and mTLS binding are outside this release.
 - API-key signing-secret rotation is operator-owned row processing. The library does not provide
   built-in batching, locking, audit-log storage, per-key audit tables, or an automatic database
   migration service for this workflow.

@@ -19,7 +19,7 @@ Use this page for `TotpConfig` fields and the plugin-owned TOTP route contract.
 
 Routes: `{auth_path}/2fa/...`. See [TOTP guide](../guides/totp.md).
 
-The plugin-owned TOTP flow follows `LitestarAuthConfig.requires_verification`, which now defaults
+The plugin-owned TOTP flow follows `LitestarAuthConfig.requires_verification`, which defaults
 to `True`. Manual `create_totp_controller(...)` wiring should keep that flag aligned with the auth
 controller so unverified accounts cannot complete the second authentication step. When both checks
 fail, the shared account-state policy reports inactive users before unverified users.
@@ -57,13 +57,13 @@ If `totp_backend_name` is omitted, the plugin uses the primary startup backend. 
 only when a secondary startup backend should issue post-2FA tokens.
 
 !!! note "Pending-token JTI store"
-    The plugin-owned controller forwards `TotpConfig.totp_pending_jti_store` into `create_totp_controller(..., pending_jti_store=...)`. In production, missing pending-token replay storage now fails closed unless `unsafe_testing=True`.
+    The plugin-owned controller forwards `TotpConfig.totp_pending_jti_store` into `create_totp_controller(..., pending_jti_store=...)`. In production, missing pending-token replay storage fails closed unless `unsafe_testing=True`.
 
 !!! note "Pending-token client binding"
     The plugin-owned auth and TOTP controllers both forward `TotpConfig.totp_pending_require_client_binding`. Keep the default `True` unless your proxy topology cannot provide stable client metadata and you accept pending-token replay from a different client. The fingerprints are SHA-256 hex values, not raw IP or User-Agent strings.
 
 !!! note "Pending-enrollment store"
-    The plugin-owned controller forwards `TotpConfig.totp_enrollment_store` into `create_totp_controller(..., enrollment_store=...)`. In production, missing enrollment storage now fails closed unless `unsafe_testing=True`; each `/2fa/enable` replaces the previous pending enrollment for that user, and `/2fa/enable/confirm` consumes the matching `jti` once.
+    The plugin-owned controller forwards `TotpConfig.totp_enrollment_store` into `create_totp_controller(..., enrollment_store=...)`. In production, missing enrollment storage fails closed unless `unsafe_testing=True`; each `/2fa/enable` replaces the previous pending enrollment for that user, and `/2fa/enable/confirm` consumes the matching `jti` once.
 
 ## TOTP step-up for sensitive operations {#totp-step-up-for-sensitive-operations}
 

@@ -82,18 +82,18 @@ For app-owned protected routes, reuse `config.resolve_openapi_security_requireme
 
 Treat the startup templates as plugin-assembly inventory only: they preserve backend names plus transport/strategy metadata for validation and controller wiring, but DB-token runtime work still has to go through `resolve_backends(session)` so the realized backend carries the active `AsyncSession`. Controller selection follows the startup inventory order: the primary backend mounts at `/auth`, later backends mount at `/auth/{backend.name}`, plugin-owned OAuth login routes use the primary backend, and TOTP uses the primary backend unless `totp_backend_name` selects another named startup backend.
 
-The relational-role redesign changes storage only. Public HTTP payloads, managers, and guard
-factories still work with one normalized flat `roles` collection. The core plugin-owned auth/users
-route table still does not auto-mount role catalog or user-assignment endpoints; use the opt-in
-`litestar_auth.contrib.role_admin` controller or the `litestar roles` CLI when you need admin
-operations. The library still does not ship permission matrices.
+Relational role storage changes persistence only. Public HTTP payloads, managers, and guard
+factories still use one normalized flat `roles` collection. The core plugin-owned auth/users route
+table does not auto-mount role catalog or user-assignment endpoints; use the opt-in
+`litestar_auth.contrib.role_admin` controller or the `litestar roles` CLI for admin operations.
+The library does not ship permission matrices.
 
 ## Public surface (high level)
 
 | Area | Types / functions |
 | ---- | ----------------- |
 | Plugin | `LitestarAuth`, `LitestarAuthConfig`, `DatabaseTokenAuthConfig`, `OAuthConfig`, `OAuthProviderConfig`, `TotpConfig`, `DEFAULT_SUPERUSER_ROLE_NAME` |
-| Backends | `AuthenticationBackend`, `Authenticator`, `BearerTransport`, `CookieTransport`, `CookieTransportConfig`; strategies from `litestar_auth.authentication.strategy` |
+| Backends | `AuthenticationBackend`, `Authenticator`, `BearerTransport`, `CookieTransport`, `CookieTransportConfig`; `ApiKeyTransport` / `ApiKeyStrategy` from `litestar_auth.authentication.transport` / `litestar_auth.authentication.strategy` |
 | Manager | `BaseUserManager`, `BaseUserManagerConfig`, `UserManagerSecurity`; `PasswordHelper` and password policy helpers from their submodules |
 | Payloads / schemas | Auth lifecycle DTOs from `litestar_auth.payloads`; user CRUD schemas from `litestar_auth.schemas` |
 | Persistence | `User`, `Role`, `UserRole`, `OAuthAccount` (from `litestar_auth.models` / submodules), `AccessToken`, `RefreshToken`, `SQLAlchemyUserDatabase` (from `litestar_auth.db.sqlalchemy`) |

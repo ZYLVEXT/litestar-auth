@@ -27,4 +27,5 @@ Integration coverage lives under `tests/integration/` and `tests/e2e/` for refre
 ## See also
 
 - [HTTP API — Auth core](../http_api.md)
-- [Strategies](../api/strategies.md)
+- [Strategies API](../api/strategies.md)
+- [Cookbook: Cookie transport with CSRF](cookie_csrf.md)

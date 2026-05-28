@@ -4,7 +4,7 @@ litestar-auth separates **authentication** (who is the caller?) from **authoriza
 
 ## Middleware and `request.user`
 
-`LitestarAuthMiddleware` runs early in the stack. It tries each configured `AuthenticationBackend` in order; the first backend that yields a user wins. **Unauthenticated requests do not automatically fail**—`request.user` may be unset or anonymous depending on your Litestar setup.
+`LitestarAuthMiddleware` runs early in the stack. It tries each configured `AuthenticationBackend` in order; the first backend that yields a user wins. **Unauthenticated requests do not automatically fail**—when no backend matches, authentication returns no user and route **guards** decide whether the request proceeds.
 
 Use **guards** on routes that require a logged-in user, verified email, active account, superuser access, or flat role membership via `has_any_role(...)` / `has_all_roles(...)`. See [Guards API](../api/guards.md).
 `is_superuser` is also role-based: it checks the configured superuser role name
@@ -118,7 +118,7 @@ If you intentionally disable plugin-managed OpenAPI security, register `auth_con
 
 ## Transport and strategy
 
-- **Transport** — how credentials travel (Authorization header vs HTTP-only cookies).
+- **Transport** — how credentials travel (Bearer header, HTTP-only cookies, or API-key headers).
 - **Strategy** — how tokens are issued, validated, rotated, and revoked.
 
 Compose them with `AuthenticationBackend`. This keeps cookie CSRF concerns and JWT claim validation independent.

@@ -4,7 +4,7 @@ What this library aims to cover today, what it deliberately does not include, an
 
 ## In scope today
 
-Registration, login/logout, email verification and password reset, Bearer and Cookie transports, JWT / database / Redis token strategies, guards, optional user CRUD, TOTP, OAuth login and account linking, rate limiting, hooks, configurable login identifier (`email` or `username`). See [Features on the home page](index.md).
+Registration, login/logout, email verification and password reset, Bearer / cookie / API-key transports, JWT / database / Redis / API-key strategies, guards, optional user CRUD, TOTP, OAuth login and account linking, rate limiting, hooks, configurable login identifier (`email` or `username`). See [Features on the home page](index.md).
 
 ## Explicitly out of scope (library core)
 

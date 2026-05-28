@@ -23,9 +23,9 @@ the cookie name **`litestar_auth_csrf`** (same as `DEFAULT_CSRF_COOKIE_NAME` in
 cookie to mirror the value into `csrf_header_name` (default `X-CSRF-Token`); see also
 [cookie CSRF cookbook](../cookbook/cookie_csrf.md) and [OAuth associate](../cookbook/oauth_associate.md).
 
-Failed-login **telemetry** is not a `LitestarAuthConfig` field: set optional
-`UserManagerSecurity.login_identifier_telemetry_secret` so structured logs can carry an
-HMAC digest of the identifier on failures (no raw identifier in logs). Details:
+Failed-login **telemetry** is not a `LitestarAuthConfig` field.
+Set optional `UserManagerSecurity.login_identifier_telemetry_secret` so structured logs can carry
+an HMAC digest of the identifier on failures (no raw identifier in logs). Details:
 [Manager customization — Login failure telemetry secret](manager.md#login-failure-telemetry-secret).
 
 The plugin-managed JWT/TOTP security surfaces use the same shared posture wording as runtime startup and validation:
@@ -35,13 +35,17 @@ The plugin-managed JWT/TOTP security surfaces use the same shared posture wordin
 For direct/manual wiring, the underlying runtime objects report their own posture explicitly:
 
 - `JWTStrategy(secret=..., denylist_store=RedisJWTDenylistStore(...))` reports `revocation_posture.key == "shared_store"` and `revocation_is_durable == True`.
-- `JWTStrategy(secret=..., allow_inmemory_denylist=True)` reports `revocation_posture.key == "in_memory"` and `revocation_is_durable == False`. `InMemoryJWTDenylistStore` fails closed when its `max_entries` cap is hit and no expired JTIs can be pruned: new revocations are skipped (logged) rather than dropping an active revocation entry. `JWTDenylistStore.deny` returns `False` in that case; `JWTStrategy.destroy_token` raises `TokenError`, and plugin HTTP logout surfaces **503** with `TOKEN_PROCESSING_FAILED`. The same capacity signal applies to TOTP pending-login JTI recording after a successful code check: verification responds with **503** instead of issuing a session when the pending-token denylist cannot store the spent JTI.
+- `JWTStrategy(secret=..., allow_inmemory_denylist=True)` reports `revocation_posture.key == "in_memory"` and `revocation_is_durable == False`.
+  `InMemoryJWTDenylistStore` fails closed when its `max_entries` cap is hit and no expired JTIs can be pruned: new revocations are skipped (logged) instead of dropping an active revocation entry.
+  `JWTDenylistStore.deny` returns `False` in that case; `JWTStrategy.destroy_token` raises `TokenError`, and plugin HTTP logout surfaces **503** with `TOKEN_PROCESSING_FAILED`.
+  The same capacity signal applies to TOTP pending-login JTI recording after a successful code check: verification responds with **503** instead of issuing a session when the pending-token denylist cannot store the spent JTI.
 - Direct `BaseUserManager(..., security=UserManagerSecurity(...))` reports `totp_secret_storage_posture.key == "fernet_encrypted"` for persisted TOTP secrets. Setting `user_manager_security.totp_secret_keyring=FernetKeyringConfig(...)` on `LitestarAuthConfig` (passed through to `UserManagerSecurity`) or on a direct `UserManagerSecurity(...)` bundle enables encrypted reads and writes with active-key rotation. The one-key `totp_secret_key` field remains available for single-key deployments; omitting both key inputs leaves disabled TOTP (`None`) readable but makes non-null TOTP secret persistence fail closed. The TOTP controller uses the same keyring/key to encrypt pending-enrollment secret values before writing them to `totp_enrollment_store`.
 - `ApiKeyConfig(signing_enabled=True, secret_encryption_keyring=FernetKeyringConfig(...))` enables
-  encrypted storage for signing-required API-key secrets. The config field is intentionally named
-  `api_keys.secret_encryption_keyring` in operator docs because it belongs to the nested API-key
-  config, not `UserManagerSecurity`. Rotate it with the same staged keyring shape as OAuth and TOTP:
-  deploy old+new ids, switch `active_key_id`, re-encrypt rows, verify, then remove the retired id.
+  encrypted storage for signing-required API-key secrets.
+  In operator docs, this field is named `api_keys.secret_encryption_keyring` because it belongs to
+  the nested API-key config, not `UserManagerSecurity`.
+  Rotate it with the same staged keyring shape as OAuth and TOTP: deploy old+new ids, switch
+  `active_key_id`, re-encrypt rows, verify, then remove the retired id.
 
 ### API-key signing-secret rotation
 
@@ -58,7 +62,7 @@ Use the manager helpers for one row at a time:
   print, log, or return the plaintext signing secret, and it does not run API-key create, revoke, or
   use lifecycle hooks.
 
-Failure handling is intentionally fail-closed. Missing `api_keys.secret_encryption_keyring`,
+Failure handling is fail-closed. Missing `api_keys.secret_encryption_keyring`,
 bearer rows, signing rows without `encrypted_secret`, raw bearer credential input, unknown key ids,
 malformed envelopes, and replacement races surface as errors for the migration job to handle. Treat
 those as operator cleanup cases; do not remove retired Fernet key ids until a fresh verification scan
@@ -67,7 +71,7 @@ finds no signing-required rows that still need re-encryption.
 ### Password hash policy
 
 `PasswordHelper.from_defaults()`, bare `PasswordHelper()`, `BaseUserManager(..., password_helper=None)`,
-and `config.resolve_password_helper()` now use an Argon2-only default policy. Unsupported stored
+and `config.resolve_password_helper()` use an Argon2-only default policy. Unsupported stored
 password hashes therefore fail closed: verification returns `False`, and `verify_and_update()`
 does not emit a replacement hash for an unsupported stored value.
 

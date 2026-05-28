@@ -3,6 +3,9 @@
 Use API keys for developer or automation access to routes that should not require a browser session. The feature is
 disabled by default and is mounted only when `ApiKeyConfig(enabled=True)` is present on `LitestarAuthConfig`.
 
+Issued bearer credentials use the standard wire format `ak_<environment_marker>_<key_id>.<secret>` (for example
+`ak_prod_kabc.secret`). The environment marker comes from `ApiKeyConfig.environment_marker` (default `"prod"`).
+
 ## Enable API keys
 
 ```python
@@ -29,10 +32,15 @@ For the full field reference, see [Configuration — API keys](../configuration/
 
 ## Issue a key
 
-API-key management requests require a real password-backed session. By default create requests also require
-`current_password`; disabling `api_keys.require_step_up_on_create` keeps the password-session boundary but skips that
-re-verification. API-key callers cannot list, inspect, create, update, or revoke API keys because those routes use
-`requires_password_session`.
+Self-service routes mount at `/api-keys`. Superuser admin routes mount under
+`{users_path}/{user_id}/api-keys` (default `users_path` is `/users`).
+
+API-key management requests require a real password-backed session (`requires_password_session`). By default, create
+requests also require `current_password`; set `api_keys.require_step_up_on_create=False` to keep the password-session
+boundary but skip that re-verification. When TOTP is enrolled, create/update/revoke routes follow
+`LitestarAuthConfig.totp_stepup_policy` for the `api_keys.*` endpoints (see [Configuration — API keys](../configuration/api_keys.md#management-routes)).
+
+API-key-authenticated callers cannot list, inspect, create, update, or revoke keys on those management routes.
 
 For password re-verification endpoints, configure `AuthRateLimitConfig.api_key_create` for `POST /api-keys` and
 `AuthRateLimitConfig.api_key_update` for `PATCH /api-keys/{key_id}`. The update slot increments on wrong `current_password` and
@@ -72,10 +80,10 @@ The response includes the raw `api_key` exactly once:
 Persist only the raw credential on the client side. Server-side API-key rows store an HMAC digest, safe metadata, and an
 optional encrypted signing secret for signing-required keys.
 
-Superusers can create, list, and revoke keys for another user through the `/users/{user_id}/api-keys` admin routes.
-Those routes are guarded by both `is_superuser` and `requires_password_session`, so an API-key-authenticated superuser
-cannot manage another user's key inventory. Admin create takes the target user from the path and does not require the
-target user's `current_password`.
+Superusers can create, list, and revoke keys for another user through the admin routes under
+`{users_path}/{user_id}/api-keys`. Those routes require `is_superuser` and `requires_password_session`, so an
+API-key-authenticated superuser cannot manage another user's inventory. Admin create takes the target user from the
+path and does not require the target user's `current_password`.
 
 ## Protect routes by key and scope
 
@@ -125,12 +133,12 @@ Request signing binds the credential to one method, path, query string, selected
 digest. It reduces replay and body-tampering risk for automation clients, but it requires reversible encrypted storage
 of the key secret.
 
-Enable signing support with a Fernet keyring and nonce store, then create keys with `"signing_required": true`.
+Enable signing support with a Fernet keyring and nonce store, then create keys with `"signing_required": true` in the
+`POST /api-keys` body (`ApiKeyCreateRequest.signing_required`).
 
 ```python
-from litestar_auth import ApiKeyConfig
+from litestar_auth import ApiKeyConfig, FernetKeyringConfig
 from litestar_auth.authentication.strategy import InMemoryApiKeyNonceStore
-from litestar_auth.manager import FernetKeyringConfig
 
 api_keys = ApiKeyConfig(
     enabled=True,
@@ -156,10 +164,13 @@ X-Auth-Date: 2026-05-09T19:00:00Z
 X-Auth-Nonce: unique-client-nonce
 ```
 
-`host`, `x-auth-date`, and `x-auth-nonce` are required in `SignedHeaders`. Sign the exact `Host` header value sent by the
-client, including a port when the request uses a non-default port, so the signature is bound to the target host.
-`X-Auth-Date` must be an ISO-8601 timestamp accepted by Python `datetime.fromisoformat`; a trailing `Z` is accepted as
-UTC. Do not send RFC 5322 / HTTP-date strings such as `Mon, 09 May 2026 23:36:35 GMT`.
+`host`, `x-auth-date`, and `x-auth-nonce` must appear in `SignedHeaders` (header names are case-insensitive in the
+signing string). Sign the exact `Host` header value sent by the client, including a port when the request uses a
+non-default port. `X-Auth-Date` must be an ISO-8601 timestamp accepted by Python `datetime.fromisoformat`; a trailing
+`Z` is accepted as UTC. Do not send RFC 5322 / HTTP-date strings such as `Mon, 09 May 2026 23:36:35 GMT`.
+
+For requests with a body, include `x-auth-content-sha256` in `SignedHeaders` and set the header to the lowercase
+SHA-256 hex digest of the exact raw body bytes the server will verify.
 
 ```python
 from datetime import UTC, datetime

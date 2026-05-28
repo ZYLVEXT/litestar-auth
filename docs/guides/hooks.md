@@ -1,6 +1,6 @@
 # Lifecycle hooks
 
-Subclass **`BaseUserManager`** and override async hooks to integrate email, analytics, or domain side effects. The default no-op implementations now live on **`UserManagerHooks`**, which `BaseUserManager` inherits, so existing subclasses keep the same override points. Hooks are **best-effort** extension points: keep them fast; offload I/O to background tasks when needed.
+Subclass **`BaseUserManager`** and override async hooks to integrate email, analytics, or domain side effects. Default no-op implementations live on **`UserManagerHooks`**, which `BaseUserManager` inherits, so existing subclasses keep the same override points. Hooks are **best-effort** extension points: keep them fast; offload I/O to background tasks when needed.
 
 !!! warning "Timing and enumeration-resistant hooks"
     `forgot_password`, verify-token requests, and duplicate registration handling use enumeration-resistant logic in the manager/controller layers. Hooks such as **`on_after_forgot_password`**, **`on_after_request_verify_token`**, and **`on_after_register_duplicate`** may perform I/O (e.g. sending email). Timing differences from real SMTP or HTTP calls can still leak information unless you delegate to a **queue or background worker**. See [Registration](registration.md).

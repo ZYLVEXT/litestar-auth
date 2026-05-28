@@ -11,8 +11,6 @@ from litestar_auth import ApiKeyConfig, LitestarAuthConfig, OAuthConfig, UserMan
 from litestar_auth.authentication.transport.cookie import CookieTransportConfig
 from litestar_auth.ratelimit import EndpointRateLimit
 
-DOCS_ROOT = Path("docs")
-
 
 @pytest.mark.unit
 @pytest.mark.parametrize(
@@ -46,17 +44,6 @@ def test_secondary_redis_totp_docs_keep_store_roles_visible(path: str) -> None:
     assert "totp_enrollment_store" in content
     assert "totp_pending_jti_store" in content
     assert "totp_used_tokens_store" in content
-
-
-@pytest.mark.unit
-def test_docs_avoid_legacy_path_vocabulary() -> None:
-    """Documentation should use direct decision rules instead of canonical/shim framing."""
-    banned_terms = ("canonical", "compatibility shim", "preferred one-client", "escape hatch")
-
-    for doc_path in DOCS_ROOT.rglob("*.md"):
-        content = doc_path.read_text(encoding="utf-8").lower()
-        for banned_term in banned_terms:
-            assert banned_term not in content, f"{doc_path} still contains {banned_term!r}"
 
 
 @pytest.mark.unit

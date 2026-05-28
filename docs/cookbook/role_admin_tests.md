@@ -1,6 +1,6 @@
 # Cookbook: Testing a custom role administration controller
 
-The supported HTTP role-management surface now lives in
+The supported HTTP role-management surface is documented in
 [HTTP role administration](../guides/role_admin_http.md). These examples are
 for applications that keep an app-owned controller from the
 [custom role administration controller](role_admin_controller.md) cookbook.

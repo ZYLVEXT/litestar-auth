@@ -9,9 +9,9 @@ Teams building on [Litestar](https://litestar.dev/) who need registration, login
 ## Features
 
 - **Plugin entry point** — `LitestarAuth` registers middleware, DI, controllers, and exception handling from one config object.
-- **Backends** — `AuthenticationBackend` combines a **transport** (Bearer or Cookie) with a **strategy** (JWT, database, or Redis tokens).
+- **Backends** — `AuthenticationBackend` combines a **transport** (Bearer, cookie, or API key) with a **strategy** (JWT, database, Redis, or API-key validation).
 - **User manager** — `BaseUserManager` centralizes password hashing, tokens, hooks, and session invalidation.
-- **Role contract** — bundled and custom SQLAlchemy model families now persist roles through dedicated `role` / `user_role` tables, while built-in responses and guards still expose one normalized flat `roles` collection.
+- **Role contract** — bundled and custom SQLAlchemy models store role membership in `role` / `user_role` tables; HTTP responses, managers, and guards still use one normalized flat `roles` collection.
 - **Role administration** — when the plugin has `session_maker` plus a relational role-capable SQLAlchemy `user_model`, it registers `litestar roles` for operator workflows, and apps can opt into `litestar_auth.contrib.role_admin` for an HTTP admin controller with the same flat `user.roles` boundary.
 - **User DTOs** — the built-in register/verify/reset/users responses expose normalized `roles`; self-service updates keep those fields privileged by default.
 - **Guards** — `is_authenticated`, `is_active`, `is_verified`, `is_superuser`, plus `has_any_role(...)` / `has_all_roles(...)` for route-level authorization over flat normalized roles.
@@ -25,7 +25,7 @@ Teams building on [Litestar](https://litestar.dev/) who need registration, login
 | First working app | [Quickstart](quickstart.md) |
 | Mental model | [Architecture](concepts/architecture.md), [Backends](concepts/backends.md), [Request lifecycle](concepts/request_lifecycle.md) |
 | How-to guides | [Security](guides/security.md), [Registration](guides/registration.md), [OAuth](guides/oauth.md), [TOTP](guides/totp.md), [Rate limiting](guides/rate_limiting.md), [Role management CLI](guides/roles_cli.md), [HTTP role administration](guides/role_admin_http.md), [Testing plugin-backed apps](guides/testing.md), [Hooks](guides/hooks.md), [Extending](guides/extending.md) |
-| Recipes & examples | [Cookie + CSRF](cookbook/cookie_csrf.md), [Refresh cookie](cookbook/refresh_cookie.md), [OAuth account linking](cookbook/oauth_associate.md), [Custom User model with OAuth](cookbook/custom_user_oauth.md), [Custom role administration controller](cookbook/role_admin_controller.md) |
+| Recipes & examples | [Cookie + CSRF](cookbook/cookie_csrf.md), [Refresh cookie](cookbook/refresh_cookie.md), [OAuth account linking](cookbook/oauth_associate.md), [Custom User model with OAuth](cookbook/custom_user_oauth.md), [API keys](cookbook/api_keys.md), [Custom role administration controller](cookbook/role_admin_controller.md), [Testing custom role admin](cookbook/role_admin_tests.md) |
 | Moving from fastapi-users | [Concept mapping](guides/from_fastapi_users.md) (optional) |
 | HTTP reference | [HTTP API](http_api.md), [Errors](errors.md) |
 | Config & ops | [Configuration index](configuration.md) (split topics: [Backends](configuration/backends.md), [OAuth](configuration/oauth.md), [TOTP](configuration/totp.md), …), [Security overview](security.md), [Deployment](deployment.md) |

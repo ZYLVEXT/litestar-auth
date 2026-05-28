@@ -53,7 +53,7 @@ When a login requires a second factor, the client finishes with:
 
 - **`POST .../2fa/verify`** — pending token + TOTP code, or pending token + an unused recovery code in the same `code` field. A recovery code is consumed on successful login and cannot be reused.
 
-Pending login JWTs use a JTI denylist internally. In production, configure **`TotpConfig.totp_pending_jti_store`** on the plugin-managed path or pass **`pending_jti_store`** to **`create_totp_controller`** manually. Missing pending-token replay storage now fails closed unless the owning config/controller explicitly sets **`unsafe_testing=True`**.
+Pending login JWTs use a JTI denylist internally. In production, configure **`TotpConfig.totp_pending_jti_store`** on the plugin-managed path or pass **`pending_jti_store`** to **`create_totp_controller`** manually. Missing pending-token replay storage fails closed unless the owning config/controller explicitly sets **`unsafe_testing=True`**.
 
 Pending login JWTs are client-bound by default. With
 **`TotpConfig.totp_pending_require_client_binding=True`**, `/login` adds SHA-256

@@ -76,7 +76,7 @@ from litestar_auth.models import import_token_orm_models
 AccessToken, RefreshToken = import_token_orm_models()
 ```
 
-Call that helper explicitly during metadata registration or Alembic setup when this app reuses the library `AccessToken` / `RefreshToken` models. `LitestarAuth.on_app_init()` now handles the matching plugin-runtime bootstrap path lazily when the configured DB-token strategy still uses the library classes, so no extra import side effect is needed only for runtime correctness.
+Call that helper during metadata registration or Alembic setup when the app reuses the library `AccessToken` / `RefreshToken` models. `LitestarAuth.on_app_init()` also bootstraps those classes at plugin startup when the configured database-token strategy still uses the library models, so an extra import is not required for runtime correctness alone.
 
 ## Plugin and user database
 
@@ -96,7 +96,7 @@ def user_db_factory(session):
 
 Wire that factory in `LitestarAuthConfig(user_model=MyUser, user_db_factory=user_db_factory, oauth_config=...)`.
 
-`SQLAlchemyUserDatabase` now validates that `oauth_account_model` points back at the same user contract. If you previously paired `litestar_auth.models.oauth.OAuthAccount` with a renamed user class, a non-`user` table, or a different declarative registry, that setup now fails fast with `TypeError`; replace it with an `OAuthAccountMixin` subclass whose `auth_user_model` / `auth_user_table` settings match `MyUser`.
+`SQLAlchemyUserDatabase` validates that `oauth_account_model` points back at the same user contract. Pairing `litestar_auth.models.oauth.OAuthAccount` with a renamed user class, a non-`user` table, or a different declarative registry raises `TypeError`; use an `OAuthAccountMixin` subclass whose `auth_user_model` / `auth_user_table` settings match `MyUser`.
 
 ## If you later add DB token tables
 

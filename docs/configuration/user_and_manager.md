@@ -46,7 +46,7 @@ from litestar_auth.models import import_token_orm_models
 AccessToken, RefreshToken = import_token_orm_models()
 ```
 
-Call that helper yourself during metadata registration or Alembic-style autogenerate so token discovery stays with the models boundary. For plugin-managed runtime, `LitestarAuth.on_app_init()` now calls the same helper lazily when the active DB-token strategy still uses the bundled `AccessToken` / `RefreshToken` classes, so apps no longer need a separate import side effect only to make the plugin work. Keep the explicit helper for metadata/Alembic flows or any non-plugin code path that needs the tables.
+Call that helper yourself during metadata registration or Alembic-style autogenerate so token discovery stays with the models boundary. For plugin-managed runtime, `LitestarAuth.on_app_init()` also calls the same helper lazily when the active DB-token strategy uses the bundled `AccessToken` / `RefreshToken` classes, so apps do not need a separate import side effect only to make the plugin work. Keep the explicit helper for metadata/Alembic flows or any non-plugin code path that needs the tables.
 
 If you use the library `AccessToken` and `RefreshToken` models, your user class should declare relationships compatible with them instead of copying mapper wiring from the reference `User` class:
 
@@ -138,9 +138,9 @@ Recommended upgrade sequence:
 5. Drop or ignore the legacy JSON column after the application is fully reading from relational
    membership.
 
-This redesign changes persistence only. Guards, DTOs, and manager APIs still exchange the same flat
-normalized `user.roles` values, and the library still does not add permission matrices or policy
-DSLs. The core plugin-owned auth/users route table does not auto-mount role-management endpoints;
+Only persistence changes; guards, DTOs, and manager APIs still exchange the same flat normalized
+`user.roles` values. The library does not add permission matrices or policy DSLs. The core
+plugin-owned auth/users route table does not auto-mount role-management endpoints;
 use the plugin-owned [`litestar roles`](../guides/roles_cli.md) CLI surface or the opt-in
 [HTTP role administration](../guides/role_admin_http.md) contrib controller when you need
 catalog or assignment administration.
@@ -226,7 +226,7 @@ backend = AuthenticationBackend(
 )
 ```
 
-Custom refresh-token classes now have a session-management and reuse-detection contract in addition to
+Custom refresh-token classes have a session-management and reuse-detection contract in addition to
 the shared token contract. They must expose mapped `session_id`, `last_used_at`, `client_metadata`, and
 `consumed_token_digests` attributes. The recommended path is still to compose `RefreshTokenMixin`, which
 provides:

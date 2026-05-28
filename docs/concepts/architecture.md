@@ -45,8 +45,8 @@ Configuration is a single `LitestarAuthConfig` dataclass (see the [Configuration
 
 An `AuthenticationBackend` pairs:
 
-- **Transport** — how credentials travel (e.g. `Authorization: Bearer`, or HTTP-only cookies).
-- **Strategy** — how access (and optionally refresh) tokens are created, validated, rotated, and revoked (`JWTStrategy`, `DatabaseTokenStrategy`, `RedisTokenStrategy`).
+- **Transport** — how credentials travel (for example `Authorization: Bearer`, HTTP-only cookies, or API-key headers).
+- **Strategy** — how credentials are issued, validated, rotated, and revoked (`JWTStrategy`, `DatabaseTokenStrategy`, `RedisTokenStrategy`, `ApiKeyStrategy`, and related helpers).
 
 Multiple backends can be configured; the first successful authentication wins for a request. Additional backends may be mounted under path prefixes (see [Backends](backends.md)).
 

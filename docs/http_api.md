@@ -9,7 +9,12 @@ Placeholders:
 - `{provider}` — OAuth provider name from `OAuthConfig.oauth_providers` or a manual controller factory.
 
 Generated OpenAPI publishes the built-in request/response payload names from `litestar_auth.payloads`. `login_identifier` only changes how `LoginCredentials.identifier` is resolved during login; it does not rename the email/token fields used by the built-in registration, verification, reset-password, refresh, or TOTP routes.
-For plugin-mounted protected routes, `LitestarAuth` also publishes per-operation OpenAPI security requirements derived from the configured auth transports so Swagger / other OpenAPI UIs can authorize requests with the standard mechanism. Disable that metadata with `include_openapi_security=False`. For app-owned protected routes, reuse `config.resolve_openapi_security_requirements()`; if you mount protected controllers manually, pass `security=` to the relevant controller factory.
+For plugin-mounted protected routes, `LitestarAuth` publishes per-operation OpenAPI security
+requirements derived from the configured auth transports, so Swagger and other OpenAPI UIs can
+authorize requests with the standard mechanism. Disable that metadata with
+`include_openapi_security=False`.
+For app-owned protected routes, reuse `config.resolve_openapi_security_requirements()`. If you
+mount protected controllers manually, pass `security=` to the relevant controller factory.
 
 ## Auth core
 
@@ -82,11 +87,11 @@ sessions, cookie clients can use `GET {auth}/sessions` and bearer clients can us
 `POST {auth}/sessions` to mark exactly that item with `is_current: true` and the other active items
 with `false`; `POST {auth}/sessions/revoke-others` preserves that session.
 
-When no current refresh credential is present, the credential is invalid, the credential belongs to a
-different user, the refresh session is expired, or the configured strategy does not support
-identification, the current session is unresolved. In that fallback, list responses keep
-`is_current: null`, and revoke-others fails closed by passing an unknown current-session marker to the
-strategy. For the built-in DB strategy this revokes all active refresh sessions for the current user.
+When no current refresh credential is present or resolvable (for example invalid, expired, owned by
+another user, or unsupported by the current strategy), the current session is unresolved.
+In that fallback, list responses keep `is_current: null`, and revoke-others passes an unknown
+current-session marker to the strategy.
+For the built-in DB strategy, this revokes all active refresh sessions for the current user.
 
 ## Registration and email
 
@@ -105,13 +110,14 @@ enforces password length through `require_password_length`. See
 password-validator, and shared-helper contract.
 
 Built-in user-returning responses from `POST {auth}/register`, `POST {auth}/verify`, and
-`POST {auth}/reset-password` use `UserRead`, which now serializes `id`, `email`, `is_active`,
+`POST {auth}/reset-password` use `UserRead`, which serializes `id`, `email`, `is_active`,
 `is_verified`, and normalized `roles`.
 
-That response contract is intentionally role-centric after the superuser migration. The HTTP API
-exposes one flat `roles` array, not a legacy superuser boolean, raw `role` / `user_role` rows,
-permission matrices, or role-catalog or user-assignment endpoints on the core plugin-owned auth routes. For operational
-catalog and user-role administration, use the plugin-owned
+That response contract is role-centric after the superuser migration.
+The HTTP API exposes one flat `roles` array, not a superuser boolean, raw `role` / `user_role`
+rows, permission matrices, or role-catalog/user-assignment endpoints on core plugin-owned auth
+routes.
+For operational catalog and user-role administration, use the plugin-owned
 [`litestar roles`](guides/roles_cli.md) CLI surface or mount the opt-in contrib controller from
 [HTTP role administration](guides/role_admin_http.md).
 
@@ -202,8 +208,8 @@ unauthenticated requests return `401`, and configured rate limits return `429` w
 Superuser `PATCH {users}/{id}` uses `AdminUserUpdate`, can persist validated `roles`, and remains
 the admin-initiated password rotation path.
 
-The storage redesign does not add separate CRUD endpoints for the relational role tables. Built-in
-users routes continue to manage only the normalized flat `roles` contract on the user boundary.
+Relational role tables do not get separate CRUD endpoints in the core plugin. Built-in users routes
+continue to manage only the normalized flat `roles` contract on the user boundary.
 Operator-driven catalog and assignment administration lives on the
 [`litestar roles`](guides/roles_cli.md) CLI surface, while applications that need an HTTP admin
 surface can opt into [HTTP role administration](guides/role_admin_http.md).
@@ -214,6 +220,7 @@ If you mount `litestar_auth.contrib.role_admin.create_role_admin_controller(...)
 adds an admin-only HTTP role-management surface under its configured prefix (default `/roles`).
 The factory defaults to `guards=[is_superuser]`; see
 [HTTP role administration](guides/role_admin_http.md) for mounting and override guidance.
+In the route table below, `{roles}` means the configured contrib role-admin prefix (default `/roles`).
 
 Payload contracts live in `litestar_auth.contrib.role_admin._schemas`:
 `RoleCreate`, `RoleUpdate`, `RoleRead`, and `UserBrief`. Paginated list routes return
@@ -224,19 +231,44 @@ these machine-readable `ErrorCode` values for role-catalog and assignment failur
 
 | Method | Path | Request body | Success | Other documented statuses | Error code(s) |
 | ------ | ---- | ------------ | ------- | ------------------------- | ------------- |
-| `GET` | `/roles` | None | `200` paginated `RoleRead` page | `403`, `422` | None |
-| `POST` | `/roles` | `RoleCreate` | `201` `RoleRead` | `403`, `409`, `422` | `ROLE_ALREADY_EXISTS`, `ROLE_NAME_INVALID` |
-| `GET` | `/roles/{role_name}` | None | `200` `RoleRead` | `403`, `404`, `422` | `ROLE_NOT_FOUND`, `ROLE_NAME_INVALID` |
-| `PATCH` | `/roles/{role_name}` | `RoleUpdate` | `200` `RoleRead` | `403`, `404`, `422` | `ROLE_NOT_FOUND`, `ROLE_NAME_INVALID` |
-| `DELETE` | `/roles/{role_name}` | None | `204` empty body | `403`, `404`, `409`, `422` | `ROLE_NOT_FOUND`, `ROLE_STILL_ASSIGNED`, `ROLE_NAME_INVALID` |
-| `POST` | `/roles/{role_name}/users/{user_id}` | None | `200` `RoleRead` | `403`, `404`, `422` | `ROLE_NOT_FOUND`, `ROLE_ASSIGNMENT_USER_NOT_FOUND`, `ROLE_NAME_INVALID` |
-| `DELETE` | `/roles/{role_name}/users/{user_id}` | None | `204` empty body | `403`, `404`, `422` | `ROLE_ASSIGNMENT_USER_NOT_FOUND`, `ROLE_NAME_INVALID` |
-| `GET` | `/roles/{role_name}/users` | None | `200` paginated `UserBrief` page | `403`, `404`, `422` | `ROLE_NOT_FOUND`, `ROLE_NAME_INVALID` |
+| `GET` | `{roles}` | None | `200` paginated `RoleRead` page | `403`, `422` | None |
+| `POST` | `{roles}` | `RoleCreate` | `201` `RoleRead` | `403`, `409`, `422` | `ROLE_ALREADY_EXISTS`, `ROLE_NAME_INVALID` |
+| `GET` | `{roles}/{role_name}` | None | `200` `RoleRead` | `403`, `404`, `422` | `ROLE_NOT_FOUND`, `ROLE_NAME_INVALID` |
+| `PATCH` | `{roles}/{role_name}` | `RoleUpdate` | `200` `RoleRead` | `403`, `404`, `422` | `ROLE_NOT_FOUND`, `ROLE_NAME_INVALID` |
+| `DELETE` | `{roles}/{role_name}` | None | `204` empty body | `403`, `404`, `409`, `422` | `ROLE_NOT_FOUND`, `ROLE_STILL_ASSIGNED`, `ROLE_NAME_INVALID` |
+| `POST` | `{roles}/{role_name}/users/{user_id}` | None | `200` `RoleRead` | `403`, `404`, `422` | `ROLE_NOT_FOUND`, `ROLE_ASSIGNMENT_USER_NOT_FOUND`, `ROLE_NAME_INVALID` |
+| `DELETE` | `{roles}/{role_name}/users/{user_id}` | None | `204` empty body | `403`, `404`, `422` | `ROLE_ASSIGNMENT_USER_NOT_FOUND`, `ROLE_NAME_INVALID` |
+| `GET` | `{roles}/{role_name}/users` | None | `200` paginated `UserBrief` page | `403`, `404`, `422` | `ROLE_NOT_FOUND`, `ROLE_NAME_INVALID` |
 
 Assignment writes are idempotent and run through the manager lifecycle instead of mutating
-association rows behind `BaseUserManager`. The `user_id` path parameter is parsed UUID-first and
-then falls back to the configured model's primary-key shape so the same controller works with the
-bundled UUID user model and integer-key custom models.
+association rows behind `BaseUserManager`.
+The `user_id` path parameter is parsed UUID-first, then falls back to the configured model's
+primary-key shape, so the same controller works with bundled UUID users and integer-key custom
+models.
+
+## API keys
+
+When `api_keys.enabled=True`, the plugin mounts self-service routes under `/api-keys` and
+superuser inventory routes under `{users}` (`users_path`, default `/users`).
+
+All API-key inventory routes require `requires_password_session`, so callers authenticated with an
+API key cannot list, create, update, or revoke API keys. Sensitive mutations also use the TOTP
+step-up policy for `api_keys.create`, `api_keys.update`, and `api_keys.revoke`.
+
+| Method | Path | Request body | Success | Other documented statuses | Error code(s) |
+| ------ | ---- | ------------ | ------- | ------------------------- | ------------- |
+| `POST` | `/api-keys` | `ApiKeyCreateRequest` | `201` `ApiKeyCreateResponse` | `400`, `401`, `403`, `422`, `429` | `LOGIN_BAD_CREDENTIALS`, `API_KEY_SCOPE_DENIED`, `API_KEY_LIMIT_REACHED`, `REQUEST_BODY_INVALID`, `TOTP_STEPUP_REQUIRED` |
+| `GET` | `/api-keys` | None | `200` `ApiKeyListResponse` | `401`, `403` | `AUTHORIZATION_DENIED` |
+| `GET` | `/api-keys/{key_id}` | None | `200` `ApiKeyRead` | `401`, `403`, `404` | `AUTHORIZATION_DENIED`, `API_KEY_INVALID` |
+| `PATCH` | `/api-keys/{key_id}` | `ApiKeyUpdateRequest` | `200` `ApiKeyRead` | `400`, `401`, `403`, `404`, `422`, `429` | `LOGIN_BAD_CREDENTIALS`, `API_KEY_SCOPE_DENIED`, `AUTHORIZATION_DENIED`, `API_KEY_INVALID`, `REQUEST_BODY_INVALID`, `TOTP_STEPUP_REQUIRED` |
+| `DELETE` | `/api-keys/{key_id}` | None | `200` `ApiKeyRead` | `401`, `403`, `404` | `AUTHORIZATION_DENIED`, `API_KEY_INVALID`, `TOTP_STEPUP_REQUIRED` |
+| `POST` | `{users}/{user_id}/api-keys` | `ApiKeyAdminCreateRequest` | `201` `ApiKeyCreateResponse` | `400`, `401`, `403`, `404` | `API_KEY_SCOPE_DENIED`, `API_KEY_LIMIT_REACHED`, `AUTHORIZATION_DENIED`, `TOTP_STEPUP_REQUIRED` |
+| `GET` | `{users}/{user_id}/api-keys` | None | `200` `ApiKeyListResponse` | `401`, `403`, `404` | `AUTHORIZATION_DENIED` |
+| `DELETE` | `{users}/{user_id}/api-keys/{key_id}` | None | `200` `ApiKeyRead` | `401`, `403`, `404` | `AUTHORIZATION_DENIED`, `API_KEY_INVALID`, `TOTP_STEPUP_REQUIRED` |
+
+`ApiKeyCreateResponse` returns the raw `api_key` only once at create time plus safe metadata in
+`key`. Subsequent list/get/update/revoke responses expose only `ApiKeyRead` metadata. Credential
+formats and optional request-signing headers are documented in [API keys](guides/api_keys.md).
 
 ## Multiple backends
 

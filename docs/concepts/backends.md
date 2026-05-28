@@ -19,6 +19,7 @@ flowchart LR
 | --------- | ----------- |
 | `BearerTransport` | APIs, SPAs with `Authorization: Bearer`. |
 | `CookieTransport` | Browser sessions; pairs with CSRF for unsafe methods (see [Security](../security.md)). |
+| `ApiKeyTransport` | Machine clients via `Authorization: Bearer ak_…`, `X-API-Key`, or signed `LSA1-HMAC-SHA256` requests (see [API keys](../guides/api_keys.md)). |
 
 ## Strategies
 
@@ -27,6 +28,7 @@ flowchart LR
 | `JWTStrategy` | Stateless access tokens; optional `jti` denylist; optional session fingerprint claim. |
 | `DatabaseTokenStrategy` | Opaque tokens stored in DB (keyed digest at rest; legacy plaintext opt-in only). |
 | `RedisTokenStrategy` | Opaque tokens in Redis (`litestar-auth[redis]`). |
+| `ApiKeyStrategy` | Validates API keys (and optional HMAC signatures) against the configured store; sets `request.auth` to `ApiKeyContext` on success. |
 
 Constructors and options are documented under [Python API — Strategies](../api/strategies.md).
 
@@ -80,5 +82,6 @@ AuthenticationBackend(name="mobile", transport=BearerTransport(), strategy=db_st
 - **Public API / microservice:** often `BearerTransport` + `JWTStrategy` with a durable denylist in production if you rely on revocation.
 - **Same-site browser app:** `CookieTransport` + strategy of your choice; enable CSRF for state-changing requests.
 - **Central session store:** use `LitestarAuthConfig(..., database_token_auth=DatabaseTokenAuthConfig(...))` for the plugin-managed bearer + DB-token path, or `RedisTokenStrategy` when Redis is your session store. Drop to manual `DatabaseTokenStrategy` assembly only when you need a custom transport or multiple backends.
+- **Service-to-service API keys:** enable `ApiKeyConfig` on the plugin or assemble `ApiKeyTransport` + `ApiKeyStrategy` manually; see [API keys](../guides/api_keys.md) and [Backends configuration](../configuration/backends.md#api-key-backend).
 
 See also [Request lifecycle](request_lifecycle.md).

@@ -1,6 +1,6 @@
 # Cookbook: Custom role catalog administration API
 
-The supported HTTP role-management surface now lives in
+The supported HTTP role-management surface is documented in
 [HTTP role administration](../guides/role_admin_http.md) via
 `litestar_auth.contrib.role_admin.create_role_admin_controller(...)`.
 

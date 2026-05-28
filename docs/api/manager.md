@@ -6,7 +6,7 @@ For plugin-managed apps, the authoritative wiring for `user_manager_security`,
 [Configuration](../configuration/manager.md#manager-password-surface). This page focuses on the
 direct `BaseUserManager` API once those inputs have already been resolved.
 
-The default plugin builder now treats `user_manager_security` as an end-to-end constructor
+The default plugin builder treats `user_manager_security` as an end-to-end constructor
 contract. When that typed bundle is present, the plugin calls
 `user_manager_class(..., password_helper=..., security=UserManagerSecurity(...), password_validator=..., backends=..., login_identifier=..., unsafe_testing=...)`
 and folds the effective `id_parser` into `security` first. If your manager narrows or renames that
@@ -29,7 +29,7 @@ Across plugin-managed and direct-manager flows, the stable account-state policy 
 shape and semantics when they customize account-state enforcement. The built-in ordering is
 inactive first, then unverified when `require_verified=True`.
 
-The generated register and users controllers now require strict request schemas:
+The generated register and users controllers require strict request schemas:
 the built-in `UserCreate` / `UserUpdate` DTOs use `forbid_unknown_fields=True`,
 and custom `user_create_schema` / `user_update_schema` values passed to the
 controller factories must do the same. Undeclared keys therefore fail request
@@ -49,7 +49,7 @@ must pass `allow_privileged=True` when they intentionally mutate `is_active`, `i
 `roles`. Public self-service HTTP flows never set those fields; admin-only routes, OAuth
 verification bootstrap, and role-administration helpers do so explicitly.
 
-`BaseUserManager` is now explicitly documented as a façade over three service entrypoints:
+`BaseUserManager` is explicitly documented as a façade over three service entrypoints:
 `manager.users` for CRUD and password lifecycle flows, `manager.tokens` for verify/reset token
 flows, and `manager.totp` for TOTP secret storage. Low-level JWT helpers sit under
 `manager.tokens.security`. The convenience methods on `BaseUserManager` still forward to those

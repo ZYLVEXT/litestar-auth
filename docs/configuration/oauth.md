@@ -74,7 +74,7 @@ Route-registration contract:
 - `oauth_redirect_base_url` is required whenever `oauth_providers` is configured. The plugin appends `/oauth` and `/associate` per route family instead of guessing a localhost fallback.
 - `oauth_flow_cookie_secret` is required whenever `oauth_providers` is configured. The plugin HKDF-derives it into Fernet key material, then encrypts and authenticates the browser-held flow cookie that contains OAuth `state` and the PKCE `code_verifier`.
 - Provider names must be route-safe slugs because they become `{provider}` path segments, OAuth state cookie names, and callback URL components.
-- In production app init, plugin-owned OAuth routes now fail closed unless `oauth_redirect_base_url` uses a non-loopback `https://...` origin. Keep localhost or plain-HTTP redirect bases behind `AppConfig(debug=True)` or `unsafe_testing=True` only.
+- In production app init, plugin-owned OAuth routes fail closed unless `oauth_redirect_base_url` uses a non-loopback `https://...` origin. Keep localhost or plain-HTTP redirect bases behind `AppConfig(debug=True)` or `unsafe_testing=True` only.
 - Manual/custom OAuth controller factories use the same non-loopback `https://...` redirect-origin baseline, but they enforce it immediately at controller construction time with no debug/testing override.
 - Both plugin-owned and manual OAuth redirect bases must remain clean callback bases without embedded userinfo, query strings, or fragments.
 - Plugin-owned OAuth login routes always use the primary startup backend from `config.resolve_startup_backends()`. If you need provider-specific backend selection, build manual controllers instead of relying on the plugin-owned route table.

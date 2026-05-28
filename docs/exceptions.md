@@ -1,6 +1,6 @@
 # Exception Context Reference
 
-`litestar-auth` keeps client-facing HTTP error payloads small and stable, but several domain exceptions now also carry structured context on the exception instance for logging, tracing, and operator diagnostics.
+`litestar-auth` keeps client-facing HTTP error payloads small and stable, and several domain exceptions also carry structured context on the exception instance for logging, tracing, and operator diagnostics.
 
 Use the exception attributes for programmatic handling. Do not parse `str(exc)` to recover structured data.
 

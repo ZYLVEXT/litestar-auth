@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import os
 from datetime import timedelta
-from typing import Any
+from typing import Any, ClassVar, cast
 from uuid import UUID
 
 from litestar import Litestar, Request, get
@@ -20,7 +20,6 @@ from litestar_auth import (
     is_authenticated,
 )
 from litestar_auth.authentication.strategy import JWTStrategy
-from litestar_auth.db.sqlalchemy import SQLAlchemyUserDatabase
 from litestar_auth.models import User
 
 DATABASE_URL = "sqlite+aiosqlite:///./quickstart.db"
@@ -35,7 +34,7 @@ session_maker = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit
 class UserManager(BaseUserManager[User, UUID]):
     """Print verification tokens so the quickstart can finish without email infrastructure."""
 
-    verification_tokens: dict[str, str] = {}
+    verification_tokens: ClassVar[dict[str, str]] = {}
 
     async def on_after_register(self, user: User, token: str) -> None:
         """Store and print a verification token for the registered user."""
@@ -43,11 +42,10 @@ class UserManager(BaseUserManager[User, UUID]):
         print(f"verification token for {user.email}: {token}")  # noqa: T201
 
 
-@get("/protected", guards=[is_authenticated])
-async def protected(request: Request[User, Any, Any]) -> dict[str, str]:
+@get("/protected", guards=[is_authenticated], sync_to_thread=False)
+def protected(request: Request[User, Any, Any]) -> dict[str, str]:
     """Return the authenticated user's email address."""
-    user = request.user
-    assert user is not None
+    user = cast("User", request.user)
     return {"email": user.email}
 
 
@@ -67,7 +65,6 @@ config = LitestarAuthConfig[User, UUID](
     session_maker=session_maker,
     user_model=User,
     user_manager_class=UserManager,
-    user_db_factory=lambda session: SQLAlchemyUserDatabase(session, user_model=User),
     user_manager_security=UserManagerSecurity(
         verification_token_secret=VERIFY_TOKEN_SECRET,
         reset_password_token_secret=RESET_PASSWORD_TOKEN_SECRET,

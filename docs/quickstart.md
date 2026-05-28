@@ -12,6 +12,8 @@ Add extras only when you need them later: `litestar-auth[redis]` for shared Redi
 
 ## 2. Create the SQLite tables
 
+`User.metadata.create_all` creates every table on the bundled user metadata, including relational `role` / `user_role` tables when you use the reference `User` model.
+
 Save this as `create_tables.py`:
 
 ```python
@@ -62,7 +64,6 @@ from litestar_auth import (
     is_authenticated,
 )
 from litestar_auth.authentication.strategy import JWTStrategy
-from litestar_auth.db.sqlalchemy import SQLAlchemyUserDatabase
 from litestar_auth.models import User
 
 DATABASE_URL = "sqlite+aiosqlite:///./quickstart.db"
@@ -107,7 +108,6 @@ config = LitestarAuthConfig[User, UUID](
     session_maker=session_maker,
     user_model=User,
     user_manager_class=UserManager,
-    user_db_factory=lambda session: SQLAlchemyUserDatabase(session, user_model=User),
     user_manager_security=UserManagerSecurity(
         verification_token_secret=VERIFY_TOKEN_SECRET,
         reset_password_token_secret=RESET_PASSWORD_TOKEN_SECRET,
@@ -117,6 +117,8 @@ config = LitestarAuthConfig[User, UUID](
 
 app = Litestar(route_handlers=[protected], plugins=[LitestarAuth(config)])
 ```
+
+When `user_db_factory` is omitted, `LitestarAuthConfig.resolve_user_db_factory()` supplies a lazy `SQLAlchemyUserDatabase` bound to `user_model` on first request.
 
 ## 4. Run the app
 
@@ -148,6 +150,7 @@ curl -s http://127.0.0.1:8000/auth/verify \
 curl -s http://127.0.0.1:8000/auth/login \
   -H 'content-type: application/json' \
   -d "{\"identifier\":\"$EMAIL\",\"password\":\"$PASSWORD\"}"
+# 201 Created — JSON body includes access_token and token_type (bearer)
 
 curl -s http://127.0.0.1:8000/protected \
   -H "Authorization: Bearer <access_token from /auth/login>"

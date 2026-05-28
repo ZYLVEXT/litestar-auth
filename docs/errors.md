@@ -49,6 +49,8 @@ Exact JSON layout follows your Litestar exception handler configuration.
 | `REQUEST_BODY_INVALID` | 400 / 422 | Body failed validation or request decoding rejected undeclared fields. |
 | `LOGIN_PAYLOAD_INVALID` | 422 | Login body shape invalid. |
 | `REFRESH_TOKEN_INVALID` | 401 | Refresh rejected. |
+| `SESSION_MANAGEMENT_UNSUPPORTED` | 400 | Session/device routes are mounted but the active strategy does not implement refresh-session management. |
+| `REFRESH_SESSION_NOT_FOUND` | 404 | Session/device revoke path did not find a matching active session for the authenticated user. |
 | `TOTP_PENDING_BAD_TOKEN` | 400 | Pending login token invalid. |
 | `TOTP_CODE_INVALID` | 400 | Wrong or reused TOTP code. |
 | `TOTP_ALREADY_ENABLED` | 400 | TOTP already active. |
@@ -63,7 +65,7 @@ Exact JSON layout follows your Litestar exception handler configuration.
 | `API_KEY_SIGNATURE_TIMESTAMP_SKEW` | 401 | Signed API-key request `X-Auth-Date` is outside the configured skew window. |
 | `API_KEY_SIGNATURE_NONCE_REPLAY` | 401 | Signed API-key request reused a nonce within the nonce-store TTL. |
 
-`USER_ALREADY_EXISTS`, `REGISTER_FAILED`, and `UPDATE_USER_INVALID_PASSWORD` keep stable HTTP mappings even though the corresponding Python exceptions now use keyword-only structured context.
+`USER_ALREADY_EXISTS`, `REGISTER_FAILED`, and `UPDATE_USER_INVALID_PASSWORD` keep stable HTTP mappings; the corresponding Python exceptions use keyword-only structured context.
 
 Source of truth in code: `litestar_auth._error_codes.ErrorCode` (re-exported from `litestar_auth.exceptions`) and controller `ClientException` sites. Full exception hierarchy: [Python API — Exceptions](api/exceptions.md).
 

@@ -9,8 +9,8 @@ Litestar matches dependency keys to callable parameter names. The default is `"d
 `RoleCapableUserProtocol` is the dedicated public typing surface for user objects that expose normalized flat `roles` membership. Use that protocol directly instead of treating an arbitrary `roles` attribute as sufficient.
 
 That protocol describes the library boundary rather than a storage implementation detail. Bundled
-SQLAlchemy models now persist roles through relational `role` / `user_role` tables, but managers,
-schemas, and guards still exchange one normalized flat `roles` collection. This remains flat role
+SQLAlchemy models store role membership in relational `role` / `user_role` tables; managers,
+schemas, and guards still exchange one normalized flat `roles` collection. This is flat role
 membership, not a full RBAC permission model.
 
 ## Which protocol should my user model implement?

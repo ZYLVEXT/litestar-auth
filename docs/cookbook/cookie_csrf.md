@@ -16,3 +16,5 @@ The plugin detects cookie transports during validation and wires CSRF when confi
 
 - [Security guide](../guides/security.md)
 - [Transports API](../api/transports.md)
+- [Cookbook: Refresh flow with cookies](refresh_cookie.md)
+- [Cookbook: OAuth account linking](oauth_associate.md)

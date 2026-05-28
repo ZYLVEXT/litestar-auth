@@ -6,24 +6,21 @@ Subclass the provided [`User`](../api/models.md) (or follow the same contract) a
 `LitestarAuthConfig.user_model` at your class. Keep sensitive fields out of public schemas via
 `user_read_schema` / msgspec structs.
 
-The bundled user contract now includes a non-null flat `roles` collection in addition to the
-existing email/password/account-state fields. The bundled `User` gets that surface from
-`UserRoleRelationshipMixin`, and the bundled persistence layer now stores membership in sibling
-`Role` / `UserRole` tables instead of a JSON column on the user row. `RoleCapableUserProtocol` is
-the dedicated typing surface for that capability.
+The bundled user contract includes a flat `roles` collection alongside email, password, and
+account-state fields. The reference `User` model takes that surface from `UserRoleRelationshipMixin`;
+membership is stored in `Role` / `UserRole` tables, not a JSON column on the user row.
+`RoleCapableUserProtocol` is the typing surface for role-capable users.
 
-Migration note: if you previously persisted the bundled `user.roles` JSON column, or copied that
-column shape onto an app-owned model, create relational role tables, normalize and deduplicate the
-stored role names, backfill one association row per `(user, role)` pair, and then switch the app
-to the bundled `Role` / `UserRole` models or a custom `UserRoleRelationshipMixin` +
-`RoleMixin` / `UserRoleAssociationMixin` family. Keep `user.roles: Sequence[str]` as the boundary
-seen by DTOs, managers, and guards even when storage becomes relational.
+**Migration from a JSON `roles` column:** create relational role tables, normalize and deduplicate
+stored role names, backfill one association row per `(user, role)` pair, then switch to the bundled
+`Role` / `UserRole` models or a custom mixin family (`UserRoleRelationshipMixin` with
+`RoleMixin` / `UserRoleAssociationMixin`). Keep `user.roles: Sequence[str]` as the boundary for DTOs,
+managers, and guards.
 
-This redesign preserves the existing flat role guards and structured role exception context. It does not add permission
-matrices or a policy DSL. The core plugin-owned auth/users controllers still do not auto-mount
-role catalog or user-assignment endpoints. Operator-driven role administration lives on the
-plugin-owned [`litestar roles`](roles_cli.md) CLI surface, and applications that want an HTTP
-admin surface can opt into [HTTP role administration](role_admin_http.md).
+Flat role guards and structured role exceptions are unchanged. The library does not add permission
+matrices or a policy DSL. Core auth/users controllers do not auto-mount role catalog or assignment
+endpoints; use the [`litestar roles`](roles_cli.md) CLI or opt into
+[HTTP role administration](role_admin_http.md) when you need operator workflows.
 
 ### Role CLI compatibility
 
@@ -76,7 +73,7 @@ handling.
 
 ## Plugin hooks
 
-`LitestarAuthConfig` now exposes three opt-in plugin customization hooks for apps that want to
+`LitestarAuthConfig` exposes three opt-in plugin customization hooks for apps that want to
 keep the plugin-owned route table but still own response envelopes, middleware wrapping, or
 controller registration:
 

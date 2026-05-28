@@ -5,7 +5,7 @@ Enable or disable slices of the auth HTTP API with flags on `LitestarAuthConfig`
 The built-in lifecycle controllers do not use one generic credential field. `identifier` belongs to login
 (`LoginCredentials`) only. Registration, email verification, password reset, and the built-in TOTP flow keep their
 current email/token-oriented request contracts unless you replace the relevant controller. The public API reference for
-those built-in request and response structs now lives on the [Payloads and schemas API](../api/schemas.md) page.
+those built-in request and response structs are documented on the [Payloads and schemas API](../api/schemas.md) page.
 
 ## Registration
 
@@ -37,9 +37,9 @@ With `include_verify=True`:
   manager hook contract enumeration-resistant.
 - `POST .../verify` — `VerifyToken` with `token`; consumes a verification token.
 
-`LitestarAuthConfig.requires_verification` now defaults to `True`, so newly registered accounts must
-verify their email before `/login` or built-in `/2fa/verify` can complete unless you opt out
-explicitly.
+`LitestarAuthConfig.requires_verification` defaults to `True`, so newly registered accounts must
+verify their email before `/login` or built-in `/2fa/verify` can complete unless you set
+`requires_verification=False`.
 
 The library **does not send email**. Implement `on_after_request_verify_token` and related hooks on
 your user manager to enqueue mail or notifications, and make sure the hook performs equivalent async
@@ -60,12 +60,10 @@ Reset tokens are tied to a password fingerprint so they invalidate after a succe
 
 ## User schema helpers
 
-The password-wiring contract now lives in
+The password-wiring contract is documented in
 [Configuration](../configuration/manager.md#manager-password-surface). For custom registration
 DTOs, reuse `litestar_auth.schemas.UserEmailField` and `litestar_auth.schemas.UserPasswordField`
-when you want the built-in email/password metadata without copying local constraints. Existing
-`UserPasswordField` imports remain valid; add `UserEmailField` only when you also want the
-built-in email contract. Those aliases only affect schema validation and OpenAPI. Runtime password
+when you want the built-in email/password metadata without copying local constraints. Those aliases only affect schema validation and OpenAPI. Runtime password
 policy still comes from `password_validator_factory` or the manager's default
 `require_password_length` validator.
 

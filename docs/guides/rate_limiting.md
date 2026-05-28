@@ -62,7 +62,7 @@ production Redis/TOTP recipe. That shared-client snippet is the single source of
 `TotpConfig.totp_pending_jti_store`, and `TotpConfig.totp_used_tokens_store` from one shared async Redis client.
 
 This guide deliberately does not repeat the full snippet, because the slot inventory, namespace
-families, and shared-client TOTP wiring now live in one maintained place. Keep
+families, and shared-client TOTP wiring are documented in one maintained place. Keep
 `AuthRateLimitConfig.from_shared_backend()` plus direct `RedisRateLimiter(...)` /
 `RedisTotpEnrollmentStore(...)` / `RedisJWTDenylistStore(...)` /
 `RedisUsedTotpCodeStore(...)` construction as the advanced

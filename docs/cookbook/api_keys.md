@@ -1,7 +1,8 @@
 # Cookbook: API keys
 
 This recipe enables user-owned API keys for a Litestar app, protects one route with a scope, and shows the two supported
-client credential forms.
+client credential forms. Wire `User`, `UserManager`, `session_maker`, and JWT backends the same way as in
+[Quickstart](../quickstart.md); see [API keys](../guides/api_keys.md) for the full configuration surface.
 
 ## Server setup
 
@@ -76,4 +77,10 @@ curl -X DELETE "https://api.example.com/api-keys/$KEY_ID" \
 ```
 
 Create, update, and revoke operations require `requires_password_session`, so an API key cannot maintain the user's key
-inventory by itself.
+inventory by itself. Enrolled TOTP users may also need step-up fields on those routes; see [API keys](../guides/api_keys.md).
+
+## See also
+
+- [API keys guide](../guides/api_keys.md)
+- [Security guide](../guides/security.md)
+- [HTTP API](../http_api.md)

@@ -23,7 +23,7 @@ Middleware does **not** send **401**; the request continues to routing and guard
 2. For each backend, the **transport** extracts a token (header, cookie, etc.).
 3. The **strategy** validates the token and resolves the user id; the manager loads the user from the database.
 4. If successful, **`request.user`** is set to the authenticated user (type is your configured user model / protocol).
-5. If no backend succeeds, the request continues **without** `request.user` (or with an anonymous placeholder, depending on Litestar version and your app) — **no 401 is raised here**.
+5. If no backend succeeds, authentication yields no user (`AuthenticationResult.user` is `None`). The middleware does **not** raise **401** here; unauthenticated access is decided later by route **guards**.
 
 ## Protected routes
 

@@ -80,8 +80,8 @@ For direct grouped settings, pass `RoleAdminControllerConfig(...)` as
   Those contrib paths opt into `allow_privileged=True` explicitly because role
   membership is part of the privileged manager surface.
 - Preserves the same system-managed role invariants as the CLI: the configured
-  `LitestarAuthConfig.superuser_role_name` catalog row cannot be deleted, and
-  the final assignment for that role cannot be removed.
+  `LitestarAuthConfig.superuser_role_name` (default `"superuser"`) catalog row
+  cannot be deleted, and the final assignment for that role cannot be removed.
 
 The HTTP reference for every route, status code, and role-admin `ErrorCode`
 mapping lives in [HTTP API](../http_api.md#contrib-role-administration-opt-in).

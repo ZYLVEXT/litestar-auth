@@ -214,7 +214,7 @@ The detailed contracts for each surface are:
 | `litestar_auth.schemas.UserEmailField` | Shares the built-in email regex and max-length metadata with app-owned `msgspec.Struct` schemas. | Schema metadata only; it does not add manager-side normalization or custom app policy. |
 | `litestar_auth.schemas.UserPasswordField` | Shares built-in password-length metadata with app-owned `msgspec.Struct` schemas. | Schema metadata only; it does not replace the runtime validator. |
 
-The default plugin builder now treats `user_manager_security` as an end-to-end constructor contract. When that
+The default plugin builder treats `user_manager_security` as an end-to-end constructor contract. When that
 typed bundle is present, the plugin always passes `security=UserManagerSecurity(...)`, folds the effective
 `id_parser` into that bundle first, and does not also send `verification_token_secret` /
 `reset_password_token_secret` / `login_identifier_telemetry_secret` / `totp_secret_key` /

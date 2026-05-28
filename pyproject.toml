@@ -96,7 +96,6 @@ target-version = "py312"
 exclude = [
     ".git",
     ".ruff_cache",
-    "docs/snippets",
     "ralph_helpers.py",
 ]
 

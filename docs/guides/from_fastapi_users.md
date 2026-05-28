@@ -9,7 +9,7 @@ Optional reference: how ideas from [**fastapi-users**](https://fastapi-users.git
 | `FastAPIUsers` / router registration | `LitestarAuth` plugin + `LitestarAuthConfig` |
 | `UserManager` subclass | `BaseUserManager` subclass |
 | Authentication backends (JWT, cookie, …) | `AuthenticationBackend(transport=…, strategy=…)` |
-| Transport / strategy split (where exposed) | First-class `BearerTransport`, `CookieTransport`, `JWTStrategy`, `DatabaseTokenStrategy`, `RedisTokenStrategy` |
+| Transport / strategy split (where exposed) | First-class `BearerTransport`, `CookieTransport`, `ApiKeyTransport`, `JWTStrategy`, `DatabaseTokenStrategy`, `RedisTokenStrategy`, `ApiKeyStrategy` |
 | Dependency `current_user` | `request.user` after middleware; **guards** (`is_authenticated`, …) for enforcement |
 | Users router | `include_users=True` → generated controllers under `users_path` |
 | OAuth routers | `oauth_config` + provider controllers (see [OAuth](oauth.md)) |

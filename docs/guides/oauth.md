@@ -18,7 +18,7 @@ OAuth has one plugin-owned route-registration contract plus a manual route-table
 
 The plugin no longer treats `oauth_providers` as inert metadata: if providers are declared, login routes are part of the plugin-owned HTTP surface.
 
-For plugin-owned routes, production app init now fails closed unless `oauth_redirect_base_url` uses a non-loopback `https://...` origin. Keep localhost or plain-HTTP redirect bases behind `AppConfig(debug=True)` or `unsafe_testing=True` only.
+For plugin-owned routes, production app init fails closed unless `oauth_redirect_base_url` uses a non-loopback `https://...` origin. Keep localhost or plain-HTTP redirect bases behind `AppConfig(debug=True)` or `unsafe_testing=True` only.
 
 Plugin-owned routes require `oauth_flow_cookie_secret` when providers are configured. Manual/custom controller wiring must pass the same kind of dedicated secret through `oauth_flow_cookie_secret` on `create_provider_oauth_controller()`, `create_oauth_controller()`, and `create_oauth_associate_controller()`. The library HKDF-derives Fernet key material from that secret before storing OAuth `state` and the PKCE `code_verifier` in the browser-held flow cookie.
 
@@ -149,7 +149,7 @@ user_db = SQLAlchemyUserDatabase(
 )
 ```
 
-For ad-hoc ORM queries against `OAuthAccount`, bind the same policy to the session with `bind_oauth_token_encryption(session, OAuthTokenEncryption(...))` before loading encrypted token columns. In tests you can use `OAuthTokenEncryption(key=None, unsafe_testing=True)` as the explicit plaintext policy; production OAuth deployments should always supply a Fernet key. Policy-shaped wrappers and objects retained across development/test module reloads are ignored or rejected; create a fresh `OAuthTokenEncryption(...)` before binding. The mapper listeners keep temporary plaintext snapshots only for the duration of a write and now clear them again if the ORM transaction rolls back.
+For ad-hoc ORM queries against `OAuthAccount`, bind the same policy to the session with `bind_oauth_token_encryption(session, OAuthTokenEncryption(...))` before loading encrypted token columns. In tests you can use `OAuthTokenEncryption(key=None, unsafe_testing=True)` as the explicit plaintext policy; production OAuth deployments should always supply a Fernet key. Policy-shaped wrappers and objects retained across development/test module reloads are ignored or rejected; create a fresh `OAuthTokenEncryption(...)` before binding. The mapper listeners keep temporary plaintext snapshots only for the duration of a write and clear them again if the ORM transaction rolls back.
 
 ## Cookies
 
@@ -177,7 +177,7 @@ If you own the `user` table with your own model, prefer composing **`UserModelMi
 
 ### Audit columns on `oauth_account` {#audit-columns-on-oauth_account}
 
-The bundled `OAuthAccount` extends `UUIDBase` (no `created_at` / `updated_at`). If your existing schema has audit columns, use a **single** mapped class for `oauth_account` (for example subclass `UUIDAuditBase` and copy the column set). You cannot map two classes to the same table name on shared metadata; see the commented example under `docs/snippets/oauth_account_audit_model.py`.
+The bundled `OAuthAccount` extends `UUIDBase` (no `created_at` / `updated_at`). If your existing schema has audit columns, use a **single** mapped class for `oauth_account` (for example `OAuthAccountMixin` with `UUIDAuditBase`). You cannot map two classes to the same table name on shared metadata; see `docs/snippets/oauth_account_audit_model.py`.
 
 ## Related
 

@@ -23,7 +23,7 @@ OAuth cookbook](../cookbook/custom_user_oauth.md) when the application owns the 
 
 Avoid `from litestar_auth.models import User` (or the `user` submodule) in apps that already map table `user` to a custom model. That import registers the bundled reference mapper and conflicts with an app-owned mapping. Likewise, importing `OAuthAccount` from `litestar_auth.models.oauth` only keeps the reference `User` lazy; when the app owns a different user class, table, or registry, prefer an `OAuthAccountMixin` subclass that points back at the custom user contract.
 
-`import_token_orm_models()` remains the explicit helper for bundled token metadata bootstrap and Alembic-style autogenerate. `LitestarAuth.on_app_init()` now calls the same helper lazily for plugin-managed runtime when bundled DB-token models are active, so no extra import side effect is required only to make the plugin work.
+`import_token_orm_models()` remains the explicit helper for bundled token metadata bootstrap and Alembic-style autogenerate. `LitestarAuth.on_app_init()` also calls the same helper lazily for plugin-managed runtime when bundled DB-token models are active, so no extra import side effect is required only to make the plugin work.
 
 For custom SQLAlchemy models, compose the mixins on your own declarative base instead of copying
 columns or relationship wiring from the reference classes.
@@ -158,8 +158,8 @@ order:
 4. Switch the app to the bundled `Role` / `UserRole` models or a custom mixin-composed role family.
 5. Remove or ignore the legacy JSON column once reads and writes use relational membership.
 
-This ORM redesign does not change the higher-level auth contract: managers, schemas, and guards
-still operate on flat normalized `roles`, and the library still does not provide RBAC permission
+Relational role storage does not change the higher-level auth contract: managers, schemas, and
+guards still operate on flat normalized `roles`, and the library does not provide RBAC permission
 matrices or policy DSLs.
 
 ## `oauth_account` shape

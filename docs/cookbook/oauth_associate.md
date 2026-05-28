@@ -73,5 +73,5 @@ Bearer-only deployments do not wire the CSRF middleware (the plugin auto-enables
 ## See also
 
 - [OAuth guide](../guides/oauth.md)
-- [HTTP API — Associate](../http_api.md)
+- [HTTP API — OAuth account linking](../http_api.md#oauth-account-linking-associate)
 - [Deployment checklist](../deployment.md)
