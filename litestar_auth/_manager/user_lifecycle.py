@@ -30,7 +30,7 @@ class _UserLifecycleManagerProtocol[UP, ID](
     reset_verification_on_email_change: bool
     backends: tuple[object, ...] | list[object]
 
-    def write_verify_token(self, user: UP) -> str:  # pragma: no cover - Protocol method body - pure type contract
+    def write_verify_token(self, user: UP) -> str:
         """Issue a verification token for the supplied user."""
 
 
@@ -92,10 +92,10 @@ class UserLifecycleService[UP, ID]:
             allow_privileged=allow_privileged,
         )
 
-        email = self._normalize_email(_require_str(user_dict, "email"))
+        email = self._policy.normalize_email(_require_str(user_dict, "email"))
         password = _require_str(user_dict, "password")
-        self._validate_password(password)
-        hashed_password = self._hash_password(password)
+        self._policy.validate_password(password)
+        hashed_password = self._policy.password_helper.hash(password)
         existing_user = await self._manager.user_db.get_by_email(email)
         if existing_user is not None:
             await self._hook_bus.fire("after_register_duplicate", existing_user)
@@ -131,13 +131,13 @@ class UserLifecycleService[UP, ID]:
     ) -> UP | None:
         """Authenticate against the configured user database."""
         if login_identifier == "email":
-            lookup = self._normalize_email(identifier)
+            lookup = self._policy.normalize_email(identifier)
             user = await self._manager.user_db.get_by_field("email", lookup)
         else:
-            lookup = self._normalize_username_lookup(identifier)
+            lookup = self._policy.normalize_username_lookup(identifier)
             user = None if not lookup else await self._manager.user_db.get_by_field("username", lookup)
         hashed_password = _managed_user(user).hashed_password if user is not None else dummy_hash
-        verified, new_hash = self._verify_and_update_password(password, hashed_password)
+        verified, new_hash = self._policy.password_helper.verify_and_update(password, hashed_password)
         if not verified or user is None:
             return None
 
@@ -202,7 +202,7 @@ class UserLifecycleService[UP, ID]:
         if "email" not in update_dict:
             return None
 
-        new_email = self._normalize_email(_require_str(update_dict, "email"))
+        new_email = self._policy.normalize_email(_require_str(update_dict, "email"))
         update_dict["email"] = new_email
         existing_user = await self._manager.user_db.get_by_email(new_email)
         if existing_user is not None and _managed_user(existing_user).id != _managed_user(user).id:
@@ -218,8 +218,8 @@ class UserLifecycleService[UP, ID]:
             return False
 
         password = _require_str(update_dict, "password")
-        self._validate_password(password)
-        update_dict["hashed_password"] = self._hash_password(password)
+        self._policy.validate_password(password)
+        update_dict["hashed_password"] = self._policy.password_helper.hash(password)
         update_dict.pop("password", None)
         return True
 
@@ -228,7 +228,7 @@ class UserLifecycleService[UP, ID]:
         if "roles" not in update_dict:
             return
 
-        update_dict["roles"] = self._normalize_roles(update_dict["roles"])
+        update_dict["roles"] = self._policy.normalize_roles(update_dict["roles"])
 
     async def _run_post_update_side_effects(
         self,
@@ -255,24 +255,6 @@ class UserLifecycleService[UP, ID]:
         await self._delete_api_keys_for_user(user_id)
         await self._manager.user_db.delete(user_id)
         await self._hook_bus.fire("after_delete", user)
-
-    def _normalize_email(self, email: str) -> str:
-        return self._policy.normalize_email(email)
-
-    def _normalize_username_lookup(self, username: str) -> str:
-        return self._policy.normalize_username_lookup(username)
-
-    def _normalize_roles(self, roles: object) -> list[str]:
-        return self._policy.normalize_roles(roles)
-
-    def _validate_password(self, password: str) -> None:
-        self._policy.validate_password(password)
-
-    def _hash_password(self, password: str) -> str:
-        return self._policy.password_helper.hash(password)
-
-    def _verify_and_update_password(self, password: str, hashed_password: str) -> tuple[bool, str | None]:
-        return self._policy.password_helper.verify_and_update(password, hashed_password)
 
     async def invalidate_all_tokens(self, user: UP) -> None:
         """Invalidate backend-managed tokens when the strategy supports it."""

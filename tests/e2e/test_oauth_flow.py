@@ -315,7 +315,7 @@ class FakeOAuthClient:
         self.id_email_calls.append(access_token)
         return self.account_id, self.email
 
-    async def get_profile(self, access_token: str) -> dict[str, object]:  # noqa: ARG002, RUF100
+    async def get_profile(self, access_token: str) -> dict[str, object]:
         """Return a deterministic provider profile payload."""
         return {"email_verified": self.email_verified}
 

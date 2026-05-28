@@ -322,7 +322,6 @@ def create_role_admin_controller[UP: UserProtocol[Any]](  # noqa: D418
     controller_config: RoleAdminControllerConfig[UP],
 ) -> type[Controller]:
     """Build a role-admin controller from grouped settings."""
-    # pragma: no cover - overload signature - implementation is exercised
 
 
 @overload
@@ -330,7 +329,6 @@ def create_role_admin_controller[UP: UserProtocol[Any]](  # noqa: D418
     **options: Unpack[RoleAdminControllerOptions[UP]],
 ) -> type[Controller]:
     """Build a role-admin controller from keyword settings."""
-    # pragma: no cover - overload signature - implementation is exercised
 
 
 def create_role_admin_controller[UP: UserProtocol[Any]](

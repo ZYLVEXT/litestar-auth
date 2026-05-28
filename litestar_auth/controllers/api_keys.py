@@ -26,13 +26,11 @@ if TYPE_CHECKING:
 def create_api_keys_controllers[ID](
     *,
     config: ApiKeysControllerConfig[ID],
-) -> list[type[Controller]]:
-    pass  # pragma: no cover - overload signature - implementation is exercised
+) -> list[type[Controller]]: ...
 
 
 @overload
-def create_api_keys_controllers[ID](**options: Unpack[ApiKeysControllerOptions[ID]]) -> list[type[Controller]]:
-    pass  # pragma: no cover - overload signature - implementation is exercised
+def create_api_keys_controllers[ID](**options: Unpack[ApiKeysControllerOptions[ID]]) -> list[type[Controller]]: ...
 
 
 def create_api_keys_controllers[ID](

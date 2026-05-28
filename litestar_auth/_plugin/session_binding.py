@@ -20,14 +20,14 @@ class _UserManagerFactory[UP: UserProtocol[Any], ID](Protocol):  # noqa: PYI046
     """Factory that builds a session-bound user manager."""
 
     def __call__(self, session: AsyncSession) -> BaseUserManager[UP, ID]:
-        pass  # pragma: no cover - Protocol method body - pure type contract
+        pass
 
 
 class _AccountStateValidator[UP](Protocol):  # noqa: PYI046
     """Callable validator contract for ``require_account_state`` on the manager class."""
 
     def __call__(self, user: UP, *, require_verified: bool = False) -> None:
-        pass  # pragma: no cover - Protocol method body - pure type contract
+        pass
 
 
 class _OAuthTokenEncryptionBindable(Protocol):
@@ -38,7 +38,6 @@ class _OAuthTokenEncryptionBindable(Protocol):
         oauth_token_encryption: OAuthTokenEncryption,
     ) -> object:
         """Return a store bound to the supplied OAuth token encryption policy."""
-        # pragma: no cover - Protocol method body - pure type contract
 
 
 class _TotpRecoveryCodeStore[UP](Protocol):
@@ -46,15 +45,12 @@ class _TotpRecoveryCodeStore[UP](Protocol):
 
     async def set_recovery_code_hashes(self, user: UP, code_index: dict[str, str]) -> UP:
         """Replace the active recovery-code lookup index for ``user``."""
-        # pragma: no cover - Protocol method body - pure type contract
 
     async def find_recovery_code_hash_by_lookup(self, user: UP, lookup_hex: str) -> str | None:
         """Return the active recovery-code hash matching ``lookup_hex``."""
-        # pragma: no cover - Protocol method body - pure type contract
 
     async def consume_recovery_code_by_lookup(self, user: UP, lookup_hex: str) -> bool:
         """Consume the recovery code keyed by ``lookup_hex`` when still active."""
-        # pragma: no cover - Protocol method body - pure type contract
 
 
 class _ScopedUserDatabaseProxy[UP: UserProtocol[Any], ID](BaseUserStore[UP, ID]):

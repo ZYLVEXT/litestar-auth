@@ -131,10 +131,10 @@ class ManagerHookBus[UP]:
 class UserManagerHooks[UP]:
     """Default lifecycle-hook no-ops inherited by ``BaseUserManager``."""
 
-    async def on_after_register(self, user: UP, token: str) -> None:  # noqa: ARG002, RUF100
+    async def on_after_register(self, user: UP, token: str) -> None:
         """Hook invoked after a new user is created."""
 
-    async def on_after_register_duplicate(self, user: UP) -> None:  # noqa: ARG002, RUF100
+    async def on_after_register_duplicate(self, user: UP) -> None:
         """Hook invoked after a duplicate registration attempt is detected.
 
         SECURITY: This hook receives the existing account so your application can
@@ -144,13 +144,13 @@ class UserManagerHooks[UP]:
         enumeration-resistant.
         """
 
-    async def on_after_login(self, user: UP) -> None:  # noqa: ARG002, RUF100
+    async def on_after_login(self, user: UP) -> None:
         """Hook invoked after a user authenticates successfully."""
 
-    async def on_after_verify(self, user: UP) -> None:  # noqa: ARG002, RUF100
+    async def on_after_verify(self, user: UP) -> None:
         """Hook invoked after a user verifies their email."""
 
-    async def on_after_request_verify_token(self, user: UP | None, token: str | None) -> None:  # noqa: ARG002, RUF100
+    async def on_after_request_verify_token(self, user: UP | None, token: str | None) -> None:
         """Hook invoked after a verify-token request is processed.
 
         SECURITY: When ``user`` is ``None``, the email either did not match any
@@ -161,7 +161,7 @@ class UserManagerHooks[UP]:
         whether ``user`` is ``None``.
         """
 
-    async def on_after_forgot_password(self, user: UP | None, token: str | None) -> None:  # noqa: ARG002, RUF100
+    async def on_after_forgot_password(self, user: UP | None, token: str | None) -> None:
         """Hook invoked after a forgot-password request is processed.
 
         SECURITY: When ``user`` is ``None``, the email did not match any account.
@@ -171,23 +171,23 @@ class UserManagerHooks[UP]:
         skip work based on whether ``user`` is ``None``.
         """
 
-    async def on_after_reset_password(self, user: UP) -> None:  # noqa: ARG002, RUF100
+    async def on_after_reset_password(self, user: UP) -> None:
         """Hook invoked after a password reset completes."""
 
-    async def on_after_update(self, user: UP, update_dict: dict[str, Any]) -> None:  # noqa: ARG002, RUF100
+    async def on_after_update(self, user: UP, update_dict: dict[str, Any]) -> None:
         """Hook invoked after a user is updated successfully."""
 
-    async def on_before_delete(self, user: UP) -> None:  # noqa: ARG002, RUF100
+    async def on_before_delete(self, user: UP) -> None:
         """Hook invoked before a user is deleted. Raise to cancel deletion."""
 
-    async def on_after_delete(self, user: UP) -> None:  # noqa: ARG002, RUF100
+    async def on_after_delete(self, user: UP) -> None:
         """Hook invoked after a user is deleted permanently."""
 
-    async def on_after_api_key_created(self, user: UP, api_key: object) -> None:  # noqa: ARG002, RUF100
+    async def on_after_api_key_created(self, user: UP, api_key: object) -> None:
         """Hook invoked after an API key is created."""
 
-    async def on_after_api_key_revoked(self, user: UP, api_key: object) -> None:  # noqa: ARG002, RUF100
+    async def on_after_api_key_revoked(self, user: UP, api_key: object) -> None:
         """Hook invoked after an API key is revoked."""
 
-    async def on_after_api_key_used(self, api_key: object) -> None:  # noqa: ARG002, RUF100
+    async def on_after_api_key_used(self, api_key: object) -> None:
         """Hook invoked after an API-key last-used timestamp is persisted."""

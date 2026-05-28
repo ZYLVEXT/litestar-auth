@@ -37,51 +37,51 @@ class ApiKeyConfigProtocol(Protocol):
     """Structural subset of plugin API-key config consumed by the manager."""
 
     @property
-    def prefix(self) -> str:  # pragma: no cover - Protocol property body - pure type contract
+    def prefix(self) -> str:
         """Return the API-key credential prefix."""
         ...
 
     @property
-    def environment_marker(self) -> str:  # pragma: no cover - Protocol property body - pure type contract
+    def environment_marker(self) -> str:
         """Return the deployment/environment marker embedded in issued keys."""
         ...
 
     @property
-    def max_keys_per_user(self) -> int:  # pragma: no cover - Protocol property body - pure type contract
+    def max_keys_per_user(self) -> int:
         """Return the maximum active API-key count per user."""
         ...
 
     @property
-    def default_ttl(self) -> timedelta | None:  # pragma: no cover - Protocol property body - pure type contract
+    def default_ttl(self) -> timedelta | None:
         """Return the default issued-key lifetime."""
         ...
 
     @property
-    def allowed_scopes(self) -> Sequence[str]:  # pragma: no cover - Protocol property body - pure type contract
+    def allowed_scopes(self) -> Sequence[str]:
         """Return configured API-key scopes."""
         ...
 
     @property
-    def scope_subset_check(self) -> bool:  # pragma: no cover - Protocol property body - pure type contract
+    def scope_subset_check(self) -> bool:
         """Return whether requested scopes must be a subset of allowed scopes."""
         ...
 
     @property
     def last_used_write_strategy(
         self,
-    ) -> ApiKeyLastUsedWriteStrategy:  # pragma: no cover - Protocol property body - pure type contract
+    ) -> ApiKeyLastUsedWriteStrategy:
         """Return the last-used timestamp write strategy."""
         ...
 
     @property
-    def last_used_throttle_seconds(self) -> int:  # pragma: no cover - Protocol property body - pure type contract
+    def last_used_throttle_seconds(self) -> int:
         """Return the last-used timestamp throttle interval."""
         ...
 
     @property
     def secret_encryption_keyring(
         self,
-    ) -> object | None:  # pragma: no cover - Protocol property body - pure type contract
+    ) -> object | None:
         """Return optional secret-at-rest keyring configuration."""
         ...
 

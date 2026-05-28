@@ -81,7 +81,7 @@ class _StartupOnlyDatabaseTokenStrategy[UP: UserProtocol[Any], ID]:
         self.token_bytes = self.settings.token_bytes
         self.unsafe_testing = self.settings.unsafe_testing
 
-    def _raise_startup_only_runtime_error(self) -> Never:  # noqa: ARG002, PLR6301, RUF100
+    def _raise_startup_only_runtime_error(self) -> Never:  # noqa: PLR6301
         return _raise_startup_only_database_token_runtime_error()
 
     def with_session(self, session: AsyncSessionT) -> StrategyProto[UP, ID]:
@@ -99,7 +99,7 @@ class _StartupOnlyDatabaseTokenStrategy[UP: UserProtocol[Any], ID]:
             ),
         )
 
-    async def read_token(  # noqa: ARG002, RUF100
+    async def read_token(
         self,
         token: str | None,  # noqa: ARG002
         user_manager: UserManagerProtocol[UP, ID],  # noqa: ARG002
@@ -111,7 +111,7 @@ class _StartupOnlyDatabaseTokenStrategy[UP: UserProtocol[Any], ID]:
         """
         return self._raise_startup_only_runtime_error()
 
-    async def write_token(self, user: UP) -> str:  # noqa: ARG002, RUF100
+    async def write_token(self, user: UP) -> str:  # noqa: ARG002
         """Reject token writes until a request ``AsyncSession`` is bound.
 
         Returns:
@@ -119,11 +119,11 @@ class _StartupOnlyDatabaseTokenStrategy[UP: UserProtocol[Any], ID]:
         """
         return self._raise_startup_only_runtime_error()
 
-    async def destroy_token(self, token: str, user: UP) -> None:  # noqa: ARG002, RUF100
+    async def destroy_token(self, token: str, user: UP) -> None:  # noqa: ARG002
         """Reject token destruction until a request ``AsyncSession`` is bound."""
         return self._raise_startup_only_runtime_error()
 
-    async def write_refresh_token(self, user: UP) -> str:  # noqa: ARG002, RUF100
+    async def write_refresh_token(self, user: UP) -> str:  # noqa: ARG002
         """Reject refresh-token writes until a request ``AsyncSession`` is bound.
 
         Returns:
@@ -131,7 +131,7 @@ class _StartupOnlyDatabaseTokenStrategy[UP: UserProtocol[Any], ID]:
         """
         return self._raise_startup_only_runtime_error()
 
-    async def rotate_refresh_token(  # noqa: ARG002, RUF100
+    async def rotate_refresh_token(
         self,
         refresh_token: str,  # noqa: ARG002
         user_manager: UserManagerProtocol[UP, ID],  # noqa: ARG002
@@ -143,11 +143,11 @@ class _StartupOnlyDatabaseTokenStrategy[UP: UserProtocol[Any], ID]:
         """
         return self._raise_startup_only_runtime_error()
 
-    async def invalidate_all_tokens(self, user: UP) -> None:  # noqa: ARG002, RUF100
+    async def invalidate_all_tokens(self, user: UP) -> None:  # noqa: ARG002
         """Reject token invalidation until a request ``AsyncSession`` is bound."""
         return self._raise_startup_only_runtime_error()
 
-    async def cleanup_expired_tokens(self, session: AsyncSession) -> int:  # noqa: ARG002, RUF100
+    async def cleanup_expired_tokens(self, session: AsyncSession) -> int:  # noqa: ARG002
         """Reject token cleanup on the startup-only strategy.
 
         Returns:

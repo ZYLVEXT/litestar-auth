@@ -144,7 +144,7 @@ class _AccountTokensManagerProtocol[UP, ID](
     reset_password_token_lifetime: timedelta
 
     async def _invalidate_all_tokens(self, user: UP) -> None:
-        pass  # pragma: no cover - Protocol method body - pure type contract
+        pass
 
 
 class AccountTokenSecurityService[UP, ID]:

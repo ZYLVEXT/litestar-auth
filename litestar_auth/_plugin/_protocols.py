@@ -21,17 +21,17 @@ class StrategyProto[UP: UserProtocol[Any], ID](Protocol):
         self,
         token: str | None,
         user_manager: object,
-    ) -> UP | None:  # pragma: no cover - Protocol method body - pure type contract
+    ) -> UP | None:
         """Resolve a user from a transport token."""
 
-    async def write_token(self, user: UP) -> str:  # pragma: no cover - Protocol method body - pure type contract
+    async def write_token(self, user: UP) -> str:
         """Create a transport token for ``user``."""
 
     async def destroy_token(
         self,
         token: str,
         user: UP,
-    ) -> None:  # pragma: no cover - Protocol method body - pure type contract
+    ) -> None:
         """Invalidate ``token`` for ``user``."""
 
 
@@ -59,5 +59,5 @@ class DependencyProvider(Protocol):
         self,
         *args: object,
         **kwargs: object,
-    ) -> object:  # pragma: no cover - Protocol method body - pure type contract
+    ) -> object:
         """Return the dependency value."""

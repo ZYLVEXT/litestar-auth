@@ -24,7 +24,7 @@ class _RequestSessionContextManager:
         """Return the shared request session."""
         return self._session
 
-    async def __aexit__(  # noqa: ARG002, RUF100
+    async def __aexit__(
         self,
         exc_type: type[BaseException] | None,
         exc: BaseException | None,

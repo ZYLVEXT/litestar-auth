@@ -138,7 +138,7 @@ class _DatabaseRefreshTokenRotationMixin[UP: UserProtocol[Any], ID](
             return None
         return rotated_refresh_token
 
-    async def rotate_refresh_token(  # noqa: ARG002, RUF100
+    async def rotate_refresh_token(
         self,
         refresh_token: str,
         user_manager: UserManagerProtocol[UP, ID],  # noqa: ARG002

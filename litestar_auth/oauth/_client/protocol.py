@@ -8,18 +8,16 @@ from typing import Literal, Protocol, TypedDict, runtime_checkable
 ACCOUNT_IDENTITY_LENGTH = 2  # pragma: no cover - module constant - pure type contract support
 
 
-class OAuthPayloadObjectProtocol(Protocol):  # pragma: no cover - Protocol class body - pure type contract
+class OAuthPayloadObjectProtocol(Protocol):
     """Attribute-based payload object supported by the manual OAuth helpers."""
 
     __dict__: dict[str, object]
 
 
-type OAuthPayloadSource = (
-    Mapping[str, object] | OAuthPayloadObjectProtocol
-)  # pragma: no cover - type alias - pure type contract
+type OAuthPayloadSource = Mapping[str, object] | OAuthPayloadObjectProtocol
 
 
-class OAuthAuthorizationURLClientProtocol(Protocol):  # pragma: no cover - Protocol class body - pure type contract
+class OAuthAuthorizationURLClientProtocol(Protocol):
     """Manual OAuth client contract for RFC 7636 authorization URL resolution."""
 
     async def get_authorization_url(
@@ -34,7 +32,7 @@ class OAuthAuthorizationURLClientProtocol(Protocol):  # pragma: no cover - Proto
         """Return the upstream provider authorization URL with optional PKCE S256 challenge material."""
 
 
-class OAuthAccessTokenClientProtocol(Protocol):  # pragma: no cover - Protocol class body - pure type contract
+class OAuthAccessTokenClientProtocol(Protocol):
     """Manual OAuth client contract for RFC 7636 callback token exchange."""
 
     async def get_access_token(
@@ -51,14 +49,14 @@ class OAuthClientBaseProtocol(
     OAuthAuthorizationURLClientProtocol,
     OAuthAccessTokenClientProtocol,
     Protocol,
-):  # pragma: no cover - Protocol class body - pure type contract
+):
     """Base manual OAuth client contract used by login and associate flows."""
 
 
 class OAuthDirectIdentityClientProtocol(
     OAuthClientBaseProtocol,
     Protocol,
-):  # pragma: no cover - Protocol class body - pure type contract
+):
     """Manual OAuth client contract with direct identity resolution.
 
     Returning ``None`` requests the documented ``get_profile()`` fallback.
@@ -71,7 +69,7 @@ class OAuthDirectIdentityClientProtocol(
 class OAuthProfileClientProtocol(
     OAuthClientBaseProtocol,
     Protocol,
-):  # pragma: no cover - Protocol class body - pure type contract
+):
     """Manual OAuth client contract with profile-based identity resolution."""
 
     async def get_profile(self, access_token: str) -> OAuthPayloadSource:
@@ -81,35 +79,33 @@ class OAuthProfileClientProtocol(
 @runtime_checkable
 class OAuthEmailVerificationAsyncClientProtocol(
     Protocol,
-):  # pragma: no cover - Protocol class body - pure type contract
+):
     """Async-only manual OAuth client contract for email verification evidence."""
 
     async def get_email_verified(self, access_token: str) -> bool:
         """Return provider email-verification evidence."""
 
 
-class OAuthEmailVerificationSyncClientProtocol(Protocol):  # pragma: no cover - Protocol class body - pure type contract
+class OAuthEmailVerificationSyncClientProtocol(Protocol):
     """Sync-only manual OAuth client contract for email verification evidence."""
 
     def get_email_verified(self, access_token: str) -> bool:
         """Return provider email-verification evidence."""
 
 
-type OAuthClientProtocol = (
-    OAuthDirectIdentityClientProtocol | OAuthProfileClientProtocol
-)  # pragma: no cover - type alias - pure type contract
-type OAuthClientFactory = Callable[[], OAuthClientProtocol]  # pragma: no cover - type alias - pure type contract
-type OAuthClientConstructor = Callable[..., OAuthClientProtocol]  # pragma: no cover - type alias - pure type contract
+type OAuthClientProtocol = OAuthDirectIdentityClientProtocol | OAuthProfileClientProtocol
+type OAuthClientFactory = Callable[[], OAuthClientProtocol]
+type OAuthClientConstructor = Callable[..., OAuthClientProtocol]
 
 
-class OAuthClientClassLoader(Protocol):  # pragma: no cover - Protocol class body - pure type contract
+class OAuthClientClassLoader(Protocol):
     """Lazy loader contract for fully qualified manual OAuth client class paths."""
 
     def __call__(self, oauth_client_class: str, /, **client_kwargs: object) -> OAuthClientProtocol:
         """Load and instantiate a configured manual OAuth client."""
 
 
-class OAuthTokenPayload(TypedDict):  # pragma: no cover - TypedDict class body - pure type contract
+class OAuthTokenPayload(TypedDict):
     """Normalized OAuth access-token payload."""
 
     access_token: str

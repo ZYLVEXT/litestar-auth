@@ -123,15 +123,13 @@ class _RuntimeContextBuilder[UP: UserProtocol[Any]](Protocol):
 @overload
 def create_session_devices_controller[UP: UserProtocol[Any], ID](
     config: SessionDevicesControllerConfig[UP, ID],
-) -> type[Controller]:
-    pass  # pragma: no cover - overload signature - implementation is exercised
+) -> type[Controller]: ...
 
 
 @overload
 def create_session_devices_controller[UP: UserProtocol[Any], ID](
     **options: Unpack[SessionDevicesControllerOptions[UP, ID]],
-) -> type[Controller]:
-    pass  # pragma: no cover - overload signature - implementation is exercised
+) -> type[Controller]: ...
 
 
 def create_session_devices_controller[UP: UserProtocol[Any], ID](

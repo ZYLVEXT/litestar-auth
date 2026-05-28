@@ -38,6 +38,7 @@ from litestar_auth.controllers._users_helpers import (
 from litestar_auth.controllers._utils import (
     AccountStateValidatorProvider,
     _configure_request_body_handler,
+    _finalize_route_handler,
     _map_domain_exceptions,
     _mark_litestar_auth_route_handler,
     _require_account_state,
@@ -645,7 +646,7 @@ def _create_get_me_handler[UP: UsersControllerUserProtocol[Any], ID](
     ) -> msgspec.Struct:
         return await _users_handle_get_me(request, ctx=ctx, user_manager=litestar_auth_user_manager)
 
-    return cast("RequestBodyRouteHandler", get_me)
+    return _finalize_route_handler(get_me)
 
 
 def _create_update_me_handler[UP: UsersControllerUserProtocol[Any], ID](
@@ -681,7 +682,7 @@ def _create_update_me_handler[UP: UsersControllerUserProtocol[Any], ID](
             user_manager=litestar_auth_user_manager,
         )
 
-    return cast("RequestBodyRouteHandler", update_me)
+    return _finalize_route_handler(update_me)
 
 
 def _create_change_password_handler[UP: UsersControllerUserProtocol[Any], ID](
@@ -713,7 +714,7 @@ def _create_change_password_handler[UP: UsersControllerUserProtocol[Any], ID](
             user_manager=litestar_auth_user_manager,
         )
 
-    return cast("RequestBodyRouteHandler", change_password)
+    return _finalize_route_handler(change_password)
 
 
 def _create_get_user_handler[UP: UsersControllerUserProtocol[Any], ID](
@@ -737,7 +738,7 @@ def _create_get_user_handler[UP: UsersControllerUserProtocol[Any], ID](
             user_manager=litestar_auth_user_manager,
         )
 
-    return cast("RequestBodyRouteHandler", get_user)
+    return _finalize_route_handler(get_user)
 
 
 def _create_update_user_handler[UP: UsersControllerUserProtocol[Any], ID](
@@ -765,7 +766,7 @@ def _create_update_user_handler[UP: UsersControllerUserProtocol[Any], ID](
             user_manager=litestar_auth_user_manager,
         )
 
-    return cast("RequestBodyRouteHandler", update_user)
+    return _finalize_route_handler(update_user)
 
 
 def _create_delete_user_handler[UP: UsersControllerUserProtocol[Any], ID](
@@ -793,7 +794,7 @@ def _create_delete_user_handler[UP: UsersControllerUserProtocol[Any], ID](
             user_manager=litestar_auth_user_manager,
         )
 
-    return cast("RequestBodyRouteHandler", delete_user)
+    return _finalize_route_handler(delete_user)
 
 
 def _create_list_users_handler[UP: UsersControllerUserProtocol[Any], ID](
@@ -825,7 +826,7 @@ def _create_list_users_handler[UP: UsersControllerUserProtocol[Any], ID](
         signature=signature,
         annotations=_list_users_handler_annotations(max_limit=ctx.max_limit),
     )
-    return cast("RequestBodyRouteHandler", get(guards=[is_superuser])(list_users))
+    return _finalize_route_handler(get(guards=[is_superuser])(list_users))
 
 
 def _define_users_controller_class_di[UP: UsersControllerUserProtocol[Any], ID](
@@ -881,15 +882,13 @@ def _create_users_page_schema_type() -> type[msgspec.Struct]:
 def create_users_controller[UP: UsersControllerUserProtocol[Any], ID](
     *,
     config: UsersControllerConfig[ID],
-) -> type[Controller]:
-    pass  # pragma: no cover - overload signature - implementation is exercised
+) -> type[Controller]: ...
 
 
 @overload
 def create_users_controller[UP: UsersControllerUserProtocol[Any], ID](
     **options: Unpack[UsersControllerOptions[ID]],
-) -> type[Controller]:
-    pass  # pragma: no cover - overload signature - implementation is exercised
+) -> type[Controller]: ...
 
 
 def create_users_controller[UP: UsersControllerUserProtocol[Any], ID](

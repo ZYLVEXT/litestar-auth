@@ -31,14 +31,14 @@ class ExceptionResponseHook(Protocol):
         request: Request[Any, Any, Any],
         /,
     ) -> Response[Any]:
-        pass  # pragma: no cover - Protocol method body - pure type contract
+        pass
 
 
 class MiddlewareHook(Protocol):
     """Adjust the constructed auth middleware before plugin insertion."""
 
     def __call__(self, middleware: DefineMiddleware, /) -> DefineMiddleware:
-        pass  # pragma: no cover - Protocol method body - pure type contract
+        pass
 
 
 class ControllerHook(Protocol):
@@ -49,7 +49,7 @@ class ControllerHook(Protocol):
         controllers: list[ControllerRouterHandler],
         /,
     ) -> list[ControllerRouterHandler]:
-        pass  # pragma: no cover - Protocol method body - pure type contract
+        pass
 
 
 def _always_enabled(_config: object) -> bool:

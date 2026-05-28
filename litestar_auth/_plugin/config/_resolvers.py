@@ -35,7 +35,6 @@ class _BackendInventoryConfig[UP: UserProtocol[Any], ID](Protocol):
 
     def resolve_feature_registry(self) -> _FeatureRegistryWithInventory[UP, ID]:
         """Return the resolved feature registry."""
-        # pragma: no cover - Protocol method body - pure type contract
 
 
 class _TotpSecretPolicyConfig[ID](Protocol):
@@ -44,22 +43,18 @@ class _TotpSecretPolicyConfig[ID](Protocol):
     @property
     def totp_config(self) -> object | None:
         """Return the configured TOTP feature settings."""
-        # pragma: no cover - Protocol property body - pure type contract
 
     @property
     def user_manager_factory(self) -> object | None:
         """Return the custom user-manager factory, when configured."""
-        # pragma: no cover - Protocol property body - pure type contract
 
     @property
     def user_manager_security(self) -> UserManagerSecurity[ID] | None:
         """Return manager-owned security settings, when configured."""
-        # pragma: no cover - Protocol property body - pure type contract
 
     @property
     def id_parser(self) -> Callable[[str], ID] | None:
         """Return the configured ID parser, when configured."""
-        # pragma: no cover - Protocol property body - pure type contract
 
 
 class _SessionMakerConfig(Protocol):

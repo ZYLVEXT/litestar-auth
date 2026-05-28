@@ -29,6 +29,7 @@ from litestar_auth.contrib.role_admin._error_responses import (
     _role_still_assigned,
 )
 from litestar_auth.contrib.role_admin._schemas import RoleCreate, RoleRead, RoleUpdate  # noqa: TC001
+from litestar_auth.controllers._utils import _finalize_route_handler
 from litestar_auth.exceptions import ConfigurationError
 from litestar_auth.manager import BaseUserManager
 from litestar_auth.types import UserProtocol
@@ -70,7 +71,7 @@ def create_list_roles_handler() -> RequestBodyRouteHandler:
             offset=offset,
         )
 
-    return cast("RequestBodyRouteHandler", list_roles)
+    return _finalize_route_handler(list_roles)
 
 
 def create_create_role_handler() -> RequestBodyRouteHandler:
@@ -112,7 +113,7 @@ def create_create_role_handler() -> RequestBodyRouteHandler:
         role = await _load_role_row(role_admin, normalized_role_name=normalized_role_name)
         return _to_role_read(role)
 
-    return cast("RequestBodyRouteHandler", create_role)
+    return _finalize_route_handler(create_role)
 
 
 def create_get_role_handler() -> RequestBodyRouteHandler:
@@ -134,7 +135,7 @@ def create_get_role_handler() -> RequestBodyRouteHandler:
         role = await _load_role_row(role_admin, normalized_role_name=_normalize_input_role_name(role_name))
         return _to_role_read(role)
 
-    return cast("RequestBodyRouteHandler", get_role)
+    return _finalize_route_handler(get_role)
 
 
 def create_update_role_handler() -> RequestBodyRouteHandler:
@@ -183,7 +184,7 @@ def create_update_role_handler() -> RequestBodyRouteHandler:
             await session.commit()
         return _to_role_read(role)
 
-    return cast("RequestBodyRouteHandler", update_role)
+    return _finalize_route_handler(update_role)
 
 
 def create_delete_role_handler() -> RequestBodyRouteHandler:
@@ -216,7 +217,7 @@ def create_delete_role_handler() -> RequestBodyRouteHandler:
         except ValueError as exc:
             raise _role_still_assigned(str(exc)) from exc
 
-    return cast("RequestBodyRouteHandler", delete_role)
+    return _finalize_route_handler(delete_role)
 
 
 def create_assign_role_handler() -> RequestBodyRouteHandler:
@@ -247,7 +248,7 @@ def create_assign_role_handler() -> RequestBodyRouteHandler:
         )
         return await _assign_role_user(role_admin, role_name=role_name, user_id=user_id)
 
-    return cast("RequestBodyRouteHandler", assign_role)
+    return _finalize_route_handler(assign_role)
 
 
 def create_unassign_role_handler() -> RequestBodyRouteHandler:
@@ -274,7 +275,7 @@ def create_unassign_role_handler() -> RequestBodyRouteHandler:
         )
         await _unassign_role_user(role_admin, role_name=role_name, user_id=user_id)
 
-    return cast("RequestBodyRouteHandler", unassign_role)
+    return _finalize_route_handler(unassign_role)
 
 
 def create_list_role_users_handler() -> RequestBodyRouteHandler:
@@ -303,4 +304,4 @@ def create_list_role_users_handler() -> RequestBodyRouteHandler:
             offset=offset,
         )
 
-    return cast("RequestBodyRouteHandler", list_role_users)
+    return _finalize_route_handler(list_role_users)

@@ -96,12 +96,10 @@ class DatabaseTokenStrategy[UP: UserProtocol[Any], ID](
     """Stateful strategy that persists opaque tokens in the database."""
 
     @overload
-    def __init__(self, *, config: DatabaseTokenStrategyConfig) -> None:
-        pass  # pragma: no cover - overload signature - implementation is exercised
+    def __init__(self, *, config: DatabaseTokenStrategyConfig) -> None: ...
 
     @overload
-    def __init__(self, **options: Unpack[DatabaseTokenStrategyOptions]) -> None:
-        pass  # pragma: no cover - overload signature - implementation is exercised
+    def __init__(self, **options: Unpack[DatabaseTokenStrategyOptions]) -> None: ...
 
     def __init__(
         self,
@@ -222,7 +220,7 @@ class DatabaseTokenStrategy[UP: UserProtocol[Any], ID](
         return access_rowcount + refresh_rowcount
 
     @override
-    async def read_token(  # noqa: ARG002, RUF100
+    async def read_token(
         self,
         token: str | None,
         user_manager: UserManagerProtocol[UP, ID],
@@ -265,7 +263,7 @@ class DatabaseTokenStrategy[UP: UserProtocol[Any], ID](
         return token
 
     @override
-    async def destroy_token(self, token: str, user: UP) -> None:  # noqa: ARG002, RUF100
+    async def destroy_token(self, token: str, user: UP) -> None:
         """Delete a persisted token."""
         token_digest = self._token_digest(token)
         await self._repository(self._access_token_repository_type).delete_where(token=token_digest, auto_commit=False)

@@ -460,27 +460,6 @@ async def test_delete_invalidates_dependent_stores_before_user_delete() -> None:
     assert calls == ["tokens", "api_keys", "user"]
 
 
-def test_helper_methods_route_through_injected_policy() -> None:
-    """Helper methods should delegate exclusively to the injected policy object."""
-    user_db = AsyncMock()
-    password_helper = PasswordHelper()
-    manager = TrackingUserManager(user_db, password_helper)
-    policy = UserPolicy(password_helper=password_helper)
-    service = UserLifecycleService(manager, policy=policy)
-
-    with patch.object(policy, "validate_password") as validate_password:
-        assert service._normalize_email("  User@Example.COM ") == "user@example.com"
-        assert service._normalize_username_lookup("  UserName ") == "username"
-        assert service._normalize_roles([" Billing ", "admin", "ADMIN"]) == ["admin", "billing"]
-        service._validate_password("secret-password")
-
-    validate_password.assert_called_once_with("secret-password")
-    hashed_password = service._hash_password("secret-password")
-    verified, new_hash = service._verify_and_update_password("secret-password", hashed_password)
-    assert verified is True
-    assert new_hash is None or isinstance(new_hash, str)
-
-
 def test_apply_password_update_propagates_validation_errors() -> None:
     """Weak passwords should raise before mutation of the persistence payload."""
     user_db = AsyncMock()

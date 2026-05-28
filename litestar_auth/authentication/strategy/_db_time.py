@@ -23,7 +23,7 @@ class _DatabaseTokenTimeMixin:
         self,
         created_at: datetime,
         max_age: timedelta,
-    ) -> bool:  # pragma: no cover - Protocol method body - pure type contract
+    ) -> bool:
         """Return whether a token created at ``created_at`` exceeds ``max_age``."""
         normalized = self._normalize_timestamp(created_at)
         expires_at = normalized + max_age

@@ -7,9 +7,9 @@ from typing import TYPE_CHECKING, ClassVar
 from sqlalchemy import String, UniqueConstraint
 from sqlalchemy.orm import Mapped, declared_attr, mapped_column
 
-from litestar_auth._api_key_model_mixin import ApiKeyMixin
 from litestar_auth._auth_model_mixins import (
     AccessTokenMixin,
+    ApiKeyMixin,
     RefreshTokenMixin,
     RoleMixin,
     UserAuthRelationshipMixin,

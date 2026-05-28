@@ -83,6 +83,7 @@ from litestar_auth.controllers._request_body import (  # noqa: E402
     _controller_route_handler,
     _create_request_body_exception_handlers,
     _decode_request_body,
+    _finalize_route_handler,
     _set_data_parameter_annotation,
 )
 from litestar_auth.controllers._user_schema import _require_msgspec_struct, _to_user_schema  # noqa: E402
@@ -107,6 +108,7 @@ __all__ = (
     "_create_request_body_exception_handlers",
     "_decode_request_body",
     "_domain_error_public_detail",
+    "_finalize_route_handler",
     "_is_litestar_auth_route_handler",
     "_map_domain_exceptions",
     "_mark_litestar_auth_route_handler",

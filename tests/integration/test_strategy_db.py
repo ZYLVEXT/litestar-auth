@@ -16,6 +16,7 @@ from sqlalchemy.orm import DeclarativeBase
 
 import litestar_auth.authentication.strategy.db as db_strategy_module
 from litestar_auth.authentication.strategy import DatabaseTokenModels
+from litestar_auth.authentication.strategy._db_time import _DatabaseTokenTimeMixin
 from litestar_auth.authentication.strategy._opaque_tokens import digest_opaque_token
 from litestar_auth.authentication.strategy.base import RefreshableStrategy, RefreshSessionManagementStrategy, Strategy
 from litestar_auth.authentication.strategy.db_models import AccessToken, RefreshToken
@@ -50,6 +51,10 @@ EXPECTED_CLEANUP_DELETIONS = 2
 EXPECTED_REVOKED_SESSIONS_WITHOUT_CURRENT = 2
 _TOKEN_HASH_SECRET = "test-token-hash-secret-1234567890-1234567890"
 CONCURRENT_REFRESH_ROTATION_COUNT = 2
+
+
+class DatabaseTokenTimeHarness(_DatabaseTokenTimeMixin):
+    """Expose timestamp helpers for behavior-focused coverage."""
 
 
 class CustomTokenBase(DeclarativeBase):
@@ -674,6 +679,23 @@ def test_database_token_strategy_normalize_timestamp_converts_offset_datetimes(s
     normalized = strategy._normalize_timestamp(offset_timestamp)
 
     assert normalized == datetime(2026, 3, 28, 15, 0, tzinfo=UTC)
+
+
+def test_database_token_time_mixin_normalizes_naive_timestamps() -> None:
+    """Naive persisted timestamps are treated as UTC."""
+    timestamp = datetime(2026, 3, 28, 15, 0, tzinfo=UTC).replace(tzinfo=None)
+
+    normalized = DatabaseTokenTimeHarness._normalize_timestamp(timestamp)
+
+    assert normalized == datetime(2026, 3, 28, 15, 0, tzinfo=UTC)
+
+
+def test_database_token_time_mixin_detects_expired_tokens() -> None:
+    """Age checks use normalized timestamps before comparing against current UTC."""
+    time_helpers = DatabaseTokenTimeHarness()
+
+    assert time_helpers._is_token_expired(datetime.now(tz=UTC) - timedelta(minutes=2), timedelta(minutes=1)) is True
+    assert time_helpers._is_token_expired(datetime.now(tz=UTC), timedelta(minutes=1)) is False
 
 
 def test_database_token_strategy_ignores_empty_or_invalid_refresh_client_metadata(session: Session) -> None:

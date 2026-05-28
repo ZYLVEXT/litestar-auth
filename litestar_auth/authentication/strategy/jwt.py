@@ -187,12 +187,10 @@ class JWTStrategy(Strategy[UP, ID]):
     """
 
     @overload
-    def __init__(self, *, config: JWTStrategyConfig[UP, ID]) -> None:
-        pass  # pragma: no cover - overload signature - implementation is exercised
+    def __init__(self, *, config: JWTStrategyConfig[UP, ID]) -> None: ...
 
     @overload
-    def __init__(self, **options: Unpack[JWTStrategyOptions[UP, ID]]) -> None:
-        pass  # pragma: no cover - overload signature - implementation is exercised
+    def __init__(self, **options: Unpack[JWTStrategyOptions[UP, ID]]) -> None: ...
 
     def __init__(
         self,
@@ -368,7 +366,7 @@ class JWTStrategy(Strategy[UP, ID]):
         return jwt.encode(payload, self.secret, algorithm=self.algorithm, headers=jwt_encode_headers())
 
     @override
-    async def destroy_token(self, token: str, user: UP) -> None:  # noqa: ARG002, RUF100
+    async def destroy_token(self, token: str, user: UP) -> None:
         """Revoke the given token by adding its ``jti`` to the configured denylist.
 
         Tokens without a ``jti`` claim, or tokens that fail to decode, are ignored.

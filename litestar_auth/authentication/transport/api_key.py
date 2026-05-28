@@ -45,7 +45,7 @@ class ApiKeyTransport(Transport):
         return token
 
     @override
-    def set_login_token(self, response: Response[Any], token: str) -> Response[Any]:  # noqa: ARG002, RUF100
+    def set_login_token(self, response: Response[Any], token: str) -> Response[Any]:
         """Reject login issuance because API keys are not login-flow tokens.
 
         Raises:

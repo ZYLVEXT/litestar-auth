@@ -528,15 +528,13 @@ def _define_refresh_auth_controller_class_di[UP: UserProtocol[Any], ID](
 def create_auth_controller[UP: UserProtocol[Any], ID](
     *,
     config: AuthControllerConfig[UP, ID],
-) -> type[Controller]:
-    pass  # pragma: no cover - overload signature - implementation is exercised
+) -> type[Controller]: ...
 
 
 @overload
 def create_auth_controller[UP: UserProtocol[Any], ID](
     **options: Unpack[AuthControllerOptions[UP, ID]],
-) -> type[Controller]:
-    pass  # pragma: no cover - overload signature - implementation is exercised
+) -> type[Controller]: ...
 
 
 def create_auth_controller[UP: UserProtocol[Any], ID](

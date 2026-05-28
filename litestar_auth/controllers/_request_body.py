@@ -43,6 +43,15 @@ class RequestBodyRouteHandler(Protocol):
     exception_handlers: ExceptionHandlersMap | None
 
 
+def _finalize_route_handler(handler: object) -> RequestBodyRouteHandler:
+    """Bridge Litestar decorator return types to the local route-handler Protocol.
+
+    Returns:
+        The route handler typed against the local request-body Protocol.
+    """
+    return cast("RequestBodyRouteHandler", handler)
+
+
 async def _decode_request_body[SchemaT: msgspec.Struct](
     request: Request[Any, Any, Any],
     *,

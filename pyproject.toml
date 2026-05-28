@@ -193,6 +193,16 @@ exclude_lines = [
     # Don't check overload-only signatures
     "^\\s*@overload\\b",
     "@(typing\\.)?overload",
+    # Don't check placeholder bodies used by overload and structural typing declarations
+    "^\\s*\\.\\.\\.\\s*$",
+    # Don't check Protocol class bodies; they are pure type contracts
+    "^\\s*class \\w+(\\[.*\\])?\\(.*Protocol\\b.*\\):",
+    # Don't check multiline Protocol class bodies; they are pure type contracts
+    "^\\s*class \\w*Protocol(\\[.*\\])?\\(",
+    # Don't check TypedDict class bodies; they are pure type contracts
+    "^\\s*class \\w+\\(.*TypedDict\\b.*\\):",
+    # Don't check PEP 695 type aliases; they are pure type contracts
+    "^\\s*type \\w+\\s*=",
     # Don't check for code that only runs itself
     "if __name__ == .__main__.:",
 ]
