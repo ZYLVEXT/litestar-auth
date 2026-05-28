@@ -156,6 +156,49 @@
 - **Fernet keyring** is a single shared abstraction; OAuth token encryption and TOTP
   enrollment secrets use the same nullable-keyring policy.
 
+### Internal
+
+- **Controller partition flattening.** Four single-consumer private partition files were
+  inlined back into their parent controllers: `controllers/_auth_login.py` +
+  `_auth_refresh.py` + `_auth_routes.py` → `controllers/auth.py`;
+  `controllers/_users_handlers.py` + `_users_routes.py` → `controllers/users.py`;
+  `controllers/_oauth_associate_routes.py` + `_oauth_authorize_routes.py` +
+  `_oauth_login_handlers.py` → `controllers/oauth.py`;
+  `controllers/_totp_confirm_handlers.py` → `controllers/totp_handlers.py`.
+  Public route registration, request-body wiring, and OpenAPI metadata are unchanged.
+- **Dead manager hook `Protocol` layer removed.** `_manager/_protocols.py` no longer
+  declares the hook surface that mirrored `ManagerHookBus` method-for-method; nothing
+  typed against the Protocol and the parallel definition was unreachable.
+- **`UserLifecycleService` policy delegates inlined.** Six private pass-through wrappers
+  (`_normalize_email`, `_normalize_username_lookup`, `_normalize_roles`,
+  `_validate_password`, `_hash_password`, `_verify_and_update_password`) deleted from
+  `_manager/user_lifecycle.py`; all call sites go through `self._policy.<method>` or
+  `self._policy.password_helper.<method>` directly.
+- **`_finalize_route_handler` helper.** A single typed helper in
+  `controllers/_request_body.py` (re-exported via `controllers/_utils.py`) replaces 15
+  repeated `cast("RequestBodyRouteHandler", ...)` call sites across
+  `controllers/users.py` (7) and `contrib/role_admin/_controller_handlers.py` (8),
+  bridging the Litestar decorator return type to the local request-body Protocol behind
+  one named seam.
+- **Private `ApiKeyMixin` re-export module removed.** `litestar_auth/_api_key_model_mixin.py`
+  was a one-line re-export of `ApiKeyMixin` from `_auth_model_mixins`; the only in-repo
+  consumer now imports the symbol directly from its canonical module.
+  `litestar_auth.models.ApiKeyMixin` (the public path) is unchanged.
+- **Lint hygiene pass.** `del`-no-op argument bodies replaced by underscore-prefixed
+  names or a single targeted `# noqa: ARG002` where the public signature is a contract;
+  redundant `RUF100` suffixes stripped from 32 noqa directives across the library and
+  e2e tests, with whole directives removed where the underlying rule was already
+  silenced by per-file ignores; the lone `except Exception` + `isinstance(exc,
+  IntegrityError)` filter in `contrib/role_admin/_controller_handlers.py` rewritten to
+  `except IntegrityError`; an `F401`-suppressed re-export removed from
+  `controllers/_users_helpers.py`.
+- **Coverage configuration consolidated.** `[tool.coverage.report] exclude_lines` now
+  covers `@overload` signatures, ellipsis placeholder bodies, `Protocol` and `TypedDict`
+  class bodies, and PEP 695 `type` aliases via structural regex patterns; 78 per-line
+  templated `# pragma: no cover - ...` comments were removed from `litestar_auth/`
+  (91 → 13 pragmas, with the 13 remaining all carrying singular, non-templated reasons).
+  The `--cov-fail-under=100` gate remains green.
+
 ### Migration
 
 - **Add the `consumed_token_digests` column.** Deployments using the bundled
