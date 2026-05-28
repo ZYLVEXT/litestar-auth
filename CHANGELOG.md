@@ -198,6 +198,30 @@
   templated `# pragma: no cover - ...` comments were removed from `litestar_auth/`
   (91 → 13 pragmas, with the 13 remaining all carrying singular, non-templated reasons).
   The `--cov-fail-under=100` gate remains green.
+- **Code-quality finding sweep (CodeQL standard + AI).** Three actionable findings
+  triaged against the codebase and fixed; remaining findings audited and dismissed as
+  false positives (CodeQL not modelling `pytest.raises`, `Never`/`NoReturn`, cross-module
+  private imports, or constant-time security intent).
+- **Dead duplicate `_INVALID_CREDENTIALS_DETAIL` removed.** The unused private constant
+  in `controllers/_step_up.py` duplicated the canonical `INVALID_CREDENTIALS_DETAIL`
+  exported from `controllers/auth.py` and `controllers/_error_responses.py`; deleted to
+  prevent future divergence. No import-path or wire-format change.
+- **API-key `last_used_write_strategy` validator derives its allowed set from the type.**
+  `_plugin/validation/api_key.py` now reads the allowed strategy values via
+  `typing.get_args(ApiKeyLastUsedWriteStrategy)` instead of a hard-coded literal set,
+  and the configuration error message lists them dynamically. The duplicated
+  `ApiKeyLastUsedWriteStrategy` redeclaration in `_manager/api_key_config.py` was
+  reconciled to import the canonical alias from `_plugin/features/_defaults.py`, which
+  is now a plain `Literal` assignment (no longer a PEP 695 `type` statement) so
+  `get_args` returns the literal values at runtime; the static-typing surface for
+  consumers is unchanged.
+- **Constant-time API-key failure classification documented.** The trailing
+  `api_key_secret_matches` / `_signed_request_signature_matches` comparisons inside
+  `_classify_bearer_failure_reason` and `_classify_signed_failure_reason` in
+  `authentication/strategy/api_key.py` carry single-line comments noting that the
+  reason intentionally maps to the wrong-secret / wrong-signature failure to prevent
+  timing-based discrimination between valid and invalid secrets on already-failed
+  authentication. The conditional and return values are unchanged.
 
 ### Migration
 

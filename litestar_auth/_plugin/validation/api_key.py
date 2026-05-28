@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import re
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, get_args
 
+from litestar_auth._plugin.features._defaults import ApiKeyLastUsedWriteStrategy
 from litestar_auth._plugin.validation._core import (
     IssueCollector,
     format_configuration_message,
@@ -22,6 +23,13 @@ from litestar_auth.types import UserProtocol
 if TYPE_CHECKING:
     from litestar_auth._plugin.config import LitestarAuthConfig
     from litestar_auth._plugin.features import ApiKeyConfig
+
+_API_KEY_LAST_USED_WRITE_STRATEGIES = tuple(sorted(get_args(ApiKeyLastUsedWriteStrategy)))
+_API_KEY_LAST_USED_WRITE_STRATEGY_SET = frozenset(_API_KEY_LAST_USED_WRITE_STRATEGIES)
+_API_KEY_LAST_USED_WRITE_STRATEGY_LIST = (
+    f"{', '.join(repr(strategy) for strategy in _API_KEY_LAST_USED_WRITE_STRATEGIES[:-1])}, "
+    f"or {_API_KEY_LAST_USED_WRITE_STRATEGIES[-1]!r}"
+)
 
 
 def validate_api_key_config[UP: UserProtocol[Any], ID](config: LitestarAuthConfig[UP, ID]) -> None:
@@ -75,9 +83,9 @@ def _validate_api_key_policy_fields(api_key_config: ApiKeyConfig) -> None:
             "api_keys.last_used_throttle_seconds must be non-negative.",
             field="api_keys.last_used_throttle_seconds",
         )
-    if api_key_config.last_used_write_strategy not in {"disabled", "immediate", "throttled"}:
+    if api_key_config.last_used_write_strategy not in _API_KEY_LAST_USED_WRITE_STRATEGY_SET:
         collector.add(
-            "api_keys.last_used_write_strategy must be 'disabled', 'immediate', or 'throttled'.",
+            f"api_keys.last_used_write_strategy must be {_API_KEY_LAST_USED_WRITE_STRATEGY_LIST}.",
             field="api_keys.last_used_write_strategy",
         )
     if api_key_config.signing_skew_seconds < 1:

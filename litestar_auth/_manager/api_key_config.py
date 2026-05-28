@@ -4,18 +4,15 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from typing import TYPE_CHECKING, Literal, Protocol
+from typing import TYPE_CHECKING, Protocol
 
-from litestar_auth._plugin.features import DEFAULT_API_KEY_LAST_USED_THROTTLE_SECONDS
+from litestar_auth._plugin.features import DEFAULT_API_KEY_LAST_USED_THROTTLE_SECONDS, ApiKeyLastUsedWriteStrategy
 from litestar_auth._secrets_at_rest import FernetKeyring
 from litestar_auth.authentication.strategy._api_key_format import API_KEY_PREFIX
 from litestar_auth.exceptions import ApiKeyError
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
-
-
-type ApiKeyLastUsedWriteStrategy = Literal["disabled", "immediate", "throttled"]
 
 
 @dataclass(frozen=True, slots=True)

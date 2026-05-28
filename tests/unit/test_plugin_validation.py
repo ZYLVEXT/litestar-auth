@@ -7,7 +7,7 @@ import warnings
 from dataclasses import dataclass
 from datetime import timedelta
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Literal, cast
+from typing import TYPE_CHECKING, Any, Literal, cast, get_args
 from uuid import UUID
 
 import msgspec
@@ -24,6 +24,7 @@ import litestar_auth._plugin.user_manager_builder as user_manager_builder_module
 import litestar_auth._plugin.validation as validation_module
 import litestar_auth._plugin.validation.request_security as request_security_validation_module
 from litestar_auth._plugin import api_key_validation, oauth_validation, totp_validation
+from litestar_auth._plugin.features import ApiKeyLastUsedWriteStrategy
 from litestar_auth._plugin.middleware import build_csrf_config, get_cookie_transports
 from litestar_auth._plugin.validation._core import (
     IssueCollector,
@@ -2234,6 +2235,48 @@ def test_validate_api_key_config_rejects_invalid_policy_fields(api_key_config: A
 
     with pytest.raises(ConfigurationError, match=match):
         validate_api_key_config(config)
+
+
+@pytest.mark.parametrize("strategy", get_args(ApiKeyLastUsedWriteStrategy))
+def test_validate_api_key_config_accepts_declared_last_used_write_strategies(strategy: str) -> None:
+    """Every declared last-used write strategy is accepted by plugin validation."""
+    config = _minimal_config(
+        user_manager_security=UserManagerSecurity[UUID](
+            verification_token_secret=VERIFICATION_SECRET,
+            reset_password_token_secret=RESET_PASSWORD_SECRET,
+            api_key_hash_secret=API_KEY_HASH_SECRET,
+        ),
+    )
+    config.api_keys = ApiKeyConfig(
+        enabled=True,
+        allowed_scopes=("read",),
+        last_used_write_strategy=cast("Any", strategy),
+    )
+
+    validate_api_key_config(config)
+
+
+def test_validate_api_key_config_lists_declared_last_used_write_strategies() -> None:
+    """Invalid last-used write strategy errors list the declared strategy values."""
+    config = _minimal_config(
+        user_manager_security=UserManagerSecurity[UUID](
+            verification_token_secret=VERIFICATION_SECRET,
+            reset_password_token_secret=RESET_PASSWORD_SECRET,
+            api_key_hash_secret=API_KEY_HASH_SECRET,
+        ),
+    )
+    config.api_keys = ApiKeyConfig(
+        enabled=True,
+        allowed_scopes=("read",),
+        last_used_write_strategy=cast("Any", "sometimes"),
+    )
+
+    with pytest.raises(ConfigurationError) as exc_info:
+        validate_api_key_config(config)
+
+    message = str(exc_info.value)
+    for strategy in get_args(ApiKeyLastUsedWriteStrategy):
+        assert repr(strategy) in message
 
 
 def test_validate_user_manager_security_config_rejects_short_login_telemetry_secret() -> None:

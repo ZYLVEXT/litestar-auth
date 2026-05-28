@@ -44,7 +44,6 @@ _DEFAULT_TOTP_STEPUP_POLICY: dict[TotpStepUpEndpoint, TotpStepUpPolicyMode] = {
     "users.update_self": "required_when_enrolled",
     "oauth.associate": "required_when_enrolled",
 }
-_INVALID_CREDENTIALS_DETAIL = "Invalid credentials."
 
 TOTP_STEPUP_REQUIRED_OPENAPI_RESPONSE = ResponseSpec(
     data_container=dict[str, object],

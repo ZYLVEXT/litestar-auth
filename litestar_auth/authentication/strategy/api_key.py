@@ -398,6 +398,7 @@ class ApiKeyStrategy[UP: UserProtocol[Any], ID](Strategy[UP, ID]):
         row_failure = self._classify_bearer_api_key_row(api_key)
         if row_failure is not None:
             return row_failure
+        # Keep this compare to avoid timing leaks; success intentionally maps to the wrong-secret failure.
         if not api_key_secret_matches(
             stored_digest=api_key.hashed_secret,
             api_key_hash_secret=self._api_key_hash_secret,
@@ -416,6 +417,7 @@ class ApiKeyStrategy[UP: UserProtocol[Any], ID](Strategy[UP, ID]):
         if self._signed_request_has_skew(signed_request):
             return ApiKeyFailureReason.SIGNATURE_TIMESTAMP_SKEW
         secret = self._decrypt_signing_secret(api_key)
+        # Keep this compare to avoid timing leaks; success intentionally maps to the wrong-signature failure.
         if secret is None or not self._signed_request_signature_matches(signed_request, secret=secret):
             return ApiKeyFailureReason.SIGNATURE_INVALID
         return ApiKeyFailureReason.SIGNATURE_INVALID

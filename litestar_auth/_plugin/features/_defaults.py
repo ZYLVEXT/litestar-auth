@@ -12,7 +12,7 @@ from litestar_auth.config import UNSET, UnsetType
 if TYPE_CHECKING:
     from litestar_auth.totp import TotpAlgorithm
 
-type ApiKeyLastUsedWriteStrategy = Literal["disabled", "immediate", "throttled"]
+ApiKeyLastUsedWriteStrategy = Literal["disabled", "immediate", "throttled"]
 type FeatureKey = Literal["database_token", "api_key", "totp", "oauth"]
 type TotpStepUpPolicyMode = Literal["required_when_enrolled", "always_required", "off"]
 
