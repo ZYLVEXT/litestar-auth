@@ -24,10 +24,13 @@ import litestar_auth.ratelimit as ratelimit_module
 import litestar_auth.ratelimit._client_host as ratelimit_client_host_module
 import litestar_auth.ratelimit._config as ratelimit_config_module
 import litestar_auth.ratelimit._endpoint as ratelimit_endpoint_module
-import litestar_auth.ratelimit._helpers as ratelimit_helpers_module
+import litestar_auth.ratelimit._identifier_extraction as ratelimit_identifier_extraction_module
+import litestar_auth.ratelimit._key_derivation as ratelimit_key_derivation_module
+import litestar_auth.ratelimit._redis as ratelimit_redis_module
 import litestar_auth.ratelimit._slot_catalog as ratelimit_slot_catalog_module
 import litestar_auth.ratelimit._window_math as ratelimit_window_math_module
 from litestar_auth._clock import read_clock
+from litestar_auth._schema_fields import EMAIL_MAX_LENGTH
 from litestar_auth.authentication.strategy.api_key import ApiKeyContext
 from litestar_auth.authentication.strategy.redis import RedisClientProtocol as RedisTokenClientProtocol
 from litestar_auth.authentication.strategy.redis import RedisTokenStrategy, RedisTokenStrategyConfig
@@ -219,17 +222,17 @@ async def test_ratelimit_module_exposes_public_limiter_api() -> None:
     assert await backend.check("127.0.0.1") is True
     assert await limiter.build_key(request) == (
         "login:"
-        f"{ratelimit_helpers_module._safe_key_part('127.0.0.1')}:"
-        f"{ratelimit_helpers_module._safe_key_part('reloaded@example.com')}"
+        f"{ratelimit_key_derivation_module._safe_key_part('127.0.0.1')}:"
+        f"{ratelimit_key_derivation_module._safe_key_part('reloaded@example.com')}"
     )
-    assert await ratelimit_helpers_module._extract_email(request) == "reloaded@example.com"
+    assert await ratelimit_identifier_extraction_module._extract_email(request) == "reloaded@example.com"
     await orchestrator.on_success("verify", request)
 
 
 async def test_api_key_rate_limit_scope_uses_key_id_from_supported_headers() -> None:
     """The api_key_id scope keys parsed bearer and X-API-Key credentials by key id."""
     backend = InMemoryRateLimiter(max_attempts=2, window_seconds=10)
-    hmac_scheme_bucket_part = ratelimit_helpers_module._safe_key_part("signed")
+    hmac_scheme_bucket_part = ratelimit_key_derivation_module._safe_key_part("signed")
     bearer_request = cast(
         "Request[Any, Any, Any]",
         JsonRequestStub(
@@ -311,41 +314,42 @@ async def test_api_key_rate_limit_scope_uses_key_id_from_supported_headers() -> 
 
     assert await limiter.build_key(bearer_request) == (
         "api-key-use:"
-        f"{ratelimit_helpers_module._safe_key_part('127.0.0.1')}:"
-        f"{ratelimit_helpers_module._safe_key_part('key-id')}"
+        f"{ratelimit_key_derivation_module._safe_key_part('127.0.0.1')}:"
+        f"{ratelimit_key_derivation_module._safe_key_part('key-id')}"
     )
     assert await limiter.build_key(header_request) == (
         "api-key-use:"
-        f"{ratelimit_helpers_module._safe_key_part('127.0.0.1')}:"
-        f"{ratelimit_helpers_module._safe_key_part('other-id')}"
+        f"{ratelimit_key_derivation_module._safe_key_part('127.0.0.1')}:"
+        f"{ratelimit_key_derivation_module._safe_key_part('other-id')}"
     )
     assert await limiter.build_key(fallback_header_request) == (
         "api-key-use:"
-        f"{ratelimit_helpers_module._safe_key_part('127.0.0.1')}:"
-        f"{ratelimit_helpers_module._safe_key_part('fallback-id')}"
+        f"{ratelimit_key_derivation_module._safe_key_part('127.0.0.1')}:"
+        f"{ratelimit_key_derivation_module._safe_key_part('fallback-id')}"
     )
     assert await limiter.build_key(hmac_request) == (
-        f"api-key-use:{ratelimit_helpers_module._safe_key_part('127.0.0.1')}:{hmac_scheme_bucket_part}"
+        f"api-key-use:{ratelimit_key_derivation_module._safe_key_part('127.0.0.1')}:{hmac_scheme_bucket_part}"
     )
     assert await limiter.build_key(hmac_without_credential_request) == (
-        f"api-key-use:{ratelimit_helpers_module._safe_key_part('127.0.0.1')}:{hmac_scheme_bucket_part}"
+        f"api-key-use:{ratelimit_key_derivation_module._safe_key_part('127.0.0.1')}:{hmac_scheme_bucket_part}"
     )
     assert await limiter.build_key(hmac_empty_credential_request) == (
-        f"api-key-use:{ratelimit_helpers_module._safe_key_part('127.0.0.1')}:{hmac_scheme_bucket_part}"
+        f"api-key-use:{ratelimit_key_derivation_module._safe_key_part('127.0.0.1')}:{hmac_scheme_bucket_part}"
     )
     assert (
-        await limiter.build_key(empty_request) == f"api-key-use:{ratelimit_helpers_module._safe_key_part('127.0.0.1')}"
+        await limiter.build_key(empty_request)
+        == f"api-key-use:{ratelimit_key_derivation_module._safe_key_part('127.0.0.1')}"
     )
     assert await limiter.build_key(non_api_key_context_request) == (
-        f"api-key-use:{ratelimit_helpers_module._safe_key_part('127.0.0.1')}"
+        f"api-key-use:{ratelimit_key_derivation_module._safe_key_part('127.0.0.1')}"
     )
     assert await limiter.build_key(non_mapping_scope_request) == (
-        f"api-key-use:{ratelimit_helpers_module._safe_key_part('127.0.0.1')}"
+        f"api-key-use:{ratelimit_key_derivation_module._safe_key_part('127.0.0.1')}"
     )
     assert await limiter.build_key(context_request) == (
         "api-key-use:"
-        f"{ratelimit_helpers_module._safe_key_part('127.0.0.1')}:"
-        f"{ratelimit_helpers_module._safe_key_part('signed-id')}"
+        f"{ratelimit_key_derivation_module._safe_key_part('127.0.0.1')}:"
+        f"{ratelimit_key_derivation_module._safe_key_part('signed-id')}"
     )
 
 
@@ -1043,22 +1047,22 @@ async def test_auth_rate_limit_config_from_shared_backend_applies_explicit_slot_
     }
     expected_keys = {
         "login": (
-            f"login:{ratelimit_helpers_module._safe_key_part('10.0.0.1')}:"
-            f"{ratelimit_helpers_module._safe_key_part('user@example.com')}"
+            f"login:{ratelimit_key_derivation_module._safe_key_part('10.0.0.1')}:"
+            f"{ratelimit_key_derivation_module._safe_key_part('user@example.com')}"
         ),
         "change_password": (
-            f"change-password:{ratelimit_helpers_module._safe_key_part('10.0.0.1')}:"
-            f"{ratelimit_helpers_module._safe_key_part('user@example.com')}"
+            f"change-password:{ratelimit_key_derivation_module._safe_key_part('10.0.0.1')}:"
+            f"{ratelimit_key_derivation_module._safe_key_part('user@example.com')}"
         ),
         "forgot_password": (
-            f"forgot_password:{ratelimit_helpers_module._safe_key_part('10.0.0.1')}:"
-            f"{ratelimit_helpers_module._safe_key_part('user@example.com')}"
+            f"forgot_password:{ratelimit_key_derivation_module._safe_key_part('10.0.0.1')}:"
+            f"{ratelimit_key_derivation_module._safe_key_part('user@example.com')}"
         ),
-        "refresh": f"refresh:{ratelimit_helpers_module._safe_key_part('10.0.0.1')}",
-        "totp_verify": f"totp_verify:{ratelimit_helpers_module._safe_key_part('10.0.0.1')}",
-        "totp_disable": f"totp_disable:{ratelimit_helpers_module._safe_key_part('10.0.0.1')}",
+        "refresh": f"refresh:{ratelimit_key_derivation_module._safe_key_part('10.0.0.1')}",
+        "totp_verify": f"totp_verify:{ratelimit_key_derivation_module._safe_key_part('10.0.0.1')}",
+        "totp_disable": f"totp_disable:{ratelimit_key_derivation_module._safe_key_part('10.0.0.1')}",
         "totp_regenerate_recovery_codes": (
-            f"totp_regenerate_recovery_codes:{ratelimit_helpers_module._safe_key_part('10.0.0.1')}"
+            f"totp_regenerate_recovery_codes:{ratelimit_key_derivation_module._safe_key_part('10.0.0.1')}"
         ),
     }
 
@@ -1222,8 +1226,8 @@ async def test_contrib_redis_preset_builds_rate_limit_config_with_shared_client_
     assert config.forgot_password is not None
     assert config.forgot_password.namespace == "forgot-password"
     assert await config.forgot_password.build_key(credential_request) == (
-        f"forgot-password:{ratelimit_helpers_module._safe_key_part('10.0.0.1')}:"
-        f"{ratelimit_helpers_module._safe_key_part('user@example.com')}"
+        f"forgot-password:{ratelimit_key_derivation_module._safe_key_part('10.0.0.1')}:"
+        f"{ratelimit_key_derivation_module._safe_key_part('user@example.com')}"
     )
     assert config.totp_verify is not None
     assert config.totp_verify.backend is explicit_totp_backend
@@ -1455,30 +1459,25 @@ async def test_endpoint_rate_limit_shared_backend_preserves_namespace_and_scope_
     assert verify_rate_limit.backend is shared_backend
     assert await login_rate_limit.build_key(request) == (
         "login:"
-        f"{ratelimit_helpers_module._safe_key_part('10.0.0.1')}:"
-        f"{ratelimit_helpers_module._safe_key_part('user@example.com')}"
+        f"{ratelimit_key_derivation_module._safe_key_part('10.0.0.1')}:"
+        f"{ratelimit_key_derivation_module._safe_key_part('user@example.com')}"
     )
     assert await refresh_rate_limit.build_key(request) == (
         "refresh:"
-        f"{ratelimit_helpers_module._safe_key_part('10.0.0.1')}:"
-        f"{ratelimit_helpers_module._safe_key_part('user@example.com')}"
+        f"{ratelimit_key_derivation_module._safe_key_part('10.0.0.1')}:"
+        f"{ratelimit_key_derivation_module._safe_key_part('user@example.com')}"
     )
     assert await confirm_enable_rate_limit.build_key(request) == (
-        f"totp-confirm-enable:{ratelimit_helpers_module._safe_key_part('10.0.0.1')}"
+        f"totp-confirm-enable:{ratelimit_key_derivation_module._safe_key_part('10.0.0.1')}"
     )
     assert await verify_rate_limit.build_key(request) == (
-        f"totp-verify:{ratelimit_helpers_module._safe_key_part('10.0.0.1')}"
+        f"totp-verify:{ratelimit_key_derivation_module._safe_key_part('10.0.0.1')}"
     )
 
 
 @pytest.mark.parametrize(
     ("module_path", "expected_symbols"),
     [
-        pytest.param(
-            "litestar_auth.ratelimit._helpers",
-            ("DEFAULT_KEY_PREFIX", "RedisScriptResult", "_extract_email", "_safe_key_part", "logger"),
-            id="_helpers",
-        ),
         pytest.param(
             "litestar_auth.ratelimit._client_host",
             ("_DEFAULT_TRUSTED_HEADERS", "_client_host", "logger"),
@@ -1710,15 +1709,15 @@ def patch_redis_loader(monkeypatch: pytest.MonkeyPatch) -> None:
     def load_redis() -> object:
         return object()
 
-    monkeypatch.setattr(ratelimit_helpers_module, "_load_redis_asyncio", load_redis)
+    monkeypatch.setattr(ratelimit_redis_module, "_load_redis_asyncio", load_redis)
 
 
 @pytest.fixture(autouse=True)
 def _reset_proxy_header_warning_throttle() -> Iterator[None]:
     """Keep trusted-proxy warning throttle state isolated per test."""
-    ratelimit_helpers_module._warned_missing_proxy_headers.clear()
+    ratelimit_client_host_module._warned_missing_proxy_headers.clear()
     yield
-    ratelimit_helpers_module._warned_missing_proxy_headers.clear()
+    ratelimit_client_host_module._warned_missing_proxy_headers.clear()
 
 
 def _build_request(
@@ -1766,7 +1765,7 @@ def test_endpoint_rate_limit_trusted_proxy_defaults_to_false() -> None:
 def test_client_host_ignores_proxy_headers_by_default() -> None:
     """When trusted_proxy=False, only request.client.host is used."""
     request = _build_request(headers=[(b"x-forwarded-for", b"203.0.113.1")])
-    assert ratelimit_helpers_module._client_host(request) == "127.0.0.1"
+    assert ratelimit_client_host_module._client_host(request) == "127.0.0.1"
 
 
 def test_client_host_returns_unknown_without_client() -> None:
@@ -1789,7 +1788,7 @@ def test_client_host_returns_unknown_without_client() -> None:
     )
     request = Request(scope=scope)
 
-    assert ratelimit_helpers_module._client_host(request) == "unknown"
+    assert ratelimit_client_host_module._client_host(request) == "unknown"
 
 
 @pytest.mark.parametrize(
@@ -1846,14 +1845,14 @@ def test_select_x_forwarded_for_trusted_hop_uses_configured_hop_count(
 def test_client_host_uses_default_trusted_headers(headers: list[tuple[bytes, bytes]], expected: str) -> None:
     """Default trusted_headers only reads X-Forwarded-For."""
     request = _build_request(headers=headers)
-    assert ratelimit_helpers_module._client_host(request, trusted_proxy=True) == expected
+    assert ratelimit_client_host_module._client_host(request, trusted_proxy=True) == expected
 
 
 def test_client_host_falls_back_when_xforwarded_for_is_only_separators() -> None:
     """All-comma XFF values yield no parsable hop and fall back to the direct client host."""
     request = _build_request(headers=[(b"x-forwarded-for", b",,,")])
 
-    assert ratelimit_helpers_module._client_host(request, trusted_proxy=True) == "127.0.0.1"
+    assert ratelimit_client_host_module._client_host(request, trusted_proxy=True) == "127.0.0.1"
 
 
 def test_client_host_does_not_trust_spoofed_leftmost_xforwarded_for_entry() -> None:
@@ -1866,7 +1865,7 @@ def test_client_host_does_not_trust_spoofed_leftmost_xforwarded_for_entry() -> N
     """
     request = _build_request(headers=[(b"x-forwarded-for", b"1.1.1.1, 2.2.2.2, 10.0.0.1")])
 
-    assert ratelimit_helpers_module._client_host(request, trusted_proxy=True) == "10.0.0.1"
+    assert ratelimit_client_host_module._client_host(request, trusted_proxy=True) == "10.0.0.1"
 
 
 def test_client_host_uses_configured_trusted_proxy_hop_count() -> None:
@@ -1874,7 +1873,7 @@ def test_client_host_uses_configured_trusted_proxy_hop_count() -> None:
     request = _build_request(headers=[(b"x-forwarded-for", b"198.51.100.8, 203.0.113.12, 10.0.0.1")])
 
     assert (
-        ratelimit_helpers_module._client_host(
+        ratelimit_client_host_module._client_host(
             request,
             trusted_proxy=True,
             trusted_proxy_hops=MULTI_PROXY_HOPS,
@@ -1888,7 +1887,7 @@ def test_client_host_falls_back_when_trusted_proxy_hops_exceeds_xff_entries() ->
     request = _build_request(headers=[(b"x-forwarded-for", b"203.0.113.12")])
 
     assert (
-        ratelimit_helpers_module._client_host(
+        ratelimit_client_host_module._client_host(
             request,
             trusted_proxy=True,
             trusted_proxy_hops=MULTI_PROXY_HOPS,
@@ -1915,7 +1914,7 @@ async def test_endpoint_rate_limit_build_key_uses_configured_trusted_proxy_hops(
         trusted_proxy_hops=MULTI_PROXY_HOPS,
     )
 
-    assert await limiter.build_key(request) == f"login:{ratelimit_helpers_module._safe_key_part('203.0.113.12')}"
+    assert await limiter.build_key(request) == f"login:{ratelimit_key_derivation_module._safe_key_part('203.0.113.12')}"
 
 
 def test_client_host_warns_once_when_trusted_proxy_headers_are_absent(caplog: pytest.LogCaptureFixture) -> None:
@@ -1923,7 +1922,7 @@ def test_client_host_warns_once_when_trusted_proxy_headers_are_absent(caplog: py
     caplog.set_level(logging.WARNING, logger="litestar_auth.ratelimit")
     request = _build_request()
 
-    assert ratelimit_helpers_module._client_host(request, trusted_proxy=True) == "127.0.0.1"
+    assert ratelimit_client_host_module._client_host(request, trusted_proxy=True) == "127.0.0.1"
 
     records = [record for record in caplog.records if record.name == "litestar_auth.ratelimit"]
     assert len(records) == 1
@@ -1937,9 +1936,9 @@ def test_client_host_does_not_reemit_warning_for_same_trusted_headers(caplog: py
     caplog.set_level(logging.WARNING, logger="litestar_auth.ratelimit")
     request = _build_request()
 
-    assert ratelimit_helpers_module._client_host(request, trusted_proxy=True) == "127.0.0.1"
+    assert ratelimit_client_host_module._client_host(request, trusted_proxy=True) == "127.0.0.1"
     caplog.clear()
-    assert ratelimit_helpers_module._client_host(_build_request(), trusted_proxy=True) == "127.0.0.1"
+    assert ratelimit_client_host_module._client_host(_build_request(), trusted_proxy=True) == "127.0.0.1"
 
     records = [record for record in caplog.records if record.name == "litestar_auth.ratelimit"]
     assert records == []
@@ -1952,7 +1951,7 @@ def test_client_host_does_not_warn_when_trusted_header_is_present_but_unusable(
     caplog.set_level(logging.WARNING, logger="litestar_auth.ratelimit")
     request = _build_request(headers=[(b"x-forwarded-for", b"   ")])
 
-    assert ratelimit_helpers_module._client_host(request, trusted_proxy=True) == "127.0.0.1"
+    assert ratelimit_client_host_module._client_host(request, trusted_proxy=True) == "127.0.0.1"
 
     records = [record for record in caplog.records if record.name == "litestar_auth.ratelimit"]
     assert records == []
@@ -1962,7 +1961,7 @@ def test_client_host_rejects_non_ip_xforwarded_for_value() -> None:
     """A non-IP rightmost (trusted-hop) value falls back to the direct client host."""
     request = _build_request(headers=[(b"x-forwarded-for", b"10.0.0.1, not-an-ip")])
 
-    assert ratelimit_helpers_module._client_host(request, trusted_proxy=True) == "127.0.0.1"
+    assert ratelimit_client_host_module._client_host(request, trusted_proxy=True) == "127.0.0.1"
 
 
 def test_client_host_warns_independently_for_distinct_trusted_header_tuples(
@@ -1971,9 +1970,9 @@ def test_client_host_warns_independently_for_distinct_trusted_header_tuples(
     """Each trusted_headers tuple gets its own missing-header warning."""
     caplog.set_level(logging.WARNING, logger="litestar_auth.ratelimit")
 
-    assert ratelimit_helpers_module._client_host(_build_request(), trusted_proxy=True) == "127.0.0.1"
+    assert ratelimit_client_host_module._client_host(_build_request(), trusted_proxy=True) == "127.0.0.1"
     assert (
-        ratelimit_helpers_module._client_host(
+        ratelimit_client_host_module._client_host(
             _build_request(),
             trusted_proxy=True,
             trusted_headers=("X-Real-IP", "CF-Connecting-IP"),
@@ -1992,7 +1991,7 @@ def test_client_host_rejects_non_boolean_trusted_proxy_configuration() -> None:
     request = _build_request(headers=[(b"x-forwarded-for", b"203.0.113.5")])
 
     with pytest.raises(ConfigurationError, match="trusted_proxy must be a boolean"):
-        ratelimit_helpers_module._client_host(request, trusted_proxy=cast("Any", "true"))
+        ratelimit_client_host_module._client_host(request, trusted_proxy=cast("Any", "true"))
 
 
 def test_client_host_rejects_invalid_trusted_proxy_hops_configuration() -> None:
@@ -2000,7 +1999,7 @@ def test_client_host_rejects_invalid_trusted_proxy_hops_configuration() -> None:
     request = _build_request(headers=[(b"x-forwarded-for", b"203.0.113.5")])
 
     with pytest.raises(ConfigurationError, match="trusted_proxy_hops must be a positive integer"):
-        ratelimit_helpers_module._client_host(request, trusted_proxy=True, trusted_proxy_hops=0)
+        ratelimit_client_host_module._client_host(request, trusted_proxy=True, trusted_proxy_hops=0)
 
 
 @pytest.mark.parametrize(
@@ -2031,7 +2030,7 @@ def test_client_host_uses_custom_trusted_headers(
     """Explicit trusted_headers opt-in reads additional proxy headers."""
     request = _build_request(headers=headers)
     assert (
-        ratelimit_helpers_module._client_host(
+        ratelimit_client_host_module._client_host(
             request,
             trusted_proxy=True,
             trusted_headers=trusted_headers,
@@ -2092,7 +2091,7 @@ async def test_memory_rate_limiter_fails_closed_for_new_keys_at_capacity(
     clock.advance(0.1)
     await limiter.increment("first")
     clock.advance(0.1)
-    with caplog.at_level(logging.WARNING, logger=ratelimit_helpers_module.logger.name):
+    with caplog.at_level(logging.WARNING, logger=ratelimit_client_host_module.logger.name):
         assert await limiter.check("third") is False
         await limiter.increment("third")
 
@@ -2352,18 +2351,18 @@ def test_redis_rate_limiter_lazy_import_error_message(monkeypatch: pytest.Monkey
     monkeypatch.setattr(importlib, "import_module", fail_import)
 
     with pytest.raises(ImportError, match="Install litestar-auth\\[redis\\] to use RedisRateLimiter"):
-        ratelimit_helpers_module._load_redis_asyncio()
+        ratelimit_redis_module._load_redis_asyncio()
 
 
 def test_safe_key_part_uses_scoped_digest_without_raw_identifier() -> None:
     """Rate-limit storage keys pseudonymize PII-bearing key parts."""
-    digest = ratelimit_helpers_module._safe_key_part("user@example.com")
+    digest = ratelimit_key_derivation_module._safe_key_part("user@example.com")
 
     assert digest == "9b56b9b71a2b3656ca0846e316b308d2"
     assert len(digest) == UUID4_HEX_LENGTH
     assert "user@example.com" not in digest
-    assert ":" not in ratelimit_helpers_module._safe_key_part("tenant:admin")
-    assert digest != ratelimit_helpers_module._safe_key_part("other@example.com")
+    assert ":" not in ratelimit_key_derivation_module._safe_key_part("tenant:admin")
+    assert digest != ratelimit_key_derivation_module._safe_key_part("other@example.com")
 
 
 async def test_redis_rate_limiter_propagates_connection_error(
@@ -2458,8 +2457,8 @@ async def test_endpoint_rate_limit_build_key_ip_email_normalizes_identifier() ->
 
     assert key == (
         "login:"
-        f"{ratelimit_helpers_module._safe_key_part('10.0.0.1')}:"
-        f"{ratelimit_helpers_module._safe_key_part('user@example.com')}"
+        f"{ratelimit_key_derivation_module._safe_key_part('10.0.0.1')}:"
+        f"{ratelimit_key_derivation_module._safe_key_part('user@example.com')}"
     )
 
 
@@ -2474,7 +2473,6 @@ async def test_endpoint_rate_limit_omits_oversize_identifier_before_hashing(
         return f"hashed-{len(value)}"
 
     monkeypatch.setattr(ratelimit_endpoint_module, "_safe_key_part", record_safe_key_part)
-    monkeypatch.setattr(ratelimit_helpers_module, "_safe_key_part", record_safe_key_part)
 
     limiter = EndpointRateLimit(
         backend=InMemoryRateLimiter(max_attempts=1, window_seconds=10),
@@ -2484,7 +2482,7 @@ async def test_endpoint_rate_limit_omits_oversize_identifier_before_hashing(
     request = cast(
         "Request[Any, Any, Any]",
         JsonRequestStub(
-            payload={"identifier": "a" * (ratelimit_helpers_module.EMAIL_MAX_LENGTH + 1)},
+            payload={"identifier": "a" * (EMAIL_MAX_LENGTH + 1)},
             client=ClientStub(host="10.0.0.1"),
         ),
     )
@@ -2506,7 +2504,7 @@ async def test_hmac_api_key_rate_limit_ignores_untrusted_credential_value() -> N
             client=ClientStub(host="10.0.0.1"),
             headers={
                 "Authorization": (
-                    f"LSA1-HMAC-SHA256 Credential={'a' * (ratelimit_helpers_module._API_KEY_ID_LENGTH + 10)}, "
+                    f"LSA1-HMAC-SHA256 Credential={'a' * (ratelimit_identifier_extraction_module._API_KEY_ID_LENGTH + 10)}, "
                     "SignedHeaders=x-auth-date;x-auth-nonce, Signature=abc123"
                 ),
             },
@@ -2540,7 +2538,9 @@ async def test_api_key_rate_limit_omits_malformed_bearer_token() -> None:
         ),
     )
 
-    assert await limiter.build_key(request) == f"api-key-use:{ratelimit_helpers_module._safe_key_part('10.0.0.1')}"
+    assert (
+        await limiter.build_key(request) == f"api-key-use:{ratelimit_key_derivation_module._safe_key_part('10.0.0.1')}"
+    )
 
 
 async def test_endpoint_rate_limit_omits_oversize_api_key_id_before_hashing(
@@ -2554,7 +2554,6 @@ async def test_endpoint_rate_limit_omits_oversize_api_key_id_before_hashing(
         return f"hashed-{len(value)}"
 
     monkeypatch.setattr(ratelimit_endpoint_module, "_safe_key_part", record_safe_key_part)
-    monkeypatch.setattr(ratelimit_helpers_module, "_safe_key_part", record_safe_key_part)
 
     limiter = EndpointRateLimit(
         backend=InMemoryRateLimiter(max_attempts=1, window_seconds=10),
@@ -2568,7 +2567,7 @@ async def test_endpoint_rate_limit_omits_oversize_api_key_id_before_hashing(
             client=ClientStub(host="10.0.0.1"),
             scope={
                 "auth": ApiKeyContext(
-                    key_id="a" * (ratelimit_helpers_module._API_KEY_ID_LENGTH + 1),
+                    key_id="a" * (ratelimit_identifier_extraction_module._API_KEY_ID_LENGTH + 1),
                     scopes=(),
                     prefix_env="prod",
                 ),
@@ -2593,10 +2592,10 @@ async def test_endpoint_rate_limit_defensively_omits_over_cap_extracted_parts(
         identity_fields: tuple[str, ...],
     ) -> str:
         await asyncio.sleep(0)
-        return "a" * (ratelimit_helpers_module.EMAIL_MAX_LENGTH + 1)
+        return "a" * (EMAIL_MAX_LENGTH + 1)
 
     def over_cap_key_id(request: Request[Any, Any, Any]) -> str:
-        return "a" * (ratelimit_helpers_module._API_KEY_ID_LENGTH + 1)
+        return "a" * (ratelimit_identifier_extraction_module._API_KEY_ID_LENGTH + 1)
 
     monkeypatch.setattr(ratelimit_endpoint_module, "_extract_email", over_cap_email)
     monkeypatch.setattr(ratelimit_endpoint_module, "_extract_api_key_id", over_cap_key_id)
@@ -2613,9 +2612,12 @@ async def test_endpoint_rate_limit_defensively_omits_over_cap_extracted_parts(
     )
     request = _build_request()
 
-    assert await ip_email_limiter.build_key(request) == f"login:{ratelimit_helpers_module._safe_key_part('127.0.0.1')}"
+    assert (
+        await ip_email_limiter.build_key(request)
+        == f"login:{ratelimit_key_derivation_module._safe_key_part('127.0.0.1')}"
+    )
     assert await api_key_limiter.build_key(request) == (
-        f"api-key-use:{ratelimit_helpers_module._safe_key_part('127.0.0.1')}"
+        f"api-key-use:{ratelimit_key_derivation_module._safe_key_part('127.0.0.1')}"
     )
 
 
@@ -2639,7 +2641,7 @@ async def test_endpoint_rate_limit_reset_uses_key_without_email_when_body_has_no
     await limiter.reset(request)
 
     backend.reset.assert_awaited_once_with(
-        f"register:{ratelimit_helpers_module._safe_key_part('192.168.1.1')}",
+        f"register:{ratelimit_key_derivation_module._safe_key_part('192.168.1.1')}",
     )
 
 
@@ -2656,15 +2658,15 @@ async def test_extract_email_prefers_identity_fields_and_ignores_invalid_payload
         ),
     )
 
-    assert await ratelimit_helpers_module._extract_email(prioritized_request) == "user@example.com"
+    assert await ratelimit_identifier_extraction_module._extract_email(prioritized_request) == "user@example.com"
     assert (
-        await ratelimit_helpers_module._extract_email(
+        await ratelimit_identifier_extraction_module._extract_email(
             cast("Request[Any, Any, Any]", JsonRequestStub(payload={"email": "user@example.com"})),
         )
         == "user@example.com"
     )
     assert (
-        await ratelimit_helpers_module._extract_email(
+        await ratelimit_identifier_extraction_module._extract_email(
             cast("Request[Any, Any, Any]", JsonRequestStub(payload=["not-a-dict"])),
         )
         is None
@@ -2678,7 +2680,10 @@ async def test_extract_email_prefers_identity_fields_and_ignores_invalid_payload
         async def json(self) -> object:
             raise TypeError
 
-    assert await ratelimit_helpers_module._extract_email(cast("Request[Any, Any, Any]", BadJsonRequest())) is None
+    assert (
+        await ratelimit_identifier_extraction_module._extract_email(cast("Request[Any, Any, Any]", BadJsonRequest()))
+        is None
+    )
 
 
 async def test_extract_email_returns_nfkc_lowercased_canonical_form() -> None:
@@ -2693,7 +2698,7 @@ async def test_extract_email_returns_nfkc_lowercased_canonical_form() -> None:
         JsonRequestStub(payload={"identifier": "  Ｖictim@Example.COM  "}),  # noqa: RUF001
     )
 
-    assert await ratelimit_helpers_module._extract_email(fullwidth_request) == "victim@example.com"
+    assert await ratelimit_identifier_extraction_module._extract_email(fullwidth_request) == "victim@example.com"
 
 
 async def test_extract_email_skips_blank_identifier_username_and_email_values() -> None:
@@ -2717,9 +2722,9 @@ async def test_extract_email_skips_blank_identifier_username_and_email_values() 
         JsonRequestStub(payload={"email": ""}),
     )
 
-    assert await ratelimit_helpers_module._extract_email(identifier_request) == "id@example.com"
-    assert await ratelimit_helpers_module._extract_email(email_request) == "other@example.com"
-    assert await ratelimit_helpers_module._extract_email(blank_email_request) is None
+    assert await ratelimit_identifier_extraction_module._extract_email(identifier_request) == "id@example.com"
+    assert await ratelimit_identifier_extraction_module._extract_email(email_request) == "other@example.com"
+    assert await ratelimit_identifier_extraction_module._extract_email(blank_email_request) is None
 
 
 async def test_endpoint_rate_limit_build_key_ip_uses_namespace_and_host() -> None:
@@ -2731,7 +2736,7 @@ async def test_endpoint_rate_limit_build_key_ip_uses_namespace_and_host() -> Non
     )
     request = _build_request()
 
-    assert await limiter.build_key(request) == f"login:{ratelimit_helpers_module._safe_key_part('127.0.0.1')}"
+    assert await limiter.build_key(request) == f"login:{ratelimit_key_derivation_module._safe_key_part('127.0.0.1')}"
 
 
 async def test_endpoint_rate_limit_build_key_ip_email_without_email_uses_host_only() -> None:
@@ -2746,7 +2751,9 @@ async def test_endpoint_rate_limit_build_key_ip_email_without_email_uses_host_on
         JsonRequestStub(payload={}, client=ClientStub(host="192.168.1.1")),
     )
 
-    assert await limiter.build_key(request) == (f"register:{ratelimit_helpers_module._safe_key_part('192.168.1.1')}")
+    assert await limiter.build_key(request) == (
+        f"register:{ratelimit_key_derivation_module._safe_key_part('192.168.1.1')}"
+    )
 
 
 async def test_endpoint_rate_limit_logs_trigger(caplog: pytest.LogCaptureFixture) -> None:
@@ -2762,7 +2769,7 @@ async def test_endpoint_rate_limit_logs_trigger(caplog: pytest.LogCaptureFixture
     with (
         caplog.at_level(
             logging.WARNING,
-            logger=ratelimit_helpers_module.logger.name,
+            logger=ratelimit_client_host_module.logger.name,
         ),
         pytest.raises(TooManyRequestsException),
     ):

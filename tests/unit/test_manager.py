@@ -53,7 +53,7 @@ manager_logger = manager_module.logger
 if TYPE_CHECKING:
     from collections.abc import Callable
 
-    from litestar_auth._manager.api_keys import ApiKeyConfigProtocol
+    from litestar_auth._manager.api_key_config import ApiKeyConfigProtocol
     from litestar_auth._manager.hooks import ManagerHookEvent
     from litestar_auth.db import OAuthAccountData
 

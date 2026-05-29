@@ -240,11 +240,12 @@ def test_validate_secret_strength_rejects_sequential_codepoint_walk() -> None:
 
 
 def test_validate_secret_strength_scopes_sequential_check_to_single_span() -> None:
-    """A repeated short unit is judged by its unit, not the single-span sequential check.
+    """A repeated floor-length unit is judged by the full string, not the sequential gate.
 
     ``"0123456789abcdef" * 4`` has a high adjacent-sequential fraction, but it is a
-    repeated 16-character unit rather than one uninterrupted walk, so the unit-based
-    entropy estimate governs it and the single-span sequential gate does not fire.
+    repeated 16-character unit rather than one uninterrupted walk. The repeat-unit
+    entropy cap applies only below the floor, so the full-string entropy estimate
+    governs this boundary case and the single-span sequential gate does not fire.
     """
     repeated_unit_secret = "0123456789abcdef" * 4
 

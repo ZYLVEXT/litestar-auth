@@ -45,11 +45,10 @@ def _select_x_forwarded_for_trusted_hop(value: str, *, trusted_proxy_hops: int =
     header is treated as unusable and the caller falls back to the direct client
     host.
     """
-    resolved_hops = resolve_trusted_proxy_hops(trusted_proxy_hops=trusted_proxy_hops)
     parts = [part.strip() for part in value.split(",") if part.strip()]
-    if len(parts) < resolved_hops:
+    if len(parts) < trusted_proxy_hops:
         return None
-    return parts[-resolved_hops]
+    return parts[-trusted_proxy_hops]
 
 
 def _usable_trusted_header_value(header_name: str, raw_value: str, *, trusted_proxy_hops: int = 1) -> str | None:

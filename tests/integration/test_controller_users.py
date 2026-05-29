@@ -51,7 +51,7 @@ if TYPE_CHECKING:
     from litestar.openapi.spec import OpenAPIResponse
     from litestar.testing import AsyncTestClient
 
-    from litestar_auth._manager.api_keys import ApiKeyConfigProtocol
+    from litestar_auth._manager.api_key_config import ApiKeyConfigProtocol
     from tests._helpers import AsyncFakeRedis
 
 pytestmark = pytest.mark.integration

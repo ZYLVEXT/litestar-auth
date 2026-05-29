@@ -74,7 +74,7 @@ _current_counter = _totp_mod._current_counter
 _generate_totp_code = _totp_mod._generate_totp_code
 
 if TYPE_CHECKING:
-    from litestar_auth._manager.api_keys import ApiKeyConfigProtocol
+    from litestar_auth._manager.api_key_config import ApiKeyConfigProtocol
     from litestar_auth.authentication.strategy.base import Strategy
     from litestar_auth.db.base import BaseUserStore
     from tests._helpers import AsyncFakeRedis

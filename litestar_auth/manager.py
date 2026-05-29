@@ -14,7 +14,7 @@ from litestar_auth._manager.account_tokens import (
     _AccountTokensManagerProtocol,
 )
 from litestar_auth._manager.api_key_facade import ApiKeyManagerFacade
-from litestar_auth._manager.api_keys import ApiKeyManagerService
+from litestar_auth._manager.api_key_service import ApiKeyManagerService
 from litestar_auth._manager.construction import (
     DEFAULT_RESET_PASSWORD_TOKEN_LIFETIME as _DEFAULT_RESET_PASSWORD_TOKEN_LIFETIME,
 )

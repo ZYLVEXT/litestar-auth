@@ -11,112 +11,23 @@ own application layout.
 
 ## Unit tests (handler logic with mocked service)
 
-```python
-"""Unit tests for role admin controller handlers.
+Unit tests for an app-owned role controller should execute the controller method
+or route handler under test. Keep mocks at the service or repository boundary,
+then assert the HTTP exception or response produced by that handler. Avoid tests
+that raise `NotFoundException` or `HTTPException` directly inside the test body:
+those only verify pytest's exception handling and do not exercise your
+controller.
 
-Mocks Advanced Alchemy Service / Repository so no real database is needed.
-"""
+Useful unit assertions for a custom role controller:
 
-from __future__ import annotations
+- list routes call the role service and convert returned role rows into the
+  response schema;
+- missing rows from the service are mapped to `NotFoundException`;
+- duplicate role names from persistence errors are mapped to HTTP 409;
+- delete operations reject roles that still have user assignments.
 
-from typing import Any
-from unittest.mock import AsyncMock, MagicMock, patch
-from uuid import uuid4
-
-import pytest
-from advanced_alchemy.exceptions import NotFoundError
-from litestar.exceptions import HTTPException, NotFoundException
-from litestar.status_codes import HTTP_409_CONFLICT
-from sqlalchemy.exc import IntegrityError
-
-from myapp.auth.roles import (
-    RoleCreate,
-    RoleRead,
-    RoleUpdate,
-    create_role_admin_controller,
-)
-
-
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
-
-def _make_role(name: str = "admin", description: str | None = "Admin") -> MagicMock:
-    role = MagicMock()
-    role.name = name
-    role.description = description
-    return role
-
-
-# ---------------------------------------------------------------------------
-# Fixtures
-# ---------------------------------------------------------------------------
-
-
-@pytest.fixture()
-def controller_cls():
-    """Return the controller class wired with dummy models."""
-    return create_role_admin_controller(
-        user_model=MagicMock(),
-        role_model=MagicMock(),
-        user_role_model=MagicMock(),
-    )
-
-
-# ---------------------------------------------------------------------------
-# Tests
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.anyio
-async def test_list_roles_returns_items(controller_cls):
-    """list_roles delegates to RoleService.get_many_and_count."""
-    role_a, role_b = _make_role("admin"), _make_role("editor", "Editor")
-
-    with patch.object(
-        controller_cls, "_RoleService_new",  # illustrative; adapt to your mock strategy
-    ):
-        # The real test would provide a mocked db_session that the service
-        # picks up.  Here we just verify the schema conversion:
-        result = [
-            RoleRead(name=r.name, description=r.description)
-            for r in [role_a, role_b]
-        ]
-        assert len(result) == 2
-        assert result[0].name == "admin"
-
-
-@pytest.mark.anyio
-async def test_get_role_not_found_raises_404(controller_cls):
-    """When the service raises NotFoundError, the handler returns 404."""
-    # NotFoundError is what Advanced Alchemy raises for missing rows.
-    # The handler re-raises as Litestar NotFoundException (HTTP 404).
-    with pytest.raises(NotFoundException):
-        raise NotFoundException(detail="Role 'nonexistent' not found")
-
-
-@pytest.mark.anyio
-async def test_create_role_conflict_raises_409():
-    """IntegrityError on duplicate name should produce 409."""
-    with pytest.raises(HTTPException) as exc_info:
-        raise HTTPException(
-            status_code=HTTP_409_CONFLICT,
-            detail="Role 'admin' already exists",
-        )
-    assert exc_info.value.status_code == HTTP_409_CONFLICT
-
-
-@pytest.mark.anyio
-async def test_delete_role_blocked_by_assignments_raises_409():
-    """When assignments exist, delete returns 409."""
-    with pytest.raises(HTTPException) as exc_info:
-        raise HTTPException(
-            status_code=HTTP_409_CONFLICT,
-            detail="Cannot delete role 'editor': users are still assigned.",
-        )
-    assert exc_info.value.status_code == HTTP_409_CONFLICT
-```
+If those mappings live in only a few lines of controller code, an HTTP-level test
+with a real app and database is usually clearer than a mock-heavy unit test.
 
 ## Integration tests (real database)
 

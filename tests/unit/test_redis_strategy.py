@@ -18,7 +18,7 @@ from litestar_auth.authentication.strategy.redis import (
     RedisTokenStrategyConfig,
 )
 from litestar_auth.exceptions import ConfigurationError
-from litestar_auth.ratelimit._helpers import _safe_key_part
+from litestar_auth.ratelimit._key_derivation import _safe_key_part
 from tests._helpers import ExampleUser, cast_fakeredis
 
 pytestmark = pytest.mark.unit

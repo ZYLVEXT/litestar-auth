@@ -10,7 +10,9 @@ if TYPE_CHECKING:
     from datetime import datetime
 
     from litestar_auth._manager.api_key_creation import ApiKeyCreateOptions
-    from litestar_auth._manager.api_keys import ApiKeyCreateResult, ApiKeyManagerService, ApiKeyRowProtocol
+    from litestar_auth._manager.api_key_row import ApiKeyRowProtocol
+    from litestar_auth._manager.api_key_secrets import ApiKeyCreateResult
+    from litestar_auth._manager.api_key_service import ApiKeyManagerService
 
 
 class ApiKeyManagerFacade[UP: UserProtocol[Any], ID]:

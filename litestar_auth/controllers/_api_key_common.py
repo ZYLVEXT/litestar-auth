@@ -38,7 +38,8 @@ if TYPE_CHECKING:
     from litestar.openapi.spec import SecurityRequirement
 
     from litestar_auth._manager.api_key_creation import ApiKeyCreateOptions
-    from litestar_auth._manager.api_keys import ApiKeyCreateResult, ApiKeyRowProtocol
+    from litestar_auth._manager.api_key_row import ApiKeyRowProtocol
+    from litestar_auth._manager.api_key_secrets import ApiKeyCreateResult
     from litestar_auth.controllers._utils import RequestHandler
     from litestar_auth.ratelimit import AuthRateLimitConfig
     from litestar_auth.types import UserProtocol

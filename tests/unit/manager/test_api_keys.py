@@ -13,17 +13,16 @@ import pytest
 from cryptography.fernet import Fernet
 
 import litestar_auth._manager as manager_exports
-from litestar_auth._manager.api_keys import (
+from litestar_auth._manager.api_key_config import (
     ApiKeyConfigProtocol,
-    ApiKeyCreateResult,
     ApiKeyManagerConfig,
-    ApiKeyManagerService,
-    ApiKeyRowProtocol,
-    ApiKeySecret,
 )
-from litestar_auth._manager.api_keys import (
+from litestar_auth._manager.api_key_row import ApiKeyRowProtocol
+from litestar_auth._manager.api_key_secrets import ApiKeyCreateResult, ApiKeySecret
+from litestar_auth._manager.api_key_secrets import (
     secrets as api_key_secrets,
 )
+from litestar_auth._manager.api_key_service import ApiKeyManagerService
 from litestar_auth._plugin.features import DEFAULT_API_KEY_LAST_USED_THROTTLE_SECONDS
 from litestar_auth._secrets_at_rest import FernetKeyring
 from litestar_auth.authentication.strategy._api_key_format import api_key_secret_matches, parse_api_key

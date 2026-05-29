@@ -22,8 +22,10 @@ import litestar_auth._plugin.security_policy as plugin_security_policy_module
 import litestar_auth._plugin.startup as startup_module
 import litestar_auth._plugin.user_manager_builder as user_manager_builder_module
 import litestar_auth._plugin.validation as validation_module
+import litestar_auth._plugin.validation.api_key as api_key_validation
+import litestar_auth._plugin.validation.oauth as oauth_validation
 import litestar_auth._plugin.validation.request_security as request_security_validation_module
-from litestar_auth._plugin import api_key_validation, oauth_validation, totp_validation
+import litestar_auth._plugin.validation.totp as totp_validation
 from litestar_auth._plugin.features import ApiKeyLastUsedWriteStrategy
 from litestar_auth._plugin.middleware import build_csrf_config, get_cookie_transports
 from litestar_auth._plugin.validation._core import (
@@ -172,8 +174,8 @@ def test_validation_core_predicates_accept_valid_values_without_issues() -> None
     assert collector.issues == ()
 
 
-def test_legacy_feature_validation_modules_reexport_package_implementations() -> None:
-    """Legacy validation module imports remain stable after moving implementation into the package."""
+def test_feature_validation_modules_expose_package_implementations() -> None:
+    """Canonical validation submodules stay aligned with the package facade."""
     assert api_key_validation.validate_api_key_config is validation_module.validate_api_key_config
     assert (
         oauth_validation.validate_oauth_route_registration_config.__module__ == "litestar_auth._plugin.validation.oauth"

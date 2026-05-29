@@ -32,7 +32,7 @@ from litestar_auth.controllers._utils import _require_account_state
 from litestar_auth.controllers.auth import INVALID_CREDENTIALS_DETAIL
 from litestar_auth.exceptions import AuthorizationError, ErrorCode, UnverifiedUserError
 from litestar_auth.ratelimit import EndpointRateLimit, InMemoryRateLimiter
-from litestar_auth.ratelimit._helpers import _safe_key_part
+from litestar_auth.ratelimit._key_derivation import _safe_key_part
 from litestar_auth.schemas import AdminUserUpdate, ChangePasswordRequest, UserRead, UserUpdate
 from litestar_auth.totp import _current_counter, _generate_totp_code, generate_totp_secret
 

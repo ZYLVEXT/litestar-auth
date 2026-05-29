@@ -39,7 +39,7 @@ if TYPE_CHECKING:
     from collections.abc import Callable
     from types import TracebackType
 
-    from litestar_auth._manager.api_keys import ApiKeyConfigProtocol
+    from litestar_auth._manager.api_key_config import ApiKeyConfigProtocol
     from litestar_auth.db.base import BaseApiKeyStore, BaseUserStore
     from litestar_auth.types import LoginIdentifier
 
