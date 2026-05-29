@@ -1,3 +1,9 @@
+## 4.0.1 (2026-05-29)
+
+### Fix
+
+- **docs**: align auth documentation with code and remove migration-style wording
+
 ## 4.0.0 (2026-05-28)
 
 ### Added
