@@ -82,17 +82,20 @@ TOTP, or API-key request signing to production traffic.
 
 Set `trusted_proxy=True` only on rate-limit endpoints whose traffic reaches the application through a
 trusted reverse proxy or load balancer that overwrites the configured `trusted_headers`. This applies
-to `EndpointRateLimit.trusted_proxy`, `EndpointRateLimit.trusted_headers`, and the shared builders that
+to `EndpointRateLimit.trusted_proxy`, `EndpointRateLimit.trusted_headers`,
+`EndpointRateLimit.trusted_proxy_hops`, and the shared builders that
 copy those settings into endpoint limiters, including `SharedRateLimitConfigOptions.trusted_proxy` and
 `RedisAuthRateLimitConfigOptions.trusted_proxy`.
 
 The default trusted header is `X-Forwarded-For`. When `trusted_proxy=True`, the rate-limit key builder
-uses the **rightmost** `X-Forwarded-For` value because that is the value appended by the immediately
-upstream trusted proxy in common `proxy_add_x_forwarded_for` deployments. Leftmost entries may be
-client-controlled and spoofed. For multi-proxy chains such as CDN -> load balancer -> app, either make
-the trusted edge strip incoming forwarded headers or configure the chain so the application only sees
-headers written by infrastructure you control. Leave `trusted_proxy=False` when those conditions are
-not true; the direct client host is the fail-closed rate-limit identity source.
+uses `trusted_proxy_hops=1` by default, selecting the **rightmost** `X-Forwarded-For` value because
+that is the value appended by the immediately upstream trusted proxy in common
+`proxy_add_x_forwarded_for` deployments. Leftmost entries may be client-controlled and spoofed. For
+multi-proxy chains such as CDN -> load balancer -> app, set `trusted_proxy_hops` to the number of
+trusted proxy hops between the real client IP and the application, counted from the right. If the
+header carries fewer entries than `trusted_proxy_hops`, rate-limit identity fails closed to the direct
+client host. Leave `trusted_proxy=False` when those conditions are not true; the direct client host is
+the fail-closed rate-limit identity source.
 
 ### Cookie transport security requirements
 
@@ -132,6 +135,19 @@ row-level helpers such as `OAuthTokenEncryption.requires_reencrypt(...)` /
 `BaseUserManager.reencrypt_api_key_signing_secret(...)`; it does not provide a global database sweep,
 locking strategy, batching job, audit-log table, or full Fernet key-rotation service. Those migration
 concerns remain application-owned until the library ships a built-in helper.
+
+### Privileged controllers and role administration
+
+The contrib role-admin controller (`create_role_admin_controller(...)`) defaults to a single
+`is_superuser` guard when `guards=None`. An explicit guard sequence replaces that default verbatim —
+including an **empty list**, which leaves the role-administration endpoints with **no authorization
+guard**. The empty-override is intentional (it lets you compose a fully custom guard stack), but it is
+a footgun: never pass `guards=[]` to a privileged controller meaning "use the defaults". In
+production, either leave `guards=None` to keep the `is_superuser` default, or supply an explicit
+non-empty guard sequence that enforces at least equivalent privilege. The role-catalog invariants
+still fail closed regardless of guards — they refuse to modify the system-managed superuser role or
+remove the final superuser assignment — but those are integrity guards, not an authorization
+substitute.
 
 ## DB refresh-session metadata
 
@@ -308,6 +324,7 @@ When `rate_limit_config` is set, throttled endpoints return **429** with **`Retr
 - Set **`oauth_flow_cookie_secret`** for any configured providers. This value is HKDF-derived into the Fernet key that protects the short-lived flow cookie containing OAuth state and the PKCE verifier; keep it high-entropy and distinct from every other auth secret.
 - Plugin-owned OAuth startup fails closed unless **`oauth_redirect_base_url`** uses a public **`https://...`** origin. Plain HTTP and loopback hosts are only supported behind local/test overrides such as `AppConfig(debug=True)` or `unsafe_testing=True`.
 - Manual/custom OAuth controllers require the same public **`https://...`** baseline for `redirect_base_url`, enforced at controller construction time with no localhost or plain-HTTP override.
+- The `redirect_base_url` host is additionally validated against non-routable / SSRF-adjacent ranges (loopback, RFC 1918 private, RFC 3927 link-local including the `169.254.169.254` cloud metadata endpoint, multicast, reserved, unspecified); hostnames are DNS-resolved once at validation time and checked the same way. This gate **fails open** when DNS resolution is unavailable and does **not** defend against DNS rebinding (the address resolved at validation time may differ at runtime). Pair it with runtime **egress controls** on the OAuth callback path so a misconfigured or rebinding `redirect_base_url` cannot reach internal infrastructure.
 - **`oauth_associate_by_email`**: keep `False` unless you understand identity linking risk. If `True` on the plugin-owned route table, pair it with **`oauth_trust_provider_email_verified=True`** only for providers that cryptographically assert email ownership. Manual OAuth controllers use the lower-level **`trust_provider_email_verified=True`** flag instead (see [OAuth guide](guides/oauth.md)).
 
 ## Cookies

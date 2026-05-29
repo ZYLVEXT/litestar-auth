@@ -1371,6 +1371,20 @@ def test_validate_rate_limit_config_rejects_non_boolean_trusted_proxy() -> None:
     assert type(exc_info.value).__name__ == "ConfigurationError"
 
 
+def test_validate_rate_limit_config_rejects_invalid_trusted_proxy_hops() -> None:
+    """Trusted-proxy hop-count validation is delegated to the shared config helper."""
+    rate_limit = EndpointRateLimit(
+        backend=InMemoryRateLimiter(max_attempts=5, window_seconds=60),
+        scope="ip",
+        namespace="login",
+        trusted_proxy_hops=cast("int", 0),
+    )
+
+    with pytest.raises(Exception, match="trusted_proxy_hops must be a positive integer") as exc_info:
+        validate_rate_limit_config(AuthRateLimitConfig(login=rate_limit))
+    assert type(exc_info.value).__name__ == "ConfigurationError"
+
+
 def test_validate_rate_limit_config_accepts_none() -> None:
     """Omitting rate limiting is a valid configuration."""
     validate_rate_limit_config(None)

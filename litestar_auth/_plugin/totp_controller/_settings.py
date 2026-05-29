@@ -161,6 +161,9 @@ def _build_plugin_totp_context_settings[UP: UserProtocol[Any], ID](
         totp_pending_client_binding_trusted_headers=(
             ("X-Forwarded-For",) if totp_verify_rate_limit is None else totp_verify_rate_limit.trusted_headers
         ),
+        totp_pending_client_binding_trusted_proxy_hops=(
+            1 if totp_verify_rate_limit is None else totp_verify_rate_limit.trusted_proxy_hops
+        ),
         effective_pending_jti_store=_totp_resolve_pending_jti_store(
             settings.pending_jti_store,
             unsafe_testing=settings.unsafe_testing,

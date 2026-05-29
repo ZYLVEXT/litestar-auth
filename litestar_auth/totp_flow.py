@@ -79,9 +79,22 @@ def build_pending_totp_client_binding(
     pending_secret: str,
     trusted_proxy: bool = False,
     trusted_headers: tuple[str, ...] = ("X-Forwarded-For",),
+    trusted_proxy_hops: int = 1,
 ) -> PendingTotpClientBinding:
-    """Return keyed client-IP and User-Agent fingerprints for a TOTP pending token."""
-    client_ip = _client_host(request, trusted_proxy=trusted_proxy, trusted_headers=trusted_headers)
+    """Return keyed client-IP and User-Agent fingerprints for a TOTP pending token.
+
+    ``trusted_proxy_hops`` selects which ``X-Forwarded-For`` entry (counted from
+    the right) is fingerprinted. It must mirror the verify-endpoint rate-limit
+    setting so the IP component of the anti-theft client binding resolves to the
+    same hop the limiter keys on; otherwise multi-proxy deployments would bind to
+    the inner proxy address shared by every client behind it.
+    """
+    client_ip = _client_host(
+        request,
+        trusted_proxy=trusted_proxy,
+        trusted_headers=trusted_headers,
+        trusted_proxy_hops=trusted_proxy_hops,
+    )
     user_agent = (request.headers.get("User-Agent") or request.headers.get("user-agent") or "")[
         :_USER_AGENT_FINGERPRINT_MAX_BYTES
     ]

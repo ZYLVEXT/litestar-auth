@@ -211,6 +211,78 @@ def test_build_pending_totp_client_binding_caps_user_agent_length() -> None:
     assert binding.user_agent_fingerprint == expected
 
 
+def _build_forwarded_request(*, forwarded_for: bytes, client_host: str = "10.0.0.1") -> Request[Any, Any, Any]:
+    """Construct a request carrying an X-Forwarded-For header and a direct client host.
+
+    Returns:
+        Minimal request with the proxy header and direct client both populated.
+    """
+    scope = cast(
+        "HTTPScope",
+        {
+            "type": "http",
+            "http_version": "1.1",
+            "method": "POST",
+            "scheme": "http",
+            "path": "/auth/login",
+            "raw_path": b"/auth/login",
+            "root_path": "",
+            "query_string": b"",
+            "headers": [(b"x-forwarded-for", forwarded_for)],
+            "client": (client_host, 12345),
+            "server": ("testserver", 80),
+            "path_params": {},
+            "app": object(),
+        },
+    )
+    return Request(scope=scope)
+
+
+def _expected_ip_fingerprint(client_ip: str) -> str:
+    """Return the keyed fingerprint a binding should carry for ``client_ip``."""
+    return _fingerprint_client_binding_value(client_ip, key=TOTP_PENDING_SECRET.encode())
+
+
+def test_build_pending_totp_client_binding_multi_hop_selects_correct_hop() -> None:
+    """With trusted_proxy_hops=2 the binding fingerprints the second-from-right XFF entry."""
+    request = _build_forwarded_request(forwarded_for=b"203.0.113.7, 198.51.100.4, 198.51.100.5")
+    binding = build_pending_totp_client_binding(
+        request,
+        pending_secret=TOTP_PENDING_SECRET,
+        trusted_proxy=True,
+        trusted_proxy_hops=2,
+    )
+
+    assert binding.client_ip_fingerprint == _expected_ip_fingerprint("198.51.100.4")
+    # Default hops=1 would instead bind the rightmost (inner-proxy) entry.
+    assert binding.client_ip_fingerprint != _expected_ip_fingerprint("198.51.100.5")
+
+
+def test_build_pending_totp_client_binding_fails_closed_on_short_xff() -> None:
+    """A header with fewer entries than the hop count falls back to the direct client host."""
+    request = _build_forwarded_request(forwarded_for=b"203.0.113.7", client_host="10.0.0.1")
+    binding = build_pending_totp_client_binding(
+        request,
+        pending_secret=TOTP_PENDING_SECRET,
+        trusted_proxy=True,
+        trusted_proxy_hops=2,
+    )
+
+    assert binding.client_ip_fingerprint == _expected_ip_fingerprint("10.0.0.1")
+
+
+def test_build_pending_totp_client_binding_default_hops_preserves_rightmost() -> None:
+    """The default hops=1 keeps binding to the rightmost XFF entry (existing behavior)."""
+    request = _build_forwarded_request(forwarded_for=b"203.0.113.7, 198.51.100.4, 198.51.100.5")
+    binding = build_pending_totp_client_binding(
+        request,
+        pending_secret=TOTP_PENDING_SECRET,
+        trusted_proxy=True,
+    )
+
+    assert binding.client_ip_fingerprint == _expected_ip_fingerprint("198.51.100.5")
+
+
 async def test_issue_pending_token_omits_binding_claims_when_disabled() -> None:
     """The opt-out mode does not write empty binding claims into pending tokens."""
     user = ExampleUser(id=uuid4(), email="user@example.com")

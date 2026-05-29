@@ -48,6 +48,7 @@ async def _build_change_password_rate_limit_key(
         request,
         trusted_proxy=rate_limit.trusted_proxy,
         trusted_headers=rate_limit.trusted_headers,
+        trusted_proxy_hops=rate_limit.trusted_proxy_hops,
     )
     return RateLimitKey(
         ":".join(

@@ -25,7 +25,6 @@ from __future__ import annotations
 
 import logging
 import os
-import warnings
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import timedelta
@@ -38,6 +37,7 @@ from litestar.openapi.config import OpenAPIConfig
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import configure_mappers
 
+from examples._demo_secrets import resolve_demo_secrets
 from litestar_auth import (
     AuthenticationBackend,
     BaseUserManager,
@@ -66,28 +66,15 @@ _INSECURE_DEFAULTS = (
 
 def _demo_secrets() -> tuple[str, str, str, str]:
     """Return (jwt, verify, reset, csrf) secrets."""
-    if os.environ.get("LITESTAR_AUTH_DEMO_COOKIE_JWT_INSECURE") == "1":
-        warnings.warn(
-            "LITESTAR_AUTH_DEMO_COOKIE_JWT_INSECURE=1 uses fixed secrets; never enable in production.",
-            stacklevel=2,
-        )
-        return _INSECURE_DEFAULTS
-
-    def _req(name: str) -> str:
-        value = os.environ.get(name)
-        if not value:
-            msg = (
-                f"Missing {name}. Export strong secrets or set "
-                "LITESTAR_AUTH_DEMO_COOKIE_JWT_INSECURE=1 for local demonstration only."
-            )
-            raise RuntimeError(msg)
-        return value
-
-    return (
-        _req("LITESTAR_AUTH_JWT_SECRET"),
-        _req("LITESTAR_AUTH_VERIFY_TOKEN_SECRET"),
-        _req("LITESTAR_AUTH_RESET_PASSWORD_TOKEN_SECRET"),
-        _req("LITESTAR_AUTH_CSRF_SECRET"),
+    return resolve_demo_secrets(
+        insecure_flag="LITESTAR_AUTH_DEMO_COOKIE_JWT_INSECURE",
+        insecure_defaults=_INSECURE_DEFAULTS,
+        secret_names=(
+            "LITESTAR_AUTH_JWT_SECRET",
+            "LITESTAR_AUTH_VERIFY_TOKEN_SECRET",
+            "LITESTAR_AUTH_RESET_PASSWORD_TOKEN_SECRET",
+            "LITESTAR_AUTH_CSRF_SECRET",
+        ),
     )
 
 

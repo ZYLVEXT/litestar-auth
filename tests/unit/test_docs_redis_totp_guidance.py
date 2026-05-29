@@ -95,8 +95,8 @@ def test_deployment_security_contract_references_runtime_config_fields() -> None
     assert "X-Forwarded-For" in deployment_content
 
     endpoint_limit_fields = {field.name for field in fields(EndpointRateLimit)}
-    assert {"trusted_proxy", "trusted_headers"} <= endpoint_limit_fields
-    for field_name in ("trusted_proxy", "trusted_headers"):
+    assert {"trusted_proxy", "trusted_headers", "trusted_proxy_hops"} <= endpoint_limit_fields
+    for field_name in ("trusted_proxy", "trusted_headers", "trusted_proxy_hops"):
         assert field_name in deployment_content
 
     cookie_fields = {field.name for field in fields(CookieTransportConfig)}

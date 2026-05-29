@@ -87,6 +87,8 @@ shared_backend = InMemoryRateLimiter(max_attempts=10, window_seconds=60)
 rate_limit_config = AuthRateLimitConfig.from_shared_backend(
     shared_backend,
     options=SharedRateLimitConfigOptions(
+        trusted_proxy=True,
+        trusted_proxy_hops=2,
         endpoint_overrides={
             AuthRateLimitSlot.TOTP_VERIFY: EndpointRateLimit(
                 backend=shared_backend,
@@ -102,6 +104,12 @@ rate_limit_config = AuthRateLimitConfig.from_shared_backend(
 slot inventory directly, iterate `AuthRateLimitSlot`. Use `tuple(AuthRateLimitSlot)` for explicit
 `enabled=...` options, and use `{AuthRateLimitSlot.VERIFY_TOKEN, AuthRateLimitSlot.REQUEST_VERIFY_TOKEN}`
 for `disabled=...` options when the built-in verification routes stay off.
+
+When rate-limited traffic reaches the app through trusted reverse proxies, set `trusted_proxy=True`
+only after your edge strips or overwrites client-supplied forwarding headers. The default
+`trusted_proxy_hops=1` keeps the existing single-proxy behavior and selects the rightmost
+`X-Forwarded-For` entry. Multi-proxy chains can set `trusted_proxy_hops=N` to select the Nth entry
+from the right; if the header has fewer entries, the limiter fails closed to `request.client.host`.
 
 ## `AuthRateLimitSlot`
 
@@ -210,7 +218,13 @@ Keep direct `AuthRateLimitConfig(..., EndpointRateLimit(...))` construction for 
 from litestar_auth.ratelimit import AuthRateLimitConfig, EndpointRateLimit
 
 rate_limit_config = AuthRateLimitConfig(
-    login=EndpointRateLimit(backend=login_backend, scope="ip_email", namespace="login"),
+    login=EndpointRateLimit(
+        backend=login_backend,
+        scope="ip_email",
+        namespace="login",
+        trusted_proxy=True,
+        trusted_proxy_hops=2,
+    ),
     totp_verify=EndpointRateLimit(backend=totp_backend, scope="ip", namespace="totp-verify"),
 )
 ```

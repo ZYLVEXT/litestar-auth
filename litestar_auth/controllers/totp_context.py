@@ -51,6 +51,7 @@ class _TotpPendingTokenContext[ID]:
     totp_pending_require_client_binding: bool
     totp_pending_client_binding_trusted_proxy: bool
     totp_pending_client_binding_trusted_headers: tuple[str, ...]
+    totp_pending_client_binding_trusted_proxy_hops: int
     effective_pending_jti_store: JWTDenylistStore | None
     id_parser: Callable[[str], ID] | None
 
@@ -92,6 +93,7 @@ class _TotpControllerContextSettings[UP: UserProtocol[Any], ID]:
     totp_pending_require_client_binding: bool
     totp_pending_client_binding_trusted_proxy: bool
     totp_pending_client_binding_trusted_headers: tuple[str, ...]
+    totp_pending_client_binding_trusted_proxy_hops: int
     effective_pending_jti_store: JWTDenylistStore | None
     id_parser: Callable[[str], ID] | None
     unsafe_testing: bool
@@ -216,6 +218,7 @@ def _build_totp_controller_context[UP: UserProtocol[Any], ID](
             totp_pending_require_client_binding=settings.totp_pending_require_client_binding,
             totp_pending_client_binding_trusted_proxy=settings.totp_pending_client_binding_trusted_proxy,
             totp_pending_client_binding_trusted_headers=settings.totp_pending_client_binding_trusted_headers,
+            totp_pending_client_binding_trusted_proxy_hops=settings.totp_pending_client_binding_trusted_proxy_hops,
             effective_pending_jti_store=settings.effective_pending_jti_store,
             id_parser=settings.id_parser,
         ),

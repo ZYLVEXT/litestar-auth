@@ -27,12 +27,12 @@ from litestar_auth._secret_roles import (
 from litestar_auth.exceptions import ConfigurationError
 
 MINIMUM_SECRET_LENGTH = 32
-# Shannon-entropy floor recommended for production-config secrets. 128 bits
-# rejects degenerate misconfig ("a" * 32 ≈ 0 bits) while comfortably accepting
-# ``secrets.token_hex(32)`` (~256 bits) and ``secrets.token_urlsafe(32)``
-# (~256 bits). Operators can pass a stricter floor through
-# :func:`validate_secret_strength`.
+# Entropy floor recommended for production-config secrets. 128 bits rejects
+# degenerate misconfig and short repeated structured patterns while comfortably
+# accepting ``secrets.token_hex(32)`` and ``secrets.token_urlsafe(32)``.
+# Operators can pass a stricter floor through :func:`validate_secret_strength`.
 MINIMUM_SECRET_ENTROPY_BITS = 128.0
+_REPEATED_SECRET_UNIT_LENGTH_FLOOR = MINIMUM_SECRET_LENGTH // 2
 # Shared password-length bounds for built-in validation and schema metadata.
 DEFAULT_MINIMUM_PASSWORD_LENGTH = 12
 MAX_PASSWORD_LENGTH = 128
@@ -57,6 +57,7 @@ __all__ = (
     "SecretRoleValues",
     "UnsetType",
     "require_password_length",
+    "resolve_trusted_proxy_hops",
     "resolve_trusted_proxy_setting",
     "validate_oauth_provider_name",
     "validate_production_secret",
@@ -176,6 +177,36 @@ def _shannon_entropy_bits(value: str) -> float:
     return -sum((count / length) * math.log2(count / length) for count in counter.values()) * length
 
 
+def _shortest_repeating_unit(value: str) -> str:
+    """Return the smallest substring that exactly reconstructs a repeated value."""
+    length = len(value)
+    for unit_length in range(1, (length // 2) + 1):
+        if length % unit_length != 0:
+            continue
+        unit = value[:unit_length]
+        if unit * (length // unit_length) == value:
+            return unit
+    return value
+
+
+def _estimated_secret_entropy_bits(value: str) -> float:
+    """Estimate secret entropy with a cap for exactly repeated structured patterns.
+
+    Observed Shannon entropy treats ``"abc123" * 22`` as a 132-character
+    six-symbol distribution, even though the configured material is just one
+    short phrase copied repeatedly. When a secret is an exact periodic string
+    built from a short unit, cap its score at the entropy of that unit;
+    otherwise retain the observed-frequency estimate used by older releases.
+
+    Returns:
+        Estimated entropy bits used for production secret validation.
+    """
+    repeating_unit = _shortest_repeating_unit(value)
+    if repeating_unit == value or len(repeating_unit) >= _REPEATED_SECRET_UNIT_LENGTH_FLOOR:
+        return _shannon_entropy_bits(value)
+    return _shannon_entropy_bits(repeating_unit)
+
+
 def validate_secret_strength(
     secret: str,
     *,
@@ -183,7 +214,7 @@ def validate_secret_strength(
     minimum_length: int = MINIMUM_SECRET_LENGTH,
     minimum_entropy_bits: float = MINIMUM_SECRET_ENTROPY_BITS,
 ) -> None:
-    """Validate that a configured secret clears length and Shannon-entropy floors.
+    """Validate that a configured secret clears length and entropy floors.
 
     The base library checks length only at constructor seams to keep test
     fixtures interchangeable with production config. ``validate_secret_strength``
@@ -198,7 +229,7 @@ def validate_secret_strength(
         label: Human-readable label used in error messages.
         minimum_length: Minimum length in characters (defaults to
             :data:`MINIMUM_SECRET_LENGTH`).
-        minimum_entropy_bits: Minimum approximate Shannon entropy in bits
+        minimum_entropy_bits: Minimum approximate entropy in bits
             (defaults to :data:`MINIMUM_SECRET_ENTROPY_BITS`). Pass ``0`` to
             skip the entropy check while keeping length validation.
 
@@ -211,7 +242,7 @@ def validate_secret_strength(
     validate_secret_length(secret, label=label, minimum_length=minimum_length)
     if minimum_entropy_bits <= 0:
         return
-    bits = _shannon_entropy_bits(secret)
+    bits = _estimated_secret_entropy_bits(secret)
     if bits < minimum_entropy_bits:
         msg = (
             f"{label} has insufficient entropy (~{bits:.0f} bits; required "
@@ -332,4 +363,23 @@ def resolve_trusted_proxy_setting(*, trusted_proxy: object) -> bool:
         return trusted_proxy
 
     msg = "trusted_proxy must be a boolean."
+    raise ConfigurationError(msg)
+
+
+def resolve_trusted_proxy_hops(*, trusted_proxy_hops: object) -> int:
+    """Validate and normalize trusted-proxy hop counts.
+
+    Args:
+        trusted_proxy_hops: Candidate X-Forwarded-For hop count from configuration.
+
+    Returns:
+        Positive integer hop count.
+
+    Raises:
+        ConfigurationError: If ``trusted_proxy_hops`` is not a positive integer.
+    """
+    if isinstance(trusted_proxy_hops, int) and not isinstance(trusted_proxy_hops, bool) and trusted_proxy_hops > 0:
+        return trusted_proxy_hops
+
+    msg = "trusted_proxy_hops must be a positive integer."
     raise ConfigurationError(msg)

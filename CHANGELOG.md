@@ -1,3 +1,45 @@
+## Unreleased
+
+### Added
+
+- **Configurable trusted-proxy hop count for rate limiting.** `EndpointRateLimit.trusted_proxy_hops`
+  (plus `SharedRateLimitConfigOptions.trusted_proxy_hops` and
+  `RedisAuthRateLimitConfigOptions.trusted_proxy_hops`) selects which `X-Forwarded-For` entry, counted
+  from the right, is trusted as the client IP behind a multi-proxy chain (CDN → LB → app). The default
+  `1` preserves the previous rightmost-entry behavior byte-for-byte; when the header carries fewer
+  entries than the configured hop count, rate-limit identity fails closed to the direct client host.
+
+### Changed
+
+- **Demo example apps share one secret-resolution helper.** All seven `examples/demo_*/app.py` resolve
+  secrets through `examples._demo_secrets.resolve_demo_secrets`, centralizing the insecure-default
+  warning and the env-var-read-or-raise behavior while preserving each app's `*_INSECURE` flag,
+  default tuple, error wording, and tuple/dataclass return shape. Examples only; no library API change.
+
+### Security
+
+- **Stronger production secret entropy validation.** `validate_secret_strength` now estimates entropy
+  with a pattern-aware heuristic that caps exactly-periodic secrets built from a short repeated unit
+  (e.g. `"abc123" * 22`) at the entropy of that unit, so structured-but-long secrets that previously
+  cleared the 128-bit floor are rejected at startup. Cryptographically random secrets
+  (`secrets.token_hex(32)`, `secrets.token_urlsafe(32)`) still pass, and the `unsafe_testing=True` and
+  `minimum_entropy_bits=0` bypasses are unchanged. **Potentially breaking:** weak production secrets
+  that previously validated may now be rejected — generate strong secrets and redeploy.
+- **Trusted-proxy hop count applied to the TOTP pending-token client binding.**
+  `build_pending_totp_client_binding` honors `trusted_proxy_hops`, sourced from the configured
+  `totp_verify_rate_limit`, so the anti-theft client-IP fingerprint resolves the same `X-Forwarded-For`
+  hop the verify-endpoint rate limiter keys on. Previously this path always trusted the rightmost
+  entry, which in multi-proxy deployments bound to the shared inner-proxy address. The default of 1 hop
+  is unchanged.
+
+### Documentation
+
+- **Deployment hardening guidance.** The deployment security contract documents the role-admin
+  controller authorization footgun (an explicit empty `guards=[]` disables the default `is_superuser`
+  guard) and the limits of the OAuth `redirect_base_url` SSRF gate (validation-time DNS check that
+  fails open on resolver errors and does not defend against DNS rebinding — pair it with runtime egress
+  controls).
+
 ## 4.0.1 (2026-05-29)
 
 ### Fix

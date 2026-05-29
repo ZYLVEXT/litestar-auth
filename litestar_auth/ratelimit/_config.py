@@ -63,6 +63,7 @@ class SharedRateLimitConfigOptions:
         trusted_proxy: Shared trusted-proxy setting applied to generated limiters.
         identity_fields: Shared request body identity fields applied to generated limiters.
         trusted_headers: Shared trusted proxy header names applied to generated limiters.
+        trusted_proxy_hops: Shared X-Forwarded-For hop count applied to generated limiters.
     """
 
     enabled: Iterable[AuthRateLimitSlot] | None = None
@@ -72,6 +73,7 @@ class SharedRateLimitConfigOptions:
     trusted_proxy: bool = False
     identity_fields: tuple[str, ...] = _DEFAULT_IDENTITY_FIELDS
     trusted_headers: tuple[str, ...] = _DEFAULT_TRUSTED_HEADERS
+    trusted_proxy_hops: int = 1
 
 
 @dataclass(slots=True, frozen=True)
@@ -84,6 +86,7 @@ class _EndpointBuildSettings:
     trusted_proxy: bool
     identity_fields: tuple[str, ...]
     trusted_headers: tuple[str, ...]
+    trusted_proxy_hops: int
 
 
 @dataclass(slots=True, frozen=True)
@@ -111,6 +114,7 @@ class _AuthRateLimitConfigItems:
     trusted_proxy: bool
     identity_fields: tuple[str, ...]
     trusted_headers: tuple[str, ...]
+    trusted_proxy_hops: int
 
 
 def _validate_builder_names[NameT: str](
@@ -214,6 +218,7 @@ def _build_auth_rate_limit_endpoint(
         trusted_proxy=settings.trusted_proxy,
         identity_fields=settings.identity_fields,
         trusted_headers=settings.trusted_headers,
+        trusted_proxy_hops=settings.trusted_proxy_hops,
     )
 
 
@@ -325,6 +330,7 @@ def _iter_auth_rate_limit_config_items(
                 trusted_proxy=settings.trusted_proxy,
                 identity_fields=settings.identity_fields,
                 trusted_headers=settings.trusted_headers,
+                trusted_proxy_hops=settings.trusted_proxy_hops,
             ),
         ),
     )
@@ -460,6 +466,7 @@ class AuthRateLimitConfig:
                     trusted_proxy=resolved_options.trusted_proxy,
                     identity_fields=resolved_options.identity_fields,
                     trusted_headers=resolved_options.trusted_headers,
+                    trusted_proxy_hops=resolved_options.trusted_proxy_hops,
                 ),
             ),
         )

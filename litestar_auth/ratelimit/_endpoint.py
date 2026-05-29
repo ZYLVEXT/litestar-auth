@@ -35,6 +35,7 @@ class EndpointRateLimit:
     trusted_proxy: bool = False
     identity_fields: tuple[str, ...] = _DEFAULT_IDENTITY_FIELDS
     trusted_headers: tuple[str, ...] = _DEFAULT_TRUSTED_HEADERS
+    trusted_proxy_hops: int = 1
 
     async def before_request(self, request: KnownRateLimitConnection) -> None:
         """Reject the request with 429 when its key is over the configured limit.
@@ -82,7 +83,12 @@ class EndpointRateLimit:
         Returns:
             Namespaced rate-limit key for the request.
         """
-        host = _client_host(request, trusted_proxy=self.trusted_proxy, trusted_headers=self.trusted_headers)
+        host = _client_host(
+            request,
+            trusted_proxy=self.trusted_proxy,
+            trusted_headers=self.trusted_headers,
+            trusted_proxy_hops=self.trusted_proxy_hops,
+        )
         parts = [self.namespace, _safe_key_part(host)]
         if self.scope == "ip_email":
             email = await _extract_email(request, identity_fields=self.identity_fields)

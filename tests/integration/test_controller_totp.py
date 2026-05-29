@@ -339,6 +339,7 @@ def _build_direct_totp_context(
             totp_pending_require_client_binding=True,
             totp_pending_client_binding_trusted_proxy=False,
             totp_pending_client_binding_trusted_headers=("X-Forwarded-For",),
+            totp_pending_client_binding_trusted_proxy_hops=1,
             effective_pending_jti_store=cast("Any", effective_pending_jti_store),
             id_parser=UUID,
             unsafe_testing=False,

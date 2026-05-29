@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+import secrets as _secrets
 import warnings
 
 import pytest
@@ -23,7 +24,9 @@ TOTP_ENROLL_AUDIENCE = config_module.TOTP_ENROLL_AUDIENCE
 TOTP_PENDING_AUDIENCE = config_module.TOTP_PENDING_AUDIENCE
 VERIFY_TOKEN_AUDIENCE = config_module.VERIFY_TOKEN_AUDIENCE
 _resolve_token_secret = config_module._resolve_token_secret
+_estimated_secret_entropy_bits = config_module._estimated_secret_entropy_bits
 _shannon_entropy_bits = config_module._shannon_entropy_bits
+resolve_trusted_proxy_hops = config_module.resolve_trusted_proxy_hops
 resolve_trusted_proxy_setting = config_module.resolve_trusted_proxy_setting
 validate_production_secret = config_module.validate_production_secret
 validate_secret_length = config_module.validate_secret_length
@@ -31,6 +34,7 @@ validate_secret_strength = config_module.validate_secret_strength
 
 pytestmark = pytest.mark.unit
 GENERATED_SECRET_HEX_LENGTH = 64
+MULTI_PROXY_HOPS = 2
 
 
 def test_config_defines_canonical_token_audiences() -> None:
@@ -148,7 +152,7 @@ def test_resolve_token_secret_skips_length_validation_under_explicit_unsafe_test
 
 def test_resolve_token_secret_returns_explicit_secret_in_production() -> None:
     """Configured production secrets are returned unchanged."""
-    secret = "0123456789abcdef" * 4
+    secret = "c1e8f42a79b035d6a9f03c2e81d4765bf2a70e6c9d1348b5ad02f7c6e9b4183a"
 
     assert _resolve_token_secret(secret, label="JWT secret") == secret
 
@@ -173,16 +177,21 @@ def test_shannon_entropy_bits_grows_with_alphabet_size() -> None:
     """Uniformly drawn high-alphabet strings score near the theoretical maximum."""
     # ``secrets.token_hex(32)`` yields 64 chars over 16 hex symbols; the
     # observed-frequency estimate sits comfortably above 128 bits.
-    import secrets as _secrets  # noqa: PLC0415
-
     assert _shannon_entropy_bits(_secrets.token_hex(32)) > MINIMUM_SECRET_ENTROPY_BITS
+
+
+def test_estimated_secret_entropy_caps_repeated_structured_pattern() -> None:
+    """Repeated phrases score as the phrase, not as the expanded copy."""
+    weak_secret = "abc123" * 22
+
+    assert _shannon_entropy_bits(weak_secret) > MINIMUM_SECRET_ENTROPY_BITS
+    assert _estimated_secret_entropy_bits(weak_secret) < MINIMUM_SECRET_ENTROPY_BITS
 
 
 def test_validate_secret_strength_accepts_high_entropy_secret() -> None:
     """Cryptographically random secrets clear both length and entropy floors."""
-    import secrets as _secrets  # noqa: PLC0415
-
     validate_secret_strength(_secrets.token_hex(32), label="JWT secret")
+    validate_secret_strength(_secrets.token_urlsafe(32), label="JWT secret")
 
 
 def test_validate_secret_strength_rejects_low_entropy_secret() -> None:
@@ -193,6 +202,12 @@ def test_validate_secret_strength_rejects_low_entropy_secret() -> None:
     """
     with pytest.raises(ConfigurationError, match="insufficient entropy"):
         validate_secret_strength("a" * MINIMUM_SECRET_LENGTH, label="JWT secret")
+
+
+def test_validate_secret_strength_rejects_weak_but_long_repeated_secret() -> None:
+    """Pattern repetition cannot satisfy the production entropy floor."""
+    with pytest.raises(ConfigurationError, match="insufficient entropy"):
+        validate_secret_strength("abc123" * 22, label="JWT secret")
 
 
 def test_validate_secret_strength_rejects_short_secret_before_entropy_check() -> None:
@@ -231,6 +246,15 @@ def test_validate_production_secret_preserves_explicit_unsafe_testing_shortcut()
     validate_production_secret("short", label="JWT secret", unsafe_testing=True)
 
 
+def test_validate_production_secret_preserves_zero_floor_skip_hatch() -> None:
+    """The explicit zero-floor opt-out keeps length validation but skips entropy."""
+    validate_production_secret(
+        "abc123" * 22,
+        label="JWT secret",
+        minimum_entropy_bits=0,
+    )
+
+
 @pytest.mark.parametrize("trusted_proxy", [True, False])
 def test_resolve_trusted_proxy_setting_returns_boolean(trusted_proxy: object) -> None:
     """Boolean trusted-proxy settings are preserved."""
@@ -241,3 +265,15 @@ def test_resolve_trusted_proxy_setting_rejects_non_boolean() -> None:
     """Non-boolean trusted-proxy settings raise a configuration error."""
     with pytest.raises(ConfigurationError, match="trusted_proxy must be a boolean\\."):
         resolve_trusted_proxy_setting(trusted_proxy="yes")
+
+
+def test_resolve_trusted_proxy_hops_returns_positive_integer() -> None:
+    """Positive integer trusted-proxy hop counts are preserved."""
+    assert resolve_trusted_proxy_hops(trusted_proxy_hops=MULTI_PROXY_HOPS) == MULTI_PROXY_HOPS
+
+
+@pytest.mark.parametrize("trusted_proxy_hops", [0, -1, True, "2"])
+def test_resolve_trusted_proxy_hops_rejects_invalid_values(trusted_proxy_hops: object) -> None:
+    """Invalid trusted-proxy hop counts raise a configuration error."""
+    with pytest.raises(ConfigurationError, match="trusted_proxy_hops must be a positive integer\\."):
+        resolve_trusted_proxy_hops(trusted_proxy_hops=trusted_proxy_hops)

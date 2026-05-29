@@ -10,6 +10,8 @@ from typing import TYPE_CHECKING, Final
 import pytest
 from litestar import Litestar
 
+from examples._demo_secrets import resolve_demo_secrets
+
 if TYPE_CHECKING:
     from pathlib import Path
 
@@ -75,3 +77,53 @@ def test_example_apps_construct_with_isolated_sqlite(
         )
         mod = importlib.import_module(module_qname)
     assert isinstance(mod.app, Litestar)
+
+
+@pytest.mark.unit
+def test_resolve_demo_secrets_uses_insecure_defaults_with_warning(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Insecure demo mode must keep returning the fixed app-specific secrets."""
+    monkeypatch.setenv("LITESTAR_AUTH_DEMO_TEST_INSECURE", "1")
+
+    with pytest.warns(
+        UserWarning,
+        match=r"LITESTAR_AUTH_DEMO_TEST_INSECURE=1 uses fixed secrets; never enable in production\.",
+    ):
+        secrets = resolve_demo_secrets(
+            insecure_flag="LITESTAR_AUTH_DEMO_TEST_INSECURE",
+            insecure_defaults=("jwt", "csrf"),
+            secret_names=("LITESTAR_AUTH_JWT_SECRET", "LITESTAR_AUTH_CSRF_SECRET"),
+        )
+
+    assert secrets == ("jwt", "csrf")
+
+
+@pytest.mark.unit
+def test_resolve_demo_secrets_reads_required_env_values(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Required env values are returned in the app-provided order."""
+    monkeypatch.setenv("LITESTAR_AUTH_JWT_SECRET", "jwt-secret")
+    monkeypatch.setenv("LITESTAR_AUTH_CSRF_SECRET", "csrf-secret")
+
+    secrets = resolve_demo_secrets(
+        insecure_flag="LITESTAR_AUTH_DEMO_TEST_INSECURE",
+        insecure_defaults=("unused", "unused"),
+        secret_names=("LITESTAR_AUTH_JWT_SECRET", "LITESTAR_AUTH_CSRF_SECRET"),
+    )
+
+    assert secrets == ("jwt-secret", "csrf-secret")
+
+
+@pytest.mark.unit
+def test_resolve_demo_secrets_raises_for_missing_required_env() -> None:
+    """Missing required secrets name the env var and the app-specific insecure flag."""
+    with pytest.raises(
+        RuntimeError,
+        match=(
+            r"Missing LITESTAR_AUTH_JWT_SECRET\. Export strong secrets or set "
+            r"LITESTAR_AUTH_DEMO_TEST_INSECURE=1 for local demonstration only\."
+        ),
+    ):
+        resolve_demo_secrets(
+            insecure_flag="LITESTAR_AUTH_DEMO_TEST_INSECURE",
+            insecure_defaults=("unused",),
+            secret_names=("LITESTAR_AUTH_JWT_SECRET",),
+        )

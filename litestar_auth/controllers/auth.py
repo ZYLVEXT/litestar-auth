@@ -124,6 +124,7 @@ class _AuthControllerContext[UP: UserProtocol[Any], ID]:
     login_minimum_response_seconds: float
     totp_pending_client_binding_trusted_proxy: bool
     totp_pending_client_binding_trusted_headers: tuple[str, ...]
+    totp_pending_client_binding_trusted_proxy_hops: int
 
 
 @dataclass(frozen=True, slots=True)
@@ -215,6 +216,9 @@ def _make_auth_controller_context[UP: UserProtocol[Any], ID](
         ),
         totp_pending_client_binding_trusted_headers=(
             ("X-Forwarded-For",) if totp_verify_rate_limit is None else totp_verify_rate_limit.trusted_headers
+        ),
+        totp_pending_client_binding_trusted_proxy_hops=(
+            1 if totp_verify_rate_limit is None else totp_verify_rate_limit.trusted_proxy_hops
         ),
     )
 
@@ -342,6 +346,7 @@ async def _maybe_issue_totp_pending_response[UP: UserProtocol[Any], ID](
             pending_secret=cast("str", ctx.totp_pending_secret),
             trusted_proxy=ctx.totp_pending_client_binding_trusted_proxy,
             trusted_headers=ctx.totp_pending_client_binding_trusted_headers,
+            trusted_proxy_hops=ctx.totp_pending_client_binding_trusted_proxy_hops,
         )
         if ctx.totp_pending_require_client_binding
         else None

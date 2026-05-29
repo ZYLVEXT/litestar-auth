@@ -24,7 +24,6 @@ indexes for production workloads.
 from __future__ import annotations
 
 import os
-import warnings
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from pathlib import Path
@@ -36,6 +35,7 @@ from litestar.openapi.config import OpenAPIConfig
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import configure_mappers
 
+from examples._demo_secrets import resolve_demo_secrets
 from litestar_auth import (
     BaseUserManager,
     DatabaseTokenAuthConfig,
@@ -71,24 +71,15 @@ class DemoUserManager(BaseUserManager[User, UUID]):
 
 def _demo_secrets() -> tuple[str, str, str]:
     """Return (db_token_hash, verify, reset) secrets."""
-    if os.environ.get("LITESTAR_AUTH_DEMO_DB_TOKEN_INSECURE") == "1":
-        warnings.warn(
-            "LITESTAR_AUTH_DEMO_DB_TOKEN_INSECURE=1 uses fixed secrets; never enable in production.",
-            stacklevel=2,
-        )
-        return _DB_TOKEN_INSECURE
-
-    def _req(name: str) -> str:
-        value = os.environ.get(name)
-        if not value:
-            msg = f"Missing {name}. Set strong secrets or LITESTAR_AUTH_DEMO_DB_TOKEN_INSECURE=1 for local demos only."
-            raise RuntimeError(msg)
-        return value
-
-    return (
-        _req("LITESTAR_AUTH_DB_TOKEN_HASH_SECRET"),
-        _req("LITESTAR_AUTH_VERIFY_TOKEN_SECRET"),
-        _req("LITESTAR_AUTH_RESET_PASSWORD_TOKEN_SECRET"),
+    return resolve_demo_secrets(
+        insecure_flag="LITESTAR_AUTH_DEMO_DB_TOKEN_INSECURE",
+        insecure_defaults=_DB_TOKEN_INSECURE,
+        secret_names=(
+            "LITESTAR_AUTH_DB_TOKEN_HASH_SECRET",
+            "LITESTAR_AUTH_VERIFY_TOKEN_SECRET",
+            "LITESTAR_AUTH_RESET_PASSWORD_TOKEN_SECRET",
+        ),
+        missing_value_message="Missing {name}. Set strong secrets or {insecure_flag}=1 for local demos only.",
     )
 
 

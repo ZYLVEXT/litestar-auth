@@ -24,6 +24,7 @@ if TYPE_CHECKING:
     from tests._helpers import AsyncFakeRedis
 
 pytestmark = pytest.mark.unit
+MULTI_PROXY_HOPS = 2
 
 
 def test_redis_auth_preset_build_rate_limit_config_signature_tracks_canonical_builder_surface() -> None:
@@ -72,6 +73,7 @@ def test_redis_auth_preset_build_rate_limit_config_uses_endpoint_overrides(
             trusted_proxy=True,
             identity_fields=("email",),
             trusted_headers=("X-Real-IP",),
+            trusted_proxy_hops=MULTI_PROXY_HOPS,
         ),
     )
 
@@ -81,6 +83,7 @@ def test_redis_auth_preset_build_rate_limit_config_uses_endpoint_overrides(
     assert config.login.trusted_proxy is True
     assert config.login.identity_fields == ("email",)
     assert config.login.trusted_headers == ("X-Real-IP",)
+    assert config.login.trusted_proxy_hops == MULTI_PROXY_HOPS
     assert config.refresh is not None
     assert config.refresh.backend is refresh_backend
     assert config.forgot_password is forgot_password_override

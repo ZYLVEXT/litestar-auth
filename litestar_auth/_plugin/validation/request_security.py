@@ -8,7 +8,12 @@ from typing import TYPE_CHECKING, Any, cast
 from litestar_auth._plugin.middleware import get_cookie_transports
 from litestar_auth._plugin.rate_limit import iter_rate_limit_endpoints
 from litestar_auth._plugin.validation._core import format_configuration_message
-from litestar_auth.config import MINIMUM_SECRET_LENGTH, resolve_trusted_proxy_setting, validate_production_secret
+from litestar_auth.config import (
+    MINIMUM_SECRET_LENGTH,
+    resolve_trusted_proxy_hops,
+    resolve_trusted_proxy_setting,
+    validate_production_secret,
+)
 from litestar_auth.exceptions import ConfigurationError
 from litestar_auth.types import UserProtocol
 
@@ -65,6 +70,7 @@ def validate_rate_limit_config(rate_limit_config: object) -> None:
         if endpoint_limit is None:
             continue
         resolve_trusted_proxy_setting(trusted_proxy=endpoint_limit.trusted_proxy)
+        resolve_trusted_proxy_hops(trusted_proxy_hops=endpoint_limit.trusted_proxy_hops)
 
 
 def validate_cookie_auth_config[UP: UserProtocol[Any], ID](config: LitestarAuthConfig[UP, ID]) -> None:

@@ -62,6 +62,8 @@ only when a secondary startup backend should issue post-2FA tokens.
 !!! note "Pending-token client binding"
     The plugin-owned auth and TOTP controllers both forward `TotpConfig.totp_pending_require_client_binding`. Keep the default `True` unless your proxy topology cannot provide stable client metadata and you accept pending-token replay from a different client. The fingerprints are SHA-256 hex values, not raw IP or User-Agent strings.
 
+    The client-IP fingerprint resolves through the same `trusted_proxy`, `trusted_headers`, and `trusted_proxy_hops` settings as the `/2fa/verify` rate limiter — these are mirrored from `totp_verify` so the binding keys on the same `X-Forwarded-For` hop the limiter does. In a multi-proxy deployment set `totp_verify.trusted_proxy_hops=N` (see [rate limiting](../guides/rate_limiting.md)); otherwise the binding would fingerprint the inner-proxy address shared by every client behind it and the IP component would no longer distinguish callers.
+
 !!! note "Pending-enrollment store"
     The plugin-owned controller forwards `TotpConfig.totp_enrollment_store` into `create_totp_controller(..., enrollment_store=...)`. In production, missing enrollment storage fails closed unless `unsafe_testing=True`; each `/2fa/enable` replaces the previous pending enrollment for that user, and `/2fa/enable/confirm` consumes the matching `jti` once.
 

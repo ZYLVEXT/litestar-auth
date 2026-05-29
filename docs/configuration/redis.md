@@ -51,6 +51,8 @@ redis_auth = RedisAuthPreset(
 rate_limit_config = redis_auth.build_rate_limit_config(
     options=RedisAuthRateLimitConfigOptions(
         disabled={AuthRateLimitSlot.VERIFY_TOKEN, AuthRateLimitSlot.REQUEST_VERIFY_TOKEN},
+        trusted_proxy=True,
+        trusted_proxy_hops=2,
     ),
 )
 totp_config = TotpConfig(
@@ -142,6 +144,8 @@ rate_limit_config = AuthRateLimitConfig.from_shared_backend(
     options=SharedRateLimitConfigOptions(
         enabled=tuple(AuthRateLimitSlot),
         disabled={AuthRateLimitSlot.VERIFY_TOKEN, AuthRateLimitSlot.REQUEST_VERIFY_TOKEN},
+        trusted_proxy=True,
+        trusted_proxy_hops=2,
     ),
 )
 totp_used_tokens_store = RedisUsedTotpCodeStore(redis=redis_client)
@@ -205,6 +209,8 @@ redis_auth = RedisAuthPreset(
 rate_limit_config = redis_auth.build_rate_limit_config(
     options=RedisAuthRateLimitConfigOptions(
         disabled={AuthRateLimitSlot.VERIFY_TOKEN, AuthRateLimitSlot.REQUEST_VERIFY_TOKEN},
+        trusted_proxy=True,
+        trusted_proxy_hops=2,
     ),
 )
 ```

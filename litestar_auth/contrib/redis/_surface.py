@@ -83,6 +83,8 @@ class RedisAuthRateLimitConfigOptions:
         trusted_headers: Optional shared trusted proxy header names. When
             omitted, ``AuthRateLimitConfig.from_shared_backend()`` keeps its
             current default.
+        trusted_proxy_hops: Shared X-Forwarded-For hop count applied to
+            generated limiters.
     """
 
     enabled: typing.Iterable[AuthRateLimitSlot] | None = None
@@ -92,6 +94,7 @@ class RedisAuthRateLimitConfigOptions:
     trusted_proxy: bool = False
     identity_fields: tuple[str, ...] | None = None
     trusted_headers: tuple[str, ...] | None = None
+    trusted_proxy_hops: int = 1
 
 
 @runtime_checkable
@@ -196,6 +199,7 @@ class RedisAuthPreset:
                 if resolved_options.trusted_headers is not None
                 else default_shared_options.trusted_headers
             ),
+            trusted_proxy_hops=resolved_options.trusted_proxy_hops,
         )
         return AuthRateLimitConfig.from_shared_backend(shared_backend, options=shared_options)
 

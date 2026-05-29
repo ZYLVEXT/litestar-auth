@@ -21,6 +21,7 @@ from litestar.exceptions import TooManyRequestsException
 from redis.exceptions import ConnectionError as RedisConnectionError
 
 import litestar_auth.ratelimit as ratelimit_module
+import litestar_auth.ratelimit._client_host as ratelimit_client_host_module
 import litestar_auth.ratelimit._config as ratelimit_config_module
 import litestar_auth.ratelimit._endpoint as ratelimit_endpoint_module
 import litestar_auth.ratelimit._helpers as ratelimit_helpers_module
@@ -79,6 +80,7 @@ LENIENT_STRICT_MAX_ATTEMPTS = 5
 LENIENT_MEMORY_WINDOW_SECONDS = 300
 LENIENT_REDIS_WINDOW_SECONDS = 120
 EXPECTED_DISTINCT_PROXY_WARNINGS = 2
+MULTI_PROXY_HOPS = 2
 
 AUTH_RATE_LIMIT_SLOT_IDENTIFIERS: tuple[AuthRateLimitSlot, ...] = (
     AuthRateLimitSlot.LOGIN,
@@ -666,6 +668,22 @@ def test_auth_rate_limit_config_from_shared_backend_uses_supported_slot_defaults
         assert limiter.trusted_proxy is True
         assert limiter.identity_fields == ("identifier", "username", "email")
         assert limiter.trusted_headers == ratelimit_config_module._DEFAULT_TRUSTED_HEADERS
+        assert limiter.trusted_proxy_hops == 1
+
+
+def test_auth_rate_limit_config_from_shared_backend_applies_trusted_proxy_hops() -> None:
+    """The shared-backend builder propagates the configured XFF hop count to each generated limiter."""
+    shared_backend = InMemoryRateLimiter(max_attempts=2, window_seconds=10)
+    config = AuthRateLimitConfig.from_shared_backend(
+        shared_backend,
+        options=SharedRateLimitConfigOptions(trusted_proxy=True, trusted_proxy_hops=MULTI_PROXY_HOPS),
+    )
+
+    for recipe in ratelimit_slot_catalog_module._AUTH_RATE_LIMIT_ENDPOINT_RECIPES:
+        limiter = getattr(config, recipe.slot)
+
+        assert limiter is not None
+        assert limiter.trusted_proxy_hops == MULTI_PROXY_HOPS
 
 
 def test_auth_rate_limit_config_strict_preset_enables_only_public_sign_in_slots() -> None:
@@ -1742,6 +1760,7 @@ def test_endpoint_rate_limit_trusted_proxy_defaults_to_false() -> None:
         namespace="login",
     )
     assert limiter.trusted_proxy is False
+    assert limiter.trusted_proxy_hops == 1
 
 
 def test_client_host_ignores_proxy_headers_by_default() -> None:
@@ -1771,6 +1790,47 @@ def test_client_host_returns_unknown_without_client() -> None:
     request = Request(scope=scope)
 
     assert ratelimit_helpers_module._client_host(request) == "unknown"
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        ("203.0.113.12", "203.0.113.12"),
+        ("203.0.113.12, 10.0.0.1", "10.0.0.1"),
+        (" , 10.0.0.1", "10.0.0.1"),
+        (",,,", None),
+    ],
+)
+def test_select_x_forwarded_for_trusted_hop_uses_rightmost_non_empty_entry(
+    value: str,
+    expected: str | None,
+) -> None:
+    """The isolated XFF trust decision keeps the existing rightmost-hop rule."""
+    assert ratelimit_client_host_module._select_x_forwarded_for_trusted_hop(value) == expected
+
+
+@pytest.mark.parametrize(
+    ("value", "trusted_proxy_hops", "expected"),
+    [
+        ("203.0.113.12, 10.0.0.1", 2, "203.0.113.12"),
+        ("198.51.100.8, 203.0.113.12, 10.0.0.1", 2, "203.0.113.12"),
+        ("198.51.100.8, 203.0.113.12, 10.0.0.1", 3, "198.51.100.8"),
+        ("203.0.113.12", 2, None),
+    ],
+)
+def test_select_x_forwarded_for_trusted_hop_uses_configured_hop_count(
+    value: str,
+    trusted_proxy_hops: int,
+    expected: str | None,
+) -> None:
+    """Configured hop counts select the Nth-from-right XFF entry or fail closed."""
+    assert (
+        ratelimit_client_host_module._select_x_forwarded_for_trusted_hop(
+            value,
+            trusted_proxy_hops=trusted_proxy_hops,
+        )
+        == expected
+    )
 
 
 @pytest.mark.parametrize(
@@ -1807,6 +1867,55 @@ def test_client_host_does_not_trust_spoofed_leftmost_xforwarded_for_entry() -> N
     request = _build_request(headers=[(b"x-forwarded-for", b"1.1.1.1, 2.2.2.2, 10.0.0.1")])
 
     assert ratelimit_helpers_module._client_host(request, trusted_proxy=True) == "10.0.0.1"
+
+
+def test_client_host_uses_configured_trusted_proxy_hop_count() -> None:
+    """Multi-proxy deployments can trust the configured Nth-from-right XFF entry."""
+    request = _build_request(headers=[(b"x-forwarded-for", b"198.51.100.8, 203.0.113.12, 10.0.0.1")])
+
+    assert (
+        ratelimit_helpers_module._client_host(
+            request,
+            trusted_proxy=True,
+            trusted_proxy_hops=MULTI_PROXY_HOPS,
+        )
+        == "203.0.113.12"
+    )
+
+
+def test_client_host_falls_back_when_trusted_proxy_hops_exceeds_xff_entries() -> None:
+    """Shorter-than-configured XFF chains fail closed to the direct client host."""
+    request = _build_request(headers=[(b"x-forwarded-for", b"203.0.113.12")])
+
+    assert (
+        ratelimit_helpers_module._client_host(
+            request,
+            trusted_proxy=True,
+            trusted_proxy_hops=MULTI_PROXY_HOPS,
+        )
+        == "127.0.0.1"
+    )
+
+
+async def test_endpoint_rate_limit_build_key_uses_configured_trusted_proxy_hops() -> None:
+    """Endpoint settings thread the configured hop count into client-host resolution."""
+    request = cast(
+        "Request[Any, Any, Any]",
+        JsonRequestStub(
+            payload={},
+            client=ClientStub(host="127.0.0.1"),
+            headers={"X-Forwarded-For": "198.51.100.8, 203.0.113.12, 10.0.0.1"},
+        ),
+    )
+    limiter = EndpointRateLimit(
+        backend=InMemoryRateLimiter(max_attempts=2, window_seconds=10),
+        scope="ip",
+        namespace="login",
+        trusted_proxy=True,
+        trusted_proxy_hops=MULTI_PROXY_HOPS,
+    )
+
+    assert await limiter.build_key(request) == f"login:{ratelimit_helpers_module._safe_key_part('203.0.113.12')}"
 
 
 def test_client_host_warns_once_when_trusted_proxy_headers_are_absent(caplog: pytest.LogCaptureFixture) -> None:
@@ -1884,6 +1993,14 @@ def test_client_host_rejects_non_boolean_trusted_proxy_configuration() -> None:
 
     with pytest.raises(ConfigurationError, match="trusted_proxy must be a boolean"):
         ratelimit_helpers_module._client_host(request, trusted_proxy=cast("Any", "true"))
+
+
+def test_client_host_rejects_invalid_trusted_proxy_hops_configuration() -> None:
+    """trusted_proxy_hops must be positive to avoid trusting the wrong XFF position."""
+    request = _build_request(headers=[(b"x-forwarded-for", b"203.0.113.5")])
+
+    with pytest.raises(ConfigurationError, match="trusted_proxy_hops must be a positive integer"):
+        ratelimit_helpers_module._client_host(request, trusted_proxy=True, trusted_proxy_hops=0)
 
 
 @pytest.mark.parametrize(

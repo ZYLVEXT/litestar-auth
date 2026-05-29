@@ -23,7 +23,6 @@ from __future__ import annotations
 
 import logging
 import os
-import warnings
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import timedelta
@@ -36,6 +35,7 @@ from litestar.openapi.config import OpenAPIConfig
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import configure_mappers
 
+from examples._demo_secrets import resolve_demo_secrets
 from litestar_auth import (
     AuthenticationBackend,
     BaseUserManager,
@@ -95,48 +95,35 @@ def _demo_secrets() -> _CookieTotpSecrets:
     Returns:
         Parsed secrets bundle.
     """
-    if os.environ.get("LITESTAR_AUTH_DEMO_COOKIE_JWT_TOTP_INSECURE") == "1":
-        warnings.warn(
-            "LITESTAR_AUTH_DEMO_COOKIE_JWT_TOTP_INSECURE=1 uses fixed secrets; never enable in production.",
-            stacklevel=2,
-        )
-        (
-            jwt_s,
-            verify_s,
-            reset_s,
-            csrf_s,
-            pending_s,
-            recovery_s,
-            fernet_s,
-        ) = _INSECURE_DEFAULTS
-        return _CookieTotpSecrets(
-            jwt_secret=jwt_s,
-            verify_secret=verify_s,
-            reset_secret=reset_s,
-            csrf_secret=csrf_s,
-            totp_pending_secret=pending_s,
-            totp_recovery_lookup_secret=recovery_s,
-            totp_fernet_key=fernet_s,
-        )
-
-    def _req(name: str) -> str:
-        value = os.environ.get(name)
-        if not value:
-            msg = (
-                f"Missing {name}. Export strong secrets or set "
-                "LITESTAR_AUTH_DEMO_COOKIE_JWT_TOTP_INSECURE=1 for local demonstration only."
-            )
-            raise RuntimeError(msg)
-        return value
-
+    (
+        jwt_s,
+        verify_s,
+        reset_s,
+        csrf_s,
+        pending_s,
+        recovery_s,
+        fernet_s,
+    ) = resolve_demo_secrets(
+        insecure_flag="LITESTAR_AUTH_DEMO_COOKIE_JWT_TOTP_INSECURE",
+        insecure_defaults=_INSECURE_DEFAULTS,
+        secret_names=(
+            "LITESTAR_AUTH_JWT_SECRET",
+            "LITESTAR_AUTH_VERIFY_TOKEN_SECRET",
+            "LITESTAR_AUTH_RESET_PASSWORD_TOKEN_SECRET",
+            "LITESTAR_AUTH_CSRF_SECRET",
+            "LITESTAR_AUTH_TOTP_PENDING_SECRET",
+            "LITESTAR_AUTH_TOTP_RECOVERY_LOOKUP_SECRET",
+            "LITESTAR_AUTH_TOTP_FERNET_KEY",
+        ),
+    )
     return _CookieTotpSecrets(
-        jwt_secret=_req("LITESTAR_AUTH_JWT_SECRET"),
-        verify_secret=_req("LITESTAR_AUTH_VERIFY_TOKEN_SECRET"),
-        reset_secret=_req("LITESTAR_AUTH_RESET_PASSWORD_TOKEN_SECRET"),
-        csrf_secret=_req("LITESTAR_AUTH_CSRF_SECRET"),
-        totp_pending_secret=_req("LITESTAR_AUTH_TOTP_PENDING_SECRET"),
-        totp_recovery_lookup_secret=_req("LITESTAR_AUTH_TOTP_RECOVERY_LOOKUP_SECRET"),
-        totp_fernet_key=_req("LITESTAR_AUTH_TOTP_FERNET_KEY"),
+        jwt_secret=jwt_s,
+        verify_secret=verify_s,
+        reset_secret=reset_s,
+        csrf_secret=csrf_s,
+        totp_pending_secret=pending_s,
+        totp_recovery_lookup_secret=recovery_s,
+        totp_fernet_key=fernet_s,
     )
 
 

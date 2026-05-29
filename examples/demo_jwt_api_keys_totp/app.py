@@ -22,7 +22,6 @@ from __future__ import annotations
 
 import logging
 import os
-import warnings
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import timedelta
@@ -35,6 +34,7 @@ from litestar.openapi.config import OpenAPIConfig
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import configure_mappers
 
+from examples._demo_secrets import resolve_demo_secrets
 from litestar_auth import (
     ApiKeyConfig,
     AuthenticationBackend,
@@ -105,18 +105,12 @@ class DemoUserManager(BaseUserManager[User, UUID]):
             )
 
 
-def _required_secret(name: str) -> str:
-    value = os.environ.get(name)
-    if not value:
-        msg = (
-            f"Missing {name}. Export strong secrets or set "
-            "LITESTAR_AUTH_DEMO_JWT_API_KEYS_TOTP_INSECURE=1 for local demonstration only."
-        )
-        raise RuntimeError(msg)
-    return value
+def _demo_secrets() -> _DemoSecrets:
+    """Load secrets from the environment or insecure demo defaults.
 
-
-def _insecure_demo_secrets() -> _DemoSecrets:
+    Returns:
+        Parsed secrets for one app instance.
+    """
     (
         jwt_s,
         verify_s,
@@ -126,7 +120,20 @@ def _insecure_demo_secrets() -> _DemoSecrets:
         pending_s,
         recovery_s,
         fernet_s,
-    ) = _INSECURE_DEFAULTS
+    ) = resolve_demo_secrets(
+        insecure_flag="LITESTAR_AUTH_DEMO_JWT_API_KEYS_TOTP_INSECURE",
+        insecure_defaults=_INSECURE_DEFAULTS,
+        secret_names=(
+            "LITESTAR_AUTH_JWT_SECRET",
+            "LITESTAR_AUTH_VERIFY_TOKEN_SECRET",
+            "LITESTAR_AUTH_RESET_PASSWORD_TOKEN_SECRET",
+            "LITESTAR_AUTH_API_KEY_HASH_SECRET",
+            "LITESTAR_AUTH_CSRF_SECRET",
+            "LITESTAR_AUTH_TOTP_PENDING_SECRET",
+            "LITESTAR_AUTH_TOTP_RECOVERY_LOOKUP_SECRET",
+            "LITESTAR_AUTH_TOTP_FERNET_KEY",
+        ),
+    )
     return _DemoSecrets(
         jwt_secret=jwt_s,
         verify_secret=verify_s,
@@ -136,31 +143,6 @@ def _insecure_demo_secrets() -> _DemoSecrets:
         totp_pending_secret=pending_s,
         totp_recovery_lookup_secret=recovery_s,
         totp_fernet_key=fernet_s,
-    )
-
-
-def _demo_secrets() -> _DemoSecrets:
-    """Load secrets from the environment or insecure demo defaults.
-
-    Returns:
-        Parsed secrets for one app instance.
-    """
-    if os.environ.get("LITESTAR_AUTH_DEMO_JWT_API_KEYS_TOTP_INSECURE") == "1":
-        warnings.warn(
-            "LITESTAR_AUTH_DEMO_JWT_API_KEYS_TOTP_INSECURE=1 uses fixed secrets; never enable in production.",
-            stacklevel=2,
-        )
-        return _insecure_demo_secrets()
-
-    return _DemoSecrets(
-        jwt_secret=_required_secret("LITESTAR_AUTH_JWT_SECRET"),
-        verify_secret=_required_secret("LITESTAR_AUTH_VERIFY_TOKEN_SECRET"),
-        reset_secret=_required_secret("LITESTAR_AUTH_RESET_PASSWORD_TOKEN_SECRET"),
-        api_key_hash_secret=_required_secret("LITESTAR_AUTH_API_KEY_HASH_SECRET"),
-        csrf_secret=_required_secret("LITESTAR_AUTH_CSRF_SECRET"),
-        totp_pending_secret=_required_secret("LITESTAR_AUTH_TOTP_PENDING_SECRET"),
-        totp_recovery_lookup_secret=_required_secret("LITESTAR_AUTH_TOTP_RECOVERY_LOOKUP_SECRET"),
-        totp_fernet_key=_required_secret("LITESTAR_AUTH_TOTP_FERNET_KEY"),
     )
 
 
