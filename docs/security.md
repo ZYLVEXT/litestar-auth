@@ -22,7 +22,7 @@ Before production rollout, verify the deployment-owned security contract in
 - **Session fingerprint** — optional claim on JWT tying tokens to current password/email state.
 - **Cookie auth** — secure defaults (`HttpOnly`, `Secure`, `SameSite`); CSRF for unsafe methods when wired (see [Guides — Security](guides/security.md)).
 - **TOTP** — pending enrollment secrets stay server-side in `totp_enrollment_store`; replay protection is enforced when `totp_used_tokens_store` is configured; production fails fast without required stores; persisted TOTP secrets require encrypted-at-rest storage through `BaseUserManager.totp_secret_storage_posture` plus `UserManagerSecurity.totp_secret_keyring` or the one-key `totp_secret_key`; recovery codes are 112-bit lowercase hex values stored as HMAC lookup digests mapped to Argon2 hashes; pending-login tokens are bound to hashed client IP and User-Agent fingerprints by default; successful app-code verification can record a short-lived server-side step-up marker for downstream sensitive operations.
-- **OAuth** — state and PKCE verifier evidence in a short-lived `HttpOnly` flow cookie encrypted/authenticated with a Fernet key HKDF-derived from `oauth_flow_cookie_secret`; strict state validation; optional encryption at rest for provider tokens (`oauth_token_encryption_keyring` or one-key `oauth_token_encryption_key`); OAuth token persistence accepts only current-module `OAuthTokenEncryption` policies; write-time plaintext snapshots are restored after successful writes and cleared on rollback; guarded associate-by-email rules (`oauth_trust_provider_email_verified` on plugin-owned routes, `trust_provider_email_verified` on manual controllers, and `oauth_associate_by_email`); redirect-host validation rejects non-public and SSRF-adjacent hosts, with opt-in `oauth_redirect_dns_strict=True` to turn DNS resolver failures or empty/unusable answers into `ConfigurationError` instead of the default fail-open DNS behavior; **the associate authorize route is POST + CSRF-protected** so a victim's `SameSite=Lax` session cookie cannot be abused by a cross-site top-level navigation to attach an attacker-controlled provider account to the victim's local user. Login authorize stays GET because anonymous OAuth login has no victim session to abuse.
+- **OAuth** — state and PKCE verifier evidence in a short-lived `HttpOnly` flow cookie encrypted/authenticated with a Fernet key HKDF-derived from `oauth_flow_cookie_secret`; strict state validation; optional encryption at rest for provider tokens (`oauth_token_encryption_keyring` or one-key `oauth_token_encryption_key`); OAuth token persistence accepts only current-module `OAuthTokenEncryption` policies; write-time plaintext snapshots are restored after successful writes and cleared on rollback; guarded associate-by-email rules (`oauth_trust_provider_email_verified` on plugin-owned routes, `trust_provider_email_verified` on manual controllers, and `oauth_associate_by_email`); redirect-host validation rejects non-public and SSRF-adjacent hosts and, with the fail-closed default `oauth_redirect_dns_strict=True`, also turns DNS resolver failures or empty/unusable answers into `ConfigurationError` (set it to `False` to restore fail-open DNS behavior for offline or sandboxed startup); **the associate authorize route is POST + CSRF-protected** so a victim's `SameSite=Lax` session cookie cannot be abused by a cross-site top-level navigation to attach an attacker-controlled provider account to the victim's local user. Login authorize stays GET because anonymous OAuth login has no victim session to abuse.
 - **Opaque DB tokens** — keyed digest at rest; plugin-managed DB-token wiring uses `DatabaseTokenAuthConfig` plus `LitestarAuthConfig(..., database_token_auth=...)`.
 - **API keys** — opt-in user-owned credentials with digest-only bearer storage, one-time raw-secret
   create responses, soft revocation, expiry, active-key caps, allowed-scope validation, and
@@ -70,14 +70,16 @@ When you assemble `JWTStrategy` or `BaseUserManager` yourself, inspect the runti
 ## OAuth redirect-host DNS validation
 
 Plugin-owned `OAuthConfig.oauth_redirect_dns_strict` and manual OAuth controller
-`oauth_redirect_dns_strict` both default to `False`. With the default, redirect-host validation still
+`oauth_redirect_dns_strict` both default to `True` (fail closed). Redirect-host validation
 rejects loopback, RFC 1918 private, RFC 3927 link-local including `169.254.169.254`, multicast,
-reserved, and unspecified IP literals or DNS answers, but DNS resolver failures are accepted so
-offline or sandboxed startup environments keep the historical fail-open behavior.
+reserved, and unspecified IP literals or DNS answers, and — with the fail-closed default — DNS
+resolver failures, empty answers, and answers without any usable public address also become
+`ConfigurationError` at plugin startup or manual controller construction.
 
-Set `oauth_redirect_dns_strict=True` when startup or manual controller construction should fail
-closed: resolver failures, empty answers, and answers without any usable public address become
-`ConfigurationError`. This check resolves DNS once at validation time only. It does not defend
+Set `oauth_redirect_dns_strict=False` to restore the fail-open behavior for offline or sandboxed
+startup environments where DNS is unavailable; with that override, only resolvable internal-only
+answers are rejected and resolver failures are accepted. This check resolves DNS once at validation
+time only in either mode. It does not defend
 against DNS rebinding or any later runtime DNS change, so production deployments must also enforce
 network egress controls that block app-to-RFC1918, app-to-link-local, metadata-service, and other
 internal destinations.

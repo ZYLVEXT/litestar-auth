@@ -57,7 +57,7 @@ HTTP_REQUEST_ENTITY_TOO_LARGE = 413
 HTTP_TOO_MANY_REQUESTS = 429
 
 API_KEY_HASH_SECRET = "api-key-hash-secret-0123456789abcdef"
-JWT_TEST_SECRET = "jwt-test-secret-0123456789abcdef0123456789abcdef"
+JWT_TEST_SECRET = "jwt-test-secret-7b3e9a01c8d246f5b09e1a7c4d825f63"
 
 
 class InMemoryApiKeyRow:

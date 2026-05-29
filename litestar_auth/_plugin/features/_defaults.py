@@ -73,7 +73,11 @@ class OAuthDefaults:
     trust_provider_email_verified: bool = False
     include_associate: bool = False
     redirect_base_url: str = ""
-    redirect_dns_strict: bool = False
+    # Fail closed by default: DNS resolver failures or empty/unusable answers for
+    # the OAuth redirect host reject startup rather than silently accepting an
+    # unresolvable/SSRF-adjacent origin. Operators in offline or sandboxed startup
+    # environments opt back into fail-open with oauth_redirect_dns_strict=False.
+    redirect_dns_strict: bool = True
 
 
 @dataclass(frozen=True, slots=True)

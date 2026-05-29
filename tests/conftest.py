@@ -37,15 +37,16 @@ if TYPE_CHECKING:
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 
-# Suffixes for hostnames reserved by RFC 6761 (Special-Use Domain Names) and
-# RFC 2606 (Reserved Top Level DNS Names). Recursive resolvers SHOULD return
+# Suffixes for hostnames reserved by RFC 6761 (Special-Use Domain Names),
+# RFC 2606 (Reserved Top Level DNS Names), and RFC 6762 (``.local`` mDNS, used
+# by the test client base URL ``testserver.local``). Recursive resolvers SHOULD return
 # NXDOMAIN for these, but operator-controlled resolvers (Cloudflare WARP,
 # NextDNS, captive-portal DNS) frequently synthesize answers in the
 # 198.18.0.0/15 benchmark range, which Python's ``ipaddress`` module classifies
-# as private. That synthesis flips ``_is_unsafe_redirect_host`` from "safe"
-# (gaierror falls open) to "unsafe" (resolved-IP-is-private fails closed),
-# which breaks every OAuth fixture using ``app.example`` / ``app.example.com``
-# / ``provider.example`` etc. on those resolvers without indicating any real
+# as private. Under the fail-closed redirect-DNS default both verdicts are now
+# rejections (NXDOMAIN -> strict fail-closed; private synthesis -> unsafe IP),
+# which would break every OAuth fixture using ``app.example`` /
+# ``app.example.com`` / ``provider.example`` etc. without indicating any real
 # regression in the validator.
 _RFC_RESERVED_DNS_SUFFIXES: tuple[str, ...] = (
     ".example",
@@ -54,24 +55,29 @@ _RFC_RESERVED_DNS_SUFFIXES: tuple[str, ...] = (
     ".example.org",
     ".test",
     ".invalid",
+    ".local",
 )
+# Real public address of ``example.com`` (IANA-operated documentation domain).
+# Python's ``ipaddress`` classifies it as a routable global address, so the
+# redirect-origin validator accepts it in both fail-closed and fail-open modes.
+_HERMETIC_PUBLIC_IPV4 = "93.184.216.34"
 
 
 @pytest.fixture(autouse=True)
 def _hermetic_reserved_dns_for_redirect_validation(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Force ``socket.getaddrinfo`` to raise ``gaierror`` for RFC 6761/2606 hostnames.
+    """Resolve RFC 6761/2606/6762 test hostnames to a fixed public IP for ``socket.getaddrinfo``.
 
     The redirect-origin validator at
     ``litestar_auth._plugin._redirect_validation._hostname_resolves_to_unsafe_ip``
-    treats ``gaierror`` as fail-open (matches the RFC-compliant NXDOMAIN
-    behaviour and intentionally avoids spurious validation errors in offline
-    CI). Resolvers that synthesize captive answers for reserved suffixes
-    therefore flip the validator's verdict on shared test fixtures such as
-    ``https://app.example/auth/oauth``. This fixture re-establishes the
-    RFC-compliant resolver behaviour for reserved suffixes only, leaving
-    every other hostname (including the validator's own per-test
-    ``getaddrinfo`` mocks at ``tests/unit/test_plugin_validation.py``) to
-    take precedence via their own ``monkeypatch.setattr`` calls.
+    now fails closed by default: ``gaierror`` (NXDOMAIN) and privately
+    synthesized captive answers are both rejected. Shared OAuth fixtures use
+    reserved domains such as ``https://app.example/auth/oauth`` whose real-world
+    resolution differs per environment. This fixture pins those reserved
+    suffixes to a known routable public address so the validator's verdict is
+    deterministic and matches the fixtures' intent (a public HTTPS origin),
+    leaving every other hostname (including the validator's own per-test
+    ``getaddrinfo`` mocks at ``tests/unit/test_plugin_validation.py``) to take
+    precedence via their own ``monkeypatch.setattr`` calls.
     """
     real_getaddrinfo = _redirect_validation.socket.getaddrinfo
 
@@ -84,15 +90,11 @@ def _hermetic_reserved_dns_for_redirect_validation(monkeypatch: pytest.MonkeyPat
         proto: int = 0,
         flags: int = 0,
     ) -> list[tuple[socket.AddressFamily, socket.SocketKind, int, str, tuple[Any, ...]]]:
-        """Raise ``gaierror`` for reserved test hostnames; delegate everything else.
+        """Resolve reserved test hostnames to a fixed public IP; delegate everything else.
 
         Returns:
-            Whatever the real ``socket.getaddrinfo`` returns for non-reserved hosts.
-
-        Raises:
-            socket.gaierror: When ``host`` falls under an RFC 6761/2606 reserved
-                suffix; the validator treats this as fail-open (NXDOMAIN) as it
-                does in compliant resolvers.
+            A single routable-public addrinfo record for RFC 6761/2606/6762
+            reserved hostnames, otherwise whatever the real ``socket.getaddrinfo`` returns.
         """
         decoded_host = host.decode("ascii", errors="ignore") if isinstance(host, bytes) else host or ""
         normalized_host = decoded_host.casefold().rstrip(".")
@@ -100,8 +102,15 @@ def _hermetic_reserved_dns_for_redirect_validation(monkeypatch: pytest.MonkeyPat
             normalized_host == suffix.lstrip(".") or normalized_host.endswith(suffix)
             for suffix in _RFC_RESERVED_DNS_SUFFIXES
         ):
-            msg = f"hermetic-test resolver: {decoded_host!r} treated as NXDOMAIN per RFC 6761/2606"
-            raise socket.gaierror(socket.EAI_NONAME, msg)
+            return [
+                (
+                    socket.AF_INET,
+                    socket.SOCK_STREAM,
+                    socket.IPPROTO_TCP,
+                    "",
+                    (_HERMETIC_PUBLIC_IPV4, 0),
+                ),
+            ]
         return real_getaddrinfo(host, port, family, type, proto, flags)
 
     monkeypatch.setattr(_redirect_validation.socket, "getaddrinfo", _hermetic_getaddrinfo)

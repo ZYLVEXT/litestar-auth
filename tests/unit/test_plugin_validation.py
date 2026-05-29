@@ -2682,10 +2682,31 @@ def test_require_secure_oauth_redirect_in_production_forwards_strict_dns_flag(
         require_secure_oauth_redirect_in_production(config=config, app_config=AppConfig(debug=False))
 
 
-def test_require_secure_oauth_redirect_in_production_keeps_default_fail_open_dns(
+def test_require_secure_oauth_redirect_in_production_opt_out_restores_fail_open_dns(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Default plugin redirect-host DNS validation keeps the existing fail-open posture."""
+    """Explicit ``oauth_redirect_dns_strict=False`` restores the fail-open DNS posture."""
+
+    def _unsafe_only_when_strict(_host: str, *, strict: bool = False) -> bool:
+        return strict
+
+    monkeypatch.setattr(startup_module, "_is_unsafe_redirect_host", _unsafe_only_when_strict)
+    config = _minimal_config(
+        oauth_config=OAuthConfig(
+            oauth_providers=[_oauth_provider(name="github", client=object())],
+            oauth_redirect_base_url="https://app.example.com/auth",
+            oauth_redirect_dns_strict=False,
+            oauth_flow_cookie_secret=OAUTH_FLOW_COOKIE_SECRET,
+        ),
+    )
+
+    require_secure_oauth_redirect_in_production(config=config, app_config=AppConfig(debug=False))
+
+
+def test_require_secure_oauth_redirect_in_production_fails_closed_by_default(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The fail-closed DNS default rejects unusable plugin redirect-host resolution."""
 
     def _unsafe_only_when_strict(_host: str, *, strict: bool = False) -> bool:
         return strict
@@ -2699,7 +2720,8 @@ def test_require_secure_oauth_redirect_in_production_keeps_default_fail_open_dns
         ),
     )
 
-    require_secure_oauth_redirect_in_production(config=config, app_config=AppConfig(debug=False))
+    with pytest.raises(ConfigurationError, match="routable public HTTPS origin"):
+        require_secure_oauth_redirect_in_production(config=config, app_config=AppConfig(debug=False))
 
 
 @pytest.mark.parametrize(

@@ -73,7 +73,7 @@ class _OAuthControllerAssemblySettings:
     state_cookie_prefix: str
     controller_name_suffix: str
     validate_redirect_base_url: bool = True
-    oauth_redirect_dns_strict: bool = False
+    oauth_redirect_dns_strict: bool = True
     totp_stepup_policy: dict[str, TotpStepUpPolicyMode] | None = None
 
 
@@ -110,7 +110,7 @@ class _OAuthLoginControllerSettings[UP: UserProtocol[Any], ID]:
     associate_by_email: bool = False
     trust_provider_email_verified: bool = False
     validate_redirect_base_url: bool = True
-    oauth_redirect_dns_strict: bool = False
+    oauth_redirect_dns_strict: bool = True
 
 
 @dataclass(frozen=True, slots=True)
@@ -126,7 +126,7 @@ class _OAuthAssociateControllerSettings[UP: UserProtocol[Any], ID]:
     path: str = "/auth/associate"
     cookie_secure: bool = True
     validate_redirect_base_url: bool = True
-    oauth_redirect_dns_strict: bool = False
+    oauth_redirect_dns_strict: bool = True
     security: Sequence[Any] | None = None
     totp_stepup_policy: dict[str, TotpStepUpPolicyMode] | None = None
 

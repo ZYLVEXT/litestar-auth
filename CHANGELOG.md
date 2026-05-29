@@ -8,14 +8,16 @@
   from the right, is trusted as the client IP behind a multi-proxy chain (CDN → LB → app). The default
   `1` preserves the previous rightmost-entry behavior byte-for-byte; when the header carries fewer
   entries than the configured hop count, rate-limit identity fails closed to the direct client host.
-- **Opt-in fail-closed DNS validation for OAuth redirect hosts.** `OAuthConfig.oauth_redirect_dns_strict`
+- **Fail-closed DNS validation for OAuth redirect hosts (default).** `OAuthConfig.oauth_redirect_dns_strict`
   (plugin-owned routes) and `oauth_redirect_dns_strict` on the manual/provider OAuth controller configs
-  (`OAuthControllerConfig`, `OAuthAssociateControllerConfig`, `ProviderOAuthControllerConfig`) make the
-  redirect-host SSRF gate fail closed: when `True`, DNS resolver failures, empty answers, and answers
-  without any usable public address are rejected with `ConfigurationError` at validation/startup time
-  instead of the default fail-open behavior. The default `False` preserves the previous behavior
-  byte-for-byte. The check still resolves DNS only at validation time and does not defend against DNS
-  rebinding, so pair it with runtime network egress controls.
+  (`OAuthControllerConfig`, `OAuthAssociateControllerConfig`, `ProviderOAuthControllerConfig`) now default
+  to `True`: the redirect-host SSRF gate rejects DNS resolver failures, empty answers, and answers without
+  any usable public address with `ConfigurationError` at validation/startup time. Set
+  `oauth_redirect_dns_strict=False` to restore fail-open resolver handling for offline or sandboxed startup
+  environments. The check still resolves DNS only at validation time and does not defend against DNS
+  rebinding, so pair it with runtime network egress controls. **Potentially breaking:** deployments whose
+  OAuth `redirect_base_url` host cannot be resolved at startup (offline, sandboxed, or transient DNS
+  failure) now fail closed unless they opt out with `oauth_redirect_dns_strict=False`.
 
 ### Changed
 
@@ -28,11 +30,14 @@
 
 - **Stronger production secret entropy validation.** `validate_secret_strength` now estimates entropy
   with a pattern-aware heuristic that caps exactly-periodic secrets built from a short repeated unit
-  (e.g. `"abc123" * 22`) at the entropy of that unit, so structured-but-long secrets that previously
-  cleared the 128-bit floor are rejected at startup. Cryptographically random secrets
-  (`secrets.token_hex(32)`, `secrets.token_urlsafe(32)`) still pass, and the `unsafe_testing=True` and
-  `minimum_entropy_bits=0` bypasses are unchanged. **Potentially breaking:** weak production secrets
-  that previously validated may now be rejected — generate strong secrets and redeploy.
+  (e.g. `"abc123" * 22`) at the entropy of that unit, and additionally rejects a single uninterrupted run
+  of near-consecutive codepoints (e.g. `"abcdefghijklmnopqrstuvwxyz123456"`) that clears the 128-bit
+  frequency floor yet is trivially guessable. Structured-but-long secrets that previously cleared the floor
+  are rejected at startup. Cryptographically random secrets (`secrets.token_hex(32)`,
+  `secrets.token_urlsafe(32)`) still pass, the single-span sequential check does not touch repeated-unit
+  secrets, and the `unsafe_testing=True` and `minimum_entropy_bits=0` bypasses are unchanged.
+  **Potentially breaking:** weak production secrets that previously validated may now be rejected —
+  generate strong secrets and redeploy.
 - **Trusted-proxy hop count applied to the TOTP pending-token client binding.**
   `build_pending_totp_client_binding` honors `trusted_proxy_hops`, sourced from the configured
   `totp_verify_rate_limit`, so the anti-theft client-IP fingerprint resolves the same `X-Forwarded-For`
@@ -44,10 +49,10 @@
 
 - **Deployment hardening guidance.** The deployment security contract documents the role-admin
   controller authorization footgun (an explicit empty `guards=[]` disables the default `is_superuser`
-  guard) and the limits of the OAuth `redirect_base_url` SSRF gate (validation-time DNS check that
-  fails open on resolver errors by default and does not defend against DNS rebinding — opt into
-  fail-closed resolver handling with `oauth_redirect_dns_strict=True`, and pair it with runtime egress
-  controls).
+  guard) and the limits of the OAuth `redirect_base_url` SSRF gate (validation-time DNS check that fails
+  closed on resolver errors by default and does not defend against DNS rebinding — opt out with
+  `oauth_redirect_dns_strict=False` for offline or sandboxed startup, and pair the gate with runtime
+  egress controls).
 
 ## 4.0.1 (2026-05-29)
 

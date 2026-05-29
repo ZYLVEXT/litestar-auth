@@ -134,7 +134,7 @@ def require_secure_oauth_redirect_in_production(
     _require_public_oauth_redirect_host(
         redirect_base_url,
         parsed_redirect_base_url.hostname,
-        strict=oauth_config.oauth_redirect_dns_strict if oauth_config is not None else False,
+        strict=oauth_config.oauth_redirect_dns_strict if oauth_config is not None else True,
     )
     _require_clean_oauth_redirect_base_url(
         redirect_base_url,

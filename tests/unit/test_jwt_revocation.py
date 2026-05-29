@@ -70,8 +70,8 @@ async def test_jwt_revocation_is_durable_across_strategy_instances(async_fakered
 
     store = RedisJWTDenylistStore(redis=cast_fakeredis(async_fakeredis, RedisExpiringValueStoreClient))
 
-    strategy_a = JWTStrategy(secret="secret-1234567890-1234567890-1234567890", denylist_store=store)
-    strategy_b = JWTStrategy(secret="secret-1234567890-1234567890-1234567890", denylist_store=store)
+    strategy_a = JWTStrategy(secret="jwt-revocation-secret-9f2c7a14e0b83d6f5c1948a7e2d0fb36", denylist_store=store)
+    strategy_b = JWTStrategy(secret="jwt-revocation-secret-9f2c7a14e0b83d6f5c1948a7e2d0fb36", denylist_store=store)
 
     token = await strategy_a.write_token(cast("Any", user))
     assert await strategy_b.read_token(token, cast("Any", user_manager)) is user
@@ -87,7 +87,10 @@ async def test_jwt_session_fingerprint_invalidates_after_email_change() -> None:
     user = _User(id=uuid4(), email="user@example.com", hashed_password=password_helper.hash("pw"))
     user_manager = _UserManager(user)
 
-    strategy = JWTStrategy(secret="secret-1234567890-1234567890-1234567890", allow_inmemory_denylist=True)
+    strategy = JWTStrategy(
+        secret="jwt-revocation-secret-9f2c7a14e0b83d6f5c1948a7e2d0fb36",
+        allow_inmemory_denylist=True,
+    )
     token = await strategy.write_token(cast("Any", user))
     assert await strategy.read_token(token, cast("Any", user_manager)) is user
 
@@ -102,7 +105,7 @@ async def test_jwt_without_fingerprint_claim_is_rejected_when_user_fingerprint_i
     user = _User(id=uuid4(), email="user@example.com", hashed_password=password_helper.hash("pw"))
     user_manager = _UserManager(user)
 
-    secret = "secret-1234567890-1234567890-1234567890"
+    secret = "jwt-revocation-secret-9f2c7a14e0b83d6f5c1948a7e2d0fb36"
     strategy = JWTStrategy(secret=secret, allow_inmemory_denylist=True)
 
     now = datetime.now(tz=UTC)
@@ -125,7 +128,7 @@ async def test_jwt_with_non_string_fingerprint_claim_is_rejected_when_user_finge
     user = _User(id=uuid4(), email="user@example.com", hashed_password=password_helper.hash("pw"))
     user_manager = _UserManager(user)
 
-    secret = "secret-1234567890-1234567890-1234567890"
+    secret = "jwt-revocation-secret-9f2c7a14e0b83d6f5c1948a7e2d0fb36"
     strategy = JWTStrategy(secret=secret, allow_inmemory_denylist=True)
 
     now = datetime.now(tz=UTC)
@@ -147,7 +150,7 @@ async def test_jwt_without_fingerprint_claim_keeps_graceful_degradation_when_use
     """Missing fingerprint claims are still allowed when the server cannot compute one."""
     user = _User(id=uuid4(), email="user@example.com", hashed_password="hashed")
     user_manager = _UserManager(user)
-    secret = "secret-1234567890-1234567890-1234567890"
+    secret = "jwt-revocation-secret-9f2c7a14e0b83d6f5c1948a7e2d0fb36"
     strategy = JWTStrategy(secret=secret, session_fingerprint_getter=lambda _: None, allow_inmemory_denylist=True)
 
     now = datetime.now(tz=UTC)
@@ -218,7 +221,7 @@ async def test_jwt_strategy_destroy_token_raises_when_in_memory_denylist_cannot_
     password_helper = PasswordHelper()
     user = _User(id=uuid4(), email="user@example.com", hashed_password=password_helper.hash("pw"))
     store = InMemoryJWTDenylistStore(max_entries=DENYLIST_CAP)
-    strategy = JWTStrategy(secret="secret-1234567890-1234567890-1234567890", denylist_store=store)
+    strategy = JWTStrategy(secret="jwt-revocation-secret-9f2c7a14e0b83d6f5c1948a7e2d0fb36", denylist_store=store)
 
     await store.deny("jti-1", ttl_seconds=60)
     await store.deny("jti-2", ttl_seconds=60)
@@ -278,7 +281,7 @@ async def test_jwt_strategy_read_token_returns_none_when_user_manager_cannot_res
     password_helper = PasswordHelper()
     user = _User(id=uuid4(), email="user@example.com", hashed_password=password_helper.hash("pw"))
     strategy = JWTStrategy(
-        secret="secret-1234567890-1234567890-1234567890",
+        secret="jwt-revocation-secret-9f2c7a14e0b83d6f5c1948a7e2d0fb36",
         subject_decoder=UUID,
         allow_inmemory_denylist=True,
     )
@@ -294,7 +297,7 @@ async def test_jwt_strategy_destroy_token_ignores_tokens_without_jti() -> None:
     password_helper = PasswordHelper()
     user = _User(id=uuid4(), email="user@example.com", hashed_password=password_helper.hash("pw"))
     store = _RecordingDenylistStore()
-    strategy = JWTStrategy(secret="secret-1234567890-1234567890-1234567890", denylist_store=store)
+    strategy = JWTStrategy(secret="jwt-revocation-secret-9f2c7a14e0b83d6f5c1948a7e2d0fb36", denylist_store=store)
 
     now = datetime.now(tz=UTC)
     token = jwt.encode(
@@ -327,7 +330,7 @@ async def test_jwt_strategy_destroy_token_uses_numeric_expiry_for_denylist_ttl(
     password_helper = PasswordHelper()
     user = _User(id=uuid4(), email="user@example.com", hashed_password=password_helper.hash("pw"))
     store = _RecordingDenylistStore()
-    strategy = JWTStrategy(secret="secret-1234567890-1234567890-1234567890", denylist_store=store)
+    strategy = JWTStrategy(secret="jwt-revocation-secret-9f2c7a14e0b83d6f5c1948a7e2d0fb36", denylist_store=store)
     token = jwt.encode(
         {
             "sub": str(user.id),
@@ -352,7 +355,7 @@ async def test_jwt_strategy_destroy_token_uses_minimum_ttl_when_exp_is_not_numer
     password_helper = PasswordHelper()
     user = _User(id=uuid4(), email="user@example.com", hashed_password=password_helper.hash("pw"))
     store = _RecordingDenylistStore()
-    strategy = JWTStrategy(secret="secret-1234567890-1234567890-1234567890", denylist_store=store)
+    strategy = JWTStrategy(secret="jwt-revocation-secret-9f2c7a14e0b83d6f5c1948a7e2d0fb36", denylist_store=store)
     token = jwt.encode(
         {
             "sub": str(user.id),
@@ -376,7 +379,10 @@ async def test_jwt_strategy_read_token_returns_none_for_missing_input() -> None:
     """read_token() should return None immediately when no token is provided."""
     password_helper = PasswordHelper()
     user = _User(id=uuid4(), email="user@example.com", hashed_password=password_helper.hash("pw"))
-    strategy = JWTStrategy(secret="secret-1234567890-1234567890-1234567890", allow_inmemory_denylist=True)
+    strategy = JWTStrategy(
+        secret="jwt-revocation-secret-9f2c7a14e0b83d6f5c1948a7e2d0fb36",
+        allow_inmemory_denylist=True,
+    )
 
     assert await strategy.read_token(None, cast("Any", _UserManager(user))) is None
 
@@ -413,9 +419,12 @@ def test_jwt_strategy_revocation_posture_distinguishes_inmemory_and_shared_store
     async_fakeredis: AsyncFakeRedis,
 ) -> None:
     """Direct JWTStrategy wiring exposes explicit in-memory and shared-store branches."""
-    inmemory_strategy = JWTStrategy(secret="secret-1234567890-1234567890-1234567890", allow_inmemory_denylist=True)
+    inmemory_strategy = JWTStrategy(
+        secret="jwt-revocation-secret-9f2c7a14e0b83d6f5c1948a7e2d0fb36",
+        allow_inmemory_denylist=True,
+    )
     shared_strategy = JWTStrategy(
-        secret="secret-1234567890-1234567890-1234567890",
+        secret="jwt-revocation-secret-9f2c7a14e0b83d6f5c1948a7e2d0fb36",
         denylist_store=RedisJWTDenylistStore(redis=cast_fakeredis(async_fakeredis, RedisExpiringValueStoreClient)),
     )
 
@@ -450,7 +459,10 @@ async def test_jwt_redis_denylist_protocol_stubs_are_callable() -> None:
 @pytest.mark.unit
 async def test_jwt_strategy_is_token_denied_false_without_string_jti() -> None:
     """Denylist lookup runs only when ``jti`` is a string."""
-    strategy = JWTStrategy(secret="secret-1234567890-1234567890-1234567890", allow_inmemory_denylist=True)
+    strategy = JWTStrategy(
+        secret="jwt-revocation-secret-9f2c7a14e0b83d6f5c1948a7e2d0fb36",
+        allow_inmemory_denylist=True,
+    )
     assert await strategy._is_token_denied({}) is False
     non_string_jti: dict[str, object] = {"jti": 123}
     assert await strategy._is_token_denied(non_string_jti) is False
@@ -460,7 +472,7 @@ async def test_jwt_strategy_is_token_denied_false_without_string_jti() -> None:
 async def test_jwt_strategy_is_token_denied_delegates_to_store() -> None:
     """``_is_token_denied`` mirrors the configured denylist store."""
     store = InMemoryJWTDenylistStore()
-    strategy = JWTStrategy(secret="secret-1234567890-1234567890-1234567890", denylist_store=store)
+    strategy = JWTStrategy(secret="jwt-revocation-secret-9f2c7a14e0b83d6f5c1948a7e2d0fb36", denylist_store=store)
     await store.deny("revoked-jti", ttl_seconds=3600)
     assert await strategy._is_token_denied({"jti": "revoked-jti"}) is True
     assert await strategy._is_token_denied({"jti": "active-jti"}) is False
@@ -472,7 +484,7 @@ def test_jwt_strategy_validate_fingerprint_accepts_when_getter_returns_none() ->
     password_helper = PasswordHelper()
     user = _User(id=uuid4(), email="user@example.com", hashed_password=password_helper.hash("pw"))
     strategy = JWTStrategy(
-        secret="secret-1234567890-1234567890-1234567890",
+        secret="jwt-revocation-secret-9f2c7a14e0b83d6f5c1948a7e2d0fb36",
         session_fingerprint_getter=lambda _: None,
         allow_inmemory_denylist=True,
     )
@@ -484,7 +496,10 @@ def test_jwt_strategy_validate_fingerprint_compares_digest() -> None:
     """Fingerprint helper enforces constant-time equality when both sides are present."""
     password_helper = PasswordHelper()
     user = _User(id=uuid4(), email="user@example.com", hashed_password=password_helper.hash("pw"))
-    strategy = JWTStrategy(secret="secret-1234567890-1234567890-1234567890", allow_inmemory_denylist=True)
+    strategy = JWTStrategy(
+        secret="jwt-revocation-secret-9f2c7a14e0b83d6f5c1948a7e2d0fb36",
+        allow_inmemory_denylist=True,
+    )
     current = strategy.session_fingerprint_getter(cast("Any", user))
     assert current is not None
     claim = strategy.session_fingerprint_claim

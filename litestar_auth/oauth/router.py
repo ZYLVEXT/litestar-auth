@@ -44,7 +44,9 @@ class ProviderOAuthControllerConfig[UP: UserProtocol[Any], ID]:
     oauth_scopes: Sequence[str] | None = None
     associate_by_email: bool = False
     trust_provider_email_verified: bool = False
-    oauth_redirect_dns_strict: bool = False
+    # Fail closed by default; see OAuthDefaults.redirect_dns_strict. Set False to
+    # restore fail-open DNS behavior in offline or sandboxed startup environments.
+    oauth_redirect_dns_strict: bool = True
 
 
 class ProviderOAuthControllerOptions[UP: UserProtocol[Any], ID](TypedDict):

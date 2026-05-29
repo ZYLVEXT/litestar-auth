@@ -1584,11 +1584,11 @@ def test_manual_oauth_factories_forward_strict_redirect_dns_flag(
 
 
 @pytest.mark.parametrize("factory_name", ["login", "associate", "provider"])
-def test_manual_oauth_factories_keep_default_redirect_dns_fail_open(
+def test_manual_oauth_factories_opt_out_restores_redirect_dns_fail_open(
     factory_name: str,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Manual OAuth controller config preserves default fail-open DNS validation."""
+    """Explicit ``oauth_redirect_dns_strict=False`` restores fail-open DNS validation."""
 
     def _unsafe_only_when_strict(_host: str, *, strict: bool = False) -> bool:
         return strict
@@ -1610,6 +1610,7 @@ def test_manual_oauth_factories_keep_default_redirect_dns_fail_open(
             oauth_client=FakeOAuthClient(),
             redirect_base_url=MANUAL_LOGIN_REDIRECT_BASE_URL,
             oauth_flow_cookie_secret=OAUTH_FLOW_COOKIE_SECRET,
+            oauth_redirect_dns_strict=False,
         )
     elif factory_name == "associate":
         controller = create_oauth_associate_controller(
@@ -1618,6 +1619,7 @@ def test_manual_oauth_factories_keep_default_redirect_dns_fail_open(
             oauth_client=FakeOAuthClient(),
             redirect_base_url=MANUAL_ASSOCIATE_REDIRECT_BASE_URL,
             oauth_flow_cookie_secret=OAUTH_FLOW_COOKIE_SECRET,
+            oauth_redirect_dns_strict=False,
         )
     else:
         controller = create_provider_oauth_controller(
@@ -1627,6 +1629,7 @@ def test_manual_oauth_factories_keep_default_redirect_dns_fail_open(
             oauth_client=FakeOAuthClient(),
             redirect_base_url=MANUAL_LOGIN_REDIRECT_BASE_URL,
             oauth_flow_cookie_secret=OAUTH_FLOW_COOKIE_SECRET,
+            oauth_redirect_dns_strict=False,
         )
 
     assert controller.path.endswith("/github")

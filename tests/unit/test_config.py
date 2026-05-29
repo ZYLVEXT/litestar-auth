@@ -19,12 +19,14 @@ from litestar_auth.exceptions import ConfigurationError
 JWT_ACCESS_TOKEN_AUDIENCE = config_module.JWT_ACCESS_TOKEN_AUDIENCE
 MINIMUM_SECRET_ENTROPY_BITS = config_module.MINIMUM_SECRET_ENTROPY_BITS
 MINIMUM_SECRET_LENGTH = config_module.MINIMUM_SECRET_LENGTH
+_MAX_SEQUENTIAL_PAIR_FRACTION = config_module._MAX_SEQUENTIAL_PAIR_FRACTION
 RESET_PASSWORD_TOKEN_AUDIENCE = config_module.RESET_PASSWORD_TOKEN_AUDIENCE
 TOTP_ENROLL_AUDIENCE = config_module.TOTP_ENROLL_AUDIENCE
 TOTP_PENDING_AUDIENCE = config_module.TOTP_PENDING_AUDIENCE
 VERIFY_TOKEN_AUDIENCE = config_module.VERIFY_TOKEN_AUDIENCE
 _resolve_token_secret = config_module._resolve_token_secret
 _estimated_secret_entropy_bits = config_module._estimated_secret_entropy_bits
+_sequential_pair_fraction = config_module._sequential_pair_fraction
 _shannon_entropy_bits = config_module._shannon_entropy_bits
 resolve_trusted_proxy_hops = config_module.resolve_trusted_proxy_hops
 resolve_trusted_proxy_setting = config_module.resolve_trusted_proxy_setting
@@ -208,6 +210,46 @@ def test_validate_secret_strength_rejects_weak_but_long_repeated_secret() -> Non
     """Pattern repetition cannot satisfy the production entropy floor."""
     with pytest.raises(ConfigurationError, match="insufficient entropy"):
         validate_secret_strength("abc123" * 22, label="JWT secret")
+
+
+def test_sequential_pair_fraction_returns_zero_for_short_value() -> None:
+    """Values shorter than two characters have no adjacent pairs to score."""
+    assert _sequential_pair_fraction("") == pytest.approx(0.0)
+    assert _sequential_pair_fraction("a") == pytest.approx(0.0)
+
+
+def test_sequential_pair_fraction_separates_walks_from_random_tokens() -> None:
+    """A strict codepoint walk scores above the ceiling while random tokens stay below it."""
+    assert _sequential_pair_fraction("abcdefghijklmnopqrstuvwxyz123456") >= _MAX_SEQUENTIAL_PAIR_FRACTION
+    assert _sequential_pair_fraction(_secrets.token_hex(32)) < _MAX_SEQUENTIAL_PAIR_FRACTION
+
+
+def test_validate_secret_strength_rejects_sequential_codepoint_walk() -> None:
+    """A sequential pattern clears the frequency entropy floor but is still rejected.
+
+    ``"abc...xyz123"`` has 32 distinct characters, so raw Shannon entropy
+    over-credits it well past the 128-bit floor; the adjacent-transition check
+    rejects it as trivially guessable.
+    """
+    sequential_secret = "abcdefghijklmnopqrstuvwxyz123456"
+
+    assert len(sequential_secret) >= MINIMUM_SECRET_LENGTH
+    assert _estimated_secret_entropy_bits(sequential_secret) > MINIMUM_SECRET_ENTROPY_BITS
+    with pytest.raises(ConfigurationError, match="low-complexity sequential pattern"):
+        validate_secret_strength(sequential_secret, label="JWT secret")
+
+
+def test_validate_secret_strength_scopes_sequential_check_to_single_span() -> None:
+    """A repeated short unit is judged by its unit, not the single-span sequential check.
+
+    ``"0123456789abcdef" * 4`` has a high adjacent-sequential fraction, but it is a
+    repeated 16-character unit rather than one uninterrupted walk, so the unit-based
+    entropy estimate governs it and the single-span sequential gate does not fire.
+    """
+    repeated_unit_secret = "0123456789abcdef" * 4
+
+    assert _sequential_pair_fraction(repeated_unit_secret) >= _MAX_SEQUENTIAL_PAIR_FRACTION
+    validate_secret_strength(repeated_unit_secret, label="JWT secret")
 
 
 def test_validate_secret_strength_rejects_short_secret_before_entropy_check() -> None:

@@ -482,7 +482,9 @@ class OAuthControllerConfig[UP: UserProtocol[Any], ID]:
     oauth_scopes: Sequence[str] | None = None
     associate_by_email: bool = False
     trust_provider_email_verified: bool = False
-    oauth_redirect_dns_strict: bool = False
+    # Fail closed by default; see OAuthDefaults.redirect_dns_strict. Set False to
+    # restore fail-open DNS behavior in offline or sandboxed startup environments.
+    oauth_redirect_dns_strict: bool = True
     totp_stepup_policy: dict[str, TotpStepUpPolicyMode] = field(default_factory=dict)
 
 
@@ -516,7 +518,9 @@ class OAuthAssociateControllerConfig[UP: UserProtocol[Any], ID]:
     user_manager_dependency_key: str | None = None
     path: str = "/auth/associate"
     cookie_secure: bool = True
-    oauth_redirect_dns_strict: bool = False
+    # Fail closed by default; see OAuthDefaults.redirect_dns_strict. Set False to
+    # restore fail-open DNS behavior in offline or sandboxed startup environments.
+    oauth_redirect_dns_strict: bool = True
     security: Sequence[SecurityRequirement] | None = None
     totp_stepup_policy: dict[str, TotpStepUpPolicyMode] = field(default_factory=dict)
 
