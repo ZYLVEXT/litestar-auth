@@ -482,6 +482,7 @@ class OAuthControllerConfig[UP: UserProtocol[Any], ID]:
     oauth_scopes: Sequence[str] | None = None
     associate_by_email: bool = False
     trust_provider_email_verified: bool = False
+    oauth_redirect_dns_strict: bool = False
     totp_stepup_policy: dict[str, TotpStepUpPolicyMode] = field(default_factory=dict)
 
 
@@ -499,6 +500,7 @@ class OAuthControllerOptions[UP: UserProtocol[Any], ID](TypedDict):
     oauth_scopes: NotRequired[Sequence[str] | None]
     associate_by_email: NotRequired[bool]
     trust_provider_email_verified: NotRequired[bool]
+    oauth_redirect_dns_strict: NotRequired[bool]
     totp_stepup_policy: NotRequired[dict[str, TotpStepUpPolicyMode]]
 
 
@@ -514,6 +516,7 @@ class OAuthAssociateControllerConfig[UP: UserProtocol[Any], ID]:
     user_manager_dependency_key: str | None = None
     path: str = "/auth/associate"
     cookie_secure: bool = True
+    oauth_redirect_dns_strict: bool = False
     security: Sequence[SecurityRequirement] | None = None
     totp_stepup_policy: dict[str, TotpStepUpPolicyMode] = field(default_factory=dict)
 
@@ -529,6 +532,7 @@ class OAuthAssociateControllerOptions[UP: UserProtocol[Any], ID](TypedDict):
     oauth_flow_cookie_secret: Required[str]
     path: NotRequired[str]
     cookie_secure: NotRequired[bool]
+    oauth_redirect_dns_strict: NotRequired[bool]
     security: NotRequired[Sequence[SecurityRequirement] | None]
     totp_stepup_policy: NotRequired[dict[str, TotpStepUpPolicyMode]]
 
@@ -573,6 +577,7 @@ def _create_login_oauth_controller[UP: UserProtocol[Any], ID](
             state_cookie_prefix=STATE_COOKIE_PREFIX,
             controller_name_suffix="OAuthController",
             validate_redirect_base_url=settings.validate_redirect_base_url,
+            oauth_redirect_dns_strict=settings.oauth_redirect_dns_strict,
         ),
         client_binding=_OAuthClientBinding(oauth_client_adapter=settings.oauth_client_adapter),
         user_manager_binding=_build_direct_user_manager_binding(settings.user_manager),
@@ -649,6 +654,7 @@ def create_oauth_controller[UP: UserProtocol[Any], ID](
             oauth_scopes=settings.oauth_scopes,
             associate_by_email=settings.associate_by_email,
             trust_provider_email_verified=settings.trust_provider_email_verified,
+            oauth_redirect_dns_strict=settings.oauth_redirect_dns_strict,
         ),
     )
 
@@ -671,6 +677,7 @@ def _create_oauth_associate_controller[UP: UserProtocol[Any], ID](
             state_cookie_prefix=ASSOCIATE_STATE_COOKIE_PREFIX,
             controller_name_suffix="OAuthAssociateController",
             validate_redirect_base_url=settings.validate_redirect_base_url,
+            oauth_redirect_dns_strict=settings.oauth_redirect_dns_strict,
             totp_stepup_policy=settings.totp_stepup_policy,
         ),
         client_binding=_OAuthClientBinding(
@@ -753,6 +760,7 @@ def create_oauth_associate_controller[UP: UserProtocol[Any], ID](
             oauth_flow_cookie_secret=settings.oauth_flow_cookie_secret,
             path=settings.path,
             cookie_secure=settings.cookie_secure,
+            oauth_redirect_dns_strict=settings.oauth_redirect_dns_strict,
             security=settings.security,
             totp_stepup_policy=settings.totp_stepup_policy or None,
         ),

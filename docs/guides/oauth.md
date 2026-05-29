@@ -24,6 +24,10 @@ Plugin-owned routes require `oauth_flow_cookie_secret` when providers are config
 
 For manual/custom controller wiring, `redirect_base_url` on `create_provider_oauth_controller()`, `create_oauth_controller()`, and `create_oauth_associate_controller()` must also use a non-loopback `https://...` origin and remain a clean callback base without embedded userinfo, query strings, or fragments. Unlike the plugin-owned route table, the low-level manual factories do not inspect `AppConfig(debug=True)` or `unsafe_testing=True`, so there is no localhost or plain-HTTP override on that API surface.
 
+Set `oauth_redirect_dns_strict=True` on `OAuthConfig` or on manual OAuth controller configuration when redirect-host DNS validation should fail closed for resolver failures or empty/unusable answers. The default `False` keeps the historical fail-open behavior for environments where startup DNS is unavailable. In strict mode, a resolver failure, no usable public answer, or an internal-only answer is a `ConfigurationError` at plugin startup or manual controller construction.
+
+Redirect-host DNS validation resolves the host once at validation time. It rejects loopback, RFC 1918 private, RFC 3927 link-local including `169.254.169.254`, multicast, reserved, and unspecified addresses, but it is not a DNS-rebinding defense: the address observed during validation can differ from the address used later by provider callbacks. Production deployments still need network-layer egress controls that prevent the app from reaching RFC 1918, link-local, metadata-service, and other internal addresses through OAuth redirect handling.
+
 ## Scope policy
 
 OAuth scopes are **server-owned configuration**, not caller input.

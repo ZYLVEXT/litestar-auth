@@ -118,9 +118,10 @@ def require_secure_oauth_redirect_in_production(
     if config.unsafe_testing or getattr(app_config, "debug", False):
         return
 
+    oauth_config = config.oauth_config
     contract = _build_oauth_route_registration_contract(
         auth_path=config.auth_path,
-        oauth_config=config.oauth_config,
+        oauth_config=oauth_config,
     )
     if not contract.has_plugin_owned_login_routes:
         return
@@ -130,7 +131,11 @@ def require_secure_oauth_redirect_in_production(
 
     parsed_redirect_base_url = urlsplit(redirect_base_url)
     _require_https_oauth_redirect_base_url(redirect_base_url, parsed_redirect_base_url.scheme)
-    _require_public_oauth_redirect_host(redirect_base_url, parsed_redirect_base_url.hostname)
+    _require_public_oauth_redirect_host(
+        redirect_base_url,
+        parsed_redirect_base_url.hostname,
+        strict=oauth_config.oauth_redirect_dns_strict if oauth_config is not None else False,
+    )
     _require_clean_oauth_redirect_base_url(
         redirect_base_url,
         has_userinfo=parsed_redirect_base_url.username is not None or parsed_redirect_base_url.password is not None,
@@ -139,8 +144,8 @@ def require_secure_oauth_redirect_in_production(
     )
 
 
-def _require_public_oauth_redirect_host(redirect_base_url: str, host: str | None) -> None:
-    if host is not None and not _is_unsafe_redirect_host(host):
+def _require_public_oauth_redirect_host(redirect_base_url: str, host: str | None, *, strict: bool = False) -> None:
+    if host is not None and not _is_unsafe_redirect_host(host, strict=strict):
         return
     msg = (
         "Plugin-managed OAuth routes require oauth_redirect_base_url to use a routable public HTTPS origin "

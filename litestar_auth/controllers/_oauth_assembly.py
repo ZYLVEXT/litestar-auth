@@ -73,6 +73,7 @@ class _OAuthControllerAssemblySettings:
     state_cookie_prefix: str
     controller_name_suffix: str
     validate_redirect_base_url: bool = True
+    oauth_redirect_dns_strict: bool = False
     totp_stepup_policy: dict[str, TotpStepUpPolicyMode] | None = None
 
 
@@ -109,6 +110,7 @@ class _OAuthLoginControllerSettings[UP: UserProtocol[Any], ID]:
     associate_by_email: bool = False
     trust_provider_email_verified: bool = False
     validate_redirect_base_url: bool = True
+    oauth_redirect_dns_strict: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -124,6 +126,7 @@ class _OAuthAssociateControllerSettings[UP: UserProtocol[Any], ID]:
     path: str = "/auth/associate"
     cookie_secure: bool = True
     validate_redirect_base_url: bool = True
+    oauth_redirect_dns_strict: bool = False
     security: Sequence[Any] | None = None
     totp_stepup_policy: dict[str, TotpStepUpPolicyMode] | None = None
 
@@ -207,7 +210,10 @@ def _build_oauth_controller_assembly[UP: UserProtocol[Any], ID](
 
     validate_oauth_provider_name(settings.provider_name)
     if settings.validate_redirect_base_url:
-        _validate_manual_oauth_redirect_base_url(settings.redirect_base_url)
+        _validate_manual_oauth_redirect_base_url(
+            settings.redirect_base_url,
+            strict=settings.oauth_redirect_dns_strict,
+        )
     controller_path = _build_cookie_path(path=settings.path, provider_name=settings.provider_name)
     return _OAuthControllerAssembly(
         controller_name=f"{_build_controller_name(settings.provider_name)}{settings.controller_name_suffix}",

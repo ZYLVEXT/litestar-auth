@@ -43,35 +43,37 @@ def _ip_is_unsafe(parsed: IPv4Address | IPv6Address) -> bool:
     )
 
 
-def _hostname_resolves_to_unsafe_ip(host: str) -> bool:
+def _hostname_resolves_to_unsafe_ip(host: str, *, strict: bool = False) -> bool:
     """Return whether DNS resolution of ``host`` yields a non-routable address.
 
     Resolution is performed once at validation time (controller construction
     or plugin startup), so the cost is paid up front rather than on every
-    OAuth callback. Fails open when the platform DNS resolver is unavailable
-    (offline CI, sandboxed test environments, or temporary network failures
-    during startup) so misconfigured infrastructure does not surface as a
-    spurious validation error; runtime egress firewall enforcement remains
-    the operator's responsibility for that path. DNS rebinding is not
-    defended here either: the address resolved at validation time may differ
+    OAuth callback. By default this fails open when the platform DNS resolver
+    is unavailable (offline CI, sandboxed test environments, or temporary
+    network failures during startup) so misconfigured infrastructure does not
+    surface as a spurious validation error; set ``strict=True`` to classify
+    resolution failures and unusable resolver results as unsafe. DNS rebinding
+    remains out of scope: the address resolved at validation time may differ
     from the address used at runtime, so operators relying on this gate must
     pair it with egress controls.
     """
     try:
         addrinfo_records = socket.getaddrinfo(host, None, type=socket.SOCK_STREAM)
     except socket.gaierror:
-        return False
+        return strict
+    resolved_usable_address = False
     for *_, sockaddr in addrinfo_records:
         try:
             resolved = ip_address(sockaddr[0])
         except (ValueError, IndexError):
             continue
+        resolved_usable_address = True
         if _ip_is_unsafe(resolved):
             return True
-    return False
+    return strict and not resolved_usable_address
 
 
-def _is_unsafe_redirect_host(host: str) -> bool:
+def _is_unsafe_redirect_host(host: str, *, strict: bool = False) -> bool:
     """Return whether ``host`` is non-routable / SSRF-adjacent for OAuth callbacks.
 
     Rejects loopback, link-local (incl. RFC 3927 169.254/16 — AWS/GCP IMDS),
@@ -81,11 +83,13 @@ def _is_unsafe_redirect_host(host: str) -> bool:
     validation time so an A/AAAA record pointing at internal addresses is
     caught before the OAuth ``code`` is ever issued; resolution failures
     fall through to the historical accept-hostname behaviour so offline CI
-    and sandboxed environments still validate hostnames structurally.
+    and sandboxed environments still validate hostnames structurally unless
+    ``strict=True`` is supplied. DNS rebinding remains out of scope for this
+    validation-time predicate and must be handled with runtime egress controls.
     """
     if host.casefold() in _LOOPBACK_HOSTNAMES:
         return True
     try:
         return _ip_is_unsafe(ip_address(host))
     except ValueError:
-        return _hostname_resolves_to_unsafe_ip(host)
+        return _hostname_resolves_to_unsafe_ip(host, strict=strict)

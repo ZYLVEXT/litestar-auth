@@ -45,7 +45,7 @@ def _build_callback_url_from_base(redirect_base_url: str, provider_name: str) ->
     return f"{redirect_base_url.rstrip('/')}/{provider_name}/callback"
 
 
-def _validate_manual_oauth_redirect_base_url(redirect_base_url: str) -> None:
+def _validate_manual_oauth_redirect_base_url(redirect_base_url: str, *, strict: bool = False) -> None:
     """Validate the fail-closed redirect-origin contract for manual OAuth controllers.
 
     Raises:
@@ -61,7 +61,7 @@ def _validate_manual_oauth_redirect_base_url(redirect_base_url: str) -> None:
         raise ConfigurationError(msg)
 
     host = parsed_redirect_base_url.hostname
-    if host is None or _is_unsafe_redirect_host(host):
+    if host is None or _is_unsafe_redirect_host(host, strict=strict):
         # Security: reject any host that resolves to a non-routable network so a
         # misconfigured redirect_base_url cannot send OAuth `code` to internal
         # services (loopback, RFC 1918 private, RFC 3927 link-local incl. AWS/GCP

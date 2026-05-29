@@ -44,6 +44,7 @@ class ProviderOAuthControllerConfig[UP: UserProtocol[Any], ID]:
     oauth_scopes: Sequence[str] | None = None
     associate_by_email: bool = False
     trust_provider_email_verified: bool = False
+    oauth_redirect_dns_strict: bool = False
 
 
 class ProviderOAuthControllerOptions[UP: UserProtocol[Any], ID](TypedDict):
@@ -64,6 +65,7 @@ class ProviderOAuthControllerOptions[UP: UserProtocol[Any], ID](TypedDict):
     oauth_scopes: NotRequired[Sequence[str] | None]
     associate_by_email: NotRequired[bool]
     trust_provider_email_verified: NotRequired[bool]
+    oauth_redirect_dns_strict: NotRequired[bool]
 
 
 @overload
@@ -108,7 +110,10 @@ def create_provider_oauth_controller[UP: UserProtocol[Any], ID](
         raise ValueError(msg)
     settings = ProviderOAuthControllerConfig(**options) if config is None else config
 
-    _validate_manual_oauth_redirect_base_url(settings.redirect_base_url)
+    _validate_manual_oauth_redirect_base_url(
+        settings.redirect_base_url,
+        strict=settings.oauth_redirect_dns_strict,
+    )
     oauth_client_adapter = _build_oauth_client_adapter(
         oauth_client=settings.oauth_client,
         oauth_client_factory=settings.oauth_client_factory,
@@ -131,6 +136,7 @@ def create_provider_oauth_controller[UP: UserProtocol[Any], ID](
             oauth_scopes=settings.oauth_scopes,
             associate_by_email=settings.associate_by_email,
             trust_provider_email_verified=settings.trust_provider_email_verified,
+            oauth_redirect_dns_strict=settings.oauth_redirect_dns_strict,
             validate_redirect_base_url=False,
         ),
     )

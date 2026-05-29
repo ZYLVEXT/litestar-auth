@@ -512,6 +512,18 @@ def test_unsafe_redirect_host_resolves_hostname_to_private_ip(monkeypatch: pytes
     assert redirect_validation_module._is_unsafe_redirect_host("metadata.example.com") is True
 
 
+def test_unsafe_redirect_host_strict_mode_rejects_hostname_resolving_to_private_ip(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Strict mode preserves existing private-address rejection."""
+    monkeypatch.setattr(
+        redirect_validation_module.socket,
+        "getaddrinfo",
+        lambda *_args, **_kwargs: _stub_addrinfo("169.254.169.254"),
+    )
+    assert redirect_validation_module._is_unsafe_redirect_host("metadata.example.com", strict=True) is True
+
+
 def test_unsafe_redirect_host_accepts_hostname_resolving_to_public_ip(monkeypatch: pytest.MonkeyPatch) -> None:
     """A hostname whose A-record points at a public address is accepted."""
     monkeypatch.setattr(
@@ -520,6 +532,18 @@ def test_unsafe_redirect_host_accepts_hostname_resolving_to_public_ip(monkeypatc
         lambda *_args, **_kwargs: _stub_addrinfo("8.8.8.8"),
     )
     assert redirect_validation_module._is_unsafe_redirect_host("dns.google") is False
+
+
+def test_unsafe_redirect_host_strict_mode_accepts_hostname_resolving_to_public_ip(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Strict mode still accepts hostnames with usable public DNS answers."""
+    monkeypatch.setattr(
+        redirect_validation_module.socket,
+        "getaddrinfo",
+        lambda *_args, **_kwargs: _stub_addrinfo("8.8.8.8"),
+    )
+    assert redirect_validation_module._is_unsafe_redirect_host("dns.google", strict=True) is False
 
 
 def test_unsafe_redirect_host_rejects_hostname_with_mixed_routability(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -552,6 +576,18 @@ def test_unsafe_redirect_host_falls_through_when_dns_unavailable(monkeypatch: py
     assert redirect_validation_module._is_unsafe_redirect_host("offline.example.com") is False
 
 
+def test_unsafe_redirect_host_strict_mode_rejects_dns_resolution_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Strict mode treats resolver failures as unsafe instead of falling open."""
+
+    def _gaierror(*_args: object, **_kwargs: object) -> list[object]:
+        raise redirect_validation_module.socket.gaierror
+
+    monkeypatch.setattr(redirect_validation_module.socket, "getaddrinfo", _gaierror)
+    assert redirect_validation_module._is_unsafe_redirect_host("offline.example.com", strict=True) is True
+
+
 def test_unsafe_redirect_host_skips_unparseable_resolution_entries(monkeypatch: pytest.MonkeyPatch) -> None:
     """``getaddrinfo`` results that do not parse as IPs are skipped, not raised on."""
     monkeypatch.setattr(
@@ -560,6 +596,38 @@ def test_unsafe_redirect_host_skips_unparseable_resolution_entries(monkeypatch: 
         lambda *_args, **_kwargs: [(0, 0, 0, "", ("not-an-ip", 0)), (0, 0, 0, "", ("8.8.8.8", 0))],
     )
     assert redirect_validation_module._is_unsafe_redirect_host("partial.example.com") is False
+
+
+def test_unsafe_redirect_host_non_strict_mode_accepts_unusable_resolution_entries(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Non-strict mode preserves the historical fail-open behavior for unusable DNS answers."""
+    monkeypatch.setattr(
+        redirect_validation_module.socket,
+        "getaddrinfo",
+        lambda *_args, **_kwargs: [(0, 0, 0, "", ("not-an-ip", 0))],
+    )
+    assert redirect_validation_module._is_unsafe_redirect_host("partial.example.com") is False
+
+
+@pytest.mark.parametrize(
+    "addrinfo_records",
+    [
+        pytest.param([], id="empty-addrinfo"),
+        pytest.param([(0, 0, 0, "", ("not-an-ip", 0))], id="unusable-addrinfo"),
+    ],
+)
+def test_unsafe_redirect_host_strict_mode_rejects_empty_or_unusable_resolution_entries(
+    addrinfo_records: list[tuple[object, object, object, object, tuple[str, int]]],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Strict mode treats empty or unusable resolver results as unsafe."""
+    monkeypatch.setattr(
+        redirect_validation_module.socket,
+        "getaddrinfo",
+        lambda *_args, **_kwargs: addrinfo_records,
+    )
+    assert redirect_validation_module._is_unsafe_redirect_host("partial.example.com", strict=True) is True
 
 
 def test_warn_insecure_plugin_startup_defaults_emits_all_expected_security_warnings(
@@ -2576,7 +2644,53 @@ def test_require_secure_oauth_redirect_in_production_accepts_public_https_origin
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Production startup accepts public HTTPS plugin redirect origins."""
-    monkeypatch.setattr(startup_module, "_is_unsafe_redirect_host", lambda _host: False)
+
+    def _public_host(_host: str, *, strict: bool = False) -> bool:
+        return False
+
+    monkeypatch.setattr(startup_module, "_is_unsafe_redirect_host", _public_host)
+    config = _minimal_config(
+        oauth_config=OAuthConfig(
+            oauth_providers=[_oauth_provider(name="github", client=object())],
+            oauth_redirect_base_url="https://app.example.com/auth",
+            oauth_flow_cookie_secret=OAUTH_FLOW_COOKIE_SECRET,
+        ),
+    )
+
+    require_secure_oauth_redirect_in_production(config=config, app_config=AppConfig(debug=False))
+
+
+def test_require_secure_oauth_redirect_in_production_forwards_strict_dns_flag(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Strict DNS mode lets operators fail closed when plugin redirect-host DNS is unusable."""
+
+    def _unsafe_only_when_strict(_host: str, *, strict: bool = False) -> bool:
+        return strict
+
+    monkeypatch.setattr(startup_module, "_is_unsafe_redirect_host", _unsafe_only_when_strict)
+    config = _minimal_config(
+        oauth_config=OAuthConfig(
+            oauth_providers=[_oauth_provider(name="github", client=object())],
+            oauth_redirect_base_url="https://app.example.com/auth",
+            oauth_redirect_dns_strict=True,
+            oauth_flow_cookie_secret=OAUTH_FLOW_COOKIE_SECRET,
+        ),
+    )
+
+    with pytest.raises(ConfigurationError, match="routable public HTTPS origin"):
+        require_secure_oauth_redirect_in_production(config=config, app_config=AppConfig(debug=False))
+
+
+def test_require_secure_oauth_redirect_in_production_keeps_default_fail_open_dns(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Default plugin redirect-host DNS validation keeps the existing fail-open posture."""
+
+    def _unsafe_only_when_strict(_host: str, *, strict: bool = False) -> bool:
+        return strict
+
+    monkeypatch.setattr(startup_module, "_is_unsafe_redirect_host", _unsafe_only_when_strict)
     config = _minimal_config(
         oauth_config=OAuthConfig(
             oauth_providers=[_oauth_provider(name="github", client=object())],

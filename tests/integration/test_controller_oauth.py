@@ -16,6 +16,7 @@ from litestar.exceptions import ClientException
 from litestar.middleware import DefineMiddleware
 from litestar.testing import AsyncTestClient
 
+import litestar_auth.controllers._oauth_helpers as oauth_helpers_module
 from litestar_auth.authentication.authenticator import Authenticator
 from litestar_auth.authentication.backend import AuthenticationBackend
 from litestar_auth.authentication.middleware import LitestarAuthMiddleware
@@ -1522,6 +1523,113 @@ def test_manual_oauth_factories_reject_insecure_redirect_origins(
 
     with pytest.raises(ConfigurationError, match=expected_message):
         cast("Any", factory)(**factory_kwargs)
+
+
+@pytest.mark.parametrize("factory_name", ["login", "associate", "provider"])
+def test_manual_oauth_factories_forward_strict_redirect_dns_flag(
+    factory_name: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Manual OAuth controller config can opt in to fail-closed redirect-host DNS validation."""
+
+    def _unsafe_only_when_strict(_host: str, *, strict: bool = False) -> bool:
+        return strict
+
+    monkeypatch.setattr(oauth_helpers_module, "_is_unsafe_redirect_host", _unsafe_only_when_strict)
+    password_helper = PasswordHelper()
+    user_manager = TrackingUserManager(InMemoryOAuthUserDatabase(), password_helper)
+    backend = AuthenticationBackend[ExampleUser, UUID](
+        name="oauth-bearer",
+        transport=BearerTransport(),
+        strategy=cast("Any", InMemoryTokenStrategy()),
+    )
+
+    factory: object
+    factory_kwargs: dict[str, object]
+    if factory_name == "login":
+        factory = create_oauth_controller
+        factory_kwargs = {
+            "provider_name": "github",
+            "backend": backend,
+            "user_manager": cast("Any", user_manager),
+            "oauth_client": FakeOAuthClient(),
+            "redirect_base_url": MANUAL_LOGIN_REDIRECT_BASE_URL,
+            "oauth_flow_cookie_secret": OAUTH_FLOW_COOKIE_SECRET,
+            "oauth_redirect_dns_strict": True,
+        }
+    elif factory_name == "associate":
+        factory = create_oauth_associate_controller
+        factory_kwargs = {
+            "provider_name": "github",
+            "user_manager": cast("Any", user_manager),
+            "oauth_client": FakeOAuthClient(),
+            "redirect_base_url": MANUAL_ASSOCIATE_REDIRECT_BASE_URL,
+            "oauth_flow_cookie_secret": OAUTH_FLOW_COOKIE_SECRET,
+            "oauth_redirect_dns_strict": True,
+        }
+    else:
+        factory = create_provider_oauth_controller
+        factory_kwargs = {
+            "provider_name": "github",
+            "backend": backend,
+            "user_manager": cast("Any", user_manager),
+            "oauth_client": FakeOAuthClient(),
+            "redirect_base_url": MANUAL_LOGIN_REDIRECT_BASE_URL,
+            "oauth_flow_cookie_secret": OAUTH_FLOW_COOKIE_SECRET,
+            "oauth_redirect_dns_strict": True,
+        }
+
+    with pytest.raises(ConfigurationError, match="routable public HTTPS origin"):
+        cast("Any", factory)(**factory_kwargs)
+
+
+@pytest.mark.parametrize("factory_name", ["login", "associate", "provider"])
+def test_manual_oauth_factories_keep_default_redirect_dns_fail_open(
+    factory_name: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Manual OAuth controller config preserves default fail-open DNS validation."""
+
+    def _unsafe_only_when_strict(_host: str, *, strict: bool = False) -> bool:
+        return strict
+
+    monkeypatch.setattr(oauth_helpers_module, "_is_unsafe_redirect_host", _unsafe_only_when_strict)
+    password_helper = PasswordHelper()
+    user_manager = TrackingUserManager(InMemoryOAuthUserDatabase(), password_helper)
+    backend = AuthenticationBackend[ExampleUser, UUID](
+        name="oauth-bearer",
+        transport=BearerTransport(),
+        strategy=cast("Any", InMemoryTokenStrategy()),
+    )
+
+    if factory_name == "login":
+        controller = create_oauth_controller(
+            provider_name="github",
+            backend=backend,
+            user_manager=cast("Any", user_manager),
+            oauth_client=FakeOAuthClient(),
+            redirect_base_url=MANUAL_LOGIN_REDIRECT_BASE_URL,
+            oauth_flow_cookie_secret=OAUTH_FLOW_COOKIE_SECRET,
+        )
+    elif factory_name == "associate":
+        controller = create_oauth_associate_controller(
+            provider_name="github",
+            user_manager=cast("Any", user_manager),
+            oauth_client=FakeOAuthClient(),
+            redirect_base_url=MANUAL_ASSOCIATE_REDIRECT_BASE_URL,
+            oauth_flow_cookie_secret=OAUTH_FLOW_COOKIE_SECRET,
+        )
+    else:
+        controller = create_provider_oauth_controller(
+            provider_name="github",
+            backend=backend,
+            user_manager=cast("Any", user_manager),
+            oauth_client=FakeOAuthClient(),
+            redirect_base_url=MANUAL_LOGIN_REDIRECT_BASE_URL,
+            oauth_flow_cookie_secret=OAUTH_FLOW_COOKIE_SECRET,
+        )
+
+    assert controller.path.endswith("/github")
 
 
 async def test_callback_returns_400_when_state_cookie_missing() -> None:

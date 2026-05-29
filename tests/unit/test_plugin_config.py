@@ -1328,6 +1328,7 @@ def test_oauth_config_defaults_match_expected_values() -> None:
     assert config.oauth_trust_provider_email_verified is False
     assert config.include_oauth_associate is False
     assert not config.oauth_redirect_base_url
+    assert config.oauth_redirect_dns_strict is False
     assert config.oauth_token_encryption_key is None
     assert config.oauth_token_encryption_keyring is None
     assert config.has_oauth_token_encryption is False

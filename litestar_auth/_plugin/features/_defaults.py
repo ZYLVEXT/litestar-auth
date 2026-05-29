@@ -73,6 +73,7 @@ class OAuthDefaults:
     trust_provider_email_verified: bool = False
     include_associate: bool = False
     redirect_base_url: str = ""
+    redirect_dns_strict: bool = False
 
 
 @dataclass(frozen=True, slots=True)

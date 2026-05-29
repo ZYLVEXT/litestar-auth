@@ -54,6 +54,7 @@ class OAuthConfig:
     oauth_trust_provider_email_verified: bool = FEATURE_DEFAULTS.oauth.trust_provider_email_verified
     include_oauth_associate: bool = FEATURE_DEFAULTS.oauth.include_associate
     oauth_redirect_base_url: str = FEATURE_DEFAULTS.oauth.redirect_base_url
+    oauth_redirect_dns_strict: bool = FEATURE_DEFAULTS.oauth.redirect_dns_strict
     oauth_token_encryption_key: str | None = field(default=None, repr=False)
     oauth_token_encryption_keyring: FernetKeyringConfig | None = field(default=None, repr=False)
     oauth_flow_cookie_secret: str | None = field(default=None, repr=False)

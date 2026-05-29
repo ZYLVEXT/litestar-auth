@@ -8,6 +8,14 @@
   from the right, is trusted as the client IP behind a multi-proxy chain (CDN → LB → app). The default
   `1` preserves the previous rightmost-entry behavior byte-for-byte; when the header carries fewer
   entries than the configured hop count, rate-limit identity fails closed to the direct client host.
+- **Opt-in fail-closed DNS validation for OAuth redirect hosts.** `OAuthConfig.oauth_redirect_dns_strict`
+  (plugin-owned routes) and `oauth_redirect_dns_strict` on the manual/provider OAuth controller configs
+  (`OAuthControllerConfig`, `OAuthAssociateControllerConfig`, `ProviderOAuthControllerConfig`) make the
+  redirect-host SSRF gate fail closed: when `True`, DNS resolver failures, empty answers, and answers
+  without any usable public address are rejected with `ConfigurationError` at validation/startup time
+  instead of the default fail-open behavior. The default `False` preserves the previous behavior
+  byte-for-byte. The check still resolves DNS only at validation time and does not defend against DNS
+  rebinding, so pair it with runtime network egress controls.
 
 ### Changed
 
@@ -37,7 +45,8 @@
 - **Deployment hardening guidance.** The deployment security contract documents the role-admin
   controller authorization footgun (an explicit empty `guards=[]` disables the default `is_superuser`
   guard) and the limits of the OAuth `redirect_base_url` SSRF gate (validation-time DNS check that
-  fails open on resolver errors and does not defend against DNS rebinding — pair it with runtime egress
+  fails open on resolver errors by default and does not defend against DNS rebinding — opt into
+  fail-closed resolver handling with `oauth_redirect_dns_strict=True`, and pair it with runtime egress
   controls).
 
 ## 4.0.1 (2026-05-29)
