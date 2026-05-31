@@ -37,7 +37,7 @@ source = "https://github.com/ZYLVEXT/litestar-auth"
 tracker = "https://github.com/ZYLVEXT/litestar-auth/issues"
 
 [project.optional-dependencies]
-redis = ["redis>=7.4.0,<8.0.0"]
+redis = ["redis>=7.4.0,<9.0.0"]
 oauth = ["httpx-oauth>=0.17.0,<0.18.0", "cryptography>=48.0.0"]
 totp = ["cryptography>=48.0.0"]
 all = ["litestar-auth[redis,oauth,totp]"]
