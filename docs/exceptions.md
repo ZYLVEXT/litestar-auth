@@ -248,6 +248,61 @@ Example custom-handler response shape:
 }
 ```
 
+## `InsufficientPermissionsError`
+
+Raised when an authenticated user fails a structured permission requirement.
+
+| Field | Type | Semantics |
+| ---- | ---- | --------- |
+| `required_permissions` | `frozenset[str]` | Normalized permissions required by the authorization check. |
+| `granted_permissions` | `frozenset[str]` | Normalized effective permissions resolved for the authenticated user. |
+| `require_all` | `bool` | `True` when every permission in `required_permissions` must be satisfied; `False` when any one permission is sufficient. |
+
+Notes:
+- The constructor stores the supplied permission sets as-is; validate permission-string invariants
+  at the raise site.
+- The default message is intentionally generic. Permission names often reveal internal resources,
+  actions, or policy shape and are kept off ordinary HTTP responses.
+- Permission guards use `ErrorCode.INSUFFICIENT_PERMISSIONS`. Custom exception hooks can inspect
+  `required_permissions`, `granted_permissions`, and `require_all` for trusted diagnostics.
+
+Example catch/log flow:
+
+```python
+from logging import getLogger
+
+from litestar_auth.exceptions import InsufficientPermissionsError
+
+logger = getLogger(__name__)
+
+try:
+    raise InsufficientPermissionsError(
+        required_permissions=frozenset({"posts:delete", "posts:write"}),
+        granted_permissions=frozenset({"posts:read"}),
+        require_all=True,
+    )
+except InsufficientPermissionsError as exc:
+    logger.info(
+        "Permission denial require_all=%s required_permissions=%s granted_permissions=%s",
+        exc.require_all,
+        sorted(exc.required_permissions),
+        sorted(exc.granted_permissions),
+    )
+    raise
+```
+
+Example custom-handler response shape:
+
+```json
+{
+  "status_code": 403,
+  "detail": "The authenticated user does not have all of the required permissions.",
+  "extra": {
+    "code": "INSUFFICIENT_PERMISSIONS"
+  }
+}
+```
+
 ## Related references
 
 - [Errors reference](errors.md) for the stable `ErrorCode` catalog and typical HTTP mappings.

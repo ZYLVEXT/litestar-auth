@@ -29,6 +29,7 @@ Exact JSON layout follows your Litestar exception handler configuration.
 | `LOGIN_ACCOUNT_UNAVAILABLE` | 400 | Account-state policy blocked sign-in, refresh, OAuth local session issue, or another account-state gated flow. |
 | `AUTHORIZATION_DENIED` | 403 | Guard denied access. |
 | `INSUFFICIENT_ROLES` | 403 | Role-based guard denial. Structured role context stays on the exception object but is omitted from default HTTP responses. |
+| `INSUFFICIENT_PERMISSIONS` | 403 | Permission-based guard denial. Structured required/granted permission context stays on the exception object but is omitted from default HTTP responses. |
 | `ROLE_ALREADY_EXISTS` | 409 | Opt-in contrib role-admin create conflict. |
 | `ROLE_NOT_FOUND` | 404 | Opt-in contrib role-admin requested role missing. |
 | `ROLE_STILL_ASSIGNED` | 409 | Opt-in contrib role-admin delete refused while users still hold the role. |
@@ -68,6 +69,11 @@ Exact JSON layout follows your Litestar exception handler configuration.
 `USER_ALREADY_EXISTS`, `REGISTER_FAILED`, and `UPDATE_USER_INVALID_PASSWORD` keep stable HTTP mappings; the corresponding Python exceptions use keyword-only structured context.
 
 Source of truth in code: `litestar_auth._error_codes.ErrorCode` (re-exported from `litestar_auth.exceptions`) and controller `ClientException` sites. Full exception hierarchy: [Python API — Exceptions](api/exceptions.md).
+
+`INSUFFICIENT_PERMISSIONS` is emitted by permission guard failures through
+`InsufficientPermissionsError`. The exception keeps `required_permissions`,
+`granted_permissions`, and `require_all` on the Python object for handlers or logs,
+but the default HTTP response does not expose permission names.
 
 `LOGIN_ACCOUNT_UNAVAILABLE` intentionally uses one opaque 400 response for inactive and unverified
 account-state failures so external observers cannot enumerate account state after valid credentials.

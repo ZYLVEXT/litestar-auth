@@ -79,9 +79,14 @@ def _normalized_user_roles(user: object, *, guard_name: str) -> frozenset[str]:
 
 def _roles_intersect_fixed_work(user_roles: frozenset[str], required_roles: tuple[str, ...]) -> bool:
     """Return whether any normalized user role matches a required role without early exit."""
+    # ``hmac.compare_digest`` raises ``TypeError`` on non-ASCII ``str`` operands, and
+    # role names are only NFKC-normalized (not ASCII-restricted), so compare UTF-8
+    # byte encodings to keep the match constant-time AND total for every role name.
+    encoded_required_roles = [required_role.encode("utf-8") for required_role in required_roles]
+    encoded_user_roles = [user_role.encode("utf-8") for user_role in user_roles]
     roles_intersect = False
-    for required_role in required_roles:
-        for user_role in user_roles:
+    for required_role in encoded_required_roles:
+        for user_role in encoded_user_roles:
             role_matches = hmac.compare_digest(user_role, required_role)
             roles_intersect = bool(int(roles_intersect) + int(role_matches))
     return roles_intersect
@@ -89,10 +94,14 @@ def _roles_intersect_fixed_work(user_roles: frozenset[str], required_roles: tupl
 
 def _roles_include_all_fixed_work(user_roles: frozenset[str], required_roles: tuple[str, ...]) -> bool:
     """Return whether every required role is present in normalized user roles without early exit."""
+    # See :func:`_roles_intersect_fixed_work`: compare UTF-8 bytes so non-ASCII role
+    # names match in constant time instead of raising from ``hmac.compare_digest``.
+    encoded_required_roles = [required_role.encode("utf-8") for required_role in required_roles]
+    encoded_user_roles = [user_role.encode("utf-8") for user_role in user_roles]
     includes_all_roles = True
-    for required_role in required_roles:
+    for required_role in encoded_required_roles:
         role_is_present = False
-        for user_role in user_roles:
+        for user_role in encoded_user_roles:
             role_matches = hmac.compare_digest(user_role, required_role)
             role_is_present = bool(int(role_is_present) + int(role_matches))
         includes_all_roles = bool(int(includes_all_roles) * int(role_is_present))

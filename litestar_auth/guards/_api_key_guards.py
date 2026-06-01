@@ -6,6 +6,12 @@ from typing import TYPE_CHECKING, Any, Never, TypeVar
 
 from litestar.exceptions import PermissionDeniedException
 
+from litestar_auth._permissions import (
+    normalize_permissions,
+    permissions_cover_delegated_grant,
+    permissions_grant,
+    resolve_connection_permissions,
+)
 from litestar_auth._roles import normalize_role_name as _normalize_role_name
 from litestar_auth._roles import normalize_roles as _normalize_roles
 from litestar_auth.authentication.strategy.api_key import ApiKeyContext
@@ -30,6 +36,26 @@ def _api_key_context(connection: ASGIConnection[Any, Any, Any, Any]) -> ApiKeyCo
     if isinstance(auth, ApiKeyContext):
         return auth
     return None
+
+
+def api_key_delegation_scopes(connection: ASGIConnection[Any, Any, Any, Any]) -> frozenset[str] | None:
+    """Return the permission-shaped scopes a delegated API key may exercise.
+
+    Returns:
+        ``None`` when the request was not API-key authenticated, so no delegation
+        ceiling applies. For an API-key request, the key's normalized
+        permission-shaped scopes; legacy simple scopes (no ``resource:action``
+        grammar) or malformed scope material carry no permission authority and
+        yield an empty set so permission guards fail closed for the delegated
+        credential rather than inheriting the owning user's full permissions.
+    """
+    context = _api_key_context(connection)
+    if context is None:
+        return None
+    try:
+        return frozenset(normalize_permissions(context.scopes))
+    except (TypeError, ValueError):
+        return frozenset()
 
 
 def _raise_authorization_denied(detail: str) -> Never:
@@ -57,11 +83,19 @@ def _normalize_required_scopes(scopes: tuple[object, ...]) -> tuple[str, ...]:
         msg = "API-key scope guards require at least one scope."
         raise ValueError(msg)
 
-    normalized_scopes: set[str] = set()
+    string_scopes: list[str] = []
     for raw_scope in scopes:
         if not isinstance(raw_scope, str):
             msg = "API-key scopes must be provided as non-empty strings."
             raise TypeError(msg)
+        string_scopes.append(raw_scope)
+    try:
+        return tuple(normalize_permissions(string_scopes))
+    except ValueError:
+        pass
+
+    normalized_scopes: set[str] = set()
+    for raw_scope in string_scopes:
         try:
             normalized_scopes.add(_normalize_role_name(raw_scope))
         except ValueError as exc:
@@ -74,13 +108,57 @@ def default_api_key_scope_authority(
     connection: ASGIConnection[Any, Any, Any, Any],
     api_key_scopes: frozenset[str],
 ) -> bool:
-    """Return whether current user roles still cover API-key scopes.
+    """Return whether current user permissions still cover API-key scopes.
 
-    This is the default v1 scopes-as-role-names authority used when API-key
-    scope subset checking is enabled and no custom authority is configured.
+    Permission-shaped scopes use the request-scope permission resolver and the
+    shared permission matcher. Legacy simple scopes keep the v1
+    scopes-as-role-names subset contract.
     """
-    user_roles = _normalized_user_roles(connection.user, guard_name="has_scope")
-    return api_key_scopes.issubset(user_roles)
+    try:
+        normalized_api_key_scopes = frozenset(normalize_permissions(api_key_scopes))
+    except ValueError:
+        normalized_api_key_scopes = frozenset(_normalize_roles(api_key_scopes))
+        user_roles = _normalized_user_roles(connection.user, guard_name="has_scope")
+        return normalized_api_key_scopes.issubset(user_roles)
+
+    try:
+        user_permissions = resolve_connection_permissions(connection)
+    except PermissionDeniedException:
+        return False
+    return all(
+        permissions_cover_delegated_grant(user_permissions, api_key_scope)
+        for api_key_scope in normalized_api_key_scopes
+    )
+
+
+def _normalize_api_key_scopes(scopes: object) -> frozenset[str]:
+    try:
+        return frozenset(normalize_permissions(scopes))
+    except ValueError:
+        return frozenset(_normalize_roles(scopes))
+
+
+def _api_key_scopes_grant(
+    *,
+    api_key_scopes: frozenset[str],
+    required_scopes: tuple[str, ...],
+    require_all: bool,
+) -> bool:
+    try:
+        normalized_api_key_scopes = frozenset(normalize_permissions(api_key_scopes))
+        normalized_required_scopes = tuple(normalize_permissions(required_scopes))
+    except ValueError:
+        required_scope_set = frozenset(required_scopes)
+        return required_scope_set <= api_key_scopes if require_all else bool(api_key_scopes & required_scope_set)
+
+    if require_all:
+        return all(
+            permissions_grant(normalized_api_key_scopes, required_scope)
+            for required_scope in normalized_required_scopes
+        )
+    return any(
+        permissions_grant(normalized_api_key_scopes, required_scope) for required_scope in normalized_required_scopes
+    )
 
 
 def _scope_subset_still_allowed(
@@ -122,7 +200,7 @@ def _build_scope_guard(*, required_scopes: tuple[str, ...], require_all: bool) -
         if context is None:
             _raise_authorization_denied(_API_KEY_REQUIRED_DETAIL)
         try:
-            api_key_scopes = frozenset(_normalize_roles(context.scopes))
+            api_key_scopes = _normalize_api_key_scopes(context.scopes)
         except (TypeError, ValueError) as exc:
             raise PermissionDeniedException(
                 detail=_API_KEY_SCOPE_DENIED_DETAIL,
@@ -130,12 +208,11 @@ def _build_scope_guard(*, required_scopes: tuple[str, ...], require_all: bool) -
             ) from exc
         if context.scope_subset_check and not _scope_subset_still_allowed(connection, context, api_key_scopes):
             _raise_scope_denied()
-        required_scope_set = frozenset(required_scopes)
-        if require_all:
-            if required_scope_set <= api_key_scopes:
-                return
-            _raise_scope_denied()
-        if api_key_scopes & required_scope_set:
+        if _api_key_scopes_grant(
+            api_key_scopes=api_key_scopes,
+            required_scopes=required_scopes,
+            require_all=require_all,
+        ):
             return
         _raise_scope_denied()
 
@@ -153,6 +230,7 @@ def has_any_scope[ScopeNameT: str](*scopes: ScopeNameT) -> Guard:
 
 
 __all__ = (
+    "api_key_delegation_scopes",
     "default_api_key_scope_authority",
     "has_any_scope",
     "has_scope",

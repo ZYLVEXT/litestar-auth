@@ -114,11 +114,15 @@ rate_limits = AuthRateLimitConfig(
 | `signed_body_max_messages` | `1024` | Maximum ASGI request-message frames buffered for signed requests before the same rejection contract. |
 
 When `scope_subset_check=True`, API-key scopes are downscoped by a scope authority at guard time. The default authority
-is `litestar_auth.guards._api_key_guards.default_api_key_scope_authority`; it implements the v1 scopes-as-role-names
-contract by allowing only keys whose normalized scopes are a subset of the current user's normalized role names. For
-example, a key scoped to `read:reports` remains effective only while the user has a `read:reports` role. If your
-application models scopes and roles separately, provide `scope_authority=` so the guard can ask your permissions model
-instead of comparing scope names to role names.
+is `litestar_auth.guards._api_key_guards.default_api_key_scope_authority`. Permission-shaped scopes use the same
+normalization and wildcard matcher as permission guards: `posts:*` grants every `posts:<action>` route requirement, and
+`*` grants every permission-shaped route requirement. The subset check is still fail-closed: a key scoped to `posts:*`
+requires the owning user's resolved permissions to include `posts:*` or `*`; `posts:read` alone is not broad enough to
+delegate `posts:*`.
+
+Legacy simple scopes such as `read` continue to use the v1 exact scopes-as-role-names subset contract. To migrate to the
+permission vocabulary, configure `role_permissions` or a custom `permission_resolver`, issue API keys with
+`resource:action` scopes, and update route guards to the same tokens.
 
 The bundled `SQLAlchemyApiKeyStore` enforces `max_keys_per_user` inside the create operation and locks the owning user
 row before counting active keys, so multi-worker SQL databases serialize concurrent key creation for the same user.

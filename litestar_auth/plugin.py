@@ -279,6 +279,7 @@ class LitestarAuth[UP: UserProtocol[Any], ID](InitPlugin, CLIPlugin):
                 api_key_signed_body_max_bytes=self.config.api_keys.signed_body_max_bytes,
                 api_key_signed_body_max_messages=self.config.api_keys.signed_body_max_messages,
                 superuser_role_name=self.config.superuser_role_name,
+                permission_resolver=self.config.resolve_permission_resolver(),
             ),
         )
         if self.config.middleware_hook is not None:

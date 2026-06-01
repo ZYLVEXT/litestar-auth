@@ -5,22 +5,25 @@ from __future__ import annotations
 import asyncio
 import importlib
 import inspect
-from typing import TYPE_CHECKING, Any, cast, get_type_hints
-from uuid import UUID
+from typing import TYPE_CHECKING, Annotated, Any, cast, get_type_hints
+from uuid import UUID, uuid4
 
 import pytest
-from litestar import Controller
+from litestar import Controller, Litestar, Request, get
 from litestar.config.app import AppConfig
 from litestar.datastructures.state import State
 from litestar.di import Provide
 from litestar.enums import MediaType
 from litestar.exceptions import ClientException
+from litestar.params import Dependency
 from litestar.response import Response
+from litestar.testing import AsyncTestClient
 
 import litestar_auth._plugin.dependencies as dependencies_module
 from litestar_auth._plugin import (
     DEFAULT_BACKENDS_DEPENDENCY_KEY,
     DEFAULT_CONFIG_DEPENDENCY_KEY,
+    DEFAULT_RESOLVED_PERMISSIONS_DEPENDENCY_KEY,
     DEFAULT_USER_MANAGER_DEPENDENCY_KEY,
     DEFAULT_USER_MODEL_DEPENDENCY_KEY,
     OAUTH_ASSOCIATE_USER_MANAGER_DEPENDENCY_KEY,
@@ -31,7 +34,10 @@ from litestar_auth.authentication.backend import AuthenticationBackend
 from litestar_auth.authentication.transport.bearer import BearerTransport
 from litestar_auth.controllers._utils import _mark_litestar_auth_route_handler
 from litestar_auth.exceptions import AuthorizationError, ErrorCode, InsufficientRolesError
+from litestar_auth.guards import has_permission
 from litestar_auth.manager import UserManagerSecurity
+from litestar_auth.password import PasswordHelper
+from litestar_auth.plugin import LitestarAuth
 from tests.e2e.conftest import assert_structural_session_factory
 from tests.integration.test_orchestrator import (
     DummySessionMaker,
@@ -57,6 +63,7 @@ if TYPE_CHECKING:
 
 pytestmark = pytest.mark.unit
 OAUTH_FLOW_COOKIE_SECRET = "oauth-flow-cookie-secret-1234567890"
+_ResolvedPermissions = Annotated[frozenset[str], Dependency()]
 
 
 def _oauth_provider(*, name: str, client: object) -> OAuthProviderConfig:
@@ -73,6 +80,7 @@ def _oauth_provider(*, name: str, client: object) -> OAuthProviderConfig:
 HTTP_BAD_REQUEST = 400
 HTTP_FORBIDDEN = 403
 HTTP_IM_A_TEAPOT = 418
+HTTP_OK = 200
 
 
 def _minimal_config() -> LitestarAuthConfig[ExampleUser, UUID]:
@@ -136,6 +144,75 @@ def _providers() -> DependencyProviders:
         backends=provide_backends,
         user_model=provide_user_model,
         oauth_associate_user_manager=provide_oauth_associate_user_manager,
+    )
+
+
+@get("/permissions", guards=[has_permission("posts:read")], sync_to_thread=False)
+def _permissions_probe(litestar_auth_permissions: _ResolvedPermissions) -> dict[str, list[str]]:
+    """Expose injected resolved permissions for integration coverage.
+
+    Returns:
+        Sorted effective permissions from plugin DI.
+    """
+    return {"permissions": sorted(litestar_auth_permissions)}
+
+
+@get("/anonymous-permissions", sync_to_thread=False)
+def _anonymous_permissions_probe(litestar_auth_permissions: _ResolvedPermissions) -> dict[str, list[str]]:
+    """Expose injected resolved permissions without authentication.
+
+    Returns:
+        Sorted effective permissions from plugin DI.
+    """
+    return {"permissions": sorted(litestar_auth_permissions)}
+
+
+def _permissions_app() -> tuple[Litestar, InMemoryTokenStrategy, ExampleUser]:
+    """Build a plugin app with role-permission DI enabled.
+
+    Returns:
+        The app, backing token strategy, and authenticated test user.
+    """
+    password_helper = PasswordHelper()
+    user = ExampleUser(
+        id=uuid4(),
+        email="permissions@example.com",
+        hashed_password=password_helper.hash("permissions-password"),
+        is_verified=True,
+        roles=["editor"],
+    )
+    user_db = InMemoryUserDatabase([user])
+    strategy = InMemoryTokenStrategy(token_prefix="permissions")
+    config = LitestarAuthConfig[ExampleUser, UUID](
+        backends=[
+            AuthenticationBackend[ExampleUser, UUID](
+                name="primary",
+                transport=BearerTransport(),
+                strategy=cast("Any", strategy),
+            ),
+        ],
+        session_maker=cast("Any", DummySessionMaker()),
+        user_model=ExampleUser,
+        user_manager_class=PluginUserManager,
+        user_db_factory=lambda _session: user_db,
+        user_manager_security=UserManagerSecurity[UUID](
+            verification_token_secret="0123456789abcdef" * 4,
+            reset_password_token_secret="fedcba9876543210" * 4,
+            id_parser=UUID,
+            password_helper=password_helper,
+        ),
+        role_permissions={
+            "editor": ("posts:read", "posts:write"),
+        },
+        include_users=False,
+    )
+    return (
+        Litestar(
+            route_handlers=[_permissions_probe, _anonymous_permissions_probe],
+            plugins=[LitestarAuth(config)],
+        ),
+        strategy,
+        user,
     )
 
 
@@ -408,6 +485,24 @@ def test_register_dependencies_raises_for_dependency_key_collisions() -> None:
         register_dependencies(app_config, config, providers=_providers())
 
 
+def test_provide_resolved_permissions_returns_empty_set_for_anonymous_request() -> None:
+    """The resolved-permissions provider is predictable before authentication."""
+    request = Request(
+        scope=cast(
+            "Any",
+            {
+                "type": "http",
+                "path": "/anonymous-permissions",
+                "headers": [],
+                "state": {},
+                "user": None,
+            },
+        ),
+    )
+
+    assert dependencies_module.provide_resolved_permissions(request) == frozenset()
+
+
 async def test_register_dependencies_registers_core_providers_and_autocommit_handler(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -427,6 +522,7 @@ async def test_register_dependencies_registers_core_providers_and_autocommit_han
         DEFAULT_USER_MANAGER_DEPENDENCY_KEY,
         DEFAULT_BACKENDS_DEPENDENCY_KEY,
         DEFAULT_USER_MODEL_DEPENDENCY_KEY,
+        DEFAULT_RESOLVED_PERMISSIONS_DEPENDENCY_KEY,
         config.db_session_dependency_key,
     }
     assert app_config.before_send == [autocommit_handler]
@@ -455,6 +551,11 @@ async def test_register_dependencies_registers_core_providers_and_autocommit_han
     assert backends_provider.use_cache is False
     assert backends_provider.sync_to_thread is False
     assert backends_provider.dependency() == ("primary",)
+
+    permissions_provider = app_config.dependencies[DEFAULT_RESOLVED_PERMISSIONS_DEPENDENCY_KEY]
+    assert isinstance(permissions_provider, Provide)
+    assert permissions_provider.use_cache is True
+    assert permissions_provider.sync_to_thread is False
 
 
 def test_register_dependencies_adds_oauth_associate_provider_only_when_configured() -> None:
@@ -528,3 +629,26 @@ def test_register_dependencies_wraps_sync_providers_without_sync_to_thread() -> 
     assert config_provider.use_cache is True
     assert config_provider.sync_to_thread is False
     assert config_provider.dependency() == "config"
+
+
+async def test_resolved_permissions_dependency_injects_authenticated_effective_permissions() -> None:
+    """Handlers can inject the authenticated caller's resolved permissions."""
+    app, strategy, user = _permissions_app()
+    token = await strategy.write_token(user)
+
+    async with AsyncTestClient(app=app) as client:
+        response = await client.get("/permissions", headers={"Authorization": f"Bearer {token}"})
+
+    assert response.status_code == HTTP_OK
+    assert response.json() == {"permissions": ["posts:read", "posts:write"]}
+
+
+async def test_resolved_permissions_dependency_returns_empty_set_for_unauthenticated_request() -> None:
+    """Anonymous callers receive an empty resolved-permissions set through DI."""
+    app, _strategy, _user = _permissions_app()
+
+    async with AsyncTestClient(app=app) as client:
+        response = await client.get("/anonymous-permissions")
+
+    assert response.status_code == HTTP_OK
+    assert response.json() == {"permissions": []}

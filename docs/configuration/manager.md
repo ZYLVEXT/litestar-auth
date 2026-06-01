@@ -56,6 +56,31 @@ On the `LitestarAuthConfig` dataclass, `session_maker` is typed as optional for 
 | `user_manager_factory` | `None` | Full control over request-scoped manager construction (`UserManagerFactory`). Set it directly on `LitestarAuthConfig(...)` when you need caller-owned manager wiring. When set, the factory owns any custom constructor wiring, including password-validator injection and manager-specific secret handling. |
 | `rate_limit_config` | `None` | `AuthRateLimitConfig` for auth endpoint throttling. For the common one-client Redis recipe, build it through `litestar_auth.contrib.redis.RedisAuthPreset`; keep `AuthRateLimitConfig.from_shared_backend()` for lower-level shared-backend wiring. |
 | `superuser_role_name` | `"superuser"` | Role name treated as superuser membership by plugin-managed managers and guards. Values are normalized with the same trim/lowercase rules as `user.roles` and must not be empty. |
+| `role_permissions` | `{}` | Static role-to-permission mapping used by the default permission resolver. Role names and permission tokens are normalized at config construction; malformed maps fail fast. |
+| `permission_resolver` | `None` | Optional `PermissionResolver` override. When set, it wins over `role_permissions`; otherwise the plugin builds a `StaticRolePermissionResolver` from `role_permissions` and publishes it on request scope state. |
+
+### Permission resolver configuration
+
+`role_permissions` is the simple static path for apps that model permissions as
+role-derived strings:
+
+```python
+config = LitestarAuthConfig[User, UUID](
+    user_model=User,
+    session_maker=session_maker,
+    role_permissions={
+        "editor": ("posts:read", "posts:write"),
+        "auditor": ("reports:read",),
+    },
+)
+```
+
+The default resolver uses the same normalized role names as `user.roles`. A user
+with the configured `superuser_role_name` receives the global `"*"` permission
+grant. For database-backed or tenant-aware permission lookup, provide a custom
+`permission_resolver`; the resolver is stored on request scope by the auth
+middleware so permission guards and dependencies can read the same per-request
+contract.
 
 ### User manager customization
 

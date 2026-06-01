@@ -99,6 +99,7 @@ FEATURE_WIRING: tuple[FeatureWiring, ...] = (
             "user_manager",
             "backends",
             "user_model",
+            "resolved_permissions",
             "db_session",
         ),
         description="Core auth plugin guards, DI, middleware, OpenAPI, controllers, and route error handlers.",

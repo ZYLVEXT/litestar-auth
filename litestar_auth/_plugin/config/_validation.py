@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from typing import Any
 
+from litestar_auth._permissions import StaticRolePermissionResolver
 from litestar_auth._plugin.config._resolvers import _normalize_config_superuser_role_name
 from litestar_auth.config import UnsetType
 from litestar_auth.exceptions import ConfigurationError
@@ -25,6 +27,7 @@ class _ConfigValidationMixin:
         self._validate_totp_stepup_configuration()
         self._validate_login_identifier()
         self._validate_db_session_dependency_key()
+        self._validate_permission_configuration()
 
     def _validate_user_manager_configuration(self: Any) -> None:
         """Reject conflicting or invalid user-manager construction options.
@@ -118,3 +121,26 @@ class _ConfigValidationMixin:
             _valid_python_identifier_validator(self.db_session_dependency_key)
         except ValueError as exc:
             raise ValueError(*exc.args) from None
+
+    def _validate_permission_configuration(self: Any) -> None:
+        """Validate permission resolver configuration at startup.
+
+        Raises:
+            ConfigurationError: If the static role map is malformed or an explicit
+                resolver does not expose the expected ``resolve`` callable.
+        """
+        if not isinstance(self.role_permissions, Mapping):
+            msg = "role_permissions must be a mapping of role names to permission iterables."
+            raise ConfigurationError(msg)
+        try:
+            StaticRolePermissionResolver(
+                self.role_permissions,
+                superuser_role_name=self.superuser_role_name,
+            )
+        except (TypeError, ValueError) as exc:
+            msg = f"role_permissions is invalid: {exc}"
+            raise ConfigurationError(msg) from exc
+
+        if self.permission_resolver is not None and not callable(getattr(self.permission_resolver, "resolve", None)):
+            msg = "permission_resolver must expose a callable resolve(user, *, context=None) method."
+            raise ConfigurationError(msg)

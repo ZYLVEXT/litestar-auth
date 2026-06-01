@@ -18,7 +18,7 @@ from litestar_auth.models import User  # or your own model
 | ----- | ---- |
 | Database-token preset, API-key backend, backend lifecycle, auth paths, and built-in payloads | [Backends](configuration/backends.md) |
 | User model contracts, bundled ORM mixins, token tables, roles, and `SQLAlchemyUserDatabase` | [User and manager](configuration/user_and_manager.md) |
-| Role CLI, manager construction, plugin hooks, password helper, schemas, and secret contracts | [Manager customization](configuration/manager.md) |
+| Role CLI, permission resolver configuration, manager construction, plugin hooks, password helper, schemas, and secret contracts | [Manager customization](configuration/manager.md) |
 | Redis auth preset, shared rate limiting, replay stores, and Redis import boundaries | [Redis](configuration/redis.md) |
 | Deployment worker-count posture and production shared-store requirements | [Deployment](deployment.md#process-topology) |
 | `TotpConfig` fields, TOTP route behavior, and TOTP step-up policy | [TOTP](configuration/totp.md) |
@@ -69,6 +69,10 @@ Moved to: [Manager customization](configuration/manager.md#required-at-runtime).
 ## Core wiring
 
 Moved to: [Manager customization](configuration/manager.md#core-wiring).
+
+### Permission resolver configuration
+
+Moved to: [Manager customization](configuration/manager.md#permission-resolver-configuration).
 
 ### User manager customization
 

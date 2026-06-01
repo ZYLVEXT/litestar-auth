@@ -21,6 +21,7 @@ import litestar_auth._plugin.database_token as database_token_module
 import litestar_auth._plugin.features as plugin_features_module
 import litestar_auth.guards._api_key_guards as api_key_guards_module
 from litestar_auth import DEFAULT_SUPERUSER_ROLE_NAME
+from litestar_auth._permissions import permissions_grant
 from litestar_auth._plugin.oauth_contract import _build_oauth_route_registration_contract
 from litestar_auth._plugin.scoped_session import SessionFactory
 from litestar_auth._plugin.user_manager_builder import (
@@ -42,7 +43,7 @@ from litestar_auth.password import PasswordHelper
 from litestar_auth.plugin import LitestarAuth, LitestarAuthConfig
 from litestar_auth.ratelimit import AuthRateLimitConfig
 from litestar_auth.schemas import UserCreate
-from litestar_auth.types import LoginIdentifier
+from litestar_auth.types import LoginIdentifier, PermissionResolver
 from tests.e2e.conftest import assert_structural_session_factory
 from tests.integration.test_orchestrator import (
     DummySession,
@@ -365,6 +366,8 @@ def _minimal_config(  # noqa: PLR0913
     id_parser: type[UUID] | None = None,
     login_identifier: Literal["email", "username"] = "email",
     superuser_role_name: str = DEFAULT_SUPERUSER_ROLE_NAME,
+    role_permissions: dict[str, object] | None = None,
+    permission_resolver: PermissionResolver | None = None,
 ) -> LitestarAuthConfig[ExampleUser, UUID]:
     """Build a minimal config for plugin tests.
 
@@ -398,6 +401,8 @@ def _minimal_config(  # noqa: PLR0913
         totp_config=totp_config,
         login_identifier=login_identifier,
         superuser_role_name=superuser_role_name,
+        role_permissions={} if role_permissions is None else role_permissions,
+        permission_resolver=permission_resolver,
     )
 
 
@@ -585,6 +590,73 @@ def test_litestar_auth_config_declares_superuser_role_name_field() -> None:
     assert "superuser_role_name" in dataclass_fields
     assert dataclass_fields["superuser_role_name"].type == "str"
     assert dataclass_fields["superuser_role_name"].default == DEFAULT_SUPERUSER_ROLE_NAME
+
+
+def test_litestar_auth_config_declares_permission_fields() -> None:
+    """The plugin config exposes permission resolver wiring with safe defaults."""
+    dataclass_fields = LitestarAuthConfig.__dataclass_fields__
+    role_permissions_default_factory = dataclass_fields["role_permissions"].default_factory
+
+    assert dataclass_fields["role_permissions"].type == "Mapping[str, object]"
+    assert callable(role_permissions_default_factory)
+    assert cast("Callable[[], object]", role_permissions_default_factory)() == {}
+    assert dataclass_fields["permission_resolver"].type == "PermissionResolver | None"
+    assert dataclass_fields["permission_resolver"].default is None
+
+
+def test_litestar_auth_config_resolves_static_role_permission_resolver() -> None:
+    """Configured role permission maps produce a working static resolver."""
+    config = _minimal_config(
+        role_permissions={
+            " Admin ": ("Posts:Read", "posts:*"),
+            "auditor": ("users:read",),
+        },
+        superuser_role_name="Owner",
+    )
+    resolver = config.resolve_permission_resolver()
+
+    assert resolver.resolve(ExampleUser(id=uuid4(), roles=["admin"])) == frozenset({"posts:*", "posts:read"})
+    assert permissions_grant(resolver.resolve(ExampleUser(id=uuid4(), roles=["owner"])), "anything:delete")
+
+
+def test_litestar_auth_config_permission_resolver_override_wins() -> None:
+    """An explicit resolver owns permission resolution over the static role map."""
+
+    class ExplicitResolver:
+        def resolve(self, user: object, *, context: object | None = None) -> frozenset[str]:
+            return frozenset({"override:read"})
+
+    resolver = ExplicitResolver()
+    config = _minimal_config(
+        role_permissions={"admin": ("posts:read",)},
+        permission_resolver=resolver,
+    )
+
+    assert config.resolve_permission_resolver() is resolver
+    assert config.resolve_permission_resolver().resolve(ExampleUser(id=uuid4(), roles=["admin"])) == frozenset(
+        {"override:read"},
+    )
+
+
+@pytest.mark.parametrize(
+    ("role_permissions", "match"),
+    [
+        pytest.param(cast("Any", []), "role_permissions must be a mapping", id="not-mapping"),
+        pytest.param(cast("Any", {object(): ("posts:read",)}), "role_permissions is invalid", id="non-string-role"),
+        pytest.param({"admin": ("posts",)}, "role_permissions is invalid", id="invalid-permission"),
+        pytest.param({"admin": "posts:read"}, "role_permissions is invalid", id="string-permissions"),
+    ],
+)
+def test_litestar_auth_config_rejects_malformed_role_permissions(role_permissions: object, match: str) -> None:
+    """Malformed permission maps fail during config construction."""
+    with pytest.raises(ConfigurationError, match=match):
+        _minimal_config(role_permissions=cast("Any", role_permissions))
+
+
+def test_litestar_auth_config_rejects_invalid_permission_resolver() -> None:
+    """Explicit resolver overrides must expose the PermissionResolver method."""
+    with pytest.raises(ConfigurationError, match="permission_resolver must expose"):
+        _minimal_config(permission_resolver=cast("Any", object()))
 
 
 def test_litestar_auth_config_declares_register_minimum_response_seconds_field() -> None:

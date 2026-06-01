@@ -1,3 +1,46 @@
+## Unreleased
+
+### Added
+
+- **Permission-based authorization.** New `has_permission()`, `has_all_permissions()`, and
+  `has_any_permission()` route guards authorize against an authenticated user's effective permissions
+  using `resource:action` tokens, with `resource:*` and `*` grants (route requirements themselves may not
+  be wildcards and fail closed). Configure grants declaratively via `LitestarAuthConfig.role_permissions`
+  (role → permission iterable) or supply a custom `permission_resolver` implementing the new
+  `PermissionResolver` protocol; the bundled `StaticRolePermissionResolver` maps flat roles to permissions
+  and treats the configured `superuser_role_name` as a global `*` grant. Denials raise
+  `InsufficientPermissionsError` (`ErrorCode.INSUFFICIENT_PERMISSIONS`) with structured context but without
+  echoing permission names in the response message. A `litestar_auth_permissions` dependency
+  (`DEFAULT_RESOLVED_PERMISSIONS_DEPENDENCY_KEY`) exposes the request's resolved permissions for response
+  shaping and UI hints — not a substitute for route guards.
+
+### Changed
+
+- **API-key scope guards share the permission vocabulary.** `has_scope()` / `has_any_scope()` now accept
+  permission-shaped `resource:action`, `resource:*`, and `*` scopes and match them with the same engine as
+  permission guards. With `scope_subset_check=True` (default) a delegated key must remain within the owning
+  user's currently resolved permissions, so revoking the underlying permission also removes the key's route
+  access. Legacy simple scopes without `:` keep the previous scopes-as-role-names subset behavior for
+  migration.
+
+### Security
+
+- **API-key scopes bound permission guards (least privilege).** When a request is authenticated with an
+  API key, `has_permission()`, `has_all_permissions()`, and `has_any_permission()` now require the key's
+  own scopes to delegate each permission in addition to the owning user granting it, so a scoped key can
+  never exceed its delegation on a permission-guarded route — even for a superuser owner. This mirrors the
+  `scope_subset_check` ceiling already enforced for `has_scope()` guards. Keys with legacy simple scopes
+  (no `resource:action` grammar) or empty scopes carry no permission-shaped authority and fail closed on
+  permission guards; use `has_scope()` or `requires_password_session` for those routes.
+
+### Documentation
+
+- **Guards guide documents permission-based authorization.** `docs/guards.md` covers the permission
+  guards, `resource:action` / `resource:*` / `*` grammar, `role_permissions` configuration, the superuser
+  global grant, the `litestar_auth_permissions` dependency, and the API-key delegation ceiling. The roadmap
+  clarifies that flat `role` / `user_role` tables remain the persistence layer and that `role_permissions`
+  and custom `permission_resolver` objects are the current extension points for effective permissions.
+
 ## 4.1.0 (2026-05-29)
 
 ### Added

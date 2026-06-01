@@ -37,11 +37,22 @@ Examples:
 
 import logging
 
+from litestar_auth._permissions import StaticRolePermissionResolver
 from litestar_auth._superuser_role import DEFAULT_SUPERUSER_ROLE_NAME
 from litestar_auth.authentication import AuthenticationBackend, Authenticator
 from litestar_auth.authentication.transport import BearerTransport, CookieTransport, CookieTransportConfig
 from litestar_auth.exceptions import ErrorCode, LitestarAuthError
-from litestar_auth.guards import has_all_roles, has_any_role, is_active, is_authenticated, is_superuser, is_verified
+from litestar_auth.guards import (
+    has_all_permissions,
+    has_all_roles,
+    has_any_permission,
+    has_any_role,
+    has_permission,
+    is_active,
+    is_authenticated,
+    is_superuser,
+    is_verified,
+)
 from litestar_auth.manager import BaseUserManager, BaseUserManagerConfig, UserManagerSecurity
 from litestar_auth.plugin import (
     ApiKeyConfig,
@@ -55,6 +66,7 @@ from litestar_auth.plugin import (
 )
 from litestar_auth.types import (
     GuardedUserProtocol,
+    PermissionResolver,
     RoleCapableUserProtocol,
     TotpUserProtocol,
     UserProtocol,
@@ -84,15 +96,20 @@ __all__ = (
     "LitestarAuthError",
     "OAuthConfig",
     "OAuthProviderConfig",
+    "PermissionResolver",
     "RoleCapableUserProtocol",
+    "StaticRolePermissionResolver",
     "TotpConfig",
     "TotpUserProtocol",
     "UserManagerSecurity",
     "UserProtocol",
     "UserProtocolStrict",
     "__version__",
+    "has_all_permissions",
     "has_all_roles",
+    "has_any_permission",
     "has_any_role",
+    "has_permission",
     "is_active",
     "is_authenticated",
     "is_superuser",

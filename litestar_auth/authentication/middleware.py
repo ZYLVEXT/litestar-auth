@@ -26,6 +26,7 @@ from litestar.types import (
     WebSocketReceiveEvent,
 )
 
+from litestar_auth._permissions import DEFAULT_PERMISSION_RESOLVER, set_scope_permission_resolver
 from litestar_auth._superuser_role import (
     DEFAULT_SUPERUSER_ROLE_NAME,
     normalize_superuser_role_name,
@@ -40,7 +41,7 @@ from litestar_auth.authentication.strategy.api_key import (
 from litestar_auth.authentication.transport._api_key_signing import API_KEY_SIGNED_BODY_SCOPE_KEY
 from litestar_auth.authentication.transport.api_key import API_KEY_HEADER_NAME, ApiKeyTransport
 from litestar_auth.exceptions import ErrorCode
-from litestar_auth.types import UserProtocol
+from litestar_auth.types import PermissionResolver, UserProtocol
 
 if TYPE_CHECKING:
     from litestar.connection import ASGIConnection, Request
@@ -82,6 +83,7 @@ class LitestarAuthMiddlewareConfig[UP: UserProtocol[Any], ID]:
     api_key_signed_body_max_bytes: int = _DEFAULT_API_KEY_SIGNED_BODY_MAX_BYTES
     api_key_signed_body_max_messages: int = _DEFAULT_API_KEY_SIGNED_BODY_MAX_MESSAGES
     superuser_role_name: str = DEFAULT_SUPERUSER_ROLE_NAME
+    permission_resolver: PermissionResolver = DEFAULT_PERMISSION_RESOLVER
     exclude: str | list[str] | None = None
     exclude_from_auth_key: str = "exclude_from_auth"
     exclude_http_methods: Sequence[Method] | None = None
@@ -99,6 +101,7 @@ class LitestarAuthMiddlewareOptions[UP: UserProtocol[Any], ID](TypedDict):
     api_key_signed_body_max_bytes: NotRequired[int]
     api_key_signed_body_max_messages: NotRequired[int]
     superuser_role_name: NotRequired[str]
+    permission_resolver: NotRequired[PermissionResolver]
     exclude: NotRequired[str | list[str] | None]
     exclude_from_auth_key: NotRequired[str]
     exclude_http_methods: NotRequired[Sequence[Method] | None]
@@ -157,6 +160,7 @@ class LitestarAuthMiddleware[UP: UserProtocol[Any], ID](AbstractAuthenticationMi
         self.api_key_signed_body_max_bytes = settings.api_key_signed_body_max_bytes
         self.api_key_signed_body_max_messages = settings.api_key_signed_body_max_messages
         self.superuser_role_name = normalize_superuser_role_name(settings.superuser_role_name)
+        self.permission_resolver = settings.permission_resolver
 
     @override
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
@@ -189,6 +193,7 @@ class LitestarAuthMiddleware[UP: UserProtocol[Any], ID](AbstractAuthenticationMi
             Authentication result containing the resolved user and backend name.
         """
         set_scope_superuser_role_name(connection.scope, self)
+        set_scope_permission_resolver(connection.scope, self.permission_resolver)
         session = self.get_request_session(connection.app.state, connection.scope)
         authenticator = self.authenticator_factory(session)
         user, auth_context = await authenticator.authenticate(connection)

@@ -66,6 +66,35 @@ class InsufficientRolesError(AuthorizationError):
         super().__init__(message=resolved_message, code=code)
 
 
+class InsufficientPermissionsError(AuthorizationError):
+    """Raised when a user does not satisfy a permission-based authorization check."""
+
+    default_message = "The authenticated user does not satisfy the required permissions."
+    default_code = ErrorCode.INSUFFICIENT_PERMISSIONS
+
+    def __init__(
+        self,
+        *,
+        required_permissions: frozenset[str],
+        granted_permissions: frozenset[str],
+        require_all: bool,
+        message: str | None = None,
+        code: str | None = None,
+    ) -> None:
+        """Initialize the permission-denial error with structured permission context."""
+        self.required_permissions = required_permissions
+        self.granted_permissions = granted_permissions
+        self.require_all = require_all
+        required_permission_phrase = (
+            "all of the required permissions" if require_all else "any of the required permissions"
+        )
+        # Security: permission names can reveal the application's authorization
+        # model, so keep them on the exception instance for trusted hooks without
+        # echoing them in the default human-readable message.
+        resolved_message = message or f"The authenticated user does not have {required_permission_phrase}."
+        super().__init__(message=resolved_message, code=code)
+
+
 def totp_stepup_required_exception() -> ClientException:
     """Return the stable 403 client response for missing recent TOTP verification."""
     msg = "Recent TOTP verification is required."

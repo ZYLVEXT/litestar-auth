@@ -24,6 +24,7 @@ ERROR_CODE_REGISTRY = error_codes_module.ERROR_CODE_REGISTRY
 ErrorCode = exceptions_module.ErrorCode
 InactiveUserError = exceptions_module.InactiveUserError
 InsufficientRolesError = exceptions_module.InsufficientRolesError
+InsufficientPermissionsError = exceptions_module.InsufficientPermissionsError
 InvalidPasswordError = exceptions_module.InvalidPasswordError
 InvalidResetPasswordTokenError = exceptions_module.InvalidResetPasswordTokenError
 InvalidVerifyTokenError = exceptions_module.InvalidVerifyTokenError
@@ -160,6 +161,7 @@ EXPECTED_ERROR_CODE_GROUPS = {
     },
     RoleErrorCode: {
         "INSUFFICIENT_ROLES": "INSUFFICIENT_ROLES",
+        "INSUFFICIENT_PERMISSIONS": "INSUFFICIENT_PERMISSIONS",
         "ROLE_ALREADY_EXISTS": "ROLE_ALREADY_EXISTS",
         "ROLE_NOT_FOUND": "ROLE_NOT_FOUND",
         "ROLE_STILL_ASSIGNED": "ROLE_STILL_ASSIGNED",
@@ -204,6 +206,7 @@ EXPECTED_ERROR_CODES = {
     "LOGIN_ACCOUNT_UNAVAILABLE": "LOGIN_ACCOUNT_UNAVAILABLE",
     "AUTHORIZATION_DENIED": "AUTHORIZATION_DENIED",
     "INSUFFICIENT_ROLES": "INSUFFICIENT_ROLES",
+    "INSUFFICIENT_PERMISSIONS": "INSUFFICIENT_PERMISSIONS",
     "RESET_PASSWORD_BAD_TOKEN": "RESET_PASSWORD_BAD_TOKEN",
     "RESET_PASSWORD_INVALID_PASSWORD": "RESET_PASSWORD_INVALID_PASSWORD",
     "VERIFY_USER_BAD_TOKEN": "VERIFY_USER_BAD_TOKEN",
@@ -304,6 +307,11 @@ def test_exception_module_reload_preserves_default_message_and_code_contract(mon
         user_roles=frozenset({"viewer"}),
         require_all=False,
     )
+    reloaded_permission_error = reloaded_module.InsufficientPermissionsError(
+        required_permissions=frozenset({"posts:delete", "posts:write"}),
+        granted_permissions=frozenset({"posts:read"}),
+        require_all=True,
+    )
     reloaded_link_error = reloaded_module.OAuthAccountAlreadyLinkedError(
         provider="github",
         account_id="provider-user",
@@ -317,6 +325,7 @@ def test_exception_module_reload_preserves_default_message_and_code_contract(mon
     assert reloaded_module.UserIdentifier is UserIdentifier
     assert reloaded_module.InvalidPasswordError is not InvalidPasswordError
     assert reloaded_module.InsufficientRolesError is not InsufficientRolesError
+    assert reloaded_module.InsufficientPermissionsError is not InsufficientPermissionsError
     assert reloaded_module.OAuthAccountAlreadyLinkedError is not OAuthAccountAlreadyLinkedError
     assert str(reloaded_configuration_error) == ConfigurationError.default_message
     assert reloaded_configuration_error.code == ErrorCode.CONFIGURATION_INVALID
@@ -333,6 +342,11 @@ def test_exception_module_reload_preserves_default_message_and_code_contract(mon
     assert reloaded_role_error.required_roles == frozenset({"admin", "billing"})
     assert reloaded_role_error.user_roles == frozenset({"viewer"})
     assert reloaded_role_error.require_all is False
+    assert str(reloaded_permission_error) == "The authenticated user does not have all of the required permissions."
+    assert reloaded_permission_error.code == ErrorCode.INSUFFICIENT_PERMISSIONS
+    assert reloaded_permission_error.required_permissions == frozenset({"posts:delete", "posts:write"})
+    assert reloaded_permission_error.granted_permissions == frozenset({"posts:read"})
+    assert reloaded_permission_error.require_all is True
     assert str(reloaded_link_error) == "OAuth account github:provider-user is already linked to user user-123"
     assert reloaded_link_error.code == ErrorCode.OAUTH_ACCOUNT_ALREADY_LINKED
     assert reloaded_link_error.provider == "github"
@@ -555,6 +569,80 @@ def test_insufficient_roles_error_custom_message_and_code_override_defaults() ->
     assert error.code == "CUSTOM_INSUFFICIENT_ROLES"
     assert error.required_roles == frozenset({"admin"})
     assert error.user_roles == frozenset({"viewer"})
+    assert error.require_all is False
+
+
+def test_insufficient_permissions_error_exposes_context_and_generic_default_message() -> None:
+    """Permission-denial errors keep structured permission context off the default message."""
+    error = InsufficientPermissionsError(
+        required_permissions=frozenset({"posts:delete", "posts:write"}),
+        granted_permissions=frozenset({"posts:read"}),
+        require_all=False,
+    )
+
+    assert str(error) == "The authenticated user does not have any of the required permissions."
+    assert "posts:" not in str(error)
+    assert error.code == ErrorCode.INSUFFICIENT_PERMISSIONS
+    assert error.required_permissions == frozenset({"posts:delete", "posts:write"})
+    assert error.granted_permissions == frozenset({"posts:read"})
+    assert error.require_all is False
+
+
+def test_insufficient_permissions_error_require_all_message_uses_all_permission_wording() -> None:
+    """The default message reflects whether the guard requires every configured permission."""
+    error = InsufficientPermissionsError(
+        required_permissions=frozenset({"posts:delete", "posts:write"}),
+        granted_permissions=frozenset({"posts:write"}),
+        require_all=True,
+    )
+
+    assert str(error) == "The authenticated user does not have all of the required permissions."
+    assert "posts:" not in str(error)
+    assert error.code == ErrorCode.INSUFFICIENT_PERMISSIONS
+    assert error.require_all is True
+
+
+def test_insufficient_permissions_error_none_code_argument_uses_default_code() -> None:
+    """Permission-denial errors resolve explicit ``code=None`` to the default code."""
+    error = InsufficientPermissionsError(
+        required_permissions=frozenset({"posts:delete"}),
+        granted_permissions=frozenset({"posts:read"}),
+        require_all=False,
+        code=None,
+    )
+
+    assert str(error) == "The authenticated user does not have any of the required permissions."
+    assert error.code == ErrorCode.INSUFFICIENT_PERMISSIONS
+
+
+def test_insufficient_permissions_error_preserves_blank_permission_names_without_runtime_validation() -> None:
+    """Permission-denial errors store permission context as provided without echoing it in messages."""
+    error = InsufficientPermissionsError(
+        required_permissions=frozenset({"posts:delete", ""}),
+        granted_permissions=frozenset({" \n ", "posts:read"}),
+        require_all=False,
+    )
+
+    assert error.required_permissions == frozenset({"posts:delete", ""})
+    assert error.granted_permissions == frozenset({" \n ", "posts:read"})
+    assert error.require_all is False
+    assert str(error) == "The authenticated user does not have any of the required permissions."
+
+
+def test_insufficient_permissions_error_custom_message_and_code_override_defaults() -> None:
+    """Permission-denial errors still accept explicit message and code overrides."""
+    error = InsufficientPermissionsError(
+        required_permissions=frozenset({"posts:delete"}),
+        granted_permissions=frozenset({"posts:read"}),
+        require_all=False,
+        message="custom insufficient permissions message",
+        code="CUSTOM_INSUFFICIENT_PERMISSIONS",
+    )
+
+    assert str(error) == "custom insufficient permissions message"
+    assert error.code == "CUSTOM_INSUFFICIENT_PERMISSIONS"
+    assert error.required_permissions == frozenset({"posts:delete"})
+    assert error.granted_permissions == frozenset({"posts:read"})
     assert error.require_all is False
 
 

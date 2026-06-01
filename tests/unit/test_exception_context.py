@@ -6,6 +6,7 @@ import pytest
 
 from litestar_auth.exceptions import (
     ErrorCode,
+    InsufficientPermissionsError,
     InsufficientRolesError,
     OAuthAccountAlreadyLinkedError,
     UserAlreadyExistsError,
@@ -68,6 +69,29 @@ def test_insufficient_roles_error_context_contract(*, require_all: bool, expecte
     assert error.code == ErrorCode.INSUFFICIENT_ROLES
 
 
+@pytest.mark.parametrize(
+    ("require_all", "expected_message"),
+    [
+        (False, "The authenticated user does not have any of the required permissions."),
+        (True, "The authenticated user does not have all of the required permissions."),
+    ],
+)
+def test_insufficient_permissions_error_context_contract(*, require_all: bool, expected_message: str) -> None:
+    """Permission-denial errors keep structured permission context off the generated message."""
+    error = InsufficientPermissionsError(
+        required_permissions=frozenset({"posts:delete", "posts:write"}),
+        granted_permissions=frozenset({"posts:read"}),
+        require_all=require_all,
+    )
+
+    assert error.required_permissions == frozenset({"posts:delete", "posts:write"})
+    assert error.granted_permissions == frozenset({"posts:read"})
+    assert error.require_all is require_all
+    assert str(error) == expected_message
+    assert "posts:" not in str(error)
+    assert error.code == ErrorCode.INSUFFICIENT_PERMISSIONS
+
+
 def test_oauth_account_already_linked_error_preserves_blank_context_without_runtime_validation() -> None:
     """OAuth context is stored as provided instead of raising ``ValueError`` in ``__init__``."""
     error = OAuthAccountAlreadyLinkedError(
@@ -109,3 +133,17 @@ def test_insufficient_roles_error_preserves_role_names_without_runtime_validatio
     assert error.user_roles == frozenset({" \t "})
     assert error.require_all is False
     assert str(error) == "The authenticated user does not have any of the required roles."
+
+
+def test_insufficient_permissions_error_preserves_permission_names_without_runtime_validation() -> None:
+    """Permission-denial context is stored verbatim instead of filtering blank names in ``__init__``."""
+    error = InsufficientPermissionsError(
+        required_permissions=frozenset({"posts:delete", ""}),
+        granted_permissions=frozenset({" \t "}),
+        require_all=False,
+    )
+
+    assert error.required_permissions == frozenset({"posts:delete", ""})
+    assert error.granted_permissions == frozenset({" \t "})
+    assert error.require_all is False
+    assert str(error) == "The authenticated user does not have any of the required permissions."

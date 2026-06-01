@@ -59,6 +59,9 @@ from litestar_auth._plugin.config._core import (
     DEFAULT_REQUEST_VERIFY_MINIMUM_RESPONSE_SECONDS as DEFAULT_REQUEST_VERIFY_MINIMUM_RESPONSE_SECONDS,
 )
 from litestar_auth._plugin.config._core import (
+    DEFAULT_RESOLVED_PERMISSIONS_DEPENDENCY_KEY as DEFAULT_RESOLVED_PERMISSIONS_DEPENDENCY_KEY,
+)
+from litestar_auth._plugin.config._core import (
     DEFAULT_TOTP_STEPUP_TTL_SECONDS as DEFAULT_TOTP_STEPUP_TTL_SECONDS,
 )
 from litestar_auth._plugin.config._core import (

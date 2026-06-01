@@ -13,10 +13,12 @@ from litestar.di import Provide
 from litestar.types import Scope
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from litestar_auth._permissions import resolve_connection_permissions
 from litestar_auth._plugin._hooks import iter_feature_wiring
 from litestar_auth._plugin.config import (
     DEFAULT_BACKENDS_DEPENDENCY_KEY,
     DEFAULT_CONFIG_DEPENDENCY_KEY,
+    DEFAULT_RESOLVED_PERMISSIONS_DEPENDENCY_KEY,
     DEFAULT_USER_MANAGER_DEPENDENCY_KEY,
     DEFAULT_USER_MODEL_DEPENDENCY_KEY,
     OAUTH_ASSOCIATE_USER_MANAGER_DEPENDENCY_KEY,
@@ -38,6 +40,7 @@ from litestar_auth.types import UserProtocol
 
 if TYPE_CHECKING:
     from litestar.config.app import AppConfig
+    from litestar.connection import ASGIConnection
 
     from litestar_auth._plugin._protocols import DependencyProvider
 
@@ -177,6 +180,16 @@ def _make_backends_dependency_provider[UP: UserProtocol[Any], ID](
     return cast("Callable[..., Sequence[AuthenticationBackend[UP, ID]]]", _provide_backends)
 
 
+def provide_resolved_permissions(request: ASGIConnection[Any, Any, Any, Any]) -> frozenset[str]:
+    """Return the authenticated request user's effective permission set.
+
+    Returns:
+        Normalized permissions from the request-scope resolver, or an empty set
+        for anonymous requests.
+    """
+    return resolve_connection_permissions(request)
+
+
 def _resolve_builtin_db_session_provider_factory[UP: UserProtocol[Any], ID](
     config: LitestarAuthConfig[UP, ID],
 ) -> SessionFactory | None:
@@ -259,6 +272,10 @@ def _resolve_dependency_registration[UP: UserProtocol[Any], ID](
         "user_manager": _DependencyRegistration(DEFAULT_USER_MANAGER_DEPENDENCY_KEY, providers.user_manager),
         "backends": _DependencyRegistration(DEFAULT_BACKENDS_DEPENDENCY_KEY, providers.backends),
         "user_model": _DependencyRegistration(DEFAULT_USER_MODEL_DEPENDENCY_KEY, providers.user_model),
+        "resolved_permissions": _DependencyRegistration(
+            DEFAULT_RESOLVED_PERMISSIONS_DEPENDENCY_KEY,
+            provide_resolved_permissions,
+        ),
     }
     static_registration = static_registrations.get(provider_name)
     if static_registration is not None:

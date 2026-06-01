@@ -13,8 +13,13 @@ from uuid import UUID, uuid4
 import pytest
 from litestar.connection import ASGIConnection
 from litestar.datastructures.state import State
-from litestar.exceptions import ClientException
+from litestar.exceptions import ClientException, PermissionDeniedException
 
+from litestar_auth._permissions import (
+    PERMISSION_RESOLVER_SENTINEL,
+    StaticRolePermissionResolver,
+    read_scope_permission_resolver,
+)
 from litestar_auth._plugin.scoped_session import get_or_create_scoped_session
 from litestar_auth._superuser_role import SUPERUSER_ROLE_NAME_SENTINEL
 from litestar_auth.authentication.middleware import (
@@ -287,6 +292,7 @@ async def test_middleware_sets_authenticated_user_in_scope() -> None:
     assert scope["user"] == user
     assert scope["auth"] == "bearer-jwt"
     assert scope["state"][SUPERUSER_ROLE_NAME_SENTINEL] == "superuser"
+    assert read_scope_permission_resolver(_build_connection(scope)).resolve(user) == frozenset()
     assert session_maker.call_count == 1
     authenticator_factory.assert_called_once_with(session)
     authenticator.authenticate.assert_awaited_once()
@@ -317,6 +323,7 @@ async def test_authenticate_request_reuses_scoped_session_and_returns_resolved_u
     assert result.user == user
     assert result.auth == "bearer-jwt"
     assert scope["state"][SUPERUSER_ROLE_NAME_SENTINEL] == "superuser"
+    assert read_scope_permission_resolver(_build_connection(scope)).resolve(user) == frozenset()
     assert session_maker.call_count == 0
     authenticator_factory.assert_called_once_with(bound_session)
     authenticator.authenticate.assert_awaited_once()
@@ -376,6 +383,50 @@ async def test_middleware_leaves_unauthenticated_requests_as_none() -> None:
     assert scope["state"][SUPERUSER_ROLE_NAME_SENTINEL] == "admin"
     assert session_maker.call_count == 1
     authenticator.authenticate.assert_awaited_once()
+
+
+async def test_middleware_sets_configured_permission_resolver_in_scope() -> None:
+    """Middleware publishes the configured permission resolver on request scope state."""
+    scope = _build_scope()
+    user = ExampleUser(id=uuid4(), roles=["admin"])
+    resolver = StaticRolePermissionResolver({"admin": ("posts:read",)})
+    authenticator = Mock()
+    authenticator.authenticate = AsyncMock(return_value=(user, "bearer-jwt"))
+    middleware = LitestarAuthMiddleware[ExampleUser, UUID](
+        app=_app,
+        get_request_session=partial(
+            get_or_create_scoped_session,
+            session_maker=cast("Any", DummySessionMaker(DummySession())),
+        ),
+        authenticator_factory=Mock(return_value=authenticator),
+        permission_resolver=resolver,
+    )
+
+    await middleware(scope, cast("Receive", _receive), cast("Send", _send))
+
+    assert scope["state"][PERMISSION_RESOLVER_SENTINEL] is resolver
+    assert read_scope_permission_resolver(_build_connection(scope)).resolve(user) == frozenset({"posts:read"})
+
+
+def test_read_scope_permission_resolver_falls_back_to_safe_default() -> None:
+    """Guard-side resolver reads fail closed outside plugin-managed requests."""
+    user = ExampleUser(id=uuid4(), roles=["admin"])
+    connection = cast(
+        "ASGIConnection[Any, Any, Any, Any]",
+        MagicMock(scope={"state": object()}),
+    )
+
+    assert read_scope_permission_resolver(_build_connection(_build_scope())).resolve(user) == frozenset()
+    assert read_scope_permission_resolver(connection).resolve(user) == frozenset()
+
+
+def test_read_scope_permission_resolver_rejects_invalid_scope_value() -> None:
+    """Malformed plugin-owned resolver state fails closed."""
+    scope = _build_scope()
+    scope["state"] = {PERMISSION_RESOLVER_SENTINEL: object()}
+
+    with pytest.raises(PermissionDeniedException, match="permission resolver is invalid"):
+        read_scope_permission_resolver(_build_connection(scope))
 
 
 async def test_middleware_buffers_body_for_api_key_backend_when_any_authorization_header_is_signed() -> None:

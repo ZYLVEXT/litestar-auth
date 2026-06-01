@@ -92,6 +92,7 @@ class RoleErrorCode(_DocumentedErrorCode):
     """Role guard and bundled role-admin route error codes."""
 
     INSUFFICIENT_ROLES = ("INSUFFICIENT_ROLES", "Emitted by InsufficientRolesError.")
+    INSUFFICIENT_PERMISSIONS = ("INSUFFICIENT_PERMISSIONS", "Emitted by InsufficientPermissionsError.")
     ROLE_ALREADY_EXISTS = ("ROLE_ALREADY_EXISTS", "Emitted by role-admin create conflicts.")
     ROLE_NOT_FOUND = ("ROLE_NOT_FOUND", "Emitted by role-admin lookup failures.")
     ROLE_STILL_ASSIGNED = ("ROLE_STILL_ASSIGNED", "Emitted by role-admin delete protection.")
@@ -175,6 +176,7 @@ class ErrorCode(_DocumentedErrorCode):
     LOGIN_ACCOUNT_UNAVAILABLE = _documented_member(AuthErrorCode.LOGIN_ACCOUNT_UNAVAILABLE)
     AUTHORIZATION_DENIED = _documented_member(AuthErrorCode.AUTHORIZATION_DENIED)
     INSUFFICIENT_ROLES = _documented_member(RoleErrorCode.INSUFFICIENT_ROLES)
+    INSUFFICIENT_PERMISSIONS = _documented_member(RoleErrorCode.INSUFFICIENT_PERMISSIONS)
     RESET_PASSWORD_BAD_TOKEN = _documented_member(TokenErrorCode.RESET_PASSWORD_BAD_TOKEN)
     RESET_PASSWORD_INVALID_PASSWORD = _documented_member(TokenErrorCode.RESET_PASSWORD_INVALID_PASSWORD)
     VERIFY_USER_BAD_TOKEN = _documented_member(TokenErrorCode.VERIFY_USER_BAD_TOKEN)
@@ -224,6 +226,7 @@ ERROR_CODE_REGISTRY: dict[ErrorCode, _DocumentedErrorCode] = {
     ErrorCode.LOGIN_ACCOUNT_UNAVAILABLE: AuthErrorCode.LOGIN_ACCOUNT_UNAVAILABLE,
     ErrorCode.AUTHORIZATION_DENIED: AuthErrorCode.AUTHORIZATION_DENIED,
     ErrorCode.INSUFFICIENT_ROLES: RoleErrorCode.INSUFFICIENT_ROLES,
+    ErrorCode.INSUFFICIENT_PERMISSIONS: RoleErrorCode.INSUFFICIENT_PERMISSIONS,
     ErrorCode.RESET_PASSWORD_BAD_TOKEN: TokenErrorCode.RESET_PASSWORD_BAD_TOKEN,
     ErrorCode.RESET_PASSWORD_INVALID_PASSWORD: TokenErrorCode.RESET_PASSWORD_INVALID_PASSWORD,
     ErrorCode.VERIFY_USER_BAD_TOKEN: TokenErrorCode.VERIFY_USER_BAD_TOKEN,

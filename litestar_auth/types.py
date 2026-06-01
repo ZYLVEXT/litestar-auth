@@ -132,4 +132,18 @@ class ContextualStrategyProtocol(StrategyProtocol[UP, ID], Protocol[UP, ID]):
         """Resolve a user plus strategy-specific request auth context."""
 
 
+class PermissionResolver(Protocol):
+    """Extension point for resolving a user's effective permissions.
+
+    Implement this protocol to supply ``LitestarAuthConfig.permission_resolver``
+    with a custom permission source (for example a database-backed resolver). The
+    optional ``context`` argument is reserved for future multi-tenancy support;
+    the bundled :class:`~litestar_auth.StaticRolePermissionResolver` ignores it.
+    """
+
+    def resolve(self, user: object, *, context: object | None = None) -> frozenset[str]:
+        """Return the effective permission tokens granted to ``user``."""
+        ...
+
+
 type LoginIdentifier = Literal["email", "username"]

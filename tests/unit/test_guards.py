@@ -20,14 +20,23 @@ from litestar.handlers.base import BaseRouteHandler
 
 import litestar_auth.guards._api_key_guards as api_key_guards_module
 import litestar_auth.guards._guards as guards_module
+import litestar_auth.guards._permission_guards as permission_guards_module
+from litestar_auth._permissions import (
+    PERMISSION_RESOLVER_SENTINEL,
+    StaticRolePermissionResolver,
+    set_scope_permission_resolver,
+)
 from litestar_auth._superuser_role import DEFAULT_SUPERUSER_ROLE_NAME, SUPERUSER_ROLE_NAME_SENTINEL
 from litestar_auth.authentication.strategy.api_key import ApiKeyContext
-from litestar_auth.exceptions import ErrorCode, InsufficientRolesError
+from litestar_auth.exceptions import ErrorCode, InsufficientPermissionsError, InsufficientRolesError
 from litestar_auth.guards import (
     _guards,
+    has_all_permissions,
     has_all_roles,
+    has_any_permission,
     has_any_role,
     has_any_scope,
+    has_permission,
     has_scope,
     is_active,
     is_authenticated,
@@ -154,6 +163,15 @@ class _ExpectedInsufficientRoles:
 
 
 @dataclass(frozen=True, slots=True)
+class _ExpectedInsufficientPermissions:
+    """Expected structured context emitted by a permission guard."""
+
+    required_permissions: frozenset[str]
+    granted_permissions: frozenset[str]
+    require_all: bool
+
+
+@dataclass(frozen=True, slots=True)
 class _RoleGuardHelperDispatchCase:
     """Role guard helper dispatch expectation."""
 
@@ -276,6 +294,19 @@ def test_api_key_guard_exports_reference_internal_implementations() -> None:
     assert public_module.requires_password_session.__module__ == "litestar_auth.guards._api_key_guards"
     assert public_module.has_scope.__module__ == "litestar_auth.guards._api_key_guards"
     assert public_module.has_any_scope.__module__ == "litestar_auth.guards._api_key_guards"
+
+
+def test_permission_guard_exports_reference_internal_implementations() -> None:
+    """Public permission guard exports are direct aliases of their implementation module."""
+    public_module = importlib.import_module("litestar_auth.guards")
+    root_module = importlib.import_module("litestar_auth")
+
+    assert public_module.has_permission.__module__ == permission_guards_module.__name__
+    assert public_module.has_all_permissions.__module__ == permission_guards_module.__name__
+    assert public_module.has_any_permission.__module__ == permission_guards_module.__name__
+    assert root_module.has_permission is public_module.has_permission
+    assert root_module.has_all_permissions is public_module.has_all_permissions
+    assert root_module.has_any_permission is public_module.has_any_permission
 
 
 @pytest.mark.parametrize(
@@ -428,12 +459,34 @@ def test_api_key_scope_guards_match_set_membership_truth_table(
 @pytest.mark.parametrize(
     "guard",
     [
-        pytest.param(has_scope("read"), id="all"),
-        pytest.param(has_any_scope("read", "write"), id="any"),
+        pytest.param(has_scope("billing:read"), id="all"),
+        pytest.param(has_any_scope("billing:read", "billing:write"), id="any"),
     ],
 )
 def test_api_key_scope_guards_use_default_scope_authority_for_role_downscoping(guard: Guard) -> None:
-    """The default API-key authority preserves the scopes-as-role-names subset contract."""
+    """The default API-key authority uses resolved permissions for permission-shaped scopes."""
+    state: dict[str, object] = {}
+    user = ExampleUser(id=uuid4(), roles=["billing"])
+    set_scope_permission_resolver(
+        {"state": state},
+        StaticRolePermissionResolver({"billing": ("billing:read", "billing:write")}),
+    )
+    connection = _build_connection(
+        user,
+        auth=ApiKeyContext(
+            key_id="key",
+            scopes=("billing:read", "billing:write"),
+            prefix_env="prod",
+            scope_authority=api_key_guards_module.default_api_key_scope_authority,
+        ),
+        state=state,
+    )
+
+    assert guard(connection, _build_handler()) is None
+
+
+def test_api_key_scope_guards_preserve_legacy_role_scope_authority() -> None:
+    """Simple legacy scopes still use exact role-name subset checks."""
     connection = _build_connection(
         ExampleUser(id=uuid4(), roles=["read", "write"]),
         auth=ApiKeyContext(
@@ -444,7 +497,108 @@ def test_api_key_scope_guards_use_default_scope_authority_for_role_downscoping(g
         ),
     )
 
+    assert has_scope("read", "write")(connection, _build_handler()) is None
+
+
+@pytest.mark.parametrize(
+    ("guard", "api_key_scopes"),
+    [
+        pytest.param(has_scope("posts:read", "posts:write"), ("posts:*",), id="all-resource-wildcard"),
+        pytest.param(has_any_scope("posts:delete", "users:read"), ("*",), id="any-global-wildcard"),
+    ],
+)
+def test_api_key_scope_guards_honor_permission_wildcards(
+    guard: Guard,
+    api_key_scopes: tuple[str, ...],
+) -> None:
+    """Permission-shaped API-key scopes use the same granted-side wildcard matcher as permissions."""
+    connection = _build_connection(
+        ExampleUser(id=uuid4(), roles=[]),
+        auth=ApiKeyContext(key_id="key", scopes=api_key_scopes, prefix_env="prod", scope_subset_check=False),
+    )
+
     assert guard(connection, _build_handler()) is None
+
+
+@pytest.mark.parametrize(
+    ("api_key_scopes", "user_permissions"),
+    [
+        pytest.param(("posts:read",), ("posts:*",), id="specific-key-covered-by-owner-wildcard"),
+        pytest.param(("posts:*",), ("posts:*",), id="wildcard-key-covered-by-owner-wildcard"),
+        pytest.param(("*",), ("*",), id="global-key-covered-by-owner-global"),
+    ],
+)
+def test_api_key_scope_subset_allows_only_owner_covered_permission_scopes(
+    api_key_scopes: tuple[str, ...],
+    user_permissions: tuple[str, ...],
+) -> None:
+    """The default authority permits permission-shaped key scopes only within owner permissions."""
+    state: dict[str, object] = {}
+    user = ExampleUser(id=uuid4(), roles=["owner"])
+    set_scope_permission_resolver({"state": state}, StaticRolePermissionResolver({"owner": user_permissions}))
+    connection = _build_connection(
+        user,
+        auth=ApiKeyContext(
+            key_id="key",
+            scopes=api_key_scopes,
+            prefix_env="prod",
+            scope_authority=api_key_guards_module.default_api_key_scope_authority,
+        ),
+        state=state,
+    )
+
+    assert has_any_scope("posts:read")(connection, _build_handler()) is None
+
+
+@pytest.mark.parametrize(
+    ("api_key_scopes", "user_permissions"),
+    [
+        pytest.param(("posts:*",), ("posts:read",), id="wildcard-key-exceeds-specific-owner-permission"),
+        pytest.param(("*",), ("posts:*",), id="global-key-exceeds-resource-owner-permission"),
+    ],
+)
+def test_api_key_scope_subset_denies_permission_scopes_exceeding_owner_permissions(
+    api_key_scopes: tuple[str, ...],
+    user_permissions: tuple[str, ...],
+) -> None:
+    """The subset check fails closed when a delegated wildcard is broader than owner permissions."""
+    state: dict[str, object] = {}
+    user = ExampleUser(id=uuid4(), roles=["owner"])
+    set_scope_permission_resolver({"state": state}, StaticRolePermissionResolver({"owner": user_permissions}))
+    connection = _build_connection(
+        user,
+        auth=ApiKeyContext(
+            key_id="key",
+            scopes=api_key_scopes,
+            prefix_env="prod",
+            scope_authority=api_key_guards_module.default_api_key_scope_authority,
+        ),
+        state=state,
+    )
+
+    with pytest.raises(PermissionDeniedException) as exc_info:
+        has_any_scope("posts:read")(connection, _build_handler())
+
+    assert exc_info.value.extra == {"code": ErrorCode.API_KEY_SCOPE_DENIED}
+
+
+def test_api_key_scope_subset_denies_invalid_scope_permission_resolver() -> None:
+    """Invalid permission resolver state fails closed as an API-key scope denial."""
+    connection = _build_connection(
+        ExampleUser(id=uuid4(), roles=["owner"]),
+        auth=ApiKeyContext(
+            key_id="key",
+            scopes=("posts:read",),
+            prefix_env="prod",
+            scope_authority=api_key_guards_module.default_api_key_scope_authority,
+        ),
+        state={PERMISSION_RESOLVER_SENTINEL: object()},
+    )
+
+    with pytest.raises(PermissionDeniedException) as exc_info:
+        has_scope("posts:read")(connection, _build_handler())
+
+    assert exc_info.value.extra == {"code": ErrorCode.API_KEY_SCOPE_DENIED}
 
 
 @pytest.mark.parametrize(
@@ -815,6 +969,39 @@ def test_role_guards_allow_matching_normalized_roles(guard: Guard, user: Example
 
 
 @pytest.mark.parametrize(
+    ("guard", "roles", "allowed"),
+    [
+        pytest.param(has_any_role("café"), ["café"], True, id="any-non-ascii-match"),
+        pytest.param(has_any_role("café"), ["thé"], False, id="any-non-ascii-mismatch"),
+        pytest.param(has_all_roles("café", "thé"), ["café", "thé"], True, id="all-non-ascii-match"),
+        pytest.param(has_all_roles("café", "thé"), ["café"], False, id="all-non-ascii-partial"),
+        pytest.param(has_any_role("статья"), ["статья"], True, id="any-cyrillic-match"),
+    ],
+)
+def test_role_guards_match_non_ascii_role_names(guard: Guard, roles: list[str], *, allowed: bool) -> None:
+    """Role matching must resolve non-ASCII role names instead of raising.
+
+    ``hmac.compare_digest`` rejects non-ASCII ``str`` operands; the fixed-work role
+    matchers compare UTF-8 bytes so NFKC-normalized non-ASCII roles still authorize.
+    """
+    connection = _build_connection(ExampleUser(id=uuid4(), roles=roles))
+
+    if allowed:
+        assert guard(connection, _build_handler()) is None
+    else:
+        with pytest.raises(InsufficientRolesError):
+            guard(connection, _build_handler())
+
+
+def test_is_superuser_matches_non_ascii_scope_role_name() -> None:
+    """The superuser guard authorizes a non-ASCII configured role without raising."""
+    user = ExampleUser(id=uuid4(), roles=["café"])
+    connection = _build_connection(user, state={SUPERUSER_ROLE_NAME_SENTINEL: "café"})
+
+    assert is_superuser(connection, _build_handler()) is None
+
+
+@pytest.mark.parametrize(
     ("guard", "user"),
     [
         pytest.param(is_authenticated, ExampleUser(id=uuid4()), id="authenticated"),
@@ -1100,3 +1287,320 @@ def test_role_guards_raise_insufficient_roles_error_with_context(
     assert error.required_roles == expected.required_roles
     assert error.user_roles == expected.user_roles
     assert error.require_all is expected.require_all
+
+
+def _permission_connection(
+    user: object | None,
+    role_permissions: dict[str, object],
+) -> ASGIConnection[Any, Any, Any, Any]:
+    """Build a connection with a static request-scope permission resolver.
+
+    Returns:
+        Minimal Litestar connection with permission resolver state.
+    """
+    connection = _build_connection(user)
+    set_scope_permission_resolver(connection.scope, StaticRolePermissionResolver(role_permissions))
+    return connection
+
+
+def _api_key_permission_connection(
+    user: object | None,
+    role_permissions: dict[str, object],
+    *,
+    scopes: tuple[str, ...],
+) -> ASGIConnection[Any, Any, Any, Any]:
+    """Build an API-key-authenticated connection with a static permission resolver.
+
+    Returns:
+        Connection whose ``auth`` is an :class:`ApiKeyContext` carrying ``scopes``.
+    """
+    connection = _build_connection(
+        user,
+        auth=ApiKeyContext(key_id="key", scopes=scopes, prefix_env="prod"),
+    )
+    set_scope_permission_resolver(connection.scope, StaticRolePermissionResolver(role_permissions))
+    return connection
+
+
+@pytest.mark.parametrize(
+    ("guard", "role_permissions", "roles"),
+    [
+        pytest.param(has_permission("posts:read"), {"reader": ("posts:read",)}, ["reader"], id="single"),
+        pytest.param(
+            has_all_permissions("posts:read", "posts:write"),
+            {"editor": ("posts:*",)},
+            ["editor"],
+            id="all-with-granted-wildcard",
+        ),
+        pytest.param(
+            has_any_permission("posts:delete", "posts:read"),
+            {"reader": ("posts:read",)},
+            ["reader"],
+            id="any-partial-match",
+        ),
+    ],
+)
+def test_permission_guards_allow_matching_effective_permissions(
+    guard: Guard,
+    role_permissions: dict[str, object],
+    roles: list[str],
+) -> None:
+    """Permission guards resolve effective permissions from request scope before matching."""
+    connection = _permission_connection(ExampleUser(id=uuid4(), roles=roles), role_permissions)
+
+    assert guard(connection, _build_handler()) is None
+
+
+@pytest.mark.parametrize(
+    "guard",
+    [
+        pytest.param(has_permission("tenants:delete"), id="single"),
+        pytest.param(has_all_permissions("tenants:delete", "billing:write"), id="all"),
+        pytest.param(has_any_permission("tenants:delete", "billing:write"), id="any"),
+    ],
+)
+def test_permission_guards_allow_superuser_global_permission_grant(guard: Guard) -> None:
+    """The configured superuser role resolves to the global permission grant for permission guards."""
+    connection = _permission_connection(ExampleUser(id=uuid4(), roles=[DEFAULT_SUPERUSER_ROLE_NAME]), {})
+
+    assert guard(connection, _build_handler()) is None
+
+
+@pytest.mark.parametrize(
+    ("guard", "role_permissions", "roles", "expected"),
+    [
+        pytest.param(
+            has_permission("posts:delete"),
+            {"reader": ("posts:read",)},
+            ["reader"],
+            _ExpectedInsufficientPermissions(
+                required_permissions=frozenset({"posts:delete"}),
+                granted_permissions=frozenset({"posts:read"}),
+                require_all=True,
+            ),
+            id="single-denied",
+        ),
+        pytest.param(
+            has_any_permission("posts:delete", "users:write"),
+            {"reader": ("posts:read",)},
+            ["reader"],
+            _ExpectedInsufficientPermissions(
+                required_permissions=frozenset({"posts:delete", "users:write"}),
+                granted_permissions=frozenset({"posts:read"}),
+                require_all=False,
+            ),
+            id="any-denied",
+        ),
+        pytest.param(
+            has_all_permissions("posts:read", "posts:write"),
+            {"reader": ("posts:read",)},
+            ["reader"],
+            _ExpectedInsufficientPermissions(
+                required_permissions=frozenset({"posts:read", "posts:write"}),
+                granted_permissions=frozenset({"posts:read"}),
+                require_all=True,
+            ),
+            id="all-partial-denied",
+        ),
+    ],
+)
+def test_permission_guards_raise_insufficient_permissions_error_with_context(
+    guard: Guard,
+    role_permissions: dict[str, object],
+    roles: list[str],
+    expected: _ExpectedInsufficientPermissions,
+) -> None:
+    """Permission guard denials expose structured context without leaking names in the message."""
+    connection = _permission_connection(ExampleUser(id=uuid4(), roles=roles), role_permissions)
+
+    with pytest.raises(InsufficientPermissionsError) as exc_info:
+        guard(connection, _build_handler())
+
+    error = exc_info.value
+    assert error.code == ErrorCode.INSUFFICIENT_PERMISSIONS
+    assert error.required_permissions == expected.required_permissions
+    assert error.granted_permissions == expected.granted_permissions
+    assert error.require_all is expected.require_all
+    assert "posts:delete" not in str(error)
+    assert "posts:read" not in str(error)
+
+
+@pytest.mark.parametrize(
+    ("guard", "role_permissions", "roles", "scopes"),
+    [
+        pytest.param(
+            has_permission("posts:read"),
+            {"editor": ("posts:read", "posts:write")},
+            ["editor"],
+            ("posts:read",),
+            id="key-delegates-required",
+        ),
+        pytest.param(
+            has_permission("posts:read"),
+            {},
+            [DEFAULT_SUPERUSER_ROLE_NAME],
+            ("posts:read",),
+            id="superuser-user-with-key-delegating-required",
+        ),
+        pytest.param(
+            has_any_permission("posts:delete", "posts:read"),
+            {"editor": ("posts:read", "posts:write")},
+            ["editor"],
+            ("posts:read",),
+            id="any-key-delegates-one",
+        ),
+    ],
+)
+def test_permission_guards_allow_api_key_within_delegated_scopes(
+    guard: Guard,
+    role_permissions: dict[str, object],
+    roles: list[str],
+    scopes: tuple[str, ...],
+) -> None:
+    """An API-key request passes a permission guard only for permissions the key delegates and the user holds."""
+    connection = _api_key_permission_connection(
+        ExampleUser(id=uuid4(), roles=roles),
+        role_permissions,
+        scopes=scopes,
+    )
+
+    assert guard(connection, _build_handler()) is None
+
+
+@pytest.mark.parametrize(
+    ("guard", "role_permissions", "roles", "scopes"),
+    [
+        pytest.param(
+            has_permission("posts:write"),
+            {"editor": ("posts:read", "posts:write")},
+            ["editor"],
+            ("posts:read",),
+            id="user-has-permission-but-key-scope-does-not-delegate-it",
+        ),
+        pytest.param(
+            has_permission("billing:write"),
+            {},
+            [DEFAULT_SUPERUSER_ROLE_NAME],
+            ("posts:read",),
+            id="superuser-user-cannot-exceed-key-delegation",
+        ),
+        pytest.param(
+            has_permission("posts:read"),
+            {"editor": ("posts:read",)},
+            ["editor"],
+            ("reader",),
+            id="legacy-non-permission-key-scope-fails-closed",
+        ),
+        pytest.param(
+            has_permission("posts:read"),
+            {"editor": ("posts:read",)},
+            ["editor"],
+            (),
+            id="empty-key-scopes-fail-closed",
+        ),
+    ],
+)
+def test_permission_guards_deny_api_key_exceeding_delegated_scopes(
+    guard: Guard,
+    role_permissions: dict[str, object],
+    roles: list[str],
+    scopes: tuple[str, ...],
+) -> None:
+    """A scoped API key can never exceed its delegation on a permission-guarded route (least privilege)."""
+    connection = _api_key_permission_connection(
+        ExampleUser(id=uuid4(), roles=roles),
+        role_permissions,
+        scopes=scopes,
+    )
+
+    with pytest.raises(InsufficientPermissionsError):
+        guard(connection, _build_handler())
+
+
+@pytest.mark.parametrize(
+    ("guard", "user", "expected_exception", "detail_fragment"),
+    [
+        pytest.param(has_permission("posts:read"), None, NotAuthorizedException, "authentication", id="missing-user"),
+        pytest.param(
+            has_permission("posts:read"),
+            ExampleUser(id=uuid4(), roles=["reader"], is_active=False),
+            PermissionDeniedException,
+            "inactive",
+            id="inactive-user",
+        ),
+        pytest.param(
+            has_permission("posts:read"),
+            _GuardedUserWithoutRoles(id=uuid4()),
+            PermissionDeniedException,
+            "has_permission",
+            id="missing-role-contract",
+        ),
+        pytest.param(
+            has_all_permissions("posts:read"),
+            ExampleUser(id=uuid4(), roles=["reader"]),
+            InsufficientPermissionsError,
+            "required permissions",
+            id="missing-resolver",
+        ),
+    ],
+)
+def test_permission_guards_fail_closed_for_unauthorized_requests(
+    guard: Guard,
+    user: object | None,
+    expected_exception: type[Exception],
+    detail_fragment: str,
+) -> None:
+    """Permission guards deny missing, inactive, incompatible, or unconfigured requests."""
+    connection = _build_connection(user)
+
+    with pytest.raises(expected_exception) as exc_info:
+        guard(connection, _build_handler())
+
+    detail = (str(exc_info.value.detail) if hasattr(exc_info.value, "detail") else str(exc_info.value)).lower()
+    assert detail_fragment in detail
+    if detail_fragment == "has_permission":
+        assert "rolecapableuserprotocol" in detail
+    if isinstance(exc_info.value, InsufficientPermissionsError):
+        assert exc_info.value.granted_permissions == frozenset()
+
+
+def test_permission_guard_rejects_invalid_resolver_output() -> None:
+    """Permission guards fail closed when a resolver returns malformed permissions."""
+    connection = _build_connection(ExampleUser(id=uuid4(), roles=["reader"]))
+    resolver = SimpleNamespace(resolve=lambda *_args, **_kwargs: ("posts",))
+    set_scope_permission_resolver(connection.scope, cast("Any", resolver))
+
+    with pytest.raises(PermissionDeniedException) as exc_info:
+        has_permission("posts:read")(connection, _build_handler())
+
+    assert exc_info.value.status_code == HTTP_403_FORBIDDEN
+    assert exc_info.value.detail == "The configured permission resolver returned invalid permissions."
+
+
+@pytest.mark.parametrize(
+    "factory",
+    [has_permission, has_all_permissions, has_any_permission],
+    ids=["single", "all", "any"],
+)
+def test_permission_guard_no_permission_raises_value_error(factory: Callable[..., Guard]) -> None:
+    """Permission guards reject empty permission configuration at build time."""
+    with pytest.raises(ValueError, match="at least one permission"):
+        factory()
+
+
+@pytest.mark.parametrize(
+    ("factory", "args", "expected_exception"),
+    [
+        pytest.param(has_permission, ("",), ValueError, id="blank"),
+        pytest.param(has_all_permissions, ("posts",), ValueError, id="malformed"),
+        pytest.param(has_any_permission, (1,), TypeError, id="non-string"),
+    ],
+)
+def test_permission_guard_invalid_permission_inputs_raise(
+    factory: Callable[..., Guard],
+    args: tuple[object, ...],
+    expected_exception: type[Exception],
+) -> None:
+    """Permission guards reject invalid permission names at build time."""
+    with pytest.raises(expected_exception):
+        factory(*cast("Any", args))

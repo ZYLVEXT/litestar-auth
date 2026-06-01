@@ -25,6 +25,7 @@ import litestar_auth._plugin.startup as startup_module
 import litestar_auth._plugin.user_manager_builder as user_manager_builder_module
 import litestar_auth.plugin as plugin_module
 from litestar_auth import DEFAULT_SUPERUSER_ROLE_NAME
+from litestar_auth._permissions import permissions_grant
 from litestar_auth._plugin import (
     DEFAULT_BACKENDS_DEPENDENCY_KEY,
     DEFAULT_CONFIG_DEPENDENCY_KEY,
@@ -148,13 +149,14 @@ def _current_inmemory_totp_enrollment_store() -> object:
     return store_type()
 
 
-def _minimal_config(
+def _minimal_config(  # noqa: PLR0913
     *,
     backends: list[AuthenticationBackend[ExampleUser, UUID]] | None = None,
     include_users: bool = False,
     user_manager_class: type[Any] | None = None,
     login_identifier: Literal["email", "username"] = "email",
     superuser_role_name: str = DEFAULT_SUPERUSER_ROLE_NAME,
+    role_permissions: dict[str, object] | None = None,
 ) -> LitestarAuthConfig[ExampleUser, UUID]:
     """Build a minimal plugin config for orchestrator-focused tests.
 
@@ -183,6 +185,7 @@ def _minimal_config(
         include_users=include_users,
         login_identifier=login_identifier,
         superuser_role_name=superuser_role_name,
+        role_permissions=role_permissions or {},
     )
 
 
@@ -283,7 +286,7 @@ def test_feature_wiring_snapshots_registered_hook_order() -> None:
                 "require_refreshable_strategy_when_enable_refresh",
                 "warn_insecure_plugin_startup_defaults",
             ),
-            ("config", "user_manager", "backends", "user_model", "db_session"),
+            ("config", "user_manager", "backends", "user_model", "resolved_permissions", "db_session"),
             ("register_dependencies", "register_middleware", "register_openapi_security", "register_controllers"),
             ("register_exception_handlers",),
         ),
@@ -350,6 +353,7 @@ def test_on_app_init_registers_middleware_controllers_dependencies_and_exception
     assert middleware_config.authenticator_factory == plugin._build_authenticator
     assert middleware_config.auth_cookie_names == frozenset({b"authcookie", b"authcookie_refresh"})
     assert middleware_config.superuser_role_name == "superuser"
+    assert middleware_config.permission_resolver.resolve(ExampleUser(id=uuid4(), roles=[])) == frozenset()
 
     session_getter = middleware_config.get_request_session
     assert isinstance(session_getter, partial)
@@ -1509,6 +1513,19 @@ def test_register_middleware_without_cookie_transports_skips_csrf_registration()
     assert middleware_config.auth_cookie_names == frozenset()
     assert middleware_config.api_key_backend_present is False
     assert middleware_config.superuser_role_name == "superuser"
+
+
+def test_register_middleware_passes_configured_permission_resolver() -> None:
+    """Plugin middleware config carries the config-resolved permission resolver."""
+    plugin = LitestarAuth(_minimal_config(role_permissions={"admin": ("posts:read",)}))
+    app_config = AppConfig()
+
+    plugin._register_middleware(app_config)
+
+    middleware = cast("DefineMiddleware", app_config.middleware[0])
+    middleware_config = middleware.kwargs["config"]
+    resolved_permissions = middleware_config.permission_resolver.resolve(ExampleUser(id=uuid4(), roles=["admin"]))
+    assert permissions_grant(resolved_permissions, "posts:read")
 
 
 def test_register_middleware_detects_api_key_transport_for_signed_body_buffering() -> None:

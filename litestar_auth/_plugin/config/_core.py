@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable  # noqa: TC003
+from collections.abc import Callable, Mapping  # noqa: TC003
 from dataclasses import dataclass, field
 from functools import partial
 from typing import TYPE_CHECKING, Any, cast
 
 from sqlalchemy.ext.asyncio import AsyncSession  # noqa: TC002
 
+from litestar_auth._permissions import StaticRolePermissionResolver
 from litestar_auth._plugin import _hooks as _plugin_hooks
 from litestar_auth._plugin import features as _features
 from litestar_auth._plugin.config._defaults import ResolvedAuthConfigDefaults, _resolve_config_defaults
@@ -34,6 +35,7 @@ from litestar_auth.password import PasswordHelper
 from litestar_auth.types import (
     DbSessionDependencyKey,
     LoginIdentifier,
+    PermissionResolver,
     UserProtocol,
 )
 
@@ -60,6 +62,7 @@ DEFAULT_CONFIG_DEPENDENCY_KEY = "litestar_auth_config"
 DEFAULT_USER_MANAGER_DEPENDENCY_KEY = "litestar_auth_user_manager"
 DEFAULT_BACKENDS_DEPENDENCY_KEY = "litestar_auth_backends"
 DEFAULT_USER_MODEL_DEPENDENCY_KEY = "litestar_auth_user_model"
+DEFAULT_RESOLVED_PERMISSIONS_DEPENDENCY_KEY = "litestar_auth_permissions"
 DEFAULT_DB_SESSION_DEPENDENCY_KEY = "db_session"
 DEFAULT_CSRF_COOKIE_NAME = "litestar_auth_csrf"
 OAUTH_ASSOCIATE_USER_MANAGER_DEPENDENCY_KEY = "litestar_auth_oauth_associate_user_manager"
@@ -160,6 +163,8 @@ class LitestarAuthConfig[UP: UserProtocol[Any], ID](_ConfigValidationMixin):
     """
     login_identifier: LoginIdentifier = "email"
     superuser_role_name: str = DEFAULT_SUPERUSER_ROLE_NAME
+    role_permissions: Mapping[str, object] = field(default_factory=dict)
+    permission_resolver: PermissionResolver | None = None
     _memoized_default_password_helper: PasswordHelper | None = field(
         default=None,
         init=False,
@@ -273,6 +278,20 @@ class LitestarAuthConfig[UP: UserProtocol[Any], ID](_ConfigValidationMixin):
             :meth:`resolve_password_helper` has not been invoked yet.
         """
         return self._memoized_default_password_helper
+
+    def resolve_permission_resolver(self) -> PermissionResolver:
+        """Return the configured permission resolver, falling back to the static role map.
+
+        An explicit ``permission_resolver`` owns permission resolution. Otherwise
+        ``role_permissions`` is normalized into the default static resolver using
+        this config's superuser role name.
+        """
+        if self.permission_resolver is not None:
+            return self.permission_resolver
+        return StaticRolePermissionResolver(
+            self.role_permissions,
+            superuser_role_name=self.superuser_role_name,
+        )
 
     def resolve_user_db_factory(self) -> UserDatabaseFactory[UP, ID]:
         """Return the configured factory, falling back to the lazy default.
