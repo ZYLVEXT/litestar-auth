@@ -409,8 +409,9 @@ async def test_login_inactive_user_is_rejected(login_identifier: Literal["email"
     assert response.status_code == HTTP_BAD_REQUEST
     data = response.json()
     code = data.get("code") or (data.get("extra") or {}).get("code")
-    assert code == ErrorCode.LOGIN_ACCOUNT_UNAVAILABLE
-    assert data["detail"] == "Account is not available for sign-in."
+    # Anti-enumeration: the password-login route folds inactive state into bad-credentials (CWE-203).
+    assert code == ErrorCode.LOGIN_BAD_CREDENTIALS
+    assert data["detail"] == "Invalid credentials."
 
 
 async def test_guarded_route_rejects_inactive_user_token() -> None:
@@ -730,7 +731,7 @@ async def test_failed_login_does_not_update_hash(login_identifier: Literal["emai
 async def test_requires_verification_true_unverified_returns_400(
     login_identifier: Literal["email", "username"],
 ) -> None:
-    """When verification is required, unverified users receive the opaque account-state error."""
+    """When verification is required, unverified password-login is folded into bad-credentials."""
     cred = login_identifier_credential(login_identifier)
     app, _, _ = build_app(
         login_identifier=login_identifier,
@@ -745,8 +746,9 @@ async def test_requires_verification_true_unverified_returns_400(
     assert response.status_code == HTTP_BAD_REQUEST
     data = response.json()
     code = data.get("code") or (data.get("extra") or {}).get("code")
-    assert code == ErrorCode.LOGIN_ACCOUNT_UNAVAILABLE
-    assert data["detail"] == "Account is not available for sign-in."
+    # Anti-enumeration: unverified state is indistinguishable from wrong credentials (CWE-203).
+    assert code == ErrorCode.LOGIN_BAD_CREDENTIALS
+    assert data["detail"] == "Invalid credentials."
 
 
 @pytest.mark.parametrize("login_identifier", ["email", "username"])
@@ -785,10 +787,10 @@ async def test_login_account_state_failures_share_identical_client_payload(
 
 
 @pytest.mark.parametrize("login_identifier", ["email", "username"])
-async def test_requires_verification_true_dual_account_state_failure_returns_inactive_error(
+async def test_requires_verification_true_dual_account_state_failure_returns_bad_credentials(
     login_identifier: Literal["email", "username"],
 ) -> None:
-    """Users failing both account-state checks receive the opaque account-state error."""
+    """Users failing both account-state checks still get the generic bad-credentials response."""
     cred = login_identifier_credential(login_identifier)
     app, _, _ = build_app(
         login_identifier=login_identifier,
@@ -805,8 +807,9 @@ async def test_requires_verification_true_dual_account_state_failure_returns_ina
     assert response.status_code == HTTP_BAD_REQUEST
     data = response.json()
     code = data.get("code") or (data.get("extra") or {}).get("code")
-    assert code == ErrorCode.LOGIN_ACCOUNT_UNAVAILABLE
-    assert data["detail"] == "Account is not available for sign-in."
+    # Anti-enumeration: combined inactive+unverified still folds into bad-credentials (CWE-203).
+    assert code == ErrorCode.LOGIN_BAD_CREDENTIALS
+    assert data["detail"] == "Invalid credentials."
 
 
 @pytest.mark.parametrize("login_identifier", ["email", "username"])

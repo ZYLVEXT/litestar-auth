@@ -26,6 +26,7 @@ from litestar_auth._manager.security import _SecretValue
 from litestar_auth._manager.user_lifecycle import PRIVILEGED_FIELDS
 from litestar_auth._manager.user_policy import UserPolicy
 from litestar_auth.authentication.strategy.base import TokenInvalidationCapable
+from litestar_auth.authentication.strategy.jwt import InMemoryJWTDenylistStore
 from litestar_auth.config import require_password_length
 from litestar_auth.exceptions import (
     AuthorizationError,
@@ -124,6 +125,7 @@ class TrackingUserManager(BaseUserManager[ExampleUser, UUID]):
         api_key_hash_secret: str | None = None,
         creatable_fields: frozenset[str] = frozenset({"email", "password"}),
         updatable_fields: frozenset[str] = frozenset({"email", "password"}),
+        account_token_denylist_store: object | None = None,
     ) -> None:
         """Initialize the tracking manager with predictable secrets."""
         super().__init__(
@@ -144,6 +146,7 @@ class TrackingUserManager(BaseUserManager[ExampleUser, UUID]):
             login_identifier=login_identifier,
             creatable_fields=creatable_fields,
             updatable_fields=updatable_fields,
+            account_token_denylist_store=cast("Any", account_token_denylist_store),
         )
         self.registered_users: list[ExampleUser] = []
         self.registration_events: list[tuple[ExampleUser, str]] = []
@@ -1755,6 +1758,44 @@ async def test_reset_password_hashes_new_password_and_calls_hook() -> None:
     assert manager.reset_users == [updated_user]
 
 
+async def test_reset_password_consumes_jti_and_rejects_replay() -> None:
+    """A configured denylist makes reset-password tokens single-use server-side (VULN-3)."""
+    user_db = AsyncMock()
+    password_helper = PasswordHelper()
+    manager = TrackingUserManager(user_db, password_helper, account_token_denylist_store=InMemoryJWTDenylistStore())
+    user = _build_user(password_helper)
+    updated_user = replace(user, hashed_password=password_helper.hash("new-password"))
+    # user_db.get returns the *unchanged* user on replay, so the password fingerprint still
+    # matches: any rejection on the second call is the jti denylist, not fingerprint rotation.
+    user_db.get.return_value = user
+    user_db.update.return_value = updated_user
+    reset_token = manager.tokens.write_reset_password_token(user, dummy_hash=manager._get_dummy_hash())
+
+    assert await manager.reset_password(reset_token, "new-password") is updated_user
+
+    with pytest.raises(InvalidResetPasswordTokenError):
+        await manager.reset_password(reset_token, "another-password")
+
+
+async def test_verify_consumes_jti_and_rejects_replay() -> None:
+    """A configured denylist makes verification tokens single-use server-side (VULN-3)."""
+    user_db = AsyncMock()
+    password_helper = PasswordHelper()
+    manager = TrackingUserManager(user_db, password_helper, account_token_denylist_store=InMemoryJWTDenylistStore())
+    user = _build_user(password_helper)
+    verified_user = replace(user, is_verified=True)
+    # user_db.get keeps returning the unverified user, so the "already verified" guard never
+    # fires on replay: the second-call rejection is the jti denylist.
+    user_db.get.return_value = user
+    user_db.update.return_value = verified_user
+    token = manager.write_verify_token(user)
+
+    assert await manager.verify(token) is verified_user
+
+    with pytest.raises(InvalidVerifyTokenError):
+        await manager.verify(token)
+
+
 async def test_reset_password_rejects_invalid_token() -> None:
     """Malformed reset-password tokens raise the project token error."""
     user_db = AsyncMock()
@@ -2214,7 +2255,7 @@ async def test_reset_password_raises_invalid_token_when_subject_user_missing(
         await manager.reset_password("token", "new-password")
 
 
-async def test_get_user_from_token_raises_user_not_exists_error() -> None:
+async def test_get_user_and_payload_from_token_raises_user_not_exists_error() -> None:
     """Token security raises when the token resolves to a missing user."""
     user_db = AsyncMock()
     password_helper = PasswordHelper()
@@ -2228,7 +2269,7 @@ async def test_get_user_from_token_raises_user_not_exists_error() -> None:
     )
 
     with pytest.raises(UserNotExistsError):
-        await manager.tokens.security.get_user_from_token(
+        await manager.tokens.security.get_user_and_payload_from_token(
             token,
             secret=manager.verification_token_secret.get_secret_value(),
             audience=manager_module.VERIFY_TOKEN_AUDIENCE,
@@ -2249,9 +2290,9 @@ async def test_public_token_services_delegate_to_account_token_security_service(
         patch.object(manager.tokens.security.token_writer, "write", return_value="signed-token") as write_token,
         patch.object(
             manager.tokens.security,
-            "get_user_from_token",
-            new=AsyncMock(return_value=expected_user),
-        ) as get_user_from_token,
+            "get_user_and_payload_from_token",
+            new=AsyncMock(return_value=(expected_user, {})),
+        ) as get_user_and_payload_from_token,
         patch.object(
             manager.tokens.security,
             "read_token_subject",
@@ -2264,7 +2305,7 @@ async def test_public_token_services_delegate_to_account_token_security_service(
             audience=manager_module.VERIFY_TOKEN_AUDIENCE,
             lifetime=manager.verification_token_lifetime,
         )
-        resolved_user = await manager.tokens.security.get_user_from_token(
+        resolved_user, _payload = await manager.tokens.security.get_user_and_payload_from_token(
             "signed-token",
             secret=manager.verification_token_secret.get_secret_value(),
             audience=manager_module.VERIFY_TOKEN_AUDIENCE,
@@ -2290,7 +2331,7 @@ async def test_public_token_services_delegate_to_account_token_security_service(
         ),
         password_fingerprint_source=expected_user.hashed_password,
     )
-    get_user_from_token.assert_awaited_once_with(
+    get_user_and_payload_from_token.assert_awaited_once_with(
         "signed-token",
         user_db=manager.user_db,
         secret=manager.verification_token_secret.get_secret_value(),

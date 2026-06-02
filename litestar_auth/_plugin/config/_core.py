@@ -46,6 +46,7 @@ if TYPE_CHECKING:
     from litestar.openapi.spec import SecurityRequirement, SecurityScheme
 
     from litestar_auth.authentication.backend import AuthenticationBackend
+    from litestar_auth.authentication.strategy._jwt_denylist import JWTDenylistStore
     from litestar_auth.manager import BaseUserManager, UserManagerSecurity
     from litestar_auth.ratelimit import AuthRateLimitConfig
 
@@ -113,6 +114,9 @@ class LitestarAuthConfig[UP: UserProtocol[Any], ID](_ConfigValidationMixin):
     session_maker: SessionFactory | None = None
     user_db_factory: UserDatabaseFactory[UP, ID] | None = None
     user_manager_security: UserManagerSecurity[ID] | None = None
+    # Optional shared denylist (e.g. RedisJWTDenylistStore) that makes verify/reset
+    # account tokens single-use server-side by consuming their ``jti`` on success.
+    account_token_denylist_store: JWTDenylistStore | None = None
     password_validator_factory: PasswordValidatorFactory[UP, ID] | None = None
     # Advanced path: callable that fully constructs the manager per request. Use when the
     # constructor is not the default BaseUserManager surface or you need custom DI.

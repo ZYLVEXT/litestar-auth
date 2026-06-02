@@ -4,9 +4,7 @@ from __future__ import annotations
 
 import hmac
 import logging
-import math
 import secrets
-import time
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, NotRequired, Required, TypedDict, Unpack, cast, overload, override
@@ -21,6 +19,7 @@ from litestar_auth.authentication.strategy._jwt_denylist import (
     JWTDenylistStore,
     JWTRevocationPosture,
     _resolve_jwt_revocation,
+    denylist_ttl_seconds,
 )
 from litestar_auth.authentication.strategy.base import Strategy, UserManagerProtocol
 from litestar_auth.config import JWT_ACCESS_TOKEN_AUDIENCE, validate_production_secret
@@ -53,14 +52,6 @@ _ALLOWED_ALGORITHMS = frozenset(
 # Falling back to the private signing secret as the verify key would leak
 # private material into anywhere the verify side is read or shared.
 _ASYMMETRIC_ALGORITHMS = frozenset({"RS256", "RS384", "RS512", "ES256", "ES384", "ES512"})
-
-
-def _denylist_ttl_seconds(exp: object, *, now: float | None = None) -> int:
-    """Return the denylist TTL for a decoded JWT ``exp`` claim."""
-    if isinstance(exp, bool) or not isinstance(exp, int | float) or not math.isfinite(exp):
-        return 1
-    current_time = time.time() if now is None else now
-    return max(math.ceil(exp - current_time), 1)
 
 
 def _default_session_fingerprint(key: bytes) -> Callable[[object], str | None]:
@@ -393,7 +384,7 @@ class JWTStrategy(Strategy[UP, ID]):
         exp = payload.get("exp")
         if not isinstance(jti, str):
             return
-        ttl_seconds = _denylist_ttl_seconds(exp)
+        ttl_seconds = denylist_ttl_seconds(exp)
         recorded = await self._denylist_store.deny(jti, ttl_seconds=ttl_seconds)
         if not recorded:
             msg = (

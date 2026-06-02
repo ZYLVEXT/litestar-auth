@@ -477,7 +477,7 @@ def test_read_token_subject_rejects_invalid_subjects(
     assert [getattr(record, "event", None) for record in caplog.records] == ["token_validation_failed"]
 
 
-async def test_get_user_from_token_raises_when_subject_user_is_missing() -> None:
+async def test_get_user_and_payload_from_token_raises_when_subject_user_is_missing() -> None:
     """Lookup misses after successful token validation raise ``UserNotExistsError``."""
     user_db = AsyncMock()
     password_helper = PasswordHelper()
@@ -487,7 +487,7 @@ async def test_get_user_from_token_raises_when_subject_user_is_missing() -> None
     user_db.get.return_value = None
 
     with pytest.raises(UserNotExistsError):
-        await manager._account_token_security.get_user_from_token(
+        await manager._account_token_security.get_user_and_payload_from_token(
             token,
             user_db=user_db,
             secret=manager.verification_token_secret.get_secret_value(),

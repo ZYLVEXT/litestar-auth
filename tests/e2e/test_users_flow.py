@@ -251,7 +251,8 @@ async def _verify_then_login_headers(
     assert response.status_code == HTTP_BAD_REQUEST
     login_payload = response.json()
     login_code = login_payload.get("code") or (login_payload.get("extra") or {}).get("code")
-    assert login_code == ErrorCode.LOGIN_ACCOUNT_UNAVAILABLE
+    # Anti-enumeration: unverified password-login is folded into bad-credentials (CWE-203).
+    assert login_code == ErrorCode.LOGIN_BAD_CREDENTIALS
 
     verify_token = UsersFlowManager.verification_tokens[email]
     response = await client.post("/auth/verify", json={"token": verify_token})

@@ -631,12 +631,14 @@ async def test_login_uses_manager_account_state_validator_when_available() -> No
     user_manager.require_account_state.assert_called_once_with(user, require_verified=True)
 
 
-async def test_login_increments_rate_limit_on_account_state_failure() -> None:
-    """Successful credentials with bad account state still consume login rate-limit budget.
+async def test_login_returns_bad_credentials_and_rate_limits_on_account_state_failure() -> None:
+    """Valid credentials against a bad-state account return the generic bad-credentials code.
 
-    Closes a credential-stuffing enumeration channel: an attacker with valid
-    credentials would otherwise probe inactive/unverified state through the
-    distinct error codes without burning the per-IP/per-email login limiter.
+    Closes a credential-stuffing enumeration channel (CWE-203): an attacker
+    holding a valid password must not be able to distinguish "account exists but
+    inactive/unverified" from "wrong credentials". The login path therefore maps
+    the account-state failure to ``LOGIN_BAD_CREDENTIALS`` while still consuming
+    the per-IP/per-email login rate-limit budget before raising.
     """
     backend = AuthenticationBackend(
         name="test",
@@ -677,7 +679,7 @@ async def test_login_increments_rate_limit_on_account_state_failure() -> None:
             user_manager=user_manager,
         )
 
-    assert exc_info.value.extra == {"code": ErrorCode.LOGIN_ACCOUNT_UNAVAILABLE}
+    assert exc_info.value.extra == {"code": ErrorCode.LOGIN_BAD_CREDENTIALS}
     limiter_backend.increment.assert_awaited_once()
     limiter_backend.reset.assert_not_awaited()
 

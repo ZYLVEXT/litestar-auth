@@ -162,6 +162,7 @@ class BaseUserManager[UP: UserProtocol[Any], ID](
                 superuser_role_name=settings.superuser_role_name,
                 field_policy=settings.field_policy,
                 unsafe_testing=settings.unsafe_testing,
+                account_token_denylist_store=settings.account_token_denylist_store,
             ),
         )
         self._build_internal_services(settings.password_helper)
@@ -203,6 +204,7 @@ class BaseUserManager[UP: UserProtocol[Any], ID](
         self.field_policy = settings.field_policy
         self.unsafe_testing = settings.unsafe_testing
         self.totp_secret_keyring = resolved_security.totp_secret_keyring
+        self._account_token_denylist_store = settings.account_token_denylist_store
 
     def _build_internal_services(self, password_helper: PasswordHelper | None) -> None:
         """Instantiate the services backing the manager facade."""
@@ -234,6 +236,7 @@ class BaseUserManager[UP: UserProtocol[Any], ID](
                 token_security=self._account_token_security,
                 logger=logger,
                 policy=self.policy,
+                account_token_denylist_store=self._account_token_denylist_store,
             ),
         )
         self._api_keys = ApiKeyManagerService(

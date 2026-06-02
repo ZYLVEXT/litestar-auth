@@ -84,6 +84,8 @@ class _DefaultUserManagerBuilderContract[UP: UserProtocol[Any], ID]:
             constructor_kwargs["api_key_config"] = self.config.api_keys
         constructor_kwargs["unsafe_testing"] = self.config.unsafe_testing
         constructor_kwargs["superuser_role_name"] = self.config.superuser_role_name
+        if self.config.account_token_denylist_store is not None:
+            constructor_kwargs["account_token_denylist_store"] = self.config.account_token_denylist_store
         return constructor_kwargs
 
     @staticmethod

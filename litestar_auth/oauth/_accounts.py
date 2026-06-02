@@ -12,7 +12,11 @@ from litestar_auth.types import UserProtocol
 
 if TYPE_CHECKING:
     from litestar_auth.oauth._client import OAuthTokenPayload
-    from litestar_auth.oauth._contracts import OAuthAccountStoreProtocol, OAuthServiceUserManagerProtocol
+    from litestar_auth.oauth._contracts import (
+        OAuthAccountStoreProtocol,
+        OAuthServiceUserManagerProtocol,
+        OAuthServiceUserStoreProtocol,
+    )
 
 
 class OAuthAccountUpserter[UP: UserProtocol[Any], ID]:
@@ -31,13 +35,26 @@ class OAuthAccountUpserter[UP: UserProtocol[Any], ID]:
     async def reject_cross_user_association(self, *, user: UP, account_id: str) -> None:
         """Reject association when the provider account already belongs to another local user."""
         existing_owner = await self._oauth_account_store.get_by_oauth_account(self._provider_name, account_id)
-        if existing_owner is None:
-            return
-
-        existing_owner_id = getattr(existing_owner, "id", None)
-        current_user_id = getattr(user, "id", None)
-        if existing_owner_id is None or current_user_id is None or existing_owner_id != current_user_id:
+        if existing_owner is not None and _is_owned_by_different_user(existing_owner, user):
             _raise_account_already_linked()
+
+    @staticmethod
+    async def reject_email_owned_by_other_user(
+        *,
+        user: UP,
+        account_email: str,
+        user_db: OAuthServiceUserStoreProtocol[UP, ID],
+    ) -> None:
+        """Reject association when the provider email already belongs to a different local user.
+
+        Without this check an authenticated user could attach a provider identity carrying
+        another user's email to their own account (CWE-345). The lookup mirrors login-time email
+        resolution (``OAuthLinkingPolicy.resolve_candidate_user``) so association and login agree
+        on email ownership. Rejection raises the stable existing-user OAuth client error.
+        """
+        existing_email_owner = await user_db.get_by_email(account_email)
+        if existing_email_owner is not None and _is_owned_by_different_user(existing_email_owner, user):
+            _raise_account_email_owned_by_other_user()
 
     async def upsert_account(
         self,
@@ -62,6 +79,16 @@ class OAuthAccountUpserter[UP: UserProtocol[Any], ID]:
             )
         except OAuthAccountAlreadyLinkedError:
             _raise_account_already_linked()
+
+
+def _is_owned_by_different_user(owner: object, user: object) -> bool:
+    """Return whether ``owner`` is a different local user than ``user`` (id-based, None-safe).
+
+    A missing id on either side is treated as "different" so ``id=None`` never reads as a match.
+    """
+    owner_id = getattr(owner, "id", None)
+    user_id = getattr(user, "id", None)
+    return owner_id is None or user_id is None or owner_id != user_id
 
 
 def require_oauth_account_store[UP: UserProtocol[Any], ID](
@@ -94,4 +121,21 @@ def _raise_account_already_linked() -> None:
         status_code=400,
         detail=msg,
         extra={"code": ErrorCode.OAUTH_ACCOUNT_ALREADY_LINKED},
+    ) from None
+
+
+def _raise_account_email_owned_by_other_user() -> None:
+    """Raise the stable error for associating a provider email owned by another user.
+
+    Raises:
+        ClientException: Always raised with the existing-user OAuth error payload.
+    """
+    msg = (
+        "The email on this provider account belongs to a different local user. "
+        "Sign in to that account to link the provider, or use a provider account with your own email."
+    )
+    raise ClientException(
+        status_code=400,
+        detail=msg,
+        extra={"code": ErrorCode.OAUTH_USER_ALREADY_EXISTS},
     ) from None

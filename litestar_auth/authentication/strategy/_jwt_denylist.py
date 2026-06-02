@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import math
 import time
 from dataclasses import dataclass
 from functools import partial
@@ -14,6 +15,23 @@ if TYPE_CHECKING:
     from litestar_auth._redis_protocols import RedisExpiringValueStoreClient
 
 logger = logging.getLogger(__name__)
+
+
+def denylist_ttl_seconds(exp: object, *, now: float | None = None) -> int:
+    """Return the denylist TTL (>=1s) for a decoded JWT ``exp`` claim.
+
+    Shared by the JWT access-token strategy and the account-token (verify/reset)
+    denylist so a revoked ``jti`` is retained exactly until the token would have
+    expired anyway. Non-finite or non-numeric ``exp`` values fall back to one second.
+
+    Returns:
+        Seconds the ``jti`` should remain denied, never below 1.
+    """
+    if isinstance(exp, bool) or not isinstance(exp, int | float) or not math.isfinite(exp):
+        return 1
+    current_time = time.time() if now is None else now
+    return max(math.ceil(exp - current_time), 1)
+
 
 _load_redis_asyncio = partial(_require_redis_asyncio, feature_name="RedisJWTDenylistStore")
 

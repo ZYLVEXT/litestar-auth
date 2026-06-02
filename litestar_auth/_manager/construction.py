@@ -19,6 +19,7 @@ from litestar_auth.types import LoginIdentifier, UserProtocol
 if TYPE_CHECKING:
     from litestar_auth._manager.api_key_config import ApiKeyConfigProtocol, ApiKeyManagerConfig
     from litestar_auth._manager.security import UserManagerSecurity
+    from litestar_auth.authentication.strategy._jwt_denylist import JWTDenylistStore
     from litestar_auth.db.base import BaseApiKeyStore, BaseUserStore
     from litestar_auth.password import PasswordHelper
 
@@ -74,6 +75,7 @@ class ConstructorAttributes[UP: UserProtocol[Any], ID]:
     superuser_role_name: str
     field_policy: UserFieldPolicy
     unsafe_testing: bool
+    account_token_denylist_store: JWTDenylistStore | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -96,6 +98,7 @@ class BaseUserManagerConfig[UP: UserProtocol[Any], ID]:
     creatable_fields: Collection[str] = DEFAULT_CREATABLE_FIELDS
     updatable_fields: Collection[str] = DEFAULT_UPDATABLE_FIELDS
     unsafe_testing: bool = False
+    account_token_denylist_store: JWTDenylistStore | None = None
 
     @property
     def field_policy(self) -> UserFieldPolicy:
@@ -124,6 +127,7 @@ class BaseUserManagerConstructorKwargs[UP: UserProtocol[Any], ID](TypedDict, tot
     creatable_fields: Collection[str]
     updatable_fields: Collection[str]
     unsafe_testing: bool
+    account_token_denylist_store: JWTDenylistStore | None
 
 
 def resolve_oauth_account_store[UP: UserProtocol[Any], ID](

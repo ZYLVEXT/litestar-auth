@@ -14,6 +14,13 @@
   (`DEFAULT_RESOLVED_PERMISSIONS_DEPENDENCY_KEY`) exposes the request's resolved permissions for response
   shaping and UI hints — not a substitute for route guards.
 
+- **Optional server-side single-use for verify and reset-password tokens.** New
+  `account_token_denylist_store` on `LitestarAuthConfig` and `BaseUserManager` accepts any shared
+  `JWTDenylistStore` (for example `RedisJWTDenylistStore`). When configured, a verify or reset token's
+  `jti` is checked on entry and consumed on success, so a captured token cannot be replayed even before the
+  password fingerprint / verification state rotates. Unset (default) preserves the existing
+  fingerprint / verification-state single-use and is fully backward compatible.
+
 ### Changed
 
 - **Redis optional extra requires redis-py 8.x with no deprecated command surface.** `litestar-auth[redis]`
@@ -48,6 +55,20 @@
   (no `resource:action` grammar) or empty scopes carry no permission-shaped authority and fail closed on
   permission guards; use `has_scope()` or `requires_password_session` for those routes.
 
+- **OAuth account association verifies provider-email ownership (CWE-345).** `associate_account` now
+  rejects linking a provider identity whose email already belongs to a *different* local user — using the
+  same email resolution as login — and responds with `OAUTH_USER_ALREADY_EXISTS`. This prevents an
+  authenticated user from attaching a provider account that carries someone else's email to their own
+  account. Linking a provider whose email is your own, or owned by nobody, is unaffected.
+
+- **Password login no longer reveals disabled/unverified account state (CWE-203).** On the password-login
+  route, inactive/unverified account-state failures now return the generic `LOGIN_BAD_CREDENTIALS` response
+  instead of `LOGIN_ACCOUNT_UNAVAILABLE`, so a caller holding a valid password can no longer distinguish
+  "account exists but disabled/unverified" from "wrong credentials". The login rate-limit counter is still
+  incremented on the failure. Other account-state-gated flows where identity is already proven (refresh,
+  OAuth local session) keep emitting `LOGIN_ACCOUNT_UNAVAILABLE`. Integrators keying on the login error
+  code should treat both states as `LOGIN_BAD_CREDENTIALS`.
+
 ### Documentation
 
 - **Guards guide documents permission-based authorization.** `docs/guards.md` covers the permission
@@ -55,6 +76,12 @@
   global grant, the `litestar_auth_permissions` dependency, and the API-key delegation ceiling. The roadmap
   clarifies that flat `role` / `user_role` tables remain the persistence layer and that `role_permissions`
   and custom `permission_resolver` objects are the current extension points for effective permissions.
+
+- **Account-token and login-enumeration hardening documented.** `docs/security.md` and
+  `docs/configuration/security.md` cover the optional `account_token_denylist_store` single-use posture,
+  `docs/errors.md` documents that the password-login route folds inactive/unverified state into
+  `LOGIN_BAD_CREDENTIALS`, and `docs/cookbook/oauth_associate.md` documents the provider-email ownership
+  check on association.
 
 ## 4.1.0 (2026-05-29)
 

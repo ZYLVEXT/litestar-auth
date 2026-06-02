@@ -136,6 +136,11 @@ class OAuthService[UP: UserProtocol[Any], ID]:
             oauth_account_store=oauth_account_store,
         )
         await account_upserter.reject_cross_user_association(user=user, account_id=callback_identity.account_id)
+        await account_upserter.reject_email_owned_by_other_user(
+            user=user,
+            account_email=callback_identity.account_email,
+            user_db=user_manager.user_db,
+        )
         await account_upserter.upsert_account(
             user=user,
             account_id=callback_identity.account_id,

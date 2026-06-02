@@ -15,6 +15,7 @@ import jwt
 from litestar_auth._jwt_headers import JwtDecodeConfig, decode_signed_jwt, jwt_encode_headers
 from litestar_auth._manager._coercions import _managed_user
 from litestar_auth._manager._protocols import UserDatabaseManagerProtocol
+from litestar_auth.authentication.strategy._jwt_denylist import denylist_ttl_seconds
 from litestar_auth.exceptions import InvalidResetPasswordTokenError, InvalidVerifyTokenError, UserNotExistsError
 
 if TYPE_CHECKING:
@@ -23,6 +24,7 @@ if TYPE_CHECKING:
     from litestar_auth._manager.construction import AccountTokenSecrets
     from litestar_auth._manager.hooks import ManagerHookBus
     from litestar_auth._manager.user_policy import UserPolicy
+    from litestar_auth.authentication.strategy._jwt_denylist import JWTDenylistStore
 
 type _InvalidTokenError = type[InvalidVerifyTokenError | InvalidResetPasswordTokenError]
 
@@ -55,6 +57,7 @@ class AccountTokensServiceDependencies[UP, ID]:
     token_security: AccountTokenSecurityService[UP, ID]
     logger: Any
     policy: UserPolicy
+    account_token_denylist_store: JWTDenylistStore | None = None
 
 
 class TokenWriter:
@@ -273,7 +276,7 @@ class AccountTokenSecurityService[UP, ID]:
         payload = self.decode_token(token, secret=secret, audience=audience, invalid_token_error=invalid_token_error)
         return self._subject_id_from_payload(payload, invalid_token_error)
 
-    async def get_user_from_token(
+    async def get_user_and_payload_from_token(
         self,
         token: str,
         *,
@@ -281,18 +284,14 @@ class AccountTokenSecurityService[UP, ID]:
         secret: str,
         audience: str,
         invalid_token_error: _InvalidTokenError,
-    ) -> UP:
-        """Resolve a user from a signed manager token."""
-        user_id = self.read_token_subject(
-            token,
-            secret=secret,
-            audience=audience,
-            invalid_token_error=invalid_token_error,
-        )
+    ) -> tuple[UP, dict[str, Any]]:
+        """Resolve a user plus the validated JWT payload from a signed manager token."""
+        payload = self.decode_token(token, secret=secret, audience=audience, invalid_token_error=invalid_token_error)
+        user_id = self._subject_id_from_payload(payload, invalid_token_error)
         user = await user_db.get(user_id)
         if user is None:
             raise UserNotExistsError
-        return user
+        return user, payload
 
     async def get_reset_password_context(
         self,
@@ -344,6 +343,29 @@ class AccountTokensService[UP, ID]:
         self._token_security = dependencies.token_security
         self._logger = dependencies.logger
         self._policy = dependencies.policy
+        self._denylist_store = dependencies.account_token_denylist_store
+
+    async def _reject_if_token_replayed(self, payload: dict[str, Any], invalid_token_error: _InvalidTokenError) -> None:
+        """Reject a verify/reset token whose ``jti`` was already consumed.
+
+        No-op when no denylist store is configured (the default), in which case
+        account tokens stay single-use only through password/verification-state rotation.
+        ``jti`` is guaranteed present and string-typed here: it is a required claim and
+        PyJWT raises ``InvalidJTIError`` for non-string values during decode.
+        """
+        store = self._denylist_store
+        if store is None:
+            return
+        if await store.is_denied(payload["jti"]):
+            self._logger.warning("Account token replay rejected", extra={"event": "token_validation_failed"})
+            raise invalid_token_error
+
+    async def _consume_token(self, payload: dict[str, Any]) -> None:
+        """Record a verify/reset token's ``jti`` as spent until its original expiry."""
+        store = self._denylist_store
+        if store is None:
+            return
+        await store.deny(payload["jti"], ttl_seconds=denylist_ttl_seconds(payload.get("exp")))
 
     @property
     def security(self) -> AccountTokenSecurityService[UP, ID]:
@@ -364,19 +386,21 @@ class AccountTokensService[UP, ID]:
 
     async def verify(self, token: str) -> UP:
         """Mark the token subject as verified."""
-        user = await self._token_security.get_user_from_token(
+        user, payload = await self._token_security.get_user_and_payload_from_token(
             token,
             user_db=self._manager.user_db,
             secret=self._manager.account_token_secrets.verification_token_secret.get_secret_value(),
             audience=self._audiences.verify,
             invalid_token_error=InvalidVerifyTokenError,
         )
+        await self._reject_if_token_replayed(payload, InvalidVerifyTokenError)
         managed_user = _managed_user(user)
         if managed_user.is_verified:
             msg = "The user is already verified."
             raise InvalidVerifyTokenError(msg)
 
         updated_user = await self._manager.user_db.update(user, {"is_verified": True})
+        await self._consume_token(payload)
         await self._hook_bus.fire("after_verify", updated_user)
         return updated_user
 
@@ -419,6 +443,7 @@ class AccountTokensService[UP, ID]:
     async def reset_password(self, token: str, password: str) -> UP:
         """Reset the subject user's password."""
         user, payload = await self._token_security.get_reset_password_context(token, user_db=self._manager.user_db)
+        await self._reject_if_token_replayed(payload, InvalidResetPasswordTokenError)
 
         # Security: reject password resets for deactivated accounts
         managed = _managed_user(user)
@@ -449,6 +474,7 @@ class AccountTokensService[UP, ID]:
         update_dict = {"hashed_password": self._policy.password_helper.hash(password)}
         updated_user = await self._manager.user_db.update(user, update_dict)
         await self._manager._invalidate_all_tokens(updated_user)
+        await self._consume_token(payload)
         await self._hook_bus.fire("after_reset_password", updated_user)
         return updated_user
 

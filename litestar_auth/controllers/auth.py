@@ -258,12 +258,19 @@ async def _handle_auth_login[UP: UserProtocol[Any], ID](
 
     async def _login_work() -> object:
         user = await _authenticate_login_request(request, data, ctx=ctx, user_manager=user_manager)
-        await _require_account_state(
-            user,
-            require_verified=ctx.requires_verification,
-            user_manager=user_manager,
-            on_failure=lambda: ctx.login_inc(request),
-        )
+        # Security: collapse inactive/unverified account-state failures into the generic
+        # bad-credentials response so a caller holding a valid password cannot distinguish
+        # "account exists but disabled/unverified" from "wrong credentials" (CWE-203).
+        # The on_failure callback still increments the login rate-limit counter before raising.
+        try:
+            await _require_account_state(
+                user,
+                require_verified=ctx.requires_verification,
+                user_manager=user_manager,
+                on_failure=lambda: ctx.login_inc(request),
+            )
+        except ClientException as exc:
+            raise_login_bad_credentials(source=exc)
 
         pending_response = await _maybe_issue_totp_pending_response(
             request,

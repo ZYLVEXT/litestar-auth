@@ -713,7 +713,7 @@ async def test_jwt_strategy_destroy_token_derives_ttl_from_numeric_expiry(
     def fake_time() -> float:
         return fake_now
 
-    monkeypatch.setattr("litestar_auth.authentication.strategy.jwt.time.time", fake_time)
+    monkeypatch.setattr("litestar_auth.authentication.strategy._jwt_denylist.time.time", fake_time)
     user = ExampleUser(id=uuid4())
     store = _RecordingDenylistStore()
     strategy = JWTStrategy(secret=DEFAULT_SECRET, denylist_store=store)
@@ -742,7 +742,7 @@ async def test_jwt_strategy_destroy_token_derives_ttl_from_float_expiry(
     def fake_time() -> float:
         return fake_now
 
-    monkeypatch.setattr("litestar_auth.authentication.strategy.jwt.time.time", fake_time)
+    monkeypatch.setattr("litestar_auth.authentication.strategy._jwt_denylist.time.time", fake_time)
     user = ExampleUser(id=uuid4())
     store = _RecordingDenylistStore()
     strategy = JWTStrategy(secret=DEFAULT_SECRET, denylist_store=store)
@@ -804,7 +804,7 @@ async def test_jwt_strategy_read_token_rejects_revoked_float_exp_token_until_exp
     def fake_time() -> float:
         return fake_now
 
-    monkeypatch.setattr("litestar_auth.authentication.strategy.jwt.time.time", fake_time)
+    monkeypatch.setattr("litestar_auth.authentication.strategy._jwt_denylist.time.time", fake_time)
     monkeypatch.setattr("litestar_auth.authentication.strategy._jwt_denylist.time.time", fake_time)
     user = ExampleUser(id=uuid4())
     user_manager = ExampleUserManager(user)
@@ -842,7 +842,7 @@ async def test_jwt_strategy_destroy_token_clamps_expired_numeric_ttl_to_minimum(
     def fake_time() -> float:
         return fake_now
 
-    monkeypatch.setattr("litestar_auth.authentication.strategy.jwt.time.time", fake_time)
+    monkeypatch.setattr("litestar_auth.authentication.strategy._jwt_denylist.time.time", fake_time)
     user = ExampleUser(id=uuid4())
     store = _RecordingDenylistStore()
     strategy = JWTStrategy(secret=DEFAULT_SECRET, denylist_store=store)

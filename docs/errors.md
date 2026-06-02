@@ -25,8 +25,8 @@ Exact JSON layout follows your Litestar exception handler configuration.
 | `USER_NOT_FOUND` | 404 | User id does not exist. |
 | `USER_ALREADY_EXISTS` | 400 | Duplicate user in a non-endpoint-specific default exception context. |
 | `REGISTER_FAILED` | 400 | Generic registration failure. |
-| `LOGIN_BAD_CREDENTIALS` | 400 | Wrong password or unknown user (login). |
-| `LOGIN_ACCOUNT_UNAVAILABLE` | 400 | Account-state policy blocked sign-in, refresh, OAuth local session issue, or another account-state gated flow. |
+| `LOGIN_BAD_CREDENTIALS` | 400 | Wrong password, unknown user, **or** a valid password against an inactive/unverified account on the password-login route (the account-state failure is deliberately folded into this generic code to prevent credential-stuffing enumeration). |
+| `LOGIN_ACCOUNT_UNAVAILABLE` | 400 | Account-state policy blocked a non-password-login flow (refresh, OAuth local session issue, or another account-state gated flow where the caller has already proven identity). The password-login route never emits this code; see `LOGIN_BAD_CREDENTIALS`. |
 | `AUTHORIZATION_DENIED` | 403 | Guard denied access. |
 | `INSUFFICIENT_ROLES` | 403 | Role-based guard denial. Structured role context stays on the exception object but is omitted from default HTTP responses. |
 | `INSUFFICIENT_PERMISSIONS` | 403 | Permission-based guard denial. Structured required/granted permission context stays on the exception object but is omitted from default HTTP responses. |
@@ -75,10 +75,15 @@ Source of truth in code: `litestar_auth._error_codes.ErrorCode` (re-exported fro
 `granted_permissions`, and `require_all` on the Python object for handlers or logs,
 but the default HTTP response does not expose permission names.
 
-`LOGIN_ACCOUNT_UNAVAILABLE` intentionally uses one opaque 400 response for inactive and unverified
-account-state failures so external observers cannot enumerate account state after valid credentials.
-Operators can correlate the internal `inactive` / `unverified` reason through the `account_state_failure`
-structured log event emitted on the `litestar_auth.security` logger.
+On the **password-login route**, inactive/unverified account-state failures are folded into
+`LOGIN_BAD_CREDENTIALS`: a caller holding a valid password cannot distinguish "account exists but
+disabled/unverified" from "wrong credentials" (CWE-203). The login rate-limit counter is still
+incremented on the account-state failure so the channel cannot be probed cheaply.
+
+`LOGIN_ACCOUNT_UNAVAILABLE` remains the opaque 400 for the other account-state-gated flows (refresh,
+OAuth local session issue), where the caller has already proven identity, and still folds inactive and
+unverified into one response. Operators can correlate the internal `inactive` / `unverified` reason
+through the `account_state_failure` structured log event emitted on the `litestar_auth.security` logger.
 
 ## Enumeration safety
 

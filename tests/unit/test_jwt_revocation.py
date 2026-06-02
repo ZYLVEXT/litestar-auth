@@ -326,7 +326,7 @@ async def test_jwt_strategy_destroy_token_uses_numeric_expiry_for_denylist_ttl(
     def fake_time() -> float:
         return fake_now
 
-    monkeypatch.setattr("litestar_auth.authentication.strategy.jwt.time.time", fake_time)
+    monkeypatch.setattr("litestar_auth.authentication.strategy._jwt_denylist.time.time", fake_time)
     password_helper = PasswordHelper()
     user = _User(id=uuid4(), email="user@example.com", hashed_password=password_helper.hash("pw"))
     store = _RecordingDenylistStore()

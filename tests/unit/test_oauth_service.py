@@ -661,6 +661,97 @@ async def test_associate_account_links_provider_for_current_user() -> None:
     )
 
 
+async def test_associate_account_rejects_email_owned_by_other_user() -> None:
+    """Associate flow rejects linking a provider email owned by a different local user (CWE-345)."""
+    user = ExampleUser(id=uuid4(), email="attacker@example.com")
+    email_owner = ExampleUser(id=uuid4(), email="victim@example.com")
+    manager = _build_manager(existing_user=email_owner)
+    oauth_client = AsyncMock()
+    oauth_client.get_access_token.return_value = {
+        "access_token": "provider-access-token",
+        "expires_at": 456,
+        "refresh_token": "provider-refresh-token",
+    }
+    oauth_client.get_id_email.return_value = ("provider-user", "victim@example.com")
+    service = oauth_service_module.OAuthService(provider_name="github", client=OAuthClientAdapter(oauth_client))
+
+    with pytest.raises(ClientException) as exc_info:
+        await service.associate_account(
+            user=user,
+            code="provider-code",
+            redirect_uri="https://app.example/callback",
+            code_verifier="pkce-code-verifier",
+            user_manager=manager,
+        )
+
+    extra = exc_info.value.extra
+    assert (extra.get("code") if isinstance(extra, dict) else None) == ErrorCode.OAUTH_USER_ALREADY_EXISTS
+    manager.user_db.get_by_email.assert_awaited_once_with("victim@example.com")
+    manager.oauth_account_store.upsert_oauth_account.assert_not_awaited()
+
+
+@pytest.mark.parametrize(
+    ("current_user_id", "email_owner_id"),
+    [
+        pytest.param(None, None, id="both-none"),
+        pytest.param(uuid4(), None, id="email-owner-none"),
+        pytest.param(None, uuid4(), id="current-user-none"),
+    ],
+)
+async def test_associate_account_rejects_email_owner_when_either_id_is_none(
+    *,
+    current_user_id: UUID | None,
+    email_owner_id: UUID | None,
+) -> None:
+    """Email-ownership check never treats ``id=None`` as a self-match, even when both are None."""
+    user = MagicMock()
+    user.id = current_user_id
+    email_owner = MagicMock()
+    email_owner.id = email_owner_id
+    manager = _build_manager(existing_user=email_owner)
+    oauth_client = AsyncMock()
+    oauth_client.get_access_token.return_value = {"access_token": "provider-access-token"}
+    oauth_client.get_id_email.return_value = ("provider-user", "victim@example.com")
+    service = oauth_service_module.OAuthService(provider_name="github", client=OAuthClientAdapter(oauth_client))
+
+    with pytest.raises(ClientException) as exc_info:
+        await service.associate_account(
+            user=user,
+            code="provider-code",
+            redirect_uri="https://app.example/callback",
+            code_verifier="pkce-code-verifier",
+            user_manager=manager,
+        )
+
+    extra = exc_info.value.extra
+    assert (extra.get("code") if isinstance(extra, dict) else None) == ErrorCode.OAUTH_USER_ALREADY_EXISTS
+    manager.oauth_account_store.upsert_oauth_account.assert_not_awaited()
+
+
+async def test_associate_account_allows_email_owned_by_self() -> None:
+    """Associate flow permits linking when the provider email is the authenticated user's own."""
+    user = ExampleUser(id=uuid4(), email="user@example.com")
+    manager = _build_manager(existing_user=user)
+    oauth_client = AsyncMock()
+    oauth_client.get_access_token.return_value = {
+        "access_token": "provider-access-token",
+        "expires_at": 456,
+        "refresh_token": "provider-refresh-token",
+    }
+    oauth_client.get_id_email.return_value = ("provider-user", "user@example.com")
+    service = oauth_service_module.OAuthService(provider_name="github", client=OAuthClientAdapter(oauth_client))
+
+    await service.associate_account(
+        user=user,
+        code="provider-code",
+        redirect_uri="https://app.example/callback",
+        code_verifier="pkce-code-verifier",
+        user_manager=manager,
+    )
+
+    manager.oauth_account_store.upsert_oauth_account.assert_awaited_once()
+
+
 async def test_associate_account_maps_store_link_conflict_to_client_error() -> None:
     """Store-level linked-account conflicts keep the stable client-facing error."""
     user = ExampleUser(id=uuid4(), email="user@example.com")

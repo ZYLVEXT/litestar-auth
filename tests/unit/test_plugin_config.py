@@ -32,6 +32,7 @@ from litestar_auth._plugin.user_manager_builder import (
     resolve_user_manager_factory,
 )
 from litestar_auth.authentication.backend import AuthenticationBackend
+from litestar_auth.authentication.strategy._jwt_denylist import InMemoryJWTDenylistStore, JWTDenylistStore
 from litestar_auth.authentication.strategy.db import DatabaseTokenStrategy
 from litestar_auth.authentication.strategy.db_models import AccessToken, RefreshToken
 from litestar_auth.authentication.transport.bearer import BearerTransport
@@ -1284,6 +1285,35 @@ def test_build_user_manager_uses_typed_password_helper_from_security() -> None:
     )
 
     assert manager.password_helper is typed_password_helper
+
+
+def test_build_user_manager_passes_account_token_denylist_store() -> None:
+    """A plugin-configured account_token_denylist_store reaches the constructed manager."""
+    denylist_store = InMemoryJWTDenylistStore()
+
+    config = LitestarAuthConfig[ExampleUser, UUID](
+        backends=_minimal_config().backends,
+        user_model=ExampleUser,
+        user_manager_class=cast("Any", BaseUserManager),
+        session_maker=cast(
+            "async_sessionmaker[AsyncSession]",
+            assert_structural_session_factory(DummySessionMaker()),
+        ),
+        user_db_factory=lambda _session: InMemoryUserDatabase([]),
+        user_manager_security=UserManagerSecurity[UUID](
+            verification_token_secret=VERIFICATION_SECRET,
+            reset_password_token_secret=RESET_PASSWORD_SECRET,
+        ),
+        account_token_denylist_store=denylist_store,
+    )
+
+    manager = build_user_manager(
+        session=cast("Any", DummySession()),
+        user_db=InMemoryUserDatabase([]),
+        config=config,
+    )
+
+    assert manager._account_token_denylist_store is denylist_store
 
 
 def test_litestar_auth_config_exposes_only_canonical_password_and_backend_accessors() -> None:
@@ -2603,6 +2633,7 @@ def test_litestar_auth_config_session_maker_annotation_is_runtime_resolvable() -
             "BaseUserManager": BaseUserManager,
             "UserManagerSecurity": UserManagerSecurity,
             "AuthRateLimitConfig": AuthRateLimitConfig,
+            "JWTDenylistStore": JWTDenylistStore,
             "msgspec": msgspec,
         },
     )

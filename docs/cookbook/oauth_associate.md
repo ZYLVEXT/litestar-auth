@@ -66,6 +66,7 @@ Bearer-only deployments do not wire the CSRF middleware (the plugin auto-enables
 ## Security defaults
 
 - Associate routes require an authenticated `request.user`; they do not use `oauth_associate_by_email`.
+- Association is rejected when the provider account's email belongs to a **different** local user (the same email resolution as login). This prevents an authenticated user from attaching a provider identity that carries someone else's email to their own account; the response uses `OAUTH_USER_ALREADY_EXISTS`. Linking a provider whose email is your own, or owned by nobody, is allowed.
 - Associate authorize is POST + CSRF-protected by default; cookie-transport clients must mirror the plugin-managed CSRF cookie into the configured `csrf_header_name`.
 - Keep **`oauth_token_encryption_keyring`** configured in production so stored provider tokens are encrypted at rest.
 - Keep **`oauth_flow_cookie_secret`** distinct and configured so OAuth state and the PKCE verifier are encrypted/authenticated in the short-lived flow cookie.
