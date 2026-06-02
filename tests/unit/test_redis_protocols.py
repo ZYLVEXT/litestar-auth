@@ -16,14 +16,19 @@ class _RedisClient:
     async def eval(self, script: str, numkeys: int, *keys_and_args: object) -> int:
         return len(script) + numkeys + len(keys_and_args)
 
-    async def set(self, name: str, value: str, *, nx: bool = False, px: int | None = None) -> bool:
-        return bool(name and value and (nx or px is None))
+    async def set(
+        self,
+        name: str,
+        value: str,
+        *,
+        nx: bool = False,
+        px: int | None = None,
+        ex: int | None = None,
+    ) -> bool:
+        return bool(name and value and (nx or px is None or ex is not None))
 
     async def get(self, name: str, /) -> bytes | None:
         return name.encode()
-
-    async def setex(self, name: str, time: int, value: str, /) -> object:
-        return (name, time, value)
 
 
 def test_shared_auth_client_protocol_is_runtime_checkable() -> None:

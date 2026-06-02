@@ -3,11 +3,11 @@
 from __future__ import annotations
 
 import inspect
-from typing import TYPE_CHECKING, Annotated, Any, cast
+from typing import TYPE_CHECKING, Any, cast
 
 import msgspec  # noqa: TC002
 from litestar import Controller, Request, post
-from litestar.params import Dependency
+from litestar.di import NamedDependency
 
 from litestar_auth.controllers._step_up import TOTP_STEPUP_REQUIRED_OPENAPI_RESPONSE
 from litestar_auth.controllers._utils import (
@@ -49,7 +49,7 @@ if TYPE_CHECKING:
     from litestar_auth.controllers.totp_context import _TotpControllerContext
 
 
-_TotpUserManagerDep = Annotated[TotpUserManagerProtocol[Any, Any], Dependency()]
+_TotpUserManagerDep = NamedDependency[TotpUserManagerProtocol[Any, Any]]
 
 
 def _remove_request_body_handler_data_parameter(route_handler: RequestBodyRouteHandler) -> None:

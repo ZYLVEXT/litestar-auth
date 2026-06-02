@@ -7,7 +7,8 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Annotated, Any, cast
 
 from litestar import Controller, Request, get
-from litestar.params import Dependency, QueryParameter
+from litestar.di import NamedDependency
+from litestar.params import QueryParameter
 from litestar.response import Response  # noqa: TC002
 
 from litestar_auth._plugin.config import (
@@ -57,8 +58,8 @@ if TYPE_CHECKING:
 
 _OAuthCodeQuery = Annotated[str, QueryParameter()]
 _OAuthStateQuery = Annotated[str, QueryParameter(name="state")]
-_OAuthUserManagerDep = Annotated[OAuthControllerUserManagerProtocol[Any, Any], Dependency()]
-_OAuthBackendsDep = Annotated[Sequence[AuthenticationBackend[Any, Any]], Dependency()]
+_OAuthUserManagerDep = NamedDependency[OAuthControllerUserManagerProtocol[Any, Any]]
+_OAuthBackendsDep = NamedDependency[Sequence[AuthenticationBackend[Any, Any]]]
 
 
 @dataclass(frozen=True, slots=True)

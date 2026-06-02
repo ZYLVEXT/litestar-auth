@@ -27,7 +27,7 @@ For strict typing, annotate the shared client with
 `litestar_auth.contrib.redis.RedisAuthClientProtocol`. The shared-client recipe assumes a
 `redis.asyncio.Redis`-compatible runtime client. The shared protocol covers the combined operations
 used by the preset's rate-limiter, pending-enrollment, used-code replay, and pending-token denylist helpers:
-`eval(...)`, `delete(...)`, `set(name, value, nx=True, px=ttl_ms)`, `get(...)`, and `setex(...)`.
+`eval(...)`, `delete(...)`, `set(name, value, nx=True, px=ttl_ms)`, `set(name, value, ex=ttl_s)`, and `get(...)`.
 
 ```python
 from litestar_auth import LitestarAuthConfig, TotpConfig
@@ -247,6 +247,29 @@ totp_config = TotpConfig(
 server-side stores. Configure `TotpConfig.totp_enrollment_store` for pending enrollment secrets,
 `TotpConfig.totp_pending_jti_store` for pending login-token JTI deduplication, and
 `TotpConfig.totp_used_tokens_store` for TOTP-code replay protection.
+
+### redis-py 8 client requirements
+
+`litestar-auth[redis]` pins **redis-py 8.x**. The library never calls deprecated write helpers such
+as `setex` or `psetex`; expiring keys use `set(..., ex=ttl_seconds)` and replay/denylist paths use
+`set(..., nx=True, px=ttl_ms)` where appropriate.
+
+If you implement a custom client for `RedisAuthClientProtocol`, mirror that surface:
+
+| Operation | Required method | Notes |
+|-----------|-----------------|-------|
+| Expiring string write | `set(name, value, ex=seconds)` | Do not implement `setex` for this contract |
+| Conditional write | `set(name, value, nx=True, px=ms)` | Used by TOTP replay and API-key nonce stores |
+| Read | `get(name)` | |
+| Delete | `delete(*names)` | |
+| Lua | `eval(script, numkeys, *keys_and_args)` | Rate limiter and enrollment consume |
+| Sorted sets | implicit via Lua | Rate limiter scripts only |
+
+redis-py 8 defaults to RESP3 on the wire with legacy Python response shapes unless
+`legacy_responses=False`. Stay on the default unless you deliberately migrate every Redis consumer
+in your application.
+
+See [Migration](../migration.md#redis-py-8-litestar-authredis) for upgrade steps from redis-py 7.x.
 
 ### Redis contrib import boundary
 

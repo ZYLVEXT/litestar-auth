@@ -9,8 +9,8 @@ from typing import TYPE_CHECKING, NotRequired, Protocol, Required, TypedDict, Un
 
 from litestar_auth._optional_deps import _require_redis_asyncio
 from litestar_auth._redis_protocols import (
+    RedisConditionalSetClient,
     RedisDeleteClient,
-    RedisExpiringValueWriteClient,
     RedisKeyExpiryClient,
     RedisScriptEvalClient,
     RedisSetMembershipClient,
@@ -60,7 +60,7 @@ _load_redis_asyncio = partial(_require_redis_asyncio, feature_name="RedisTokenSt
 
 class RedisClientProtocol(
     RedisValueReadClient,
-    RedisExpiringValueWriteClient,
+    RedisConditionalSetClient,
     RedisDeleteClient,
     RedisSetMembershipClient,
     RedisKeyExpiryClient,
@@ -259,7 +259,11 @@ class RedisTokenStrategy(Strategy[UP, ID]):
         token, token_key = self._mint_token_key()
         user_id = str(user.id)
         epoch = await self._current_user_epoch(user_id)
-        await self.redis.setex(token_key, self._ttl_seconds, self._encode_token_payload(epoch=epoch, user_id=user_id))
+        await self.redis.set(
+            token_key,
+            self._encode_token_payload(epoch=epoch, user_id=user_id),
+            ex=self._ttl_seconds,
+        )
         index_key = self._user_index_key(user_id)
         await self.redis.sadd(index_key, token_key)
         await self.redis.expire(index_key, self._ttl_seconds)
@@ -299,7 +303,7 @@ class RedisTokenStrategy(Strategy[UP, ID]):
             await self.redis.delete(key)
             await self.redis.srem(index_key, key)
             return
-        await self.redis.setex(key, ttl_seconds, "1")
+        await self.redis.set(key, "1", ex=ttl_seconds)
         await self.redis.sadd(index_key, key)
         await self.redis.expire(index_key, ttl_seconds)
 

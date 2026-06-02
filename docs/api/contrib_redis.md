@@ -14,7 +14,7 @@ auth rate limiting plus the TOTP Redis stores:
   `RedisAuthRateLimitConfigOptions` when calling `build_rate_limit_config(...)`
   with `enabled=...` or `disabled=...`. The shared-client contract covers the combined operations used by
   the rate-limiter, pending-enrollment, used-code replay, and pending-JTI denylist helpers:
-  `eval(...)`, `delete(...)`, `set(name, value, nx=True, px=ttl_ms)`, `get(...)`, and `setex(...)`.
+  `eval(...)`, `delete(...)`, `set(name, value, nx=True, px=ttl_ms)`, `set(name, value, ex=ttl_s)`, and `get(...)`.
 - `RedisTokenStrategy`, `RedisTokenStrategyConfig`, `RedisTotpEnrollmentStore`, and
   `RedisUsedTotpCodeStore` remain the direct low-level convenience imports.
 - `AuthRateLimitConfig.from_shared_backend()`, direct `RedisRateLimiter(...)` construction, and

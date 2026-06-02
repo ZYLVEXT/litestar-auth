@@ -24,8 +24,8 @@ classifiers = [
 ]
 requires-python = "<3.15.0,>=3.12.0"
 dependencies = [
-    "litestar>=2.22.0,<3.0",
-    "advanced-alchemy>=1.10.0,<2.0",
+    "litestar>=2.23.0,<3.0",
+    "advanced-alchemy>=1.11.0,<2.0",
     "pwdlib[argon2]>=0.3.0,<0.4.0",
     "pyjwt>=2.13.0,<3.0",
 ]
@@ -37,7 +37,7 @@ source = "https://github.com/ZYLVEXT/litestar-auth"
 tracker = "https://github.com/ZYLVEXT/litestar-auth/issues"
 
 [project.optional-dependencies]
-redis = ["redis>=7.4.0,<8.0.0"]
+redis = ["redis>=8.0.0,<9.0.0"]
 oauth = ["httpx-oauth>=0.17.0,<0.18.0", "cryptography>=48.0.0"]
 totp = ["cryptography>=48.0.0"]
 all = ["litestar-auth[redis,oauth,totp]"]
@@ -45,7 +45,7 @@ all = ["litestar-auth[redis,oauth,totp]"]
 [dependency-groups]
 dev = [
     "aiosqlite>=0.22.1,<0.23",
-    "commitizen>=4.16.2",
+    "commitizen>=4.16.3",
     "pip-audit>=2.10.0",
     "pytest>=9.0.3",
     "pytest-cov>=7.1.0",
@@ -54,12 +54,12 @@ dev = [
     "python-dotenv>=1.2.2",
     "pytest-timeout>=2.4.0",
     "pytest-xdist>=3.8.0",
-    "ruff>=0.15.14",
+    "ruff>=0.15.15",
     "rust-just>=1.51.0",
-    "ty>=0.0.40",
+    "ty>=0.0.42",
     "deptry>=0.25.1",
     "prek>=0.4.3",
-    "fakeredis[lua]>=2.35.1",
+    "fakeredis[lua]>=2.36.0",
 ]
 docs = [
     "mkdocstrings[python]>=1.0.4",
@@ -155,9 +155,10 @@ filterwarnings = [
     "error",
     "error:::litestar_auth",
     "ignore::litestar_auth.totp.SecurityWarning",
-    # AA still emits deprecations from plugin internals (e.g. set_async_context in
-    # provide_session) that litestar-auth cannot remove until AA 2.0.
-    "ignore::DeprecationWarning:advanced_alchemy",
+    # AA's own Litestar plugin calls the deprecated set_async_context/reset_async_context
+    # during provide_session; we cannot remove these until AA 2.0. Scoped to the exact
+    # messages so any other advanced_alchemy deprecation (incl. our own misuse) still fails.
+    "ignore:Call to deprecated function '(set|reset)_async_context':DeprecationWarning",
 ]
 markers = """
     imports: mark a test as an imports test

@@ -5,10 +5,10 @@ from __future__ import annotations
 from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import timedelta
-from typing import TYPE_CHECKING, Annotated, Any
+from typing import TYPE_CHECKING, Any
 
 from litestar import Controller, Request, post
-from litestar.params import Dependency
+from litestar.di import NamedDependency
 from litestar.response import Response  # noqa: TC002 - Litestar resolves route annotations at runtime.
 
 from litestar_auth._plugin.controller_factory import ControllerFactoryKit, merge_exception_handlers
@@ -44,8 +44,8 @@ if TYPE_CHECKING:
     from litestar_auth.types import LoginIdentifier
 
 
-_AuthUserManagerDep = Annotated[AuthControllerUserManagerProtocol[Any, Any], Dependency()]
-_AuthBackendsDep = Annotated[Sequence[AuthenticationBackend[Any, Any]], Dependency()]
+_AuthUserManagerDep = NamedDependency[AuthControllerUserManagerProtocol[Any, Any]]
+_AuthBackendsDep = NamedDependency[Sequence[AuthenticationBackend[Any, Any]]]
 
 
 @dataclass(frozen=True, slots=True)

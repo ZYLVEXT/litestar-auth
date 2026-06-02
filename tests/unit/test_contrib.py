@@ -10,6 +10,7 @@ from uuid import uuid4
 
 import msgspec
 import pytest
+from advanced_alchemy.filters import LimitOffset
 from litestar import Controller
 from litestar.exceptions import ClientException
 from sqlalchemy.exc import IntegrityError
@@ -406,18 +407,40 @@ async def test_contrib_role_admin_internal_request_session_helpers_cover_request
     await role_admin_controller_handler_utils_module._reject_role_name_mutation(safe_request)
 
 
-async def test_contrib_role_admin_internal_helpers_cover_listing_loading_and_signature_rename() -> None:
+async def test_contrib_role_admin_internal_helpers_cover_listing_loading_and_signature_rename(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """Internal helpers cover paginated listing, missing-role handling, and dependency-key renaming."""
+    catalog_roles = [
+        SimpleNamespace(name="admin", description=None),
+        SimpleNamespace(name="billing", description="Docs"),
+        SimpleNamespace(name="support", description=None),
+    ]
+
+    class FakeRoleRepository:
+        async def get_many_and_count(self, *filters: object, **kwargs: object) -> tuple[list[object], int]:
+            limit_offset = next(
+                statement_filter for statement_filter in filters if isinstance(statement_filter, LimitOffset)
+            )
+            ordered = sorted(catalog_roles, key=lambda role: role.name)
+            page = ordered[limit_offset.offset : limit_offset.offset + limit_offset.limit]
+            return cast("tuple[list[object], int]", (page, len(catalog_roles)))
+
+    def fake_build_model_repository(model: object) -> object:
+        def repository_factory(*args: object, **kwargs: object) -> FakeRoleRepository:
+            return FakeRoleRepository()
+
+        return repository_factory
+
+    monkeypatch.setattr(
+        role_admin_controller_handler_utils_module,
+        "_build_model_repository",
+        fake_build_model_repository,
+    )
 
     class SessionStub:
         async def scalar(self, statement: object) -> object:
             return SimpleNamespace(name="billing", description="Docs")
-
-        async def scalars(self, statement: object) -> list[object]:
-            return [
-                SimpleNamespace(name="admin", description=None),
-                SimpleNamespace(name="billing", description="Docs"),
-            ]
 
     class RoleAdminStub:
         role_model = Role
@@ -425,9 +448,6 @@ async def test_contrib_role_admin_internal_helpers_cover_listing_loading_and_sig
         @asynccontextmanager
         async def session(self) -> AsyncIterator[SessionStub]:
             yield SessionStub()
-
-        async def list_roles(self) -> list[str]:
-            return ["admin", "billing", "support"]
 
     role_admin = RoleAdminStub()
     page_schema_type = msgspec.defstruct(
@@ -462,13 +482,17 @@ async def test_contrib_role_admin_internal_helpers_cover_listing_loading_and_sig
         "offset": 0,
     }
     assert msgspec.to_builtins(empty_page) == {"items": [], "total": 3, "limit": 2, "offset": 10}
-    assert loaded == SimpleNamespace(name="billing", description="Docs")
+    loaded_role = cast("Any", loaded)
+    assert loaded_role.name == "billing"
+    assert loaded_role.description == "Docs"
 
-    class MissingSessionStub(SessionStub):
+    class MissingSessionStub:
         async def scalar(self, statement: object) -> object | None:
             return None
 
-    class MissingRoleAdminStub(RoleAdminStub):
+    class MissingRoleAdminStub:
+        role_model = Role
+
         @asynccontextmanager
         async def session(self) -> AsyncIterator[MissingSessionStub]:
             yield MissingSessionStub()
@@ -522,12 +546,18 @@ async def test_contrib_role_admin_assignment_helpers_cover_success_and_paging(  
                 raise RoleAdminUserNotFoundError(msg)
             return object()
 
-        async def list_role_users(self, *, role: str) -> list[object]:
+        async def list_role_users_page(
+            self,
+            *,
+            role: str,
+            limit: int,
+            offset: int,
+        ) -> tuple[list[object], int]:
             self.list_calls.append(role)
             if role == "missing":
                 msg = "Role admin could not find role 'missing' in the configured catalog."
                 raise RoleAdminRoleNotFoundError(msg)
-            return [
+            users = [
                 SimpleNamespace(
                     id="user-1",
                     email="auditor@example.com",
@@ -541,6 +571,7 @@ async def test_contrib_role_admin_assignment_helpers_cover_success_and_paging(  
                     is_verified=False,
                 ),
             ]
+            return cast("tuple[list[object], int]", (users[offset : offset + limit], len(users)))
 
     role_admin = RoleAdminStub()
 
@@ -621,7 +652,13 @@ async def test_contrib_role_admin_assignment_helpers_cover_error_mapping(
             msg = "Role admin could not find a user with id 'parsed:missing-user'."
             raise RoleAdminUserNotFoundError(msg)
 
-        async def list_role_users(self, *, role: str) -> list[object]:
+        async def list_role_users_page(
+            self,
+            *,
+            role: str,
+            limit: int,
+            offset: int,
+        ) -> tuple[list[object], int]:
             msg = "Role admin could not find role 'missing' in the configured catalog."
             raise RoleAdminRoleNotFoundError(msg)
 
@@ -794,6 +831,22 @@ async def test_contrib_role_admin_controller_handlers_cover_config_and_request_b
     )
     no_config_instance = cast("Any", SimpleNamespace(role_admin_context=no_config_controller.role_admin_context))
 
+    class EmptyCatalogRoleRepository:
+        async def get_many_and_count(self, *filters: object, **kwargs: object) -> tuple[list[object], int]:
+            return [], 0
+
+    def fake_build_model_repository(model: object) -> object:
+        def repository_factory(*args: object, **kwargs: object) -> EmptyCatalogRoleRepository:
+            return EmptyCatalogRoleRepository()
+
+        return repository_factory
+
+    monkeypatch.setattr(
+        role_admin_controller_handler_utils_module,
+        "_build_model_repository",
+        fake_build_model_repository,
+    )
+
     class ConfigSessionStub:
         def __init__(self, role: object | None) -> None:
             self._role = role
@@ -816,15 +869,18 @@ async def test_contrib_role_admin_controller_handlers_cover_config_and_request_b
             self.unassign_calls: list[dict[str, object]] = []
             self.list_role_user_calls: list[str] = []
 
-        async def list_roles(self) -> list[str]:
-            return []
-
-        async def list_role_users(self, *, role: str) -> list[object]:
+        async def list_role_users_page(
+            self,
+            *,
+            role: str,
+            limit: int,
+            offset: int,
+        ) -> tuple[list[object], int]:
             self.list_role_user_calls.append(role)
             if role == "missing":
                 msg = "Role admin could not find role 'missing' in the configured catalog."
                 raise RoleAdminRoleNotFoundError(msg)
-            return [
+            users = [
                 SimpleNamespace(
                     id="user-1",
                     email="auditor@example.com",
@@ -832,6 +888,7 @@ async def test_contrib_role_admin_controller_handlers_cover_config_and_request_b
                     is_verified=True,
                 ),
             ]
+            return cast("tuple[list[object], int]", (users[offset : offset + limit], len(users)))
 
         @asynccontextmanager
         async def session(self) -> AsyncIterator[ConfigSessionStub]:

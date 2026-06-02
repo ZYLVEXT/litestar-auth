@@ -7,9 +7,10 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Annotated, Any, NotRequired, Protocol, Required, TypedDict, Unpack, overload
 
 from litestar import Controller, Request, delete, get, post
+from litestar.di import NamedDependency
 from litestar.openapi.datastructures import ResponseSpec
 from litestar.openapi.spec import Example
-from litestar.params import Dependency, PathParameter
+from litestar.params import PathParameter
 
 from litestar_auth.authentication.backend import AuthenticationBackend
 from litestar_auth.authentication.transport.cookie import CookieTransport
@@ -29,7 +30,7 @@ if TYPE_CHECKING:
 
     from litestar_auth.authentication.strategy.base import RefreshSessionManagementStrategy
 
-_OptionalBackendsDep = Annotated[Sequence[AuthenticationBackend[Any, Any]] | None, Dependency()]
+_OptionalBackendsDep = NamedDependency[Sequence[AuthenticationBackend[Any, Any]] | None]
 
 SESSION_MANAGEMENT_UNSUPPORTED_DETAIL = "The configured auth strategy does not support refresh-session management."
 REFRESH_SESSION_NOT_FOUND_DETAIL = "Refresh session not found."

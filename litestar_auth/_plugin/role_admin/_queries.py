@@ -4,7 +4,8 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any, cast
 
-from sqlalchemy import select
+from advanced_alchemy.filters import LimitOffset
+from sqlalchemy import func, select
 from sqlalchemy.orm import selectinload
 
 from litestar_auth._plugin.role_admin_contracts import (
@@ -38,12 +39,19 @@ class _RoleAdminQueryMixin[UP: UserProtocol[Any]]:
             user = await self._require_user(session, email=email, user_id=user_id)
             return self._user_role_membership(user)
 
-    async def list_role_users(self: Any, *, role: str) -> list[UP]:
-        """Return users currently assigned one normalized role in deterministic order."""
+    async def list_role_users_page(self: Any, *, role: str, limit: int, offset: int) -> tuple[list[UP], int]:
+        """Return one paginated page of role members and the total membership count."""
         normalized_role_name = self.normalized_role_name(role)
         async with self.session() as session:
             await self._require_role_by_name(session, role_name=normalized_role_name)
-            return await self._load_users_with_role(session, role_name=normalized_role_name)
+            users = await self._load_users_with_role(
+                session,
+                role_name=normalized_role_name,
+                limit=limit,
+                offset=offset,
+            )
+            total = await self._count_users_with_role(session, role_name=normalized_role_name)
+            return users, total
 
     def _with_role_membership(self: Any, statement: Select[tuple[UP]]) -> Select[tuple[UP]]:
         """Return ``statement`` with async-safe preloading for ``user.roles`` reads."""
@@ -123,15 +131,41 @@ class _RoleAdminQueryMixin[UP: UserProtocol[Any]]:
         statement = select(self.role_model.name).order_by(self.role_model.name)
         return list(cast("Any", await session.scalars(statement)))
 
-    async def _load_users_with_role(self: Any, session: AsyncSession, *, role_name: str) -> list[UP]:
+    async def _load_users_with_role(
+        self: Any,
+        session: AsyncSession,
+        *,
+        role_name: str,
+        limit: int | None = None,
+        offset: int | None = None,
+    ) -> list[UP]:
         """Return users currently assigned ``role_name`` in deterministic order."""
-        statement = self._with_role_membership(
+        statement = self._role_users_statement(role_name=role_name)
+        if limit is not None and offset is not None:
+            statement = LimitOffset(limit=limit, offset=offset).append_to_statement(
+                statement,
+                self.user_model,
+            )
+        return list(cast("Any", await session.scalars(statement)))
+
+    async def _count_users_with_role(self: Any, session: AsyncSession, *, role_name: str) -> int:
+        """Return how many users are currently assigned ``role_name``."""
+        statement = (
+            select(func.count())
+            .select_from(self.user_model)
+            .join(self.user_model.role_assignments)
+            .where(self.user_role_model.role_name == role_name)
+        )
+        return int(cast("Any", await session.scalar(statement)) or 0)
+
+    def _role_users_statement(self: Any, *, role_name: str) -> Select[tuple[UP]]:
+        """Return the base role-membership query ordered by user email."""
+        return self._with_role_membership(
             select(self.user_model)
             .join(self.user_model.role_assignments)
             .where(self.user_role_model.role_name == role_name)
             .order_by(self.user_model.email),
         )
-        return list(cast("Any", await session.scalars(statement)))
 
     def _user_role_membership(self: Any, user: UP) -> UserRoleMembership:
         """Return the normalized role snapshot for one configured user instance."""

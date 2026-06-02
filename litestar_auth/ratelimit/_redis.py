@@ -69,13 +69,27 @@ if count < max_attempts then
 end
 
 local oldest = redis.call("ZRANGE", key, 0, 0, "WITHSCORES")
-if #oldest < 2 then
+if #oldest == 0 then
+    return 0
+end
+
+local score_raw
+if type(oldest[1]) == "table" then
+    -- fakeredis (and some nested RESP3 paths) return one [[member, score]] row.
+    score_raw = oldest[1][2]
+else
+    if #oldest < 2 then
+        return 0
+    end
+    score_raw = oldest[2]
+end
+if score_raw == nil then
     return 0
 end
 
 -- Keep this policy aligned with ratelimit._window_math.retry_seconds:
 -- an active full window reports at least one whole retry second.
-return math.max(math.ceil(window - (now - tonumber(oldest[2]))), 1)
+return math.max(math.ceil(window - (now - tonumber(score_raw))), 1)
 """
 
     def __init__(

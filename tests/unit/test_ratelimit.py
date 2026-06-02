@@ -69,6 +69,25 @@ PARTIAL_RETRY_AFTER = 8
 REDIS_WINDOW_SECONDS = 5
 REDIS_TOKEN_HASH_SECRET = "redis-token-hash-secret-1234567890"
 REDIS_RETRY_AFTER = 4
+
+
+def _redis_member_text(member: object) -> str:
+    """Return a sorted-set member as text for bytes or str Redis values.
+
+    Returns:
+        UTF-8 text for the member.
+
+    Raises:
+        TypeError: When ``member`` is not ``bytes`` or ``str``.
+    """
+    if isinstance(member, str):
+        return member
+    if isinstance(member, bytes):
+        return member.decode()
+    msg = f"unexpected Redis sorted-set member type: {type(member)!r}"
+    raise TypeError(msg)
+
+
 SHARED_MAX_ATTEMPTS = 5
 SHARED_WINDOW_SECONDS = 60
 REFRESH_MAX_ATTEMPTS = 10
@@ -2207,8 +2226,9 @@ async def test_redis_rate_limiter_increments_with_atomic_pipeline(
     entries = await async_fakeredis.zrange(redis_key, 0, -1, withscores=True)
     assert len(entries) == 1
     stored_member, stored_score = entries[0]
-    assert stored_member.decode().startswith(f"{clock.now:.9f}:")
-    assert len(stored_member.decode().split(":")[1]) == UUID4_HEX_LENGTH
+    member_text = _redis_member_text(stored_member)
+    assert member_text.startswith(f"{clock.now:.9f}:")
+    assert len(member_text.split(":")[1]) == UUID4_HEX_LENGTH
     assert stored_score == clock.now
     ttl_seconds = await async_fakeredis.ttl(redis_key)
     assert 0 < ttl_seconds <= REDIS_WINDOW_SECONDS
@@ -2311,7 +2331,7 @@ async def test_redis_rate_limiter_prunes_expired_entries_like_in_memory_backend(
         withscores=True,
     )
     assert len(entries) == 1
-    assert entries[0][0].decode().startswith(f"{second_attempt_at:.9f}:")
+    assert _redis_member_text(entries[0][0]).startswith(f"{second_attempt_at:.9f}:")
     assert entries[0][1] == pytest.approx(second_attempt_at)
 
 

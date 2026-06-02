@@ -16,7 +16,6 @@ from litestar_auth._optional_deps import _require_redis_asyncio
 from litestar_auth._redis_protocols import (
     RedisConditionalSetClient,
     RedisDeleteClient,
-    RedisExpiringValueWriteClient,
     RedisNullableScriptEvalClient,
 )
 
@@ -129,7 +128,7 @@ class RedisUsedTotpCodeStoreClient(RedisConditionalSetClient, Protocol):
 
 class RedisTotpEnrollmentStoreClient(
     RedisDeleteClient,
-    RedisExpiringValueWriteClient,
+    RedisConditionalSetClient,
     RedisNullableScriptEvalClient,
     Protocol,
 ):
@@ -169,7 +168,7 @@ class RedisTotpEnrollmentStore:
             failures continue to raise so callers fail closed regardless.
         """
         value = f"{jti}{_TOTP_ENROLLMENT_VALUE_SEPARATOR}{secret}"
-        result = await self._redis.setex(self._key(user_id), max(ttl_seconds, 1), value)
+        result = await self._redis.set(self._key(user_id), value, ex=max(ttl_seconds, 1))
         return bool(result)
 
     async def consume(self, *, user_id: str, jti: str) -> str | None:

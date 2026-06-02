@@ -263,7 +263,13 @@ async def test_contrib_role_admin_assignment_helpers_map_missing_role_and_user_e
             msg = "Role admin could not find a user with id 'parsed:missing-user'."
             raise RoleAdminUserNotFoundError(msg)
 
-        async def list_role_users(self, *, role: str) -> list[object]:
+        async def list_role_users_page(
+            self,
+            *,
+            role: str,
+            limit: int,
+            offset: int,
+        ) -> tuple[list[object], int]:
             msg = "Role admin could not find role 'missing' in the configured catalog."
             raise RoleAdminRoleNotFoundError(msg)
 

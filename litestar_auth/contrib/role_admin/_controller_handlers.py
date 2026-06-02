@@ -6,7 +6,8 @@ from typing import TYPE_CHECKING, Annotated, Any, cast
 
 import msgspec  # noqa: TC002
 from litestar import Request, delete, get, patch, post
-from litestar.params import Dependency, PathParameter, QueryParameter
+from litestar.di import NamedDependency
+from litestar.params import PathParameter, QueryParameter
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -43,8 +44,8 @@ _LimitQuery = Annotated[int, QueryParameter(name="limit", ge=1, le=_MAX_LIMIT)]
 _OffsetQuery = Annotated[int, QueryParameter(name="offset", ge=0)]
 _RoleNamePath = Annotated[str, PathParameter()]
 _UserIdPath = Annotated[str, PathParameter()]
-_DbSessionDep = Annotated[AsyncSession | None, Dependency()]
-_OptionalUserManagerDep = Annotated[BaseUserManager[UserProtocol[Any], Any] | None, Dependency()]
+_DbSessionDep = NamedDependency[AsyncSession | None]
+_OptionalUserManagerDep = NamedDependency[BaseUserManager[UserProtocol[Any], Any] | None]
 
 
 def create_list_roles_handler() -> RequestBodyRouteHandler:

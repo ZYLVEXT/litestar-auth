@@ -5,17 +5,16 @@ from __future__ import annotations
 import asyncio
 import importlib
 import inspect
-from typing import TYPE_CHECKING, Annotated, Any, cast, get_type_hints
+from typing import TYPE_CHECKING, Any, cast, get_type_hints
 from uuid import UUID, uuid4
 
 import pytest
 from litestar import Controller, Litestar, Request, get
 from litestar.config.app import AppConfig
 from litestar.datastructures.state import State
-from litestar.di import Provide
+from litestar.di import NamedDependency, Provide
 from litestar.enums import MediaType
 from litestar.exceptions import ClientException
-from litestar.params import Dependency
 from litestar.response import Response
 from litestar.testing import AsyncTestClient
 
@@ -63,7 +62,7 @@ if TYPE_CHECKING:
 
 pytestmark = pytest.mark.unit
 OAUTH_FLOW_COOKIE_SECRET = "oauth-flow-cookie-secret-1234567890"
-_ResolvedPermissions = Annotated[frozenset[str], Dependency()]
+_ResolvedPermissions = NamedDependency[frozenset[str]]
 
 
 def _oauth_provider(*, name: str, client: object) -> OAuthProviderConfig:

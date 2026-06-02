@@ -453,7 +453,7 @@ async def test_jwt_redis_denylist_protocol_stubs_are_callable() -> None:
     protocol_client = cast("RedisExpiringValueStoreClient", object())
 
     assert await RedisExpiringValueStoreClient.get(protocol_client, "jti-key") is None
-    assert await RedisExpiringValueStoreClient.setex(protocol_client, "jti-key", 60, "1") is None
+    assert await RedisExpiringValueStoreClient.set(protocol_client, "jti-key", "1", ex=60) is None
 
 
 @pytest.mark.unit

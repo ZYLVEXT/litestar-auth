@@ -4,15 +4,15 @@ from __future__ import annotations
 
 from dataclasses import is_dataclass
 from functools import partial
-from typing import TYPE_CHECKING, Annotated, Any, Self, cast
+from typing import TYPE_CHECKING, Any, Self, cast
 from uuid import UUID, uuid4
 
 import msgspec
 import pytest
 from cryptography.fernet import Fernet
 from litestar import Litestar, Request, get
+from litestar.di import NamedDependency
 from litestar.exceptions import ClientException
-from litestar.params import Dependency
 from litestar.plugins import InitPlugin
 from litestar.testing import AsyncTestClient
 
@@ -245,7 +245,7 @@ class DummySessionMaker:
         return DummySession()
 
 
-_LitestarAuthUserManagerProbe = Annotated[PluginUserManager, Dependency()]
+_LitestarAuthUserManagerProbe = NamedDependency[PluginUserManager]
 
 
 @get("/dependency-probe", sync_to_thread=False)

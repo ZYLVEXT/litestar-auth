@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, ClassVar, cast
 
 import msgspec
+from advanced_alchemy.filters import LimitOffset
 from litestar import Controller, Request
 from sqlalchemy import select
 
@@ -30,6 +31,7 @@ from litestar_auth.contrib.role_admin._session_wiring import (
     _build_request_bound_role_admin,
     _ProvidedUserManagerLifecycleUpdater,
 )
+from litestar_auth.db._repositories import _build_model_repository
 from litestar_auth.exceptions import ConfigurationError
 from litestar_auth.types import UserProtocol
 
@@ -168,19 +170,13 @@ async def _list_role_page[UP: UserProtocol[Any]](
     offset: int,
 ) -> msgspec.Struct:
     """Return the paginated role-catalog response."""
-    role_names = await role_admin.list_roles()
-    total = len(role_names)
-    page_names = role_names[offset : offset + limit]
-    if not page_names:
-        return page_schema_type(items=[], total=total, limit=limit, offset=offset)
-
     async with role_admin.session() as session:
-        statement = (
-            select(role_admin.role_model)
-            .where(cast("Any", role_admin.role_model).name.in_(page_names))
-            .order_by(cast("Any", role_admin.role_model).name)
+        role_repository = _build_model_repository(role_admin.role_model)(session=session)
+        roles, total = await role_repository.get_many_and_count(
+            LimitOffset(limit=limit, offset=offset),
+            order_by=("name", False),
+            count_with_window_function=False,
         )
-        roles = list(cast("Any", await session.scalars(statement)))
 
     return page_schema_type(
         items=[_to_role_read(role) for role in roles],
@@ -262,12 +258,14 @@ async def _list_role_user_page[UP: UserProtocol[Any]](
     """
     normalized_role_name = _normalize_input_role_name(role_name)
     try:
-        users = await role_admin.list_role_users(role=normalized_role_name)
+        page_users, total = await role_admin.list_role_users_page(
+            role=normalized_role_name,
+            limit=limit,
+            offset=offset,
+        )
     except RoleAdminRoleNotFoundError as exc:
         raise _role_not_found(str(exc)) from exc
 
-    total = len(users)
-    page_users = users[offset : offset + limit]
     return page_schema_type(
         items=[_to_user_brief(user) for user in page_users],
         total=total,

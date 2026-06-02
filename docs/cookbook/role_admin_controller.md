@@ -54,7 +54,7 @@ from typing import Any, cast
 from uuid import UUID
 
 from advanced_alchemy.exceptions import NotFoundError
-from advanced_alchemy.filters import CollectionFilter, LimitOffset
+from advanced_alchemy.filters import ChoicesFilter, LimitOffset
 from advanced_alchemy.repository import SQLAlchemyAsyncRepository
 from advanced_alchemy.service import SQLAlchemyAsyncRepositoryService
 from litestar import Controller, delete, get, patch, post
@@ -409,7 +409,7 @@ def create_role_admin_controller(
                 user_ids = [a.user_id for a in assignments]
                 u_repo = UserRepo(session=db_session)
                 users = await u_repo.list(
-                    CollectionFilter(field_name="id", values=user_ids),
+                    ChoicesFilter(field_name="id", values=user_ids),
                 )
                 return [_user_brief(u) for u in users]
 

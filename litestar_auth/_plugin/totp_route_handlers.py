@@ -4,11 +4,11 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import replace
-from typing import TYPE_CHECKING, Annotated, Any, cast
+from typing import TYPE_CHECKING, Any, cast
 
 import msgspec  # noqa: TC002
 from litestar import Controller, Request, post
-from litestar.params import Dependency
+from litestar.di import NamedDependency
 
 from litestar_auth._plugin.controller_factory import ControllerFactoryKit
 from litestar_auth.authentication.backend import AuthenticationBackend
@@ -48,8 +48,8 @@ if TYPE_CHECKING:
     from litestar_auth._plugin.features import StartupBackendInventory
 
 
-_TotpUserManagerDep = Annotated[TotpUserManagerProtocol[Any, Any], Dependency()]
-_TotpBackendsDep = Annotated[Sequence[AuthenticationBackend[Any, Any]], Dependency()]
+_TotpUserManagerDep = NamedDependency[TotpUserManagerProtocol[Any, Any]]
+_TotpBackendsDep = NamedDependency[Sequence[AuthenticationBackend[Any, Any]]]
 
 
 def _plugin_runtime_context_factory[UP: UserProtocol[Any], ID](

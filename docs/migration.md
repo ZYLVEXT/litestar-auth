@@ -41,6 +41,58 @@ and are removed by hard delete through `invalidate_all_tokens()`. Older unindexe
 cannot be discovered by user id without scanning and remain TTL-bound; let them expire naturally or
 run an application-owned cleanup if your deployment previously wrote unindexed keys.
 
+## redis-py 8 (`litestar-auth[redis]`)
+
+The optional Redis extra now requires **redis-py 8.x** (`redis>=8.0.0,<9.0.0`). redis-py 7.x is no
+longer accepted by the extra pin; upgrade the dependency (or your lockfile) before installing
+`litestar-auth[redis]` on a new environment.
+
+### What changed in this library
+
+- All built-in Redis stores and strategies write expiring keys with **`SET ... EX=`** (and conditional
+  writes with **`SET ... NX PX=`**). They do **not** call deprecated commands such as **`SETEX`** or
+  **`PSETEX`**.
+- `RedisAuthClientProtocol` / `RedisExpiringValueStoreClient` expect **`set(name, value, ex=seconds)`**
+  instead of `setex(name, seconds, value)`. Update custom client wrappers or test doubles that
+  implemented the old protocol shape.
+- The Redis rate limiter's retry-after Lua accepts both flat and nested `ZRANGE ... WITHSCORES`
+  result shapes so behavior stays correct under redis-py 8 and fakeredis.
+
+### Application-owned Redis clients
+
+litestar-auth does not construct your production `redis.asyncio.Redis` instance. When you create
+the client your app passes into `RedisAuthPreset`, token strategies, or individual stores:
+
+- Prefer **`await client.set(key, value, ex=ttl_seconds)`** (or `px=` for millisecond TTL) for new
+  code. Avoid `setex` / `psetex` in application layers that share the same client — redis-py 8 emits
+  `DeprecationWarning` for those entry points.
+- redis-py 8 uses **RESP3 on the wire by default** but keeps **legacy RESP2-shaped Python values**
+  unless you pass `legacy_responses=False`. The library's protocols and tests assume the default
+  legacy response shapes (`bytes` members from sorted sets, `get` returning `bytes | None`, and so
+  on). Only opt into unified responses when you have audited every Redis call site.
+- Optional: set `protocol=3` explicitly on the client if you want the wire protocol choice visible
+  in configuration; it is not required for litestar-auth's default integration path.
+
+Example client construction (application code):
+
+```python
+from redis.asyncio import Redis
+
+redis_client = Redis.from_url(
+    "redis://localhost:6379/0",
+    decode_responses=False,
+)
+```
+
+Wire the same client into `RedisAuthPreset(redis=redis_client)` or the lower-level stores documented
+in [Configuration](configuration/redis.md#redis-backed-auth-surface).
+
+### Verification
+
+After upgrading, reinstall/sync dependencies and run your Redis-backed auth tests. This repository
+uses pytest `filterwarnings = ["error"]` in `pyproject.toml`, so `DeprecationWarning` from redis-py
+(including `setex` / `psetex` in application code on a shared client) fails CI like any other warning.
+
 ## DB refresh-token reuse detection
 
 DB-backed refresh-token rotation records consumed refresh-token digests so a replayed refresh token
@@ -398,23 +450,25 @@ Migration steps:
    authenticate with their TOTP app and regenerate codes through
    `/auth/2fa/recovery-codes/regenerate`.
 
-### Litestar 2.22 route parameters and dependencies
+### Litestar 2.22+ route parameters and dependencies
 
-Litestar 2.22 deprecates inferred and legacy default parameter styles. With
-`filterwarnings = ["error"]`, handlers must declare parameters explicitly.
+Litestar 2.22 deprecates inferred and legacy default parameter styles. Litestar
+2.23 deprecates ``params.Dependency`` in favor of ``di.NamedDependency``. With
+`filterwarnings = ["error"]`, handlers must declare parameters explicitly and
+must not call the deprecated ``Dependency()`` marker at import time.
 
 | Parameter kind | Preferred style | Avoid |
 |----------------|-----------------|-------|
 | Path | `FromPath[T]` or `Annotated[T, PathParameter()]` | bare `user_id: int` on `{user_id:...}` routes |
 | Query | `FromQuery[T]` or `Annotated[T, QueryParameter(...)]` | bare `limit: int = 10` or `limit: int = QueryParameter(...)` |
-| Dependency | `Annotated[T, Dependency()]` | `value: T = Dependency()` |
+| Dependency | `NamedDependency[T]` | `Annotated[T, Dependency()]` or `value: T = Dependency()` |
 | Legacy `Parameter(query=...)` | `QueryParameter` / `FromQuery` | `Parameter(query="limit")` |
 
 Application routes that inject a dependency registered under the same parameter
 name (for example `litestar_auth_user_manager` when the plugin provides that key)
-do not emit inferred-parameter warnings even without `Dependency()` in the
-annotation. Generated plugin routes in this library still use
-`Annotated[..., Dependency()]` with concrete protocol types for clarity.
+do not emit inferred-parameter warnings even without an explicit dependency
+marker. Generated plugin routes in this library use
+`NamedDependency[...]` with concrete protocol types for clarity.
 
 Factory-built handlers with dynamic query limits (for example paginated user
 listing) should attach an explicit signature with
@@ -455,12 +509,34 @@ Two supported setups:
    )
    ```
 
-Advanced Alchemy 1.10 deprecates repository helpers such as `list_and_count` in
+Advanced Alchemy 1.10+ deprecates repository helpers such as `list_and_count` in
 favor of `get_many_and_count`. The SQLAlchemy user adapter in this library uses
-the new API. When `filterwarnings = ["error"]` is enabled, pytest also ignores
-`DeprecationWarning` from the `advanced_alchemy` package itself because plugin
-internals (for example `set_async_context` inside `provide_session`) still emit
-warnings until Advanced Alchemy 2.0.
+the new API. Advanced Alchemy 1.11 adds `ChoicesFilter`, a clearer-named subclass of
+`CollectionFilter` with identical `IN (...)` behavior, for matching a field against a set
+of values; role-catalog materialization and the role-admin cookbook examples use
+`ChoicesFilter` accordingly. `CollectionFilter` and SQLAlchemy `.in_()` are not deprecated —
+this is a vocabulary choice, not a forced migration.
+Advanced Alchemy 1.11 updates Litestar integration code to the
+parameter markers introduced in Litestar 2.23. Under `filterwarnings = ["error"]`
+the test suite narrowly ignores only the `set_async_context` /
+`reset_async_context` `DeprecationWarning` that Advanced Alchemy's own Litestar
+plugin still emits from `provide_session` (removed in Advanced Alchemy 2.0); every
+other `advanced_alchemy` deprecation — including any the library itself might
+introduce — is still treated as an error.
+
+```python
+from advanced_alchemy.filters import ChoicesFilter, LimitOffset
+
+# Prefer ChoicesFilter over CollectionFilter for IN-style membership filters:
+ChoicesFilter(field_name="name", values=("admin", "billing"))
+
+# Paginate with LimitOffset via get_many_and_count (bool is descending: False = ascending):
+roles, total = await repository.get_many_and_count(
+    LimitOffset(limit=limit, offset=offset),
+    order_by=("name", False),
+    count_with_window_function=False,
+)
+```
 
 ```python
 from advanced_alchemy.config import AsyncSessionConfig

@@ -53,17 +53,27 @@ class _RecordingRedisClient:
     def __init__(self, redis: AsyncFakeRedis) -> None:
         """Store the wrapped fakeredis client."""
         self.redis = redis
-        self.setex_calls: list[tuple[str, int, str]] = []
+        self.set_ex_calls: list[tuple[str, str, int]] = []
         self.expire_calls: list[tuple[str, int]] = []
 
-    async def setex(self, name: str, time: int, value: str, /) -> object:
-        """Record an expiring value write and execute it against fakeredis.
+    async def set(
+        self,
+        name: str,
+        value: str,
+        *,
+        nx: bool = False,
+        px: int | None = None,
+        ex: int | None = None,
+    ) -> object:
+        """Record expiring ``SET EX`` writes and delegate other sets to fakeredis.
 
         Returns:
-            The wrapped fakeredis ``setex`` result.
+            The wrapped fakeredis ``set`` result.
         """
-        self.setex_calls.append((name, time, value))
-        return await self.redis.setex(name, time, value)
+        if ex is not None and not nx and px is None:
+            self.set_ex_calls.append((name, value, ex))
+            return await self.redis.set(name, value, ex=ex)
+        return await self.redis.set(name, value, nx=nx, px=px, ex=ex)
 
     async def get(self, name: str, /) -> object:
         """Delegate value reads to fakeredis.
@@ -79,7 +89,7 @@ class _RecordingRedisClient:
         Returns:
             The number of added set members.
         """
-        return await self.redis.sadd(name, *values)  # ty: ignore[invalid-await]
+        return await self.redis.sadd(name, *values)
 
     async def expire(self, name: str, time: int) -> bool:
         """Record key expiry updates and execute them against fakeredis.
@@ -239,7 +249,7 @@ async def test_redis_strategy_write_token_persists_token_and_updates_user_index(
     index_key = strategy._user_index_key(str(user.id))
     assert token == "token-write"
     assert await async_fakeredis.get(token_key) == f"v1:0:{user.id}".encode()
-    assert await async_fakeredis.smembers(index_key) == {token_key.encode()}  # ty: ignore[invalid-await]
+    assert await async_fakeredis.smembers(index_key) == {token_key.encode()}
     assert FIVE_MINUTES_TTL_FLOOR <= await async_fakeredis.ttl(token_key) <= FIVE_MINUTES_TTL_SECONDS
     assert FIVE_MINUTES_TTL_FLOOR <= await async_fakeredis.ttl(index_key) <= FIVE_MINUTES_TTL_SECONDS
     assert token not in token_key
@@ -266,7 +276,7 @@ async def test_redis_strategy_write_token_enforces_minimum_ttl(
 
     token_key = _token_key("token-min-ttl")
     index_key = strategy._user_index_key(str(user.id))
-    assert recording_redis.setex_calls == [(token_key, MINIMUM_TTL_SECONDS, f"v1:0:{user.id}")]
+    assert recording_redis.set_ex_calls == [(token_key, f"v1:0:{user.id}", MINIMUM_TTL_SECONDS)]
     assert recording_redis.expire_calls == [(index_key, MINIMUM_TTL_SECONDS)]
 
 
@@ -383,12 +393,12 @@ async def test_redis_strategy_destroy_token_removes_token_key_and_user_index_ent
     )
     index_key = strategy._user_index_key(str(user.id))
     assert await async_fakeredis.set(token_key, str(user.id)) is True
-    assert await async_fakeredis.sadd(index_key, token_key) == 1  # ty: ignore[invalid-await]
+    assert await async_fakeredis.sadd(index_key, token_key) == 1
 
     await strategy.destroy_token(token, user)
 
     assert await async_fakeredis.get(token_key) is None
-    assert await async_fakeredis.smembers(index_key) == set()  # ty: ignore[invalid-await]
+    assert await async_fakeredis.smembers(index_key) == set()
 
 
 async def test_redis_strategy_invalidate_all_tokens_returns_after_index_delete(
@@ -409,7 +419,7 @@ async def test_redis_strategy_invalidate_all_tokens_returns_after_index_delete(
     index_key = strategy._user_index_key(str(user.id))
     assert await async_fakeredis.set(token_key, str(user.id)) is True
     assert await async_fakeredis.set(extra_key, str(user.id)) is True
-    assert await async_fakeredis.sadd(index_key, token_key) == 1  # ty: ignore[invalid-await]
+    assert await async_fakeredis.sadd(index_key, token_key) == 1
 
     await strategy.invalidate_all_tokens(user)
 
@@ -508,7 +518,7 @@ async def test_redis_strategy_issue_totp_stepup_non_positive_ttl_deletes_marker_
     marker_key = strategy._totp_stepup_key(str(user.id), "session-a")
     index_key = strategy._totp_stepup_index_key(str(user.id))
     assert await async_fakeredis.get(marker_key) is None
-    assert await async_fakeredis.smembers(index_key) == set()  # ty: ignore[invalid-await]
+    assert await async_fakeredis.smembers(index_key) == set()
 
 
 async def test_redis_strategy_invalidate_all_tokens_without_index_rejects_orphaned_tokens(

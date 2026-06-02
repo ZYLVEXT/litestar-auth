@@ -31,42 +31,34 @@ type UserModelT[UP: SQLAlchemyUserModelProtocol] = type[UP]
 
 
 @lru_cache(maxsize=16)
+def _build_model_repository[ModelT: ModelProtocol](
+    model: type[ModelT],
+) -> type[SQLAlchemyAsyncRepository[ModelT]]:
+    """Create a repository type bound to the provided SQLAlchemy model.
+
+    Returns:
+        Repository class configured for ``model``.
+    """
+    return cast(
+        "type[SQLAlchemyAsyncRepository[ModelT]]",
+        type(
+            f"{model.__name__}Repository",
+            (SQLAlchemyAsyncRepository,),
+            {"model_type": model},
+        ),
+    )
+
+
 def _build_user_repository[UP: SQLAlchemyUserModelProtocol](
     user_model: UserModelT[UP],
 ) -> type[SQLAlchemyAsyncRepository[UP]]:
-    """Create a repository type bound to the provided SQLAlchemy user model.
-
-    Cached by ``user_model`` identity so repeated adapter construction does not
-    allocate new dynamic repository classes.
-
-    Returns:
-        Repository class configured for ``user_model``.
-    """
-    return cast(
-        "type[SQLAlchemyAsyncRepository[UP]]",
-        type(
-            f"{user_model.__name__}Repository",
-            (SQLAlchemyAsyncRepository,),
-            {"model_type": user_model},
-        ),
-    )
+    """Return the cached repository type bound to the configured user model."""
+    return cast("type[SQLAlchemyAsyncRepository[UP]]", _build_model_repository(user_model))
 
 
-@lru_cache(maxsize=16)
 def _build_oauth_repository(oauth_model: type[Any]) -> type[SQLAlchemyAsyncRepository[Any]]:
-    """Create a repository type bound to the provided OAuth account model.
-
-    Returns:
-        A cached Advanced Alchemy async repository subclass for ``oauth_model``.
-    """
-    return cast(
-        "type[SQLAlchemyAsyncRepository[Any]]",
-        type(
-            f"{oauth_model.__name__}OAuthRepository",
-            (SQLAlchemyAsyncRepository,),
-            {"model_type": oauth_model},
-        ),
-    )
+    """Return the cached repository type bound to the configured OAuth account model."""
+    return _build_model_repository(oauth_model)
 
 
 @lru_cache(maxsize=16)

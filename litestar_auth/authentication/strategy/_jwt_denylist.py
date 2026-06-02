@@ -139,7 +139,7 @@ class RedisJWTDenylistStore:
 
         Args:
             redis: Async Redis client supporting ``get(name)`` plus
-                ``setex(name, ttl_seconds, value)``. The same client may also
+                ``set(name, value, ex=ttl_seconds)``. The same client may also
                 be annotated as
                 :class:`litestar_auth.contrib.redis.RedisAuthClientProtocol`
                 when it backs the contrib preset or TOTP replay store.
@@ -158,7 +158,7 @@ class RedisJWTDenylistStore:
         Returns:
             ``True`` after the key is written (Redis denylist writes always succeed).
         """
-        await self.redis.setex(self._key(jti), max(ttl_seconds, 1), "1")
+        await self.redis.set(self._key(jti), "1", ex=max(ttl_seconds, 1))
         return True
 
     async def is_denied(self, jti: str) -> bool:

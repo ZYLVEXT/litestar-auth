@@ -838,7 +838,15 @@ async def test_redis_totp_enrollment_store_coerces_non_bytes_eval_result(
     """Non-redis-py compatible clients that return strings are normalized."""
 
     class _StringEvalRedisClient:
-        async def setex(self, name: str, time: int, value: str) -> object:
+        async def set(
+            self,
+            name: str,
+            value: str,
+            *,
+            nx: bool = False,
+            px: int | None = None,
+            ex: int | None = None,
+        ) -> object:
             return True
 
         async def eval(self, script: str, numkeys: int, *keys_and_args: object) -> object:
@@ -855,13 +863,21 @@ async def test_redis_totp_enrollment_store_coerces_non_bytes_eval_result(
     assert await store.consume(user_id="user-1", jti="jti") == "secret"
 
 
-async def test_redis_totp_enrollment_store_save_returns_false_when_setex_signals_refusal(
+async def test_redis_totp_enrollment_store_save_returns_false_when_set_signals_refusal(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A falsy ``setex`` return is surfaced so callers fail closed."""
+    """A falsy ``SET EX`` return is surfaced so callers fail closed."""
 
     class _RefusingRedisClient:
-        async def setex(self, name: str, time: int, value: str) -> object:
+        async def set(
+            self,
+            name: str,
+            value: str,
+            *,
+            nx: bool = False,
+            px: int | None = None,
+            ex: int | None = None,
+        ) -> object:
             return None
 
         async def eval(self, script: str, numkeys: int, *keys_and_args: object) -> object:

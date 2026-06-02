@@ -4,7 +4,7 @@ Litestar 2.22+ requires explicit parameter markers for query/path/DI in many cas
 Integration probes additionally avoid typing pitfalls discovered in this suite:
 
 - Do not annotate handlers with ``LitestarAuthConfig[User, ID]`` inside
-  ``Annotated[..., Dependency()]``; msgspec signature evaluation can raise
+  ``NamedDependency[...]``; msgspec signature evaluation can raise
   ``NameError`` for PEP 695 type parameters.
 - Prefer ``@runtime_checkable`` protocols or ``object`` for fake DB sessions when
   the handler only forwards the session to assertions.
@@ -13,17 +13,17 @@ Integration probes additionally avoid typing pitfalls discovered in this suite:
 from __future__ import annotations
 
 from collections.abc import Sequence
-from typing import Annotated, Protocol, runtime_checkable
+from typing import Protocol, runtime_checkable
 from uuid import UUID
 
-from litestar.params import Dependency
+from litestar.di import NamedDependency
 
 from litestar_auth.authentication.backend import AuthenticationBackend
 from tests.integration.test_orchestrator import ExampleUser, PluginUserManager
 
-LitestarAuthUserManagerProbe = Annotated[PluginUserManager, Dependency()]
-LitestarAuthBackendsProbe = Annotated[Sequence[AuthenticationBackend[ExampleUser, UUID]], Dependency()]
-LitestarAuthUserModelProbe = Annotated[type[ExampleUser], Dependency()]
+LitestarAuthUserManagerProbe = NamedDependency[PluginUserManager]
+LitestarAuthBackendsProbe = NamedDependency[Sequence[AuthenticationBackend[ExampleUser, UUID]]]
+LitestarAuthUserModelProbe = NamedDependency[type[ExampleUser]]
 LitestarAuthConfigProbe = object
 
 
@@ -34,4 +34,4 @@ class SessionIdentityProbe(Protocol):
     session_id: int
 
 
-DbSessionIdentityProbe = Annotated[SessionIdentityProbe, Dependency()]
+DbSessionIdentityProbe = NamedDependency[SessionIdentityProbe]

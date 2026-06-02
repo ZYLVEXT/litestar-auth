@@ -16,10 +16,10 @@ async def test_async_fakeredis_supports_async_commands_and_lua(
     async_fakeredis: AsyncFakeRedis,
 ) -> None:
     """The shared fakeredis fixture supports async Redis commands and Lua scripts."""
-    assert await async_fakeredis.ping() is True  # ty: ignore[invalid-await]
+    assert await async_fakeredis.ping() is True
     assert await async_fakeredis.set("fixture:key", "fixture-value") is True
     assert await async_fakeredis.get("fixture:key") == b"fixture-value"
-    assert await async_fakeredis.eval("return redis.call('GET', KEYS[1])", 1, "fixture:key") == b"fixture-value"  # ty: ignore[invalid-await]
+    assert await async_fakeredis.eval("return redis.call('GET', KEYS[1])", 1, "fixture:key") == b"fixture-value"
 
 
 async def test_async_fakeredis_factory_shares_default_state_and_isolates_servers(

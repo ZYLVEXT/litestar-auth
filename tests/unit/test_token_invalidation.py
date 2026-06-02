@@ -138,11 +138,11 @@ async def test_redis_strategy_invalidate_all_tokens_deletes_only_matching_subjec
     user = _User(id=uuid4(), email="user@example.com", hashed_password="hashed")
     other_user = _User(id=uuid4(), email="other@example.com", hashed_password="hashed")
 
-    assert await async_fakeredis.setex("litestar_auth:token:token-a", 10, str(user.id)) is True
-    assert await async_fakeredis.setex("litestar_auth:token:token-b", 10, str(other_user.id)) is True
-    assert await async_fakeredis.setex("litestar_auth:token:token-c", 10, str(user.id)) is True
-    assert await async_fakeredis.setex("other-prefix:token-d", 10, str(user.id)) is True
-    indexed_token_count = await async_fakeredis.sadd(  # ty: ignore[invalid-await]
+    assert await async_fakeredis.set("litestar_auth:token:token-a", str(user.id), ex=10) is True
+    assert await async_fakeredis.set("litestar_auth:token:token-b", str(other_user.id), ex=10) is True
+    assert await async_fakeredis.set("litestar_auth:token:token-c", str(user.id), ex=10) is True
+    assert await async_fakeredis.set("other-prefix:token-d", str(user.id), ex=10) is True
+    indexed_token_count = await async_fakeredis.sadd(
         strategy._user_index_key(str(user.id)),
         "litestar_auth:token:token-a",
         "litestar_auth:token:token-c",

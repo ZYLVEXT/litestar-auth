@@ -117,8 +117,8 @@ class RedisAuthPreset:
         redis: Async Redis client compatible with ``redis.asyncio.Redis`` and
             satisfying :class:`RedisAuthClientProtocol`:
             ``eval(...)``, ``delete(...)``,
-            ``set(name, value, nx=True, px=ttl_ms)``, ``get(...)``, and
-            ``setex(...)``.
+            ``set(name, value, nx=True, px=ttl_ms)``, ``set(name, value, ex=ttl_s)``,
+            and ``get(...)``.
         rate_limit_tier: Default rate-limit settings used for every supported
             auth slot unless a group-specific override is configured.
         group_rate_limit_tiers: Optional per-group rate-limit settings keyed by

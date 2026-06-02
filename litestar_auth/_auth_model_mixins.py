@@ -7,6 +7,7 @@ import uuid
 from datetime import datetime  # noqa: TC003 - SQLAlchemy resolves mapped annotations at runtime.
 from typing import TYPE_CHECKING, Any, ClassVar, cast
 
+from advanced_alchemy.filters import ChoicesFilter
 from sqlalchemy import JSON, DateTime, ForeignKey, LargeBinary, String, event, func, insert, inspect, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Mapped, declared_attr, mapped_column, relationship, validates
@@ -352,7 +353,10 @@ def _materialize_missing_role_rows(
         role_name_column = role_model.name
         existing_role_names = set(
             session.scalars(
-                select(role_name_column).where(role_name_column.in_(sorted(unresolved_role_names))),
+                ChoicesFilter(
+                    field_name="name",
+                    values=sorted(unresolved_role_names),
+                ).append_to_statement(select(role_name_column), role_model),
             ),
         )
         for role_name in sorted(unresolved_role_names - existing_role_names):

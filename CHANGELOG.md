@@ -16,6 +16,21 @@
 
 ### Changed
 
+- **Redis optional extra requires redis-py 8.x with no deprecated command surface.** `litestar-auth[redis]`
+  now pins `redis>=8.0.0,<9.0.0`. Built-in stores use `SET ... EX=` and `SET ... NX PX=` only (not
+  `SETEX` / `PSETEX`). `RedisAuthClientProtocol` and `RedisExpiringValueStoreClient` expect
+  `set(..., ex=...)` instead of `setex`. The rate-limit retry-after Lua script accepts flat and nested
+  `ZRANGE ... WITHSCORES` shapes under redis-py 8 + fakeredis. See `docs/migration.md` (redis-py 8).
+- **Minimum runtime dependencies:** Litestar ≥ 2.23 and Advanced Alchemy ≥ 1.11.
+- **Litestar 2.23 dependency markers:** generated plugin routes and contrib handlers now use
+  ``di.NamedDependency[T]`` instead of the deprecated ``params.Dependency()`` marker so import-time
+  deprecations stay compatible with strict ``filterwarnings = ["error"]`` test suites.
+- **Advanced Alchemy filter vocabulary:** role-catalog pagination and role-name existence checks use
+  ``ChoicesFilter`` and ``LimitOffset`` via ``get_many_and_count`` instead of loading full catalogs into
+  Python and slicing. ``ChoicesFilter`` (new in Advanced Alchemy 1.11) is the clearer membership-filter
+  vocabulary in place of ``CollectionFilter`` / ``.in_()`` — neither of which is deprecated. Contrib
+  role-admin list endpoints now paginate at the database layer.
+
 - **API-key scope guards share the permission vocabulary.** `has_scope()` / `has_any_scope()` now accept
   permission-shaped `resource:action`, `resource:*`, and `*` scopes and match them with the same engine as
   permission guards. With `scope_subset_check=True` (default) a delegated key must remain within the owning
