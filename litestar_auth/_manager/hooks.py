@@ -20,6 +20,7 @@ type ManagerHookName = Literal[
     "after_api_key_created",
     "after_api_key_revoked",
     "after_api_key_used",
+    "after_organization_invitation",
 ]
 
 
@@ -119,6 +120,14 @@ class ManagerHookBus[UP]:
     @overload
     async def fire(self, name: Literal["after_api_key_used"], api_key: object) -> None: ...
 
+    @overload
+    async def fire(
+        self,
+        name: Literal["after_organization_invitation"],
+        invitation: object,
+        token: str,
+    ) -> None: ...
+
     async def fire(self, name: ManagerHookName, *args: object) -> None:
         """Dispatch one lifecycle hook, then notify event subscribers."""
         hook = getattr(self._hooks, f"on_{name}")
@@ -191,3 +200,11 @@ class UserManagerHooks[UP]:
 
     async def on_after_api_key_used(self, api_key: object) -> None:
         """Hook invoked after an API-key last-used timestamp is persisted."""
+
+    async def on_after_organization_invitation(self, invitation: object, token: str) -> None:
+        """Hook invoked after an organization invitation is created.
+
+        SECURITY: This hook receives the raw invitation token exactly once so
+        your application can enqueue out-of-band delivery. The library stores
+        only a digest and never sends email itself.
+        """

@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING, Any, cast
 
 from litestar.exceptions import PermissionDeniedException
 
+from litestar_auth._organization_authz import resolve_current_organization_roles
 from litestar_auth._roles import normalize_role_name as _normalize_role_name
 from litestar_auth._roles import normalize_roles as _normalize_roles
 from litestar_auth._superuser_role import DEFAULT_SUPERUSER_ROLE_NAME, normalize_superuser_role_name
@@ -17,6 +18,7 @@ if TYPE_CHECKING:
 
     from litestar.connection import ASGIConnection
 
+    from litestar_auth._plugin.features._defaults import OrganizationRolePrecedence
     from litestar_auth.types import PermissionResolver
 
 GLOBAL_PERMISSION_GRANT = "*"
@@ -28,8 +30,15 @@ WILDCARD_PERMISSION_ACTION = "*"
 class StaticRolePermissionResolver:
     """Resolve effective permissions from flat user roles and a static permission map."""
 
-    __slots__ = ("role_permissions", "superuser_role_name")
+    __slots__ = (
+        "organization_role_precedence",
+        "require_organization_context",
+        "role_permissions",
+        "superuser_role_name",
+    )
 
+    organization_role_precedence: OrganizationRolePrecedence
+    require_organization_context: bool
     role_permissions: Mapping[str, frozenset[str]]
     superuser_role_name: str
 
@@ -38,22 +47,41 @@ class StaticRolePermissionResolver:
         role_permissions: Mapping[str, object],
         *,
         superuser_role_name: str = DEFAULT_SUPERUSER_ROLE_NAME,
+        organization_role_precedence: OrganizationRolePrecedence = "replace",
+        require_organization_context: bool = False,
     ) -> None:
-        """Store a normalized role-to-permissions mapping."""
+        """Store a normalized role-to-permissions mapping.
+
+        Raises:
+            ValueError: If the organization role precedence policy is unsupported.
+        """
         self.role_permissions = {
             _normalize_role_name(role_name): frozenset(normalize_permissions(permissions))
             for role_name, permissions in role_permissions.items()
         }
         self.superuser_role_name = normalize_superuser_role_name(superuser_role_name)
+        if organization_role_precedence not in {"replace", "merge"}:
+            msg = "organization_role_precedence must be 'replace' or 'merge'."
+            raise ValueError(msg)
+        self.organization_role_precedence = organization_role_precedence
+        self.require_organization_context = require_organization_context
 
-    def resolve(self, user: object, *, context: object | None = None) -> frozenset[str]:  # noqa: ARG002
-        """Return normalized permissions granted by the user's normalized roles."""
+    def resolve(self, user: object, *, context: object | None = None) -> frozenset[str]:
+        """Return normalized permissions granted by the effective request roles."""
         user_roles = _normalize_roles(getattr(user, "roles", ()))
         if self.superuser_role_name in user_roles:
             return frozenset({GLOBAL_PERMISSION_GRANT})
 
+        context_roles = _resolve_context_roles(context)
+        if context_roles is None:
+            effective_roles = [] if self.require_organization_context else user_roles
+        elif self.organization_role_precedence == "merge":
+            # "merge" intentionally lets global role permissions satisfy organization-scoped guards.
+            effective_roles = [*user_roles, *context_roles]
+        else:
+            effective_roles = context_roles
         resolved_permissions: set[str] = set()
-        for role_name in user_roles:
+        for role_name in effective_roles:
             resolved_permissions.update(self.role_permissions.get(role_name, ()))
         return frozenset(resolved_permissions)
 
@@ -83,6 +111,13 @@ def read_scope_permission_resolver(connection: ASGIConnection[Any, Any, Any, Any
         msg = "The configured permission resolver is invalid."
         raise PermissionDeniedException(detail=msg)
     return cast("PermissionResolver", resolver)
+
+
+def _resolve_context_roles(context: object | None) -> frozenset[str] | None:
+    if context is None or not isinstance(getattr(context, "scope", None), Mapping):
+        return None
+
+    return resolve_current_organization_roles(cast("ASGIConnection[Any, Any, Any, Any]", context))
 
 
 def resolve_connection_permissions(connection: ASGIConnection[Any, Any, Any, Any]) -> frozenset[str]:

@@ -31,8 +31,16 @@ from litestar_auth._plugin.totp_controller import (
     totp_path,
 )
 from litestar_auth.authentication.transport.api_key import ApiKeyTransport
+from litestar_auth.contrib.organization_admin import (
+    OrganizationInvitationControllerConfig,
+    create_organization_admin_controller,
+    create_organization_invitation_controller,
+)
 from litestar_auth.controllers import (
+    OrganizationControllerConfig,
+    backend_supports_organization_tokens,
     create_api_keys_controllers,
+    create_organization_controller,
     create_register_controller,
     create_reset_password_controller,
     create_users_controller,
@@ -53,6 +61,7 @@ __all__ = (
     "create_auth_controller",
     "create_oauth_associate_controller",
     "create_oauth_login_controller",
+    "create_organization_controller",
     "create_totp_controller",
     "totp_backend",
     "totp_path",
@@ -147,6 +156,61 @@ def _append_optional_feature_controllers[UP: UserProtocol[Any], ID](
         backend_inventory=backend_inventory,
     )
     _append_oauth_associate_controllers(controllers=controllers, config=config, security=security)
+    _append_organization_controllers(
+        controllers=controllers,
+        config=config,
+        backend_inventory=backend_inventory,
+        security=security,
+    )
+
+
+def _append_organization_controllers[UP: UserProtocol[Any], ID](
+    *,
+    controllers: list[ControllerRouterHandler],
+    config: LitestarAuthConfig[UP, ID],
+    backend_inventory: StartupBackendInventory[UP, ID] | None,
+    security: Sequence[SecurityRequirement] | None,
+) -> None:
+    """Append opt-in organization activation controllers for capable backends."""
+    organization_config = config.organization_config
+    if not organization_config.enabled:
+        return
+
+    if organization_config.include_organization_admin:
+        controllers.append(create_organization_admin_controller(config=config, route_prefix="organizations"))
+
+    if organization_config.include_organization_invitations:
+        controllers.append(
+            create_organization_invitation_controller(
+                OrganizationInvitationControllerConfig(config=config, security=security),
+            ),
+        )
+
+    if not organization_config.include_switch_organization:
+        return
+
+    inventory = resolve_backend_inventory(config) if backend_inventory is None else backend_inventory
+    for backend_index, backend in enumerate(inventory.startup_backends()):
+        if isinstance(backend.transport, ApiKeyTransport) or not backend_supports_organization_tokens(backend):
+            continue
+        controllers.append(
+            create_organization_controller(
+                OrganizationControllerConfig(
+                    backend=backend,
+                    backend_inventory=inventory,
+                    backend_index=backend_index,
+                    path=backend_auth_path(
+                        auth_path=config.auth_path,
+                        backend_name=backend.name,
+                        index=backend_index,
+                    ),
+                    slug_min_length=organization_config.slug_min_length,
+                    slug_max_length=organization_config.slug_max_length,
+                    rate_limit_config=config.rate_limit_config,
+                    security=security,
+                ),
+            ),
+        )
 
 
 def _append_account_feature_controllers[UP: UserProtocol[Any], ID](

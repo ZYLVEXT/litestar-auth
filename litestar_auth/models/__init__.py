@@ -29,6 +29,9 @@ if TYPE_CHECKING:
         AccessTokenMixin,
         ApiKeyMixin,
         OAuthAccountMixin,
+        OrganizationInvitationMixin,
+        OrganizationMembershipMixin,
+        OrganizationMixin,
         RefreshTokenMixin,
         RoleMixin,
         UserAuthRelationshipMixin,
@@ -37,6 +40,7 @@ if TYPE_CHECKING:
         UserRoleRelationshipMixin,
     )
     from litestar_auth.models.oauth import OAuthAccount
+    from litestar_auth.models.organization import Organization, OrganizationInvitation, OrganizationMembership
     from litestar_auth.models.role import Role, UserRole
     from litestar_auth.models.user import User
 
@@ -46,6 +50,12 @@ __all__ = (
     "ApiKeyMixin",
     "OAuthAccount",
     "OAuthAccountMixin",
+    "Organization",
+    "OrganizationInvitation",
+    "OrganizationInvitationMixin",
+    "OrganizationMembership",
+    "OrganizationMembershipMixin",
+    "OrganizationMixin",
     "RefreshTokenMixin",
     "Role",
     "RoleMixin",
@@ -74,6 +84,12 @@ def __getattr__(name: str) -> object:
         "ApiKeyMixin": "litestar_auth.models.mixins",
         "OAuthAccount": "litestar_auth.models.oauth",
         "OAuthAccountMixin": "litestar_auth.models.mixins",
+        "Organization": "litestar_auth.models.organization",
+        "OrganizationInvitation": "litestar_auth.models.organization",
+        "OrganizationInvitationMixin": "litestar_auth.models.mixins",
+        "OrganizationMembership": "litestar_auth.models.organization",
+        "OrganizationMembershipMixin": "litestar_auth.models.mixins",
+        "OrganizationMixin": "litestar_auth.models.mixins",
         "RefreshTokenMixin": "litestar_auth.models.mixins",
         "Role": "litestar_auth.models.role",
         "RoleMixin": "litestar_auth.models.mixins",

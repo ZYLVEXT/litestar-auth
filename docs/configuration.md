@@ -23,6 +23,7 @@ from litestar_auth.models import User  # or your own model
 | Deployment worker-count posture and production shared-store requirements | [Deployment](deployment.md#process-topology) |
 | `TotpConfig` fields, TOTP route behavior, and TOTP step-up policy | [TOTP](configuration/totp.md) |
 | `OAuthConfig`, provider inventory, redirect policy, and token encryption | [OAuth](configuration/oauth.md) |
+| `OrganizationConfig`, organization model imports, and organization store wiring | [Organizations](configuration/organizations.md) |
 | CSRF, legacy-token policy, dependency keys, and shared helpers | [Security and DI](configuration/security.md) |
 | Operator-side proxy, cookie, and secrets-at-rest preconditions | [Deployment security contract](deployment.md#deployment-security-contract) |
 
@@ -136,6 +137,10 @@ Moved to: [TOTP](configuration/totp.md#totp-step-up-for-sensitive-operations).
 ## OAuth — `oauth_config: OAuthConfig | None`
 
 Moved to: [OAuth](configuration/oauth.md#oauth--oauth_config-oauthconfig--none).
+
+## Organizations — `organization_config: OrganizationConfig`
+
+Moved to: [Organizations](configuration/organizations.md#organizationconfig).
 
 ## Security and token policy
 

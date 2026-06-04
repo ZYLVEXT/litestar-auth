@@ -11,6 +11,11 @@ from litestar_auth.controllers.oauth import (
     create_oauth_associate_controller,
     create_oauth_controller,
 )
+from litestar_auth.controllers.organization import (
+    OrganizationControllerConfig,
+    backend_supports_organization_tokens,
+    create_organization_controller,
+)
 from litestar_auth.controllers.register import RegisterControllerConfig, create_register_controller
 from litestar_auth.controllers.reset import create_reset_password_controller
 from litestar_auth.controllers.session_devices import (
@@ -26,15 +31,18 @@ __all__ = (
     "AuthControllerConfig",
     "OAuthAssociateControllerConfig",
     "OAuthControllerConfig",
+    "OrganizationControllerConfig",
     "RegisterControllerConfig",
     "SessionDevicesControllerConfig",
     "TotpControllerOptions",
     "TotpUserManagerProtocol",
     "UsersControllerConfig",
+    "backend_supports_organization_tokens",
     "create_api_keys_controllers",
     "create_auth_controller",
     "create_oauth_associate_controller",
     "create_oauth_controller",
+    "create_organization_controller",
     "create_register_controller",
     "create_reset_password_controller",
     "create_session_devices_controller",

@@ -228,6 +228,7 @@ The detailed contracts for each surface are:
 | ------- | ---------------- | ----- |
 | `user_manager_security.verification_token_secret` | Signs email-verification tokens. | Required in production unless the owning manager/config explicitly sets `unsafe_testing=True`. |
 | `user_manager_security.reset_password_token_secret` | Signs reset-password tokens and password fingerprints. | Required in production unless the owning manager/config explicitly sets `unsafe_testing=True`. |
+| `user_manager_security.organization_invitation_token_secret` | Signs organization-invitation tokens and keys their persisted lookup digest. | Required only when using organization invitation token helpers; when set, it must be distinct from other auth secrets. |
 | `user_manager_security.login_identifier_telemetry_secret` | Keys the non-reversible failed-login `identifier_digest` log field. | Optional. When omitted, failed-login logs do not include `identifier_digest`; when set, it must be high-entropy and distinct from other auth secrets. |
 | `user_manager_security.totp_secret_keyring` | Versioned Fernet keyring for persisted TOTP secrets and pending-enrollment secret values at rest. | Required in production when `totp_config` is enabled; prefer `FernetKeyringConfig(active_key_id=..., keys=...)` for rotation. |
 | `user_manager_security.totp_secret_key` | One-key TOTP Fernet shortcut encoded under the `default` key id. | Mutually exclusive with `totp_secret_keyring`; useful when a single active key is enough. |
@@ -249,13 +250,14 @@ follow the default `BaseUserManager` constructor surface must be configured with
 
 The supported production posture is one distinct high-entropy value per secret role. Outside
 explicit `unsafe_testing`, `LitestarAuth(config)` validation raises `ConfigurationError` when one
-configured value is reused across verification, reset-password, failed-login telemetry, and TOTP
-roles, including every configured key in `user_manager_security.totp_secret_keyring` and
+configured value is reused across verification, reset-password, organization-invitation,
+failed-login telemetry, and TOTP roles, including every configured key in
+`user_manager_security.totp_secret_keyring` and
 `totp_config.totp_pending_secret` when that controller flow is enabled. Direct
 `BaseUserManager(..., security=UserManagerSecurity(...))` construction applies the same
 fail-closed validation for the manager-owned secret roles supplied on that bundle
-(`verification_token_secret`, `reset_password_token_secret`, `login_identifier_telemetry_secret`,
-and TOTP Fernet keys). Custom `user_manager_factory` implementations should keep their
+(`verification_token_secret`, `reset_password_token_secret`, `organization_invitation_token_secret`,
+`login_identifier_telemetry_secret`, and TOTP Fernet keys). Custom `user_manager_factory` implementations should keep their
 manager-owned secret wiring aligned with `user_manager_security`; if they construct a manager with
 reused secret material, that manager constructor raises for the roles it actually receives.
 
@@ -263,19 +265,20 @@ reused secret material, that manager constructor raises for the roles it actuall
 | ------- | ---------------------- | ---------------------------- |
 | `user_manager_security.verification_token_secret` | `litestar-auth:verify` | Dedicated secret used only for email-verification JWTs. |
 | `user_manager_security.reset_password_token_secret` | `litestar-auth:reset-password` | Dedicated secret used only for reset-password JWTs and password fingerprints. |
+| `user_manager_security.organization_invitation_token_secret` | `litestar-auth:organization-invitation` | Dedicated secret used only for organization-invitation JWTs and stored token-hash lookup. |
 | `user_manager_security.login_identifier_telemetry_secret` | Failed-login telemetry; no JWT audience | Dedicated secret used only to produce non-reversible failed-login identifier digests. |
 | `totp_config.totp_pending_secret` | `litestar-auth:2fa-pending`, `litestar-auth:2fa-enroll` | Dedicated secret used only for pending/enrollment TOTP JWTs. |
 | `user_manager_security.totp_secret_keyring` / `totp_secret_key` | Stored TOTP secret encryption at rest; no JWT audience | Dedicated Fernet key material kept separate from all JWT signing secrets. |
 
-Distinct audiences already prevent token cross-use between verification, reset-password, and TOTP
-JWTs. Separate secrets still matter because they reduce blast radius if one secret leaks and avoid
-coupling unrelated rotation events.
+Distinct audiences already prevent token cross-use between verification, reset-password,
+organization-invitation, and TOTP JWTs. Separate secrets still matter because they reduce blast
+radius if one secret leaks and avoid coupling unrelated rotation events.
 
 Compatibility and migration:
 
 - Configure plugin-managed `verification_token_secret`, `reset_password_token_secret`,
-  `login_identifier_telemetry_secret`, `totp_secret_keyring`, and `id_parser` through
-  `user_manager_security`.
+  `organization_invitation_token_secret`, `login_identifier_telemetry_secret`,
+  `totp_secret_keyring`, and `id_parser` through `user_manager_security`.
 - If you intentionally need factory-owned security wiring, set `user_manager_factory` directly and pass explicit
   dependencies through your factory closure or another typed app-owned dependency surface.
 - The default plugin builder calls the `BaseUserManager`-style constructor surface:

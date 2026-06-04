@@ -79,11 +79,40 @@ def _assert_account_token_service_dependencies(
     assert dependencies.audiences == manager_module.AccountTokenAudiences(
         verify=manager_module.VERIFY_TOKEN_AUDIENCE,
         reset_password=RESET_PASSWORD_TOKEN_AUDIENCE,
+        organization_invitation=manager_module.ORGANIZATION_INVITATION_TOKEN_AUDIENCE,
     )
     assert dependencies.hook_bus is manager.hook_bus
     assert dependencies.token_security is token_security_service
     assert dependencies.logger is manager_logger
     assert dependencies.policy is manager.policy
+
+
+@dataclass(frozen=True, slots=True)
+class _AccountTokenSettings:
+    verification_secret: str
+    reset_secret: str
+    organization_invitation_secret: str
+    verification_lifetime: object
+    reset_lifetime: object
+    organization_invitation_lifetime: object
+
+
+def _assert_manager_account_token_settings(
+    manager: BaseUserManager[Any, Any],
+    expected: _AccountTokenSettings,
+) -> None:
+    """Assert manager account-token secrets and lifetimes are assigned consistently."""
+    organization_invitation_secret = manager.organization_invitation_token_secret
+    assert organization_invitation_secret is not None
+    assert manager.verification_token_secret.get_secret_value() == expected.verification_secret
+    assert manager.reset_password_token_secret.get_secret_value() == expected.reset_secret
+    assert organization_invitation_secret.get_secret_value() == expected.organization_invitation_secret
+    assert manager.account_token_secrets.verification_token_secret is manager.verification_token_secret
+    assert manager.account_token_secrets.reset_password_token_secret is manager.reset_password_token_secret
+    assert manager.account_token_secrets.organization_invitation_token_secret is organization_invitation_secret
+    assert manager.verification_token_lifetime == expected.verification_lifetime
+    assert manager.reset_password_token_lifetime == expected.reset_lifetime
+    assert manager.organization_invitation_token_lifetime == expected.organization_invitation_lifetime
 
 
 def _as_any(value: object) -> Any:  # noqa: ANN401
@@ -134,6 +163,7 @@ class TrackingUserManager(BaseUserManager[ExampleUser, UUID]):
             security=UserManagerSecurity[UUID](
                 verification_token_secret="0123456789abcdef" * 4,
                 reset_password_token_secret="fedcba9876543210" * 4,
+                organization_invitation_token_secret="c4b7e9a13f6d8c2059ab7e3041f8d6e2" * 2,
                 login_identifier_telemetry_secret=login_identifier_telemetry_secret,
                 api_key_hash_secret=api_key_hash_secret,
                 id_parser=UUID,
@@ -726,6 +756,30 @@ def test_manager_init_rejects_reused_login_telemetry_secret_in_production() -> N
     assert shared_secret not in message
 
 
+def test_manager_init_rejects_reused_organization_invitation_secret_in_production() -> None:
+    """Organization invitation tokens must use secret material distinct from account-token roles."""
+    user_db = AsyncMock()
+    password_helper = PasswordHelper()
+    shared_secret = "shared-manager-secret-role-1234567890"
+
+    with pytest.raises(ConfigurationError, match="Distinct secrets/keys") as exc_info:
+        BaseUserManager(
+            user_db,
+            password_helper=password_helper,
+            security=UserManagerSecurity[UUID](
+                verification_token_secret="0123456789abcdef" * 4,
+                reset_password_token_secret=shared_secret,
+                organization_invitation_token_secret=shared_secret,
+            ),
+        )
+
+    message = str(exc_info.value)
+    assert "reset_password_token_secret" in message
+    assert "organization_invitation_token_secret" in message
+    assert manager_module.ORGANIZATION_INVITATION_TOKEN_AUDIENCE in message
+    assert shared_secret not in message
+
+
 def test_manager_init_rejects_short_login_telemetry_secret_in_production() -> None:
     """Configured failed-login telemetry secrets must meet the normal secret-length floor."""
     user_db = AsyncMock()
@@ -987,8 +1041,10 @@ def test_manager_init_wires_services_and_configuration() -> None:
     password_helper = PasswordHelper()
     verification_secret = "0123456789abcdef" * 4
     reset_secret = "fedcba9876543210" * 4
+    organization_invitation_secret = "c4b7e9a13f6d8c2059ab7e3041f8d6e2" * 2
     verification_lifetime = manager_module.DEFAULT_VERIFY_TOKEN_LIFETIME * 2
     reset_lifetime = manager_module.DEFAULT_RESET_PASSWORD_TOKEN_LIFETIME * 3
+    organization_invitation_lifetime = manager_module.DEFAULT_ORGANIZATION_INVITATION_TOKEN_LIFETIME * 4
     password_validator = require_password_length
     backends = (object(),)
     totp_keyring = FernetKeyringConfig(active_key_id="current", keys={"current": _fernet_key(), "old": _fernet_key()})
@@ -1028,11 +1084,13 @@ def test_manager_init_wires_services_and_configuration() -> None:
             security=UserManagerSecurity[UUID](
                 verification_token_secret=verification_secret,
                 reset_password_token_secret=reset_secret,
+                organization_invitation_token_secret=organization_invitation_secret,
                 totp_secret_keyring=totp_keyring,
                 id_parser=UUID,
             ),
             verification_token_lifetime=verification_lifetime,
             reset_password_token_lifetime=reset_lifetime,
+            organization_invitation_token_lifetime=organization_invitation_lifetime,
             password_validator=password_validator,
             reset_verification_on_email_change=False,
             backends=backends,
@@ -1042,12 +1100,17 @@ def test_manager_init_wires_services_and_configuration() -> None:
     assert manager.user_db is user_db
     assert manager.oauth_account_store is oauth_account_store
     assert manager.password_helper is password_helper
-    assert manager.verification_token_secret.get_secret_value() == verification_secret
-    assert manager.reset_password_token_secret.get_secret_value() == reset_secret
-    assert manager.account_token_secrets.verification_token_secret is manager.verification_token_secret
-    assert manager.account_token_secrets.reset_password_token_secret is manager.reset_password_token_secret
-    assert manager.verification_token_lifetime == verification_lifetime
-    assert manager.reset_password_token_lifetime == reset_lifetime
+    _assert_manager_account_token_settings(
+        manager,
+        _AccountTokenSettings(
+            verification_secret=verification_secret,
+            reset_secret=reset_secret,
+            organization_invitation_secret=organization_invitation_secret,
+            verification_lifetime=verification_lifetime,
+            reset_lifetime=reset_lifetime,
+            organization_invitation_lifetime=organization_invitation_lifetime,
+        ),
+    )
     assert manager.id_parser is UUID
     assert manager.password_validator is password_validator
     assert manager.reset_verification_on_email_change is False

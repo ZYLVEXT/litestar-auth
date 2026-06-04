@@ -159,6 +159,9 @@ verification endpoints should stay disabled.
 | `change_password` / `AuthRateLimitSlot.CHANGE_PASSWORD` | `login` | `ip_email` | `change-password` | `POST {users}/me/change-password` |
 | `verify_token` / `AuthRateLimitSlot.VERIFY_TOKEN` | `verification` | `ip` | `verify-token` | `POST {auth}/verify` |
 | `request_verify_token` / `AuthRateLimitSlot.REQUEST_VERIFY_TOKEN` | `verification` | `ip_email` | `request-verify-token` | `POST {auth}/request-verify-token` |
+| `organization_switch` / `AuthRateLimitSlot.ORGANIZATION_SWITCH` | `organizations` | `ip` | `organization-switch` | `POST {auth}/switch-organization` |
+| `organization_invitation_accept` / `AuthRateLimitSlot.ORGANIZATION_INVITATION_ACCEPT` | `organization_invitations` | `ip` | `organization-invitation-accept` | `POST {auth}/organization-invitations/accept` |
+| `organization_invitation_decline` / `AuthRateLimitSlot.ORGANIZATION_INVITATION_DECLINE` | `organization_invitations` | `ip` | `organization-invitation-decline` | `POST {auth}/organization-invitations/decline` |
 | `totp_enable` / `AuthRateLimitSlot.TOTP_ENABLE` | `totp` | `ip` | `totp-enable` | `POST {auth}/2fa/enable` |
 | `totp_confirm_enable` / `AuthRateLimitSlot.TOTP_CONFIRM_ENABLE` | `totp` | `ip` | `totp-confirm-enable` | `POST {auth}/2fa/enable/confirm` |
 | `totp_verify` / `AuthRateLimitSlot.TOTP_VERIFY` | `totp` | `ip` | `totp-verify` | `POST {auth}/2fa/verify` |

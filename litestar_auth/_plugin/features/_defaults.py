@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 from datetime import timedelta
 from typing import TYPE_CHECKING, Literal
 
+from litestar_auth._tenant_resolution import DEFAULT_ORGANIZATION_HEADER
 from litestar_auth.authentication.strategy._api_key_format import API_KEY_PREFIX
 from litestar_auth.config import UNSET, UnsetType
 
@@ -13,13 +14,15 @@ if TYPE_CHECKING:
     from litestar_auth.totp import TotpAlgorithm
 
 ApiKeyLastUsedWriteStrategy = Literal["disabled", "immediate", "throttled"]
-type FeatureKey = Literal["database_token", "api_key", "totp", "oauth"]
+OrganizationRolePrecedence = Literal["replace", "merge"]
+type FeatureKey = Literal["database_token", "api_key", "totp", "oauth", "organization"]
 type TotpStepUpPolicyMode = Literal["required_when_enrolled", "always_required", "off"]
 
 DATABASE_TOKEN_FEATURE: FeatureKey = "database_token"  # noqa: S105
 API_KEY_FEATURE: FeatureKey = "api_key"
 TOTP_FEATURE: FeatureKey = "totp"
 OAUTH_FEATURE: FeatureKey = "oauth"
+ORGANIZATION_FEATURE: FeatureKey = "organization"
 
 
 @dataclass(frozen=True, slots=True)
@@ -81,6 +84,20 @@ class OAuthDefaults:
 
 
 @dataclass(frozen=True, slots=True)
+class OrganizationDefaults:
+    """Canonical organization feature defaults."""
+
+    include_switch_organization: bool = False
+    include_organization_admin: bool = False
+    include_organization_invitations: bool = False
+    slug_min_length: int = 1
+    slug_max_length: int = 128
+    tenant_header_name: str = DEFAULT_ORGANIZATION_HEADER
+    role_precedence: OrganizationRolePrecedence = "replace"
+    require_authorization_context: bool = False
+
+
+@dataclass(frozen=True, slots=True)
 class FeatureDefaults:
     """Single default source for plugin-owned feature config."""
 
@@ -88,6 +105,7 @@ class FeatureDefaults:
     api_key: ApiKeyDefaults = field(default_factory=ApiKeyDefaults)
     totp: TotpDefaults = field(default_factory=TotpDefaults)
     oauth: OAuthDefaults = field(default_factory=OAuthDefaults)
+    organization: OrganizationDefaults = field(default_factory=OrganizationDefaults)
 
 
 FEATURE_DEFAULTS = FeatureDefaults()

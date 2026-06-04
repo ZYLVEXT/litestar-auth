@@ -16,7 +16,14 @@ from litestar_auth._jwt_headers import JwtDecodeConfig, decode_signed_jwt, jwt_e
 from litestar_auth._manager._coercions import _managed_user
 from litestar_auth._manager._protocols import UserDatabaseManagerProtocol
 from litestar_auth.authentication.strategy._jwt_denylist import denylist_ttl_seconds
-from litestar_auth.exceptions import InvalidResetPasswordTokenError, InvalidVerifyTokenError, UserNotExistsError
+from litestar_auth.exceptions import (
+    ConfigurationError,
+    ExpiredOrganizationInvitationTokenError,
+    InvalidOrganizationInvitationTokenError,
+    InvalidResetPasswordTokenError,
+    InvalidVerifyTokenError,
+    UserNotExistsError,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Mapping
@@ -26,7 +33,16 @@ if TYPE_CHECKING:
     from litestar_auth._manager.user_policy import UserPolicy
     from litestar_auth.authentication.strategy._jwt_denylist import JWTDenylistStore
 
-type _InvalidTokenError = type[InvalidVerifyTokenError | InvalidResetPasswordTokenError]
+type _InvalidTokenError = type[
+    InvalidVerifyTokenError | InvalidResetPasswordTokenError | InvalidOrganizationInvitationTokenError
+]
+
+
+class OrganizationInvitationLookupStore[INVITATION](Protocol):
+    """Store surface required for invitation-token validation."""
+
+    async def get_invitation_by_token_hash(self, token_hash: bytes) -> INVITATION | None:
+        """Return an invitation row by persisted token digest when present."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -35,6 +51,7 @@ class AccountTokenAudiences:
 
     verify: str
     reset_password: str
+    organization_invitation: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -46,6 +63,16 @@ class TokenWriteRequest:
     secret: str
     lifetime: timedelta
     extra_claims: Mapping[str, Any] | None = None
+    issued_at: datetime | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class OrganizationInvitationToken:
+    """Signed invitation token plus the digest stored on the invitation row."""
+
+    token: str
+    token_hash: bytes
+    expires_at: datetime
 
 
 @dataclass(frozen=True, slots=True)
@@ -86,6 +113,7 @@ class TokenWriter:
                 secret=request.secret,
                 audience=request.audience,
                 lifetime=request.lifetime,
+                issued_at=request.issued_at,
                 extra_claims=self._extra_claims_for_request(
                     request,
                     password_fingerprint_source=password_fingerprint_source,
@@ -115,7 +143,7 @@ class TokenWriter:
     @staticmethod
     def write_token_subject(request: TokenWriteRequest) -> str:
         """Sign a short-lived JWT bound to an arbitrary subject string."""
-        issued_at = datetime.now(tz=UTC)
+        issued_at = request.issued_at or datetime.now(tz=UTC)
         payload: dict[str, Any] = {
             "sub": request.subject,
             "aud": request.audience,
@@ -145,6 +173,7 @@ class _AccountTokensManagerProtocol[UP, ID](
 
     verification_token_lifetime: timedelta
     reset_password_token_lifetime: timedelta
+    organization_invitation_token_lifetime: timedelta
 
     async def _invalidate_all_tokens(self, user: UP) -> None:
         pass
@@ -181,6 +210,22 @@ class AccountTokenSecurityService[UP, ID]:
             hashed_password.encode(),
             hashlib.sha256,
         ).hexdigest()
+
+    def organization_invitation_token_hash(self, token: str) -> bytes:
+        """Return the keyed digest persisted for organization invitation lookup."""
+        return hmac.digest(
+            self._organization_invitation_token_secret().encode(),
+            token.encode(),
+            hashlib.sha256,
+        )
+
+    def _organization_invitation_token_secret(self) -> str:
+        """Return the configured organization-invitation token secret."""
+        secret = self._manager.account_token_secrets.organization_invitation_token_secret
+        if secret is not None:
+            return secret.get_secret_value()
+        msg = "organization_invitation_token_secret is required to issue or validate organization invitation tokens."
+        raise ConfigurationError(msg)
 
     @staticmethod
     def write_token(
@@ -246,6 +291,25 @@ class AccountTokenSecurityService[UP, ID]:
             raise invalid_token_error from exc
 
         return payload
+
+    def decode_organization_invitation_token(self, token: str, *, audience: str) -> dict[str, Any]:
+        """Decode an organization invitation token with expired-token classification."""
+        try:
+            return decode_signed_jwt(
+                token,
+                config=JwtDecodeConfig(
+                    key=self._organization_invitation_token_secret(),
+                    algorithms=["HS256"],
+                    audience=audience,
+                    options={"require": ["exp", "aud", "iat", "nbf", "jti", "sub"]},
+                ),
+            )
+        except jwt.ExpiredSignatureError as exc:
+            self._logger.warning("Manager token validation failed", extra={"event": "token_validation_failed"})
+            raise ExpiredOrganizationInvitationTokenError from exc
+        except jwt.InvalidTokenError as exc:
+            self._logger.warning("Manager token validation failed", extra={"event": "token_validation_failed"})
+            raise InvalidOrganizationInvitationTokenError from exc
 
     def _subject_id_from_payload(
         self,
@@ -509,6 +573,79 @@ class AccountTokensService[UP, ID]:
     def password_fingerprint(self, hashed_password: str) -> str:
         """Compute the password fingerprint for reset tokens."""
         return self._token_security.password_fingerprint(hashed_password)
+
+    def write_organization_invitation_token(self, *, issued_at: datetime | None = None) -> OrganizationInvitationToken:
+        """Sign an organization invitation token and return its persistence digest."""
+        resolved_issued_at = issued_at or datetime.now(tz=UTC)
+        lifetime = self._manager.organization_invitation_token_lifetime
+        token = self._write_token(
+            TokenWriteRequest(
+                subject=secrets.token_urlsafe(32),
+                secret=self._token_security._organization_invitation_token_secret(),
+                audience=self._audiences.organization_invitation,
+                lifetime=lifetime,
+                issued_at=resolved_issued_at,
+            ),
+        )
+        return OrganizationInvitationToken(
+            token=token,
+            token_hash=self.organization_invitation_token_hash(token),
+            expires_at=resolved_issued_at + lifetime,
+        )
+
+    def organization_invitation_token_hash(self, token: str) -> bytes:
+        """Return the keyed digest persisted for organization invitation lookup."""
+        return self._token_security.organization_invitation_token_hash(token)
+
+    async def validate_organization_invitation_token[INVITATION](
+        self,
+        token: str,
+        *,
+        organization_store: OrganizationInvitationLookupStore[INVITATION],
+        now: datetime | None = None,
+    ) -> INVITATION:
+        """Return the pending invitation row for a valid signed invitation token."""
+        payload = self._token_security.decode_organization_invitation_token(
+            token,
+            audience=self._audiences.organization_invitation,
+        )
+        subject = payload.get("sub")
+        if not isinstance(subject, str) or not subject:
+            self._logger.warning("Manager token subject validation failed", extra={"event": "token_validation_failed"})
+            raise InvalidOrganizationInvitationTokenError
+
+        invitation = await organization_store.get_invitation_by_token_hash(
+            self.organization_invitation_token_hash(token),
+        )
+        if invitation is None:
+            self._logger.warning(
+                "Organization invitation token referenced missing invitation",
+                extra={"event": "token_validation_failed"},
+            )
+            raise InvalidOrganizationInvitationTokenError
+
+        self._validate_organization_invitation_row(invitation, now=now or datetime.now(tz=UTC))
+        return invitation
+
+    def _validate_organization_invitation_row(self, invitation: object, *, now: datetime) -> None:
+        """Reject invitation rows that are not pending and unexpired."""
+        if getattr(invitation, "status", None) != "pending":
+            self._logger.warning(
+                "Organization invitation token referenced non-pending invitation",
+                extra={"event": "token_validation_failed"},
+            )
+            raise InvalidOrganizationInvitationTokenError
+
+        expires_at = getattr(invitation, "expires_at", None)
+        comparison_now = now
+        if isinstance(expires_at, datetime) and expires_at.tzinfo is None:
+            comparison_now = now.replace(tzinfo=None)
+        if not isinstance(expires_at, datetime) or expires_at <= comparison_now:
+            self._logger.warning(
+                "Organization invitation token referenced expired invitation",
+                extra={"event": "token_validation_failed"},
+            )
+            raise ExpiredOrganizationInvitationTokenError
 
     def write_user_token(
         self,

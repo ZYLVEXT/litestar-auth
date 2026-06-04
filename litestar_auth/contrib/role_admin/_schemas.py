@@ -5,7 +5,7 @@ from __future__ import annotations
 import msgspec
 
 
-class RoleCreate(msgspec.Struct):
+class RoleCreate(msgspec.Struct, forbid_unknown_fields=True):
     """Payload used to create one normalized role-catalog entry."""
 
     name: str
@@ -13,7 +13,13 @@ class RoleCreate(msgspec.Struct):
 
 
 class RoleUpdate(msgspec.Struct, omit_defaults=True):
-    """Partial role update payload with immutable role names."""
+    """Partial role update payload with immutable role names.
+
+    Deliberately does not set ``forbid_unknown_fields``: an unknown ``name``
+    field must reach ``_reject_role_name_mutation`` so the handler can raise the
+    domain-specific ``ROLE_NAME_INVALID`` "Role names are immutable." error
+    instead of a generic msgspec validation failure.
+    """
 
     description: str | None = None
 

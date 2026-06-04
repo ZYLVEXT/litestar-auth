@@ -1,17 +1,18 @@
 # Models
 
 Package `litestar_auth.models` exposes the reference **`User`**, **`Role`**, **`UserRole`**,
-**`OAuthAccount`**, and **`ApiKey`** ORM models plus the side-effect-free mixins behind the bundled
-model family.
+**`OAuthAccount`**, **`ApiKey`**, **`Organization`**, and **`OrganizationMembership`** ORM models
+plus the side-effect-free mixins behind the bundled model family.
 Names are loaded lazily (PEP 562) when accessed on the package.
 
 ## Import paths
 
 | Goal | Import |
 |------|--------|
-| Shared auth-model mixins without registering reference mappers | `from litestar_auth.models.mixins import UserModelMixin, UserAuthRelationshipMixin, UserRoleRelationshipMixin, RoleMixin, UserRoleAssociationMixin, OAuthAccountMixin, ApiKeyMixin, AccessTokenMixin, RefreshTokenMixin` |
+| Shared auth-model mixins without registering reference mappers | `from litestar_auth.models.mixins import UserModelMixin, UserAuthRelationshipMixin, UserRoleRelationshipMixin, RoleMixin, UserRoleAssociationMixin, OrganizationMixin, OrganizationMembershipMixin, OAuthAccountMixin, ApiKeyMixin, AccessTokenMixin, RefreshTokenMixin` |
 | Bundled `AccessToken` / `RefreshToken` mapper bootstrap | `from litestar_auth.models import import_token_orm_models` |
 | Bundled role tables without loading reference `User` | `from litestar_auth.models.role import Role, UserRole` |
+| Bundled organization tables without loading root package models | `from litestar_auth.models.organization import Organization, OrganizationMembership` |
 | API-key table contract **without** loading reference `User` | `from litestar_auth.models.api_key import ApiKey` |
 | OAuth table contract **without** loading reference `User` | `from litestar_auth.models.oauth import OAuthAccount` |
 | Reference `User` (and typical tests / quickstarts) | `from litestar_auth.models import User` or `from litestar_auth.models.user import User` |
@@ -85,6 +86,7 @@ IDE support—jump to definition, rename, and completion—import from the concr
 
 - `from litestar_auth.models.user import User`
 - `from litestar_auth.models.oauth import OAuthAccount`
+- `from litestar_auth.models.organization import Organization, OrganizationMembership`
 
 The [import paths](#import-paths) table restates the same guidance in task-oriented form.
 
@@ -161,6 +163,39 @@ order:
 Relational role storage does not change the higher-level auth contract: managers, schemas, and
 guards still operate on flat normalized `roles`, and the library does not provide RBAC permission
 matrices or policy DSLs.
+
+## Organization shape
+
+The bundled organization family consists of:
+
+- `organization.id` — UUID primary key
+- `organization.slug` — normalized unique tenant slug, indexed
+- `organization.name` — display name
+- `organization.created_at` / `organization.updated_at` — server-managed audit timestamps
+- `organization_membership.user_id` — foreign key to `user.id`, part of the composite primary key
+- `organization_membership.organization_id` — foreign key to `organization.id`, part of the
+  composite primary key
+- `organization_membership.roles` — normalized JSON list of organization-scoped role names
+- Unique constraint on `(user_id, organization_id)`
+
+Import the reference models lazily from `litestar_auth.models` or directly from
+`litestar_auth.models.organization`:
+
+```python
+from litestar_auth.models import Organization, OrganizationMembership
+```
+
+`OrganizationMixin` and `OrganizationMembershipMixin` are side-effect-free composition helpers for
+custom declarative bases. The membership mixin reuses the same configurable user foreign-key
+contract as other user-owned auth rows and adds configurable organization-table hooks.
+
+Organization models are intentionally not exported from `litestar_auth` or `litestar_auth.db`.
+`litestar_auth.db` exports only `BaseOrganizationStore`, `OrganizationData`, and `MembershipData`;
+the SQLAlchemy adapter lives at `litestar_auth.db.sqlalchemy.SQLAlchemyOrganizationStore`.
+
+Phase-1 organization persistence does not alter authorization behavior. There are no
+organization-scoped guards, tenant-resolution middleware, JWT `org_id` claim, organization admin
+routes, or automatic filters for application-owned tables.
 
 ## `oauth_account` shape
 

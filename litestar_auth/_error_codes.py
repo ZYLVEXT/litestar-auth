@@ -61,6 +61,10 @@ class AuthErrorCode(_DocumentedErrorCode):
         "SUPERUSER_CANNOT_DELETE_SELF",
         "Emitted by user-delete self-protection checks.",
     )
+    ORGANIZATION_SWITCH_DENIED = (
+        "ORGANIZATION_SWITCH_DENIED",
+        "Emitted by switch-organization when target membership cannot be verified.",
+    )
 
 
 class TokenErrorCode(_DocumentedErrorCode):
@@ -93,6 +97,14 @@ class RoleErrorCode(_DocumentedErrorCode):
 
     INSUFFICIENT_ROLES = ("INSUFFICIENT_ROLES", "Emitted by InsufficientRolesError.")
     INSUFFICIENT_PERMISSIONS = ("INSUFFICIENT_PERMISSIONS", "Emitted by InsufficientPermissionsError.")
+    INSUFFICIENT_ORGANIZATION_ROLES = (
+        "INSUFFICIENT_ORGANIZATION_ROLES",
+        "Emitted by InsufficientOrganizationRolesError.",
+    )
+    INSUFFICIENT_ORGANIZATION_PERMISSIONS = (
+        "INSUFFICIENT_ORGANIZATION_PERMISSIONS",
+        "Emitted by InsufficientOrganizationPermissionsError.",
+    )
     ROLE_ALREADY_EXISTS = ("ROLE_ALREADY_EXISTS", "Emitted by role-admin create conflicts.")
     ROLE_NOT_FOUND = ("ROLE_NOT_FOUND", "Emitted by role-admin lookup failures.")
     ROLE_STILL_ASSIGNED = ("ROLE_STILL_ASSIGNED", "Emitted by role-admin delete protection.")
@@ -101,6 +113,32 @@ class RoleErrorCode(_DocumentedErrorCode):
         "Emitted by role-admin user-assignment lookup failures.",
     )
     ROLE_NAME_INVALID = ("ROLE_NAME_INVALID", "Emitted by role-admin role-name validation.")
+    ORGANIZATION_ALREADY_EXISTS = ("ORGANIZATION_ALREADY_EXISTS", "Emitted by organization-admin create conflicts.")
+    ORGANIZATION_NOT_FOUND = ("ORGANIZATION_NOT_FOUND", "Emitted by organization-admin lookup failures.")
+    ORGANIZATION_MEMBERSHIP_ALREADY_EXISTS = (
+        "ORGANIZATION_MEMBERSHIP_ALREADY_EXISTS",
+        "Emitted by organization-admin duplicate membership failures.",
+    )
+    ORGANIZATION_MEMBERSHIP_NOT_FOUND = (
+        "ORGANIZATION_MEMBERSHIP_NOT_FOUND",
+        "Emitted by organization-admin membership lookup failures.",
+    )
+    ORGANIZATION_LAST_PRIVILEGED_MEMBER = (
+        "ORGANIZATION_LAST_PRIVILEGED_MEMBER",
+        "Emitted by organization-admin last privileged member protection.",
+    )
+    ORGANIZATION_INVITATION_INVALID = (
+        "ORGANIZATION_INVITATION_INVALID",
+        "Emitted by InvalidOrganizationInvitationTokenError.",
+    )
+    ORGANIZATION_INVITATION_EXPIRED = (
+        "ORGANIZATION_INVITATION_EXPIRED",
+        "Emitted by ExpiredOrganizationInvitationTokenError.",
+    )
+    ORGANIZATION_INVITATION_EMAIL_MISMATCH = (
+        "ORGANIZATION_INVITATION_EMAIL_MISMATCH",
+        "Emitted by OrganizationInvitationEmailMismatchError.",
+    )
 
 
 class TotpErrorCode(_DocumentedErrorCode):
@@ -177,6 +215,10 @@ class ErrorCode(_DocumentedErrorCode):
     AUTHORIZATION_DENIED = _documented_member(AuthErrorCode.AUTHORIZATION_DENIED)
     INSUFFICIENT_ROLES = _documented_member(RoleErrorCode.INSUFFICIENT_ROLES)
     INSUFFICIENT_PERMISSIONS = _documented_member(RoleErrorCode.INSUFFICIENT_PERMISSIONS)
+    INSUFFICIENT_ORGANIZATION_ROLES = _documented_member(RoleErrorCode.INSUFFICIENT_ORGANIZATION_ROLES)
+    INSUFFICIENT_ORGANIZATION_PERMISSIONS = _documented_member(
+        RoleErrorCode.INSUFFICIENT_ORGANIZATION_PERMISSIONS,
+    )
     RESET_PASSWORD_BAD_TOKEN = _documented_member(TokenErrorCode.RESET_PASSWORD_BAD_TOKEN)
     RESET_PASSWORD_INVALID_PASSWORD = _documented_member(TokenErrorCode.RESET_PASSWORD_INVALID_PASSWORD)
     VERIFY_USER_BAD_TOKEN = _documented_member(TokenErrorCode.VERIFY_USER_BAD_TOKEN)
@@ -184,6 +226,7 @@ class ErrorCode(_DocumentedErrorCode):
     UPDATE_USER_EMAIL_ALREADY_EXISTS = _documented_member(AuthErrorCode.UPDATE_USER_EMAIL_ALREADY_EXISTS)
     UPDATE_USER_INVALID_PASSWORD = _documented_member(AuthErrorCode.UPDATE_USER_INVALID_PASSWORD)
     SUPERUSER_CANNOT_DELETE_SELF = _documented_member(AuthErrorCode.SUPERUSER_CANNOT_DELETE_SELF)
+    ORGANIZATION_SWITCH_DENIED = _documented_member(AuthErrorCode.ORGANIZATION_SWITCH_DENIED)
     OAUTH_NOT_AVAILABLE_EMAIL = _documented_member(OAuthErrorCode.OAUTH_NOT_AVAILABLE_EMAIL)
     OAUTH_STATE_INVALID = _documented_member(OAuthErrorCode.OAUTH_STATE_INVALID)
     OAUTH_EMAIL_NOT_VERIFIED = _documented_member(OAuthErrorCode.OAUTH_EMAIL_NOT_VERIFIED)
@@ -199,6 +242,16 @@ class ErrorCode(_DocumentedErrorCode):
     ROLE_STILL_ASSIGNED = _documented_member(RoleErrorCode.ROLE_STILL_ASSIGNED)
     ROLE_ASSIGNMENT_USER_NOT_FOUND = _documented_member(RoleErrorCode.ROLE_ASSIGNMENT_USER_NOT_FOUND)
     ROLE_NAME_INVALID = _documented_member(RoleErrorCode.ROLE_NAME_INVALID)
+    ORGANIZATION_ALREADY_EXISTS = _documented_member(RoleErrorCode.ORGANIZATION_ALREADY_EXISTS)
+    ORGANIZATION_NOT_FOUND = _documented_member(RoleErrorCode.ORGANIZATION_NOT_FOUND)
+    ORGANIZATION_MEMBERSHIP_ALREADY_EXISTS = _documented_member(RoleErrorCode.ORGANIZATION_MEMBERSHIP_ALREADY_EXISTS)
+    ORGANIZATION_MEMBERSHIP_NOT_FOUND = _documented_member(RoleErrorCode.ORGANIZATION_MEMBERSHIP_NOT_FOUND)
+    ORGANIZATION_LAST_PRIVILEGED_MEMBER = _documented_member(RoleErrorCode.ORGANIZATION_LAST_PRIVILEGED_MEMBER)
+    ORGANIZATION_INVITATION_INVALID = _documented_member(RoleErrorCode.ORGANIZATION_INVITATION_INVALID)
+    ORGANIZATION_INVITATION_EXPIRED = _documented_member(RoleErrorCode.ORGANIZATION_INVITATION_EXPIRED)
+    ORGANIZATION_INVITATION_EMAIL_MISMATCH = _documented_member(
+        RoleErrorCode.ORGANIZATION_INVITATION_EMAIL_MISMATCH,
+    )
     TOTP_PENDING_BAD_TOKEN = _documented_member(TotpErrorCode.TOTP_PENDING_BAD_TOKEN)
     TOTP_CODE_INVALID = _documented_member(TotpErrorCode.TOTP_CODE_INVALID)
     TOTP_ALREADY_ENABLED = _documented_member(TotpErrorCode.TOTP_ALREADY_ENABLED)
@@ -227,6 +280,8 @@ ERROR_CODE_REGISTRY: dict[ErrorCode, _DocumentedErrorCode] = {
     ErrorCode.AUTHORIZATION_DENIED: AuthErrorCode.AUTHORIZATION_DENIED,
     ErrorCode.INSUFFICIENT_ROLES: RoleErrorCode.INSUFFICIENT_ROLES,
     ErrorCode.INSUFFICIENT_PERMISSIONS: RoleErrorCode.INSUFFICIENT_PERMISSIONS,
+    ErrorCode.INSUFFICIENT_ORGANIZATION_ROLES: RoleErrorCode.INSUFFICIENT_ORGANIZATION_ROLES,
+    ErrorCode.INSUFFICIENT_ORGANIZATION_PERMISSIONS: RoleErrorCode.INSUFFICIENT_ORGANIZATION_PERMISSIONS,
     ErrorCode.RESET_PASSWORD_BAD_TOKEN: TokenErrorCode.RESET_PASSWORD_BAD_TOKEN,
     ErrorCode.RESET_PASSWORD_INVALID_PASSWORD: TokenErrorCode.RESET_PASSWORD_INVALID_PASSWORD,
     ErrorCode.VERIFY_USER_BAD_TOKEN: TokenErrorCode.VERIFY_USER_BAD_TOKEN,
@@ -234,6 +289,7 @@ ERROR_CODE_REGISTRY: dict[ErrorCode, _DocumentedErrorCode] = {
     ErrorCode.UPDATE_USER_EMAIL_ALREADY_EXISTS: AuthErrorCode.UPDATE_USER_EMAIL_ALREADY_EXISTS,
     ErrorCode.UPDATE_USER_INVALID_PASSWORD: AuthErrorCode.UPDATE_USER_INVALID_PASSWORD,
     ErrorCode.SUPERUSER_CANNOT_DELETE_SELF: AuthErrorCode.SUPERUSER_CANNOT_DELETE_SELF,
+    ErrorCode.ORGANIZATION_SWITCH_DENIED: AuthErrorCode.ORGANIZATION_SWITCH_DENIED,
     ErrorCode.OAUTH_NOT_AVAILABLE_EMAIL: OAuthErrorCode.OAUTH_NOT_AVAILABLE_EMAIL,
     ErrorCode.OAUTH_STATE_INVALID: OAuthErrorCode.OAUTH_STATE_INVALID,
     ErrorCode.OAUTH_EMAIL_NOT_VERIFIED: OAuthErrorCode.OAUTH_EMAIL_NOT_VERIFIED,
@@ -249,6 +305,14 @@ ERROR_CODE_REGISTRY: dict[ErrorCode, _DocumentedErrorCode] = {
     ErrorCode.ROLE_STILL_ASSIGNED: RoleErrorCode.ROLE_STILL_ASSIGNED,
     ErrorCode.ROLE_ASSIGNMENT_USER_NOT_FOUND: RoleErrorCode.ROLE_ASSIGNMENT_USER_NOT_FOUND,
     ErrorCode.ROLE_NAME_INVALID: RoleErrorCode.ROLE_NAME_INVALID,
+    ErrorCode.ORGANIZATION_ALREADY_EXISTS: RoleErrorCode.ORGANIZATION_ALREADY_EXISTS,
+    ErrorCode.ORGANIZATION_NOT_FOUND: RoleErrorCode.ORGANIZATION_NOT_FOUND,
+    ErrorCode.ORGANIZATION_MEMBERSHIP_ALREADY_EXISTS: RoleErrorCode.ORGANIZATION_MEMBERSHIP_ALREADY_EXISTS,
+    ErrorCode.ORGANIZATION_MEMBERSHIP_NOT_FOUND: RoleErrorCode.ORGANIZATION_MEMBERSHIP_NOT_FOUND,
+    ErrorCode.ORGANIZATION_LAST_PRIVILEGED_MEMBER: RoleErrorCode.ORGANIZATION_LAST_PRIVILEGED_MEMBER,
+    ErrorCode.ORGANIZATION_INVITATION_INVALID: RoleErrorCode.ORGANIZATION_INVITATION_INVALID,
+    ErrorCode.ORGANIZATION_INVITATION_EXPIRED: RoleErrorCode.ORGANIZATION_INVITATION_EXPIRED,
+    ErrorCode.ORGANIZATION_INVITATION_EMAIL_MISMATCH: RoleErrorCode.ORGANIZATION_INVITATION_EMAIL_MISMATCH,
     ErrorCode.TOTP_PENDING_BAD_TOKEN: TotpErrorCode.TOTP_PENDING_BAD_TOKEN,
     ErrorCode.TOTP_CODE_INVALID: TotpErrorCode.TOTP_CODE_INVALID,
     ErrorCode.TOTP_ALREADY_ENABLED: TotpErrorCode.TOTP_ALREADY_ENABLED,

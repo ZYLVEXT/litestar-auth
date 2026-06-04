@@ -21,7 +21,7 @@ import litestar_auth._plugin.database_token as database_token_module
 import litestar_auth._plugin.features as plugin_features_module
 import litestar_auth.guards._api_key_guards as api_key_guards_module
 from litestar_auth import DEFAULT_SUPERUSER_ROLE_NAME
-from litestar_auth._permissions import permissions_grant
+from litestar_auth._permissions import StaticRolePermissionResolver, permissions_grant
 from litestar_auth._plugin.oauth_contract import _build_oauth_route_registration_contract
 from litestar_auth._plugin.scoped_session import SessionFactory
 from litestar_auth._plugin.user_manager_builder import (
@@ -31,6 +31,7 @@ from litestar_auth._plugin.user_manager_builder import (
     resolve_password_validator,
     resolve_user_manager_factory,
 )
+from litestar_auth._tenant_resolution import DEFAULT_ORGANIZATION_HEADER, ClaimTenantResolver, HeaderTenantResolver
 from litestar_auth.authentication.backend import AuthenticationBackend
 from litestar_auth.authentication.strategy._jwt_denylist import InMemoryJWTDenylistStore, JWTDenylistStore
 from litestar_auth.authentication.strategy.db import DatabaseTokenStrategy
@@ -69,6 +70,7 @@ DEFAULT_API_KEY_LAST_USED_THROTTLE_SECONDS = plugin_config_module.DEFAULT_API_KE
 DEFAULT_API_KEY_SIGNED_BODY_MAX_MESSAGES = plugin_config_module.DEFAULT_API_KEY_SIGNED_BODY_MAX_MESSAGES
 DatabaseTokenAuthConfig = plugin_config_module.DatabaseTokenAuthConfig
 OAuthConfig = plugin_config_module.OAuthConfig
+OrganizationConfig = plugin_config_module.OrganizationConfig
 StartupBackendTemplate = plugin_config_module.StartupBackendTemplate
 TotpConfig = plugin_config_module.TotpConfig
 require_session_maker = plugin_config_module.require_session_maker
@@ -106,6 +108,7 @@ def test_plugin_config_reexports_feature_config_contracts() -> None:
     assert plugin_config_module.ApiKeyConfig is plugin_features_module.ApiKeyConfig
     assert plugin_config_module.DatabaseTokenAuthConfig is plugin_features_module.DatabaseTokenAuthConfig
     assert plugin_config_module.OAuthConfig is plugin_features_module.OAuthConfig
+    assert plugin_config_module.OrganizationConfig is plugin_features_module.OrganizationConfig
     assert plugin_config_module.TotpConfig is plugin_features_module.TotpConfig
 
 
@@ -202,10 +205,12 @@ def test_feature_registry_captures_feature_configs_and_backend_inventory_once() 
     assert registry.config_for("api_key") is config.api_keys
     assert registry.config_for("totp") is config.totp_config
     assert registry.config_for("oauth") is oauth_config
+    assert registry.config_for("organization") is config.organization_config
     assert registry.config_for("database_token") is None
     assert registry.is_enabled("api_key") is True
     assert registry.is_enabled("totp") is True
     assert registry.is_enabled("oauth") is True
+    assert registry.is_enabled("organization") is False
     assert registry.is_enabled("database_token") is False
     assert [backend.name for backend in registry.startup_backends()] == ["primary", "api_key"]
     assert registry.backend_by_feature["api_key"] == (1, registry.startup_backends()[1])
@@ -238,6 +243,9 @@ def test_feature_registry_enabled_disabled_permutations() -> None:
             reset_password_token_secret=RESET_PASSWORD_SECRET,
         ),
     ).resolve_feature_registry()
+    organization_registry = _minimal_config(
+        organization_config=OrganizationConfig(enabled=True, store_factory=cast("Any", lambda _session: object())),
+    ).resolve_feature_registry()
 
     assert disabled_registry.enabled_features == frozenset()
     assert api_key_registry.enabled_features == frozenset({plugin_features_module.API_KEY_FEATURE})
@@ -248,6 +256,9 @@ def test_feature_registry_enabled_disabled_permutations() -> None:
         0,
         database_token_registry.startup_backends()[0],
     )
+    assert organization_registry.enabled_features == frozenset({plugin_features_module.ORGANIZATION_FEATURE})
+    assert [backend.name for backend in organization_registry.startup_backends()] == ["primary"]
+    assert plugin_features_module.ORGANIZATION_FEATURE not in organization_registry.backend_by_feature
 
 
 def test_resolve_backends_binds_api_key_store_factory_to_request_session() -> None:
@@ -320,10 +331,23 @@ def test_feature_configs_module_constructors_apply_documented_defaults() -> None
     """Feature config constructors apply documented defaults and reject conflicting OAuth keys."""
     totp_config_type = plugin_features_module.TotpConfig
     oauth_config_type = plugin_features_module.OAuthConfig
+    organization_config_type = plugin_features_module.OrganizationConfig
     database_token_config_type = plugin_features_module.DatabaseTokenAuthConfig
 
     assert totp_config_type(totp_pending_secret=TOTP_PENDING_SECRET).totp_algorithm == "SHA256"
     assert oauth_config_type().has_oauth_token_encryption is False
+    assert organization_config_type().enabled is False
+    assert organization_config_type().slug_min_length == 1
+    assert (
+        organization_config_type().slug_max_length
+        == plugin_features_module.FEATURE_DEFAULTS.organization.slug_max_length
+    )
+    assert organization_config_type().tenant_header_name == DEFAULT_ORGANIZATION_HEADER
+    assert organization_config_type().include_switch_organization is False
+    assert organization_config_type().include_organization_invitations is False
+    assert organization_config_type().role_precedence == "replace"
+    assert organization_config_type().require_authorization_context is False
+    assert isinstance(organization_config_type().tenant_resolver, HeaderTenantResolver)
     assert database_token_config_type(token_hash_secret="0123456789abcdef" * 4).backend_name == "database"
     keyring = FernetKeyringConfig(active_key_id="current", keys={"current": _fernet_key()})
     with pytest.raises(ConfigurationError, match="oauth_token_encryption_key or oauth_token_encryption_keyring"):
@@ -362,6 +386,7 @@ def _minimal_config(  # noqa: PLR0913
     include_users: bool = False,
     totp_config: TotpConfig | None = None,
     api_keys: ApiKeyConfig | None = None,
+    organization_config: OrganizationConfig | None = None,
     user_manager_security: UserManagerSecurity[UUID] | None = None,
     user_manager_class: type[Any] | None = None,
     id_parser: type[UUID] | None = None,
@@ -398,6 +423,7 @@ def _minimal_config(  # noqa: PLR0913
         user_manager_security=resolved_manager_security,
         include_users=include_users,
         api_keys=api_keys or ApiKeyConfig(),
+        organization_config=OrganizationConfig() if organization_config is None else organization_config,
         id_parser=id_parser,
         totp_config=totp_config,
         login_identifier=login_identifier,
@@ -412,6 +438,249 @@ def test_litestar_auth_config_declares_oauth_config_field() -> None:
     dataclass_fields = LitestarAuthConfig.__dataclass_fields__
 
     assert "oauth_config" in dataclass_fields
+
+
+def test_litestar_auth_config_declares_organization_config_field() -> None:
+    """The plugin config exposes an inert nested organization config field."""
+    dataclass_fields = LitestarAuthConfig.__dataclass_fields__
+    config = _minimal_config()
+    tenant_resolver = config.organization_config.tenant_resolver
+
+    assert "organization_config" in dataclass_fields
+    assert isinstance(config.organization_config, OrganizationConfig)
+    assert config.organization_config.enabled is False
+    assert config.organization_config.store_factory is None
+    assert config.organization_config.include_switch_organization is False
+    assert config.organization_config.tenant_header_name == DEFAULT_ORGANIZATION_HEADER
+    assert config.organization_config.role_precedence == "replace"
+    assert config.organization_config.require_authorization_context is False
+    assert isinstance(tenant_resolver, HeaderTenantResolver)
+    assert tenant_resolver.header_name == DEFAULT_ORGANIZATION_HEADER
+    assert config.resolve_feature_registry().is_enabled(plugin_features_module.ORGANIZATION_FEATURE) is False
+    assert [backend.name for backend in config.resolve_startup_backends()] == ["primary"]
+
+
+def test_organization_config_custom_header_updates_default_tenant_resolver() -> None:
+    """The default tenant resolver follows the configured organization header."""
+    organization_config = OrganizationConfig(tenant_header_name="X-Tenant")
+    tenant_resolver = organization_config.tenant_resolver
+
+    assert organization_config.tenant_header_name == "X-Tenant"
+    assert isinstance(tenant_resolver, HeaderTenantResolver)
+    assert tenant_resolver.header_name == "X-Tenant"
+
+
+def test_organization_config_switch_endpoint_selects_claim_resolver_by_default() -> None:
+    """Switch-organization tokens use signed JWT claims as the default tenant source."""
+    organization_config = OrganizationConfig(include_switch_organization=True)
+
+    assert isinstance(organization_config.tenant_resolver, ClaimTenantResolver)
+
+
+def test_disabled_organization_config_keeps_tenant_resolution_settings_inert() -> None:
+    """Disabled organization settings are captured but not startup-validated."""
+    organization_config = OrganizationConfig(
+        tenant_header_name=" ",
+        tenant_resolver=cast("Any", object()),
+    )
+    config = _minimal_config(organization_config=organization_config)
+    plugin = LitestarAuth(config)
+
+    assert plugin.config.organization_config is organization_config
+    assert plugin.config.resolve_feature_registry().is_enabled(plugin_features_module.ORGANIZATION_FEATURE) is False
+
+
+def test_disabled_organization_config_keeps_default_authorization_policy_inert() -> None:
+    """The default authorization policy does not activate the disabled organization feature."""
+    organization_config = OrganizationConfig(role_precedence="merge")
+    config = _minimal_config(organization_config=organization_config)
+    plugin = LitestarAuth(config)
+
+    assert plugin.config.organization_config is organization_config
+    assert plugin.config.resolve_feature_registry().is_enabled(plugin_features_module.ORGANIZATION_FEATURE) is False
+
+
+def test_organization_config_enabled_store_factory_resolves_without_backend_wiring() -> None:
+    """Enabled organization config validates its store factory without registering auth backends."""
+    stores: list[object] = []
+
+    def _store_factory(_session: object) -> object:
+        store = object()
+        stores.append(store)
+        return store
+
+    config = _minimal_config(
+        organization_config=OrganizationConfig(enabled=True, store_factory=cast("Any", _store_factory)),
+    )
+    plugin = LitestarAuth(config)
+    registry = config.resolve_feature_registry()
+    store_factory = config.organization_config.store_factory
+    assert store_factory is not None
+    store = store_factory(cast("Any", DummySession()))
+
+    assert plugin.config is config
+    assert store is stores[0]
+    assert registry.is_enabled(plugin_features_module.ORGANIZATION_FEATURE) is True
+    assert registry.config_for(plugin_features_module.ORGANIZATION_FEATURE) is config.organization_config
+    assert [backend.name for backend in registry.startup_backends()] == ["primary"]
+    assert plugin_features_module.ORGANIZATION_FEATURE not in registry.backend_by_feature
+
+
+def test_organization_config_enabled_without_store_fails_startup_validation() -> None:
+    """Enabled organization config requires an explicit persistence store factory."""
+    config = _minimal_config(organization_config=OrganizationConfig(enabled=True))
+
+    with pytest.raises(ConfigurationError, match=r"organization_config\.store_factory is required"):
+        LitestarAuth(config)
+
+
+@pytest.mark.parametrize(
+    ("organization_config", "match"),
+    [
+        pytest.param(
+            OrganizationConfig(enabled=True, store_factory=cast("Any", object())),
+            r"organization_config\.store_factory must be callable",
+            id="non-callable-store",
+        ),
+        pytest.param(
+            OrganizationConfig(
+                enabled=True,
+                store_factory=cast("Any", lambda _session: object()),
+                tenant_header_name=" ",
+            ),
+            r"organization_config\.tenant_header_name must be a non-empty string",
+            id="blank-tenant-header",
+        ),
+        pytest.param(
+            OrganizationConfig(
+                enabled=True,
+                store_factory=cast("Any", lambda _session: object()),
+                tenant_resolver=cast("Any", object()),
+            ),
+            r"organization_config\.tenant_resolver must be callable",
+            id="non-callable-tenant-resolver",
+        ),
+        pytest.param(
+            OrganizationConfig(
+                enabled=True,
+                store_factory=cast("Any", lambda _session: object()),
+                include_switch_organization=cast("Any", "yes"),
+            ),
+            r"organization_config\.include_switch_organization must be a boolean",
+            id="non-boolean-switch-organization",
+        ),
+        pytest.param(
+            OrganizationConfig(
+                enabled=True,
+                store_factory=cast("Any", lambda _session: object()),
+                include_organization_admin=cast("Any", "yes"),
+            ),
+            r"organization_config\.include_organization_admin must be a boolean",
+            id="non-boolean-organization-admin",
+        ),
+        pytest.param(
+            OrganizationConfig(
+                enabled=True,
+                store_factory=cast("Any", lambda _session: object()),
+                include_organization_invitations=cast("Any", "yes"),
+            ),
+            r"organization_config\.include_organization_invitations must be a boolean",
+            id="non-boolean-organization-invitations",
+        ),
+        pytest.param(
+            OrganizationConfig(
+                enabled=True,
+                store_factory=cast("Any", lambda _session: object()),
+                role_precedence=cast("Any", "union"),
+            ),
+            r"organization_config\.role_precedence must be 'replace' or 'merge'",
+            id="invalid-role-precedence",
+        ),
+        pytest.param(
+            OrganizationConfig(
+                enabled=True,
+                store_factory=cast("Any", lambda _session: object()),
+                require_authorization_context=cast("Any", "yes"),
+            ),
+            r"organization_config\.require_authorization_context must be a boolean",
+            id="non-boolean-require-authorization-context",
+        ),
+        pytest.param(
+            OrganizationConfig(
+                enabled=True,
+                store_factory=cast("Any", lambda _session: object()),
+                slug_min_length=0,
+            ),
+            r"organization_config\.slug_min_length must be greater than 0",
+            id="invalid-slug-min",
+        ),
+        pytest.param(
+            OrganizationConfig(
+                enabled=True,
+                store_factory=cast("Any", lambda _session: object()),
+                slug_min_length=4,
+                slug_max_length=3,
+            ),
+            r"organization_config\.slug_max_length must be greater than or equal to slug_min_length",
+            id="invalid-slug-max",
+        ),
+    ],
+)
+def test_organization_config_rejects_invalid_enabled_settings(
+    organization_config: OrganizationConfig,
+    match: str,
+) -> None:
+    """Enabled organization config validates the passive feature settings fail-closed."""
+    config = _minimal_config(organization_config=organization_config)
+
+    with pytest.raises(ConfigurationError, match=match):
+        LitestarAuth(config)
+
+
+def test_organization_config_rejects_required_authorization_when_disabled() -> None:
+    """Org authorization cannot be required while the organization feature is disabled."""
+    config = _minimal_config(organization_config=OrganizationConfig(require_authorization_context=True))
+
+    with pytest.raises(ConfigurationError, match=r"require_authorization_context cannot be True"):
+        LitestarAuth(config)
+
+
+def test_organization_config_rejects_switch_endpoint_when_disabled() -> None:
+    """Switch-organization route opt-in requires the organization feature."""
+    config = _minimal_config(organization_config=OrganizationConfig(include_switch_organization=True))
+
+    with pytest.raises(ConfigurationError, match=r"include_switch_organization cannot be True"):
+        LitestarAuth(config)
+
+
+def test_organization_config_rejects_admin_when_disabled() -> None:
+    """Organization admin opt-in requires the organization feature."""
+    config = _minimal_config(organization_config=OrganizationConfig(include_organization_admin=True))
+
+    with pytest.raises(ConfigurationError, match=r"include_organization_admin cannot be True"):
+        LitestarAuth(config)
+
+
+def test_organization_config_rejects_invitation_endpoints_when_disabled() -> None:
+    """Organization invitation route opt-in requires the organization feature."""
+    config = _minimal_config(organization_config=OrganizationConfig(include_organization_invitations=True))
+
+    with pytest.raises(ConfigurationError, match=r"include_organization_invitations cannot be True"):
+        LitestarAuth(config)
+
+
+def test_organization_config_rejects_invitation_routes_without_invitation_secret() -> None:
+    """Invitation routes require token signing material at startup."""
+    config = _minimal_config(
+        organization_config=OrganizationConfig(
+            enabled=True,
+            store_factory=cast("Any", lambda _session: object()),
+            include_organization_invitations=True,
+        ),
+    )
+
+    with pytest.raises(ConfigurationError, match=r"organization_invitation_token_secret"):
+        LitestarAuth(config)
 
 
 def test_api_key_config_defaults_match_plugin_contract() -> None:
@@ -486,6 +755,12 @@ def test_litestar_auth_config_resolved_defaults_snapshot_is_coherent() -> None:
             if defaults.features.oauth.config
             else None,
         },
+        "organization": {
+            "enabled": defaults.features.organization.enabled,
+            "store_factory": "set" if defaults.features.organization.config.store_factory is not None else "unset",
+            "slug_min_length": defaults.features.organization.config.slug_min_length,
+            "slug_max_length": defaults.features.organization.config.slug_max_length,
+        },
     } == {
         "user_db_factory": "explicit",
         "id_parser": "unset",
@@ -503,6 +778,12 @@ def test_litestar_auth_config_resolved_defaults_snapshot_is_coherent() -> None:
             "stepup_allow_recovery": False,
         },
         "oauth": {"enabled": True, "cookie_secure": False},
+        "organization": {
+            "enabled": False,
+            "store_factory": "unset",
+            "slug_min_length": 1,
+            "slug_max_length": 128,
+        },
     }
 
 
@@ -618,6 +899,24 @@ def test_litestar_auth_config_resolves_static_role_permission_resolver() -> None
 
     assert resolver.resolve(ExampleUser(id=uuid4(), roles=["admin"])) == frozenset({"posts:*", "posts:read"})
     assert permissions_grant(resolver.resolve(ExampleUser(id=uuid4(), roles=["owner"])), "anything:delete")
+
+
+def test_litestar_auth_config_passes_organization_authorization_policy_to_static_resolver() -> None:
+    """The built-in permission resolver consumes OrganizationConfig authorization policy."""
+    config = _minimal_config(
+        role_permissions={"admin": ("posts:read",)},
+        organization_config=OrganizationConfig(
+            enabled=True,
+            store_factory=cast("Any", lambda _session: object()),
+            role_precedence="merge",
+            require_authorization_context=True,
+        ),
+    )
+    resolver = config.resolve_permission_resolver()
+
+    assert isinstance(resolver, StaticRolePermissionResolver)
+    assert resolver.organization_role_precedence == "merge"
+    assert resolver.require_organization_context is True
 
 
 def test_litestar_auth_config_permission_resolver_override_wins() -> None:

@@ -9,7 +9,12 @@ from typing import TYPE_CHECKING, Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from litestar_auth._plugin.features._defaults import FEATURE_DEFAULTS, ApiKeyLastUsedWriteStrategy
+from litestar_auth._plugin.features._defaults import (
+    FEATURE_DEFAULTS,
+    ApiKeyLastUsedWriteStrategy,
+    OrganizationRolePrecedence,
+)
+from litestar_auth._tenant_resolution import ClaimTenantResolver, HeaderTenantResolver
 from litestar_auth.exceptions import ConfigurationError
 
 if TYPE_CHECKING:
@@ -17,13 +22,15 @@ if TYPE_CHECKING:
 
     from litestar.connection import ASGIConnection
 
+    from litestar_auth._tenant_resolution import TenantResolver
     from litestar_auth.authentication.strategy.jwt import JWTDenylistStore
     from litestar_auth.config import OAuthProviderConfig
-    from litestar_auth.db import BaseApiKeyStore
+    from litestar_auth.db import BaseApiKeyStore, BaseOrganizationStore
     from litestar_auth.manager import FernetKeyringConfig
     from litestar_auth.totp import TotpAlgorithm, TotpEnrollmentStore, UsedTotpCodeStore
 
 type ApiKeyStoreFactory = Callable[[AsyncSession], BaseApiKeyStore[Any, Any]]
+type OrganizationStoreFactory = Callable[[AsyncSession], BaseOrganizationStore[Any, Any, Any, Any]]
 type ApiKeyScopeAuthority = Callable[[ASGIConnection[Any, Any, Any, Any], frozenset[str]], bool]
 
 
@@ -102,6 +109,32 @@ class ApiKeyConfig:
     signed_body_max_messages: int = FEATURE_DEFAULTS.api_key.signed_body_max_messages
     nonce_store: object | None = None
     secret_encryption_keyring: FernetKeyringConfig | None = field(default=None, repr=False)
+
+
+@dataclass(slots=True)
+class OrganizationConfig:
+    """Organization feature settings."""
+
+    enabled: bool = False
+    store_factory: OrganizationStoreFactory | None = None
+    include_switch_organization: bool = FEATURE_DEFAULTS.organization.include_switch_organization
+    include_organization_admin: bool = FEATURE_DEFAULTS.organization.include_organization_admin
+    include_organization_invitations: bool = FEATURE_DEFAULTS.organization.include_organization_invitations
+    slug_min_length: int = FEATURE_DEFAULTS.organization.slug_min_length
+    slug_max_length: int = FEATURE_DEFAULTS.organization.slug_max_length
+    tenant_header_name: str = FEATURE_DEFAULTS.organization.tenant_header_name
+    tenant_resolver: TenantResolver | None = None
+    role_precedence: OrganizationRolePrecedence = FEATURE_DEFAULTS.organization.role_precedence
+    require_authorization_context: bool = FEATURE_DEFAULTS.organization.require_authorization_context
+
+    def __post_init__(self) -> None:
+        """Resolve the default tenant resolver from the configured header name."""
+        if self.tenant_resolver is None:
+            self.tenant_resolver = (
+                ClaimTenantResolver()
+                if self.include_switch_organization
+                else HeaderTenantResolver(header_name=self.tenant_header_name)
+            )
 
 
 @dataclass(slots=True)

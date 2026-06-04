@@ -6,6 +6,16 @@ What this library aims to cover today, what it deliberately does not include, an
 
 Registration, login/logout, email verification and password reset, Bearer / cookie / API-key transports, JWT / database / Redis / API-key strategies, guards, role-derived permission authorization, optional user CRUD, TOTP, OAuth login and account linking, rate limiting, hooks, configurable login identifier (`email` or `username`). See [Features on the home page](index.md).
 
+Opt-in **multi-tenant organizations** (roadmap #10) are complete for the library's intended scope:
+global `User` plus `OrganizationMembership`, tenant resolution, verified current-organization
+context, organization-scoped roles and permissions, JWT active-organization switching, operator
+administration (HTTP and CLI), and email invitations. Configuration, HTTP routes, security
+posture, and extension points are documented in
+[Organizations](configuration/organizations.md). The library does not send invitation email;
+applications deliver the raw token from `on_after_organization_invitation`. Application-table data
+isolation remains the application's responsibility: the library does not add tenant foreign keys,
+mutate application queries, or filter application-owned tables.
+
 ## Explicitly out of scope (library core)
 
 - Built-in **email transport** (use hooks).
@@ -14,13 +24,19 @@ Registration, login/logout, email verification and password reset, Bearer / cook
   permission catalogs, or multi-tenant authorization semantics. The shipped `role` / `user_role`
   tables remain the persistence layer behind flat role membership; `role_permissions` and custom
   `permission_resolver` objects are the current extension points for effective permissions.
+- Automatic row-level filtering or isolation helpers for application-owned tables. Applications
+  remain responsible for tenant foreign keys, query scoping, and database isolation on their own
+  domain tables.
 - **WebAuthn** / passkeys.
 - Built-in **audit log** storage.
 - End-user **session dashboard** API.
 
 ## Product evolution
 
-Planned directions include: production-first durable JWT denylist defaults, operator tooling around the documented Fernet keyring rotation helpers, audit trails, WebAuthn, richer RBAC policy tooling, DB-backed permission resolution helpers, session management APIs, and multi-tenant authorization semantics. Timelines are not committed here.
+Planned directions include: production-first durable JWT denylist defaults, operator tooling around
+the documented Fernet keyring rotation helpers, audit trails, WebAuthn, richer RBAC policy tooling,
+DB-backed permission resolution helpers, session management APIs, and optional guidance or helpers
+for application-table isolation. Timelines are not committed here.
 
 ## Definition of done (feature-level)
 

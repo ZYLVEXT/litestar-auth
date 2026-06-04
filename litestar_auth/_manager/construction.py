@@ -27,6 +27,7 @@ type PasswordValidator = Callable[[str], None]
 
 DEFAULT_VERIFY_TOKEN_LIFETIME = timedelta(hours=1)
 DEFAULT_RESET_PASSWORD_TOKEN_LIFETIME = timedelta(hours=1)
+DEFAULT_ORGANIZATION_INVITATION_TOKEN_LIFETIME = timedelta(days=7)
 LOGIN_IDENTIFIER_DIGEST_SIZE = 16
 
 
@@ -46,6 +47,7 @@ class AccountTokenSecrets:
 
     verification_token_secret: SecretValueProtocol
     reset_password_token_secret: SecretValueProtocol
+    organization_invitation_token_secret: SecretValueProtocol | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -68,6 +70,7 @@ class ConstructorAttributes[UP: UserProtocol[Any], ID]:
     resolved_secret_inputs: ResolvedSecretInputs[ID]
     verification_token_lifetime: timedelta
     reset_password_token_lifetime: timedelta
+    organization_invitation_token_lifetime: timedelta
     password_validator: Callable[[str], None] | None
     reset_verification_on_email_change: bool
     backends: tuple[object, ...]
@@ -90,6 +93,7 @@ class BaseUserManagerConfig[UP: UserProtocol[Any], ID]:
     security: UserManagerSecurity[ID] | None = None
     verification_token_lifetime: timedelta = DEFAULT_VERIFY_TOKEN_LIFETIME
     reset_password_token_lifetime: timedelta = DEFAULT_RESET_PASSWORD_TOKEN_LIFETIME
+    organization_invitation_token_lifetime: timedelta = DEFAULT_ORGANIZATION_INVITATION_TOKEN_LIFETIME
     password_validator: Callable[[str], None] | None = None
     reset_verification_on_email_change: bool = True
     backends: tuple[object, ...] = ()
@@ -119,6 +123,7 @@ class BaseUserManagerConstructorKwargs[UP: UserProtocol[Any], ID](TypedDict, tot
     security: UserManagerSecurity[ID] | None
     verification_token_lifetime: timedelta
     reset_password_token_lifetime: timedelta
+    organization_invitation_token_lifetime: timedelta
     password_validator: Callable[[str], None] | None
     reset_verification_on_email_change: bool
     backends: tuple[object, ...]
@@ -200,9 +205,24 @@ def resolve_account_token_secrets[ID](
         warning_stacklevel=warning_stacklevel,
         unsafe_testing=unsafe_testing,
     )
+    organization_invitation_token_secret = (
+        None
+        if manager_security.organization_invitation_token_secret is None
+        else _resolve_token_secret(
+            manager_security.organization_invitation_token_secret,
+            label="organization_invitation_token_secret",
+            warning_stacklevel=warning_stacklevel,
+            unsafe_testing=unsafe_testing,
+        )
+    )
     return AccountTokenSecrets(
         verification_token_secret=secret_factory(verification_token_secret),
         reset_password_token_secret=secret_factory(reset_password_token_secret),
+        organization_invitation_token_secret=(
+            None
+            if organization_invitation_token_secret is None
+            else secret_factory(organization_invitation_token_secret)
+        ),
     )
 
 
@@ -271,6 +291,11 @@ def validate_secret_distinctness[ID](
             resolved_security,
             verification_token_secret=resolved_verification_token_secret,
             reset_password_token_secret=resolved_reset_password_token_secret,
+            organization_invitation_token_secret=(
+                None
+                if account_token_secrets.organization_invitation_token_secret is None
+                else account_token_secrets.organization_invitation_token_secret.get_secret_value()
+            ),
         ),
     )
 

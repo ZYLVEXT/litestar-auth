@@ -14,6 +14,46 @@
   (`DEFAULT_RESOLVED_PERMISSIONS_DEPENDENCY_KEY`) exposes the request's resolved permissions for response
   shaping and UI hints — not a substitute for route guards.
 
+- **Multi-tenant organizations (opt-in).** New global-`User` + `OrganizationMembership` identity model with
+  bundled lazy ORM models `Organization`, `OrganizationMembership`, and `OrganizationInvitation` (import from
+  `litestar_auth.models`; composable mixins `OrganizationMixin` / `OrganizationMembershipMixin` /
+  `OrganizationInvitationMixin`, kept out of the root package and `litestar_auth.db` to preserve lazy ORM
+  import isolation). Persistence goes through `BaseOrganizationStore` (with `OrganizationData`,
+  `MembershipData`, `OrganizationInvitationData` payloads) and the bundled `SQLAlchemyOrganizationStore`
+  (`litestar_auth.db.sqlalchemy`). Everything is gated by `LitestarAuthConfig.organization_config`
+  (`OrganizationConfig`, disabled by default). A request's verified organization is resolved by a pluggable
+  `TenantResolver` — built-ins `HeaderTenantResolver`, `SubdomainTenantResolver`, and the signed
+  `ClaimTenantResolver` — exposed to handlers via the `litestar_auth_current_organization` dependency, with
+  the `requires_organization_membership` guard for member-only routes.
+
+- **Organization-scoped authorization.** `has_organization_role()` and `has_organization_permission()`
+  authorize against the caller's roles in the *current* organization. Within an organization the membership
+  roles replace the user's global flat roles for permission resolution (the configured `superuser_role_name`
+  still grants a global `*`), so the existing `has_permission()` guards become organization-scoped when an
+  organization context is present. Denials use `INSUFFICIENT_ORGANIZATION_ROLES` /
+  `INSUFFICIENT_ORGANIZATION_PERMISSIONS`; precedence and fail-closed behavior are configurable via
+  `OrganizationConfig.role_precedence` and `OrganizationConfig.require_authorization_context`.
+
+- **Signed active organization and switch-organization flow.** The JWT strategy can carry a verified
+  organization claim and issue an org-bound token; `ClaimTenantResolver` reads that signed claim (trusted,
+  unlike the header/subdomain hints). An opt-in `POST /switch-organization` endpoint
+  (`include_switch_organization`) verifies the caller's membership in the target organization before
+  reissuing an org-bound token (`ORGANIZATION_SWITCH_DENIED` on failure). Signed active organization is
+  JWT-strategy-specific; other strategies fall back to the header/subdomain resolvers. The endpoint exposes an
+  `AuthRateLimitConfig.organization_switch` rate-limit slot (off by default), mirroring the invitation
+  accept/decline slots.
+
+- **Organization administration and email invitations (opt-in).** Bundled
+  `create_organization_admin_controller` (organization CRUD + membership management) and an `organizations`
+  CLI group manage organizations and memberships behind `include_organization_admin`, with
+  last-privileged-member protection (`ORGANIZATION_LAST_PRIVILEGED_MEMBER`).
+  `create_organization_invitation_controller` (`include_organization_invitations`) adds email-scoped
+  invitations: an admin issues a signed single-use invitation token delivered via the new
+  `on_after_organization_invitation(invitation, token)` manager hook (the library never sends email), and the
+  invitee accepts at `POST /organization-invitations/accept`. Accepting or declining an invitation requires an
+  active, verified account (`is_active` + `is_verified`): an inactive or unverified caller is denied with the
+  standard permission-denied response even when holding a valid invitation token.
+
 - **Optional server-side single-use for verify and reset-password tokens.** New
   `account_token_denylist_store` on `LitestarAuthConfig` and `BaseUserManager` accepts any shared
   `JWTDenylistStore` (for example `RedisJWTDenylistStore`). When configured, a verify or reset token's
@@ -45,7 +85,22 @@
   access. Legacy simple scopes without `:` keep the previous scopes-as-role-names subset behavior for
   migration.
 
+- **Concurrent organization/membership creation returns a clean conflict.** A create-organization or
+  add-member request that loses a unique-constraint race (duplicate slug, or duplicate
+  `(user_id, organization_id)` membership) now surfaces the existing conflict domain error instead of an
+  unhandled 500. The store maps the constraint violation within a savepoint, so the outer transaction stays
+  usable and the conflict re-classification query runs without discarding earlier work.
+
 ### Security
+
+- **Tenant hints are untrusted; organization access requires verified membership.** A header- or
+  subdomain-resolved organization slug is only a lookup key: the current-organization context is published
+  only after the authenticated user's membership is verified, and every organization guard fails closed
+  without it. Switching organizations and accepting invitations both verify membership/identity
+  server-side — invitation accept requires the authenticated user's email to match the invitation
+  (`ORGANIZATION_INVITATION_EMAIL_MISMATCH`), so a leaked or forwarded invitation token cannot be used to
+  join an organization. Invitation tokens are signed, single-use, and persisted only as a hash; switch and
+  accept denials are non-enumerating.
 
 - **API-key scopes bound permission guards (least privilege).** When a request is authenticated with an
   API key, `has_permission()`, `has_all_permissions()`, and `has_any_permission()` now require the key's
@@ -70,6 +125,13 @@
   code should treat both states as `LOGIN_BAD_CREDENTIALS`.
 
 ### Documentation
+
+- **Multi-tenant organizations documented.** `docs/configuration/organizations.md`, `docs/http_api.md`, and
+  `docs/errors.md` cover the organization models, `OrganizationConfig`, tenant resolution, org-scoped guards,
+  the switch-organization endpoint, administration controllers/CLI, and invitations. The roadmap marks
+  multi-tenancy delivered and states that row-level isolation of *application* tables remains the
+  application's responsibility — the library provides the `litestar_auth_current_organization` dependency and
+  authorization primitives, not automatic query filtering.
 
 - **Guards guide documents permission-based authorization.** `docs/guards.md` covers the permission
   guards, `resource:action` / `resource:*` / `*` grammar, `role_permissions` configuration, the superuser

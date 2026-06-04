@@ -19,6 +19,7 @@ from litestar_auth.db._repositories import (
     _build_user_repository,
 )
 from litestar_auth.db._sqlalchemy_api_keys import SQLAlchemyApiKeyStore
+from litestar_auth.db._sqlalchemy_organizations import SQLAlchemyOrganizationStore
 from litestar_auth.db.base import BaseUserStore, OAuthAccountData
 from litestar_auth.exceptions import ConfigurationError, OAuthAccountAlreadyLinkedError
 from litestar_auth.oauth_encryption import (
@@ -41,6 +42,7 @@ type AsyncSessionT = AsyncSession | async_scoped_session[AsyncSession]
 
 __all__ = (
     "SQLAlchemyApiKeyStore",
+    "SQLAlchemyOrganizationStore",
     "SQLAlchemyUserDatabase",
     "SQLAlchemyUserModelProtocol",
 )

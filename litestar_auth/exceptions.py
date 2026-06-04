@@ -39,6 +39,72 @@ class AuthorizationError(LitestarAuthError):
     default_code = ErrorCode.AUTHORIZATION_DENIED
 
 
+class OrganizationAdminError(LitestarAuthError):
+    """Raised when an organization-admin operation fails.
+
+    Concrete subclasses carry a specific ``default_code``; the base keeps the
+    generic ``ErrorCode.UNKNOWN`` inherited from :class:`LitestarAuthError`.
+    """
+
+    default_message = "Organization administration failed."
+
+
+class OrganizationAlreadyExistsError(OrganizationAdminError):
+    """Raised when an organization slug is already assigned."""
+
+    default_message = "Organization already exists."
+    default_code = ErrorCode.ORGANIZATION_ALREADY_EXISTS
+
+
+class OrganizationNotFoundError(OrganizationAdminError):
+    """Raised when an organization-admin lookup target is unknown."""
+
+    default_message = "Organization not found."
+    default_code = ErrorCode.ORGANIZATION_NOT_FOUND
+
+
+class OrganizationMembershipAlreadyExistsError(OrganizationAdminError):
+    """Raised when an organization membership already exists."""
+
+    default_message = "Organization membership already exists."
+    default_code = ErrorCode.ORGANIZATION_MEMBERSHIP_ALREADY_EXISTS
+
+
+class OrganizationMembershipNotFoundError(OrganizationAdminError):
+    """Raised when an organization membership lookup target is unknown."""
+
+    default_message = "Organization membership not found."
+    default_code = ErrorCode.ORGANIZATION_MEMBERSHIP_NOT_FOUND
+
+
+class OrganizationLastPrivilegedMemberError(OrganizationAdminError):
+    """Raised when an operation would remove the final privileged organization member."""
+
+    default_message = "Organization must retain at least one privileged member."
+    default_code = ErrorCode.ORGANIZATION_LAST_PRIVILEGED_MEMBER
+
+
+class InvalidOrganizationInvitationTokenError(OrganizationAdminError):
+    """Raised when an organization invitation token or row state is invalid."""
+
+    default_message = "The organization invitation token is invalid."
+    default_code = ErrorCode.ORGANIZATION_INVITATION_INVALID
+
+
+class ExpiredOrganizationInvitationTokenError(InvalidOrganizationInvitationTokenError):
+    """Raised when an organization invitation token or row is expired."""
+
+    default_message = "The organization invitation token is expired."
+    default_code = ErrorCode.ORGANIZATION_INVITATION_EXPIRED
+
+
+class OrganizationInvitationEmailMismatchError(InvalidOrganizationInvitationTokenError):
+    """Raised when the authenticated user does not own the invited email address."""
+
+    default_message = "The organization invitation token is invalid."
+    default_code = ErrorCode.ORGANIZATION_INVITATION_EMAIL_MISMATCH
+
+
 class InsufficientRolesError(AuthorizationError):
     """Raised when a user does not satisfy a role-based authorization check."""
 
@@ -64,6 +130,35 @@ class InsufficientRolesError(AuthorizationError):
         # default human-readable message.
         resolved_message = message or f"The authenticated user does not have {required_role_phrase}."
         super().__init__(message=resolved_message, code=code)
+
+
+class InsufficientOrganizationRolesError(InsufficientRolesError):
+    """Raised when a user does not satisfy an organization role check."""
+
+    default_message = "The authenticated user does not satisfy the required organization roles."
+    default_code = ErrorCode.INSUFFICIENT_ORGANIZATION_ROLES
+
+    def __init__(
+        self,
+        *,
+        required_roles: frozenset[str],
+        user_roles: frozenset[str],
+        require_all: bool,
+        message: str | None = None,
+        code: str | None = None,
+    ) -> None:
+        """Initialize the organization role-denial error with structured role context."""
+        required_role_phrase = (
+            "all of the required organization roles" if require_all else "any of the required organization roles"
+        )
+        resolved_message = message or f"The authenticated user does not have {required_role_phrase}."
+        super().__init__(
+            required_roles=required_roles,
+            user_roles=user_roles,
+            require_all=require_all,
+            message=resolved_message,
+            code=code,
+        )
 
 
 class InsufficientPermissionsError(AuthorizationError):
@@ -93,6 +188,37 @@ class InsufficientPermissionsError(AuthorizationError):
         # echoing them in the default human-readable message.
         resolved_message = message or f"The authenticated user does not have {required_permission_phrase}."
         super().__init__(message=resolved_message, code=code)
+
+
+class InsufficientOrganizationPermissionsError(InsufficientPermissionsError):
+    """Raised when a user does not satisfy an organization permission check."""
+
+    default_message = "The authenticated user does not satisfy the required organization permissions."
+    default_code = ErrorCode.INSUFFICIENT_ORGANIZATION_PERMISSIONS
+
+    def __init__(
+        self,
+        *,
+        required_permissions: frozenset[str],
+        granted_permissions: frozenset[str],
+        require_all: bool,
+        message: str | None = None,
+        code: str | None = None,
+    ) -> None:
+        """Initialize the organization permission-denial error with structured permission context."""
+        required_permission_phrase = (
+            "all of the required organization permissions"
+            if require_all
+            else "any of the required organization permissions"
+        )
+        resolved_message = message or f"The authenticated user does not have {required_permission_phrase}."
+        super().__init__(
+            required_permissions=required_permissions,
+            granted_permissions=granted_permissions,
+            require_all=require_all,
+            message=resolved_message,
+            code=code,
+        )
 
 
 def totp_stepup_required_exception() -> ClientException:

@@ -10,6 +10,98 @@ role membership. By default, the user must expose the `"superuser"` role in
 `roles`; set `LitestarAuthConfig.superuser_role_name` when your deployment uses
 another normalized role name such as `"admin"`.
 
+## Organization membership guard
+
+`requires_organization_membership` requires an authenticated active user and a verified
+current-organization context for the request. It fails closed with
+`ErrorCode.AUTHORIZATION_DENIED` when the request is anonymous, the user is inactive, the request
+does not carry a tenant hint, the tenant hint does not resolve to an organization, or the
+authenticated user has no membership in that organization.
+
+```python
+from litestar import get
+
+from litestar_auth.guards import requires_organization_membership
+
+
+@get("/organization/projects", guards=[requires_organization_membership])
+async def list_organization_projects() -> dict[str, bool]:
+    return {"ok": True}
+```
+
+Tenant hints from headers or subdomains are untrusted. The guard allows the request only after the
+authentication middleware has resolved the organization and verified the authenticated user's
+membership through the configured organization store.
+
+Use the `litestar_auth_current_organization` dependency when a handler needs the verified
+organization and membership objects:
+
+```python
+from typing import Any
+
+from litestar import get
+
+from litestar_auth.guards import requires_organization_membership
+
+
+@get("/organization/me", guards=[requires_organization_membership])
+async def read_current_organization(
+    litestar_auth_current_organization: Any,
+) -> dict[str, str]:
+    return {
+        "organization_id": str(litestar_auth_current_organization.organization.id),
+        "membership_id": str(litestar_auth_current_organization.membership.id),
+    }
+```
+
+This guard only verifies membership in the resolved current organization. Use the organization role
+and permission guards below when a route also requires membership roles or role-derived permissions.
+Application-owned tables still need explicit tenant foreign keys, query filters, and database
+isolation.
+
+## Organization role guards
+
+`has_organization_role()` requires an authenticated active user, a verified current-organization
+context, and all listed roles on that membership row. It does not read the user's global `roles`.
+Without verified organization context it fails closed with
+`ErrorCode.INSUFFICIENT_ORGANIZATION_ROLES`.
+
+```python
+from litestar import get
+
+from litestar_auth.guards import has_organization_role
+
+
+@get("/organization/billing", guards=[has_organization_role("billing-admin")])
+async def organization_billing() -> dict[str, bool]:
+    return {"ok": True}
+```
+
+Role names use the same trim, lowercase, deduplicate, and sort normalization as global role guards.
+At least one role is required, and empty role names are rejected when the guard is created.
+
+## Organization permission guards
+
+`has_organization_permission()` requires an authenticated active role-capable user, a verified
+current-organization context, and all listed effective permissions after organization-aware role
+resolution. Without verified organization context it fails closed with
+`ErrorCode.INSUFFICIENT_ORGANIZATION_PERMISSIONS`.
+
+```python
+from litestar import get
+
+from litestar_auth.guards import has_organization_permission
+
+
+@get("/organization/posts", guards=[has_organization_permission("posts:write")])
+async def write_organization_posts() -> dict[str, bool]:
+    return {"ok": True}
+```
+
+When the request is authenticated with an API key, organization permission guards keep the same
+least-privilege ceiling as general permission guards: the owning user's organization-scoped
+effective permissions must grant the route requirement, and the key scopes must delegate it.
+
 ## Typed role guards
 
 `has_any_role()` and `has_all_roles()` accept plain strings, but their Python 3.12
@@ -127,6 +219,24 @@ async def moderation_queue() -> dict[str, bool]:
 
 Use `has_permission()` or `has_all_permissions()` when every listed permission is
 required. Use `has_any_permission()` when any one listed permission is enough.
+
+When a verified current-organization context is present, the same permission guards become
+organization-aware automatically. With the default `OrganizationConfig.role_precedence="replace"`,
+membership roles from the current organization replace the user's global roles for permission
+resolution, so broad global roles do not leak into tenant-scoped requests. The configured
+`superuser_role_name` remains a global grant: a user holding that global role resolves to `"*"` even
+inside an organization. Set `OrganizationConfig.role_precedence="merge"` only when your application
+intentionally wants global roles and organization membership roles to combine inside org context.
+Set `OrganizationConfig.require_authorization_context=True` when permission guards should fail
+closed unless the request has verified organization context.
+
+The `replace` default is the safer tenant-isolation posture for most deployments: an organization
+permission guard is satisfied only by roles on the verified membership row, except for the explicit
+global superuser grant. With `role_precedence="merge"`, every global role on the user is unioned with
+the membership roles for each organization the user belongs to. That means a global permission such
+as `posts:write` can satisfy `has_organization_permission("posts:write")` in every verified
+organization context for that user, not just one tenant. Choose `merge` only when that cross-tenant
+global-role behavior is intentional and understood by operators.
 
 Permission strings normalize with the same trim, lowercase, deduplicate, and sort
 rules as role names, then must match one of these forms:

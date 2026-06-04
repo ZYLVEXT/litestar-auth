@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING, Any, cast
 
 from litestar.exceptions import PermissionDeniedException
 
-from litestar_auth._roles import normalize_role_name
+from litestar_auth._roles import normalize_role_name, normalize_roles
 
 if TYPE_CHECKING:
     from collections.abc import MutableMapping
@@ -20,6 +20,7 @@ SUPERUSER_ROLE_NAME_SENTINEL = "litestar_auth.superuser_role_name"
 __all__ = (
     "DEFAULT_SUPERUSER_ROLE_NAME",
     "SUPERUSER_ROLE_NAME_SENTINEL",
+    "is_global_superuser",
     "normalize_superuser_role_name",
     "read_scope_superuser_role_name",
     "resolve_superuser_role_name",
@@ -92,3 +93,16 @@ def read_scope_superuser_role_name(connection: ASGIConnection[Any, Any, Any, Any
     except ValueError as exc:
         msg = "The configured superuser role name is invalid."
         raise PermissionDeniedException(detail=msg) from exc
+
+
+def is_global_superuser(connection: ASGIConnection[Any, Any, Any, Any]) -> bool:
+    """Return whether the request user holds the configured global superuser role.
+
+    Returns:
+        ``True`` when an authenticated user carries the request-scope superuser role.
+    """
+    user = connection.user
+    if user is None:
+        return False
+    user_roles = normalize_roles(getattr(user, "roles", ()))
+    return read_scope_superuser_role_name(connection) in user_roles

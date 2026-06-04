@@ -14,6 +14,7 @@ from jwt import ExpiredSignatureError, InvalidTokenError
 
 from litestar_auth._jwt_headers import JwtDecodeConfig, decode_signed_jwt, jwt_encode_headers
 from litestar_auth._keyed_digest import keyed_hex
+from litestar_auth._roles import normalize_role_name
 from litestar_auth.authentication.strategy import _jwt_denylist
 from litestar_auth.authentication.strategy._jwt_denylist import (
     JWTDenylistStore,
@@ -99,6 +100,21 @@ class JWTStrategyConfig[UP, ID]:
     session_fingerprint_claim: str = "sfp"
 
 
+@dataclass(frozen=True, slots=True)
+class JWTContext:
+    """Authentication context exposed as ``request.auth`` for JWT requests."""
+
+    organization: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class JWTAuthenticationResult[UP]:
+    """Resolved JWT user plus request authentication context."""
+
+    user: UP
+    context: JWTContext
+
+
 class JWTStrategyOptions[UP, ID](TypedDict):
     """Keyword options accepted by :class:`JWTStrategy`."""
 
@@ -159,6 +175,17 @@ def _validate_asymmetric_jwt_settings[UP, ID](settings: JWTStrategyConfig[UP, ID
         "private signing key."
     )
     raise ValueError(msg)
+
+
+def _organization_from_payload(payload: dict[str, object]) -> str | None:
+    """Return organization context from a verified JWT payload."""
+    organization = payload.get("org")
+    if not isinstance(organization, str):
+        return None
+    try:
+        return normalize_role_name(organization)
+    except (TypeError, ValueError):
+        return None
 
 
 class JWTStrategy(Strategy[UP, ID]):
@@ -282,16 +309,15 @@ class JWTStrategy(Strategy[UP, ID]):
             return None
         return raw
 
-    @override
-    async def read_token(  # noqa: PLR0911
+    async def _read_verified_user_and_payload(  # noqa: PLR0911
         self,
         token: str | None,
         user_manager: UserManagerProtocol[UP, ID],
-    ) -> UP | None:
-        """Decode a JWT token and load its user.
+    ) -> tuple[UP, dict[str, object]] | None:
+        """Decode a JWT token and load its user plus verified payload.
 
         Returns:
-            The matching user, or ``None`` when the token is invalid.
+            The matching user and verified payload, or ``None`` when the token is invalid.
         """
         if token is None:
             return None
@@ -330,17 +356,48 @@ class JWTStrategy(Strategy[UP, ID]):
             logger.info("JWT fingerprint mismatch")
             return None
 
-        return user
+        return user, payload
 
     @override
-    async def write_token(self, user: UP) -> str:
-        """Generate a JWT token for the provided user.
+    async def read_token(
+        self,
+        token: str | None,
+        user_manager: UserManagerProtocol[UP, ID],
+    ) -> UP | None:
+        """Decode a JWT token and load its user.
+
+        Returns:
+            The matching user, or ``None`` when the token is invalid.
+        """
+        result = await self._read_verified_user_and_payload(token, user_manager)
+        return None if result is None else result[0]
+
+    async def read_token_with_context(
+        self,
+        token: str | None,
+        user_manager: UserManagerProtocol[UP, ID],
+    ) -> JWTAuthenticationResult[UP] | None:
+        """Decode a JWT token and expose verified organization claim context.
+
+        Returns:
+            Resolved user plus optional organization context, or ``None`` when
+            the token does not authenticate.
+        """
+        result = await self._read_verified_user_and_payload(token, user_manager)
+        if result is None:
+            return None
+        user, payload = result
+
+        return JWTAuthenticationResult(user=user, context=JWTContext(organization=_organization_from_payload(payload)))
+
+    def _build_access_token(self, user: UP, *, organization: str | None = None) -> str:
+        """Generate a signed access token payload.
 
         Returns:
             The encoded JWT token string.
         """
         issued_at = datetime.now(tz=UTC)
-        payload = {
+        payload: dict[str, object] = {
             "sub": str(user.id),
             "aud": JWT_ACCESS_TOKEN_AUDIENCE,
             "iat": issued_at,
@@ -354,7 +411,30 @@ class JWTStrategy(Strategy[UP, ID]):
         fingerprint = self.session_fingerprint_getter(user)
         if fingerprint is not None:
             payload[self.session_fingerprint_claim] = fingerprint
+        if organization is not None:
+            payload["org"] = normalize_role_name(organization)
         return jwt.encode(payload, self.secret, algorithm=self.algorithm, headers=jwt_encode_headers())
+
+    @override
+    async def write_token(self, user: UP) -> str:
+        """Generate an organization-free JWT token for the provided user.
+
+        Returns:
+            The encoded JWT token string.
+        """
+        return self._build_access_token(user)
+
+    async def write_token_for_organization(self, user: UP, organization: str) -> str:
+        """Generate a JWT token bound to a verified active organization.
+
+        Callers must verify that ``user`` is a member of ``organization`` before
+        invoking this method. The strategy only normalizes and signs the
+        organization claim; it performs no membership lookup itself.
+
+        Returns:
+            The encoded JWT token string carrying the normalized organization claim.
+        """
+        return self._build_access_token(user, organization=organization)
 
     @override
     async def destroy_token(self, token: str, user: UP) -> None:

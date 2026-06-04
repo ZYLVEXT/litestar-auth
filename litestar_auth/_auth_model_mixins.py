@@ -6,18 +6,34 @@ import re
 import uuid
 from datetime import datetime  # noqa: TC003 - SQLAlchemy resolves mapped annotations at runtime.
 from typing import TYPE_CHECKING, Any, ClassVar, cast
+from uuid import uuid4
 
 from advanced_alchemy.filters import ChoicesFilter
-from sqlalchemy import JSON, DateTime, ForeignKey, LargeBinary, String, event, func, insert, inspect, select
+from sqlalchemy import (
+    JSON,
+    DateTime,
+    ForeignKey,
+    LargeBinary,
+    String,
+    event,
+    func,
+    insert,
+    inspect,
+    select,
+)
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Mapped, declared_attr, mapped_column, relationship, validates
 from sqlalchemy.orm import Session as ORMSession
 
+from litestar_auth._email import normalize_email as _normalize_email
 from litestar_auth._roles import normalize_role_name, normalize_roles
 
 __all__ = (
     "AccessTokenMixin",
     "ApiKeyMixin",
+    "OrganizationInvitationMixin",
+    "OrganizationMembershipMixin",
+    "OrganizationMixin",
     "RefreshTokenMixin",
     "RoleMixin",
     "UserAuthRelationshipMixin",
@@ -30,6 +46,9 @@ __all__ = (
 _USER_RELATIONSHIP_NAME = "user"
 _ROLE_ASSIGNMENTS_RELATIONSHIP_NAME = "role_assignments"
 _ROLE_NAME_LENGTH = 255
+_ORGANIZATION_SLUG_LENGTH = 255
+_ORGANIZATION_NAME_LENGTH = 255
+_ORGANIZATION_INVITATION_STATUS_LENGTH = 32
 _SESSION_ID_LENGTH = 36
 _API_KEY_ID_LENGTH = 64
 _API_KEY_PREFIX_ENV_LENGTH = 32
@@ -167,6 +186,70 @@ class RoleMixin:
         if cls.auth_user_role_relationship_lazy is not None:
             relationship_kwargs["lazy"] = cls.auth_user_role_relationship_lazy
         return relationship(cls.auth_user_role_model, **relationship_kwargs)
+
+
+class OrganizationMixin:
+    """Shared columns and inverse relationship for organization catalog rows."""
+
+    auth_organization_invitation_model: ClassVar[str | None] = None
+    auth_organization_invitation_relationship_lazy: ClassVar[str | None] = None
+    auth_organization_membership_model: ClassVar[str] = "OrganizationMembership"
+    auth_organization_membership_relationship_lazy: ClassVar[str | None] = None
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid4)
+    slug: Mapped[str] = mapped_column(String(length=_ORGANIZATION_SLUG_LENGTH), unique=True, index=True)
+    name: Mapped[str] = mapped_column(String(length=_ORGANIZATION_NAME_LENGTH))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        onupdate=func.now(),
+        nullable=False,
+    )
+
+    @validates("slug")
+    def _normalize_slug(self, key: str, value: str) -> str:  # noqa: ARG002, PLR6301
+        """Normalize organization slugs before persisting them.
+
+        Returns:
+            The normalized organization slug.
+        """
+        return normalize_role_name(value)
+
+    @declared_attr
+    @classmethod
+    def memberships(cls) -> Mapped[list[Any]]:
+        """Map the inverse collection of organization-membership rows.
+
+        Returns:
+            The relationship descriptor for organization-membership rows.
+        """
+        relationship_kwargs: dict[str, Any] = {
+            "back_populates": "organization",
+            "cascade": "all, delete-orphan",
+        }
+        if cls.auth_organization_membership_relationship_lazy is not None:
+            relationship_kwargs["lazy"] = cls.auth_organization_membership_relationship_lazy
+        return relationship(cls.auth_organization_membership_model, **relationship_kwargs)
+
+    @declared_attr
+    @classmethod
+    def invitations(cls) -> Mapped[list[Any]]:
+        """Map the inverse collection of organization-invitation rows.
+
+        Returns:
+            The relationship descriptor for organization-invitation rows.
+        """
+        if cls.auth_organization_invitation_model is None:
+            return cast("Mapped[list[Any]]", None)
+
+        relationship_kwargs: dict[str, Any] = {
+            "back_populates": "organization",
+            "cascade": "all, delete-orphan",
+        }
+        if cls.auth_organization_invitation_relationship_lazy is not None:
+            relationship_kwargs["lazy"] = cls.auth_organization_invitation_relationship_lazy
+        return relationship(cls.auth_organization_invitation_model, **relationship_kwargs)
 
 
 class _UserOwnedMixin:
@@ -325,6 +408,132 @@ class UserRoleAssociationMixin(_UserOwnedMixin):
         )
 
 
+class OrganizationMembershipMixin(_UserOwnedMixin):
+    """Map one user's normalized role membership in one organization."""
+
+    auth_user_back_populates: ClassVar[str] = "organization_memberships"
+    auth_user_id_primary_key: ClassVar[bool] = True
+    auth_user_relationship_foreign_keys: ClassVar[bool] = True
+    auth_organization_model: ClassVar[str] = "Organization"
+    auth_organization_table: ClassVar[str] = "organization"
+    auth_organization_back_populates: ClassVar[str] = "memberships"
+    auth_organization_id_ondelete: ClassVar[str | None] = "CASCADE"
+    auth_organization_relationship_foreign_keys: ClassVar[bool] = True
+
+    if TYPE_CHECKING:
+        __tablename__: ClassVar[str]
+        organization_id: Mapped[uuid.UUID]
+        organization: Mapped[Any]
+
+    @declared_attr
+    @classmethod
+    def organization_id(cls) -> Mapped[uuid.UUID]:
+        """Map the organization foreign key for the membership row.
+
+        Returns:
+            The mapped organization foreign-key column.
+        """
+        return mapped_column(
+            ForeignKey(f"{cls.auth_organization_table}.id", ondelete=cls.auth_organization_id_ondelete),
+            primary_key=True,
+        )
+
+    @declared_attr
+    @classmethod
+    def organization(cls) -> Mapped[Any]:
+        """Map the relationship back to the configured organization model.
+
+        Returns:
+            The relationship descriptor for the configured organization model.
+        """
+        relationship_kwargs: dict[str, Any] = {"back_populates": cls.auth_organization_back_populates}
+        if cls.auth_organization_relationship_foreign_keys:
+            relationship_kwargs["foreign_keys"] = lambda: [cast("Mapped[Any]", cls.organization_id)]
+        return relationship(cls.auth_organization_model, **relationship_kwargs)
+
+    roles: Mapped[list[str]] = mapped_column(JSON, default=list, nullable=False)
+
+    @validates("roles")
+    def _normalize_roles(self, key: str, value: object) -> list[str]:  # noqa: ARG002, PLR6301
+        """Normalize organization-scoped role membership before persisting it.
+
+        Returns:
+            The normalized role list.
+        """
+        return normalize_roles(value)
+
+
+class OrganizationInvitationMixin:
+    """Map one single-use invitation token digest for one organization."""
+
+    auth_organization_model: ClassVar[str] = "Organization"
+    auth_organization_table: ClassVar[str] = "organization"
+    auth_organization_back_populates: ClassVar[str] = "invitations"
+    auth_organization_id_ondelete: ClassVar[str | None] = "CASCADE"
+    auth_organization_relationship_foreign_keys: ClassVar[bool] = True
+
+    if TYPE_CHECKING:
+        organization_id: Mapped[uuid.UUID]
+        organization: Mapped[Any]
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid4)
+    invited_email: Mapped[str] = mapped_column(String(length=320), index=True, nullable=False)
+    roles: Mapped[list[str]] = mapped_column(JSON, default=list, nullable=False)
+    token_hash: Mapped[bytes] = mapped_column(LargeBinary(length=64), unique=True, index=True, nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    status: Mapped[str] = mapped_column(
+        String(length=_ORGANIZATION_INVITATION_STATUS_LENGTH),
+        default="pending",
+        nullable=False,
+    )
+
+    @declared_attr
+    @classmethod
+    def organization_id(cls) -> Mapped[uuid.UUID]:
+        """Map the organization foreign key for the invitation row.
+
+        Returns:
+            The mapped organization foreign-key column.
+        """
+        return mapped_column(
+            ForeignKey(f"{cls.auth_organization_table}.id", ondelete=cls.auth_organization_id_ondelete),
+            index=True,
+            nullable=False,
+        )
+
+    @declared_attr
+    @classmethod
+    def organization(cls) -> Mapped[Any]:
+        """Map the relationship back to the configured organization model.
+
+        Returns:
+            The relationship descriptor for the configured organization model.
+        """
+        relationship_kwargs: dict[str, Any] = {"back_populates": cls.auth_organization_back_populates}
+        if cls.auth_organization_relationship_foreign_keys:
+            relationship_kwargs["foreign_keys"] = lambda: [cast("Mapped[Any]", cls.organization_id)]
+        return relationship(cls.auth_organization_model, **relationship_kwargs)
+
+    @validates("invited_email")
+    def _normalize_invited_email(self, key: str, value: str) -> str:  # noqa: ARG002, PLR6301
+        """Normalize invited email addresses using the user account policy.
+
+        Returns:
+            The normalized email address.
+        """
+        return _normalize_email(value)
+
+    @validates("roles")
+    def _normalize_roles(self, key: str, value: object) -> list[str]:  # noqa: ARG002, PLR6301
+        """Normalize organization-scoped roles before persisting the invitation.
+
+        Returns:
+            The normalized role list.
+        """
+        return normalize_roles(value)
+
+
 @event.listens_for(ORMSession, "before_flush")
 def _materialize_missing_role_rows(
     session: ORMSession,
@@ -412,8 +621,10 @@ class UserAuthRelationshipMixin:
     auth_api_key_model: ClassVar[str | None] = None
     auth_refresh_token_model: ClassVar[str | None] = "RefreshToken"
     auth_oauth_account_model: ClassVar[str | None] = "OAuthAccount"
+    auth_organization_membership_model: ClassVar[str | None] = None
     auth_token_relationship_lazy: ClassVar[str | None] = None
     auth_oauth_account_relationship_lazy: ClassVar[str | None] = None
+    auth_organization_membership_relationship_lazy: ClassVar[str | None] = None
     auth_oauth_account_relationship_foreign_keys: ClassVar[str | None] = None
 
     @staticmethod
@@ -489,6 +700,19 @@ class UserAuthRelationshipMixin:
             cls.auth_oauth_account_model,
             lazy=cls.auth_oauth_account_relationship_lazy,
             foreign_keys=cls.auth_oauth_account_relationship_foreign_keys,
+        )
+
+    @declared_attr
+    @classmethod
+    def organization_memberships(cls) -> Mapped[list[Any]]:
+        """Map the inverse side of the configured organization-membership model when enabled.
+
+        Returns:
+            The relationship descriptor, or ``None`` when organization integration is disabled.
+        """
+        return cls._relationship(
+            cls.auth_organization_membership_model,
+            lazy=cls.auth_organization_membership_relationship_lazy,
         )
 
 

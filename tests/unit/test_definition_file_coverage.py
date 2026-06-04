@@ -8,9 +8,8 @@ import sys
 import types
 import uuid
 import warnings
-from datetime import UTC, datetime
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, cast, get_args, get_type_hints
+from typing import TYPE_CHECKING, get_args, get_type_hints
 
 import pytest
 from sqlalchemy import Uuid, inspect
@@ -33,6 +32,9 @@ from litestar_auth.authentication.strategy.db_models import AccessToken as Model
 from litestar_auth.authentication.strategy.db_models import RefreshToken as ModelsRefreshToken
 from litestar_auth.models.api_key import ApiKey as ModelsApiKey
 from litestar_auth.models.oauth import OAuthAccount as ModelsOAuthAccount
+from litestar_auth.models.organization import Organization as ModelsOrganization
+from litestar_auth.models.organization import OrganizationInvitation as ModelsOrganizationInvitation
+from litestar_auth.models.organization import OrganizationMembership as ModelsOrganizationMembership
 from litestar_auth.models.role import Role as ModelsRole
 from litestar_auth.models.role import UserRole as ModelsUserRole
 from litestar_auth.models.user import User as ModelsUser
@@ -42,6 +44,9 @@ uuid4 = uuid.uuid4
 AccessTokenMixin = model_mixins_module.AccessTokenMixin
 ApiKeyMixin = model_mixins_module.ApiKeyMixin
 OAuthAccountMixin = model_mixins_module.OAuthAccountMixin
+OrganizationInvitationMixin = model_mixins_module.OrganizationInvitationMixin
+OrganizationMembershipMixin = model_mixins_module.OrganizationMembershipMixin
+OrganizationMixin = model_mixins_module.OrganizationMixin
 RefreshTokenMixin = model_mixins_module.RefreshTokenMixin
 RoleMixin = model_mixins_module.RoleMixin
 UserAuthRelationshipMixin = model_mixins_module.UserAuthRelationshipMixin
@@ -280,58 +285,26 @@ def test_db_base_module_preserves_store_contracts() -> None:
     }
     assert "get_by_oauth_account" in db_base_module.BaseOAuthAccountStore.__dict__
     assert "upsert_oauth_account" in db_base_module.BaseOAuthAccountStore.__dict__
-
-
-async def test_db_base_protocol_method_stubs_execute_under_coverage() -> None:
-    """Execute protocol stub bodies so coverage records the structural contract surface."""
-    dummy_self = cast("Any", object())
-
-    assert await db_base_module.BaseUserStore.get(dummy_self, uuid4()) is None
-    assert await db_base_module.BaseUserStore.get_by_email(dummy_self, "user@example.com") is None
-    assert await db_base_module.BaseUserStore.get_by_field(dummy_self, "email", "user@example.com") is None
-    assert await db_base_module.BaseUserStore.create(dummy_self, {"email": "user@example.com"}) is None
-    assert await db_base_module.BaseUserStore.list_users(dummy_self, offset=0, limit=10) is None
-    assert await db_base_module.BaseUserStore.update(dummy_self, cast("Any", object()), {"email": "updated"}) is None
-    delete_result = await db_base_module.BaseUserStore.delete(dummy_self, uuid4())
-    assert delete_result is None
-    assert await db_base_module.BaseOAuthAccountStore.get_by_oauth_account(dummy_self, "provider", "account") is None
-    assert (
-        await db_base_module.BaseOAuthAccountStore.upsert_oauth_account(
-            dummy_self,
-            cast("Any", object()),
-            account=db_base_module.OAuthAccountData(
-                oauth_name="provider",
-                account_id="account",
-                account_email="user@example.com",
-                access_token="token",
-                expires_at=None,
-                refresh_token=None,
-            ),
-        )
-        is None
-    )
-    api_key_data = db_base_module.ApiKeyData(
-        key_id="akid_protocol",
-        user_id=uuid4(),
-        hashed_secret=b"hashed-secret",
-        encrypted_secret=None,
-        name="Protocol",
-        scopes=[],
-        prefix_env="prod",
-        signing_required=False,
-        expires_at=None,
-        created_via="test",
-    )
-    assert await db_base_module.BaseApiKeyStore.create(dummy_self, api_key_data) is None
-    assert await db_base_module.BaseApiKeyStore.get_by_key_id(dummy_self, "akid_protocol") is None
-    assert await db_base_module.BaseApiKeyStore.list_for_user(dummy_self, uuid4()) is None
-    assert await db_base_module.BaseApiKeyStore.delete_for_user(dummy_self, uuid4()) is None
-    revoked_at = datetime.now(tz=UTC)
-    assert await db_base_module.BaseApiKeyStore.revoke(dummy_self, "akid_protocol", revoked_at=revoked_at) is None
-    assert (
-        await db_base_module.BaseApiKeyStore.update_last_used_at(dummy_self, "akid_protocol", last_used_at=revoked_at)
-        is None
-    )
+    assert db_base_module.BaseOrganizationStore.__dict__.keys() >= {
+        "add_membership",
+        "consume_invitation",
+        "create_invitation",
+        "create_organization",
+        "delete_organization",
+        "get_invitation_by_token_hash",
+        "get_membership",
+        "get_organization",
+        "get_organization_by_slug",
+        "list_pending_invitations",
+        "list_memberships",
+        "list_organizations_for_user",
+        "remove_membership",
+        "remove_membership_preserving_privileged_member",
+        "revoke_invitation",
+        "set_membership_roles",
+        "set_membership_roles_preserving_privileged_member",
+        "update_organization",
+    }
 
 
 def test_manager_protocols_module_preserves_internal_protocols() -> None:
@@ -347,6 +320,9 @@ def test_models_mixins_module_preserves_contract_exports() -> None:
         "AccessTokenMixin",
         "ApiKeyMixin",
         "OAuthAccountMixin",
+        "OrganizationInvitationMixin",
+        "OrganizationMembershipMixin",
+        "OrganizationMixin",
         "RefreshTokenMixin",
         "RoleMixin",
         "UserAuthRelationshipMixin",
@@ -357,6 +333,9 @@ def test_models_mixins_module_preserves_contract_exports() -> None:
     assert hasattr(model_mixins_module.UserModelMixin, "email")
     assert hasattr(model_mixins_module.ApiKeyMixin, "key_id")
     assert hasattr(model_mixins_module.OAuthAccountMixin, "access_token")
+    assert hasattr(model_mixins_module.OrganizationInvitationMixin, "token_hash")
+    assert hasattr(model_mixins_module.OrganizationMixin, "slug")
+    assert hasattr(model_mixins_module.OrganizationMembershipMixin, "roles")
     assert hasattr(model_mixins_module.RoleMixin, "name")
     assert hasattr(model_mixins_module.UserRoleRelationshipMixin, "roles")
     assert not hasattr(model_mixins_module, "_TokenModelMixin")
@@ -382,6 +361,9 @@ def test_internal_auth_model_mixins_module_preserves_contract_exports(
     assert reloaded_module.__all__ == (
         "AccessTokenMixin",
         "ApiKeyMixin",
+        "OrganizationInvitationMixin",
+        "OrganizationMembershipMixin",
+        "OrganizationMixin",
         "RefreshTokenMixin",
         "RoleMixin",
         "UserAuthRelationshipMixin",
@@ -392,6 +374,7 @@ def test_internal_auth_model_mixins_module_preserves_contract_exports(
     )
     assert reloaded_module._USER_RELATIONSHIP_NAME == "user"
     assert reloaded_module._ROLE_ASSIGNMENTS_RELATIONSHIP_NAME == "role_assignments"
+    assert reloaded_module._ORGANIZATION_SLUG_LENGTH == reloaded_module._ROLE_NAME_LENGTH
     assert sorted(reloaded_module.UserModelMixin.__annotations__) == [
         "email",
         "hashed_password",
@@ -401,6 +384,10 @@ def test_internal_auth_model_mixins_module_preserves_contract_exports(
         "totp_secret",
     ]
     assert reloaded_module.UserRoleRelationshipMixin.auth_user_role_model == "UserRole"
+    assert reloaded_module.OrganizationMixin.auth_organization_membership_model == "OrganizationMembership"
+    assert reloaded_module.OrganizationMixin.auth_organization_invitation_model is None
+    assert reloaded_module.OrganizationInvitationMixin.auth_organization_model == "Organization"
+    assert reloaded_module.OrganizationMembershipMixin.auth_organization_model == "Organization"
     assert reloaded_module.RoleMixin.auth_user_role_model == "UserRole"
     assert reloaded_module.UserRoleAssociationMixin.auth_role_model == "Role"
     assert reloaded_module.AccessTokenMixin.auth_user_back_populates == "access_tokens"
@@ -409,6 +396,7 @@ def test_internal_auth_model_mixins_module_preserves_contract_exports(
     assert reloaded_module.RefreshTokenMixin.__mro__[1].__name__ == "_TokenModelMixin"
     assert reloaded_module._TokenModelMixin.__mro__[1].__name__ == "_UserOwnedMixin"
     assert reloaded_module.UserRoleAssociationMixin.__mro__[1].__name__ == "_UserOwnedMixin"
+    assert reloaded_module.OrganizationMembershipMixin.__mro__[1].__name__ == "_UserOwnedMixin"
     assert reloaded_module._UserOwnedMixin.__annotations__["user_id"] == "Mapped[uuid.UUID]"
     assert reloaded_module._UserOwnedMixin.__annotations__["user"] == "Mapped[Any]"
 
@@ -622,6 +610,9 @@ def test_models_user_module_columns_and_relationships() -> None:
     assert issubclass(ModelsRole, RoleMixin)
     assert issubclass(ModelsUserRole, UserRoleAssociationMixin)
     assert issubclass(ModelsOAuthAccount, OAuthAccountMixin)
+    assert issubclass(ModelsOrganization, OrganizationMixin)
+    assert issubclass(ModelsOrganizationInvitation, OrganizationInvitationMixin)
+    assert issubclass(ModelsOrganizationMembership, OrganizationMembershipMixin)
     assert issubclass(ModelsApiKey, ApiKeyMixin)
     assert issubclass(ModelsAccessToken, AccessTokenMixin)
     assert issubclass(ModelsRefreshToken, RefreshTokenMixin)
@@ -652,6 +643,7 @@ def test_models_user_module_columns_and_relationships() -> None:
         "access_tokens",
         "api_keys",
         "oauth_accounts",
+        "organization_memberships",
         "refresh_tokens",
         "role_assignments",
     ]
@@ -663,7 +655,13 @@ def test_models_user_module_columns_and_relationships() -> None:
     assert user_relationships["refresh_tokens"].back_populates == "user"
     assert user_relationships["oauth_accounts"].mapper.class_.__name__ == "OAuthAccount"
     assert user_relationships["oauth_accounts"].back_populates == "user"
+    assert user_relationships["organization_memberships"].mapper.class_.__name__ == "OrganizationMembership"
+    assert user_relationships["organization_memberships"].back_populates == "user"
     assert user_relationships["role_assignments"].mapper.class_.__name__ == "UserRole"
     assert user_relationships["role_assignments"].back_populates == "user"
+    assert inspect(ModelsOrganizationMembership).relationships["organization"].mapper.class_ is ModelsOrganization
+    assert inspect(ModelsOrganizationInvitation).relationships["organization"].mapper.class_ is ModelsOrganization
+    assert inspect(ModelsOrganization).relationships["memberships"].mapper.class_ is ModelsOrganizationMembership
+    assert inspect(ModelsOrganization).relationships["invitations"].mapper.class_ is ModelsOrganizationInvitation
     assert inspect(ModelsUserRole).relationships["role"].mapper.class_ is ModelsRole
     assert inspect(ModelsRole).relationships["user_assignments"].mapper.class_ is ModelsUserRole

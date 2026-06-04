@@ -64,6 +64,7 @@ class UserManagerSecurity[ID]:
 
     verification_token_secret: str | None = dataclasses.field(default=None, repr=False)
     reset_password_token_secret: str | None = dataclasses.field(default=None, repr=False)
+    organization_invitation_token_secret: str | None = dataclasses.field(default=None, repr=False)
     login_identifier_telemetry_secret: str | None = dataclasses.field(default=None, repr=False)
     totp_secret_key: str | None = dataclasses.field(default=None, repr=False)
     totp_recovery_code_lookup_secret: str | None = dataclasses.field(default=None, repr=False)
@@ -90,6 +91,8 @@ class UserManagerSecurity[ID]:
             "UserManagerSecurity("
             f"verification_token_secret={_mask_optional_secret(self.verification_token_secret)!r}, "
             f"reset_password_token_secret={_mask_optional_secret(self.reset_password_token_secret)!r}, "
+            "organization_invitation_token_secret="
+            f"{_mask_optional_secret(self.organization_invitation_token_secret)!r}, "
             f"login_identifier_telemetry_secret="
             f"{_mask_optional_secret(self.login_identifier_telemetry_secret)!r}, "
             f"totp_secret_key={_mask_optional_secret(self.totp_secret_key)!r}, "
@@ -184,6 +187,7 @@ def validate_user_manager_security_secret_roles_are_distinct(
             _config.SecretRoleValues(
                 verification_token_secret=security.verification_token_secret,
                 reset_password_token_secret=security.reset_password_token_secret,
+                organization_invitation_token_secret=security.organization_invitation_token_secret,
                 login_identifier_telemetry_secret=security.login_identifier_telemetry_secret,
                 totp_secret_key=totp_secret_value,
                 totp_pending_secret=totp_pending_secret,

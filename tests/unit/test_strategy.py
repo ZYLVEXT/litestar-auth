@@ -476,12 +476,12 @@ async def test_jwt_strategy_uses_signing_secret_for_default_session_fingerprint_
 
 async def test_jwt_strategy_preserves_custom_session_fingerprint_getter() -> None:
     """Custom fingerprint getters are used directly instead of being wrapped."""
-    user = type("FingerprintUser", (), {"id": uuid4()})()
+    user = ExampleUser(id=uuid4())
 
     def custom_getter(candidate: object) -> str | None:
         return f"custom:{getattr(candidate, 'id', 'missing')}"
 
-    strategy = JWTStrategy(
+    strategy = JWTStrategy[ExampleUser, str](
         secret=DEFAULT_SECRET,
         session_fingerprint_getter=custom_getter,
         allow_inmemory_denylist=True,

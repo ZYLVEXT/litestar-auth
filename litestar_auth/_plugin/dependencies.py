@@ -13,11 +13,14 @@ from litestar.di import Provide
 from litestar.types import Scope
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from litestar_auth._current_organization import read_scope_current_organization_context
 from litestar_auth._permissions import resolve_connection_permissions
 from litestar_auth._plugin._hooks import iter_feature_wiring
 from litestar_auth._plugin.config import (
     DEFAULT_BACKENDS_DEPENDENCY_KEY,
     DEFAULT_CONFIG_DEPENDENCY_KEY,
+    DEFAULT_CURRENT_ORGANIZATION_DEPENDENCY_KEY,
+    DEFAULT_ORGANIZATION_STORE_DEPENDENCY_KEY,
     DEFAULT_RESOLVED_PERMISSIONS_DEPENDENCY_KEY,
     DEFAULT_USER_MANAGER_DEPENDENCY_KEY,
     DEFAULT_USER_MODEL_DEPENDENCY_KEY,
@@ -43,6 +46,7 @@ if TYPE_CHECKING:
     from litestar.connection import ASGIConnection
 
     from litestar_auth._plugin._protocols import DependencyProvider
+    from litestar_auth.db import BaseOrganizationStore
 
 
 type DbSessionProvider = Callable[[State, Scope], AsyncSession]
@@ -180,6 +184,30 @@ def _make_backends_dependency_provider[UP: UserProtocol[Any], ID](
     return cast("Callable[..., Sequence[AuthenticationBackend[UP, ID]]]", _provide_backends)
 
 
+def _make_organization_store_dependency_provider(
+    store_factory: Callable[[AsyncSession], BaseOrganizationStore[Any, Any, Any, Any]],
+    db_session_key: str,
+) -> Callable[..., BaseOrganizationStore[Any, Any, Any, Any]]:
+    signature = _make_dependency_signature(db_session_key)
+
+    def _provide_organization_store(*args: object, **kwargs: object) -> BaseOrganizationStore[Any, Any, Any, Any]:
+        session = _resolve_dependency_argument(
+            _provide_organization_store.__name__,
+            db_session_key,
+            args,
+            kwargs,
+        )
+        return store_factory(cast("AsyncSession", session))
+
+    provider = cast("DependencyProvider", _provide_organization_store)
+    provider.__signature__ = signature
+    provider.__annotations__ = {
+        db_session_key: Any,
+        "return": Any,
+    }
+    return _provide_organization_store
+
+
 def provide_resolved_permissions(request: ASGIConnection[Any, Any, Any, Any]) -> frozenset[str]:
     """Return the authenticated request user's effective permission set.
 
@@ -188,6 +216,16 @@ def provide_resolved_permissions(request: ASGIConnection[Any, Any, Any, Any]) ->
         for anonymous requests.
     """
     return resolve_connection_permissions(request)
+
+
+def provide_current_organization(request: ASGIConnection[Any, Any, Any, Any]) -> object | None:
+    """Return the request's verified current organization context, if any.
+
+    Returns:
+        The middleware-published current organization context for authenticated
+        member requests, or ``None`` when no verified organization is available.
+    """
+    return read_scope_current_organization_context(request)
 
 
 def _resolve_builtin_db_session_provider_factory[UP: UserProtocol[Any], ID](
@@ -276,6 +314,10 @@ def _resolve_dependency_registration[UP: UserProtocol[Any], ID](
             DEFAULT_RESOLVED_PERMISSIONS_DEPENDENCY_KEY,
             provide_resolved_permissions,
         ),
+        "current_organization": _DependencyRegistration(
+            DEFAULT_CURRENT_ORGANIZATION_DEPENDENCY_KEY,
+            provide_current_organization,
+        ),
     }
     static_registration = static_registrations.get(provider_name)
     if static_registration is not None:
@@ -302,8 +344,33 @@ def _resolve_dependency_registration[UP: UserProtocol[Any], ID](
             OAUTH_ASSOCIATE_USER_MANAGER_DEPENDENCY_KEY,
             providers.oauth_associate_user_manager,
         )
+    if provider_name == "organization_store":
+        return _resolve_organization_store_registration(config)
     msg = f"Unknown auth dependency provider wiring: {provider_name}"
     raise RuntimeError(msg)
+
+
+def _resolve_organization_store_registration[UP: UserProtocol[Any], ID](
+    config: LitestarAuthConfig[UP, ID],
+) -> _DependencyRegistration | None:
+    organization_config = config.organization_config
+    if (
+        not organization_config.enabled
+        or not (
+            organization_config.include_switch_organization
+            or organization_config.include_organization_admin
+            or organization_config.include_organization_invitations
+        )
+        or organization_config.store_factory is None
+    ):
+        return None
+    return _DependencyRegistration(
+        DEFAULT_ORGANIZATION_STORE_DEPENDENCY_KEY,
+        _make_organization_store_dependency_provider(
+            organization_config.store_factory,
+            config.db_session_dependency_key,
+        ),
+    )
 
 
 def _to_dependency_provider(provider: object, *, use_cache: bool | None = None) -> Provide:

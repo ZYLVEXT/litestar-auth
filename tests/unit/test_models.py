@@ -7,14 +7,15 @@ import sqlite3
 import subprocess
 import sys
 from contextlib import contextmanager
+from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any, Self, cast, get_type_hints
-from uuid import UUID
+from uuid import UUID, uuid4
 
 import pytest
 from advanced_alchemy.base import UUIDPrimaryKey, create_registry
 from sqlalchemy import String, create_engine, event, inspect, select
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column
+from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, relationship
 from sqlalchemy.pool import StaticPool
 
 import litestar_auth._auth_model_mixins as auth_model_mixins_module
@@ -29,6 +30,7 @@ from litestar_auth.models._oauth_encrypted_types import (
     oauth_access_token_type,
     oauth_refresh_token_type,
 )
+from litestar_auth.models.mixins import OrganizationInvitationMixin, OrganizationMembershipMixin, OrganizationMixin
 from litestar_auth.oauth_encryption import OAuthTokenEncryption, bind_oauth_token_encryption
 
 AccessTokenMixin = litestar_auth_models.AccessTokenMixin
@@ -36,6 +38,9 @@ ApiKey = litestar_auth_models.ApiKey
 ApiKeyMixin = litestar_auth_models.ApiKeyMixin
 OAuthAccount = litestar_auth_models.OAuthAccount
 OAuthAccountMixin = litestar_auth_models.OAuthAccountMixin
+Organization = litestar_auth_models.Organization
+OrganizationInvitation = litestar_auth_models.OrganizationInvitation
+OrganizationMembership = litestar_auth_models.OrganizationMembership
 RefreshTokenMixin = litestar_auth_models.RefreshTokenMixin
 Role = litestar_auth_models.Role
 RoleMixin = litestar_auth_models.RoleMixin
@@ -99,6 +104,12 @@ def test_models_package_dir_lists_lazy_exports() -> None:
         "ApiKeyMixin",
         "OAuthAccount",
         "OAuthAccountMixin",
+        "Organization",
+        "OrganizationInvitation",
+        "OrganizationInvitationMixin",
+        "OrganizationMembership",
+        "OrganizationMembershipMixin",
+        "OrganizationMixin",
         "RefreshTokenMixin",
         "Role",
         "RoleMixin",
@@ -128,9 +139,13 @@ def test_models_package_mixins_do_not_load_reference_model_modules() -> None:
         "    UserRoleAssociationMixin,\n"
         "    UserRoleRelationshipMixin,\n"
         ")\n"
+        "from litestar_auth.models.mixins import OrganizationInvitationMixin, OrganizationMembershipMixin, OrganizationMixin\n"
         "assert AccessTokenMixin.__name__ == 'AccessTokenMixin'\n"
         "assert ApiKeyMixin.__name__ == 'ApiKeyMixin'\n"
         "assert OAuthAccountMixin.__name__ == 'OAuthAccountMixin'\n"
+        "assert OrganizationInvitationMixin.__name__ == 'OrganizationInvitationMixin'\n"
+        "assert OrganizationMembershipMixin.__name__ == 'OrganizationMembershipMixin'\n"
+        "assert OrganizationMixin.__name__ == 'OrganizationMixin'\n"
         "assert RefreshTokenMixin.__name__ == 'RefreshTokenMixin'\n"
         "assert RoleMixin.__name__ == 'RoleMixin'\n"
         "assert UserAuthRelationshipMixin.__name__ == 'UserAuthRelationshipMixin'\n"
@@ -140,6 +155,7 @@ def test_models_package_mixins_do_not_load_reference_model_modules() -> None:
         'assert "litestar_auth.models.user" not in sys.modules\n'
         'assert "litestar_auth.models.api_key" not in sys.modules\n'
         'assert "litestar_auth.models.oauth" not in sys.modules\n'
+        'assert "litestar_auth.models.organization" not in sys.modules\n'
         'assert "litestar_auth.models.role" not in sys.modules\n'
     )
     result = subprocess.run(
@@ -879,6 +895,201 @@ def test_custom_role_mixins_round_trip_normalized_membership() -> None:
             ]
 
 
+def test_organization_mixins_map_columns_relationships_and_normalize_roles() -> None:
+    """Organization mixins compose a side-effect-free tenant membership schema."""
+
+    class OrganizationBase(DeclarativeBase):
+        """App-owned registry for organization mixin coverage."""
+
+        registry = create_registry()
+        metadata = registry.metadata
+        __abstract__ = True
+
+    class OrganizationUUIDBase(UUIDPrimaryKey, OrganizationBase):
+        """UUID primary-key base for organization user coverage."""
+
+        __abstract__ = True
+
+    class OrganizationUser(UserModelMixin, OrganizationUUIDBase):
+        """Custom user model with an organization-membership inverse relationship."""
+
+        __tablename__ = "organization_user"
+
+        organization_memberships: Mapped[list[Any]] = relationship(
+            "OrganizationMembership",
+            back_populates="user",
+            cascade="all, delete-orphan",
+            passive_deletes=True,
+        )
+
+    class Organization(OrganizationMixin, OrganizationBase):
+        """Custom organization catalog row."""
+
+        __tablename__ = "organization"
+        auth_organization_invitation_model = "OrganizationInvitation"
+        auth_organization_invitation_relationship_lazy = "selectin"
+
+    class OrganizationMembership(OrganizationMembershipMixin, OrganizationBase):
+        """Custom join row linking one user to one organization."""
+
+        __tablename__ = "organization_membership"
+
+        auth_user_model = "OrganizationUser"
+        auth_user_table = "organization_user"
+
+    class OrganizationInvitation(OrganizationInvitationMixin, OrganizationBase):
+        """Custom invitation row linked to one organization."""
+
+        __tablename__ = "organization_invitation"
+        auth_organization_relationship_foreign_keys = False
+
+    with create_test_engine() as engine:
+        OrganizationUser.metadata.create_all(engine)
+
+        inspector = inspect(engine)
+        organization_columns = {column["name"]: column for column in inspector.get_columns("organization")}
+        membership_columns = {column["name"]: column for column in inspector.get_columns("organization_membership")}
+        invitation_columns = {column["name"]: column for column in inspector.get_columns("organization_invitation")}
+        membership_foreign_keys = inspector.get_foreign_keys("organization_membership")
+        invitation_foreign_keys = inspector.get_foreign_keys("organization_invitation")
+        membership_primary_key = inspector.get_pk_constraint("organization_membership")
+        organization_indexes = inspector.get_indexes("organization")
+
+        assert set(organization_columns) == {"created_at", "id", "name", "slug", "updated_at"}
+        assert organization_columns["slug"]["nullable"] is False
+        assert organization_columns["name"]["nullable"] is False
+        assert set(membership_columns) == {"organization_id", "roles", "user_id"}
+        assert set(invitation_columns) == {
+            "created_at",
+            "expires_at",
+            "id",
+            "invited_email",
+            "organization_id",
+            "roles",
+            "status",
+            "token_hash",
+        }
+        assert set(membership_primary_key["constrained_columns"]) == {"organization_id", "user_id"}
+        assert inspector.get_unique_constraints("organization_membership") == []
+        assert {foreign_key["referred_table"] for foreign_key in membership_foreign_keys} == {
+            "organization",
+            "organization_user",
+        }
+        assert {foreign_key["referred_table"] for foreign_key in invitation_foreign_keys} == {"organization"}
+        assert any(index["name"] == "ix_organization_slug" and index["unique"] == 1 for index in organization_indexes)
+        assert inspect(Organization).relationships["memberships"].mapper.class_ is OrganizationMembership
+        assert inspect(Organization).relationships["invitations"].mapper.class_ is OrganizationInvitation
+        assert inspect(Organization).relationships["invitations"].lazy == "selectin"
+        assert inspect(OrganizationMembership).relationships["user"].mapper.class_ is OrganizationUser
+        assert inspect(OrganizationMembership).relationships["organization"].mapper.class_ is Organization
+        assert inspect(OrganizationInvitation).relationships["organization"].mapper.class_ is Organization
+        assert inspect(OrganizationInvitation).relationships["organization"]._user_defined_foreign_keys == set()
+
+        with Session(engine) as session:
+            user = OrganizationUser(email="member@example.com", hashed_password="custom-hash")
+            organization = Organization(slug=" Billing ", name="Billing")
+            membership = OrganizationMembership(
+                user=user,
+                organization=organization,
+                roles=[" Admin ", "ADMIN", "member"],
+            )
+            invitation = OrganizationInvitation(
+                organization=organization,
+                invited_email=" Invitee@Example.COM ",
+                roles=[" Member ", "member", "admin"],
+                token_hash=b"custom-invitation-token-hash".ljust(64, b"0"),
+                expires_at=datetime.now(UTC) + timedelta(hours=1),
+            )
+            session.add_all([membership, invitation])
+            session.commit()
+            session.refresh(organization)
+            session.refresh(membership)
+            session.refresh(invitation)
+
+            assert organization.slug == "billing"
+            assert membership.roles == ["admin", "member"]
+            assert invitation.invited_email == "invitee@example.com"
+            assert invitation.roles == ["admin", "member"]
+            assert user.organization_memberships == [membership]
+            assert organization.memberships == [membership]
+
+
+def test_organization_invitation_mixin_rejects_invalid_email() -> None:
+    """Invitation email validation uses the account email normalization rules."""
+    with pytest.raises(ValueError, match="Invalid email address"):
+        OrganizationInvitation(
+            organization_id=uuid4(),
+            invited_email="not-an-email",
+            roles=["member"],
+            token_hash=b"invalid-invitation-token-hash".ljust(64, b"0"),
+            expires_at=datetime.now(UTC) + timedelta(hours=1),
+        )
+
+
+def test_organization_mixins_support_custom_user_and_organization_targets() -> None:
+    """Organization membership hooks can target app-owned user and organization tables."""
+
+    class CustomOrganizationBase(DeclarativeBase):
+        """App-owned registry for custom organization-table coverage."""
+
+        registry = create_registry()
+        metadata = registry.metadata
+        __abstract__ = True
+
+    class CustomOrganizationUUIDBase(UUIDPrimaryKey, CustomOrganizationBase):
+        """UUID primary-key base for custom organization user coverage."""
+
+        __abstract__ = True
+
+    class TenantUser(UserModelMixin, CustomOrganizationUUIDBase):
+        """Custom user table with a custom membership collection name."""
+
+        __tablename__ = "tenant_user"
+
+        tenant_links: Mapped[list[Any]] = relationship(
+            "TenantLink",
+            back_populates="user",
+            cascade="all, delete-orphan",
+            passive_deletes=True,
+        )
+
+    class Tenant(OrganizationMixin, CustomOrganizationBase):
+        """Custom organization table with a custom membership collection name."""
+
+        __tablename__ = "tenant"
+
+        auth_organization_membership_model = "TenantLink"
+        auth_organization_membership_relationship_lazy = "selectin"
+
+    class TenantLink(OrganizationMembershipMixin, CustomOrganizationBase):
+        """Custom organization membership row using every table/model override."""
+
+        __tablename__ = "tenant_link"
+
+        auth_user_model = "TenantUser"
+        auth_user_table = "tenant_user"
+        auth_user_back_populates = "tenant_links"
+        auth_organization_model = "Tenant"
+        auth_organization_table = "tenant"
+        auth_organization_relationship_foreign_keys = False
+
+    with create_test_engine() as engine:
+        TenantUser.metadata.create_all(engine)
+
+        inspector = inspect(engine)
+        membership_foreign_keys = inspector.get_foreign_keys("tenant_link")
+        membership_primary_key = inspector.get_pk_constraint("tenant_link")
+        membership_unique_constraints = inspector.get_unique_constraints("tenant_link")
+        relationships = inspect(TenantLink).relationships
+
+        assert {foreign_key["referred_table"] for foreign_key in membership_foreign_keys} == {"tenant", "tenant_user"}
+        assert set(membership_primary_key["constrained_columns"]) == {"organization_id", "user_id"}
+        assert membership_unique_constraints == []
+        assert inspect(Tenant).relationships["memberships"].lazy == "selectin"
+        assert relationships["user"].mapper.class_ is TenantUser
+        assert relationships["organization"].mapper.class_ is Tenant
+
+
 def test_custom_user_model_can_define_hashed_password_mapping_directly() -> None:
     """Custom users can define the ``hashed_password`` mapping directly when they own the attribute contract."""
 
@@ -1002,6 +1213,9 @@ def test_reference_user_model_inverse_relationship_contracts_are_stable() -> Non
     assert issubclass(Role, RoleMixin)
     assert issubclass(UserRole, UserRoleAssociationMixin)
     assert issubclass(OAuthAccount, OAuthAccountMixin)
+    assert issubclass(Organization, OrganizationMixin)
+    assert issubclass(OrganizationInvitation, OrganizationInvitationMixin)
+    assert issubclass(OrganizationMembership, OrganizationMembershipMixin)
     assert issubclass(ApiKey, ApiKeyMixin)
     assert issubclass(AccessToken, AccessTokenMixin)
     assert issubclass(RefreshToken, RefreshTokenMixin)
@@ -1009,6 +1223,7 @@ def test_reference_user_model_inverse_relationship_contracts_are_stable() -> Non
         "access_tokens",
         "api_keys",
         "oauth_accounts",
+        "organization_memberships",
         "refresh_tokens",
         "role_assignments",
     ]
@@ -1044,6 +1259,16 @@ def test_reference_user_model_inverse_relationship_contracts_are_stable() -> Non
         ("id", "user_id"),
     ]
     assert user_relationships["oauth_accounts"].uselist is True
+    assert user_relationships["organization_memberships"].mapper.class_ is OrganizationMembership
+    assert user_relationships["organization_memberships"].back_populates == "user"
+    assert user_relationships["organization_memberships"].lazy == "select"
+    assert user_relationships["organization_memberships"]._user_defined_foreign_keys == set()
+    assert [
+        (left.key, right.key) for left, right in user_relationships["organization_memberships"].synchronize_pairs
+    ] == [
+        ("id", "user_id"),
+    ]
+    assert user_relationships["organization_memberships"].uselist is True
     assert user_relationships["role_assignments"].mapper.class_ is UserRole
     assert user_relationships["role_assignments"].back_populates == "user"
     assert user_relationships["role_assignments"].lazy == "selectin"
@@ -1060,6 +1285,16 @@ def test_reference_user_model_inverse_relationship_contracts_are_stable() -> Non
     assert inspect(RefreshToken).relationships["user"].back_populates == "refresh_tokens"
     assert inspect(OAuthAccount).relationships["user"].mapper.class_ is User
     assert inspect(OAuthAccount).relationships["user"].back_populates == "oauth_accounts"
+    assert inspect(OrganizationMembership).relationships["user"].mapper.class_ is User
+    assert inspect(OrganizationMembership).relationships["user"].back_populates == "organization_memberships"
+    assert inspect(OrganizationMembership).relationships["organization"].mapper.class_ is Organization
+    assert inspect(OrganizationMembership).relationships["organization"].back_populates == "memberships"
+    assert inspect(OrganizationInvitation).relationships["organization"].mapper.class_ is Organization
+    assert inspect(OrganizationInvitation).relationships["organization"].back_populates == "invitations"
+    assert inspect(Organization).relationships["invitations"].mapper.class_ is OrganizationInvitation
+    assert inspect(Organization).relationships["invitations"].back_populates == "organization"
+    assert inspect(Organization).relationships["memberships"].mapper.class_ is OrganizationMembership
+    assert inspect(Organization).relationships["memberships"].back_populates == "organization"
     assert inspect(UserRole).relationships["user"].mapper.class_ is User
     assert inspect(UserRole).relationships["user"].back_populates == "role_assignments"
     assert inspect(UserRole).relationships["role"].mapper.class_ is Role

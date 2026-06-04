@@ -54,6 +54,7 @@ nav = [
     "configuration/manager.md",
     "configuration/redis.md",
     "configuration/api_keys.md",
+    "configuration/organizations.md",
     "configuration/totp.md",
     "configuration/oauth.md",
     "configuration/security.md",

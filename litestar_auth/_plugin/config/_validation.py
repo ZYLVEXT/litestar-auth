@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from typing import Any
+from typing import TYPE_CHECKING, Any, Protocol
 
 from litestar_auth._permissions import StaticRolePermissionResolver
 from litestar_auth._plugin.config._resolvers import _normalize_config_superuser_role_name
@@ -12,6 +12,118 @@ from litestar_auth.exceptions import ConfigurationError
 from litestar_auth.types import LoginIdentifier, _valid_python_identifier_validator
 
 _VALID_LOGIN_IDENTIFIERS: frozenset[LoginIdentifier] = frozenset(("email", "username"))
+
+if TYPE_CHECKING:
+    from litestar_auth._plugin.features import OrganizationConfig
+    from litestar_auth.manager import UserManagerSecurity
+
+
+class _OrganizationConfigCarrier(Protocol):
+    organization_config: OrganizationConfig
+    user_manager_security: UserManagerSecurity[Any] | None
+
+
+def validate_organization_configuration(config: _OrganizationConfigCarrier) -> None:
+    """Validate organization feature prerequisites during plugin startup."""
+    organization_config = config.organization_config
+    _validate_disabled_organization_policy(organization_config)
+    if not organization_config.enabled:
+        return
+    _validate_enabled_organization_store(organization_config)
+    _validate_enabled_organization_tenant_policy(organization_config)
+    _validate_enabled_organization_invitation_policy(config)
+    _validate_enabled_organization_authorization_policy(organization_config)
+    _validate_enabled_organization_slug_policy(organization_config)
+
+
+def _validate_disabled_organization_policy(organization_config: OrganizationConfig) -> None:
+    if organization_config.enabled:
+        return
+    if organization_config.include_switch_organization:
+        msg = (
+            "organization_config.include_switch_organization cannot be True when organization_config.enabled is False."
+        )
+        raise ConfigurationError(msg)
+    if organization_config.include_organization_admin:
+        msg = "organization_config.include_organization_admin cannot be True when organization_config.enabled is False."
+        raise ConfigurationError(msg)
+    if organization_config.include_organization_invitations:
+        msg = (
+            "organization_config.include_organization_invitations cannot be True when "
+            "organization_config.enabled is False."
+        )
+        raise ConfigurationError(msg)
+    if not organization_config.require_authorization_context:
+        return
+    msg = "organization_config.require_authorization_context cannot be True when organization_config.enabled is False."
+    raise ConfigurationError(msg)
+
+
+def _validate_enabled_organization_store(organization_config: OrganizationConfig) -> None:
+    if organization_config.store_factory is None:
+        msg = "organization_config.store_factory is required when organization_config.enabled is True."
+        raise ConfigurationError(msg)
+    if not callable(organization_config.store_factory):
+        msg = "organization_config.store_factory must be callable when organization_config.enabled is True."
+        raise ConfigurationError(msg)
+
+
+def _validate_enabled_organization_tenant_policy(organization_config: OrganizationConfig) -> None:
+    if (
+        not isinstance(organization_config.tenant_header_name, str)
+        or not organization_config.tenant_header_name.strip()
+    ):
+        msg = "organization_config.tenant_header_name must be a non-empty string when organization_config.enabled is True."
+        raise ConfigurationError(msg)
+    if not callable(organization_config.tenant_resolver):
+        msg = "organization_config.tenant_resolver must be callable when organization_config.enabled is True."
+        raise ConfigurationError(msg)
+    if not isinstance(organization_config.include_switch_organization, bool):
+        msg = "organization_config.include_switch_organization must be a boolean when organization_config.enabled is True."
+        raise ConfigurationError(msg)
+    if not isinstance(organization_config.include_organization_admin, bool):
+        msg = (
+            "organization_config.include_organization_admin must be a boolean when organization_config.enabled is True."
+        )
+        raise ConfigurationError(msg)
+    if not isinstance(organization_config.include_organization_invitations, bool):
+        msg = (
+            "organization_config.include_organization_invitations must be a boolean when "
+            "organization_config.enabled is True."
+        )
+        raise ConfigurationError(msg)
+
+
+def _validate_enabled_organization_invitation_policy(config: _OrganizationConfigCarrier) -> None:
+    organization_config = config.organization_config
+    if not organization_config.include_organization_invitations:
+        return
+    manager_security = config.user_manager_security
+    if manager_security is not None and manager_security.organization_invitation_token_secret is not None:
+        return
+    msg = (
+        "organization_config.include_organization_invitations requires "
+        "user_manager_security.organization_invitation_token_secret."
+    )
+    raise ConfigurationError(msg)
+
+
+def _validate_enabled_organization_authorization_policy(organization_config: OrganizationConfig) -> None:
+    if organization_config.role_precedence not in {"replace", "merge"}:
+        msg = "organization_config.role_precedence must be 'replace' or 'merge'."
+        raise ConfigurationError(msg)
+    if not isinstance(organization_config.require_authorization_context, bool):
+        msg = "organization_config.require_authorization_context must be a boolean when organization_config.enabled is True."
+        raise ConfigurationError(msg)
+
+
+def _validate_enabled_organization_slug_policy(organization_config: OrganizationConfig) -> None:
+    if organization_config.slug_min_length < 1:
+        msg = "organization_config.slug_min_length must be greater than 0."
+        raise ConfigurationError(msg)
+    if organization_config.slug_max_length < organization_config.slug_min_length:
+        msg = "organization_config.slug_max_length must be greater than or equal to slug_min_length."
+        raise ConfigurationError(msg)
 
 
 class _ConfigValidationMixin:

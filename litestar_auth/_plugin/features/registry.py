@@ -12,6 +12,8 @@ from litestar_auth._plugin.features._config import (
     ApiKeyStoreFactory,
     DatabaseTokenAuthConfig,
     OAuthConfig,
+    OrganizationConfig,
+    OrganizationStoreFactory,
     TotpConfig,
 )
 from litestar_auth._plugin.features._defaults import (
@@ -30,6 +32,7 @@ from litestar_auth._plugin.features._defaults import (
     DEFAULT_TOTP_STEPUP_TTL_SECONDS,
     FEATURE_DEFAULTS,
     OAUTH_FEATURE,
+    ORGANIZATION_FEATURE,
     TOTP_FEATURE,
     TOTP_STEPUP_POLICY_ENDPOINTS,
     ApiKeyDefaults,
@@ -38,6 +41,8 @@ from litestar_auth._plugin.features._defaults import (
     FeatureDefaults,
     FeatureKey,
     OAuthDefaults,
+    OrganizationDefaults,
+    OrganizationRolePrecedence,
     TotpDefaults,
     TotpStepUpPolicyMode,
 )
@@ -47,6 +52,7 @@ from litestar_auth._plugin.features._snapshot import (
     ResolvedDatabaseTokenDefaults,
     ResolvedFeatureDefaults,
     ResolvedOAuthDefaults,
+    ResolvedOrganizationDefaults,
     ResolvedTotpDefaults,
 )
 from litestar_auth.config import UNSET, UnsetType
@@ -74,6 +80,7 @@ __all__ = (
     "DEFAULT_TOTP_STEPUP_TTL_SECONDS",
     "FEATURE_DEFAULTS",
     "OAUTH_FEATURE",
+    "ORGANIZATION_FEATURE",
     "TOTP_FEATURE",
     "TOTP_STEPUP_POLICY_ENDPOINTS",
     "ApiKeyConfig",
@@ -89,10 +96,15 @@ __all__ = (
     "FeatureRegistry",
     "OAuthConfig",
     "OAuthDefaults",
+    "OrganizationConfig",
+    "OrganizationDefaults",
+    "OrganizationRolePrecedence",
+    "OrganizationStoreFactory",
     "ResolvedApiKeyDefaults",
     "ResolvedDatabaseTokenDefaults",
     "ResolvedFeatureDefaults",
     "ResolvedOAuthDefaults",
+    "ResolvedOrganizationDefaults",
     "ResolvedTotpDefaults",
     "StartupBackendInventory",
     "StartupBackendTemplate",
@@ -124,6 +136,7 @@ class FeatureRegistry[UP: UserProtocol[Any], ID]:
             API_KEY_FEATURE: self.config_snapshot.api_keys,
             TOTP_FEATURE: self.config_snapshot.totp_config,
             OAUTH_FEATURE: self.config_snapshot.oauth_config,
+            ORGANIZATION_FEATURE: self.config_snapshot.organization_config,
         }[feature]
 
     def startup_backends(self) -> tuple[StartupBackendTemplate[UP, ID], ...]:
@@ -163,6 +176,8 @@ def resolve_feature_registry[UP: UserProtocol[Any], ID](
         enabled_features.add(TOTP_FEATURE)
     if defaults.oauth.config is not None:
         enabled_features.add(OAUTH_FEATURE)
+    if defaults.organization.enabled:
+        enabled_features.add(ORGANIZATION_FEATURE)
 
     return FeatureRegistry(
         config_snapshot=defaults.config_snapshot,
@@ -190,12 +205,14 @@ def resolve_feature_defaults[UP: UserProtocol[Any], ID](
     totp_config = config.totp_config
     totp_backend_name = None if totp_config is None else getattr(totp_config, "totp_backend_name", None)
     oauth_config = config.oauth_config
+    organization_config = config.organization_config
     return ResolvedFeatureDefaults(
         config_snapshot=FeatureConfigSnapshot(
             database_token_auth=database_token_config,
             api_keys=api_key_config,
             totp_config=totp_config,
             oauth_config=oauth_config,
+            organization_config=organization_config,
         ),
         database_token=ResolvedDatabaseTokenDefaults(
             config=database_token_config,
@@ -214,6 +231,7 @@ def resolve_feature_defaults[UP: UserProtocol[Any], ID](
             stepup_allow_recovery=config.totp_stepup_allow_recovery,
         ),
         oauth=ResolvedOAuthDefaults(config=oauth_config),
+        organization=ResolvedOrganizationDefaults(config=organization_config, enabled=organization_config.enabled),
     )
 
 

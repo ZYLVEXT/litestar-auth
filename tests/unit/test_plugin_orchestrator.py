@@ -46,7 +46,9 @@ from litestar_auth.authentication.transport.api_key import ApiKeyTransport
 from litestar_auth.authentication.transport.bearer import BearerTransport
 from litestar_auth.authentication.transport.cookie import CookieTransport
 from litestar_auth.config import require_password_length
-from litestar_auth.exceptions import ConfigurationError
+from litestar_auth.exceptions import (
+    ConfigurationError,
+)
 from litestar_auth.manager import UserManagerSecurity
 from litestar_auth.password import PasswordHelper
 from litestar_auth.ratelimit import (
@@ -86,10 +88,20 @@ OAUTH_FLOW_COOKIE_SECRET = "oauth-flow-cookie-secret-1234567890"
 TOKEN_HASH_SECRET = "0123456789abcdef" * 4
 VERIFICATION_SECRET = "89abcdef01234567" * 4
 RESET_PASSWORD_SECRET = "fedcba9876543210" * 4
+ORGANIZATION_INVITATION_SECRET = "c4b7e9a13f6d8c2059ab7e3041f8d6e2" * 2
 API_KEY_HASH_SECRET = "api-key-hash-secret-0123456789abcdef"
 TOTP_PENDING_SECRET = "76543210fedcba98" * 4
 CSRF_SECRET = "456789abcdef0123" * 4
 TOTP_RECOVERY_CODE_LOOKUP_SECRET = "13579bdf02468ace" * 4
+HTTP_FORBIDDEN = 403
+HTTP_NOT_FOUND = 404
+HTTP_BAD_REQUEST = 400
+HTTP_TOO_MANY_REQUESTS = 429
+HTTP_OK = 200
+HTTP_CREATED = 201
+HTTP_NO_CONTENT = 204
+HTTP_CONFLICT = 409
+HTTP_UNPROCESSABLE_ENTITY = 422
 
 
 def _current_startup_backend_template_type() -> type[Any]:
@@ -135,6 +147,24 @@ def _current_jwt_strategy() -> object:
     return strategy_type(secret=TOKEN_HASH_SECRET, algorithm="HS256", allow_inmemory_denylist=True)
 
 
+def _response_error_code(payload: dict[str, Any]) -> str:
+    """Return the stable error code from either plugin or route-local error payloads.
+
+    Raises:
+        AssertionError: If the payload does not include an auth error code.
+    """
+    code = payload.get("code")
+    if isinstance(code, str):
+        return code
+    extra = payload.get("extra")
+    if isinstance(extra, dict):
+        extra_code = extra.get("code")
+        if isinstance(extra_code, str):
+            return extra_code
+    msg = "Response payload does not include an auth error code."
+    raise AssertionError(msg)
+
+
 def _current_inmemory_used_totp_code_store() -> object:
     """Return a used-code store instance from the current TOTP module."""
     totp_module = importlib.import_module("litestar_auth.totp")
@@ -157,6 +187,7 @@ def _minimal_config(  # noqa: PLR0913
     login_identifier: Literal["email", "username"] = "email",
     superuser_role_name: str = DEFAULT_SUPERUSER_ROLE_NAME,
     role_permissions: dict[str, object] | None = None,
+    organization_config: object | None = None,
 ) -> LitestarAuthConfig[ExampleUser, UUID]:
     """Build a minimal plugin config for orchestrator-focused tests.
 
@@ -180,12 +211,14 @@ def _minimal_config(  # noqa: PLR0913
         user_manager_security=UserManagerSecurity[UUID](
             verification_token_secret=VERIFICATION_SECRET,
             reset_password_token_secret=RESET_PASSWORD_SECRET,
+            organization_invitation_token_secret=ORGANIZATION_INVITATION_SECRET,
             id_parser=UUID,
         ),
         include_users=include_users,
         login_identifier=login_identifier,
         superuser_role_name=superuser_role_name,
         role_permissions=role_permissions or {},
+        organization_config=cast("Any", organization_config) or plugin_module.OrganizationConfig(),
     )
 
 
@@ -286,7 +319,16 @@ def test_feature_wiring_snapshots_registered_hook_order() -> None:
                 "require_refreshable_strategy_when_enable_refresh",
                 "warn_insecure_plugin_startup_defaults",
             ),
-            ("config", "user_manager", "backends", "user_model", "resolved_permissions", "db_session"),
+            (
+                "config",
+                "user_manager",
+                "backends",
+                "user_model",
+                "resolved_permissions",
+                "current_organization",
+                "organization_store",
+                "db_session",
+            ),
             ("register_dependencies", "register_middleware", "register_openapi_security", "register_controllers"),
             ("register_exception_handlers",),
         ),

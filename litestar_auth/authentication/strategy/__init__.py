@@ -24,7 +24,7 @@ from litestar_auth.authentication.strategy.base import (
 )
 from litestar_auth.authentication.strategy.db import DatabaseTokenStrategy, DatabaseTokenStrategyConfig
 from litestar_auth.authentication.strategy.db_models import DatabaseTokenModels
-from litestar_auth.authentication.strategy.jwt import JWTStrategy, JWTStrategyConfig
+from litestar_auth.authentication.strategy.jwt import JWTContext, JWTStrategy, JWTStrategyConfig
 from litestar_auth.authentication.strategy.redis import RedisTokenStrategy, RedisTokenStrategyConfig
 
 __all__ = (
@@ -38,6 +38,7 @@ __all__ = (
     "DatabaseTokenStrategy",
     "DatabaseTokenStrategyConfig",
     "InMemoryApiKeyNonceStore",
+    "JWTContext",
     "JWTStrategy",
     "JWTStrategyConfig",
     "RedisApiKeyNonceStore",

@@ -2,11 +2,15 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from types import SimpleNamespace
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, cast
+from uuid import UUID, uuid4
 
 import pytest
+from litestar.connection import ASGIConnection
 
+from litestar_auth._current_organization import CurrentOrganizationContext, set_scope_current_organization_context
 from litestar_auth._permissions import (
     GLOBAL_PERMISSION_GRANT,
     StaticRolePermissionResolver,
@@ -16,6 +20,8 @@ from litestar_auth._permissions import (
     permission_grants_fixed_work,
     permissions_cover_delegated_grant,
     permissions_grant,
+    resolve_connection_permissions,
+    set_scope_permission_resolver,
 )
 from litestar_auth._roles import normalize_role_name, normalize_roles
 
@@ -23,6 +29,71 @@ if TYPE_CHECKING:
     from litestar_auth.types import PermissionResolver
 
 pytestmark = pytest.mark.unit
+
+
+@dataclass(frozen=True, slots=True)
+class _PermissionTestOrganization:
+    """Organization row used by permission-resolution tests."""
+
+    id: UUID
+    slug: str
+
+
+@dataclass(frozen=True, slots=True)
+class _PermissionTestMembership:
+    """Membership row exposing organization-scoped roles."""
+
+    organization_id: UUID
+    user_id: UUID
+    roles: object
+
+
+class _MembershipWithStoreSentinel:
+    """Membership sentinel that fails if permission resolution tries store access."""
+
+    def __init__(self, roles: object) -> None:
+        """Store the role collection exposed by the membership."""
+        self.roles = roles
+
+    @property
+    def store(self) -> object:
+        """Fail if code attempts to reach persistence during permission resolution.
+
+        Raises:
+            AssertionError: Always, because permission resolution must use cached context.
+        """
+        msg = "permission resolution must not query organization stores"
+        raise AssertionError(msg)
+
+
+def _build_connection(
+    *,
+    user: object | None = None,
+) -> ASGIConnection[Any, Any, Any, Any]:
+    """Create a minimal HTTP connection for permission tests.
+
+    Returns:
+        Minimal Litestar ASGI connection.
+    """
+    scope: dict[str, object] = {
+        "type": "http",
+        "headers": [],
+        "path_params": {},
+        "query_string": b"",
+        "user": user,
+        "auth": None,
+    }
+    return ASGIConnection(scope=cast("Any", scope))
+
+
+def _set_permission_context(connection: ASGIConnection[Any, Any, Any, Any], roles: object) -> None:
+    """Store a verified organization context with the provided membership roles."""
+    organization = _PermissionTestOrganization(id=uuid4(), slug="acme")
+    membership = _PermissionTestMembership(organization_id=organization.id, user_id=uuid4(), roles=roles)
+    set_scope_current_organization_context(
+        connection.scope,
+        CurrentOrganizationContext(organization=organization, membership=membership),
+    )
 
 
 def test_permission_normalization_matches_role_scope_normalization() -> None:
@@ -189,6 +260,110 @@ def test_static_role_permission_resolver_treats_configured_superuser_as_global_g
 
     assert permissions == frozenset({GLOBAL_PERMISSION_GRANT})
     assert permissions_grant(permissions, "tenants:delete")
+
+
+def test_static_role_permission_resolver_rejects_invalid_organization_precedence() -> None:
+    """Organization role precedence accepts only the documented policy values."""
+    with pytest.raises(ValueError, match="organization_role_precedence must be 'replace' or 'merge'"):
+        StaticRolePermissionResolver({}, organization_role_precedence=cast("Any", "union"))
+
+
+def test_resolve_connection_permissions_uses_org_roles_in_verified_context() -> None:
+    """Verified organization membership roles replace broad global roles."""
+    resolver = StaticRolePermissionResolver(
+        {
+            "admin": ("users:*", "billing:*"),
+            "member": ("posts:read",),
+        },
+    )
+    connection = _build_connection(user=SimpleNamespace(roles=["admin"]))
+    set_scope_permission_resolver(connection.scope, resolver)
+    _set_permission_context(connection, ["member"])
+
+    assert resolve_connection_permissions(connection) == frozenset({"posts:read"})
+
+
+def test_resolve_connection_permissions_falls_back_to_global_roles_without_org_context() -> None:
+    """Existing global-role permission resolution is unchanged without org context."""
+    resolver = StaticRolePermissionResolver(
+        {
+            "admin": ("users:*", "billing:*"),
+            "member": ("posts:read",),
+        },
+    )
+    connection = _build_connection(user=SimpleNamespace(roles=["admin"]))
+    set_scope_permission_resolver(connection.scope, resolver)
+
+    assert resolve_connection_permissions(connection) == frozenset({"billing:*", "users:*"})
+
+
+def test_resolve_connection_permissions_merges_global_and_org_roles_when_configured() -> None:
+    """The explicit merge policy unions global and organization-scoped roles."""
+    resolver = StaticRolePermissionResolver(
+        {
+            "admin": ("users:*", "billing:*"),
+            "member": ("posts:read",),
+        },
+        organization_role_precedence="merge",
+    )
+    connection = _build_connection(user=SimpleNamespace(roles=["admin"]))
+    set_scope_permission_resolver(connection.scope, resolver)
+    _set_permission_context(connection, ["member"])
+
+    assert resolve_connection_permissions(connection) == frozenset({"billing:*", "posts:read", "users:*"})
+
+
+def test_resolve_connection_permissions_can_require_organization_context() -> None:
+    """Required organization authorization denies global-role fallback without org context."""
+    resolver = StaticRolePermissionResolver(
+        {"admin": ("users:*", "billing:*")},
+        require_organization_context=True,
+    )
+    connection = _build_connection(user=SimpleNamespace(roles=["admin"]))
+    set_scope_permission_resolver(connection.scope, resolver)
+
+    assert resolve_connection_permissions(connection) == frozenset()
+
+
+def test_resolve_connection_permissions_keeps_superuser_global_in_org_context() -> None:
+    """The configured superuser role keeps global permission precedence."""
+    resolver = StaticRolePermissionResolver(
+        {"member": ("posts:read",)},
+        superuser_role_name="owner",
+    )
+    connection = _build_connection(user=SimpleNamespace(roles=["owner"]))
+    set_scope_permission_resolver(connection.scope, resolver)
+    _set_permission_context(connection, [])
+
+    assert resolve_connection_permissions(connection) == frozenset({GLOBAL_PERMISSION_GRANT})
+
+
+def test_resolve_connection_permissions_keeps_superuser_global_when_org_context_required() -> None:
+    """The configured superuser role remains a global grant when org context is required."""
+    resolver = StaticRolePermissionResolver(
+        {"member": ("posts:read",)},
+        superuser_role_name="owner",
+        require_organization_context=True,
+    )
+    connection = _build_connection(user=SimpleNamespace(roles=["owner"]))
+    set_scope_permission_resolver(connection.scope, resolver)
+
+    assert resolve_connection_permissions(connection) == frozenset({GLOBAL_PERMISSION_GRANT})
+
+
+def test_resolve_connection_permissions_does_not_query_store_for_org_roles() -> None:
+    """Permission resolution reads the cached membership role snapshot only."""
+    resolver = StaticRolePermissionResolver({"member": ("posts:read",)})
+    organization = _PermissionTestOrganization(id=uuid4(), slug="acme")
+    membership = _MembershipWithStoreSentinel(["member"])
+    connection = _build_connection(user=SimpleNamespace(roles=["admin"]))
+    set_scope_permission_resolver(connection.scope, resolver)
+    set_scope_current_organization_context(
+        connection.scope,
+        CurrentOrganizationContext(organization=organization, membership=membership),
+    )
+
+    assert resolve_connection_permissions(connection) == frozenset({"posts:read"})
 
 
 def test_static_role_permission_resolver_ignores_context_argument() -> None:

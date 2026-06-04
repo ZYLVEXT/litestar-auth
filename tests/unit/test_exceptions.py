@@ -22,10 +22,15 @@ AuthorizationError = exceptions_module.AuthorizationError
 ConfigurationError = exceptions_module.ConfigurationError
 ERROR_CODE_REGISTRY = error_codes_module.ERROR_CODE_REGISTRY
 ErrorCode = exceptions_module.ErrorCode
+ExpiredOrganizationInvitationTokenError = exceptions_module.ExpiredOrganizationInvitationTokenError
 InactiveUserError = exceptions_module.InactiveUserError
+InsufficientOrganizationPermissionsError = exceptions_module.InsufficientOrganizationPermissionsError
+InsufficientOrganizationRolesError = exceptions_module.InsufficientOrganizationRolesError
 InsufficientRolesError = exceptions_module.InsufficientRolesError
 InsufficientPermissionsError = exceptions_module.InsufficientPermissionsError
 InvalidPasswordError = exceptions_module.InvalidPasswordError
+InvalidOrganizationInvitationTokenError = exceptions_module.InvalidOrganizationInvitationTokenError
+OrganizationInvitationEmailMismatchError = exceptions_module.OrganizationInvitationEmailMismatchError
 InvalidResetPasswordTokenError = exceptions_module.InvalidResetPasswordTokenError
 InvalidVerifyTokenError = exceptions_module.InvalidVerifyTokenError
 LitestarAuthError = exceptions_module.LitestarAuthError
@@ -130,6 +135,24 @@ EXCEPTION_CASES: tuple[ExceptionCase, ...] = (
         ErrorCode.RESET_PASSWORD_BAD_TOKEN,
         TokenError,
     ),
+    (
+        InvalidOrganizationInvitationTokenError,
+        "The organization invitation token is invalid.",
+        ErrorCode.ORGANIZATION_INVITATION_INVALID,
+        LitestarAuthError,
+    ),
+    (
+        ExpiredOrganizationInvitationTokenError,
+        "The organization invitation token is expired.",
+        ErrorCode.ORGANIZATION_INVITATION_EXPIRED,
+        InvalidOrganizationInvitationTokenError,
+    ),
+    (
+        OrganizationInvitationEmailMismatchError,
+        "The organization invitation token is invalid.",
+        ErrorCode.ORGANIZATION_INVITATION_EMAIL_MISMATCH,
+        InvalidOrganizationInvitationTokenError,
+    ),
 )
 
 EXPECTED_ERROR_CODE_GROUPS = {
@@ -148,6 +171,7 @@ EXPECTED_ERROR_CODE_GROUPS = {
         "UPDATE_USER_EMAIL_ALREADY_EXISTS": "UPDATE_USER_EMAIL_ALREADY_EXISTS",
         "UPDATE_USER_INVALID_PASSWORD": "UPDATE_USER_INVALID_PASSWORD",
         "SUPERUSER_CANNOT_DELETE_SELF": "SUPERUSER_CANNOT_DELETE_SELF",
+        "ORGANIZATION_SWITCH_DENIED": "ORGANIZATION_SWITCH_DENIED",
     },
     TokenErrorCode: {
         "TOKEN_PROCESSING_FAILED": "TOKEN_PROCESSING_FAILED",
@@ -162,11 +186,21 @@ EXPECTED_ERROR_CODE_GROUPS = {
     RoleErrorCode: {
         "INSUFFICIENT_ROLES": "INSUFFICIENT_ROLES",
         "INSUFFICIENT_PERMISSIONS": "INSUFFICIENT_PERMISSIONS",
+        "INSUFFICIENT_ORGANIZATION_ROLES": "INSUFFICIENT_ORGANIZATION_ROLES",
+        "INSUFFICIENT_ORGANIZATION_PERMISSIONS": "INSUFFICIENT_ORGANIZATION_PERMISSIONS",
         "ROLE_ALREADY_EXISTS": "ROLE_ALREADY_EXISTS",
         "ROLE_NOT_FOUND": "ROLE_NOT_FOUND",
         "ROLE_STILL_ASSIGNED": "ROLE_STILL_ASSIGNED",
         "ROLE_ASSIGNMENT_USER_NOT_FOUND": "ROLE_ASSIGNMENT_USER_NOT_FOUND",
         "ROLE_NAME_INVALID": "ROLE_NAME_INVALID",
+        "ORGANIZATION_ALREADY_EXISTS": "ORGANIZATION_ALREADY_EXISTS",
+        "ORGANIZATION_NOT_FOUND": "ORGANIZATION_NOT_FOUND",
+        "ORGANIZATION_MEMBERSHIP_ALREADY_EXISTS": "ORGANIZATION_MEMBERSHIP_ALREADY_EXISTS",
+        "ORGANIZATION_MEMBERSHIP_NOT_FOUND": "ORGANIZATION_MEMBERSHIP_NOT_FOUND",
+        "ORGANIZATION_LAST_PRIVILEGED_MEMBER": "ORGANIZATION_LAST_PRIVILEGED_MEMBER",
+        "ORGANIZATION_INVITATION_INVALID": "ORGANIZATION_INVITATION_INVALID",
+        "ORGANIZATION_INVITATION_EXPIRED": "ORGANIZATION_INVITATION_EXPIRED",
+        "ORGANIZATION_INVITATION_EMAIL_MISMATCH": "ORGANIZATION_INVITATION_EMAIL_MISMATCH",
     },
     TotpErrorCode: {
         "TOTP_PENDING_BAD_TOKEN": "TOTP_PENDING_BAD_TOKEN",
@@ -207,6 +241,8 @@ EXPECTED_ERROR_CODES = {
     "AUTHORIZATION_DENIED": "AUTHORIZATION_DENIED",
     "INSUFFICIENT_ROLES": "INSUFFICIENT_ROLES",
     "INSUFFICIENT_PERMISSIONS": "INSUFFICIENT_PERMISSIONS",
+    "INSUFFICIENT_ORGANIZATION_ROLES": "INSUFFICIENT_ORGANIZATION_ROLES",
+    "INSUFFICIENT_ORGANIZATION_PERMISSIONS": "INSUFFICIENT_ORGANIZATION_PERMISSIONS",
     "RESET_PASSWORD_BAD_TOKEN": "RESET_PASSWORD_BAD_TOKEN",
     "RESET_PASSWORD_INVALID_PASSWORD": "RESET_PASSWORD_INVALID_PASSWORD",
     "VERIFY_USER_BAD_TOKEN": "VERIFY_USER_BAD_TOKEN",
@@ -214,6 +250,7 @@ EXPECTED_ERROR_CODES = {
     "UPDATE_USER_EMAIL_ALREADY_EXISTS": "UPDATE_USER_EMAIL_ALREADY_EXISTS",
     "UPDATE_USER_INVALID_PASSWORD": "UPDATE_USER_INVALID_PASSWORD",
     "SUPERUSER_CANNOT_DELETE_SELF": "SUPERUSER_CANNOT_DELETE_SELF",
+    "ORGANIZATION_SWITCH_DENIED": "ORGANIZATION_SWITCH_DENIED",
     "OAUTH_NOT_AVAILABLE_EMAIL": "OAUTH_NOT_AVAILABLE_EMAIL",
     "OAUTH_STATE_INVALID": "OAUTH_STATE_INVALID",
     "OAUTH_EMAIL_NOT_VERIFIED": "OAUTH_EMAIL_NOT_VERIFIED",
@@ -229,6 +266,14 @@ EXPECTED_ERROR_CODES = {
     "ROLE_STILL_ASSIGNED": "ROLE_STILL_ASSIGNED",
     "ROLE_ASSIGNMENT_USER_NOT_FOUND": "ROLE_ASSIGNMENT_USER_NOT_FOUND",
     "ROLE_NAME_INVALID": "ROLE_NAME_INVALID",
+    "ORGANIZATION_ALREADY_EXISTS": "ORGANIZATION_ALREADY_EXISTS",
+    "ORGANIZATION_NOT_FOUND": "ORGANIZATION_NOT_FOUND",
+    "ORGANIZATION_MEMBERSHIP_ALREADY_EXISTS": "ORGANIZATION_MEMBERSHIP_ALREADY_EXISTS",
+    "ORGANIZATION_MEMBERSHIP_NOT_FOUND": "ORGANIZATION_MEMBERSHIP_NOT_FOUND",
+    "ORGANIZATION_LAST_PRIVILEGED_MEMBER": "ORGANIZATION_LAST_PRIVILEGED_MEMBER",
+    "ORGANIZATION_INVITATION_INVALID": "ORGANIZATION_INVITATION_INVALID",
+    "ORGANIZATION_INVITATION_EXPIRED": "ORGANIZATION_INVITATION_EXPIRED",
+    "ORGANIZATION_INVITATION_EMAIL_MISMATCH": "ORGANIZATION_INVITATION_EMAIL_MISMATCH",
     "TOTP_PENDING_BAD_TOKEN": "TOTP_PENDING_BAD_TOKEN",
     "TOTP_CODE_INVALID": "TOTP_CODE_INVALID",
     "TOTP_ALREADY_ENABLED": "TOTP_ALREADY_ENABLED",
@@ -644,6 +689,38 @@ def test_insufficient_permissions_error_custom_message_and_code_override_default
     assert error.required_permissions == frozenset({"posts:delete"})
     assert error.granted_permissions == frozenset({"posts:read"})
     assert error.require_all is False
+
+
+def test_insufficient_organization_roles_error_exposes_context_and_generic_default_message() -> None:
+    """Organization role-denial errors keep structured context off the default message."""
+    error = InsufficientOrganizationRolesError(
+        required_roles=frozenset({"admin", "billing"}),
+        user_roles=frozenset({"viewer"}),
+        require_all=True,
+    )
+
+    assert str(error) == "The authenticated user does not have all of the required organization roles."
+    assert "admin" not in str(error)
+    assert error.code == ErrorCode.INSUFFICIENT_ORGANIZATION_ROLES
+    assert error.required_roles == frozenset({"admin", "billing"})
+    assert error.user_roles == frozenset({"viewer"})
+    assert error.require_all is True
+
+
+def test_insufficient_organization_permissions_error_exposes_context_and_generic_default_message() -> None:
+    """Organization permission-denial errors keep structured context off the default message."""
+    error = InsufficientOrganizationPermissionsError(
+        required_permissions=frozenset({"posts:delete"}),
+        granted_permissions=frozenset({"posts:read"}),
+        require_all=True,
+    )
+
+    assert str(error) == "The authenticated user does not have all of the required organization permissions."
+    assert "posts:" not in str(error)
+    assert error.code == ErrorCode.INSUFFICIENT_ORGANIZATION_PERMISSIONS
+    assert error.required_permissions == frozenset({"posts:delete"})
+    assert error.granted_permissions == frozenset({"posts:read"})
+    assert error.require_all is True
 
 
 def test_user_already_exists_error_exposes_identifier_context_and_default_message() -> None:

@@ -118,6 +118,9 @@ AUTH_RATE_LIMIT_SLOT_IDENTIFIERS: tuple[AuthRateLimitSlot, ...] = (
     AuthRateLimitSlot.TOTP_REGENERATE_RECOVERY_CODES,
     AuthRateLimitSlot.VERIFY_TOKEN,
     AuthRateLimitSlot.REQUEST_VERIFY_TOKEN,
+    AuthRateLimitSlot.ORGANIZATION_SWITCH,
+    AuthRateLimitSlot.ORGANIZATION_INVITATION_ACCEPT,
+    AuthRateLimitSlot.ORGANIZATION_INVITATION_DECLINE,
     AuthRateLimitSlot.API_KEY_CREATE,
     AuthRateLimitSlot.API_KEY_UPDATE,
     AuthRateLimitSlot.API_KEY_USE,
@@ -126,6 +129,8 @@ AUTH_RATE_LIMIT_SLOT_VALUES = tuple(slot.value for slot in AUTH_RATE_LIMIT_SLOT_
 AUTH_RATE_LIMIT_GROUP_IDENTIFIERS: tuple[AuthRateLimitEndpointGroup, ...] = (
     "api_keys",
     "login",
+    "organization_invitations",
+    "organizations",
     "password_reset",
     "refresh",
     "register",
@@ -152,6 +157,13 @@ AUTH_RATE_LIMIT_SLOT_IDENTIFIERS_BY_GROUP: dict[
             AuthRateLimitSlot.TOTP_REGENERATE_RECOVERY_CODES,
         },
     ),
+    "organization_invitations": frozenset(
+        {
+            AuthRateLimitSlot.ORGANIZATION_INVITATION_ACCEPT,
+            AuthRateLimitSlot.ORGANIZATION_INVITATION_DECLINE,
+        },
+    ),
+    "organizations": frozenset({AuthRateLimitSlot.ORGANIZATION_SWITCH}),
     "verification": frozenset({AuthRateLimitSlot.VERIFY_TOKEN, AuthRateLimitSlot.REQUEST_VERIFY_TOKEN}),
 }
 AUTH_RATE_LIMIT_VERIFICATION_SLOT_IDENTIFIERS = AUTH_RATE_LIMIT_SLOT_IDENTIFIERS_BY_GROUP["verification"]
@@ -410,6 +422,9 @@ def test_auth_rate_limit_slot_enum_stays_aligned_with_public_inventory() -> None
         "TOTP_REGENERATE_RECOVERY_CODES",
         "VERIFY_TOKEN",
         "REQUEST_VERIFY_TOKEN",
+        "ORGANIZATION_SWITCH",
+        "ORGANIZATION_INVITATION_ACCEPT",
+        "ORGANIZATION_INVITATION_DECLINE",
         "API_KEY_CREATE",
         "API_KEY_UPDATE",
         "API_KEY_USE",
@@ -541,6 +556,9 @@ def test_auth_rate_limit_default_recipes_cover_supported_slots_scopes_groups_and
         "totp_regenerate_recovery_codes": "ip",
         "verify_token": "ip",
         "request_verify_token": "ip_email",
+        "organization_switch": "ip",
+        "organization_invitation_accept": "ip",
+        "organization_invitation_decline": "ip",
         "api_key_create": "ip",
         "api_key_update": "ip",
         "api_key_use": "api_key_id",
@@ -559,6 +577,9 @@ def test_auth_rate_limit_default_recipes_cover_supported_slots_scopes_groups_and
         "totp_regenerate_recovery_codes": "totp-regenerate-recovery-codes",
         "verify_token": "verify-token",
         "request_verify_token": "request-verify-token",
+        "organization_switch": "organization-switch",
+        "organization_invitation_accept": "organization-invitation-accept",
+        "organization_invitation_decline": "organization-invitation-decline",
         "api_key_create": "api-key-create",
         "api_key_update": "api-key-update",
         "api_key_use": "api-key-use",
@@ -577,6 +598,9 @@ def test_auth_rate_limit_default_recipes_cover_supported_slots_scopes_groups_and
         "totp_regenerate_recovery_codes": "totp",
         "verify_token": "verification",
         "request_verify_token": "verification",
+        "organization_switch": "organizations",
+        "organization_invitation_accept": "organization_invitations",
+        "organization_invitation_decline": "organization_invitations",
         "api_key_create": "api_keys",
         "api_key_update": "api_keys",
         "api_key_use": "api_keys",
@@ -620,8 +644,10 @@ def test_auth_rate_limit_config_from_shared_backend_accepts_all_supported_group_
     register_backend = InMemoryRateLimiter(max_attempts=5, window_seconds=10)
     totp_backend = InMemoryRateLimiter(max_attempts=6, window_seconds=10)
     verification_backend = InMemoryRateLimiter(max_attempts=7, window_seconds=10)
+    organizations_backend = InMemoryRateLimiter(max_attempts=8, window_seconds=10)
     group_backends: dict[AuthRateLimitEndpointGroup, InMemoryRateLimiter] = {
         "login": login_backend,
+        "organizations": organizations_backend,
         "password_reset": password_reset_backend,
         "refresh": refresh_backend,
         "register": register_backend,
@@ -651,6 +677,7 @@ def test_auth_rate_limit_config_from_shared_backend_accepts_all_supported_group_
         "totp_regenerate_recovery_codes": totp_backend,
         "verify_token": verification_backend,
         "request_verify_token": verification_backend,
+        "organization_switch": organizations_backend,
     }
 
     for slot, expected_backend in expected_backends.items():
@@ -895,6 +922,7 @@ def test_auth_rate_limit_config_from_shared_backend_supports_partial_enablement_
     assert config.register is None
     assert config.forgot_password is None
     assert config.reset_password is None
+    assert config.organization_switch is None
     assert config.totp_enable is None
     assert config.totp_confirm_enable is None
     assert config.totp_disable is None
@@ -1808,6 +1836,46 @@ def test_client_host_returns_unknown_without_client() -> None:
     request = Request(scope=scope)
 
     assert ratelimit_client_host_module._client_host(request) == "unknown"
+
+
+@pytest.mark.parametrize(
+    ("label", "expected"),
+    [
+        pytest.param("Example", "example", id="ascii"),
+        pytest.param("BÜCHER", "bücher", id="unicode-uts46"),
+        pytest.param("xn--bcher-kva", "bücher", id="punycode"),
+    ],
+)
+def test_normalize_host_label_returns_lowercase_unicode(label: str, expected: str) -> None:
+    """Host labels normalize through the maintained IDNA implementation."""
+    assert ratelimit_client_host_module._normalize_host_label(label) == expected
+
+
+@pytest.mark.parametrize(
+    "label",
+    [
+        pytest.param("bad_host", id="disallowed-codepoint"),
+        pytest.param("-bad", id="leading-hyphen"),
+        pytest.param("\ud800", id="surrogate"),
+    ],
+)
+def test_normalize_host_label_returns_none_for_invalid_idna(label: str) -> None:
+    """Invalid IDNA labels fail closed without escaping the helper."""
+    assert ratelimit_client_host_module._normalize_host_label(label) is None
+
+
+@pytest.mark.parametrize(
+    ("raw_host", "expected"),
+    [
+        pytest.param("Auth.Example.COM", "auth.example.com", id="ascii"),
+        pytest.param("xn--bcher-kva.example.com:8443", "bücher.example.com", id="punycode-port"),
+    ],
+)
+def test_request_host_normalizes_standard_host_headers(raw_host: str, expected: str) -> None:
+    """Shared host parsing preserves standard host-header normalization."""
+    request = _build_request(headers=[(b"host", raw_host.encode())])
+
+    assert ratelimit_client_host_module._request_host(request) == expected
 
 
 @pytest.mark.parametrize(

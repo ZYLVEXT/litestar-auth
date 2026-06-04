@@ -35,6 +35,9 @@ from litestar_auth._plugin.config._core import (
     DEFAULT_CSRF_COOKIE_NAME as DEFAULT_CSRF_COOKIE_NAME,
 )
 from litestar_auth._plugin.config._core import (
+    DEFAULT_CURRENT_ORGANIZATION_DEPENDENCY_KEY as DEFAULT_CURRENT_ORGANIZATION_DEPENDENCY_KEY,
+)
+from litestar_auth._plugin.config._core import (
     DEFAULT_DATABASE_TOKEN_BACKEND_NAME as DEFAULT_DATABASE_TOKEN_BACKEND_NAME,
 )
 from litestar_auth._plugin.config._core import (
@@ -51,6 +54,9 @@ from litestar_auth._plugin.config._core import (
 )
 from litestar_auth._plugin.config._core import (
     DEFAULT_LOGIN_MINIMUM_RESPONSE_SECONDS as DEFAULT_LOGIN_MINIMUM_RESPONSE_SECONDS,
+)
+from litestar_auth._plugin.config._core import (
+    DEFAULT_ORGANIZATION_STORE_DEPENDENCY_KEY as DEFAULT_ORGANIZATION_STORE_DEPENDENCY_KEY,
 )
 from litestar_auth._plugin.config._core import (
     DEFAULT_REGISTER_MINIMUM_RESPONSE_SECONDS as DEFAULT_REGISTER_MINIMUM_RESPONSE_SECONDS,
@@ -105,6 +111,9 @@ from litestar_auth._plugin.config._core import (
 )
 from litestar_auth._plugin.config._core import (
     OAuthConfig as OAuthConfig,
+)
+from litestar_auth._plugin.config._core import (
+    OrganizationConfig as OrganizationConfig,
 )
 from litestar_auth._plugin.config._core import (
     PasswordValidatorFactory as PasswordValidatorFactory,

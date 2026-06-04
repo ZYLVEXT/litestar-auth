@@ -30,6 +30,17 @@ Exact JSON layout follows your Litestar exception handler configuration.
 | `AUTHORIZATION_DENIED` | 403 | Guard denied access. |
 | `INSUFFICIENT_ROLES` | 403 | Role-based guard denial. Structured role context stays on the exception object but is omitted from default HTTP responses. |
 | `INSUFFICIENT_PERMISSIONS` | 403 | Permission-based guard denial. Structured required/granted permission context stays on the exception object but is omitted from default HTTP responses. |
+| `INSUFFICIENT_ORGANIZATION_ROLES` | 403 | Organization role guard denial from `has_organization_role()`. Emitted when the request lacks verified organization context or the current membership does not have all required organization roles. |
+| `INSUFFICIENT_ORGANIZATION_PERMISSIONS` | 403 | Organization permission guard denial from `has_organization_permission()`. Emitted when the request lacks verified organization context, lacks required organization-scoped effective permissions, or an API key does not delegate the required permission. |
+| `ORGANIZATION_SWITCH_DENIED` | 403 | Opt-in `POST /auth/switch-organization` denied the active-organization switch because the requested slug could not be normalized, the organization could not be found, or authenticated-user membership could not be verified. |
+| `ORGANIZATION_ALREADY_EXISTS` | 409 | Opt-in organization-admin create/update conflict for a normalized organization slug. |
+| `ORGANIZATION_NOT_FOUND` | 404 | Opt-in organization-admin organization lookup failed, including malformed organization ids on the bundled HTTP controller. |
+| `ORGANIZATION_MEMBERSHIP_ALREADY_EXISTS` | 409 | Opt-in organization-admin membership add conflict for an existing `(organization_id, user_id)` membership. |
+| `ORGANIZATION_MEMBERSHIP_NOT_FOUND` | 404 | Opt-in organization-admin membership lookup failed, including malformed user ids on the bundled HTTP controller. |
+| `ORGANIZATION_LAST_PRIVILEGED_MEMBER` | 409 | Opt-in organization-admin refused to remove or demote the final privileged member of an organization. |
+| `ORGANIZATION_INVITATION_INVALID` | 400 | Organization invitation token validation failed because the token is malformed, signed for the wrong audience, references no pending row, or the row was consumed or revoked. |
+| `ORGANIZATION_INVITATION_EXPIRED` | 400 | Organization invitation token validation failed because the signed token or stored invitation row expired. |
+| `ORGANIZATION_INVITATION_EMAIL_MISMATCH` | 400 | Organization invitation accept/decline was attempted by an authenticated user whose normalized email does not match the invitation email. |
 | `ROLE_ALREADY_EXISTS` | 409 | Opt-in contrib role-admin create conflict. |
 | `ROLE_NOT_FOUND` | 404 | Opt-in contrib role-admin requested role missing. |
 | `ROLE_STILL_ASSIGNED` | 409 | Opt-in contrib role-admin delete refused while users still hold the role. |
@@ -74,6 +85,53 @@ Source of truth in code: `litestar_auth._error_codes.ErrorCode` (re-exported fro
 `InsufficientPermissionsError`. The exception keeps `required_permissions`,
 `granted_permissions`, and `require_all` on the Python object for handlers or logs,
 but the default HTTP response does not expose permission names.
+
+`INSUFFICIENT_ORGANIZATION_ROLES` is emitted by `has_organization_role()` through
+`InsufficientOrganizationRolesError`. `INSUFFICIENT_ORGANIZATION_PERMISSIONS` is emitted by
+`has_organization_permission()` through `InsufficientOrganizationPermissionsError`. These exceptions
+keep required and granted role or permission context on the Python object, but default responses do
+not expose the names.
+
+`ORGANIZATION_SWITCH_DENIED` is emitted by the opt-in switch-organization controller. It is
+intentionally non-enumerating: invalid slugs, unknown organizations, missing ids, and missing
+memberships all collapse to the same 403 so clients cannot probe the organization catalog or another
+user's membership state. Malformed switch request bodies use `REQUEST_BODY_INVALID` instead.
+
+The organization-admin codes are emitted by the opt-in `/organizations` controller from
+`litestar_auth.contrib.organization_admin` and by the shared `SQLAlchemyOrganizationAdmin` operations
+layer as Python exceptions:
+
+- `ORGANIZATION_ALREADY_EXISTS` maps normalized slug collisions during organization create/update.
+- `ORGANIZATION_NOT_FOUND` maps unknown organization reads, updates, deletes, member listing, and
+  member additions to unknown organizations. The HTTP controller also maps malformed organization
+  identifiers to this code.
+- `ORGANIZATION_MEMBERSHIP_ALREADY_EXISTS` maps duplicate membership creation.
+- `ORGANIZATION_MEMBERSHIP_NOT_FOUND` maps unknown membership reads, role replacement, and removal.
+  The HTTP controller also maps malformed user identifiers to this code.
+- `ORGANIZATION_LAST_PRIVILEGED_MEMBER` maps attempts to remove or demote the final membership whose
+  roles include `owner` or `admin`.
+
+Organization invitation codes are emitted by both invitation surfaces:
+
+- The operator `/organizations/{organization_id}/invitations` routes and `litestar organizations`
+  invitation CLI commands create, list, and revoke pending invitations. Admin create/list uses
+  `ORGANIZATION_NOT_FOUND` for unknown or malformed organization ids. Admin revoke uses
+  `ORGANIZATION_INVITATION_INVALID` when the invitation id is malformed, unknown, already consumed,
+  already revoked, or no longer pending.
+- The authenticated `{auth}/organization-invitations/accept` and
+  `{auth}/organization-invitations/decline` routes require an active, verified authenticated user and
+  validate the signed token and stored pending row before changing state. Inactive or unverified
+  users receive the standard 403 permission-denied response before invitation-specific error mapping.
+  `ORGANIZATION_INVITATION_INVALID` covers malformed tokens, wrong JWT audience, missing token-hash
+  rows, consumed rows, and revoked rows. `ORGANIZATION_INVITATION_EXPIRED` covers either an expired
+  signed token or an expired stored row.
+- `ORGANIZATION_INVITATION_EMAIL_MISMATCH` is the anti-hijack failure for accept/decline. A valid
+  token alone is not enough: the authenticated user's normalized email must match the invitation's
+  normalized `invited_email`.
+
+Invitation error responses deliberately share the same human-readable detail,
+`"Organization invitation cannot be used."`, so callers can branch on `code` without exposing token,
+row-state, or email-ownership details in response text.
 
 On the **password-login route**, inactive/unverified account-state failures are folded into
 `LOGIN_BAD_CREDENTIALS`: a caller holding a valid password cannot distinguish "account exists but

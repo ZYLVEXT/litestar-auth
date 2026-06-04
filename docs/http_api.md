@@ -27,6 +27,9 @@ mount protected controllers manually, pass `security=` to the relevant controlle
 | POST | `{auth}/sessions` | `RefreshTokenRequest` (`refresh_token`) | `include_session_devices=True` | Authenticated; list active refresh sessions while identifying the current bearer refresh session. |
 | DELETE | `{auth}/sessions/{session_id}` | None | `include_session_devices=True` | Authenticated; revoke one of the current user's refresh sessions by public session id. |
 | POST | `{auth}/sessions/revoke-others` | Optional `RefreshTokenRequest` (`refresh_token`) for bearer clients | `include_session_devices=True` | Authenticated; revoke the current user's other refresh sessions. |
+| POST | `{auth}/switch-organization` | `SwitchOrganizationRequest` (`organization_slug`) | `organization_config.enabled=True`, `organization_config.include_switch_organization=True`, and a JWT-capable non-API-key backend | Authenticated; verifies target organization membership and returns an organization-bound JWT through the configured transport. |
+| POST | `{auth}/organization-invitations/accept` | `OrganizationInvitationTokenRequest` (`token`) | `organization_config.enabled=True`, `organization_config.include_organization_invitations=True` | Authenticated; validates a single-use invitation token, requires the authenticated user's normalized email to match the invitation, creates membership roles from the invitation, and consumes the invitation. |
+| POST | `{auth}/organization-invitations/decline` | `OrganizationInvitationTokenRequest` (`token`) | `organization_config.enabled=True`, `organization_config.include_organization_invitations=True` | Authenticated; validates the token and authenticated email, then revokes the pending invitation without creating membership. |
 
 ## Session/device response contracts
 
@@ -92,6 +95,126 @@ another user, or unsupported by the current strategy), the current session is un
 In that fallback, list responses keep `is_current: null`, and revoke-others passes an unknown
 current-session marker to the strategy.
 For the built-in DB strategy, this revokes all active refresh sessions for the current user.
+
+## Organization activation
+
+`POST {auth}/switch-organization` is an opt-in organization route mounted under the backend's auth
+path. The primary backend uses `{auth}`. Additional capable backends use `{auth}/{backend_name}`,
+matching the rest of the backend-specific controller layout.
+
+Request body:
+
+```json
+{
+  "organization_slug": "acme"
+}
+```
+
+The route requires an authenticated user and is mounted only when
+`OrganizationConfig.include_switch_organization=True` on an enabled organization config. The backend
+must use a strategy that implements `write_token_for_organization(user, organization)`, such as
+`JWTStrategy`; API-key transports are skipped. Database-token, Redis-token, and API-key strategies do
+not receive signed active-organization semantics and continue to use configured tenant resolvers such
+as headers or subdomains.
+
+On success, the controller returns the same login-token shape as the configured transport. A bearer
+JWT backend returns the new bearer token response. A cookie JWT backend sets the configured login
+cookie. The token carries a signed `org` claim normalized from `organization_slug`.
+
+The route verifies membership before minting the token: it normalizes the slug, fetches the
+organization by slug, fetches the authenticated user's membership for that organization id, then
+calls `JWTStrategy.write_token_for_organization()`. Failures are fail closed and do not distinguish
+unknown organizations from non-membership.
+
+| Status | Error code | Meaning |
+| ------ | ---------- | ------- |
+| 200 | None | Organization-bound token issued through the backend transport. |
+| 400 / 422 | `REQUEST_BODY_INVALID` | Body failed decoding or schema validation. |
+| 401 | None | Authentication credentials are absent or invalid. |
+| 403 | `ORGANIZATION_SWITCH_DENIED` | Slug invalid, organization missing, user or organization id unavailable, or membership cannot be verified. |
+
+After a successful switch, later requests authenticated by the new JWT expose
+`JWTContext.organization` from the fully verified signed claim. With the default resolver selected by
+`include_switch_organization=True`, `ClaimTenantResolver` reads that trusted context before the
+middleware performs the ordinary organization-store lookup and membership verification required to
+publish `litestar_auth_current_organization`.
+
+## Organization administration (opt-in)
+
+When `OrganizationConfig(enabled=True, include_organization_admin=True, store_factory=...)` is set,
+the plugin mounts the bundled organization-admin controller under `/organizations`. The route surface
+is opt-in and defaults to `guards=[is_superuser]`. Manual mounting uses
+`litestar_auth.contrib.organization_admin.create_organization_admin_controller(...)`; keep the
+default guard posture unless the application supplies an equivalent operator-only guard. Passing
+`guards=[]` is rejected during controller assembly so this admin surface cannot be mounted without
+an explicit guard.
+
+The controller depends on `litestar_auth_organization_store`, parses path and query identifiers
+through the configured `id_parser`, and delegates all writes through the shared
+`SQLAlchemyOrganizationAdmin` operations layer. That layer normalizes slugs and membership roles,
+fails closed on slug collisions and unknown targets, and protects the final privileged organization
+member from removal or demotion. The default privileged role names are `owner` and `admin`.
+
+Payload contracts live in `litestar_auth.contrib.organization_admin._schemas`:
+`OrganizationCreate`, `OrganizationUpdate`, `OrganizationRead`, `MembershipCreate`,
+`MembershipRolesUpdate`, `MembershipRead`, `OrganizationInvitationCreate`, and
+`OrganizationInvitationRead`. Organization create/update payloads reject unknown fields and enforce
+the same `1..128` slug bound used by the switch-organization route; organization names are also
+bounded to `1..128` characters. Organization-admin role payloads accept at most 64 role names, with
+each role name bounded to `1..255` characters before normalization and persistence. Paginated list
+routes return `{"items": [...], "total": int, "limit": int, "offset": int}`.
+
+| Method | Path | Request body | Success | Other documented statuses | Error code(s) |
+| ------ | ---- | ------------ | ------- | ------------------------- | ------------- |
+| `GET` | `/organizations?user_id={user_id}` | None | `200` paginated `OrganizationRead` page | `401`, `403`, `404`, `422` | `ORGANIZATION_MEMBERSHIP_NOT_FOUND` for malformed `user_id` |
+| `POST` | `/organizations` | `OrganizationCreate` (`slug`, `name`) | `201` `OrganizationRead` | `401`, `403`, `409`, `422` | `ORGANIZATION_ALREADY_EXISTS`, `REQUEST_BODY_INVALID` |
+| `GET` | `/organizations/{organization_id}` | None | `200` `OrganizationRead` | `401`, `403`, `404`, `422` | `ORGANIZATION_NOT_FOUND` |
+| `PATCH` | `/organizations/{organization_id}` | `OrganizationUpdate` (`slug`, `name`) | `200` `OrganizationRead` | `401`, `403`, `404`, `409`, `422` | `ORGANIZATION_NOT_FOUND`, `ORGANIZATION_ALREADY_EXISTS`, `REQUEST_BODY_INVALID` |
+| `DELETE` | `/organizations/{organization_id}` | None | `204` empty body | `401`, `403`, `404`, `422` | `ORGANIZATION_NOT_FOUND` |
+| `POST` | `/organizations/{organization_id}/members/{user_id}` | `MembershipCreate` (`roles`) | `201` `MembershipRead` | `401`, `403`, `404`, `409`, `422` | `ORGANIZATION_NOT_FOUND`, `ORGANIZATION_MEMBERSHIP_ALREADY_EXISTS`, `ORGANIZATION_MEMBERSHIP_NOT_FOUND`, `REQUEST_BODY_INVALID` |
+| `POST` | `/organizations/{organization_id}/invitations` | `OrganizationInvitationCreate` (`invited_email`, `roles`) | `201` `OrganizationInvitationRead` | `401`, `403`, `404`, `422` | `ORGANIZATION_NOT_FOUND`, `REQUEST_BODY_INVALID` |
+| `GET` | `/organizations/{organization_id}/invitations` | None | `200` paginated `OrganizationInvitationRead` page | `401`, `403`, `404`, `422` | `ORGANIZATION_NOT_FOUND` |
+| `DELETE` | `/organizations/invitations/{invitation_id}` | None | `204` empty body | `401`, `403`, `400`, `422` | `ORGANIZATION_INVITATION_INVALID` |
+| `GET` | `/organizations/{organization_id}/members` | None | `200` paginated `MembershipRead` page | `401`, `403`, `404`, `422` | `ORGANIZATION_NOT_FOUND` |
+| `PATCH` | `/organizations/{organization_id}/members/{user_id}/roles` | `MembershipRolesUpdate` (`roles`) | `200` `MembershipRead` | `401`, `403`, `404`, `409`, `422` | `ORGANIZATION_MEMBERSHIP_NOT_FOUND`, `ORGANIZATION_LAST_PRIVILEGED_MEMBER`, `REQUEST_BODY_INVALID` |
+| `DELETE` | `/organizations/{organization_id}/members/{user_id}` | None | `204` empty body | `401`, `403`, `404`, `409`, `422` | `ORGANIZATION_MEMBERSHIP_NOT_FOUND`, `ORGANIZATION_LAST_PRIVILEGED_MEMBER` |
+
+Malformed organization ids collapse to `ORGANIZATION_NOT_FOUND`; malformed user ids collapse to
+`ORGANIZATION_MEMBERSHIP_NOT_FOUND`. Malformed invitation ids on the revoke route collapse to
+`ORGANIZATION_INVITATION_INVALID`.
+
+Invitation admin routes create, list, and revoke pending invitations through the same
+`SQLAlchemyOrganizationAdmin` operations layer used by the CLI. `POST /organizations/{id}/invitations`
+normalizes the invited email and roles, revokes any existing unexpired pending invitation for the
+same normalized email in that organization, stores only a token hash, and dispatches
+`BaseUserManager.on_after_organization_invitation(invitation, token)` for delivery. The raw token is
+not included in `OrganizationInvitationRead` and is never returned by the HTTP API.
+
+The operator controller is separate from the authenticated invitee-facing invitation accept/decline
+routes and does not scope application-owned tables. Tenant foreign keys and query filtering for
+application data remain the application's responsibility.
+
+## Organization invitations (invitee)
+
+Invitee-facing invitation routes are mounted under the backend auth path when
+`OrganizationConfig.include_organization_invitations=True` and organizations are enabled. They are
+authenticated routes for active, verified accounts and use `OrganizationInvitationTokenRequest` with
+one `token` field. The token field uses the same non-empty `1..2048` character bound as other
+long-lived account-token payloads before JWT parsing.
+
+| Method | Path | Request body | Success | Other documented statuses | Error code(s) |
+| ------ | ---- | ------------ | ------- | ------------------------- | ------------- |
+| `POST` | `{auth}/organization-invitations/accept` | `OrganizationInvitationTokenRequest` (`token`) | `200` `MembershipRead` | `400`, `401`, `403`, `422` | `ORGANIZATION_INVITATION_INVALID`, `ORGANIZATION_INVITATION_EXPIRED`, `ORGANIZATION_INVITATION_EMAIL_MISMATCH`, `REQUEST_BODY_INVALID` |
+| `POST` | `{auth}/organization-invitations/decline` | `OrganizationInvitationTokenRequest` (`token`) | `204` empty body | `400`, `401`, `403`, `422` | `ORGANIZATION_INVITATION_INVALID`, `ORGANIZATION_INVITATION_EXPIRED`, `ORGANIZATION_INVITATION_EMAIL_MISMATCH`, `REQUEST_BODY_INVALID` |
+
+A valid signed token is not sufficient to accept or decline an invitation. The route validates the
+JWT signature, organization-invitation audience, expiry, stored token hash, pending row state, and
+the authenticated user's active, verified account state and normalized email. Inactive or unverified
+authenticated users receive the standard permission-denied response before the invitation row is
+mutated. If the authenticated email does not match
+`OrganizationInvitationRead.invited_email`, the route fails with
+`ORGANIZATION_INVITATION_EMAIL_MISMATCH`. Accept consumes the invitation row before creating
+membership with the stored roles; decline revokes the row without creating membership.
 
 ## Registration and email
 

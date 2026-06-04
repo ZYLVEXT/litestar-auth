@@ -47,7 +47,9 @@ def test_import_db_package_exposes_only_base_store_types() -> None:
     proc = _run_isolated(
         "import sys\n"
         "import litestar_auth.db as auth_db\n"
-        "assert auth_db.__all__ == ('ApiKeyData', 'BaseApiKeyStore', 'BaseOAuthAccountStore', 'BaseUserStore', 'OAuthAccountData')\n"
+        "assert auth_db.__all__ == ('ApiKeyData', 'BaseApiKeyStore', 'BaseOAuthAccountStore', "
+        "'BaseOrganizationStore', 'BaseUserStore', 'MembershipData', 'OAuthAccountData', "
+        "'OrganizationData', 'OrganizationInvitationData')\n"
         "assert not hasattr(auth_db, 'SQLAlchemyApiKeyStore')\n"
         "assert not hasattr(auth_db, 'SQLAlchemyUserDatabase')\n"
         "assert 'litestar_auth.db.sqlalchemy' not in sys.modules\n",
@@ -106,6 +108,12 @@ def test_import_models_package_keeps_concrete_orm_submodules_lazy() -> None:
         "    'ApiKeyMixin',\n"
         "    'OAuthAccount',\n"
         "    'OAuthAccountMixin',\n"
+        "    'Organization',\n"
+        "    'OrganizationInvitation',\n"
+        "    'OrganizationInvitationMixin',\n"
+        "    'OrganizationMembership',\n"
+        "    'OrganizationMembershipMixin',\n"
+        "    'OrganizationMixin',\n"
         "    'RefreshTokenMixin',\n"
         "    'Role',\n"
         "    'RoleMixin',\n"
@@ -120,6 +128,7 @@ def test_import_models_package_keeps_concrete_orm_submodules_lazy() -> None:
         "assert 'litestar_auth.models.api_key' not in sys.modules\n"
         "assert 'litestar_auth.models.user' not in sys.modules\n"
         "assert 'litestar_auth.models.oauth' not in sys.modules\n"
+        "assert 'litestar_auth.models.organization' not in sys.modules\n"
         "assert 'litestar_auth.models.role' not in sys.modules\n",
     )
     assert proc.returncode == 0, proc.stdout + proc.stderr
@@ -172,6 +181,29 @@ def test_accessing_role_models_from_models_package_only_loads_role_submodule() -
         "assert role_model.__module__ == 'litestar_auth.models.role'\n"
         "assert user_role_model.__module__ == 'litestar_auth.models.role'\n"
         "assert 'litestar_auth.models.role' in sys.modules\n"
+        "assert 'litestar_auth.models.user' not in sys.modules\n",
+    )
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+
+
+def test_accessing_organization_models_from_models_package_only_loads_organization_submodule() -> None:
+    """Lazy organization-model access loads ``models.organization`` without importing the reference ``User`` model."""
+    proc = _run_isolated(
+        "import sys\n"
+        "import litestar_auth.models as models\n"
+        "organization_model = models.Organization\n"
+        "invitation_model = models.OrganizationInvitation\n"
+        "membership_model = models.OrganizationMembership\n"
+        "assert organization_model.__module__ == 'litestar_auth.models.organization'\n"
+        "assert invitation_model.__module__ == 'litestar_auth.models.organization'\n"
+        "assert membership_model.__module__ == 'litestar_auth.models.organization'\n"
+        "assert organization_model.__table__.c.slug.unique is True\n"
+        "assert organization_model.__table__.c.slug.index is True\n"
+        "assert set(invitation_model.__table__.c.keys()) == {\n"
+        "    'created_at', 'expires_at', 'id', 'invited_email', 'organization_id', 'roles', 'status', 'token_hash'\n"
+        "}\n"
+        "assert set(membership_model.__table__.c.keys()) == {'organization_id', 'roles', 'user_id'}\n"
+        "assert 'litestar_auth.models.organization' in sys.modules\n"
         "assert 'litestar_auth.models.user' not in sys.modules\n",
     )
     assert proc.returncode == 0, proc.stdout + proc.stderr
@@ -267,6 +299,7 @@ def test_import_strategy_package_keeps_models_namespace_unloaded() -> None:
         "    'DatabaseTokenStrategy',\n"
         "    'DatabaseTokenStrategyConfig',\n"
         "    'InMemoryApiKeyNonceStore',\n"
+        "    'JWTContext',\n"
         "    'JWTStrategy',\n"
         "    'JWTStrategyConfig',\n"
         "    'RedisApiKeyNonceStore',\n"

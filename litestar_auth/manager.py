@@ -16,6 +16,9 @@ from litestar_auth._manager.account_tokens import (
 from litestar_auth._manager.api_key_facade import ApiKeyManagerFacade
 from litestar_auth._manager.api_key_service import ApiKeyManagerService
 from litestar_auth._manager.construction import (
+    DEFAULT_ORGANIZATION_INVITATION_TOKEN_LIFETIME as _DEFAULT_ORGANIZATION_INVITATION_TOKEN_LIFETIME,
+)
+from litestar_auth._manager.construction import (
     DEFAULT_RESET_PASSWORD_TOKEN_LIFETIME as _DEFAULT_RESET_PASSWORD_TOKEN_LIFETIME,
 )
 from litestar_auth._manager.construction import (
@@ -48,7 +51,11 @@ from litestar_auth._manager.user_lifecycle import (
 )
 from litestar_auth._manager.user_policy import UserPolicy
 from litestar_auth._superuser_role import normalize_superuser_role_name
-from litestar_auth.config import RESET_PASSWORD_TOKEN_AUDIENCE, VERIFY_TOKEN_AUDIENCE
+from litestar_auth.config import (
+    ORGANIZATION_INVITATION_TOKEN_AUDIENCE,
+    RESET_PASSWORD_TOKEN_AUDIENCE,
+    VERIFY_TOKEN_AUDIENCE,
+)
 from litestar_auth.password import PasswordHelper
 from litestar_auth.types import LoginIdentifier, UserProtocol
 
@@ -62,6 +69,7 @@ if TYPE_CHECKING:
 ENCRYPTED_TOTP_SECRET_PREFIX = "fernet:"  # noqa: S105
 DEFAULT_VERIFY_TOKEN_LIFETIME = _DEFAULT_VERIFY_TOKEN_LIFETIME
 DEFAULT_RESET_PASSWORD_TOKEN_LIFETIME = _DEFAULT_RESET_PASSWORD_TOKEN_LIFETIME
+DEFAULT_ORGANIZATION_INVITATION_TOKEN_LIFETIME = _DEFAULT_ORGANIZATION_INVITATION_TOKEN_LIFETIME
 FernetKeyringConfig = _manager_security.FernetKeyringConfig
 UserManagerSecurity = _manager_security.UserManagerSecurity
 
@@ -155,6 +163,7 @@ class BaseUserManager[UP: UserProtocol[Any], ID](
                 resolved_secret_inputs=resolved_secret_inputs,
                 verification_token_lifetime=settings.verification_token_lifetime,
                 reset_password_token_lifetime=settings.reset_password_token_lifetime,
+                organization_invitation_token_lifetime=settings.organization_invitation_token_lifetime,
                 password_validator=settings.password_validator,
                 reset_verification_on_email_change=settings.reset_verification_on_email_change,
                 backends=settings.backends,
@@ -181,6 +190,7 @@ class BaseUserManager[UP: UserProtocol[Any], ID](
         self._account_token_secrets = resolved_secret_inputs.account_token_secrets
         self.verification_token_secret = self._account_token_secrets.verification_token_secret
         self.reset_password_token_secret = self._account_token_secrets.reset_password_token_secret
+        self.organization_invitation_token_secret = self._account_token_secrets.organization_invitation_token_secret
         self.login_identifier_telemetry_secret = (
             _SecretValue(resolved_secret_inputs.login_identifier_telemetry_secret)
             if resolved_secret_inputs.login_identifier_telemetry_secret is not None
@@ -188,6 +198,7 @@ class BaseUserManager[UP: UserProtocol[Any], ID](
         )
         self.verification_token_lifetime = settings.verification_token_lifetime
         self.reset_password_token_lifetime = settings.reset_password_token_lifetime
+        self.organization_invitation_token_lifetime = settings.organization_invitation_token_lifetime
         self.id_parser = resolved_security.id_parser
         self.password_validator = settings.password_validator
         self.reset_verification_on_email_change = settings.reset_verification_on_email_change
@@ -231,6 +242,7 @@ class BaseUserManager[UP: UserProtocol[Any], ID](
                 audiences=AccountTokenAudiences(
                     verify=VERIFY_TOKEN_AUDIENCE,
                     reset_password=RESET_PASSWORD_TOKEN_AUDIENCE,
+                    organization_invitation=ORGANIZATION_INVITATION_TOKEN_AUDIENCE,
                 ),
                 hook_bus=self._hook_bus,
                 token_security=self._account_token_security,

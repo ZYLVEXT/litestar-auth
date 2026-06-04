@@ -4,16 +4,85 @@ from __future__ import annotations
 
 import ipaddress
 import logging
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Protocol
+
+import idna
 
 from litestar_auth.config import resolve_trusted_proxy_hops, resolve_trusted_proxy_setting
 
 if TYPE_CHECKING:
+    from collections.abc import Mapping
+
     from ._protocol import KnownRateLimitConnection
 
 _DEFAULT_TRUSTED_HEADERS: tuple[str, ...] = ("X-Forwarded-For",)
 logger = logging.getLogger("litestar_auth.ratelimit")
 _warned_missing_proxy_headers: set[tuple[str, ...]] = set()
+
+
+class _HostHeaderConnection(Protocol):
+    """Minimal request-like surface used for host-header parsing."""
+
+    @property
+    def headers(self) -> Mapping[str, str]:
+        """Return request headers."""
+
+
+def _get_header_value(headers: Mapping[str, str], header_name: str) -> str | None:
+    """Return a header value using case-insensitive matching."""
+    value = headers.get(header_name) or headers.get(header_name.lower())
+    if value is not None:
+        return value
+
+    normalized_name = header_name.casefold()
+    for candidate_name, candidate_value in headers.items():
+        if candidate_name.casefold() == normalized_name:
+            return candidate_value
+    return None
+
+
+def _normalize_host_label(label: str) -> str | None:
+    """Return a lowercase Unicode host label, or ``None`` for invalid IDNA."""
+    try:
+        ascii_label = idna.encode(label, uts46=True)
+        return idna.decode(ascii_label, uts46=True).lower()
+    except idna.IDNAError:
+        return None
+
+
+def _normalize_host_value(raw_host: str) -> str | None:
+    """Return a normalized host name without a port."""
+    host = raw_host.strip()
+    if not host:
+        return None
+
+    if host.startswith("["):
+        bracket_index = host.find("]")
+        if bracket_index == -1:
+            return None
+        host = host[1:bracket_index]
+    elif host.count(":") == 1:
+        host = host.rsplit(":", maxsplit=1)[0]
+
+    labels = [label for label in host.rstrip(".").split(".") if label]
+    if not labels:
+        return None
+
+    normalized_labels: list[str] = []
+    for label in labels:
+        normalized_label = _normalize_host_label(label)
+        if normalized_label is None:
+            return None
+        normalized_labels.append(normalized_label)
+    return ".".join(normalized_labels)
+
+
+def _request_host(request: _HostHeaderConnection) -> str | None:
+    """Return the normalized HTTP host header without a port."""
+    raw_host = _get_header_value(request.headers, "Host")
+    if raw_host is None:
+        return None
+    return _normalize_host_value(raw_host)
 
 
 def _warn_missing_proxy_headers_once(trusted_headers: tuple[str, ...]) -> None:

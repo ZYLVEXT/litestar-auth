@@ -6,7 +6,13 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from litestar_auth._plugin.features._config import ApiKeyConfig, DatabaseTokenAuthConfig, OAuthConfig, TotpConfig
+    from litestar_auth._plugin.features._config import (
+        ApiKeyConfig,
+        DatabaseTokenAuthConfig,
+        OAuthConfig,
+        OrganizationConfig,
+        TotpConfig,
+    )
     from litestar_auth.config import UnsetType
 
 
@@ -18,6 +24,7 @@ class FeatureConfigSnapshot:
     api_keys: ApiKeyConfig
     totp_config: TotpConfig | None
     oauth_config: OAuthConfig | None
+    organization_config: OrganizationConfig
 
 
 @dataclass(frozen=True, slots=True)
@@ -56,6 +63,14 @@ class ResolvedOAuthDefaults:
 
 
 @dataclass(frozen=True, slots=True)
+class ResolvedOrganizationDefaults:
+    """Resolved organization feature defaults for one plugin config."""
+
+    config: OrganizationConfig
+    enabled: bool
+
+
+@dataclass(frozen=True, slots=True)
 class ResolvedFeatureDefaults:
     """Single resolved-defaults snapshot consumed by plugin startup."""
 
@@ -64,3 +79,4 @@ class ResolvedFeatureDefaults:
     api_key: ResolvedApiKeyDefaults
     totp: ResolvedTotpDefaults
     oauth: ResolvedOAuthDefaults
+    organization: ResolvedOrganizationDefaults

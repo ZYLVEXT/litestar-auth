@@ -355,6 +355,9 @@ class AuthRateLimitConfig:
     totp_regenerate_recovery_codes: EndpointRateLimit | None = None
     verify_token: EndpointRateLimit | None = None
     request_verify_token: EndpointRateLimit | None = None
+    organization_switch: EndpointRateLimit | None = None
+    organization_invitation_accept: EndpointRateLimit | None = None
+    organization_invitation_decline: EndpointRateLimit | None = None
     api_key_create: EndpointRateLimit | None = None
     api_key_update: EndpointRateLimit | None = None
     api_key_use: EndpointRateLimit | None = None

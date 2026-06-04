@@ -23,6 +23,7 @@ _MAX_SEQUENTIAL_PAIR_FRACTION = config_module._MAX_SEQUENTIAL_PAIR_FRACTION
 RESET_PASSWORD_TOKEN_AUDIENCE = config_module.RESET_PASSWORD_TOKEN_AUDIENCE
 TOTP_ENROLL_AUDIENCE = config_module.TOTP_ENROLL_AUDIENCE
 TOTP_PENDING_AUDIENCE = config_module.TOTP_PENDING_AUDIENCE
+ORGANIZATION_INVITATION_TOKEN_AUDIENCE = config_module.ORGANIZATION_INVITATION_TOKEN_AUDIENCE
 VERIFY_TOKEN_AUDIENCE = config_module.VERIFY_TOKEN_AUDIENCE
 _resolve_token_secret = config_module._resolve_token_secret
 _estimated_secret_entropy_bits = config_module._estimated_secret_entropy_bits
@@ -43,6 +44,7 @@ def test_config_defines_canonical_token_audiences() -> None:
     """Shared token audiences are defined once in the config module."""
     assert VERIFY_TOKEN_AUDIENCE == "litestar-auth:verify"
     assert RESET_PASSWORD_TOKEN_AUDIENCE == "litestar-auth:reset-password"
+    assert ORGANIZATION_INVITATION_TOKEN_AUDIENCE == "litestar-auth:organization-invitation"
     assert JWT_ACCESS_TOKEN_AUDIENCE == "litestar-auth:access"
     assert TOTP_PENDING_AUDIENCE == "litestar-auth:2fa-pending"
     assert TOTP_ENROLL_AUDIENCE == "litestar-auth:2fa-enroll"
@@ -65,6 +67,7 @@ def test_config_reexports_secret_role_catalog_helpers() -> None:
     assert [role.setting_name for role, _secret in role_values.as_role_pairs()] == [
         "verification_token_secret",
         "reset_password_token_secret",
+        "organization_invitation_token_secret",
         "login_identifier_telemetry_secret",
         "totp_secret_key",
         "totp_pending_secret",
@@ -84,6 +87,12 @@ def test_config_reexports_secret_role_catalog_helpers() -> None:
             "RESET_PASSWORD_TOKEN_AUDIENCE",
             RESET_PASSWORD_TOKEN_AUDIENCE,
             id="manager-reset-password",
+        ),
+        pytest.param(
+            manager_module,
+            "ORGANIZATION_INVITATION_TOKEN_AUDIENCE",
+            ORGANIZATION_INVITATION_TOKEN_AUDIENCE,
+            id="manager-organization-invitation",
         ),
         pytest.param(
             jwt_strategy_module,

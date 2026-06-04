@@ -3,11 +3,11 @@
 
 from __future__ import annotations
 
-import re
-import unicodedata
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
+from litestar_auth._email import EMAIL_MAX_LENGTH as _EMAIL_MAX_LENGTH
+from litestar_auth._email import normalize_email as _normalize_email
 from litestar_auth._manager._coercions import _account_state_user
 from litestar_auth._roles import normalize_roles as _normalize_roles
 from litestar_auth.config import DEFAULT_MINIMUM_PASSWORD_LENGTH, require_password_length
@@ -17,8 +17,7 @@ from litestar_auth.password import PasswordHelper
 if TYPE_CHECKING:
     from collections.abc import Callable, Mapping
 
-EMAIL_MAX_LENGTH = 320
-_EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+EMAIL_MAX_LENGTH = _EMAIL_MAX_LENGTH
 DEFAULT_CREATABLE_FIELDS = frozenset({"email", "password"})
 DEFAULT_UPDATABLE_FIELDS = frozenset({"email", "password"})
 PRIVILEGED_FIELDS = frozenset({"is_active", "is_verified", "roles"})
@@ -127,15 +126,8 @@ class UserPolicy:
 
         Returns:
             A normalized email address (stripped and lowercased).
-
-        Raises:
-            ValueError: If ``email`` is not a valid email address or exceeds 320 characters.
         """
-        normalized = unicodedata.normalize("NFKC", email.strip()).lower()
-        if len(normalized) > EMAIL_MAX_LENGTH or not _EMAIL_RE.fullmatch(normalized):
-            msg = "Invalid email address."
-            raise ValueError(msg)
-        return normalized
+        return _normalize_email(email)
 
     @staticmethod
     def normalize_username_lookup(username: str) -> str:

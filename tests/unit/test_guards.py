@@ -20,7 +20,9 @@ from litestar.handlers.base import BaseRouteHandler
 
 import litestar_auth.guards._api_key_guards as api_key_guards_module
 import litestar_auth.guards._guards as guards_module
+import litestar_auth.guards._organization_guards as organization_guards_module
 import litestar_auth.guards._permission_guards as permission_guards_module
+from litestar_auth._current_organization import CurrentOrganizationContext, set_scope_current_organization_context
 from litestar_auth._permissions import (
     PERMISSION_RESOLVER_SENTINEL,
     StaticRolePermissionResolver,
@@ -28,7 +30,13 @@ from litestar_auth._permissions import (
 )
 from litestar_auth._superuser_role import DEFAULT_SUPERUSER_ROLE_NAME, SUPERUSER_ROLE_NAME_SENTINEL
 from litestar_auth.authentication.strategy.api_key import ApiKeyContext
-from litestar_auth.exceptions import ErrorCode, InsufficientPermissionsError, InsufficientRolesError
+from litestar_auth.exceptions import (
+    ErrorCode,
+    InsufficientOrganizationPermissionsError,
+    InsufficientOrganizationRolesError,
+    InsufficientPermissionsError,
+    InsufficientRolesError,
+)
 from litestar_auth.guards import (
     _guards,
     has_all_permissions,
@@ -36,6 +44,8 @@ from litestar_auth.guards import (
     has_any_permission,
     has_any_role,
     has_any_scope,
+    has_organization_permission,
+    has_organization_role,
     has_permission,
     has_scope,
     is_active,
@@ -43,6 +53,7 @@ from litestar_auth.guards import (
     is_superuser,
     is_verified,
     requires_api_key,
+    requires_organization_membership,
     requires_password_session,
 )
 from litestar_auth.guards._protocol_narrowing import (
@@ -307,6 +318,19 @@ def test_permission_guard_exports_reference_internal_implementations() -> None:
     assert root_module.has_permission is public_module.has_permission
     assert root_module.has_all_permissions is public_module.has_all_permissions
     assert root_module.has_any_permission is public_module.has_any_permission
+
+
+def test_organization_guard_exports_reference_internal_implementation() -> None:
+    """The organization guards are public from both guard surfaces."""
+    public_module = importlib.import_module("litestar_auth.guards")
+    root_module = importlib.import_module("litestar_auth")
+
+    assert public_module.has_organization_role.__module__ == organization_guards_module.__name__
+    assert public_module.has_organization_permission.__module__ == organization_guards_module.__name__
+    assert public_module.requires_organization_membership.__module__ == organization_guards_module.__name__
+    assert root_module.has_organization_role is public_module.has_organization_role
+    assert root_module.has_organization_permission is public_module.has_organization_permission
+    assert root_module.requires_organization_membership is public_module.requires_organization_membership
 
 
 @pytest.mark.parametrize(
@@ -1034,6 +1058,245 @@ def test_is_superuser_honors_configured_scope_role_name() -> None:
     connection = _build_connection(user, state={SUPERUSER_ROLE_NAME_SENTINEL: " ADMIN "})
 
     assert is_superuser(connection, _build_handler()) is None
+
+
+def test_requires_organization_membership_allows_verified_current_organization_context() -> None:
+    """A verified current-organization context authorizes an active authenticated user."""
+    state: dict[str, object] = {}
+    connection = _build_connection(ExampleUser(id=uuid4()), state=state)
+    organization = SimpleNamespace(id=uuid4(), slug="acme")
+    membership = SimpleNamespace(organization_id=organization.id, user_id=connection.user.id)
+    set_scope_current_organization_context(
+        connection.scope,
+        CurrentOrganizationContext(organization=organization, membership=membership),
+    )
+
+    assert requires_organization_membership(connection, _build_handler()) is None
+
+
+def _set_current_organization_context(
+    connection: ASGIConnection[Any, Any, Any, Any],
+    *,
+    roles: tuple[str, ...] = (),
+) -> None:
+    organization = SimpleNamespace(id=uuid4(), slug="acme")
+    membership = SimpleNamespace(organization_id=organization.id, user_id=connection.user.id, roles=roles)
+    set_scope_current_organization_context(
+        connection.scope,
+        CurrentOrganizationContext(organization=organization, membership=membership),
+    )
+
+
+@pytest.mark.parametrize(
+    ("guard", "membership_roles"),
+    [
+        pytest.param(has_organization_role("admin"), (" Admin ",), id="role-single"),
+        pytest.param(has_organization_role("admin", "billing"), (" Billing ", "ADMIN"), id="role-all"),
+    ],
+)
+def test_has_organization_role_allows_matching_membership_roles(
+    guard: Guard,
+    membership_roles: tuple[str, ...],
+) -> None:
+    """Organization-role guards authorize against verified membership roles only."""
+    connection = _build_connection(ExampleUser(id=uuid4(), roles=["global-admin"]))
+    _set_current_organization_context(connection, roles=membership_roles)
+
+    assert guard(connection, _build_handler()) is None
+
+
+def test_has_organization_role_ignores_global_user_roles() -> None:
+    """Organization-role guards never fall back to global user roles."""
+    connection = _build_connection(ExampleUser(id=uuid4(), roles=["admin"]))
+    _set_current_organization_context(connection, roles=())
+
+    with pytest.raises(InsufficientOrganizationRolesError) as exc_info:
+        has_organization_role("admin")(connection, _build_handler())
+
+    assert exc_info.value.code == ErrorCode.INSUFFICIENT_ORGANIZATION_ROLES
+    assert exc_info.value.required_roles == frozenset({"admin"})
+    assert exc_info.value.user_roles == frozenset()
+    assert "admin" not in str(exc_info.value)
+
+
+def test_has_organization_role_denies_partial_membership_role_match() -> None:
+    """All configured organization roles are required."""
+    connection = _build_connection(ExampleUser(id=uuid4(), roles=["admin", "billing"]))
+    _set_current_organization_context(connection, roles=("admin",))
+
+    with pytest.raises(InsufficientOrganizationRolesError) as exc_info:
+        has_organization_role("admin", "billing")(connection, _build_handler())
+
+    assert exc_info.value.required_roles == frozenset({"admin", "billing"})
+    assert exc_info.value.user_roles == frozenset({"admin"})
+    assert exc_info.value.require_all is True
+
+
+@pytest.mark.parametrize(
+    ("guard", "role_permissions", "membership_roles"),
+    [
+        pytest.param(
+            has_organization_permission("posts:read"),
+            {"member": ("posts:read",)},
+            ("member",),
+            id="permission-single",
+        ),
+        pytest.param(
+            has_organization_permission("posts:read", "posts:write"),
+            {"editor": ("posts:*",)},
+            ("editor",),
+            id="permission-all-with-wildcard",
+        ),
+    ],
+)
+def test_has_organization_permission_allows_matching_org_effective_permissions(
+    guard: Guard,
+    role_permissions: dict[str, object],
+    membership_roles: tuple[str, ...],
+) -> None:
+    """Organization-permission guards authorize against org-scoped effective permissions."""
+    connection = _permission_connection(ExampleUser(id=uuid4(), roles=["global-reader"]), role_permissions)
+    _set_current_organization_context(connection, roles=membership_roles)
+
+    assert guard(connection, _build_handler()) is None
+
+
+def test_has_organization_permission_denies_partial_permission_match() -> None:
+    """All configured organization permissions are required."""
+    connection = _permission_connection(ExampleUser(id=uuid4(), roles=["global-editor"]), {"member": ("posts:read",)})
+    _set_current_organization_context(connection, roles=("member",))
+
+    with pytest.raises(InsufficientOrganizationPermissionsError) as exc_info:
+        has_organization_permission("posts:read", "posts:write")(connection, _build_handler())
+
+    assert exc_info.value.code == ErrorCode.INSUFFICIENT_ORGANIZATION_PERMISSIONS
+    assert exc_info.value.required_permissions == frozenset({"posts:read", "posts:write"})
+    assert exc_info.value.granted_permissions == frozenset({"posts:read"})
+    assert exc_info.value.require_all is True
+    assert "posts:read" not in str(exc_info.value)
+
+
+def test_has_organization_permission_fails_closed_without_org_context_despite_global_permissions() -> None:
+    """Organization-permission guards require a verified organization context."""
+    connection = _permission_connection(ExampleUser(id=uuid4(), roles=["admin"]), {"admin": ("posts:*",)})
+
+    with pytest.raises(InsufficientOrganizationPermissionsError) as exc_info:
+        has_organization_permission("posts:read")(connection, _build_handler())
+
+    assert exc_info.value.code == ErrorCode.INSUFFICIENT_ORGANIZATION_PERMISSIONS
+    assert exc_info.value.granted_permissions == frozenset()
+
+
+@pytest.mark.parametrize(
+    ("guard", "user", "expected_exception", "detail_fragment"),
+    [
+        pytest.param(has_organization_role("member"), None, NotAuthorizedException, "authentication", id="role-anon"),
+        pytest.param(
+            has_organization_role("member"),
+            ExampleUser(id=uuid4(), is_active=False),
+            PermissionDeniedException,
+            "inactive",
+            id="role-inactive",
+        ),
+        pytest.param(
+            has_organization_role("member"),
+            ExampleUser(id=uuid4()),
+            InsufficientOrganizationRolesError,
+            "organization roles",
+            id="role-no-context",
+        ),
+        pytest.param(
+            has_organization_permission("posts:read"),
+            None,
+            NotAuthorizedException,
+            "authentication",
+            id="permission-anon",
+        ),
+        pytest.param(
+            has_organization_permission("posts:read"),
+            ExampleUser(id=uuid4(), is_active=False),
+            PermissionDeniedException,
+            "inactive",
+            id="permission-inactive",
+        ),
+        pytest.param(
+            has_organization_permission("posts:read"),
+            ExampleUser(id=uuid4(), roles=["admin"]),
+            InsufficientOrganizationPermissionsError,
+            "organization permissions",
+            id="permission-no-context",
+        ),
+    ],
+)
+def test_organization_role_and_permission_guards_fail_closed_for_unauthorized_requests(
+    guard: Guard,
+    user: object | None,
+    expected_exception: type[Exception],
+    detail_fragment: str,
+) -> None:
+    """Organization-only role and permission guards deny missing, inactive, or non-tenant requests."""
+    connection = _build_connection(user)
+
+    with pytest.raises(expected_exception) as exc_info:
+        guard(connection, _build_handler())
+
+    detail = (str(exc_info.value.detail) if hasattr(exc_info.value, "detail") else str(exc_info.value)).lower()
+    assert detail_fragment in detail
+
+
+@pytest.mark.parametrize(
+    ("factory", "args", "expected_exception"),
+    [
+        pytest.param(has_organization_role, (), ValueError, id="role-missing"),
+        pytest.param(has_organization_role, ("",), ValueError, id="role-blank"),
+        pytest.param(has_organization_role, (1,), TypeError, id="role-non-string"),
+        pytest.param(has_organization_permission, (), ValueError, id="permission-missing"),
+        pytest.param(has_organization_permission, ("posts",), ValueError, id="permission-malformed"),
+        pytest.param(has_organization_permission, (1,), TypeError, id="permission-non-string"),
+    ],
+)
+def test_organization_role_and_permission_guard_inputs_are_validated_at_build_time(
+    factory: Callable[..., Guard],
+    args: tuple[object, ...],
+    expected_exception: type[Exception],
+) -> None:
+    """Organization-only guard factories reject malformed requirements before request handling."""
+    with pytest.raises(expected_exception):
+        factory(*cast("Any", args))
+
+
+@pytest.mark.parametrize(
+    ("user", "expected_exception", "detail_fragment"),
+    [
+        pytest.param(None, NotAuthorizedException, "authentication", id="anonymous"),
+        pytest.param(ExampleUser(id=uuid4(), is_active=False), PermissionDeniedException, "inactive", id="inactive"),
+        pytest.param(
+            _UserWithoutAccountState(id=uuid4()),
+            PermissionDeniedException,
+            "guardeduserprotocol",
+            id="bad-user",
+        ),
+        pytest.param(ExampleUser(id=uuid4()), PermissionDeniedException, "organization membership", id="no-context"),
+    ],
+)
+def test_requires_organization_membership_fails_closed_without_verified_context_or_active_user(
+    user: object | None,
+    expected_exception: type[Exception],
+    detail_fragment: str,
+) -> None:
+    """The organization-membership guard denies anonymous, inactive, incompatible, or non-tenant requests."""
+    connection = _build_connection(user)
+
+    with pytest.raises(expected_exception) as exc_info:
+        requires_organization_membership(connection, _build_handler())
+
+    assert isinstance(exc_info.value, NotAuthorizedException | PermissionDeniedException)
+    detail = (exc_info.value.detail or "").lower()
+    assert detail_fragment in detail
+    if detail_fragment == "organization membership":
+        assert isinstance(exc_info.value, PermissionDeniedException)
+        assert exc_info.value.status_code == HTTP_403_FORBIDDEN
+        assert exc_info.value.extra == {"code": ErrorCode.AUTHORIZATION_DENIED}
 
 
 def test_is_superuser_dispatches_to_fixed_work_role_helper(monkeypatch: pytest.MonkeyPatch) -> None:

@@ -28,6 +28,7 @@ API_KEY_NAME_MAX_LENGTH = 120
 API_KEY_SCOPE_MAX_LENGTH = 120
 API_KEY_SCOPE_PATTERN = r"^[A-Za-z0-9:_-]+$"
 API_KEY_ID_MAX_LENGTH = 128
+ORGANIZATION_SLUG_MAX_LENGTH = 128
 
 EMAIL_FIELD_META = msgspec.Meta(max_length=EMAIL_MAX_LENGTH, pattern=EMAIL_PATTERN)
 USER_PASSWORD_FIELD_META = msgspec.Meta(
@@ -68,3 +69,4 @@ type ApiKeyScopeField = Annotated[
     msgspec.Meta(min_length=1, max_length=API_KEY_SCOPE_MAX_LENGTH, pattern=API_KEY_SCOPE_PATTERN),
 ]
 type ApiKeyIdField = Annotated[str, msgspec.Meta(min_length=1, max_length=API_KEY_ID_MAX_LENGTH)]
+type OrganizationSlugField = Annotated[str, msgspec.Meta(min_length=1, max_length=ORGANIZATION_SLUG_MAX_LENGTH)]

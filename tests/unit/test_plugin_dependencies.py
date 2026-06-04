@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import importlib
 import inspect
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, cast, get_type_hints
 from uuid import UUID, uuid4
 
@@ -19,15 +20,21 @@ from litestar.response import Response
 from litestar.testing import AsyncTestClient
 
 import litestar_auth._plugin.dependencies as dependencies_module
+from litestar_auth._current_organization import (
+    CurrentOrganizationContext,
+    read_scope_current_organization_context,
+    set_scope_current_organization_context,
+)
 from litestar_auth._plugin import (
     DEFAULT_BACKENDS_DEPENDENCY_KEY,
     DEFAULT_CONFIG_DEPENDENCY_KEY,
+    DEFAULT_CURRENT_ORGANIZATION_DEPENDENCY_KEY,
     DEFAULT_RESOLVED_PERMISSIONS_DEPENDENCY_KEY,
     DEFAULT_USER_MANAGER_DEPENDENCY_KEY,
     DEFAULT_USER_MODEL_DEPENDENCY_KEY,
     OAUTH_ASSOCIATE_USER_MANAGER_DEPENDENCY_KEY,
 )
-from litestar_auth._plugin.config import LitestarAuthConfig, OAuthConfig
+from litestar_auth._plugin.config import LitestarAuthConfig, OAuthConfig, OrganizationConfig
 from litestar_auth._plugin.scoped_session import SESSION_SCOPE_KEY, SessionFactory
 from litestar_auth.authentication.backend import AuthenticationBackend
 from litestar_auth.authentication.transport.bearer import BearerTransport
@@ -56,9 +63,12 @@ register_dependencies = dependencies_module.register_dependencies
 register_exception_handlers = dependencies_module.register_exception_handlers
 
 if TYPE_CHECKING:
+    from datetime import datetime
+
     from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
     from litestar_auth.config import OAuthProviderConfig
+    from litestar_auth.db import MembershipData, OrganizationData, OrganizationInvitationData
 
 pytestmark = pytest.mark.unit
 OAUTH_FLOW_COOKIE_SECRET = "oauth-flow-cookie-secret-1234567890"
@@ -80,6 +90,257 @@ HTTP_BAD_REQUEST = 400
 HTTP_FORBIDDEN = 403
 HTTP_IM_A_TEAPOT = 418
 HTTP_OK = 200
+
+
+@dataclass(frozen=True, slots=True)
+class ExampleOrganization:
+    """Organization row used by current-organization dependency tests."""
+
+    id: UUID
+    slug: str
+
+
+@dataclass(frozen=True, slots=True)
+class ExampleOrganizationMembership:
+    """Organization membership row used by current-organization dependency tests."""
+
+    organization_id: UUID
+    user_id: UUID
+    roles: list[str]
+
+
+class RecordingOrganizationStore:
+    """Organization store fixture that records tenant and membership lookups."""
+
+    def __init__(
+        self,
+        *,
+        organization: ExampleOrganization | None,
+        membership: ExampleOrganizationMembership | None,
+    ) -> None:
+        """Configure lookup results for one dependency test app."""
+        self.organization = organization
+        self.membership = membership
+        self.slug_calls: list[str] = []
+        self.membership_calls: list[tuple[UUID, UUID]] = []
+
+    async def get_organization_by_slug(self, slug: str) -> ExampleOrganization | None:
+        """Return the configured organization and record the slug lookup."""
+        self.slug_calls.append(slug)
+        await asyncio.sleep(0)
+        return self.organization
+
+    async def create_organization(self, data: OrganizationData) -> ExampleOrganization:
+        """Persist a test organization in memory.
+
+        Returns:
+            The stored organization row.
+        """
+        self.organization = ExampleOrganization(id=uuid4(), slug=data.slug)
+        return self.organization
+
+    async def get_organization(self, organization_id: UUID) -> ExampleOrganization | None:
+        """Return the configured organization when its id matches."""
+        if self.organization is not None and self.organization.id == organization_id:
+            return self.organization
+        return None
+
+    async def update_organization(self, organization_id: UUID, data: OrganizationData) -> ExampleOrganization | None:
+        """Update the configured organization when its id matches.
+
+        Returns:
+            Updated organization when present, otherwise ``None``.
+        """
+        if self.organization is None or self.organization.id != organization_id:
+            return None
+        self.organization = ExampleOrganization(id=organization_id, slug=data.slug)
+        return self.organization
+
+    async def delete_organization(self, organization_id: UUID) -> bool:
+        """Delete the configured organization when its id matches.
+
+        Returns:
+            Whether the configured organization was removed.
+        """
+        if self.organization is None or self.organization.id != organization_id:
+            return False
+        self.organization = None
+        self.membership = None
+        return True
+
+    async def add_membership(self, data: MembershipData[UUID]) -> ExampleOrganizationMembership:
+        """Persist a test membership in memory.
+
+        Returns:
+            The stored membership row.
+        """
+        self.membership = ExampleOrganizationMembership(
+            organization_id=data.organization_id,
+            user_id=data.user_id,
+            roles=data.roles,
+        )
+        return self.membership
+
+    async def get_membership(
+        self,
+        *,
+        organization_id: UUID,
+        user_id: UUID,
+    ) -> ExampleOrganizationMembership | None:
+        """Return the configured membership and record the lookup."""
+        self.membership_calls.append((organization_id, user_id))
+        await asyncio.sleep(0)
+        return self.membership
+
+    async def list_memberships(
+        self,
+        organization_id: UUID,
+        *,
+        offset: int,
+        limit: int,
+    ) -> tuple[list[ExampleOrganizationMembership], int]:
+        """Return the configured membership when it belongs to the organization."""
+        if self.membership is not None and self.membership.organization_id == organization_id:
+            memberships = [self.membership]
+            return memberships[offset : offset + limit], len(memberships)
+        return [], 0
+
+    async def remove_membership(self, *, organization_id: UUID, user_id: UUID) -> bool:
+        """Remove the configured membership when both identifiers match.
+
+        Returns:
+            Whether the configured membership was removed.
+        """
+        if (
+            self.membership is not None
+            and self.membership.organization_id == organization_id
+            and self.membership.user_id == user_id
+        ):
+            self.membership = None
+            return True
+        return False
+
+    async def remove_membership_preserving_privileged_member(
+        self,
+        *,
+        organization_id: UUID,
+        user_id: UUID,
+        privileged_roles: frozenset[str],
+    ) -> bool:
+        """Remove the configured membership for protocol conformance.
+
+        Returns:
+            Whether the configured membership was removed.
+        """
+        return await self.remove_membership(organization_id=organization_id, user_id=user_id)
+
+    async def set_membership_roles(
+        self,
+        *,
+        organization_id: UUID,
+        user_id: UUID,
+        roles: list[str],
+    ) -> ExampleOrganizationMembership | None:
+        """Replace the configured membership roles when both identifiers match.
+
+        Returns:
+            Updated membership when present, otherwise ``None``.
+        """
+        if (
+            self.membership is None
+            or self.membership.organization_id != organization_id
+            or self.membership.user_id != user_id
+        ):
+            return None
+        self.membership = ExampleOrganizationMembership(organization_id=organization_id, user_id=user_id, roles=roles)
+        return self.membership
+
+    async def set_membership_roles_preserving_privileged_member(
+        self,
+        *,
+        organization_id: UUID,
+        user_id: UUID,
+        roles: list[str],
+        privileged_roles: frozenset[str],
+    ) -> ExampleOrganizationMembership | None:
+        """Replace membership roles for protocol conformance.
+
+        Returns:
+            Updated membership when present, otherwise ``None``.
+        """
+        return await self.set_membership_roles(organization_id=organization_id, user_id=user_id, roles=roles)
+
+    async def list_organizations_for_user(
+        self,
+        user_id: UUID,
+        *,
+        offset: int,
+        limit: int,
+    ) -> tuple[list[ExampleOrganization], int]:
+        """Return the configured organization when the user has the configured membership."""
+        if (
+            self.organization is not None
+            and self.membership is not None
+            and self.membership.organization_id == self.organization.id
+            and self.membership.user_id == user_id
+        ):
+            organizations = [self.organization]
+            return organizations[offset : offset + limit], len(organizations)
+        return [], 0
+
+    async def create_invitation(self, data: OrganizationInvitationData[UUID]) -> object:
+        """Return an inert invitation row for protocol conformance."""
+        return data
+
+    async def get_invitation_by_token_hash(self, token_hash: bytes) -> object | None:
+        """Current-organization dependency tests never resolve invitations.
+
+        Returns:
+            ``None`` because this fixture has no invitations.
+        """
+        return None
+
+    async def get_invitation(self, invitation_id: UUID) -> object | None:
+        """Current-organization dependency tests never resolve invitations.
+
+        Returns:
+            ``None`` because this fixture has no invitations.
+        """
+        return None
+
+    async def list_pending_invitations(
+        self,
+        organization_id: UUID,
+        *,
+        now: datetime,
+        offset: int,
+        limit: int,
+    ) -> tuple[list[object], int]:
+        """Current-organization dependency tests never list invitations.
+
+        Returns:
+            Empty invitation list.
+        """
+        return [], 0
+
+    async def revoke_invitation(self, invitation_id: UUID) -> object | None:
+        """Current-organization dependency tests never revoke invitations.
+
+        Returns:
+            ``None`` because this fixture has no invitations.
+        """
+        return None
+
+    async def consume_invitation(self, invitation_id: UUID, *, consumed_at: datetime) -> object | None:
+        """Current-organization dependency tests never consume invitations.
+
+        Returns:
+            ``None`` because this fixture has no invitations.
+        """
+        return None
+
+
+_CurrentOrganization = NamedDependency[object | None]
 
 
 def _minimal_config() -> LitestarAuthConfig[ExampleUser, UUID]:
@@ -212,6 +473,113 @@ def _permissions_app() -> tuple[Litestar, InMemoryTokenStrategy, ExampleUser]:
         ),
         strategy,
         user,
+    )
+
+
+@get("/current-organization", guards=[has_permission("posts:read")], sync_to_thread=False)
+def _current_organization_probe(
+    request: Request[ExampleUser, Any, Any],
+    litestar_auth_current_organization: _CurrentOrganization,
+) -> dict[str, object]:
+    """Expose injected current-organization context for integration coverage.
+
+    Returns:
+        Serialized current-organization context metadata.
+    """
+    context = cast(
+        "CurrentOrganizationContext[ExampleOrganization, ExampleOrganizationMembership] | None",
+        litestar_auth_current_organization,
+    )
+    scope_context = read_scope_current_organization_context(request)
+    if context is None:
+        return {"context": None, "same_as_scope": scope_context is None}
+    return {
+        "context": {
+            "organization_id": str(context.organization.id),
+            "organization_slug": context.organization.slug,
+            "membership_user_id": str(context.membership.user_id),
+            "membership_roles": context.membership.roles,
+        },
+        "same_as_scope": context is scope_context,
+    }
+
+
+@get("/anonymous-current-organization", sync_to_thread=False)
+def _anonymous_current_organization_probe(
+    litestar_auth_current_organization: _CurrentOrganization,
+) -> dict[str, object]:
+    """Expose current-organization DI for unauthenticated requests.
+
+    Returns:
+        Serialized absence of a verified current-organization context.
+    """
+    return {"context": litestar_auth_current_organization}
+
+
+def _current_organization_app(
+    *,
+    membership: ExampleOrganizationMembership | None,
+) -> tuple[Litestar, InMemoryTokenStrategy, ExampleUser, ExampleOrganization, RecordingOrganizationStore]:
+    """Build a plugin app with current-organization DI enabled.
+
+    Returns:
+        App, token strategy, authenticated user, organization row, and recording store.
+    """
+    password_helper = PasswordHelper()
+    user = ExampleUser(
+        id=uuid4(),
+        email="tenant-member@example.com",
+        hashed_password=password_helper.hash("tenant-password"),
+        is_verified=True,
+        roles=["editor"],
+    )
+    organization = ExampleOrganization(id=uuid4(), slug="acme")
+    store = RecordingOrganizationStore(organization=organization, membership=membership)
+    user_db = InMemoryUserDatabase([user])
+    strategy = InMemoryTokenStrategy(token_prefix="current-organization")
+
+    def resolve_tenant(connection: object) -> str:
+        """Return the tenant slug for dependency integration requests."""
+        return "acme"
+
+    config = LitestarAuthConfig[ExampleUser, UUID](
+        backends=[
+            AuthenticationBackend[ExampleUser, UUID](
+                name="primary",
+                transport=BearerTransport(),
+                strategy=cast("Any", strategy),
+            ),
+        ],
+        session_maker=cast("Any", DummySessionMaker()),
+        user_model=ExampleUser,
+        user_manager_class=PluginUserManager,
+        user_db_factory=lambda _session: user_db,
+        user_manager_security=UserManagerSecurity[UUID](
+            verification_token_secret="0123456789abcdef" * 4,
+            reset_password_token_secret="fedcba9876543210" * 4,
+            id_parser=UUID,
+            password_helper=password_helper,
+        ),
+        organization_config=OrganizationConfig(
+            enabled=True,
+            store_factory=lambda _session: store,
+            tenant_resolver=resolve_tenant,
+        ),
+        role_permissions={
+            "editor": ("posts:read",),
+            "owner": ("posts:read",),
+        },
+        include_users=False,
+    )
+    return (
+        Litestar(
+            route_handlers=[_current_organization_probe, _anonymous_current_organization_probe],
+            plugins=[LitestarAuth(config)],
+        ),
+        strategy,
+        user,
+        organization,
+        store,
     )
 
 
@@ -502,6 +870,30 @@ def test_provide_resolved_permissions_returns_empty_set_for_anonymous_request() 
     assert dependencies_module.provide_resolved_permissions(request) == frozenset()
 
 
+def test_provide_current_organization_returns_scope_context_or_none() -> None:
+    """The current-organization provider exposes only verified scope context."""
+    scope = cast(
+        "Any",
+        {
+            "type": "http",
+            "path": "/current-organization",
+            "headers": [],
+            "state": {},
+            "user": None,
+        },
+    )
+    request = Request(scope=scope)
+    organization = ExampleOrganization(id=uuid4(), slug="acme")
+    membership = ExampleOrganizationMembership(organization_id=organization.id, user_id=uuid4(), roles=["owner"])
+    context = CurrentOrganizationContext(organization=organization, membership=membership)
+
+    assert dependencies_module.provide_current_organization(request) is None
+
+    set_scope_current_organization_context(scope, context)
+
+    assert dependencies_module.provide_current_organization(request) is context
+
+
 async def test_register_dependencies_registers_core_providers_and_autocommit_handler(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -522,6 +914,7 @@ async def test_register_dependencies_registers_core_providers_and_autocommit_han
         DEFAULT_BACKENDS_DEPENDENCY_KEY,
         DEFAULT_USER_MODEL_DEPENDENCY_KEY,
         DEFAULT_RESOLVED_PERMISSIONS_DEPENDENCY_KEY,
+        DEFAULT_CURRENT_ORGANIZATION_DEPENDENCY_KEY,
         config.db_session_dependency_key,
     }
     assert app_config.before_send == [autocommit_handler]
@@ -555,6 +948,11 @@ async def test_register_dependencies_registers_core_providers_and_autocommit_han
     assert isinstance(permissions_provider, Provide)
     assert permissions_provider.use_cache is True
     assert permissions_provider.sync_to_thread is False
+
+    current_organization_provider = app_config.dependencies[DEFAULT_CURRENT_ORGANIZATION_DEPENDENCY_KEY]
+    assert isinstance(current_organization_provider, Provide)
+    assert current_organization_provider.use_cache is True
+    assert current_organization_provider.sync_to_thread is False
 
 
 def test_register_dependencies_adds_oauth_associate_provider_only_when_configured() -> None:
@@ -651,3 +1049,61 @@ async def test_resolved_permissions_dependency_returns_empty_set_for_unauthentic
 
     assert response.status_code == HTTP_OK
     assert response.json() == {"permissions": []}
+
+
+async def test_current_organization_dependency_injects_verified_member_context() -> None:
+    """Handlers can inject the authenticated member's verified organization context."""
+    user_id = uuid4()
+    membership = ExampleOrganizationMembership(organization_id=uuid4(), user_id=user_id, roles=["owner"])
+    app, strategy, user, organization, store = _current_organization_app(membership=membership)
+    matching_membership = ExampleOrganizationMembership(
+        organization_id=organization.id,
+        user_id=user.id,
+        roles=membership.roles,
+    )
+    store.membership = matching_membership
+    token = await strategy.write_token(user)
+
+    async with AsyncTestClient(app=app) as client:
+        response = await client.get("/current-organization", headers={"Authorization": f"Bearer {token}"})
+
+    assert response.status_code == HTTP_OK
+    assert response.json() == {
+        "context": {
+            "organization_id": str(organization.id),
+            "organization_slug": "acme",
+            "membership_user_id": str(user.id),
+            "membership_roles": ["owner"],
+        },
+        "same_as_scope": True,
+    }
+    assert store.slug_calls == ["acme"]
+    assert store.membership_calls == [(organization.id, user.id)]
+
+
+async def test_current_organization_dependency_returns_none_for_authenticated_non_member() -> None:
+    """Authenticated non-members receive no current-organization context through DI."""
+    app, strategy, user, organization, store = _current_organization_app(membership=None)
+    token = await strategy.write_token(user)
+
+    async with AsyncTestClient(app=app) as client:
+        response = await client.get("/current-organization", headers={"Authorization": f"Bearer {token}"})
+
+    assert response.status_code == HTTP_OK
+    assert response.json() == {"context": None, "same_as_scope": True}
+    assert store.slug_calls == ["acme"]
+    assert store.membership_calls == [(organization.id, user.id)]
+
+
+async def test_current_organization_dependency_returns_none_for_anonymous_request() -> None:
+    """Anonymous callers receive no current-organization context through DI."""
+    membership = ExampleOrganizationMembership(organization_id=uuid4(), user_id=uuid4(), roles=["owner"])
+    app, _strategy, _user, _organization, store = _current_organization_app(membership=membership)
+
+    async with AsyncTestClient(app=app) as client:
+        response = await client.get("/anonymous-current-organization")
+
+    assert response.status_code == HTTP_OK
+    assert response.json() == {"context": None}
+    assert store.slug_calls == []
+    assert store.membership_calls == []

@@ -26,6 +26,11 @@ from litestar.types import (
     WebSocketReceiveEvent,
 )
 
+from litestar_auth._current_organization import (
+    CurrentOrganizationContext,
+    clear_scope_current_organization_context,
+    set_scope_current_organization_context,
+)
 from litestar_auth._permissions import DEFAULT_PERMISSION_RESOLVER, set_scope_permission_resolver
 from litestar_auth._superuser_role import (
     DEFAULT_SUPERUSER_ROLE_NAME,
@@ -47,8 +52,10 @@ if TYPE_CHECKING:
     from litestar.connection import ASGIConnection, Request
     from sqlalchemy.ext.asyncio import AsyncSession
 
+    from litestar_auth._tenant_resolution import TenantResolver
     from litestar_auth.authentication.authenticator import Authenticator
     from litestar_auth.authentication.strategy.base import UserManagerProtocol
+    from litestar_auth.db import BaseOrganizationStore
     from litestar_auth.ratelimit import EndpointRateLimit
 else:  # pragma: no cover - optional dependency - import-time fallback
     # Runtime fallback to avoid importing SQLAlchemy just for type aliases.
@@ -56,6 +63,7 @@ else:  # pragma: no cover - optional dependency - import-time fallback
 
 type AuthenticatorFactory[UP: UserProtocol[Any], ID] = Callable[[AsyncSession], Authenticator[UP, ID]]
 type RequestSessionProvider = Callable[[State, Scope], AsyncSession]
+type OrganizationStoreFactory = Callable[[AsyncSession], BaseOrganizationStore[Any, Any, Any, Any]]
 logger = logging.getLogger(__name__)
 
 _DEFAULT_API_KEY_SIGNED_BODY_MAX_BYTES = 1024 * 1024
@@ -84,6 +92,8 @@ class LitestarAuthMiddlewareConfig[UP: UserProtocol[Any], ID]:
     api_key_signed_body_max_messages: int = _DEFAULT_API_KEY_SIGNED_BODY_MAX_MESSAGES
     superuser_role_name: str = DEFAULT_SUPERUSER_ROLE_NAME
     permission_resolver: PermissionResolver = DEFAULT_PERMISSION_RESOLVER
+    organization_store_factory: OrganizationStoreFactory | None = None
+    tenant_resolver: TenantResolver | None = None
     exclude: str | list[str] | None = None
     exclude_from_auth_key: str = "exclude_from_auth"
     exclude_http_methods: Sequence[Method] | None = None
@@ -102,6 +112,8 @@ class LitestarAuthMiddlewareOptions[UP: UserProtocol[Any], ID](TypedDict):
     api_key_signed_body_max_messages: NotRequired[int]
     superuser_role_name: NotRequired[str]
     permission_resolver: NotRequired[PermissionResolver]
+    organization_store_factory: NotRequired[OrganizationStoreFactory | None]
+    tenant_resolver: NotRequired[TenantResolver | None]
     exclude: NotRequired[str | list[str] | None]
     exclude_from_auth_key: NotRequired[str]
     exclude_http_methods: NotRequired[Sequence[Method] | None]
@@ -161,6 +173,8 @@ class LitestarAuthMiddleware[UP: UserProtocol[Any], ID](AbstractAuthenticationMi
         self.api_key_signed_body_max_messages = settings.api_key_signed_body_max_messages
         self.superuser_role_name = normalize_superuser_role_name(settings.superuser_role_name)
         self.permission_resolver = settings.permission_resolver
+        self.organization_store_factory = settings.organization_store_factory
+        self.tenant_resolver = settings.tenant_resolver
 
     @override
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
@@ -199,8 +213,15 @@ class LitestarAuthMiddleware[UP: UserProtocol[Any], ID](AbstractAuthenticationMi
         user, auth_context = await authenticator.authenticate(connection)
 
         if user is not None:
-            await _record_successful_api_key_use_if_applicable(
+            connection.scope["auth"] = auth_context
+            await _publish_current_organization_context_if_applicable(
                 connection,
+                session=session,
+                user=user,
+                organization_store_factory=self.organization_store_factory,
+                tenant_resolver=self.tenant_resolver,
+            )
+            await _record_successful_api_key_use_if_applicable(
                 authenticator=authenticator,
                 auth_context=auth_context,
             )
@@ -215,8 +236,44 @@ class LitestarAuthMiddleware[UP: UserProtocol[Any], ID](AbstractAuthenticationMi
         return AuthenticationResult(user=user, auth=auth_context)
 
 
-async def _record_successful_api_key_use_if_applicable[UP: UserProtocol[Any], ID](
+async def _publish_current_organization_context_if_applicable[UP: UserProtocol[Any]](
     connection: ASGIConnection[Any, Any, Any, Any],
+    *,
+    session: AsyncSession,
+    user: UP,
+    organization_store_factory: OrganizationStoreFactory | None,
+    tenant_resolver: TenantResolver | None,
+) -> None:
+    """Publish verified organization membership for one authenticated request."""
+    clear_scope_current_organization_context(connection.scope)
+    if organization_store_factory is None or tenant_resolver is None:
+        return
+
+    slug = tenant_resolver(connection)
+    if slug is None:
+        return
+
+    store = organization_store_factory(session)
+    organization = await store.get_organization_by_slug(slug)
+    if organization is None:
+        return
+
+    organization_id = getattr(organization, "id", None)
+    user_id = getattr(user, "id", None)
+    if organization_id is None or user_id is None:
+        return
+
+    membership = await store.get_membership(organization_id=organization_id, user_id=user_id)
+    if membership is None:
+        return
+
+    set_scope_current_organization_context(
+        connection.scope,
+        CurrentOrganizationContext(organization=organization, membership=membership),
+    )
+
+
+async def _record_successful_api_key_use_if_applicable[UP: UserProtocol[Any], ID](
     *,
     authenticator: Authenticator[UP, ID],
     auth_context: object | None,
@@ -224,7 +281,6 @@ async def _record_successful_api_key_use_if_applicable[UP: UserProtocol[Any], ID
     """Apply API-key use accounting after a successful API-key authentication."""
     if not isinstance(auth_context, ApiKeyContext):
         return
-    connection.scope["auth"] = auth_context
     record_api_key_used = getattr(authenticator.user_manager, "record_api_key_used", None)
     if callable(record_api_key_used):
         await record_api_key_used(auth_context.key_id)

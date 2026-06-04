@@ -5,6 +5,7 @@ from __future__ import annotations
 from importlib import import_module
 from typing import TYPE_CHECKING, Any, cast
 
+from litestar_auth._plugin.config._validation import validate_organization_configuration
 from litestar_auth._plugin.validation import api_key as _api_key_validation
 from litestar_auth._plugin.validation.credentials import validate_credential_config
 from litestar_auth._plugin.validation.oauth_routes import validate_oauth_route_registration_config
@@ -35,6 +36,7 @@ def validate_config[UP: UserProtocol[Any], ID](config: LitestarAuthConfig[UP, ID
     """Validate the requested plugin configuration during plugin construction."""
     for validator in (
         validate_api_key_config,
+        validate_organization_configuration,
         validate_core_session_config,
         validate_credential_config,
         validate_totp_secret_config,

@@ -5,6 +5,7 @@ from __future__ import annotations
 import importlib
 import inspect
 import logging
+from datetime import UTC, datetime
 from typing import (
     TYPE_CHECKING,
     Annotated,
@@ -46,7 +47,7 @@ from litestar_auth.authentication.strategy.jwt import (
     RedisJWTDenylistStore,
 )
 from litestar_auth.authentication.transport import Transport
-from litestar_auth.db.sqlalchemy import SQLAlchemyUserDatabase
+from litestar_auth.db.sqlalchemy import SQLAlchemyOrganizationStore, SQLAlchemyUserDatabase
 from litestar_auth.exceptions import (
     AuthenticationError,
     AuthorizationError,
@@ -86,6 +87,7 @@ LitestarAuthConfig = litestar_auth.LitestarAuthConfig
 LitestarAuthError = litestar_auth.LitestarAuthError
 OAuthConfig = litestar_auth.OAuthConfig
 OAuthProviderConfig = litestar_auth.OAuthProviderConfig
+OrganizationConfig = litestar_auth.OrganizationConfig
 RoleCapableUserProtocol = litestar_auth.RoleCapableUserProtocol
 TotpConfig = litestar_auth.TotpConfig
 TotpUserProtocol = litestar_auth.TotpUserProtocol
@@ -132,8 +134,148 @@ create_verify_controller = controllers_package.create_verify_controller
 ApiKeyData = db_module.ApiKeyData
 BaseApiKeyStore = db_module.BaseApiKeyStore
 BaseOAuthAccountStore = db_module.BaseOAuthAccountStore
+BaseOrganizationStore = db_module.BaseOrganizationStore
 BaseUserStore = db_module.BaseUserStore
+MembershipData = db_module.MembershipData
 OAuthAccountData = db_module.OAuthAccountData
+OrganizationData = db_module.OrganizationData
+OrganizationInvitationData = db_module.OrganizationInvitationData
+
+
+class _InMemoryOrganizationStore:
+    """Minimal organization store satisfying the runtime-checkable protocol."""
+
+    def __init__(self, *, organization: dict[str, Any], membership: dict[str, Any]) -> None:
+        self.organization = organization
+        self.membership = membership
+
+    async def create_organization(self, data: OrganizationData) -> dict[str, Any]:
+        return {"id": self.organization["id"], "slug": data.slug, "name": data.name}
+
+    async def get_organization(self, organization_id: UUID) -> dict[str, Any] | None:
+        return self.organization if organization_id == self.organization["id"] else None
+
+    async def get_organization_by_slug(self, slug: str) -> dict[str, Any] | None:
+        return self.organization if slug == self.organization["slug"] else None
+
+    async def update_organization(self, organization_id: UUID, data: OrganizationData) -> dict[str, Any] | None:
+        if organization_id != self.organization["id"]:
+            return None
+        return {"id": organization_id, "slug": data.slug, "name": data.name}
+
+    async def delete_organization(self, organization_id: UUID) -> bool:
+        return organization_id == self.organization["id"]
+
+    async def add_membership(self, data: MembershipData[UUID]) -> dict[str, Any]:
+        return {
+            "organization_id": data.organization_id,
+            "user_id": data.user_id,
+            "roles": data.roles,
+        }
+
+    async def get_membership(self, *, organization_id: UUID, user_id: UUID) -> dict[str, Any] | None:
+        if organization_id == self.membership["organization_id"] and user_id == self.membership["user_id"]:
+            return self.membership
+        return None
+
+    async def list_memberships(
+        self,
+        organization_id: UUID,
+        *,
+        offset: int,
+        limit: int,
+    ) -> tuple[list[dict[str, Any]], int]:
+        memberships = [self.membership] if organization_id == self.membership["organization_id"] else []
+        return memberships[offset : offset + limit], len(memberships)
+
+    async def remove_membership(self, *, organization_id: UUID, user_id: UUID) -> bool:
+        return organization_id == self.membership["organization_id"] and user_id == self.membership["user_id"]
+
+    async def remove_membership_preserving_privileged_member(
+        self,
+        *,
+        organization_id: UUID,
+        user_id: UUID,
+        privileged_roles: frozenset[str],
+    ) -> bool:
+        return await self.remove_membership(organization_id=organization_id, user_id=user_id)
+
+    async def set_membership_roles(
+        self,
+        *,
+        organization_id: UUID,
+        user_id: UUID,
+        roles: list[str],
+    ) -> dict[str, Any] | None:
+        if organization_id != self.membership["organization_id"] or user_id != self.membership["user_id"]:
+            return None
+        return {"organization_id": organization_id, "user_id": user_id, "roles": roles}
+
+    async def set_membership_roles_preserving_privileged_member(
+        self,
+        *,
+        organization_id: UUID,
+        user_id: UUID,
+        roles: list[str],
+        privileged_roles: frozenset[str],
+    ) -> dict[str, Any] | None:
+        return await self.set_membership_roles(organization_id=organization_id, user_id=user_id, roles=roles)
+
+    async def list_organizations_for_user(
+        self,
+        user_id: UUID,
+        *,
+        offset: int,
+        limit: int,
+    ) -> tuple[list[dict[str, Any]], int]:
+        organizations = [self.organization] if user_id == self.membership["user_id"] else []
+        return organizations[offset : offset + limit], len(organizations)
+
+    async def create_invitation(self, data: OrganizationInvitationData[UUID]) -> dict[str, Any]:
+        return {
+            "id": UUID(int=3),
+            "organization_id": data.organization_id,
+            "invited_email": data.invited_email,
+            "roles": data.roles,
+            "token_hash": data.token_hash,
+            "expires_at": data.expires_at,
+            "status": "pending",
+        }
+
+    async def get_invitation_by_token_hash(self, token_hash: bytes) -> dict[str, Any] | None:
+        if token_hash == b"invitation-hash":
+            return {"token_hash": token_hash, "status": "pending"}
+        return None
+
+    async def get_invitation(self, invitation_id: UUID) -> dict[str, Any] | None:
+        if invitation_id == UUID(int=3):
+            return {"id": invitation_id, "organization_id": self.organization["id"], "status": "pending"}
+        return None
+
+    async def list_pending_invitations(
+        self,
+        organization_id: UUID,
+        *,
+        now: datetime,
+        offset: int,
+        limit: int,
+    ) -> tuple[list[dict[str, Any]], int]:
+        if organization_id != self.organization["id"]:
+            return [], 0
+        invitations = [{"organization_id": organization_id, "expires_at": now, "status": "pending"}]
+        return invitations[offset : offset + limit], len(invitations)
+
+    async def revoke_invitation(self, invitation_id: UUID) -> dict[str, Any] | None:
+        if invitation_id != UUID(int=3):
+            return None
+        return {"id": invitation_id, "status": "revoked"}
+
+    async def consume_invitation(self, invitation_id: UUID, *, consumed_at: datetime) -> dict[str, Any] | None:
+        if invitation_id != UUID(int=3):
+            return None
+        return {"id": invitation_id, "consumed_at": consumed_at, "status": "consumed"}
+
+
 create_provider_oauth_controller = oauth_package_module.create_provider_oauth_controller
 load_httpx_oauth_client = oauth_package_module.load_httpx_oauth_client
 ForgotPassword = payloads_module.ForgotPassword
@@ -184,7 +326,12 @@ ONE_MINUTE_TTL_SECONDS = 60
 ONE_MINUTE_TTL_FLOOR = ONE_MINUTE_TTL_SECONDS - 1
 ONE_MINUTE_TTL_MS = ONE_MINUTE_TTL_SECONDS * 1000
 AUTH_RATE_LIMIT_VERIFICATION_SLOT_IDENTIFIERS = frozenset(
-    {AuthRateLimitSlot.VERIFY_TOKEN, AuthRateLimitSlot.REQUEST_VERIFY_TOKEN},
+    {
+        AuthRateLimitSlot.VERIFY_TOKEN,
+        AuthRateLimitSlot.REQUEST_VERIFY_TOKEN,
+        AuthRateLimitSlot.ORGANIZATION_INVITATION_ACCEPT,
+        AuthRateLimitSlot.ORGANIZATION_INVITATION_DECLINE,
+    },
 )
 REMOVED_ROOT_PAYLOAD_EXPORTS = (
     "AdminUserUpdate",
@@ -358,6 +505,7 @@ def test_root_package_reexports_public_api() -> None:
     assert FernetKeyringConfig is not None
     assert OAuthConfig is not None
     assert OAuthProviderConfig is not None
+    assert OrganizationConfig is not None
     assert TotpConfig is not None
     assert BaseUserManager is not None
     assert BaseUserManagerConfig is not None
@@ -550,6 +698,12 @@ def test_models_and_strategy_modules_expose_documented_orm_setup_surface() -> No
         "ApiKeyMixin",
         "OAuthAccount",
         "OAuthAccountMixin",
+        "Organization",
+        "OrganizationInvitation",
+        "OrganizationInvitationMixin",
+        "OrganizationMembership",
+        "OrganizationMembershipMixin",
+        "OrganizationMixin",
         "RefreshTokenMixin",
         "Role",
         "RoleMixin",
@@ -572,6 +726,7 @@ def test_models_and_strategy_modules_expose_documented_orm_setup_surface() -> No
         "DatabaseTokenStrategy",
         "DatabaseTokenStrategyConfig",
         "InMemoryApiKeyNonceStore",
+        "JWTContext",
         "JWTStrategy",
         "JWTStrategyConfig",
         "RedisApiKeyNonceStore",
@@ -586,6 +741,12 @@ def test_models_and_strategy_modules_expose_documented_orm_setup_surface() -> No
     assert models_module.ApiKey.__name__ == "ApiKey"
     assert models_module.ApiKeyMixin.__name__ == "ApiKeyMixin"
     assert models_module.OAuthAccountMixin.__name__ == "OAuthAccountMixin"
+    assert models_module.Organization.__name__ == "Organization"
+    assert models_module.OrganizationInvitation.__name__ == "OrganizationInvitation"
+    assert models_module.OrganizationInvitationMixin.__name__ == "OrganizationInvitationMixin"
+    assert models_module.OrganizationMembership.__name__ == "OrganizationMembership"
+    assert models_module.OrganizationMembershipMixin.__name__ == "OrganizationMembershipMixin"
+    assert models_module.OrganizationMixin.__name__ == "OrganizationMixin"
     assert models_module.RefreshTokenMixin.__name__ == "RefreshTokenMixin"
     assert models_module.Role.__name__ == "Role"
     assert models_module.RoleMixin.__name__ == "RoleMixin"
@@ -614,28 +775,82 @@ def test_root_and_db_packages_keep_orm_symbols_on_documented_modules() -> None:
     assert "User" not in __all__
     assert "ApiKey" not in __all__
     assert "OAuthAccount" not in __all__
+    assert "Organization" not in __all__
+    assert "OrganizationInvitation" not in __all__
+    assert "OrganizationMembership" not in __all__
     assert "SQLAlchemyApiKeyStore" not in __all__
+    assert "SQLAlchemyOrganizationStore" not in __all__
     assert "SQLAlchemyUserDatabase" not in __all__
     assert not hasattr(litestar_auth, "Role")
     assert not hasattr(litestar_auth, "User")
     assert not hasattr(litestar_auth, "ApiKey")
     assert not hasattr(litestar_auth, "OAuthAccount")
+    assert not hasattr(litestar_auth, "Organization")
+    assert not hasattr(litestar_auth, "OrganizationInvitation")
+    assert not hasattr(litestar_auth, "OrganizationMembership")
     assert not hasattr(litestar_auth, "SQLAlchemyApiKeyStore")
+    assert not hasattr(litestar_auth, "SQLAlchemyOrganizationStore")
     assert not hasattr(litestar_auth, "SQLAlchemyUserDatabase")
     assert db_module.__all__ == (
         "ApiKeyData",
         "BaseApiKeyStore",
         "BaseOAuthAccountStore",
+        "BaseOrganizationStore",
         "BaseUserStore",
+        "MembershipData",
         "OAuthAccountData",
+        "OrganizationData",
+        "OrganizationInvitationData",
     )
     assert db_module.ApiKeyData is ApiKeyData
     assert db_module.BaseApiKeyStore is BaseApiKeyStore
     assert db_module.BaseOAuthAccountStore is BaseOAuthAccountStore
+    assert db_module.BaseOrganizationStore is BaseOrganizationStore
     assert db_module.BaseUserStore is BaseUserStore
+    assert db_module.MembershipData is MembershipData
     assert db_module.OAuthAccountData is OAuthAccountData
+    assert db_module.OrganizationData is OrganizationData
+    assert db_module.OrganizationInvitationData is OrganizationInvitationData
+    assert not hasattr(db_module, "Organization")
+    assert not hasattr(db_module, "OrganizationInvitation")
+    assert not hasattr(db_module, "OrganizationMembership")
     assert not hasattr(db_module, "SQLAlchemyApiKeyStore")
+    assert not hasattr(db_module, "SQLAlchemyOrganizationStore")
     assert not hasattr(db_module, "SQLAlchemyUserDatabase")
+
+
+async def test_organization_store_contract_accepts_structural_backend() -> None:
+    """A minimal organization store satisfies the runtime-checkable protocol."""
+    organization_id = UUID(int=1)
+    user_id = UUID(int=2)
+    organization = {"id": organization_id, "slug": "acme", "name": "Acme"}
+    membership = {"organization_id": organization_id, "user_id": user_id, "roles": ["owner"]}
+    store = _InMemoryOrganizationStore(organization=organization, membership=membership)
+
+    assert isinstance(store, BaseOrganizationStore)
+    assert await store.create_organization(OrganizationData(slug="acme", name="Acme")) == organization
+    assert await store.get_organization(organization_id) == organization
+    assert await store.get_organization_by_slug("acme") == organization
+    assert await store.update_organization(organization_id, OrganizationData(slug="acme-updated", name="Acme Updated"))
+    assert await store.delete_organization(organization_id) is True
+    assert await store.add_membership(MembershipData(organization_id=organization_id, user_id=user_id, roles=["owner"]))
+    assert await store.get_membership(organization_id=organization_id, user_id=user_id) == membership
+    assert await store.list_memberships(organization_id, offset=0, limit=10) == ([membership], 1)
+    assert await store.remove_membership(organization_id=organization_id, user_id=user_id) is True
+    assert await store.set_membership_roles(organization_id=organization_id, user_id=user_id, roles=["admin"])
+    assert await store.list_organizations_for_user(user_id, offset=0, limit=10) == ([organization], 1)
+    invitation_data = OrganizationInvitationData(
+        organization_id=organization_id,
+        invited_email="invitee@example.com",
+        roles=["member"],
+        token_hash=b"invitation-hash",
+        expires_at=datetime.now(tz=UTC),
+    )
+    assert await store.create_invitation(invitation_data)
+    assert await store.get_invitation_by_token_hash(b"invitation-hash")
+    assert await store.list_pending_invitations(organization_id, now=invitation_data.expires_at, offset=0, limit=10)
+    assert await store.revoke_invitation(UUID(int=3))
+    assert await store.consume_invitation(UUID(int=3), consumed_at=invitation_data.expires_at)
 
 
 def test_sqlalchemy_user_database_keeps_documented_keyword_contract() -> None:
@@ -646,6 +861,17 @@ def test_sqlalchemy_user_database_keeps_documented_keyword_contract() -> None:
     assert init_signature.parameters["user_model"].kind is inspect.Parameter.KEYWORD_ONLY
     assert init_signature.parameters["oauth_account_model"].kind is inspect.Parameter.KEYWORD_ONLY
     assert init_signature.parameters["oauth_account_model"].default is None
+
+
+def test_sqlalchemy_organization_store_keeps_documented_keyword_contract() -> None:
+    """The organization SQLAlchemy adapter keeps model inputs explicit and keyword-only."""
+    init_signature = inspect.signature(SQLAlchemyOrganizationStore.__init__)
+
+    assert init_signature.parameters["session"].kind is inspect.Parameter.POSITIONAL_OR_KEYWORD
+    assert init_signature.parameters["organization_model"].kind is inspect.Parameter.KEYWORD_ONLY
+    assert init_signature.parameters["membership_model"].kind is inspect.Parameter.KEYWORD_ONLY
+    assert init_signature.parameters["organization_model"].default is inspect.Parameter.empty
+    assert init_signature.parameters["membership_model"].default is inspect.Parameter.empty
 
 
 def test_controller_factories_and_payloads_stay_canonical() -> None:
@@ -1065,6 +1291,9 @@ def test_ratelimit_identifier_contract_stays_on_the_public_ratelimit_module() ->
         AuthRateLimitSlot.TOTP_REGENERATE_RECOVERY_CODES,
         AuthRateLimitSlot.VERIFY_TOKEN,
         AuthRateLimitSlot.REQUEST_VERIFY_TOKEN,
+        AuthRateLimitSlot.ORGANIZATION_SWITCH,
+        AuthRateLimitSlot.ORGANIZATION_INVITATION_ACCEPT,
+        AuthRateLimitSlot.ORGANIZATION_INVITATION_DECLINE,
         AuthRateLimitSlot.API_KEY_CREATE,
         AuthRateLimitSlot.API_KEY_UPDATE,
         AuthRateLimitSlot.API_KEY_USE,
@@ -1072,6 +1301,8 @@ def test_ratelimit_identifier_contract_stays_on_the_public_ratelimit_module() ->
     assert get_args(current_group_alias.__value__) == (
         "api_keys",
         "login",
+        "organization_invitations",
+        "organizations",
         "password_reset",
         "refresh",
         "register",
@@ -1112,15 +1343,18 @@ def test_payload_module_is_authoritative_boundary_without_controllers_package_re
         "AuthControllerConfig",
         "OAuthAssociateControllerConfig",
         "OAuthControllerConfig",
+        "OrganizationControllerConfig",
         "RegisterControllerConfig",
         "SessionDevicesControllerConfig",
         "TotpControllerOptions",
         "TotpUserManagerProtocol",
         "UsersControllerConfig",
+        "backend_supports_organization_tokens",
         "create_api_keys_controllers",
         "create_auth_controller",
         "create_oauth_associate_controller",
         "create_oauth_controller",
+        "create_organization_controller",
         "create_register_controller",
         "create_reset_password_controller",
         "create_session_devices_controller",
@@ -1147,6 +1381,7 @@ def test_payload_module_is_authoritative_boundary_without_controllers_package_re
         "ResetPassword",
         "SessionClientMetadataKey",
         "SessionClientMetadataValue",
+        "SwitchOrganizationRequest",
         "TotpConfirmEnableRequest",
         "TotpConfirmEnableResponse",
         "TotpDisableRequest",
@@ -1214,20 +1449,25 @@ def test_root_package_all_excludes_private_symbols() -> None:
         "BaseUserManager",
         "BaseUserManagerConfig",
         "BearerTransport",
+        "ClaimTenantResolver",
         "CookieTransport",
         "CookieTransportConfig",
         "DatabaseTokenAuthConfig",
         "ErrorCode",
         "FernetKeyringConfig",
         "GuardedUserProtocol",
+        "HeaderTenantResolver",
         "LitestarAuth",
         "LitestarAuthConfig",
         "LitestarAuthError",
         "OAuthConfig",
         "OAuthProviderConfig",
+        "OrganizationConfig",
         "PermissionResolver",
         "RoleCapableUserProtocol",
         "StaticRolePermissionResolver",
+        "SubdomainTenantResolver",
+        "TenantResolver",
         "TotpConfig",
         "TotpUserProtocol",
         "UserManagerSecurity",
@@ -1238,11 +1478,14 @@ def test_root_package_all_excludes_private_symbols() -> None:
         "has_all_roles",
         "has_any_permission",
         "has_any_role",
+        "has_organization_permission",
+        "has_organization_role",
         "has_permission",
         "is_active",
         "is_authenticated",
         "is_superuser",
         "is_verified",
+        "requires_organization_membership",
     )
     assert all(not symbol.startswith("_") or symbol == "__version__" for symbol in __all__)
     assert len(__all__) == len(set(__all__))
@@ -1298,6 +1541,7 @@ def test_root_package_does_not_reexport_secondary_surfaces() -> None:
     assert RedisTotpEnrollmentStore is not None
     assert RedisUsedTotpCodeStore is not None
     assert BaseUserStore is not None
+    assert SQLAlchemyOrganizationStore is not None
     assert SQLAlchemyUserDatabase is not None
     assert UserRead.__struct_fields__ == ("id", "email", "is_active", "is_verified", "roles")
     assert UserCreate.__struct_fields__ == ("email", "password")
@@ -1348,6 +1592,7 @@ def test_plugin_module_public_exports_no_compat_shims() -> None:
         "LitestarAuthConfig",
         "OAuthConfig",
         "OAuthProviderConfig",
+        "OrganizationConfig",
         "StartupBackendTemplate",
         "TotpConfig",
         "bind_auth_session_to_alchemy",
@@ -1355,6 +1600,7 @@ def test_plugin_module_public_exports_no_compat_shims() -> None:
     assert plugin_module.ApiKeyConfig is litestar_auth.ApiKeyConfig
     assert plugin_module.DatabaseTokenAuthConfig is litestar_auth.DatabaseTokenAuthConfig
     assert plugin_module.FernetKeyringConfig is litestar_auth.FernetKeyringConfig
+    assert plugin_module.OrganizationConfig is litestar_auth.OrganizationConfig
     assert plugin_module.LitestarAuthConfig is plugin_internals.LitestarAuthConfig
     assert plugin_module.StartupBackendTemplate.__module__ == "litestar_auth._plugin.features._backends"
     assert not hasattr(litestar_auth, "StartupBackendTemplate")

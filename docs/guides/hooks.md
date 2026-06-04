@@ -19,6 +19,7 @@ Subclass **`BaseUserManager`** and override async hooks to integrate email, anal
 | `on_after_update(user, update_dict)` | After profile fields saved | Sync directory, re-index search |
 | `on_before_delete(user)` | Before user deletion | Soft checks, cascade hints |
 | `on_after_delete(user)` | After user removed (or soft-deleted per policy) | GDPR export cleanup, cache purge |
+| `on_after_organization_invitation(invitation, token)` | After organization-admin invitation creation stores the token hash | Enqueue invitation email or another out-of-band delivery job; the raw token is only available in this hook and the returned issue object |
 
 Exact signatures and default implementations live on **`UserManagerHooks`**, inherited by **`BaseUserManager`** — see [Manager API](../api/manager.md).
 

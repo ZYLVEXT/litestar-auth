@@ -18,6 +18,7 @@ from litestar_auth._redis_protocols import RedisExpiringValueStoreClient
 from litestar_auth.authentication.strategy.jwt import (
     JWT_ACCESS_TOKEN_AUDIENCE,
     InMemoryJWTDenylistStore,
+    JWTContext,
     JWTStrategy,
     RedisJWTDenylistStore,
     _default_session_fingerprint,
@@ -624,6 +625,176 @@ async def test_jwt_strategy_read_token_returns_user_when_subject_is_used_directl
 
     assert await strategy.read_token(token, user_manager) is user
     user_manager.get.assert_awaited_once_with(str(user.id))
+
+
+async def test_jwt_strategy_read_token_with_context_exposes_verified_organization_claim() -> None:
+    """Verified JWT payloads can expose a signed active-organization claim."""
+    user = ExampleUser(id=uuid4())
+    now = datetime.now(tz=UTC)
+    strategy = JWTStrategy[ExampleUser, UUID](
+        secret=DEFAULT_SECRET,
+        subject_decoder=UUID,
+        session_fingerprint_getter=lambda _: None,
+        allow_inmemory_denylist=True,
+    )
+    user_manager = ExampleUserManager(user)
+    token = _make_token(
+        payload={
+            "sub": str(user.id),
+            "aud": JWT_ACCESS_TOKEN_AUDIENCE,
+            "iat": now,
+            "nbf": now,
+            "exp": now + timedelta(minutes=5),
+            "jti": "org-claim-jti",
+            "org": " Acme ",
+        },
+    )
+
+    result = await strategy.read_token_with_context(token, user_manager)
+
+    assert result is not None
+    assert result.user is user
+    assert result.context == JWTContext(organization="acme")
+    assert await strategy.read_token(token, user_manager) is user
+
+
+async def test_jwt_strategy_write_token_for_organization_round_trips_normalized_claim() -> None:
+    """Org-bound JWT issuance stores the same normalized value read from verified tokens."""
+    user = ExampleUser(id=uuid4())
+    strategy = JWTStrategy[ExampleUser, UUID](
+        secret=DEFAULT_SECRET,
+        subject_decoder=UUID,
+        session_fingerprint_getter=lambda _: None,
+        allow_inmemory_denylist=True,
+    )
+    user_manager = ExampleUserManager(user)
+
+    token = await strategy.write_token_for_organization(user, " Acme Team ")
+    payload = jwt.decode(
+        token,
+        DEFAULT_SECRET,
+        algorithms=["HS256"],
+        audience=JWT_ACCESS_TOKEN_AUDIENCE,
+    )
+    result = await strategy.read_token_with_context(token, user_manager)
+
+    assert payload["org"] == "acme team"
+    assert result is not None
+    assert result.user is user
+    assert result.context == JWTContext(organization="acme team")
+
+
+async def test_jwt_strategy_write_token_stays_organization_free() -> None:
+    """Ordinary login-token issuance must not carry active-organization authority."""
+    user = ExampleUser(id=uuid4())
+    strategy = JWTStrategy[ExampleUser, UUID](
+        secret=DEFAULT_SECRET,
+        subject_decoder=UUID,
+        session_fingerprint_getter=lambda _: None,
+        allow_inmemory_denylist=True,
+    )
+    user_manager = ExampleUserManager(user)
+
+    token = await strategy.write_token(user)
+    payload = jwt.decode(
+        token,
+        DEFAULT_SECRET,
+        algorithms=["HS256"],
+        audience=JWT_ACCESS_TOKEN_AUDIENCE,
+    )
+    result = await strategy.read_token_with_context(token, user_manager)
+
+    assert "org" not in payload
+    assert result is not None
+    assert result.context == JWTContext()
+
+
+@pytest.mark.parametrize("org_claim", [None, "", 123, ["acme"]])
+async def test_jwt_strategy_read_token_with_context_ignores_absent_or_malformed_organization_claim(
+    org_claim: object,
+) -> None:
+    """Absent or malformed org claims authenticate normally without organization context."""
+    user = ExampleUser(id=uuid4())
+    now = datetime.now(tz=UTC)
+    strategy = JWTStrategy[ExampleUser, UUID](
+        secret=DEFAULT_SECRET,
+        subject_decoder=UUID,
+        session_fingerprint_getter=lambda _: None,
+        allow_inmemory_denylist=True,
+    )
+    user_manager = ExampleUserManager(user)
+    payload: dict[str, object] = {
+        "sub": str(user.id),
+        "aud": JWT_ACCESS_TOKEN_AUDIENCE,
+        "iat": now,
+        "nbf": now,
+        "exp": now + timedelta(minutes=5),
+        "jti": f"org-claim-{org_claim!r}",
+    }
+    if org_claim is not None:
+        payload["org"] = org_claim
+    token = _make_token(payload=payload)
+
+    result = await strategy.read_token_with_context(token, user_manager)
+
+    assert result is not None
+    assert result.user is user
+    assert result.context == JWTContext()
+    assert await strategy.read_token(token, user_manager) is user
+
+
+async def test_jwt_strategy_read_token_with_context_preserves_rejection_paths() -> None:
+    """Contextual JWT reads keep revocation, expiry, and fingerprint checks intact."""
+    now = datetime.now(tz=UTC)
+    user = ExampleUser(id=uuid4(), email="user@example.com", hashed_password="current-hash")
+    expired_strategy = JWTStrategy[ExampleUser, UUID](
+        secret=DEFAULT_SECRET,
+        subject_decoder=UUID,
+        session_fingerprint_getter=lambda _: None,
+        allow_inmemory_denylist=True,
+    )
+    expired_token = _make_token(
+        payload={
+            "sub": str(user.id),
+            "aud": JWT_ACCESS_TOKEN_AUDIENCE,
+            "iat": now - timedelta(minutes=2),
+            "nbf": now - timedelta(minutes=2),
+            "exp": now - timedelta(minutes=1),
+            "jti": "expired-context-jti",
+            "org": "acme",
+        },
+    )
+    denylist_store = _RecordingDenylistStore()
+    denylist_store.denied.add("denied-context-jti")
+    denied_strategy = JWTStrategy[ExampleUser, UUID](
+        secret=DEFAULT_SECRET,
+        subject_decoder=UUID,
+        denylist_store=denylist_store,
+        session_fingerprint_getter=lambda _: None,
+    )
+    denied_token = _make_token(
+        payload={
+            "sub": str(user.id),
+            "aud": JWT_ACCESS_TOKEN_AUDIENCE,
+            "iat": now,
+            "nbf": now,
+            "exp": now + timedelta(minutes=5),
+            "jti": "denied-context-jti",
+            "org": "acme",
+        },
+    )
+    original_user = ExampleUser(id=user.id, email=user.email, hashed_password="original-hash")
+    fingerprint_strategy = JWTStrategy[ExampleUser, UUID](
+        secret=DEFAULT_SECRET,
+        subject_decoder=UUID,
+        allow_inmemory_denylist=True,
+    )
+    fingerprint_token = await fingerprint_strategy.write_token(original_user)
+    user_manager = ExampleUserManager(user)
+
+    assert await expired_strategy.read_token_with_context(expired_token, user_manager) is None
+    assert await denied_strategy.read_token_with_context(denied_token, user_manager) is None
+    assert await fingerprint_strategy.read_token_with_context(fingerprint_token, user_manager) is None
 
 
 async def test_jwt_strategy_write_token_includes_issuer_and_fingerprint_claims() -> None:

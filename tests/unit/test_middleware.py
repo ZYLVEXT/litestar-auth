@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import logging
+from dataclasses import dataclass
 from functools import partial
 from typing import TYPE_CHECKING, Any, Self, cast
 from unittest.mock import AsyncMock, MagicMock, Mock
@@ -15,6 +16,13 @@ from litestar.connection import ASGIConnection
 from litestar.datastructures.state import State
 from litestar.exceptions import ClientException, PermissionDeniedException
 
+from litestar_auth._current_organization import (
+    CURRENT_ORGANIZATION_CONTEXT_SENTINEL,
+    CurrentOrganizationContext,
+    clear_scope_current_organization_context,
+    read_scope_current_organization_context,
+    set_scope_current_organization_context,
+)
 from litestar_auth._permissions import (
     PERMISSION_RESOLVER_SENTINEL,
     StaticRolePermissionResolver,
@@ -22,6 +30,7 @@ from litestar_auth._permissions import (
 )
 from litestar_auth._plugin.scoped_session import get_or_create_scoped_session
 from litestar_auth._superuser_role import SUPERUSER_ROLE_NAME_SENTINEL
+from litestar_auth._tenant_resolution import ClaimTenantResolver
 from litestar_auth.authentication.middleware import (
     _DEFAULT_API_KEY_SIGNED_BODY_MAX_MESSAGES,
     LitestarAuthMiddleware,
@@ -38,6 +47,7 @@ from litestar_auth.authentication.strategy.api_key import (
     ApiKeyStrategy,
     api_key_failure_reason_to_error_code,
 )
+from litestar_auth.authentication.strategy.jwt import JWTContext
 from litestar_auth.authentication.transport._api_key_signing import (
     API_KEY_SIGNED_BODY_SCOPE_KEY,
     build_canonical_request,
@@ -51,6 +61,8 @@ if TYPE_CHECKING:
     from types import TracebackType
 
     from litestar.types import HTTPReceiveMessage, HTTPScope, HTTPSendMessage, Receive, Scope, Send
+
+    from litestar_auth.db import MembershipData, OrganizationData
 
 pytestmark = pytest.mark.unit
 HTTP_REQUEST_ENTITY_TOO_LARGE = 413
@@ -123,6 +135,186 @@ class ResolvingUserManager:
         if user_id == self.user.id:
             return self.user
         return None
+
+
+@dataclass(frozen=True, slots=True)
+class ExampleOrganization:
+    """Organization row used by current-organization middleware tests."""
+
+    id: UUID
+    slug: str
+
+
+@dataclass(frozen=True, slots=True)
+class ExampleOrganizationMembership:
+    """Organization-membership row used by current-organization middleware tests."""
+
+    organization_id: UUID
+    user_id: UUID
+    roles: list[str]
+
+
+class RecordingOrganizationStore:
+    """Minimal organization store that records middleware lookup calls."""
+
+    def __init__(
+        self,
+        *,
+        organization: object | None,
+        membership: ExampleOrganizationMembership | None,
+    ) -> None:
+        """Store lookup results for one request."""
+        self.organization = organization
+        self.membership = membership
+        self.slug_calls: list[str] = []
+        self.membership_calls: list[tuple[UUID, UUID]] = []
+
+    async def get_organization_by_slug(self, slug: str) -> object | None:
+        """Return the configured organization and record the slug lookup."""
+        self.slug_calls.append(slug)
+        await asyncio.sleep(0)
+        return self.organization
+
+    async def create_organization(self, data: OrganizationData) -> object:
+        """Persist a test organization object.
+
+        Returns:
+            The stored organization object.
+        """
+        self.organization = data
+        return self.organization
+
+    async def get_organization(self, organization_id: UUID) -> object | None:
+        """Return no organization by id for middleware-only tests."""
+        await asyncio.sleep(0)
+        return None
+
+    async def update_organization(self, organization_id: UUID, data: OrganizationData) -> object | None:
+        """Return no updated organization for middleware-only tests."""
+        await asyncio.sleep(0)
+        return None
+
+    async def delete_organization(self, organization_id: UUID) -> bool:
+        """Return no deleted organization for middleware-only tests.
+
+        Returns:
+            ``False`` because these tests never mutate organization state.
+        """
+        await asyncio.sleep(0)
+        return False
+
+    async def add_membership(self, data: MembershipData[UUID]) -> ExampleOrganizationMembership:
+        """Persist a test membership.
+
+        Returns:
+            The stored membership row.
+        """
+        self.membership = ExampleOrganizationMembership(
+            organization_id=data.organization_id,
+            user_id=data.user_id,
+            roles=data.roles,
+        )
+        return self.membership
+
+    async def get_membership(
+        self,
+        *,
+        organization_id: UUID,
+        user_id: UUID,
+    ) -> ExampleOrganizationMembership | None:
+        """Return the configured membership and record the exact lookup."""
+        self.membership_calls.append((organization_id, user_id))
+        await asyncio.sleep(0)
+        return self.membership
+
+    async def list_memberships(
+        self,
+        organization_id: UUID,
+        *,
+        offset: int,
+        limit: int,
+    ) -> tuple[list[ExampleOrganizationMembership], int]:
+        """Return the configured membership when it belongs to the organization."""
+        if self.membership is not None and self.membership.organization_id == organization_id:
+            memberships = [self.membership]
+            return memberships[offset : offset + limit], len(memberships)
+        return [], 0
+
+    async def remove_membership(self, *, organization_id: UUID, user_id: UUID) -> bool:
+        """Remove the configured membership when both identifiers match.
+
+        Returns:
+            Whether the configured membership was removed.
+        """
+        if (
+            self.membership is not None
+            and self.membership.organization_id == organization_id
+            and self.membership.user_id == user_id
+        ):
+            self.membership = None
+            return True
+        return False
+
+    async def remove_membership_preserving_privileged_member(
+        self,
+        *,
+        organization_id: UUID,
+        user_id: UUID,
+        privileged_roles: frozenset[str],
+    ) -> bool:
+        """Remove the configured membership for protocol coverage in middleware tests.
+
+        Returns:
+            Whether the configured membership was removed.
+        """
+        return await self.remove_membership(organization_id=organization_id, user_id=user_id)
+
+    async def set_membership_roles(
+        self,
+        *,
+        organization_id: UUID,
+        user_id: UUID,
+        roles: list[str],
+    ) -> ExampleOrganizationMembership | None:
+        """Replace the configured membership roles when both identifiers match.
+
+        Returns:
+            Updated membership when present, otherwise ``None``.
+        """
+        if (
+            self.membership is None
+            or self.membership.organization_id != organization_id
+            or self.membership.user_id != user_id
+        ):
+            return None
+        self.membership = ExampleOrganizationMembership(organization_id=organization_id, user_id=user_id, roles=roles)
+        return self.membership
+
+    async def set_membership_roles_preserving_privileged_member(
+        self,
+        *,
+        organization_id: UUID,
+        user_id: UUID,
+        roles: list[str],
+        privileged_roles: frozenset[str],
+    ) -> ExampleOrganizationMembership | None:
+        """Replace membership roles for protocol coverage in middleware tests.
+
+        Returns:
+            Updated membership when present, otherwise ``None``.
+        """
+        return await self.set_membership_roles(organization_id=organization_id, user_id=user_id, roles=roles)
+
+    async def list_organizations_for_user(
+        self,
+        user_id: UUID,
+        *,
+        offset: int,
+        limit: int,
+    ) -> tuple[list[object], int]:
+        """Return no organizations for middleware-only tests."""
+        await asyncio.sleep(0)
+        return [], 0
 
 
 class DummyRouteHandler:
@@ -329,6 +521,205 @@ async def test_authenticate_request_reuses_scoped_session_and_returns_resolved_u
     authenticator.authenticate.assert_awaited_once()
 
 
+async def test_authenticate_request_publishes_verified_current_organization_context() -> None:
+    """Authenticated members receive a verified current-organization request context."""
+    scope = _build_scope()
+    session = DummySession()
+    user = ExampleUser(id=uuid4())
+    organization = ExampleOrganization(id=uuid4(), slug="acme")
+    membership = ExampleOrganizationMembership(organization_id=organization.id, user_id=user.id, roles=["owner"])
+    store = RecordingOrganizationStore(organization=organization, membership=membership)
+    tenant_resolver = Mock(return_value="acme")
+    store_factory = Mock(return_value=store)
+    authenticator = Mock()
+    authenticator.authenticate = AsyncMock(return_value=(user, "bearer-jwt"))
+    middleware = LitestarAuthMiddleware[ExampleUser, UUID](
+        app=_app,
+        get_request_session=partial(
+            get_or_create_scoped_session,
+            session_maker=cast("Any", DummySessionMaker(session)),
+        ),
+        authenticator_factory=Mock(return_value=authenticator),
+        organization_store_factory=store_factory,
+        tenant_resolver=tenant_resolver,
+    )
+
+    result = await middleware.authenticate_request(_build_connection(scope))
+
+    context = read_scope_current_organization_context(_build_connection(scope))
+    assert result.user == user
+    assert context is not None
+    assert context.organization is organization
+    assert context.membership is membership
+    assert store.slug_calls == ["acme"]
+    assert store.membership_calls == [(organization.id, user.id)]
+    store_factory.assert_called_once_with(session)
+    tenant_resolver.assert_called_once()
+
+
+async def test_authenticate_request_publishes_claim_resolved_current_organization_context() -> None:
+    """Claim-based tenant resolution can read the freshly authenticated JWT context."""
+    scope = _build_scope()
+    session = DummySession()
+    user = ExampleUser(id=uuid4())
+    organization = ExampleOrganization(id=uuid4(), slug="acme")
+    membership = ExampleOrganizationMembership(organization_id=organization.id, user_id=user.id, roles=["owner"])
+    store = RecordingOrganizationStore(organization=organization, membership=membership)
+    store_factory = Mock(return_value=store)
+    authenticator = Mock()
+    authenticator.authenticate = AsyncMock(return_value=(user, JWTContext(organization=" Acme ")))
+    middleware = LitestarAuthMiddleware[ExampleUser, UUID](
+        app=_app,
+        get_request_session=partial(
+            get_or_create_scoped_session,
+            session_maker=cast("Any", DummySessionMaker(session)),
+        ),
+        authenticator_factory=Mock(return_value=authenticator),
+        organization_store_factory=store_factory,
+        tenant_resolver=ClaimTenantResolver(),
+    )
+
+    result = await middleware.authenticate_request(_build_connection(scope))
+
+    context = read_scope_current_organization_context(_build_connection(scope))
+    assert result.user == user
+    assert result.auth == JWTContext(organization=" Acme ")
+    assert scope["auth"] == JWTContext(organization=" Acme ")
+    assert context is not None
+    assert context.organization is organization
+    assert context.membership is membership
+    assert store.slug_calls == ["acme"]
+    assert store.membership_calls == [(organization.id, user.id)]
+    store_factory.assert_called_once_with(session)
+
+
+@pytest.mark.parametrize(
+    ("resolved_slug", "organization", "membership"),
+    [
+        pytest.param(None, None, None, id="no-slug"),
+        pytest.param("missing", None, None, id="unknown-organization"),
+        pytest.param("acme", ExampleOrganization(id=uuid4(), slug="acme"), None, id="non-member"),
+    ],
+)
+async def test_authenticate_request_publishes_no_current_organization_context_for_unverified_tenants(
+    resolved_slug: str | None,
+    organization: ExampleOrganization | None,
+    membership: ExampleOrganizationMembership | None,
+) -> None:
+    """Unknown tenants and non-members fail closed without request organization context."""
+    scope = _build_scope()
+    user = ExampleUser(id=uuid4())
+    store = RecordingOrganizationStore(organization=organization, membership=membership)
+    tenant_resolver = Mock(return_value=resolved_slug)
+    store_factory = Mock(return_value=store)
+    authenticator = Mock()
+    authenticator.authenticate = AsyncMock(return_value=(user, "bearer-jwt"))
+    middleware = LitestarAuthMiddleware[ExampleUser, UUID](
+        app=_app,
+        get_request_session=partial(
+            get_or_create_scoped_session,
+            session_maker=cast("Any", DummySessionMaker(DummySession())),
+        ),
+        authenticator_factory=Mock(return_value=authenticator),
+        organization_store_factory=store_factory,
+        tenant_resolver=tenant_resolver,
+    )
+
+    await middleware.authenticate_request(_build_connection(scope))
+
+    assert read_scope_current_organization_context(_build_connection(scope)) is None
+    tenant_resolver.assert_called_once()
+    if resolved_slug is None:
+        store_factory.assert_not_called()
+        assert store.slug_calls == []
+    else:
+        store_factory.assert_called_once()
+        assert store.slug_calls == [resolved_slug]
+    if organization is None:
+        assert store.membership_calls == []
+    else:
+        assert store.membership_calls == [(organization.id, user.id)]
+
+
+async def test_authenticate_request_publishes_no_current_organization_context_without_row_ids() -> None:
+    """Organization rows without an id cannot become verified request context."""
+    scope = _build_scope()
+    user = ExampleUser(id=uuid4())
+    store = RecordingOrganizationStore(organization=object(), membership=None)
+    tenant_resolver = Mock(return_value="acme")
+    store_factory = Mock(return_value=store)
+    authenticator = Mock()
+    authenticator.authenticate = AsyncMock(return_value=(user, "bearer-jwt"))
+    middleware = LitestarAuthMiddleware[ExampleUser, UUID](
+        app=_app,
+        get_request_session=partial(
+            get_or_create_scoped_session,
+            session_maker=cast("Any", DummySessionMaker(DummySession())),
+        ),
+        authenticator_factory=Mock(return_value=authenticator),
+        organization_store_factory=store_factory,
+        tenant_resolver=tenant_resolver,
+    )
+
+    await middleware.authenticate_request(_build_connection(scope))
+
+    assert read_scope_current_organization_context(_build_connection(scope)) is None
+    assert store.slug_calls == ["acme"]
+    assert store.membership_calls == []
+
+
+async def test_authenticate_request_skips_current_organization_for_anonymous_requests() -> None:
+    """Anonymous requests never receive a current-organization context."""
+    scope = _build_scope()
+    store = RecordingOrganizationStore(organization=None, membership=None)
+    tenant_resolver = Mock(return_value="acme")
+    store_factory = Mock(return_value=store)
+    authenticator = Mock()
+    authenticator.authenticate = AsyncMock(return_value=(None, None))
+    middleware = LitestarAuthMiddleware[ExampleUser, UUID](
+        app=_app,
+        get_request_session=partial(
+            get_or_create_scoped_session,
+            session_maker=cast("Any", DummySessionMaker(DummySession())),
+        ),
+        authenticator_factory=Mock(return_value=authenticator),
+        organization_store_factory=store_factory,
+        tenant_resolver=tenant_resolver,
+    )
+
+    await middleware.authenticate_request(_build_connection(scope))
+
+    assert read_scope_current_organization_context(_build_connection(scope)) is None
+    tenant_resolver.assert_not_called()
+    store_factory.assert_not_called()
+
+
+async def test_authenticate_request_skips_current_organization_when_feature_disabled() -> None:
+    """Middleware performs no organization work when tenant resolution is not configured."""
+    scope = _build_scope()
+    user = ExampleUser(id=uuid4())
+    tenant_resolver = Mock(return_value="acme")
+    store_factory = Mock()
+    authenticator = Mock()
+    authenticator.authenticate = AsyncMock(return_value=(user, "bearer-jwt"))
+    middleware = LitestarAuthMiddleware[ExampleUser, UUID](
+        app=_app,
+        get_request_session=partial(
+            get_or_create_scoped_session,
+            session_maker=cast("Any", DummySessionMaker(DummySession())),
+        ),
+        authenticator_factory=Mock(return_value=authenticator),
+        organization_store_factory=None,
+        tenant_resolver=tenant_resolver,
+    )
+
+    await middleware.authenticate_request(_build_connection(scope))
+
+    assert read_scope_current_organization_context(_build_connection(scope)) is None
+    tenant_resolver.assert_not_called()
+    store_factory.assert_not_called()
+
+
 async def test_successful_api_key_auth_without_usage_recorder_returns_context() -> None:
     """API-key auth succeeds even when a custom manager has no usage recorder hook."""
     scope = _build_scope()
@@ -353,13 +744,34 @@ async def test_successful_api_key_auth_without_usage_recorder_returns_context() 
         api_key_use_rate_limit=api_key_use_rate_limit,
     )
 
-    result = await middleware.authenticate_request(_build_connection(scope))
+    await middleware(scope, cast("Receive", _receive), cast("Send", _send))
 
-    assert result.user == user
-    assert result.auth == auth_context
+    assert scope["user"] == user
     assert scope["auth"] == auth_context
     api_key_use_rate_limit.before_request.assert_not_called()
     api_key_use_rate_limit.increment.assert_not_called()
+
+
+async def test_successful_jwt_auth_returns_context() -> None:
+    """JWT auth contexts are stored on the request scope like other contextual strategies."""
+    scope = _build_scope()
+    user = ExampleUser(id=uuid4())
+    auth_context = JWTContext(organization="acme")
+    authenticator = Mock()
+    authenticator.authenticate = AsyncMock(return_value=(user, auth_context))
+    middleware = LitestarAuthMiddleware[ExampleUser, UUID](
+        app=_app,
+        get_request_session=partial(
+            get_or_create_scoped_session,
+            session_maker=cast("Any", DummySessionMaker(DummySession())),
+        ),
+        authenticator_factory=Mock(return_value=authenticator),
+    )
+
+    await middleware(scope, cast("Receive", _receive), cast("Send", _send))
+
+    assert scope["user"] == user
+    assert scope["auth"] == auth_context
 
 
 async def test_middleware_leaves_unauthenticated_requests_as_none() -> None:
@@ -427,6 +839,36 @@ def test_read_scope_permission_resolver_rejects_invalid_scope_value() -> None:
 
     with pytest.raises(PermissionDeniedException, match="permission resolver is invalid"):
         read_scope_permission_resolver(_build_connection(scope))
+
+
+def test_current_organization_scope_helpers_read_verified_context_or_none() -> None:
+    """Current-organization helper reads only verified request-scope context objects."""
+    scope = _build_scope()
+    organization = ExampleOrganization(id=uuid4(), slug="acme")
+    membership = ExampleOrganizationMembership(organization_id=organization.id, user_id=uuid4(), roles=["owner"])
+    context = CurrentOrganizationContext(organization=organization, membership=membership)
+
+    assert read_scope_current_organization_context(_build_connection(scope)) is None
+
+    set_scope_current_organization_context(scope, context)
+    assert read_scope_current_organization_context(_build_connection(scope)) is context
+
+    scope["state"][CURRENT_ORGANIZATION_CONTEXT_SENTINEL] = object()
+    assert read_scope_current_organization_context(_build_connection(scope)) is None
+
+    clear_scope_current_organization_context(scope)
+    assert read_scope_current_organization_context(_build_connection(scope)) is None
+
+
+def test_current_organization_scope_helpers_ignore_non_mapping_state() -> None:
+    """Malformed scope state is treated as absent organization context."""
+    scope = _build_scope()
+    scope["state"] = cast("Any", object())
+    connection = cast("ASGIConnection[Any, Any, Any, Any]", MagicMock(scope=scope))
+
+    clear_scope_current_organization_context(scope)
+
+    assert read_scope_current_organization_context(connection) is None
 
 
 async def test_middleware_buffers_body_for_api_key_backend_when_any_authorization_header_is_signed() -> None:

@@ -20,17 +20,23 @@ type ApiKeyScopeField = schema_fields.ApiKeyScopeField
 type ApiKeyIdField = schema_fields.ApiKeyIdField
 
 
-class LoginCredentials(msgspec.Struct):
+class LoginCredentials(msgspec.Struct, forbid_unknown_fields=True):
     """Login payload accepted by the auth controller."""
 
     identifier: schema_fields.LoginIdentifierField
     password: schema_fields.PasswordField
 
 
-class RefreshTokenRequest(msgspec.Struct):
+class RefreshTokenRequest(msgspec.Struct, forbid_unknown_fields=True):
     """Refresh payload accepted by the auth controller."""
 
     refresh_token: schema_fields.RefreshTokenField
+
+
+class SwitchOrganizationRequest(msgspec.Struct, forbid_unknown_fields=True):
+    """Payload used to activate an organization for a new access token."""
+
+    organization_slug: schema_fields.OrganizationSlugField
 
 
 class RefreshSessionRead(msgspec.Struct):
@@ -111,26 +117,26 @@ class ApiKeyUpdateRequest(msgspec.Struct, omit_defaults=True, forbid_unknown_fie
     scopes: list[ApiKeyScopeField] | None = None
 
 
-class ForgotPassword(msgspec.Struct):
+class ForgotPassword(msgspec.Struct, forbid_unknown_fields=True):
     """Payload used to request a reset-password token."""
 
     email: schema_fields.EmailField
 
 
-class ResetPassword(msgspec.Struct):
+class ResetPassword(msgspec.Struct, forbid_unknown_fields=True):
     """Payload used to reset a password with a previously issued token."""
 
     token: schema_fields.LongLivedTokenField
     password: schema_fields.PasswordField
 
 
-class VerifyToken(msgspec.Struct):
+class VerifyToken(msgspec.Struct, forbid_unknown_fields=True):
     """Payload used to complete an email-verification flow."""
 
     token: schema_fields.LongLivedTokenField
 
 
-class RequestVerifyToken(msgspec.Struct):
+class RequestVerifyToken(msgspec.Struct, forbid_unknown_fields=True):
     """Payload used to request a fresh email-verification token."""
 
     email: schema_fields.EmailField
@@ -148,13 +154,13 @@ class TotpEnableResponse(msgspec.Struct):
     enrollment_token: str
 
 
-class TotpEnableRequest(msgspec.Struct):
+class TotpEnableRequest(msgspec.Struct, forbid_unknown_fields=True):
     """Optional step-up payload for enabling 2FA."""
 
     password: schema_fields.PasswordField
 
 
-class TotpRegenerateRecoveryCodesRequest(msgspec.Struct):
+class TotpRegenerateRecoveryCodesRequest(msgspec.Struct, forbid_unknown_fields=True):
     """Step-up payload for rotating TOTP recovery codes.
 
     Required only when ``totp_enable_requires_password=True``. When that
@@ -175,7 +181,7 @@ class TotpRecoveryCodesResponse(msgspec.Struct):
     recovery_codes: tuple[str, ...]
 
 
-class TotpVerifyRequest(msgspec.Struct):
+class TotpVerifyRequest(msgspec.Struct, forbid_unknown_fields=True):
     """Payload for completing 2FA login verification.
 
     ``code`` accepts either a current TOTP code or an unused recovery code.
@@ -185,7 +191,7 @@ class TotpVerifyRequest(msgspec.Struct):
     code: schema_fields.TotpVerificationCodeField
 
 
-class TotpConfirmEnableRequest(msgspec.Struct):
+class TotpConfirmEnableRequest(msgspec.Struct, forbid_unknown_fields=True):
     """Payload for confirming TOTP enrollment (phase 2)."""
 
     enrollment_token: schema_fields.LongLivedTokenField
@@ -203,7 +209,7 @@ class TotpConfirmEnableResponse(msgspec.Struct):
     recovery_codes: tuple[str, ...]
 
 
-class TotpDisableRequest(msgspec.Struct):
+class TotpDisableRequest(msgspec.Struct, forbid_unknown_fields=True):
     """Payload for disabling 2FA.
 
     ``code`` accepts either a current TOTP code or an unused recovery code.
@@ -231,6 +237,7 @@ __all__ = (
     "ResetPassword",
     "SessionClientMetadataKey",
     "SessionClientMetadataValue",
+    "SwitchOrganizationRequest",
     "TotpConfirmEnableRequest",
     "TotpConfirmEnableResponse",
     "TotpDisableRequest",

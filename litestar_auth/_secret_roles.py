@@ -8,6 +8,7 @@ from litestar_auth.exceptions import ConfigurationError
 
 VERIFY_TOKEN_AUDIENCE = "litestar-auth:verify"
 RESET_PASSWORD_TOKEN_AUDIENCE = "litestar-auth:reset-password"
+ORGANIZATION_INVITATION_TOKEN_AUDIENCE = "litestar-auth:organization-invitation"
 JWT_ACCESS_TOKEN_AUDIENCE = "litestar-auth:access"
 TOTP_PENDING_AUDIENCE = "litestar-auth:2fa-pending"
 TOTP_ENROLL_AUDIENCE = "litestar-auth:2fa-enroll"
@@ -38,6 +39,11 @@ _RESET_PASSWORD_TOKEN_SECRET_ROLE = _SecretRole(
     setting_name="reset_password_token_secret",
     protected_surface="reset-password JWT signing and password fingerprints",
     audiences=(RESET_PASSWORD_TOKEN_AUDIENCE,),
+)
+_ORGANIZATION_INVITATION_TOKEN_SECRET_ROLE = _SecretRole(
+    setting_name="organization_invitation_token_secret",
+    protected_surface="organization-invitation JWT signing and token lookup HMAC",
+    audiences=(ORGANIZATION_INVITATION_TOKEN_AUDIENCE,),
 )
 _LOGIN_IDENTIFIER_TELEMETRY_SECRET_ROLE = _SecretRole(
     setting_name="login_identifier_telemetry_secret",
@@ -76,6 +82,7 @@ class SecretRoleValues:
 
     verification_token_secret: str | None
     reset_password_token_secret: str | None
+    organization_invitation_token_secret: str | None = None
     login_identifier_telemetry_secret: str | None = None
     totp_secret_key: str | None = None
     totp_pending_secret: str | None = None
@@ -89,6 +96,7 @@ class SecretRoleValues:
         return (
             (_VERIFICATION_TOKEN_SECRET_ROLE, self.verification_token_secret),
             (_RESET_PASSWORD_TOKEN_SECRET_ROLE, self.reset_password_token_secret),
+            (_ORGANIZATION_INVITATION_TOKEN_SECRET_ROLE, self.organization_invitation_token_secret),
             (_LOGIN_IDENTIFIER_TELEMETRY_SECRET_ROLE, self.login_identifier_telemetry_secret),
             (_TOTP_SECRET_KEY_ROLE, self.totp_secret_key),
             (_TOTP_PENDING_SECRET_ROLE, self.totp_pending_secret),
@@ -129,7 +137,8 @@ def validate_secret_roles_are_distinct(role_values: SecretRoleValues) -> None:
     role_descriptions = "; ".join(", ".join(role.render_usage() for role in roles) for roles in reused_roles)
     msg = (
         "Distinct secrets/keys are the supported production posture for "
-        "verification, reset-password, login telemetry, TOTP, OAuth flow-cookie, and API-key roles. "
+        "verification, reset-password, organization-invitation, login telemetry, TOTP, OAuth flow-cookie, "
+        "and API-key roles. "
         "Distinct JWT audiences "
         "and encrypted-cookie envelopes still prevent token cross-use, but reusing one configured value across "
         "roles increases blast radius if that secret leaks. "

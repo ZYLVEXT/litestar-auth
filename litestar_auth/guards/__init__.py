@@ -16,6 +16,11 @@ from litestar_auth.guards._guards import (
     is_superuser,
     is_verified,
 )
+from litestar_auth.guards._organization_guards import (
+    has_organization_permission,
+    has_organization_role,
+    requires_organization_membership,
+)
 from litestar_auth.guards._permission_guards import has_all_permissions, has_any_permission, has_permission
 
 __all__ = (
@@ -24,6 +29,8 @@ __all__ = (
     "has_any_permission",
     "has_any_role",
     "has_any_scope",
+    "has_organization_permission",
+    "has_organization_role",
     "has_permission",
     "has_scope",
     "is_active",
@@ -31,5 +38,6 @@ __all__ = (
     "is_superuser",
     "is_verified",
     "requires_api_key",
+    "requires_organization_membership",
     "requires_password_session",
 )

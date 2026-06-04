@@ -78,6 +78,7 @@ ExceptionResponseHook = _plugin_config.ExceptionResponseHook
 LitestarAuthConfig = _plugin_config.LitestarAuthConfig
 MiddlewareHook = _plugin_config.MiddlewareHook
 OAuthConfig = _plugin_config.OAuthConfig
+OrganizationConfig = _plugin_config.OrganizationConfig
 StartupBackendTemplate = _plugin_config.StartupBackendTemplate
 TotpConfig = _plugin_config.TotpConfig
 
@@ -131,9 +132,11 @@ class LitestarAuth[UP: UserProtocol[Any], ID](InitPlugin, CLIPlugin):
     @override
     def on_cli_init(self, cli: Group) -> None:
         """Register plugin-owned CLI commands without affecting app startup wiring."""
+        from litestar_auth._plugin.organization_cli import register_organizations_cli  # noqa: PLC0415
         from litestar_auth._plugin.role_cli import register_roles_cli  # noqa: PLC0415
 
         register_roles_cli(cli, self.config)
+        register_organizations_cli(cli, self.config)
 
     def _session_bound_backends(self, session: AsyncSession) -> list[AuthenticationBackend[UP, ID]]:
         """Bind all configured backends to the current request-local DB session.
@@ -280,6 +283,12 @@ class LitestarAuth[UP: UserProtocol[Any], ID](InitPlugin, CLIPlugin):
                 api_key_signed_body_max_messages=self.config.api_keys.signed_body_max_messages,
                 superuser_role_name=self.config.superuser_role_name,
                 permission_resolver=self.config.resolve_permission_resolver(),
+                organization_store_factory=(
+                    self.config.organization_config.store_factory if self.config.organization_config.enabled else None
+                ),
+                tenant_resolver=(
+                    self.config.organization_config.tenant_resolver if self.config.organization_config.enabled else None
+                ),
             ),
         )
         if self.config.middleware_hook is not None:
@@ -309,6 +318,7 @@ __all__ = (
     "LitestarAuthConfig",
     "OAuthConfig",
     "OAuthProviderConfig",
+    "OrganizationConfig",
     "StartupBackendTemplate",
     "TotpConfig",
     "bind_auth_session_to_alchemy",

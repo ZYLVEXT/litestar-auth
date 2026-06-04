@@ -39,6 +39,12 @@ import logging
 
 from litestar_auth._permissions import StaticRolePermissionResolver
 from litestar_auth._superuser_role import DEFAULT_SUPERUSER_ROLE_NAME
+from litestar_auth._tenant_resolution import (
+    ClaimTenantResolver,
+    HeaderTenantResolver,
+    SubdomainTenantResolver,
+    TenantResolver,
+)
 from litestar_auth.authentication import AuthenticationBackend, Authenticator
 from litestar_auth.authentication.transport import BearerTransport, CookieTransport, CookieTransportConfig
 from litestar_auth.exceptions import ErrorCode, LitestarAuthError
@@ -47,11 +53,14 @@ from litestar_auth.guards import (
     has_all_roles,
     has_any_permission,
     has_any_role,
+    has_organization_permission,
+    has_organization_role,
     has_permission,
     is_active,
     is_authenticated,
     is_superuser,
     is_verified,
+    requires_organization_membership,
 )
 from litestar_auth.manager import BaseUserManager, BaseUserManagerConfig, UserManagerSecurity
 from litestar_auth.plugin import (
@@ -62,6 +71,7 @@ from litestar_auth.plugin import (
     LitestarAuthConfig,
     OAuthConfig,
     OAuthProviderConfig,
+    OrganizationConfig,
     TotpConfig,
 )
 from litestar_auth.types import (
@@ -85,20 +95,25 @@ __all__ = (
     "BaseUserManager",
     "BaseUserManagerConfig",
     "BearerTransport",
+    "ClaimTenantResolver",
     "CookieTransport",
     "CookieTransportConfig",
     "DatabaseTokenAuthConfig",
     "ErrorCode",
     "FernetKeyringConfig",
     "GuardedUserProtocol",
+    "HeaderTenantResolver",
     "LitestarAuth",
     "LitestarAuthConfig",
     "LitestarAuthError",
     "OAuthConfig",
     "OAuthProviderConfig",
+    "OrganizationConfig",
     "PermissionResolver",
     "RoleCapableUserProtocol",
     "StaticRolePermissionResolver",
+    "SubdomainTenantResolver",
+    "TenantResolver",
     "TotpConfig",
     "TotpUserProtocol",
     "UserManagerSecurity",
@@ -109,9 +124,12 @@ __all__ = (
     "has_all_roles",
     "has_any_permission",
     "has_any_role",
+    "has_organization_permission",
+    "has_organization_role",
     "has_permission",
     "is_active",
     "is_authenticated",
     "is_superuser",
     "is_verified",
+    "requires_organization_membership",
 )

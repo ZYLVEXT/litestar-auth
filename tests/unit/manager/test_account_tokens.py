@@ -2,18 +2,27 @@
 
 from __future__ import annotations
 
+import hmac
 import logging
-from dataclasses import replace
-from datetime import timedelta
+from dataclasses import dataclass, replace
+from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock, patch
+from uuid import uuid4
 
 import jwt
 import pytest
 
 import litestar_auth._manager.account_tokens as account_tokens_module
 from litestar_auth._jwt_headers import EXPECTED_JWT_TYPE
-from litestar_auth.config import JWT_TIME_CLAIM_LEEWAY_SECONDS
-from litestar_auth.exceptions import InvalidResetPasswordTokenError, InvalidVerifyTokenError, UserNotExistsError
+from litestar_auth.config import JWT_TIME_CLAIM_LEEWAY_SECONDS, ORGANIZATION_INVITATION_TOKEN_AUDIENCE
+from litestar_auth.exceptions import (
+    ConfigurationError,
+    ExpiredOrganizationInvitationTokenError,
+    InvalidOrganizationInvitationTokenError,
+    InvalidResetPasswordTokenError,
+    InvalidVerifyTokenError,
+    UserNotExistsError,
+)
 from litestar_auth.manager import RESET_PASSWORD_TOKEN_AUDIENCE, VERIFY_TOKEN_AUDIENCE
 from litestar_auth.manager import logger as manager_logger
 from litestar_auth.password import PasswordHelper
@@ -22,6 +31,27 @@ from tests.unit.test_manager import TrackingUserManager, _build_user
 pytestmark = pytest.mark.unit
 
 EXPECTED_SHA256_HEX_LENGTH = 64
+EXPECTED_SHA256_BYTES_LENGTH = 32
+
+
+@dataclass(slots=True)
+class _InvitationRow:
+    id: object
+    token_hash: bytes
+    status: str
+    expires_at: datetime
+
+
+class _InvitationStore:
+    def __init__(self, invitation: _InvitationRow | None) -> None:
+        self.invitation = invitation
+        self.requested_hashes: list[bytes] = []
+
+    async def get_invitation_by_token_hash(self, token_hash: bytes) -> _InvitationRow | None:
+        self.requested_hashes.append(token_hash)
+        if self.invitation is None or not hmac.compare_digest(self.invitation.token_hash, token_hash):
+            return None
+        return self.invitation
 
 
 async def test_forgot_password_nonexistent_user_uses_dummy_hash_and_calls_hook_with_none() -> None:
@@ -107,6 +137,168 @@ def test_write_reset_password_token_decodes_with_current_password_fingerprint() 
     )
     assert payload["sub"] == str(user.id)
     assert payload["password_fingerprint"] == manager.tokens.password_fingerprint(user.hashed_password)
+
+
+async def test_organization_invitation_token_round_trip_validates_pending_row() -> None:
+    """Invitation token validation checks both the JWT and persisted row state."""
+    user_db = AsyncMock()
+    password_helper = PasswordHelper()
+    manager = TrackingUserManager(user_db, password_helper)
+    issued_at = datetime.now(tz=UTC)
+    token = manager.tokens.write_organization_invitation_token(issued_at=issued_at)
+    invitation = _InvitationRow(
+        id=uuid4(),
+        token_hash=token.token_hash,
+        status="pending",
+        expires_at=token.expires_at,
+    )
+    store = _InvitationStore(invitation)
+
+    result = await manager.tokens.validate_organization_invitation_token(
+        token.token,
+        organization_store=store,
+        now=issued_at + timedelta(minutes=1),
+    )
+
+    assert result is invitation
+    assert store.requested_hashes == [token.token_hash]
+    assert len(token.token_hash) == EXPECTED_SHA256_BYTES_LENGTH
+    invitation_secret = manager.organization_invitation_token_secret
+    assert invitation_secret is not None
+    payload = jwt.decode(
+        token.token,
+        invitation_secret.get_secret_value(),
+        algorithms=["HS256"],
+        audience=ORGANIZATION_INVITATION_TOKEN_AUDIENCE,
+    )
+    assert isinstance(payload["sub"], str)
+    assert payload["aud"] == ORGANIZATION_INVITATION_TOKEN_AUDIENCE
+    assert payload["exp"] == int(token.expires_at.timestamp())
+
+
+async def test_organization_invitation_token_rejects_bad_signature_and_wrong_audience() -> None:
+    """Invitation validation rejects signed tokens that do not match the invitation role."""
+    user_db = AsyncMock()
+    password_helper = PasswordHelper()
+    manager = TrackingUserManager(user_db, password_helper)
+    valid = manager.tokens.write_organization_invitation_token()
+    invitation_secret = manager.organization_invitation_token_secret
+    assert invitation_secret is not None
+    bad_signature = f"{valid.token[:-1]}x"
+    wrong_audience = account_tokens_module.AccountTokenSecurityService.write_token_subject(
+        subject="invitation-reference",
+        secret=invitation_secret.get_secret_value(),
+        audience=VERIFY_TOKEN_AUDIENCE,
+        lifetime=manager.organization_invitation_token_lifetime,
+    )
+    store = _InvitationStore(None)
+
+    with pytest.raises(InvalidOrganizationInvitationTokenError):
+        await manager.tokens.validate_organization_invitation_token(bad_signature, organization_store=store)
+    with pytest.raises(InvalidOrganizationInvitationTokenError):
+        await manager.tokens.validate_organization_invitation_token(wrong_audience, organization_store=store)
+
+
+async def test_organization_invitation_token_rejects_empty_subject() -> None:
+    """Invitation tokens must carry a non-empty opaque subject reference."""
+    user_db = AsyncMock()
+    password_helper = PasswordHelper()
+    manager = TrackingUserManager(user_db, password_helper)
+    invitation_secret = manager.organization_invitation_token_secret
+    assert invitation_secret is not None
+    token = account_tokens_module.AccountTokenSecurityService.write_token_subject(
+        subject="",
+        secret=invitation_secret.get_secret_value(),
+        audience=ORGANIZATION_INVITATION_TOKEN_AUDIENCE,
+        lifetime=manager.organization_invitation_token_lifetime,
+    )
+    store = _InvitationStore(None)
+
+    with pytest.raises(InvalidOrganizationInvitationTokenError):
+        await manager.tokens.validate_organization_invitation_token(token, organization_store=store)
+
+    assert store.requested_hashes == []
+
+
+async def test_organization_invitation_token_rejects_missing_row() -> None:
+    """Signed invitation tokens are invalid when no stored pending row matches their digest."""
+    user_db = AsyncMock()
+    password_helper = PasswordHelper()
+    manager = TrackingUserManager(user_db, password_helper)
+    token = manager.tokens.write_organization_invitation_token()
+    store = _InvitationStore(None)
+
+    with pytest.raises(InvalidOrganizationInvitationTokenError):
+        await manager.tokens.validate_organization_invitation_token(token.token, organization_store=store)
+
+    assert store.requested_hashes == [token.token_hash]
+
+
+async def test_organization_invitation_token_rejects_expired_signed_token() -> None:
+    """Expired signed invitation tokens fail before row lookup."""
+    user_db = AsyncMock()
+    password_helper = PasswordHelper()
+    manager = TrackingUserManager(user_db, password_helper)
+    manager.organization_invitation_token_lifetime = timedelta(seconds=-(JWT_TIME_CLAIM_LEEWAY_SECONDS + 1))
+    token = manager.tokens.write_organization_invitation_token()
+    store = _InvitationStore(None)
+
+    with pytest.raises(ExpiredOrganizationInvitationTokenError):
+        await manager.tokens.validate_organization_invitation_token(token.token, organization_store=store)
+
+    assert store.requested_hashes == []
+
+
+@pytest.mark.parametrize("status", ["consumed", "revoked"])
+async def test_organization_invitation_token_rejects_non_pending_rows(status: str) -> None:
+    """Signed tokens for consumed or revoked invitations are rejected."""
+    user_db = AsyncMock()
+    password_helper = PasswordHelper()
+    manager = TrackingUserManager(user_db, password_helper)
+    token = manager.tokens.write_organization_invitation_token()
+    invitation = _InvitationRow(
+        id=uuid4(),
+        token_hash=token.token_hash,
+        status=status,
+        expires_at=token.expires_at,
+    )
+
+    with pytest.raises(InvalidOrganizationInvitationTokenError):
+        await manager.tokens.validate_organization_invitation_token(
+            token.token,
+            organization_store=_InvitationStore(invitation),
+        )
+
+
+async def test_organization_invitation_token_rejects_expired_row() -> None:
+    """Signed tokens do not override the stored invitation expiry."""
+    user_db = AsyncMock()
+    password_helper = PasswordHelper()
+    manager = TrackingUserManager(user_db, password_helper)
+    token = manager.tokens.write_organization_invitation_token()
+    invitation = _InvitationRow(
+        id=uuid4(),
+        token_hash=token.token_hash,
+        status="pending",
+        expires_at=datetime.now(tz=UTC) - timedelta(seconds=1),
+    )
+
+    with pytest.raises(ExpiredOrganizationInvitationTokenError):
+        await manager.tokens.validate_organization_invitation_token(
+            token.token,
+            organization_store=_InvitationStore(invitation),
+        )
+
+
+def test_organization_invitation_token_requires_configured_secret() -> None:
+    """Invitation-token helpers fail explicitly when the dedicated secret is absent."""
+    user_db = AsyncMock()
+    password_helper = PasswordHelper()
+    manager = TrackingUserManager(user_db, password_helper)
+    manager._account_token_secrets = replace(manager.account_token_secrets, organization_invitation_token_secret=None)
+
+    with pytest.raises(ConfigurationError, match="organization_invitation_token_secret"):
+        manager.tokens.write_organization_invitation_token()
 
 
 def test_write_token_subject_includes_expected_typ_header() -> None:
