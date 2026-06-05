@@ -65,7 +65,7 @@ dev = [
 docs = [
     "mkdocstrings[python]>=1.0.4",
     "pymdown-extensions>=10.21.3",
-    "zensical>=0.0.43",
+    "zensical>=0.0.44",
 ]
 
 [tool.ty.environment]

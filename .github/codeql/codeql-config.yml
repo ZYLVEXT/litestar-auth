@@ -6,6 +6,9 @@ query-filters:
   # annotations and PEP 695 generic bases used throughout the library.
   - exclude:
       id: py/unused-import
+  # PEP 695 generic class syntax (Python 3.12+) can trigger CodeQL extraction
+  # "Syntax error" diagnostics even though the code is valid; CI pins Python 3.12
+  # via setup-python before init so autobuild sees the project interpreter.
 
 paths:
   - litestar_auth
