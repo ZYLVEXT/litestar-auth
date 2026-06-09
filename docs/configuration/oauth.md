@@ -18,6 +18,16 @@ Use this page for `OAuthConfig`, OAuth provider inventory, redirect validation, 
 | `oauth_token_encryption_key` | `None` | One-key token-at-rest shortcut. Mutually exclusive with `oauth_token_encryption_keyring`; encoded under the `default` key id. |
 | `oauth_flow_cookie_secret` | `None` | **Required** for any declared provider inventory — HKDF-derived into the Fernet key that encrypts and authenticates the transient OAuth state + PKCE verifier flow cookie. Keep it distinct from token, CSRF, TOTP, verification, and reset secrets. |
 
+When `oauth_providers` is configured, `LitestarAuthConfig.resolve_extensions()`
+normalizes the provider inventory into an internal OAuth auth extension. That
+extension mounts the plugin-owned login and associate controllers during app
+initialization and runs the same fail-closed OAuth startup checks as the plugin:
+configured providers require token-at-rest encryption, and production
+plugin-owned redirects must use a clean public HTTPS base unless `AppConfig`
+debug mode or `unsafe_testing=True` is explicitly enabled. The extension is
+internal implementation detail, so application code should continue to configure
+OAuth through `OAuthConfig` or mount manual controllers directly.
+
 Provider names are security-sensitive because they are embedded in route paths,
 OAuth state cookie names, and callback URLs. Use stable slugs only: 1-64 ASCII
 letters, digits, underscores, or hyphens, starting and ending with an

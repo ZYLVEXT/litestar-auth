@@ -55,6 +55,7 @@ RedisTotpEnrollmentStore = redis_module.RedisTotpEnrollmentStore
 RedisUsedTotpCodeStore = redis_module.RedisUsedTotpCodeStore
 redis_all = redis_module.__all__
 RoleAdminControllerConfig = role_admin_module.RoleAdminControllerConfig
+RoleAdminExtension = role_admin_module.RoleAdminExtension
 create_role_admin_controller = role_admin_module.create_role_admin_controller
 role_admin_all = role_admin_module.__all__
 AuthRateLimitEndpointGroup = ratelimit_module.AuthRateLimitEndpointGroup
@@ -136,6 +137,7 @@ def test_contrib_packages_reexport_public_symbols() -> None:
     assert RedisTokenStrategyConfig is BaseRedisTokenStrategyConfig
     assert RedisTotpEnrollmentStore is BaseRedisTotpEnrollmentStore
     assert RedisUsedTotpCodeStore is BaseRedisUsedTotpCodeStore
+    assert RoleAdminExtension is role_admin_module.RoleAdminExtension
 
 
 def test_contrib_packages_define_all() -> None:
@@ -152,7 +154,7 @@ def test_contrib_packages_define_all() -> None:
         "RedisTotpEnrollmentStore",
         "RedisUsedTotpCodeStore",
     )
-    assert role_admin_all == ("RoleAdminControllerConfig", "create_role_admin_controller")
+    assert role_admin_all == ("RoleAdminControllerConfig", "RoleAdminExtension", "create_role_admin_controller")
 
 
 def test_contrib_role_admin_factory_builds_controller_from_explicit_models() -> None:

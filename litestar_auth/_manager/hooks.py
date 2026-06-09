@@ -32,7 +32,87 @@ class ManagerHookEvent:
     args: tuple[object, ...]
 
 
+_TOKEN_ARGUMENT_INDEX_BY_EVENT: dict[ManagerHookName, int] = {
+    "after_register": -1,
+    "after_forgot_password": -1,
+    "after_request_verify_token": -1,
+    "after_organization_invitation": -1,
+}
+_AFTER_UPDATE_MIN_ARG_COUNT = 2
+_UPDATE_CREDENTIAL_KEYS = frozenset(
+    {
+        "current_password",
+        "hashed_password",
+        "new_password",
+        "password",
+    },
+)
+
+
+@dataclass(frozen=True, slots=True)
+class ExtensionManagerHookEvent:
+    """Redacted lifecycle-hook event delivered to extension event subscribers."""
+
+    name: ManagerHookName
+    args: tuple[object, ...]
+
+
 type ManagerHookSubscriber = Callable[[ManagerHookEvent], Awaitable[None]]
+type ExtensionManagerHookSubscriber = Callable[[ExtensionManagerHookEvent], Awaitable[None]]
+
+
+def _redact_update_payload(update_payload: object) -> dict[object, object] | None:
+    if not isinstance(update_payload, dict):
+        return None
+    return {key: value for key, value in update_payload.items() if key not in _UPDATE_CREDENTIAL_KEYS}
+
+
+def redact_manager_hook_event(event: ManagerHookEvent) -> ExtensionManagerHookEvent:
+    """Return the extension-facing event with secret-bearing hook args redacted."""
+    if event.name == "after_update":
+        if len(event.args) < _AFTER_UPDATE_MIN_ARG_COUNT:
+            return ExtensionManagerHookEvent(name=event.name, args=event.args)
+        user, update_payload, *remaining_args = event.args
+        redacted_update_payload = _redact_update_payload(update_payload)
+        if redacted_update_payload is None:
+            return ExtensionManagerHookEvent(name=event.name, args=event.args)
+        redacted_args = (user, redacted_update_payload, *remaining_args)
+        return ExtensionManagerHookEvent(name=event.name, args=redacted_args)
+
+    token_index = _TOKEN_ARGUMENT_INDEX_BY_EVENT.get(event.name)
+    if token_index is None:
+        return ExtensionManagerHookEvent(name=event.name, args=event.args)
+    redacted_args = list(event.args)
+    redaction_index = token_index if token_index >= 0 else len(redacted_args) + token_index
+    if 0 <= redaction_index < len(redacted_args) and isinstance(redacted_args[redaction_index], str):
+        redacted_args[redaction_index] = None
+    return ExtensionManagerHookEvent(name=event.name, args=tuple(redacted_args))
+
+
+async def dispatch_after_login(manager: object, user: object) -> None:
+    """Notify manager login hooks and extension subscribers when a hook bus exists."""
+    hook_bus = getattr(manager, "hook_bus", None)
+    if isinstance(hook_bus, ManagerHookBus):
+        await hook_bus.fire("after_login", user)
+        return
+    on_after_login = getattr(manager, "on_after_login", None)
+    if on_after_login is not None:
+        await on_after_login(user)
+
+
+def wrap_extension_manager_hook_subscriber(
+    subscriber: ExtensionManagerHookSubscriber,
+) -> ManagerHookSubscriber:
+    """Adapt an extension subscriber to the internal manager hook bus.
+
+    Returns:
+        Internal hook-bus subscriber that redacts token-bearing events.
+    """
+
+    async def dispatch(event: ManagerHookEvent) -> None:
+        await subscriber(redact_manager_hook_event(event))
+
+    return dispatch
 
 
 class ManagerHookBus[UP]:

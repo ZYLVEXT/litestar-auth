@@ -343,7 +343,9 @@ async def _complete_login_callback[UP: UserProtocol[Any], ID](
         )
         response = await callback_inputs.backend.login(user)
         clear_state_cookie(response)
-        await callback_inputs.user_manager.on_after_login(user)
+        from litestar_auth._manager.hooks import dispatch_after_login  # noqa: PLC0415
+
+        await dispatch_after_login(callback_inputs.user_manager, user)
         return response
 
 

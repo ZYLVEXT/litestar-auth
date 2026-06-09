@@ -20,6 +20,7 @@ from litestar_auth._plugin.config import (
     DEFAULT_BACKENDS_DEPENDENCY_KEY,
     DEFAULT_CONFIG_DEPENDENCY_KEY,
     DEFAULT_CURRENT_ORGANIZATION_DEPENDENCY_KEY,
+    DEFAULT_DB_SESSION_DEPENDENCY_KEY,
     DEFAULT_ORGANIZATION_STORE_DEPENDENCY_KEY,
     DEFAULT_RESOLVED_PERMISSIONS_DEPENDENCY_KEY,
     DEFAULT_USER_MANAGER_DEPENDENCY_KEY,
@@ -46,11 +47,23 @@ if TYPE_CHECKING:
     from litestar.connection import ASGIConnection
 
     from litestar_auth._plugin._protocols import DependencyProvider
+    from litestar_auth._plugin.extensions import ExtensionDependencyContribution
     from litestar_auth.db import BaseOrganizationStore
 
 
 type DbSessionProvider = Callable[[State, Scope], AsyncSession]
 _RETURNS_ASYNC_GENERATOR_MARKER = "__litestar_auth_returns_async_generator__"
+_NON_OVERRIDABLE_EXTENSION_DEPENDENCY_KEYS = frozenset(
+    (
+        DEFAULT_CONFIG_DEPENDENCY_KEY,
+        DEFAULT_USER_MANAGER_DEPENDENCY_KEY,
+        DEFAULT_BACKENDS_DEPENDENCY_KEY,
+        OAUTH_ASSOCIATE_USER_MANAGER_DEPENDENCY_KEY,
+        DEFAULT_RESOLVED_PERMISSIONS_DEPENDENCY_KEY,
+        DEFAULT_CURRENT_ORGANIZATION_DEPENDENCY_KEY,
+        DEFAULT_ORGANIZATION_STORE_DEPENDENCY_KEY,
+    ),
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -258,11 +271,12 @@ def register_dependencies[UP: UserProtocol[Any], ID](
     config: LitestarAuthConfig[UP, ID],
     *,
     providers: DependencyProviders,
+    extension_dependencies: Sequence[ExtensionDependencyContribution] = (),
 ) -> None:
     """Register plugin dependency providers and guard against key collisions.
 
     Raises:
-        ValueError: If the app already defines one of the required dependency keys.
+        ValueError: If dependency keys collide without an explicit override.
     """
     dependency_registrations = tuple(_iter_dependency_registrations(config, providers=providers))
     dependency_keys = tuple(registration.key for registration in dependency_registrations)
@@ -271,10 +285,24 @@ def register_dependencies[UP: UserProtocol[Any], ID](
         msg = f"Auth dependency keys already exist: {', '.join(collisions)}"
         raise ValueError(msg)
 
+    _validate_extension_dependency_contributions(
+        app_config,
+        config=config,
+        dependency_keys=dependency_keys,
+        extension_dependencies=extension_dependencies,
+    )
+
     for registration in dependency_registrations:
         app_config.dependencies[registration.key] = _wrap_registered_dependency(
             registration.key,
             registration.provider,
+            config=config,
+        )
+
+    for contribution in extension_dependencies:
+        app_config.dependencies[contribution.key] = _wrap_registered_dependency(
+            contribution.key,
+            contribution.provider,
             config=config,
         )
 
@@ -283,6 +311,71 @@ def register_dependencies[UP: UserProtocol[Any], ID](
         app_config.before_send.append(
             async_autocommit_handler_maker(session_scope_key=_resolve_session_scope_key(config)),
         )
+
+
+def _validate_extension_dependency_contributions(
+    app_config: AppConfig,
+    *,
+    config: LitestarAuthConfig[Any, Any],
+    dependency_keys: Sequence[str],
+    extension_dependencies: Sequence[ExtensionDependencyContribution],
+) -> None:
+    seen_extension_keys: dict[str, str] = {}
+    core_dependency_keys = _reserved_dependency_keys(config, dependency_keys=dependency_keys)
+
+    for contribution in extension_dependencies:
+        previous_extension_name = seen_extension_keys.get(contribution.key)
+        if previous_extension_name is not None:
+            msg = (
+                "Auth extension dependency key "
+                f"{contribution.key!r} from extension {contribution.extension_name!r} conflicts with extension "
+                f"{previous_extension_name!r}."
+            )
+            raise ValueError(msg)
+        seen_extension_keys[contribution.key] = contribution.extension_name
+
+        if contribution.key in _NON_OVERRIDABLE_EXTENSION_DEPENDENCY_KEYS:
+            msg = (
+                "Auth extension dependency key "
+                f"{contribution.key!r} from extension {contribution.extension_name!r} cannot override an "
+                "authentication- or authorization-critical core auth dependency key."
+            )
+            raise ValueError(msg)
+
+        if contribution.allow_override:
+            continue
+
+        if contribution.key in core_dependency_keys:
+            msg = (
+                "Auth extension dependency key "
+                f"{contribution.key!r} from extension {contribution.extension_name!r} conflicts with a core auth "
+                "dependency key. Set allow_override=True to replace it explicitly."
+            )
+            raise ValueError(msg)
+
+        if contribution.key in app_config.dependencies:
+            msg = f"Auth dependency keys already exist: {contribution.key}"
+            raise ValueError(msg)
+
+
+def _reserved_dependency_keys[UP: UserProtocol[Any], ID](
+    config: LitestarAuthConfig[UP, ID],
+    *,
+    dependency_keys: Sequence[str],
+) -> frozenset[str]:
+    return frozenset(
+        (
+            *dependency_keys,
+            DEFAULT_CONFIG_DEPENDENCY_KEY,
+            DEFAULT_USER_MANAGER_DEPENDENCY_KEY,
+            DEFAULT_BACKENDS_DEPENDENCY_KEY,
+            DEFAULT_USER_MODEL_DEPENDENCY_KEY,
+            DEFAULT_RESOLVED_PERMISSIONS_DEPENDENCY_KEY,
+            DEFAULT_CURRENT_ORGANIZATION_DEPENDENCY_KEY,
+            DEFAULT_ORGANIZATION_STORE_DEPENDENCY_KEY,
+            config.db_session_dependency_key or DEFAULT_DB_SESSION_DEPENDENCY_KEY,
+        ),
+    )
 
 
 def _iter_dependency_registrations[UP: UserProtocol[Any], ID](

@@ -11,9 +11,9 @@ from litestar_auth._plugin.config import (
 )
 from litestar_auth._plugin.middleware import get_cookie_transports
 from litestar_auth._plugin.validation._core import format_configuration_message
+from litestar_auth._totp_verify import SecurityWarning
 from litestar_auth.config import MINIMUM_SECRET_LENGTH, validate_production_secret
 from litestar_auth.exceptions import ConfigurationError
-from litestar_auth.totp import SecurityWarning
 
 if TYPE_CHECKING:
     from litestar_auth._plugin.config import LitestarAuthConfig, TotpConfig
@@ -114,23 +114,23 @@ def _validate_totp_store_requirements(totp_config: TotpConfig, *, unsafe_testing
     """Validate production-only TOTP store requirements.
 
     Raises:
-        ValueError: If a required TOTP store is missing outside unsafe testing.
+        ConfigurationError: If a required TOTP store is missing outside unsafe testing.
     """
     pending_jti_store = getattr(totp_config, "totp_pending_jti_store", None)
     if pending_jti_store is None and not unsafe_testing:
         msg = "totp_pending_jti_store is required unless unsafe_testing=True."
-        raise ValueError(msg)
+        raise ConfigurationError(format_configuration_message(msg, field="totp_pending_jti_store"))
 
     enrollment_store = getattr(totp_config, "totp_enrollment_store", None)
     if enrollment_store is None and not unsafe_testing:
         msg = "totp_enrollment_store is required unless unsafe_testing=True."
-        raise ValueError(msg)
+        raise ConfigurationError(format_configuration_message(msg, field="totp_enrollment_store"))
 
     require_replay_protection = bool(getattr(totp_config, "totp_require_replay_protection", False))
     used_tokens_store = getattr(totp_config, "totp_used_tokens_store", None)
     if require_replay_protection and used_tokens_store is None and not unsafe_testing:
-        msg = "totp_require_replay_protection=True requires totp_used_tokens_store to be configured."
-        raise ValueError(msg)
+        msg = "totp_used_tokens_store is required when TOTP replay protection is enabled."
+        raise ConfigurationError(format_configuration_message(msg, field="totp_used_tokens_store"))
 
 
 def _validate_totp_authenticate_requirement(

@@ -43,9 +43,9 @@ _append_oauth_login_controllers = oauth_controllers_module._append_oauth_login_c
 _append_optional_feature_controllers = controllers_module._append_optional_feature_controllers
 _build_auth_controllers = controllers_module._build_auth_controllers
 build_controllers = controllers_module.build_controllers
-build_totp_controller = controllers_module.build_totp_controller
+build_totp_controller = totp_controllers_module.build_totp_controller
 register_schema_kwargs = controllers_module.register_schema_kwargs
-totp_backend = controllers_module.totp_backend
+totp_backend = totp_controllers_module.totp_backend
 user_read_schema_kwargs = controllers_module.user_read_schema_kwargs
 users_schema_kwargs = controllers_module.users_schema_kwargs
 
@@ -240,7 +240,7 @@ def test_plugin_create_totp_controller_logs_when_pending_client_binding_is_disab
     backend_index, backend = inventory.primary()
 
     with caplog.at_level(logging.WARNING, logger="litestar_auth.controllers.totp"):
-        controller = controllers_module.create_totp_controller(
+        controller = totp_controllers_module.create_totp_controller(
             backend=backend,
             backend_inventory=inventory,
             backend_index=backend_index,
@@ -435,7 +435,7 @@ async def test_create_totp_controller_enable_validation_callback_runs_background
         ),
     )
     inventory = resolve_backend_inventory(config)
-    controller_cls = controllers_module.create_totp_controller(
+    controller_cls = totp_controllers_module.create_totp_controller(
         backend=config.resolve_startup_backends()[0],
         backend_inventory=inventory,
         backend_index=0,
@@ -463,7 +463,7 @@ async def test_create_totp_controller_regenerate_validation_callback_runs_backgr
         ),
     )
     inventory = resolve_backend_inventory(config)
-    controller_cls = controllers_module.create_totp_controller(
+    controller_cls = totp_controllers_module.create_totp_controller(
         backend=config.resolve_startup_backends()[0],
         backend_inventory=inventory,
         backend_index=0,
@@ -582,11 +582,6 @@ def test_append_optional_feature_controllers_skips_totp_and_oauth_when_not_confi
     controllers: list[ControllerRouterHandler] = []
 
     monkeypatch.setattr(
-        controllers_module,
-        "build_totp_controller",
-        lambda _config, **_kwargs: pytest.fail("build_totp_controller should not be called"),
-    )
-    monkeypatch.setattr(
         oauth_controllers_module,
         "create_oauth_associate_controller",
         lambda **_kwargs: pytest.fail("create_oauth_associate_controller should not be called"),
@@ -605,7 +600,7 @@ def test_append_optional_feature_controllers_skips_totp_and_oauth_when_not_confi
 def test_append_optional_feature_controllers_appends_enabled_features_in_order(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Optional-controller assembly includes enabled register, verify, reset, users, TOTP, and OAuth routes."""
+    """Optional-controller assembly includes enabled register, verify, reset, and users routes."""
     github_client = object()
     gitlab_client = object()
     config = _minimal_config(
@@ -619,7 +614,6 @@ def test_append_optional_feature_controllers_appends_enabled_features_in_order(
             oauth_cookie_secure=False,
             oauth_flow_cookie_secret=OAUTH_FLOW_COOKIE_SECRET,
         ),
-        totp_config=TotpConfig(totp_pending_secret="76543210fedcba98" * 4),
     )
     config.include_users = True
     config.user_read_schema = _ReadSchema
@@ -640,30 +634,6 @@ def test_append_optional_feature_controllers_appends_enabled_features_in_order(
     monkeypatch.setattr(controllers_module, "create_verify_controller", _record("verify"))
     monkeypatch.setattr(controllers_module, "create_reset_password_controller", _record("reset"))
     monkeypatch.setattr(controllers_module, "create_users_controller", _record("users"))
-    monkeypatch.setattr(controllers_module, "build_totp_controller", lambda _config, **_kwargs: "totp")
-
-    def _create_oauth_login_controller(settings: Any) -> str:  # noqa: ANN401
-        values = _settings_values(settings)
-        calls.append(("oauth-login", values))
-        return cast("str", values["provider_name"])
-
-    def _create_oauth_associate_controller(settings: Any) -> str:  # noqa: ANN401
-        values = _settings_values(settings)
-        calls.append(("oauth-associate", values))
-        return f"associate-{values['provider_name']}"
-
-    monkeypatch.setattr(
-        oauth_controllers_module,
-        "create_oauth_login_controller",
-        _create_oauth_login_controller,
-    )
-
-    monkeypatch.setattr(
-        oauth_controllers_module,
-        "create_oauth_associate_controller",
-        _create_oauth_associate_controller,
-    )
-
     controllers: list[ControllerRouterHandler] = []
     _append_optional_feature_controllers(controllers=controllers, config=config)
 
@@ -672,11 +642,6 @@ def test_append_optional_feature_controllers_appends_enabled_features_in_order(
         "verify",
         "reset",
         "users",
-        "totp",
-        "github",
-        "gitlab",
-        "associate-github",
-        "associate-gitlab",
     ]
     assert calls[0] == (
         "register",
@@ -723,11 +688,7 @@ def test_append_optional_feature_controllers_appends_enabled_features_in_order(
             "user_update_schema": _UpdateSchema,
         },
     )
-    primary_backend = config.backends[0]
-    assert calls[4] == ("oauth-login", _oauth_login_call("github", github_client, primary_backend))
-    assert calls[5] == ("oauth-login", _oauth_login_call("gitlab", gitlab_client, primary_backend))
-    assert calls[6] == ("oauth-associate", _oauth_associate_call("github", github_client))
-    assert calls[7] == ("oauth-associate", _oauth_associate_call("gitlab", gitlab_client))
+    assert [name for name, _kwargs in calls] == ["register", "verify", "reset", "users"]
 
 
 def test_append_oauth_login_controllers_uses_explicit_redirect_base_url_and_primary_backend(
@@ -779,6 +740,15 @@ def test_append_oauth_login_controllers_uses_explicit_redirect_base_url_and_prim
             "trust_provider_email_verified": True,
         },
     ]
+
+
+def test_append_oauth_login_controllers_skips_empty_provider_inventory() -> None:
+    """OAuth login controller assembly is inert without configured providers."""
+    controllers: list[ControllerRouterHandler] = []
+
+    _append_oauth_login_controllers(controllers=controllers, config=_minimal_config())
+
+    assert controllers == []
 
 
 def test_append_oauth_login_controllers_forwards_per_provider_scopes(

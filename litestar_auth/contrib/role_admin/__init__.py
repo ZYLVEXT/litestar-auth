@@ -9,8 +9,9 @@ if TYPE_CHECKING:
     from collections.abc import Callable
 
     from litestar_auth.contrib.role_admin._controller import RoleAdminControllerConfig, create_role_admin_controller
+    from litestar_auth.contrib.role_admin._extension import RoleAdminExtension
 
-__all__ = ("RoleAdminControllerConfig", "create_role_admin_controller")
+__all__ = ("RoleAdminControllerConfig", "RoleAdminExtension", "create_role_admin_controller")
 
 
 def __getattr__(name: str) -> Callable[..., object]:
@@ -28,5 +29,8 @@ def __getattr__(name: str) -> Callable[..., object]:
     if name == "create_role_admin_controller":
         controller_module = import_module("litestar_auth.contrib.role_admin._controller")
         return controller_module.create_role_admin_controller
+    if name == "RoleAdminExtension":
+        extension_module = import_module("litestar_auth.contrib.role_admin._extension")
+        return extension_module.RoleAdminExtension
     msg = f"module {__name__!r} has no attribute {name!r}"
     raise AttributeError(msg)

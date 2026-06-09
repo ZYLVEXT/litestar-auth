@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING, Any
 
 from litestar_auth._plugin.session_binding import _ScopedUserDatabaseProxy
 from litestar_auth._plugin.user_manager_builder import resolve_user_manager_factory
-from litestar_auth.oauth_encryption import OAuthTokenEncryption
+from litestar_auth.oauth_encryption import OAuthTokenEncryption, _build_oauth_token_encryption
 from litestar_auth.types import UserProtocol
 
 if TYPE_CHECKING:
@@ -56,23 +56,3 @@ class _ManagerLifecycleRoleUpdater[UP: UserProtocol[Any]]:
             config=self.config,
             backends=bound_backends,
         )
-
-
-def _build_oauth_token_encryption[UP: UserProtocol[Any]](
-    config: LitestarAuthConfig[UP, Any],
-) -> OAuthTokenEncryption | None:
-    """Return the OAuth token encryption policy for role-admin manager lifecycles."""
-    oauth_config = config.oauth_config
-    if oauth_config is None:
-        return None
-    keyring = oauth_config.oauth_token_encryption_keyring
-    if keyring is not None:
-        return OAuthTokenEncryption(
-            unsafe_testing=config.unsafe_testing,
-            active_key_id=keyring.active_key_id,
-            keys=keyring.keys,
-        )
-    return OAuthTokenEncryption(
-        oauth_config.oauth_token_encryption_key,
-        unsafe_testing=config.unsafe_testing,
-    )

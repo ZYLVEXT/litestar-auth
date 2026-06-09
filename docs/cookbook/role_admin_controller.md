@@ -1,11 +1,12 @@
 # Cookbook: Custom role catalog administration API
 
 The supported HTTP role-management surface is documented in
-[HTTP role administration](../guides/role_admin_http.md) via
-`litestar_auth.contrib.role_admin.create_role_admin_controller(...)`.
+[HTTP role administration](../guides/role_admin_http.md) via the plugin
+extension `litestar_auth.contrib.role_admin.RoleAdminExtension` or the manual
+factory `litestar_auth.contrib.role_admin.create_role_admin_controller(...)`.
 
 !!! warning "Use this cookbook only for a fully custom controller"
-    Keep the contrib controller as the default path. This page is for
+    Keep the contrib extension or controller factory as the default path. This page is for
     applications that need custom request/response schemas, bespoke persistence
     wiring, or materially different handler behavior and are willing to own the
     security review, tests, and upgrade drift themselves.

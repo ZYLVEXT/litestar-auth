@@ -35,6 +35,7 @@ from litestar_auth._plugin import (
     OAUTH_ASSOCIATE_USER_MANAGER_DEPENDENCY_KEY,
 )
 from litestar_auth._plugin.config import LitestarAuthConfig, OAuthConfig, OrganizationConfig
+from litestar_auth._plugin.extensions import ExtensionDependencyContribution
 from litestar_auth._plugin.scoped_session import SESSION_SCOPE_KEY, SessionFactory
 from litestar_auth.authentication.backend import AuthenticationBackend
 from litestar_auth.authentication.transport.bearer import BearerTransport
@@ -850,6 +851,180 @@ def test_register_dependencies_raises_for_dependency_key_collisions() -> None:
 
     with pytest.raises(ValueError, match=DEFAULT_CONFIG_DEPENDENCY_KEY):
         register_dependencies(app_config, config, providers=_providers())
+
+
+def test_register_dependencies_rejects_extension_core_dependency_key_collision_without_override() -> None:
+    """Extensions cannot replace ordinary core auth dependency keys unless explicitly opted in."""
+    app_config = AppConfig()
+    config = _minimal_config()
+
+    with pytest.raises(ValueError, match="allow_override=True"):
+        register_dependencies(
+            app_config,
+            config,
+            providers=_providers(),
+            extension_dependencies=(
+                ExtensionDependencyContribution(
+                    extension_name="alpha",
+                    key=DEFAULT_USER_MODEL_DEPENDENCY_KEY,
+                    provider=lambda: None,
+                ),
+            ),
+        )
+
+    assert app_config.dependencies == {}
+
+
+def _assert_authz_critical_extension_dependency_override_rejected(dependency_key: str) -> None:
+    """Assert that an extension cannot replace one authz-critical dependency key."""
+    app_config = AppConfig()
+    config = _minimal_config()
+
+    with pytest.raises(ValueError, match=rf"alpha.*{dependency_key}|{dependency_key}.*alpha"):
+        register_dependencies(
+            app_config,
+            config,
+            providers=_providers(),
+            extension_dependencies=(
+                ExtensionDependencyContribution(
+                    extension_name="alpha",
+                    key=dependency_key,
+                    provider=lambda: None,
+                    allow_override=True,
+                ),
+            ),
+        )
+
+    assert app_config.dependencies == {}
+
+
+def test_register_dependencies_rejects_user_manager_extension_dependency_override() -> None:
+    """Extensions cannot replace the user-manager dependency even with explicit override intent."""
+    _assert_authz_critical_extension_dependency_override_rejected(DEFAULT_USER_MANAGER_DEPENDENCY_KEY)
+
+
+def test_register_dependencies_rejects_backends_extension_dependency_override() -> None:
+    """Extensions cannot replace the authentication-backends dependency even with explicit override intent."""
+    _assert_authz_critical_extension_dependency_override_rejected(DEFAULT_BACKENDS_DEPENDENCY_KEY)
+
+
+def test_register_dependencies_rejects_oauth_associate_user_manager_extension_dependency_override() -> None:
+    """Extensions cannot replace the OAuth-associate user-manager dependency even with explicit override intent."""
+    _assert_authz_critical_extension_dependency_override_rejected(OAUTH_ASSOCIATE_USER_MANAGER_DEPENDENCY_KEY)
+
+
+def test_register_dependencies_rejects_resolved_permissions_extension_dependency_override() -> None:
+    """Extensions cannot replace the resolved-permissions dependency even with explicit override intent."""
+    _assert_authz_critical_extension_dependency_override_rejected(DEFAULT_RESOLVED_PERMISSIONS_DEPENDENCY_KEY)
+
+
+def test_register_dependencies_rejects_extension_dependency_key_collisions() -> None:
+    """Two extensions cannot contribute the same dependency key."""
+    app_config = AppConfig()
+    config = _minimal_config()
+
+    with pytest.raises(ValueError, match="shared_dependency"):
+        register_dependencies(
+            app_config,
+            config,
+            providers=_providers(),
+            extension_dependencies=(
+                ExtensionDependencyContribution(
+                    extension_name="alpha",
+                    key="shared_dependency",
+                    provider=lambda: None,
+                ),
+                ExtensionDependencyContribution(
+                    extension_name="beta",
+                    key="shared_dependency",
+                    provider=lambda: None,
+                ),
+            ),
+        )
+
+    assert app_config.dependencies == {}
+
+
+def test_register_dependencies_honors_explicit_extension_core_dependency_override(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An explicit extension override can replace a non-authz core dependency key."""
+    app_config = AppConfig()
+    config = _minimal_config()
+    marker = object()
+    monkeypatch.setattr(
+        "litestar_auth._plugin.dependencies.async_autocommit_handler_maker",
+        lambda **_: object(),
+    )
+
+    register_dependencies(
+        app_config,
+        config,
+        providers=_providers(),
+        extension_dependencies=(
+            ExtensionDependencyContribution(
+                extension_name="alpha",
+                key=DEFAULT_USER_MODEL_DEPENDENCY_KEY,
+                provider=lambda: marker,
+                allow_override=True,
+            ),
+        ),
+    )
+
+    overridden_dependency = app_config.dependencies[DEFAULT_USER_MODEL_DEPENDENCY_KEY]
+    assert isinstance(overridden_dependency, Provide)
+    assert overridden_dependency.dependency() is marker
+
+
+def test_register_dependencies_registers_fresh_extension_dependency(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Extension dependencies using fresh keys are added to the app dependency map."""
+    app_config = AppConfig()
+    config = _minimal_config()
+    marker = object()
+    monkeypatch.setattr(
+        "litestar_auth._plugin.dependencies.async_autocommit_handler_maker",
+        lambda **_: object(),
+    )
+
+    register_dependencies(
+        app_config,
+        config,
+        providers=_providers(),
+        extension_dependencies=(
+            ExtensionDependencyContribution(
+                extension_name="alpha",
+                key="alpha_dependency",
+                provider=lambda: marker,
+            ),
+        ),
+    )
+
+    extension_dependency = app_config.dependencies["alpha_dependency"]
+    assert isinstance(extension_dependency, Provide)
+    assert extension_dependency.dependency() is marker
+
+
+def test_register_dependencies_rejects_extension_app_dependency_key_collision() -> None:
+    """Extension dependency keys cannot silently replace application dependencies."""
+    app_config = AppConfig()
+    app_config.dependencies["app_dependency"] = Provide(lambda: None, sync_to_thread=False)
+    config = _minimal_config()
+
+    with pytest.raises(ValueError, match="Auth dependency keys already exist: app_dependency"):
+        register_dependencies(
+            app_config,
+            config,
+            providers=_providers(),
+            extension_dependencies=(
+                ExtensionDependencyContribution(
+                    extension_name="alpha",
+                    key="app_dependency",
+                    provider=lambda: None,
+                ),
+            ),
+        )
 
 
 def test_provide_resolved_permissions_returns_empty_set_for_anonymous_request() -> None:

@@ -7,6 +7,7 @@ from functools import partial
 from typing import TYPE_CHECKING, Any
 
 from litestar_auth._manager.construction import BaseUserManagerConstructorKwargs, ManagerConstructorInputs
+from litestar_auth._manager.hooks import ExtensionManagerHookSubscriber, wrap_extension_manager_hook_subscriber
 from litestar_auth._plugin.config import UserManagerFactory  # noqa: TC001
 from litestar_auth.config import DEFAULT_MINIMUM_PASSWORD_LENGTH, require_password_length
 from litestar_auth.exceptions import ConfigurationError
@@ -212,3 +213,12 @@ def resolve_user_manager_factory[UP: UserProtocol[Any], ID](
     if config.user_manager_factory is not None:
         return config.user_manager_factory
     return build_user_manager
+
+
+def attach_extension_manager_hook_subscribers[UP: UserProtocol[Any], ID](
+    manager: BaseUserManager[UP, ID],
+    subscribers: tuple[ExtensionManagerHookSubscriber, ...],
+) -> None:
+    """Subscribe extension lifecycle observers on one freshly built user manager."""
+    for subscriber in subscribers:
+        manager.hook_bus.subscribe(wrap_extension_manager_hook_subscriber(subscriber))

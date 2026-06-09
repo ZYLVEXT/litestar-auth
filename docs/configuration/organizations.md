@@ -61,8 +61,8 @@ config = LitestarAuthConfig(
 | `enabled` | `False` | Keeps the organization feature inert unless explicitly enabled. |
 | `store_factory` | `None` | Callable receiving the request `AsyncSession` and returning a `BaseOrganizationStore`. Required when `enabled=True`. |
 | `include_switch_organization` | `False` | Mounts opt-in `POST /auth/switch-organization` controllers for JWT-capable, non-API-key backends and makes the default tenant resolver trust the signed JWT organization claim. Requires `enabled=True`. |
-| `include_organization_admin` | `False` | Mounts the opt-in `/organizations` HTTP controller and registers the plugin-owned `litestar organizations` CLI group. Requires `enabled=True` and `store_factory`. |
-| `include_organization_invitations` | `False` | Mounts authenticated invitee-facing `{auth}/organization-invitations/accept` and `{auth}/organization-invitations/decline` routes. Requires `enabled=True`, `store_factory`, and `user_manager_security.organization_invitation_token_secret`. |
+| `include_organization_admin` | `False` | Compatibility shortcut that mounts the opt-in `/organizations` HTTP controller through the organization-admin extension path and registers the plugin-owned `litestar organizations` CLI group. Requires `enabled=True` and `store_factory`. |
+| `include_organization_invitations` | `False` | Compatibility shortcut that mounts authenticated invitee-facing `{auth}/organization-invitations/accept` and `{auth}/organization-invitations/decline` routes through the organization-admin extension path. Requires `enabled=True`, `store_factory`, and `user_manager_security.organization_invitation_token_secret`. |
 | `slug_min_length` | Project default | Lower bound validated at startup; must be greater than zero. |
 | `slug_max_length` | Project default | Upper bound validated at startup; must be greater than or equal to `slug_min_length`. |
 | `tenant_header_name` | `"X-Organization"` | Header name used when the default header resolver is created. Blank names are rejected when `enabled=True`. |
@@ -216,7 +216,9 @@ tenant hints followed by store lookup and membership verification.
 
 Set `OrganizationConfig.include_organization_invitations=True` to mount authenticated invitee-facing
 invitation routes under `auth_path`. These routes use the same organization-invitation JWT and
-token-hash-only persistence model used by the admin invitation operations.
+token-hash-only persistence model used by the admin invitation operations. The flag is normalized
+internally into the same organization-admin extension contribution path used by
+`OrganizationAdminExtension(include_invitations=True)`.
 
 `POST /auth/organization-invitations/accept` accepts:
 
@@ -257,19 +259,70 @@ By default, privileged organization roles are `owner` and `admin`. The final pri
 means the last membership holding either role cannot be removed and cannot be demoted to a role set
 without `owner` or `admin`. This protects operators from locking themselves out of an organization.
 
-The plugin mounts an opt-in `/organizations` HTTP controller for superusers by default. The default
-guard list is `[is_superuser]`; pass explicit guards to
-`create_organization_admin_controller(...)` only when the application has an equivalent operator
-authorization policy. Organization create and user-scoped organization listing additionally require
-global superuser authority in depth, so org-scoped guards cannot satisfy those catalog routes. The
-controller exposes organization create/read/update/delete, user-scoped
-organization listing, membership add/remove/list, membership role replacement, and invitation
-invite/list/revoke operations. Organization create/update payloads reject unknown fields and bound
-both `slug` and `name` to `1..128` characters; the slug bound matches the built-in
-switch-organization request contract. Organization, membership, and invitation failures are mapped
-to stable error codes. Invitation responses include only invitation metadata; the raw invitation
-token is sent only to `BaseUserManager.on_after_organization_invitation(invitation, token)` for
-out-of-band delivery and is never echoed in HTTP responses.
+The plugin can mount an opt-in `/organizations` HTTP controller for superusers by default.
+`OrganizationConfig.include_organization_admin=True` remains supported as a compatibility shortcut,
+but it is normalized internally into the same extension contribution path as
+`OrganizationAdminExtension`. New applications should prefer the explicit extension because it keeps
+all contributed admin routes in the `extensions=` tuple:
+
+```python
+from litestar_auth import LitestarAuthConfig
+from litestar_auth.contrib.organization_admin import OrganizationAdminExtension
+
+config = LitestarAuthConfig(
+    user_model=User,
+    organization_config=OrganizationConfig(
+        enabled=True,
+        store_factory=create_organization_store,
+    ),
+    extensions=(OrganizationAdminExtension(),),
+)
+```
+
+`OrganizationAdminExtension.validate()` fails closed during startup when organizations are disabled
+or when the controller id parser is not configured directly on `LitestarAuthConfig` or inherited
+from `UserManagerSecurity.id_parser`. The extension contributes the same default `/organizations`
+controller and `[is_superuser]` guard as the manual factory path, marks its routes as
+litestar-auth-owned for route-scoped exception wiring, and uses the plugin's derived OpenAPI
+security requirements for invitation routes. Pass explicit guards only when the application has an
+equivalent operator authorization policy. Organization create and user-scoped organization listing
+additionally require global superuser authority in depth, so org-scoped guards cannot satisfy those
+catalog routes.
+
+The controller exposes organization create/read/update/delete, user-scoped organization listing,
+membership add/remove/list, membership role replacement, and invitation invite/list/revoke
+operations. Organization create/update payloads reject unknown fields and bound both `slug` and
+`name` to `1..128` characters; the slug bound matches the built-in switch-organization request
+contract. Organization, membership, and invitation failures are mapped to stable error codes.
+Invitation responses include only invitation metadata; the raw invitation token is sent only to
+`BaseUserManager.on_after_organization_invitation(invitation, token)` for out-of-band delivery and is
+never echoed in HTTP responses.
+
+The invitee-facing accept/decline routes are a separate extension opt-in:
+
+```python
+config = LitestarAuthConfig(
+    user_model=User,
+    organization_config=OrganizationConfig(
+        enabled=True,
+        store_factory=create_organization_store,
+    ),
+    extensions=(OrganizationAdminExtension(include_invitations=True),),
+)
+```
+
+When `include_invitations=True`, validation also requires
+`user_manager_security.organization_invitation_token_secret`. Without the flag, the extension leaves
+the authenticated `{auth}/organization-invitations/accept` and
+`{auth}/organization-invitations/decline` routes unmounted.
+
+Do not enable `OrganizationConfig.include_organization_admin` or
+`OrganizationConfig.include_organization_invitations` at the same time as an explicit
+`OrganizationAdminExtension`. The flags derive an internal extension named `organization_admin`, so
+the extension registry rejects that configuration with the same duplicate-extension-name guard used
+for any other repeated extension name.
+
+The manual factory remains public and supported for custom route-table layouts:
 
 ```python
 from litestar_auth.contrib.organization_admin import create_organization_admin_controller

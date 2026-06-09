@@ -24,6 +24,7 @@ import litestar_auth._plugin.startup as startup_module
 from litestar_auth._plugin.organization_cli import (
     _ORGANIZATION_CLI_CONTEXT_KEY,
     OrganizationCLIContext,
+    _OrganizationCliExtension,
     _parse_cli_id,
     _resolve_organization_cli_context,
     _run_organization_cli_operation,
@@ -40,6 +41,8 @@ from litestar_auth._plugin.role_cli import (
 from litestar_auth.authentication.backend import AuthenticationBackend
 from litestar_auth.authentication.strategy.base import Strategy, UserManagerProtocol
 from litestar_auth.authentication.transport.bearer import BearerTransport
+from litestar_auth.exceptions import ConfigurationError
+from litestar_auth.extensions import EXTENSION_API_VERSION
 from litestar_auth.manager import BaseUserManager, UserManagerSecurity
 from litestar_auth.models import User
 from litestar_auth.plugin import LitestarAuth, LitestarAuthConfig, OrganizationConfig
@@ -50,6 +53,8 @@ from tests.integration.conftest import DummySessionMaker, InMemoryUserDatabase
 
 if TYPE_CHECKING:
     from click import Group
+
+    from litestar_auth.extensions import AuthExtensionRegistrationContext, AuthExtensionValidationContext
 
 pytestmark = pytest.mark.unit
 
@@ -96,6 +101,88 @@ class _CLIInMemoryTokenStrategy[UP: _EmailUserProtocol](Strategy[UP, UUID]):
         """Discard token-destruction inputs for test coverage."""
 
 
+class _CliContributingExtension:
+    """Test extension that contributes a command only through on_cli_init."""
+
+    name = "cli-contributing"
+    enabled = True
+
+    def __init__(self) -> None:
+        """Track which extension hooks ran."""
+        self.validated = False
+        self.registered = False
+        self.cli_registered = False
+
+    def validate(self, context: AuthExtensionValidationContext) -> None:
+        """Record app-startup validation if it is invoked."""
+        assert context is not None
+        self.validated = True
+
+    def register(self, context: AuthExtensionRegistrationContext) -> None:
+        """Record app-startup registration if it is invoked."""
+        assert context is not None
+        self.registered = True
+
+    def register_cli(self, cli: Group, _config: LitestarAuthConfig[Any, Any]) -> None:
+        """Contribute a command to the active CLI group."""
+        self.cli_registered = True
+
+        @cli.command("extension-command")
+        def extension_command() -> None:
+            click.echo("extension")
+
+
+class _VersionedCliExtension(_CliContributingExtension):
+    """CLI extension declaring a concrete extension API requirement."""
+
+    requires_api = EXTENSION_API_VERSION
+
+
+class _IncompatibleCliExtension(_CliContributingExtension):
+    """CLI extension declaring a future unsupported extension API."""
+
+    name = "incompatible-cli"
+    requires_api = (EXTENSION_API_VERSION[0], EXTENSION_API_VERSION[1] + 1)
+
+
+class _InvalidApiCliExtension(_CliContributingExtension):
+    """CLI extension declaring a malformed extension API requirement."""
+
+    name = "invalid-api-cli"
+    requires_api = "1.0"
+
+
+class _ValidationRejectingCliExtension(_CliContributingExtension):
+    """CLI extension that rejects CLI initialization during validation."""
+
+    name = "validation-rejecting-cli"
+
+    def validate(self, context: AuthExtensionValidationContext) -> None:
+        """Reject CLI initialization after receiving the validation context.
+
+        Raises:
+            ConfigurationError: Always, to verify CLI validation fail-closed behavior.
+        """
+        super().validate(context)
+        msg = "CLI extension prerequisite failed"
+        raise ConfigurationError(msg)
+
+
+class _NonCliExtension:
+    """Test extension that intentionally lacks the optional CLI protocol."""
+
+    name = "non-cli"
+    enabled = True
+
+    def validate(self, context: AuthExtensionValidationContext) -> None:
+        """Accept app-startup validation only."""
+        assert context is not None
+
+    def register(self, context: AuthExtensionRegistrationContext) -> None:
+        """Accept app-startup registration only."""
+        assert context is not None
+
+
 def _build_root_cli() -> Group:
     """Return a Litestar-like root CLI group for plugin registration tests."""
 
@@ -109,6 +196,7 @@ def _build_root_cli() -> Group:
 def _minimal_config[UP: _EmailUserProtocol](
     *,
     user_model: type[UP],
+    extensions: tuple[Any, ...] = (),
     organization_config: OrganizationConfig | None = None,
 ) -> LitestarAuthConfig[UP, UUID]:
     """Build the smallest plugin config needed to test CLI registration.
@@ -128,6 +216,7 @@ def _minimal_config[UP: _EmailUserProtocol](
         user_manager_class=_CLIUserManager,
         session_maker=_as_any(assert_structural_session_factory(DummySessionMaker())),
         user_db_factory=lambda _session: user_db,
+        extensions=_as_any(extensions),
         organization_config=organization_config or OrganizationConfig(),
         user_manager_security=UserManagerSecurity[UUID](
             verification_token_secret="verification-secret-123456789012",
@@ -174,16 +263,6 @@ def test_on_cli_init_registers_roles_group_without_changing_on_app_init(
     )
     monkeypatch.setattr(
         startup_module,
-        "require_oauth_token_encryption_for_configured_providers",
-        lambda **_kwargs: calls.append("require-oauth-key"),
-    )
-    monkeypatch.setattr(
-        startup_module,
-        "require_secure_oauth_redirect_in_production",
-        lambda **_kwargs: calls.append("require-oauth-redirect"),
-    )
-    monkeypatch.setattr(
-        startup_module,
         "bootstrap_bundled_token_orm_models",
         lambda _config: calls.append("bootstrap-token-models"),
     )
@@ -206,8 +285,6 @@ def test_on_cli_init_registers_roles_group_without_changing_on_app_init(
     assert result is app_config
     assert calls == [
         "warn",
-        "require-oauth-key",
-        "require-oauth-redirect",
         "bootstrap-token-models",
         "dependencies",
         "middleware",
@@ -264,6 +341,147 @@ def test_on_cli_init_registers_organizations_group_only_for_org_admin_config() -
     ).on_cli_init(configured_cli)
 
     assert "organizations" in configured_cli.commands
+
+
+def test_on_cli_init_invokes_organization_cli_through_internal_extension(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The organization CLI command is contributed through the optional CLI extension path."""
+    calls: list[str] = []
+    original_register_cli = _OrganizationCliExtension.register_cli
+
+    def register_cli_spy(self: _OrganizationCliExtension, cli: Group, config: LitestarAuthConfig[Any, Any]) -> None:
+        calls.append(self.name)
+        original_register_cli(cli, config)
+
+    monkeypatch.setattr(_OrganizationCliExtension, "register_cli", register_cli_spy)
+    root_cli = _build_root_cli()
+
+    LitestarAuth(
+        _minimal_config(
+            user_model=User,
+            organization_config=_enabled_organization_config(),
+        ),
+    ).on_cli_init(root_cli)
+
+    assert calls == ["organization_cli"]
+    assert "organizations" in root_cli.commands
+
+
+def test_on_cli_init_registers_extension_cli_commands_without_app_init_hooks() -> None:
+    """CLI-capable extensions validate and contribute commands during CLI initialization."""
+    cli_extension = _CliContributingExtension()
+    non_cli_extension = _NonCliExtension()
+    root_cli = _build_root_cli()
+    plugin = LitestarAuth(
+        _minimal_config(
+            user_model=User,
+            extensions=(cli_extension, non_cli_extension),
+        ),
+    )
+
+    plugin.on_cli_init(root_cli)
+    result = CliRunner().invoke(root_cli, ["extension-command"])
+
+    assert cli_extension.cli_registered is True
+    assert cli_extension.validated is True
+    assert cli_extension.registered is False
+    assert "extension-command" in root_cli.commands
+    assert result.exit_code == 0
+    assert result.output == "extension\n"
+
+
+@pytest.mark.parametrize(
+    "extension",
+    [
+        _CliContributingExtension(),
+        _VersionedCliExtension(),
+    ],
+    ids=["omitted-requires-api", "compatible-requires-api"],
+)
+def test_on_cli_init_registers_cli_extensions_with_compatible_or_omitted_api(
+    extension: _CliContributingExtension,
+) -> None:
+    """CLI registration accepts compatible or omitted extension API declarations."""
+    root_cli = _build_root_cli()
+    plugin = LitestarAuth(
+        _minimal_config(
+            user_model=User,
+            extensions=(extension,),
+        ),
+    )
+
+    plugin.on_cli_init(root_cli)
+    result = CliRunner().invoke(root_cli, ["extension-command"])
+
+    assert extension.validated is True
+    assert extension.cli_registered is True
+    assert sorted(root_cli.commands) == ["extension-command", "roles"]
+    assert result.exit_code == 0
+    assert result.output == "extension\n"
+
+
+@pytest.mark.parametrize(
+    ("extension", "match"),
+    [
+        (_IncompatibleCliExtension(), "requires extension API"),
+        (_InvalidApiCliExtension(), "declares invalid requires_api"),
+    ],
+    ids=["incompatible-requires-api", "invalid-requires-api"],
+)
+def test_on_cli_init_rejects_cli_extensions_before_registering_any_commands(
+    extension: _CliContributingExtension,
+    match: str,
+) -> None:
+    """CLI initialization fails closed before registering commands for incompatible extensions."""
+    root_cli = _build_root_cli()
+    plugin = LitestarAuth(
+        _minimal_config(
+            user_model=User,
+            extensions=(extension,),
+        ),
+    )
+
+    with pytest.raises(ConfigurationError, match=match):
+        plugin.on_cli_init(root_cli)
+
+    assert extension.validated is False
+    assert extension.cli_registered is False
+    assert root_cli.commands == {}
+
+
+def test_on_cli_init_rejects_failed_cli_extension_validation_before_registering_any_commands() -> None:
+    """CLI extension validation failures propagate before any command is registered."""
+    extension = _ValidationRejectingCliExtension()
+    root_cli = _build_root_cli()
+    plugin = LitestarAuth(
+        _minimal_config(
+            user_model=User,
+            extensions=(extension,),
+        ),
+    )
+
+    with pytest.raises(ConfigurationError, match="CLI extension prerequisite failed"):
+        plugin.on_cli_init(root_cli)
+
+    assert extension.validated is True
+    assert extension.cli_registered is False
+    assert root_cli.commands == {}
+
+
+def test_on_cli_init_skips_extensions_without_cli_protocol() -> None:
+    """Extensions that only implement app-startup hooks do not contribute CLI commands."""
+    root_cli = _build_root_cli()
+    plugin = LitestarAuth(
+        _minimal_config(
+            user_model=User,
+            extensions=(_NonCliExtension(),),
+        ),
+    )
+
+    plugin.on_cli_init(root_cli)
+
+    assert sorted(root_cli.commands) == ["roles"]
 
 
 def test_on_cli_init_does_not_clobber_existing_organizations_group() -> None:

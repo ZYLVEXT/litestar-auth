@@ -1,3 +1,52 @@
+## Unreleased
+
+### Added
+
+- **Public extension SDK (`litestar_auth.extensions`).** The internal extension kernel is now a stable,
+  publicly documented authoring surface. `litestar_auth.extensions` is the only import path an external
+  extension needs — it re-exports the `AuthExtension` contract together with its
+  `AuthExtensionValidationContext` / `AuthExtensionRegistrationContext` typed contexts (all three are now
+  also exported from the root `litestar_auth` package), `EXTENSION_API_VERSION`,
+  `EXTENSION_ENTRY_POINT_GROUP`, and the public controller factories authors need (reaching into
+  `litestar_auth._plugin.*` is unsupported and guarded by an import-isolation regression test). Register
+  extensions explicitly via `LitestarAuthConfig.extensions=(...)`; an extension contributes controllers,
+  dependencies, middleware, OpenAPI security schemes, startup/shutdown hooks, and exception handlers
+  through the typed contexts. An optional `enabled` flag toggles an extension off without removing it from
+  configuration (omitting it is treated as enabled).
+
+- **Versioned extension boundary.** `EXTENSION_API_VERSION` (currently `(1, 0)`) versions the authoring
+  contract independently of the rest of the library. An extension may declare a `requires_api` minimum;
+  an incompatible requirement fails closed with `ConfigurationError` before any application wiring runs.
+
+- **Opt-in entry-point discovery.** New `LitestarAuthConfig.auto_discover_extensions` (default `False`)
+  loads external extensions published under the `litestar_auth.extensions` entry-point group, following
+  the `litestar_auth_ext_*` distribution-naming convention. Discovery is fail-closed: an entry point that
+  cannot load, cannot instantiate, or does not produce a valid `AuthExtension` raises `ConfigurationError`.
+
+- **CLI and manager-event contribution surfaces.** New optional `AuthCliExtension` lets an extension
+  contribute CLI commands; `on_cli_init` now routes through it (the built-in organization administration
+  CLI is its first internal consumer). New optional `AuthEventSubscriberExtension` lets an extension
+  observe manager lifecycle events through **redacted** payloads — token-bearing values and credential
+  fields (passwords, hashed passwords, invitation tokens, and similar) are stripped before delivery.
+
+- **`RoleAdminExtension` first-party extension.** The contrib role-administration controller is now also
+  available as a public `RoleAdminExtension` (import from `litestar_auth.contrib.role_admin`) for explicit
+  `extensions=(...)` registration — the canonical example of the user-facing authoring API. A runnable
+  reference is bundled at `examples/demo_external_extension/`.
+
+### Changed
+
+- **Built-in optional features now wire through the extension pipeline.** OAuth, TOTP, user-owned API
+  keys, and organization administration/invitations are auto-materialized into the same extension pipeline
+  from their existing configuration flags. Behavior for existing configurations is unchanged. As part of
+  this, `LitestarAuthConfig.resolve_extensions()` is memoized, so extension-relevant configuration must be
+  set before the plugin first resolves extensions during application init.
+
+- **Extension OpenAPI security scheme names must be globally unique and fail closed on collision.**
+  Extension-contributed OpenAPI security scheme names may not collide with each other or with core auth
+  scheme names (bearer/cookie backend names, `apiKeyAuth`, and `apiKeyHmacAuth` for signed API keys). A
+  collision raises `ConfigurationError` during application initialization, before the app is usable.
+
 ## 4.2.0 (2026-06-05)
 
 ### Added

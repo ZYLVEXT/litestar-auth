@@ -80,6 +80,7 @@ TotpConfig = plugin_module.TotpConfig
 if TYPE_CHECKING:
     from collections.abc import Callable
 
+    from litestar_auth._plugin.extensions import AuthExtensionRegistrationContext, AuthExtensionValidationContext
     from litestar_auth.config import OAuthProviderConfig
     from tests._helpers import AsyncFakeRedis
 
@@ -182,6 +183,7 @@ def _current_inmemory_totp_enrollment_store() -> object:
 def _minimal_config(  # noqa: PLR0913
     *,
     backends: list[AuthenticationBackend[ExampleUser, UUID]] | None = None,
+    extensions: tuple[object, ...] = (),
     include_users: bool = False,
     user_manager_class: type[Any] | None = None,
     login_identifier: Literal["email", "username"] = "email",
@@ -215,6 +217,7 @@ def _minimal_config(  # noqa: PLR0913
             id_parser=UUID,
         ),
         include_users=include_users,
+        extensions=cast("Any", extensions),
         login_identifier=login_identifier,
         superuser_role_name=superuser_role_name,
         role_permissions=role_permissions or {},
@@ -251,16 +254,6 @@ def test_on_app_init_runs_lifecycle_steps_in_order(monkeypatch: pytest.MonkeyPat
     monkeypatch.setattr(startup_module, "warn_insecure_plugin_startup_defaults", lambda _config: calls.append("warn"))
     monkeypatch.setattr(
         startup_module,
-        "require_oauth_token_encryption_for_configured_providers",
-        lambda **_kwargs: calls.append("require-oauth-key"),
-    )
-    monkeypatch.setattr(
-        startup_module,
-        "require_secure_oauth_redirect_in_production",
-        lambda **_kwargs: calls.append("require-oauth-redirect"),
-    )
-    monkeypatch.setattr(
-        startup_module,
         "bootstrap_bundled_token_orm_models",
         lambda _config: calls.append("bootstrap-token-models"),
     )
@@ -285,9 +278,72 @@ def test_on_app_init_runs_lifecycle_steps_in_order(monkeypatch: pytest.MonkeyPat
         "require-shared-rate-limit",
         "require-refreshable-strategy",
         "warn",
-        "require-oauth-key",
-        "require-oauth-redirect",
         "bootstrap-token-models",
+        "dependencies",
+        "middleware",
+        "openapi-security",
+        "controllers",
+        "exceptions",
+    ]
+
+
+def test_on_app_init_runs_extension_validation_after_core_guards(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Configured extension validation preserves core guard ordering before contribution registration."""
+    calls: list[str] = []
+
+    class RecordingExtension:
+        name = "recording"
+
+        def validate(self, context: AuthExtensionValidationContext) -> None:
+            assert context is not None
+            calls.append("extension-validate")
+
+        def register(self, context: AuthExtensionRegistrationContext) -> None:
+            assert context is not None
+            calls.append("extension-register")
+
+    plugin = LitestarAuth(_minimal_config(extensions=(RecordingExtension(),)))
+    app_config = AppConfig()
+
+    monkeypatch.setattr(
+        startup_module,
+        "require_shared_rate_limit_backends_for_multiworker",
+        lambda _config: calls.append("require-shared-rate-limit"),
+    )
+    monkeypatch.setattr(
+        startup_module,
+        "require_refreshable_strategy_when_enable_refresh",
+        lambda _config: calls.append("require-refreshable-strategy"),
+    )
+    monkeypatch.setattr(startup_module, "warn_insecure_plugin_startup_defaults", lambda _config: calls.append("warn"))
+    monkeypatch.setattr(
+        startup_module,
+        "bootstrap_bundled_token_orm_models",
+        lambda _config: calls.append("bootstrap-token-models"),
+    )
+    monkeypatch.setattr(plugin, "_register_dependencies", lambda _app_config: calls.append("dependencies"))
+    monkeypatch.setattr(plugin, "_register_middleware", lambda _app_config: calls.append("middleware"))
+    monkeypatch.setattr(
+        plugin,
+        "_register_openapi_security",
+        lambda _app_config: (calls.append("openapi-security"), None)[1],
+    )
+    monkeypatch.setattr(
+        plugin,
+        "_register_controllers",
+        lambda _app_config, *, security=None: calls.append("controllers") or [],  # noqa: ARG005
+    )
+    monkeypatch.setattr(plugin, "_register_exception_handlers", lambda _route_handlers: calls.append("exceptions"))
+
+    plugin.on_app_init(app_config)
+
+    assert calls == [
+        "require-shared-rate-limit",
+        "require-refreshable-strategy",
+        "warn",
+        "extension-validate",
+        "bootstrap-token-models",
+        "extension-register",
         "dependencies",
         "middleware",
         "openapi-security",
@@ -312,6 +368,14 @@ def test_feature_wiring_snapshots_registered_hook_order() -> None:
 
     assert registered_order == [
         (
+            0,
+            "extension_registration",
+            (),
+            (),
+            ("register_extensions",),
+            (),
+        ),
+        (
             10,
             "core",
             (
@@ -333,15 +397,114 @@ def test_feature_wiring_snapshots_registered_hook_order() -> None:
             ("register_exception_handlers",),
         ),
         (
+            15,
+            "extension_validation",
+            ("validate_extensions",),
+            (),
+            (),
+            (),
+        ),
+        (
             20,
             "oauth",
-            ("require_oauth_token_encryption_for_configured_providers", "require_secure_oauth_redirect_in_production"),
+            (),
             ("oauth_associate_user_manager",),
             (),
             (),
         ),
         (30, "database_token", ("bootstrap_bundled_token_orm_models",), (), (), ()),
     ]
+
+
+def test_iter_feature_wiring_excludes_extension_phases_without_extensions() -> None:
+    """The no-extension phase order remains the Step-0 baseline."""
+    assert [wiring.feature for wiring in plugin_hooks_module.iter_feature_wiring(_minimal_config())] == [
+        "core",
+        "oauth",
+        "database_token",
+    ]
+
+
+def test_iter_feature_wiring_includes_extension_phases_before_core_when_configured() -> None:
+    """Extension registration precedes core app wiring, while validation follows core startup guards."""
+
+    class NoopExtension:
+        name = "noop"
+
+        def validate(self, context: AuthExtensionValidationContext) -> None:
+            assert context is not None
+
+        def register(self, context: AuthExtensionRegistrationContext) -> None:
+            assert context is not None
+
+    assert [
+        wiring.feature
+        for wiring in plugin_hooks_module.iter_feature_wiring(_minimal_config(extensions=(NoopExtension(),)))
+    ] == [
+        "extension_registration",
+        "core",
+        "extension_validation",
+        "oauth",
+        "database_token",
+    ]
+
+
+def test_iter_feature_wiring_excludes_extension_phases_when_only_extension_is_disabled() -> None:
+    """A disabled-only extension config follows the same startup path as extensions=()."""
+
+    class DisabledExtension:
+        name = "disabled"
+        enabled = False
+
+        def validate(self, context: AuthExtensionValidationContext) -> None:
+            assert context is not None
+
+        def register(self, context: AuthExtensionRegistrationContext) -> None:
+            assert context is not None
+
+    assert [
+        wiring.feature
+        for wiring in plugin_hooks_module.iter_feature_wiring(_minimal_config(extensions=(DisabledExtension(),)))
+    ] == [
+        "core",
+        "oauth",
+        "database_token",
+    ]
+
+
+def test_iter_feature_wiring_supports_extension_carrier_without_resolver() -> None:
+    """The wiring predicate keeps the structural fallback for non-config carriers."""
+
+    class ExtensionCarrier:
+        extensions = (object(),)
+
+    assert [wiring.feature for wiring in plugin_hooks_module.iter_feature_wiring(ExtensionCarrier())] == [
+        "extension_registration",
+        "core",
+        "extension_validation",
+        "oauth",
+        "database_token",
+    ]
+
+
+def test_after_startup_wiring_rejects_unknown_app_init_hook(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A descriptor naming an unknown app-init hook fails the dispatch closed."""
+    plugin = LitestarAuth(_minimal_config())
+    bogus = plugin_hooks_module.FeatureWiring(order=10, feature="core", after_startup=("not_a_real_phase",))
+    monkeypatch.setattr(plugin_module, "iter_feature_wiring", lambda _config: (bogus,))
+
+    with pytest.raises(RuntimeError, match="Unknown auth app-init wiring hook: not_a_real_phase"):
+        plugin._run_after_startup_wiring(AppConfig())
+
+
+def test_after_startup_wiring_rejects_unknown_exception_handler_hook(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A descriptor naming an unknown exception-handler hook fails the dispatch closed."""
+    plugin = LitestarAuth(_minimal_config())
+    bogus = plugin_hooks_module.FeatureWiring(order=10, feature="core", exception_handlers=("not_a_real_handler",))
+    monkeypatch.setattr(plugin_module, "iter_feature_wiring", lambda _config: (bogus,))
+
+    with pytest.raises(RuntimeError, match="Unknown auth exception-handler wiring hook: not_a_real_handler"):
+        plugin._run_after_startup_wiring(AppConfig())
 
 
 def test_register_openapi_security_disabled_returns_none() -> None:

@@ -2446,29 +2446,49 @@ def test_validate_totp_config_skips_insecure_cookie_warning_in_testing(
     assert not records
 
 
-def test_validate_totp_sub_config_rejects_missing_pending_jti_store_in_production(
-    monkeypatch: pytest.MonkeyPatch,
+@pytest.mark.parametrize(
+    ("missing_field", "expected_message"),
+    [
+        pytest.param(
+            "totp_pending_jti_store",
+            "totp_pending_jti_store is required",
+            id="pending-jti-store",
+        ),
+        pytest.param(
+            "totp_enrollment_store",
+            "totp_enrollment_store is required",
+            id="enrollment-store",
+        ),
+        pytest.param(
+            "totp_used_tokens_store",
+            "totp_used_tokens_store is required",
+            id="used-tokens-store",
+        ),
+    ],
+)
+def test_validate_totp_sub_config_rejects_missing_store_in_production(
+    missing_field: str,
+    expected_message: str,
 ) -> None:
-    """Pending-token replay protection requires a configured denylist outside explicit unsafe testing."""
-    with pytest.raises(ValueError, match="totp_pending_jti_store is required"):
-        validate_totp_sub_config(
-            TotpConfig(totp_pending_secret=TOTP_PENDING_SECRET),
-            user_manager_class=PluginUserManager,
-        )
+    """TOTP store requirements all use the plugin configuration error contract."""
+    store_kwargs: dict[str, Any] = {
+        "totp_pending_jti_store": _DurableDenylistStore(),
+        "totp_enrollment_store": _DurableEnrollmentStore(),
+        "totp_used_tokens_store": object(),
+    }
+    store_kwargs[missing_field] = None
 
-
-def test_validate_totp_sub_config_rejects_missing_enrollment_store_in_production(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Pending enrollment state requires a configured store outside explicit unsafe testing."""
-    with pytest.raises(ValueError, match="totp_enrollment_store is required"):
+    with pytest.raises(ConfigurationError, match=expected_message) as exc_info:
         validate_totp_sub_config(
             TotpConfig(
                 totp_pending_secret=TOTP_PENDING_SECRET,
-                totp_pending_jti_store=cast("Any", _DurableDenylistStore()),
+                totp_pending_jti_store=cast("Any", store_kwargs["totp_pending_jti_store"]),
+                totp_enrollment_store=cast("Any", store_kwargs["totp_enrollment_store"]),
+                totp_used_tokens_store=cast("Any", store_kwargs["totp_used_tokens_store"]),
             ),
             user_manager_class=PluginUserManager,
         )
+    assert type(exc_info.value) is ConfigurationError
 
 
 def test_validate_totp_sub_config_rejects_missing_pending_secret() -> None:
@@ -2660,6 +2680,14 @@ def test_require_secure_oauth_redirect_in_production_accepts_public_https_origin
     )
 
     require_secure_oauth_redirect_in_production(config=config, app_config=AppConfig(debug=False))
+
+
+def test_require_secure_oauth_redirect_in_production_skips_empty_provider_inventory() -> None:
+    """Production redirect validation is inert without plugin-owned OAuth login routes."""
+    require_secure_oauth_redirect_in_production(
+        config=_minimal_config(oauth_config=None),
+        app_config=AppConfig(debug=False),
+    )
 
 
 def test_require_secure_oauth_redirect_in_production_forwards_strict_dns_flag(
@@ -3024,7 +3052,7 @@ def test_validate_config_keeps_unsafe_testing_instance_scoped(
     )
     relaxed_config.unsafe_testing = True
 
-    with pytest.raises(ValueError, match="totp_require_replay_protection=True requires"):
+    with pytest.raises(ConfigurationError, match="used_tokens_store is required"):
         validate_config(strict_config)
 
     validate_config(relaxed_config)

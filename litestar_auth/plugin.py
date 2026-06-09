@@ -16,7 +16,6 @@ from litestar_auth._plugin.advanced_alchemy import (
 )
 from litestar_auth._plugin.controllers import (
     build_controllers,
-    totp_backend,
 )
 from litestar_auth._plugin.dependencies import (
     DependencyProviders,
@@ -44,19 +43,21 @@ from litestar_auth._plugin.validation import (
 from litestar_auth.authentication import Authenticator, LitestarAuthMiddleware, LitestarAuthMiddlewareConfig
 from litestar_auth.config import OAuthProviderConfig
 from litestar_auth.oauth_encryption import (
-    OAuthTokenEncryption,
+    _build_oauth_token_encryption,
     require_oauth_token_encryption,
 )
 from litestar_auth.types import UserProtocol
 
 if TYPE_CHECKING:
-    from collections.abc import Sequence
+    from collections.abc import Callable, Collection, Mapping, Sequence
 
     from litestar.cli._utils import Group
     from litestar.config.app import AppConfig
     from litestar.types import ControllerRouterHandler
     from sqlalchemy.ext.asyncio import AsyncSession
 
+    from litestar_auth._manager.hooks import ExtensionManagerHookSubscriber
+    from litestar_auth._plugin.extensions import ExtensionRegistrationContext, ExtensionRegistrationContributions
     from litestar_auth.authentication.backend import AuthenticationBackend
     from litestar_auth.manager import BaseUserManager
 
@@ -113,6 +114,8 @@ class LitestarAuth[UP: UserProtocol[Any], ID](InitPlugin, CLIPlugin):
             self._build_user_manager,
             self.config.db_session_dependency_key,
         )
+        self._extension_registration_context: ExtensionRegistrationContext[UP, ID] | None = None
+        self._manager_hook_subscribers: tuple[ExtensionManagerHookSubscriber, ...] = ()
 
     @override
     def on_app_init(self, app_config: AppConfig) -> AppConfig:
@@ -132,11 +135,22 @@ class LitestarAuth[UP: UserProtocol[Any], ID](InitPlugin, CLIPlugin):
     @override
     def on_cli_init(self, cli: Group) -> None:
         """Register plugin-owned CLI commands without affecting app startup wiring."""
-        from litestar_auth._plugin.organization_cli import register_organizations_cli  # noqa: PLC0415
+        from litestar_auth._plugin.extensions import (  # noqa: PLC0415
+            build_extension_validation_context,
+            resolve_version_gated_extensions,
+        )
         from litestar_auth._plugin.role_cli import register_roles_cli  # noqa: PLC0415
+        from litestar_auth.extensions import AuthCliExtension  # noqa: PLC0415
+
+        extensions = resolve_version_gated_extensions(self.config)
+        validation_context = build_extension_validation_context(self.config)
+        cli_extensions = tuple(extension for extension in extensions if isinstance(extension, AuthCliExtension))
+        for extension in cli_extensions:
+            extension.validate(validation_context)
 
         register_roles_cli(cli, self.config)
-        register_organizations_cli(cli, self.config)
+        for extension in cli_extensions:
+            extension.register_cli(cli, self.config)
 
     def _session_bound_backends(self, session: AsyncSession) -> list[AuthenticationBackend[UP, ID]]:
         """Bind all configured backends to the current request-local DB session.
@@ -158,12 +172,21 @@ class LitestarAuth[UP: UserProtocol[Any], ID](InitPlugin, CLIPlugin):
             oauth_token_encryption=self._oauth_token_encryption,
         )
         bound_backends = tuple(backends or self._session_bound_backends(session))
-        return self._user_manager_factory(
+        manager = self._user_manager_factory(
             session=session,
             user_db=user_db,
             config=self.config,
             backends=bound_backends,
         )
+        self._attach_extension_manager_hook_subscribers(manager)
+        return manager
+
+    def _attach_extension_manager_hook_subscribers(self, manager: BaseUserManager[UP, ID]) -> None:
+        from litestar_auth._plugin.user_manager_builder import (  # noqa: PLC0415
+            attach_extension_manager_hook_subscribers,
+        )
+
+        attach_extension_manager_hook_subscribers(manager, self._manager_hook_subscribers)
 
     def _build_authenticator(self, session: AsyncSession) -> Authenticator[UP, ID]:
         backends = self._session_bound_backends(session)
@@ -190,6 +213,7 @@ class LitestarAuth[UP: UserProtocol[Any], ID](InitPlugin, CLIPlugin):
 
         backend_inventory = self.config.resolve_feature_registry().backend_inventory
         schemes = register_openapi_security(app_config, backend_inventory.startup_backends())
+        self._register_extension_openapi_security(app_config, core_security_scheme_names=schemes.keys())
         return build_security_requirement(schemes) or None
 
     def _register_controllers(
@@ -198,7 +222,7 @@ class LitestarAuth[UP: UserProtocol[Any], ID](InitPlugin, CLIPlugin):
         *,
         security: list[dict[str, list[str]]] | None = None,
     ) -> list[ControllerRouterHandler]:
-        controllers = build_controllers(self.config, security=security)
+        controllers = [*build_controllers(self.config, security=security), *self._build_extension_controllers()]
         if self.config.controller_hook is not None:
             controllers = self.config.controller_hook(controllers)
         app_config.route_handlers.extend(controllers)
@@ -206,6 +230,7 @@ class LitestarAuth[UP: UserProtocol[Any], ID](InitPlugin, CLIPlugin):
 
     def _register_exception_handlers(self, route_handlers: Sequence[ControllerRouterHandler]) -> None:
         """Register ClientException handlers for litestar-auth-generated routes only."""
+        self._register_extension_exception_handlers()
         register_exception_handlers(
             route_handlers,
             exception_response_hook=self.config.exception_response_hook,
@@ -218,28 +243,41 @@ class LitestarAuth[UP: UserProtocol[Any], ID](InitPlugin, CLIPlugin):
             RuntimeError: If the wiring table names an unknown app-init hook.
         """
         security: list[dict[str, list[str]]] | None = None
+
+        def register_openapi_security() -> None:
+            nonlocal security
+            security = self._register_openapi_security(app_config)
+
+        def register_controllers() -> None:
+            self._register_controllers(app_config, security=security)
+
+        app_init_phases: Mapping[str, Callable[[], None]] = {
+            "register_extensions": lambda: self._register_extensions(app_config),
+            "register_dependencies": lambda: self._register_dependencies(app_config),
+            "register_middleware": lambda: self._register_middleware(app_config),
+            "register_openapi_security": register_openapi_security,
+            "register_controllers": register_controllers,
+        }
+        exception_handler_phases: Mapping[str, Callable[[], None]] = {
+            "register_exception_handlers": lambda: self._register_exception_handlers(app_config.route_handlers),
+        }
         for wiring in iter_feature_wiring(self.config):
             for hook_name in wiring.after_startup:
-                if hook_name == "register_dependencies":
-                    self._register_dependencies(app_config)
-                elif hook_name == "register_middleware":
-                    self._register_middleware(app_config)
-                elif hook_name == "register_openapi_security":
-                    security = self._register_openapi_security(app_config)
-                elif hook_name == "register_controllers":
-                    self._register_controllers(app_config, security=security)
-                else:  # pragma: no cover - descriptor validation protects this branch
+                phase = app_init_phases.get(hook_name)
+                if phase is None:
                     msg = f"Unknown auth app-init wiring hook: {hook_name}"
                     raise RuntimeError(msg)
+                phase()
 
             for hook_name in wiring.exception_handlers:
-                if hook_name == "register_exception_handlers":
-                    self._register_exception_handlers(app_config.route_handlers)
-                else:  # pragma: no cover - descriptor validation protects this branch
+                phase = exception_handler_phases.get(hook_name)
+                if phase is None:
                     msg = f"Unknown auth exception-handler wiring hook: {hook_name}"
                     raise RuntimeError(msg)
+                phase()
 
     def _register_dependencies(self, app_config: AppConfig) -> None:
+        contributions = self._extension_contributions()
         register_dependencies(
             app_config,
             self.config,
@@ -250,6 +288,7 @@ class LitestarAuth[UP: UserProtocol[Any], ID](InitPlugin, CLIPlugin):
                 user_model=self._provide_user_model,
                 oauth_associate_user_manager=self._provide_oauth_associate_user_manager,
             ),
+            extension_dependencies=contributions.dependencies,
         )
 
     def _register_middleware(self, app_config: AppConfig) -> None:
@@ -294,6 +333,60 @@ class LitestarAuth[UP: UserProtocol[Any], ID](InitPlugin, CLIPlugin):
         if self.config.middleware_hook is not None:
             middleware = self.config.middleware_hook(middleware)
         app_config.middleware.insert(0, middleware)
+        self._register_extension_middleware(app_config, after_index=1)
+
+    def _register_extensions(self, app_config: AppConfig) -> None:
+        from litestar_auth._plugin.extensions import register_extensions  # noqa: PLC0415
+
+        self._extension_registration_context = register_extensions(app_config=app_config, config=self.config)
+        self._manager_hook_subscribers = tuple(
+            self._extension_registration_context.contributions.manager_hook_subscribers,
+        )
+
+    def _extension_contributions(self) -> ExtensionRegistrationContributions:
+        from litestar_auth._plugin.extensions import ExtensionRegistrationContributions  # noqa: PLC0415
+
+        if self._extension_registration_context is None:
+            return ExtensionRegistrationContributions()
+        return self._extension_registration_context.contributions
+
+    def _register_extension_middleware(self, app_config: AppConfig, *, after_index: int) -> None:
+        from litestar_auth._plugin.extensions import apply_extension_middleware  # noqa: PLC0415
+
+        apply_extension_middleware(
+            app_config,
+            contributions=self._extension_contributions(),
+            after_index=after_index,
+        )
+
+    def _register_extension_openapi_security(
+        self,
+        app_config: AppConfig,
+        *,
+        core_security_scheme_names: Collection[str] = (),
+    ) -> dict[str, object]:
+        from litestar_auth._plugin.extensions import register_extension_openapi_security  # noqa: PLC0415
+
+        return register_extension_openapi_security(
+            app_config,
+            contributions=self._extension_contributions(),
+            core_security_scheme_names=core_security_scheme_names,
+        )
+
+    def _build_extension_controllers(self) -> list[ControllerRouterHandler]:
+        from litestar_auth._plugin.extensions import build_extension_controllers  # noqa: PLC0415
+
+        return build_extension_controllers(contributions=self._extension_contributions())
+
+    def _register_extension_exception_handlers(self) -> None:
+        if self._extension_registration_context is None:
+            return
+        from litestar_auth._plugin.extensions import register_extension_exception_handlers  # noqa: PLC0415
+
+        register_extension_exception_handlers(
+            self._extension_registration_context.app_config,
+            contributions=self._extension_contributions(),
+        )
 
     def _provide_backends(self) -> tuple[StartupBackendTemplate[UP, ID], ...]:
         return self.config.resolve_feature_registry().startup_backends()
@@ -306,6 +399,8 @@ class LitestarAuth[UP: UserProtocol[Any], ID](InitPlugin, CLIPlugin):
 
     def _totp_backend(self) -> StartupBackendTemplate[UP, ID]:
         backend_inventory = self.config.resolve_feature_registry().backend_inventory
+        from litestar_auth._plugin.totp_controller import totp_backend  # noqa: PLC0415
+
         return totp_backend(self.config, backend_inventory=backend_inventory)
 
 
@@ -323,23 +418,3 @@ __all__ = (
     "TotpConfig",
     "bind_auth_session_to_alchemy",
 )
-
-
-def _build_oauth_token_encryption[UP: UserProtocol[Any], ID](
-    config: LitestarAuthConfig[UP, ID],
-) -> OAuthTokenEncryption | None:
-    """Return the plugin-scoped OAuth token encryption policy for a config."""
-    oauth_config = config.oauth_config
-    if oauth_config is None:
-        return None
-    keyring = oauth_config.oauth_token_encryption_keyring
-    if keyring is not None:
-        return OAuthTokenEncryption(
-            unsafe_testing=config.unsafe_testing,
-            active_key_id=keyring.active_key_id,
-            keys=keyring.keys,
-        )
-    return OAuthTokenEncryption(
-        oauth_config.oauth_token_encryption_key,
-        unsafe_testing=config.unsafe_testing,
-    )

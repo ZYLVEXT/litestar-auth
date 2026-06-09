@@ -14,9 +14,11 @@ if TYPE_CHECKING:
         create_organization_admin_controller,
         create_organization_invitation_controller,
     )
+    from litestar_auth.contrib.organization_admin._extension import OrganizationAdminExtension
 
 __all__ = (
     "OrganizationAdminControllerConfig",
+    "OrganizationAdminExtension",
     "OrganizationInvitationControllerConfig",
     "create_organization_admin_controller",
     "create_organization_invitation_controller",
@@ -38,6 +40,9 @@ def __getattr__(name: str) -> Callable[..., object]:
     if name == "create_organization_admin_controller":
         controller_module = import_module("litestar_auth.contrib.organization_admin._controller")
         return controller_module.create_organization_admin_controller
+    if name == "OrganizationAdminExtension":
+        extension_module = import_module("litestar_auth.contrib.organization_admin._extension")
+        return extension_module.OrganizationAdminExtension
     if name == "OrganizationInvitationControllerConfig":
         controller_module = import_module("litestar_auth.contrib.organization_admin._controller")
         return controller_module.OrganizationInvitationControllerConfig

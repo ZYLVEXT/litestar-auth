@@ -19,6 +19,14 @@ Use this page for `TotpConfig` fields and the plugin-owned TOTP route contract.
 
 Routes: `{auth_path}/2fa/...`. See [TOTP guide](../guides/totp.md).
 
+When `LitestarAuthConfig.totp_config` is set, the plugin derives an internal TOTP extension and
+mounts the bundled TOTP controller through the same extension contribution mechanism used by other
+optional route surfaces. This is an internal wiring detail: applications enable plugin-owned TOTP
+with `totp_config`, not by instantiating a public TOTP extension. The extension contributes the
+same `/2fa` controller and keeps controller-build validation in the factory path, so missing replay
+stores or production TOTP secret encryption still fail when the controller is built during plugin
+startup.
+
 The plugin-owned TOTP flow follows `LitestarAuthConfig.requires_verification`, which defaults
 to `True`. Manual `create_totp_controller(...)` wiring should keep that flag aligned with the auth
 controller so unverified accounts cannot complete the second authentication step. When both checks
@@ -38,6 +46,13 @@ the same keyword names, typed by `TotpControllerOptions`. In production,
 Use `BaseUserManager.totp_secret_requires_reencrypt(...)` and
 `BaseUserManager.reencrypt_totp_secret_for_storage(...)` from migration code that rewrites stored
 values under the active configured key.
+
+Startup validation for plugin-owned TOTP store requirements fails with `ConfigurationError`.
+This includes missing `totp_pending_jti_store`, `totp_enrollment_store`, and
+`totp_used_tokens_store` when `unsafe_testing=False`. This is an intentional breaking change from
+the earlier `ValueError` raised for missing pending-token and enrollment stores; catch
+`ConfigurationError` around plugin configuration validation if the application handles startup
+misconfiguration explicitly.
 
 For rotation, add a new Fernet key id to `user_manager_security.totp_secret_keyring.keys`, deploy the
 expanded keyring first, then switch `active_key_id` to the new id. New pending-enrollment and

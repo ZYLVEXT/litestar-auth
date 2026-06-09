@@ -27,6 +27,7 @@ from litestar_auth.authentication.strategy.base import (
     TokenInvalidationCapable,
     UserManagerProtocol,
 )
+from litestar_auth.config import TOTP_PENDING_AUDIENCE as _TOTP_PENDING_AUDIENCE
 from litestar_auth.config import validate_production_secret
 from litestar_auth.controllers._auth_helpers import (
     _attach_refresh_token,
@@ -56,13 +57,6 @@ from litestar_auth.controllers._utils import (
 from litestar_auth.exceptions import ConfigurationError, ErrorCode
 from litestar_auth.guards import is_authenticated
 from litestar_auth.payloads import LoginCredentials, RefreshTokenRequest  # noqa: TC001
-from litestar_auth.totp_flow import TOTP_PENDING_AUDIENCE as _TOTP_PENDING_AUDIENCE
-from litestar_auth.totp_flow import (
-    TotpFlowUserManagerProtocol,
-    TotpLoginFlowConfig,
-    TotpLoginFlowService,
-    build_pending_totp_client_binding,
-)
 from litestar_auth.types import LoginIdentifier, TotpUserProtocol, UserProtocol
 
 if TYPE_CHECKING:
@@ -328,29 +322,32 @@ async def _maybe_issue_totp_pending_response[UP: UserProtocol[Any], ID](
     user_manager: AuthControllerUserManagerProtocol[UP, ID],
 ) -> Response[Any] | None:
     """Return a pending-2FA response when TOTP is configured for this login."""
-    totp_login_flow = (
-        TotpLoginFlowService[TotpUserProtocol[Any], ID](
-            user_manager=cast(
-                "TotpFlowUserManagerProtocol[TotpUserProtocol[Any], ID]",
-                user_manager,
-            ),
-            config=TotpLoginFlowConfig(
-                totp_pending_secret=ctx.totp_pending_secret,
-                totp_pending_lifetime=ctx.totp_pending_lifetime,
-                require_client_binding=ctx.totp_pending_require_client_binding,
-            ),
-        )
-        if ctx.totp_pending_secret is not None
-        else None
-    )
-    if totp_login_flow is None:
+    if ctx.totp_pending_secret is None:
         return None
 
+    from litestar_auth.totp_flow import (  # noqa: PLC0415
+        TotpFlowUserManagerProtocol,
+        TotpLoginFlowConfig,
+        TotpLoginFlowService,
+        build_pending_totp_client_binding,
+    )
+
+    totp_login_flow = TotpLoginFlowService[TotpUserProtocol[Any], ID](
+        user_manager=cast(
+            "TotpFlowUserManagerProtocol[TotpUserProtocol[Any], ID]",
+            user_manager,
+        ),
+        config=TotpLoginFlowConfig(
+            totp_pending_secret=ctx.totp_pending_secret,
+            totp_pending_lifetime=ctx.totp_pending_lifetime,
+            require_client_binding=ctx.totp_pending_require_client_binding,
+        ),
+    )
     totp_user = cast("TotpUserProtocol[Any]", user)
     client_binding = (
         build_pending_totp_client_binding(
             request,
-            pending_secret=cast("str", ctx.totp_pending_secret),
+            pending_secret=ctx.totp_pending_secret,
             trusted_proxy=ctx.totp_pending_client_binding_trusted_proxy,
             trusted_headers=ctx.totp_pending_client_binding_trusted_headers,
             trusted_proxy_hops=ctx.totp_pending_client_binding_trusted_proxy_hops,
@@ -384,7 +381,9 @@ async def _build_authenticated_login_response[UP: UserProtocol[Any], ID](
     """
     await ctx.login_reset(request)
     response = await ctx.backend.login(user)
-    await user_manager.on_after_login(user)
+    from litestar_auth._manager.hooks import dispatch_after_login  # noqa: PLC0415
+
+    await dispatch_after_login(user_manager, user)
     if ctx.refresh_strategy is None:
         return response
     _record_refresh_token_request_context(ctx.refresh_strategy, request)

@@ -39,7 +39,7 @@ def _as_any(value: object) -> Any:  # noqa: ANN401
 
 def test_contrib_role_admin_package_exposes_only_its_documented_factory() -> None:
     """The contrib package preserves its narrow public surface."""
-    assert role_admin_all == ("RoleAdminControllerConfig", "create_role_admin_controller")
+    assert role_admin_all == ("RoleAdminControllerConfig", "RoleAdminExtension", "create_role_admin_controller")
     assert role_admin_module.RoleAdminControllerConfig is RoleAdminControllerConfig
 
     missing_name = "missing_factory"

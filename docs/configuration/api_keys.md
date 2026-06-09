@@ -2,7 +2,8 @@
 
 API-key authentication is opt-in. Set `LitestarAuthConfig.api_keys` with `ApiKeyConfig(enabled=True, ...)` to add the
 API-key backend, self-service routes under `/api-keys`, admin routes under `/users/{user_id}/api-keys`, and the
-`apiKeyAuth` OpenAPI security scheme.
+`apiKeyAuth` OpenAPI security scheme. The plugin mounts the management routes through an internal extension derived from
+`api_keys.enabled`; the API-key authentication backend remains configured by the normal backend registry.
 
 ```python
 from datetime import timedelta
@@ -68,6 +69,10 @@ Admin routes are guarded by `is_superuser` and use the path user id as authority
 `POST /users/{user_id}/api-keys`, `GET /users/{user_id}/api-keys`, and
 `DELETE /users/{user_id}/api-keys/{key_id}`. Request bodies never choose the target user, and admin
 create requests do not require the target user's `current_password`.
+
+For advanced manual routing, `create_api_keys_controllers(...)` and `ApiKeysControllerConfig(...)` remain public. That
+factory builds the same self-service and admin controller classes used by the plugin-managed extension; leave
+`api_keys.enabled=False` when mounting those controllers yourself to avoid duplicate routes.
 
 When TOTP is enrolled, API-key create/update/revoke routes use the `api_keys.*` entries in
 `LitestarAuthConfig.totp_stepup_policy` and default to `required_when_enrolled`. `POST` and `PATCH`

@@ -20,6 +20,7 @@ if TYPE_CHECKING:
     from litestar_auth._plugin.config import LitestarAuthConfig
     from litestar_auth._plugin.scoped_session import SessionFactory
     from litestar_auth.db import BaseOrganizationStore
+    from litestar_auth.extensions import AuthExtensionRegistrationContext, AuthExtensionValidationContext
 
 _ORGANIZATION_CLI_CONTEXT_KEY = "litestar_auth.organization_cli"
 _CLI_LIST_LIMIT = 2_147_483_647
@@ -76,6 +77,26 @@ def register_organizations_cli[ID](
     ):
         return
     cli.add_command(build_organizations_group(cli, config))
+
+
+class _OrganizationCliExtension:
+    """Internal extension that owns plugin-managed organization CLI commands."""
+
+    name = "organization_cli"
+    enabled = True
+
+    @staticmethod
+    def validate(context: AuthExtensionValidationContext) -> None:
+        """CLI registration validates lazily when the command group is invoked."""
+
+    @staticmethod
+    def register(context: AuthExtensionRegistrationContext) -> None:
+        """CLI registration is separate from app-startup wiring."""
+
+    @staticmethod
+    def register_cli[ID](cli: Group, config: LitestarAuthConfig[Any, ID]) -> None:
+        """Register the organization CLI group through the extension CLI contract."""
+        register_organizations_cli(cli, config)
 
 
 def build_organizations_group[ID](

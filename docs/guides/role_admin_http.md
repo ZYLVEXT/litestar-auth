@@ -1,13 +1,15 @@
 # HTTP role administration
 
 Use this guide for the supported HTTP role-management surface:
+`litestar_auth.contrib.role_admin.RoleAdminExtension` or
 `litestar_auth.contrib.role_admin.create_role_admin_controller(...)`.
 
 !!! warning "Opt-in admin surface"
-    `LitestarAuth` does not auto-mount this controller. Import and register it
-    explicitly, keep the default `is_superuser` guard unless you have reviewed
-    a stricter replacement, and treat guard overrides as security-sensitive
-    application code.
+    `LitestarAuth` does not auto-mount role administration. Opt in with
+    `RoleAdminExtension` or register the factory-built controller explicitly,
+    keep the default `is_superuser` guard unless you have reviewed a stricter
+    replacement, and treat guard overrides as security-sensitive application
+    code.
 
 !!! note "Contrib expectations"
     `litestar_auth.contrib.role_admin` is a public contrib module. It is
@@ -15,10 +17,77 @@ Use this guide for the supported HTTP role-management surface:
     route table. Read the changelog when upgrading and keep app-owned tests
     around the routes you mount.
 
+## Mount it through the plugin
+
+The plugin-managed path is `RoleAdminExtension`. It validates the role-admin
+model prerequisites during plugin startup, contributes the generated controller
+through the auth extension registry, and marks the route table as
+litestar-auth-owned so route-scoped auth exception handlers apply to role-admin
+errors.
+
+```python
+from uuid import UUID
+
+from litestar import Litestar
+
+from litestar_auth import LitestarAuth, LitestarAuthConfig
+from litestar_auth.contrib.role_admin import RoleAdminExtension
+from litestar_auth.manager import BaseUserManager, UserManagerSecurity
+from litestar_auth.models import User
+
+
+class UserManager(BaseUserManager[User, UUID]):
+    pass
+
+
+config = LitestarAuthConfig[User, UUID](
+    session_maker=session_maker,
+    user_model=User,
+    user_manager_class=UserManager,
+    user_manager_security=UserManagerSecurity(
+        verification_token_secret="replace-with-32+-char-secret",
+        reset_password_token_secret="replace-with-32+-char-secret",
+    ),
+    extensions=(RoleAdminExtension(),),
+)
+
+app = Litestar(plugins=[LitestarAuth(config)])
+```
+
+By default the extension mounts the same controller as the manual factory path:
+`/roles` with `guards=[is_superuser]`.
+
+```python
+from litestar_auth.guards import has_any_role
+
+config = LitestarAuthConfig[User, UUID](
+    session_maker=session_maker,
+    user_model=User,
+    user_manager_class=UserManager,
+    user_manager_security=UserManagerSecurity(
+        verification_token_secret="replace-with-32+-char-secret",
+        reset_password_token_secret="replace-with-32+-char-secret",
+    ),
+    extensions=(
+        RoleAdminExtension(
+            route_prefix="admin/roles",
+            guards=[has_any_role("role_admin", "superuser")],
+        ),
+    ),
+)
+```
+
+The extension does not add a new OpenAPI security scheme. It relies on the
+schemes already registered by `LitestarAuthConfig.include_openapi_security`;
+protected operations remain guarded by Litestar guards at runtime. If your
+OpenAPI consumers require operation-level security metadata on role-admin
+routes, add it through your application-level OpenAPI customization in the same
+way you would for other app-owned guarded routes.
+
 ## Mount it alongside the plugin
 
-The simplest supported path is to build the controller from the same
-`LitestarAuthConfig` instance that already wires your plugin:
+The manual factory path remains public and supported. Build the controller from
+the same `LitestarAuthConfig` instance that already wires your plugin:
 
 ```python
 from uuid import UUID
@@ -55,7 +124,9 @@ app = Litestar(
 
 That `config=` path keeps the HTTP controller aligned with the plugin-owned
 session factory, `db_session_dependency_key`, role-model family resolution, and
-manager construction used by the CLI and the rest of the auth stack.
+manager construction used by the CLI and the rest of the auth stack. When using
+this manual path, the factory still marks the generated controller as
+litestar-auth-owned so scoped auth exception handling is preserved.
 
 For direct grouped settings, pass `RoleAdminControllerConfig(...)` as
 `controller_config=...`. The existing `config=...` keyword remains the
@@ -66,7 +137,8 @@ For direct grouped settings, pass `RoleAdminControllerConfig(...)` as
 - Resolves the relational role model family from `config.user_model` by
   default. You can still override `user_model`, `role_model`, or
   `user_role_model` explicitly when needed.
-- Mounts under `/roles` by default. `route_prefix="admin/roles"` becomes
+- Mounts under `/roles` by default. `RoleAdminExtension(route_prefix="admin/roles")`
+  or `create_role_admin_controller(route_prefix="admin/roles")` becomes
   `/admin/roles`.
 - Applies `guards=[is_superuser]` by default.
 - Publishes the fixed contrib payloads from

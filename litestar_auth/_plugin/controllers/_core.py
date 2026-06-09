@@ -4,12 +4,6 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
-from litestar_auth._plugin._oauth_controllers import (
-    _append_oauth_associate_controllers,
-    _append_oauth_login_controllers,
-    create_oauth_associate_controller,
-    create_oauth_login_controller,
-)
 from litestar_auth._plugin.auth_controller import PluginAuthControllerSettings, create_auth_controller
 from litestar_auth._plugin.config import (
     LitestarAuthConfig,
@@ -24,28 +18,16 @@ from litestar_auth._plugin.controllers._factory_kit import (
     user_read_schema_kwargs,
     users_schema_kwargs,
 )
-from litestar_auth._plugin.totp_controller import (
-    build_totp_controller,
-    create_totp_controller,
-    totp_backend,
-    totp_path,
-)
 from litestar_auth.authentication.transport.api_key import ApiKeyTransport
-from litestar_auth.contrib.organization_admin import (
-    OrganizationInvitationControllerConfig,
-    create_organization_admin_controller,
-    create_organization_invitation_controller,
-)
-from litestar_auth.controllers import (
+from litestar_auth.controllers.organization import (
     OrganizationControllerConfig,
     backend_supports_organization_tokens,
-    create_api_keys_controllers,
     create_organization_controller,
-    create_register_controller,
-    create_reset_password_controller,
-    create_users_controller,
-    create_verify_controller,
 )
+from litestar_auth.controllers.register import create_register_controller
+from litestar_auth.controllers.reset import create_reset_password_controller
+from litestar_auth.controllers.users import create_users_controller
+from litestar_auth.controllers.verify import create_verify_controller
 from litestar_auth.types import UserProtocol
 
 if TYPE_CHECKING:
@@ -57,14 +39,8 @@ if TYPE_CHECKING:
 
 __all__ = (
     "build_controllers",
-    "build_totp_controller",
     "create_auth_controller",
-    "create_oauth_associate_controller",
-    "create_oauth_login_controller",
     "create_organization_controller",
-    "create_totp_controller",
-    "totp_backend",
-    "totp_path",
 )
 
 
@@ -150,12 +126,6 @@ def _append_optional_feature_controllers[UP: UserProtocol[Any], ID](
         backend_inventory=backend_inventory,
         security=security,
     )
-    _append_oauth_login_controllers(
-        controllers=controllers,
-        config=config,
-        backend_inventory=backend_inventory,
-    )
-    _append_oauth_associate_controllers(controllers=controllers, config=config, security=security)
     _append_organization_controllers(
         controllers=controllers,
         config=config,
@@ -175,16 +145,6 @@ def _append_organization_controllers[UP: UserProtocol[Any], ID](
     organization_config = config.organization_config
     if not organization_config.enabled:
         return
-
-    if organization_config.include_organization_admin:
-        controllers.append(create_organization_admin_controller(config=config, route_prefix="organizations"))
-
-    if organization_config.include_organization_invitations:
-        controllers.append(
-            create_organization_invitation_controller(
-                OrganizationInvitationControllerConfig(config=config, security=security),
-            ),
-        )
 
     if not organization_config.include_switch_organization:
         return
@@ -272,7 +232,7 @@ def _append_session_feature_controllers[UP: UserProtocol[Any], ID](
     backend_inventory: StartupBackendInventory[UP, ID] | None,
     security: Sequence[SecurityRequirement] | None,
 ) -> None:
-    """Append optional session, API-key, and TOTP controllers."""
+    """Append optional session controllers."""
     if config.include_session_devices:
         controllers.append(
             create_session_devices_controller(
@@ -281,17 +241,3 @@ def _append_session_feature_controllers[UP: UserProtocol[Any], ID](
                 security=security,
             ),
         )
-    if config.api_keys.enabled:
-        controllers.extend(
-            create_api_keys_controllers(
-                id_parser=config.id_parser,
-                rate_limit_config=config.rate_limit_config,
-                security=security,
-                users_path=config.users_path,
-                require_step_up_on_create=config.api_keys.require_step_up_on_create,
-                signing_enabled=config.api_keys.signing_enabled,
-                totp_stepup_policy=config.totp_stepup_policy,
-            ),
-        )
-    if config.totp_config is not None:
-        controllers.append(build_totp_controller(config, backend_inventory=backend_inventory, security=security))

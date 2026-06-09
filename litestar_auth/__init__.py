@@ -48,6 +48,7 @@ from litestar_auth._tenant_resolution import (
 from litestar_auth.authentication import AuthenticationBackend, Authenticator
 from litestar_auth.authentication.transport import BearerTransport, CookieTransport, CookieTransportConfig
 from litestar_auth.exceptions import ErrorCode, LitestarAuthError
+from litestar_auth.extensions import AuthExtension, AuthExtensionRegistrationContext, AuthExtensionValidationContext
 from litestar_auth.guards import (
     has_all_permissions,
     has_all_roles,
@@ -90,6 +91,9 @@ __version__ = "4.2.0"
 __all__ = (
     "DEFAULT_SUPERUSER_ROLE_NAME",
     "ApiKeyConfig",
+    "AuthExtension",
+    "AuthExtensionRegistrationContext",
+    "AuthExtensionValidationContext",
     "AuthenticationBackend",
     "Authenticator",
     "BaseUserManager",

@@ -57,6 +57,14 @@ def _always_enabled(_config: object) -> bool:
     return True
 
 
+def _has_extensions(config: object) -> bool:
+    """Return whether extension-specific phases need to run."""
+    resolve_extensions = getattr(config, "resolve_extensions", None)
+    if callable(resolve_extensions):
+        return bool(resolve_extensions())
+    return bool(getattr(config, "extensions", ()))
+
+
 @dataclass(frozen=True, slots=True)
 class FeatureWiring:
     """Ordered plugin feature wiring descriptor.
@@ -79,6 +87,13 @@ class FeatureWiring:
 
 
 FEATURE_WIRING: tuple[FeatureWiring, ...] = (
+    FeatureWiring(
+        order=0,
+        feature="extension_registration",
+        enabled=_has_extensions,
+        after_startup=("register_extensions",),
+        description="Configured auth extension contribution collection.",
+    ),
     FeatureWiring(
         order=10,
         feature="core",
@@ -107,14 +122,17 @@ FEATURE_WIRING: tuple[FeatureWiring, ...] = (
         description="Core auth plugin guards, DI, middleware, OpenAPI, controllers, and route error handlers.",
     ),
     FeatureWiring(
+        order=15,
+        feature="extension_validation",
+        enabled=_has_extensions,
+        before_startup=("validate_extensions",),
+        description="Configured auth extension validation after core startup guards.",
+    ),
+    FeatureWiring(
         order=20,
         feature="oauth",
-        before_startup=(
-            "require_oauth_token_encryption_for_configured_providers",
-            "require_secure_oauth_redirect_in_production",
-        ),
         dependency_providers=("oauth_associate_user_manager",),
-        description="OAuth startup guards and optional associate-route user-manager DI.",
+        description="Optional OAuth associate-route user-manager DI.",
     ),
     FeatureWiring(
         order=30,

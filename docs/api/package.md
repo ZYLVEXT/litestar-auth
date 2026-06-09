@@ -85,8 +85,15 @@ Treat the startup templates as plugin-assembly inventory only: they preserve bac
 Relational role storage changes persistence only. Public HTTP payloads, managers, and guard
 factories still use one normalized flat `roles` collection. The core plugin-owned auth/users route
 table does not auto-mount role catalog or user-assignment endpoints; use the opt-in
-`litestar_auth.contrib.role_admin` controller or the `litestar roles` CLI for admin operations.
+`litestar_auth.contrib.role_admin.RoleAdminExtension`, the manual contrib controller
+factory, or the `litestar roles` CLI for admin operations.
 The library does not ship permission matrices.
+
+Organization administration is also available through the extension kernel. Use
+`litestar_auth.contrib.organization_admin.OrganizationAdminExtension` for plugin-managed
+organization-admin HTTP routes, or keep using the public manual factories for custom route tables.
+The extension requires `OrganizationConfig(enabled=True, store_factory=...)` and an `id_parser`, and
+its invitee-facing accept/decline routes are mounted only with `include_invitations=True`.
 
 ## Public surface (high level)
 
@@ -101,7 +108,8 @@ The library does not ship permission matrices.
 | Errors | `ErrorCode`, `LitestarAuthError`; typed subclasses from `litestar_auth.exceptions` |
 | Protocols | `UserProtocol`, `GuardedUserProtocol`, `RoleCapableUserProtocol`, `TotpUserProtocol` — [Types](types.md) |
 | Controllers (advanced) | `create_*_controller` factories from `litestar_auth.controllers` — [Controllers API](controllers.md) |
-| Contrib role admin | `create_role_admin_controller` from `litestar_auth.contrib.role_admin` — [HTTP role administration](../guides/role_admin_http.md) |
+| Contrib role admin | `RoleAdminExtension`, `RoleAdminControllerConfig`, `create_role_admin_controller` from `litestar_auth.contrib.role_admin` — [HTTP role administration](../guides/role_admin_http.md) |
+| Contrib organization admin | `OrganizationAdminExtension`, `OrganizationAdminControllerConfig`, `OrganizationInvitationControllerConfig`, `create_organization_admin_controller`, `create_organization_invitation_controller` from `litestar_auth.contrib.organization_admin` — [Organizations](../configuration/organizations.md#administration) |
 | OAuth helpers | Plugin-managed route table via `OAuthConfig`; manual login helper and lazy client loader from `litestar_auth.oauth` |
 | TOTP | `generate_totp_secret`, `generate_totp_uri`, `verify_totp`, stores from `litestar_auth.totp` |
 | Rate limit | `AuthRateLimitConfig`, `EndpointRateLimit`, `InMemoryRateLimiter`, `RedisRateLimiter` from `litestar_auth.ratelimit` |

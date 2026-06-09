@@ -89,6 +89,7 @@ def _build_startup_hook_map(
 ) -> dict[str, StartupHook]:
     """Return named startup hooks used by ``FeatureWiring`` descriptors."""
     return {
+        "validate_extensions": lambda: _validate_extensions(config),
         "require_shared_rate_limit_backends_for_multiworker": lambda: (
             require_shared_rate_limit_backends_for_multiworker(
                 config,
@@ -107,6 +108,13 @@ def _build_startup_hook_map(
         ),
         "bootstrap_bundled_token_orm_models": lambda: bootstrap_bundled_token_orm_models(config),
     }
+
+
+def _validate_extensions(config: LitestarAuthConfig[Any, Any]) -> None:
+    """Run extension validation through the internal extension registry."""
+    from litestar_auth._plugin.extensions import validate_extensions  # noqa: PLC0415
+
+    validate_extensions(config)
 
 
 def require_secure_oauth_redirect_in_production(

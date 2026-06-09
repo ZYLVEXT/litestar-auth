@@ -20,7 +20,7 @@ import litestar_auth._plugin.config as plugin_config_module
 import litestar_auth._plugin.database_token as database_token_module
 import litestar_auth._plugin.features as plugin_features_module
 import litestar_auth.guards._api_key_guards as api_key_guards_module
-from litestar_auth import DEFAULT_SUPERUSER_ROLE_NAME
+from litestar_auth import DEFAULT_SUPERUSER_ROLE_NAME, AuthExtension
 from litestar_auth._permissions import StaticRolePermissionResolver, permissions_grant
 from litestar_auth._plugin.oauth_contract import _build_oauth_route_registration_contract
 from litestar_auth._plugin.scoped_session import SessionFactory
@@ -843,6 +843,43 @@ def test_litestar_auth_config_declares_user_manager_security_field() -> None:
     dataclass_fields = LitestarAuthConfig.__dataclass_fields__
 
     assert "user_manager_security" in dataclass_fields
+
+
+def test_litestar_auth_config_extensions_default_to_empty_tuple() -> None:
+    """The plugin config exposes an inert extension tuple by default."""
+    dataclass_fields = LitestarAuthConfig.__dataclass_fields__
+    config = _minimal_config()
+
+    assert "extensions" in dataclass_fields
+    assert dataclass_fields["extensions"].type == "tuple[AuthExtension, ...]"
+    assert dataclass_fields["extensions"].default == ()
+    assert config.extensions == ()
+
+
+def test_litestar_auth_config_stores_configured_extensions_unchanged() -> None:
+    """Configured extensions are stored for later wiring without validation or copying."""
+
+    class NoopExtension:
+        """Minimal structural extension used as config payload."""
+
+        name = "noop"
+        enabled = True
+
+        def validate(self, context: object) -> None:
+            """Accept validation context."""
+
+        def register(self, context: object) -> None:
+            """Accept registration context."""
+
+    extension = NoopExtension()
+    extensions = (extension,)
+    config = LitestarAuthConfig[ExampleUser, UUID](
+        user_model=ExampleUser,
+        user_manager_class=PluginUserManager,
+        extensions=extensions,
+    )
+
+    assert config.extensions is extensions
 
 
 def test_litestar_auth_config_declares_db_session_dependency_fields() -> None:
@@ -2931,6 +2968,7 @@ def test_litestar_auth_config_session_maker_annotation_is_runtime_resolvable() -
             "AuthenticationBackend": AuthenticationBackend,
             "BaseUserManager": BaseUserManager,
             "UserManagerSecurity": UserManagerSecurity,
+            "AuthExtension": AuthExtension,
             "AuthRateLimitConfig": AuthRateLimitConfig,
             "JWTDenylistStore": JWTDenylistStore,
             "msgspec": msgspec,

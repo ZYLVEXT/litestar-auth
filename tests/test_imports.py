@@ -72,6 +72,9 @@ from tests.conftest import project_version_from_pyproject
 
 AuthenticationBackend = litestar_auth.AuthenticationBackend
 Authenticator = litestar_auth.Authenticator
+AuthExtension = litestar_auth.AuthExtension
+AuthExtensionRegistrationContext = litestar_auth.AuthExtensionRegistrationContext
+AuthExtensionValidationContext = litestar_auth.AuthExtensionValidationContext
 ApiKeyConfig = litestar_auth.ApiKeyConfig
 BaseUserManager = litestar_auth.BaseUserManager
 BaseUserManagerConfig = litestar_auth.BaseUserManagerConfig
@@ -1444,6 +1447,9 @@ def test_root_package_all_excludes_private_symbols() -> None:
     assert tuple(__all__) == (
         "DEFAULT_SUPERUSER_ROLE_NAME",
         "ApiKeyConfig",
+        "AuthExtension",
+        "AuthExtensionRegistrationContext",
+        "AuthExtensionValidationContext",
         "AuthenticationBackend",
         "Authenticator",
         "BaseUserManager",
@@ -1501,6 +1507,9 @@ def test_root_package_all_excludes_private_symbols() -> None:
         "UserProtocolStrict",
     } <= set(__all__)
     assert "Authenticator" in __all__
+    assert AuthExtension is litestar_auth.extensions.AuthExtension
+    assert AuthExtensionRegistrationContext is litestar_auth.extensions.AuthExtensionRegistrationContext
+    assert AuthExtensionValidationContext is litestar_auth.extensions.AuthExtensionValidationContext
     for symbol in REMOVED_ROOT_PAYLOAD_EXPORTS:
         assert symbol not in __all__
     for symbol in REMOVED_ROOT_SECONDARY_EXPORTS:

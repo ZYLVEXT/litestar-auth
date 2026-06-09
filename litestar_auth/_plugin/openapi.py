@@ -13,6 +13,8 @@ from litestar_auth.authentication.transport.bearer import BearerTransport
 from litestar_auth.authentication.transport.cookie import CookieTransport
 
 if TYPE_CHECKING:
+    from collections.abc import Mapping
+
     from litestar.config.app import AppConfig
     from litestar.openapi.spec import SecurityRequirement
 
@@ -125,6 +127,22 @@ def build_security_requirement(
     return [{name: []} for name in security_schemes]
 
 
+def merge_openapi_security_components(
+    app_config: AppConfig,
+    security_schemes: Mapping[str, object],
+) -> None:
+    """Merge security schemes into a copied OpenAPI config components list."""
+    if not security_schemes or not app_config.openapi_config:
+        return
+
+    app_config.openapi_config = copy(app_config.openapi_config)
+    components = Components(security_schemes=cast("Any", security_schemes))
+    if isinstance(app_config.openapi_config.components, list):
+        cast("list[Components]", app_config.openapi_config.components).append(components)
+    else:
+        app_config.openapi_config.components = [components, app_config.openapi_config.components]
+
+
 def register_openapi_security(
     app_config: AppConfig,
     backends: tuple[StartupBackendTemplate[Any, Any], ...],
@@ -147,15 +165,5 @@ def register_openapi_security(
     if not schemes:
         return schemes
 
-    if not app_config.openapi_config:
-        return schemes
-
-    app_config.openapi_config = copy(app_config.openapi_config)
-    components = Components(security_schemes=cast("Any", schemes))
-
-    if isinstance(app_config.openapi_config.components, list):
-        cast("list[Components]", app_config.openapi_config.components).append(components)
-    else:
-        app_config.openapi_config.components = [components, app_config.openapi_config.components]
-
+    merge_openapi_security_components(app_config, schemes)
     return schemes

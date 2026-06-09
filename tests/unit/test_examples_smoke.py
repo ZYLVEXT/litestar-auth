@@ -51,6 +51,11 @@ _PARAMS: Final[tuple[tuple[str, dict[str, str], str], ...]] = (
         {"LITESTAR_AUTH_DEMO_COOKIE_JWT_TOTP_INSECURE": "1"},
         "LITESTAR_AUTH_DEMO_COOKIE_JWT_TOTP_DATABASE_URL",
     ),
+    (
+        "examples.demo_external_extension.app",
+        {"LITESTAR_AUTH_DEMO_EXTERNAL_EXTENSION_INSECURE": "1"},
+        "LITESTAR_AUTH_DEMO_EXTERNAL_EXTENSION_DATABASE_URL",
+    ),
 )
 
 

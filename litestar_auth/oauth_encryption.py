@@ -30,6 +30,8 @@ from litestar_auth.exceptions import ConfigurationError
 if TYPE_CHECKING:
     from collections.abc import Mapping
 
+    from litestar_auth._plugin.config import LitestarAuthConfig
+
 _OAUTH_TOKEN_ENCRYPTION_INFO_KEY = "litestar_auth_oauth_token_encryption"  # noqa: S105
 _DEFAULT_OAUTH_FERNET_KEY_ID = "default"
 
@@ -109,6 +111,24 @@ class OAuthTokenEncryption:
             return None
         plaintext = self.decrypt(value)
         return self.encrypt(plaintext)
+
+
+def _build_oauth_token_encryption(config: LitestarAuthConfig[Any, Any]) -> OAuthTokenEncryption | None:
+    """Return the OAuth token encryption policy for plugin-managed persistence."""
+    oauth_config = config.oauth_config
+    if oauth_config is None:
+        return None
+    keyring = oauth_config.oauth_token_encryption_keyring
+    if keyring is not None:
+        return OAuthTokenEncryption(
+            unsafe_testing=config.unsafe_testing,
+            active_key_id=keyring.active_key_id,
+            keys=keyring.keys,
+        )
+    return OAuthTokenEncryption(
+        oauth_config.oauth_token_encryption_key,
+        unsafe_testing=config.unsafe_testing,
+    )
 
 
 def bind_oauth_token_encryption(session: object, oauth_token_encryption: OAuthTokenEncryption) -> None:

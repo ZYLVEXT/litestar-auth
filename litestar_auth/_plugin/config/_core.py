@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping  # noqa: TC003
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from functools import partial
 from typing import TYPE_CHECKING, Any, cast
@@ -47,6 +47,7 @@ if TYPE_CHECKING:
 
     from litestar_auth.authentication.backend import AuthenticationBackend
     from litestar_auth.authentication.strategy._jwt_denylist import JWTDenylistStore
+    from litestar_auth.extensions import AuthExtension
     from litestar_auth.manager import BaseUserManager, UserManagerSecurity
     from litestar_auth.ratelimit import AuthRateLimitConfig
 
@@ -128,6 +129,8 @@ class LitestarAuthConfig[UP: UserProtocol[Any], ID](_ConfigValidationMixin):
     exception_response_hook: ExceptionResponseHook | None = None
     middleware_hook: MiddlewareHook | None = None
     controller_hook: ControllerHook | None = None
+    extensions: tuple[AuthExtension, ...] = ()
+    auto_discover_extensions: bool = False
     auth_path: str = "/auth"
     users_path: str = "/users"
     include_register: bool = True
@@ -185,6 +188,12 @@ class LitestarAuthConfig[UP: UserProtocol[Any], ID](_ConfigValidationMixin):
         repr=False,
         compare=False,
     )
+    _resolved_extensions: tuple[AuthExtension, ...] | None = field(
+        default=None,
+        init=False,
+        repr=False,
+        compare=False,
+    )
 
     def resolve_backends(
         self,
@@ -218,6 +227,27 @@ class LitestarAuthConfig[UP: UserProtocol[Any], ID](_ConfigValidationMixin):
         if self._feature_registry is None:
             self._feature_registry = _features.resolve_feature_registry(self)
         return self._feature_registry
+
+    def resolve_extensions(self) -> tuple[AuthExtension, ...]:
+        """Return configured, internal, and opt-in discovered extensions."""
+        if self._resolved_extensions is not None:
+            return self._resolved_extensions
+
+        resolved_extensions = self.extensions
+
+        for descriptor in _INTERNAL_EXTENSION_DESCRIPTORS:
+            if descriptor.enabled(self):
+                resolved_extensions = (*resolved_extensions, descriptor.build(self))
+
+        if self.auto_discover_extensions:
+            from litestar_auth._plugin.extensions._discovery import discover_extensions  # noqa: PLC0415
+
+            resolved_extensions = (*resolved_extensions, *discover_extensions())
+
+        self._resolved_extensions = tuple(
+            extension for extension in resolved_extensions if getattr(extension, "enabled", True)
+        )
+        return self._resolved_extensions
 
     def resolve_defaults(self) -> ResolvedAuthConfigDefaults[UP, ID]:
         """Return the canonical resolved-default snapshot for this config.
@@ -320,3 +350,82 @@ class LitestarAuthConfig[UP: UserProtocol[Any], ID](_ConfigValidationMixin):
             "UserDatabaseFactory[UP, ID]",
             partial(_build_default_user_db, user_model=self.user_model),
         )
+
+
+type _InternalExtensionPredicate = Callable[[LitestarAuthConfig[Any, Any]], bool]
+type _InternalExtensionBuilder = Callable[[LitestarAuthConfig[Any, Any]], AuthExtension]
+
+
+@dataclass(frozen=True, slots=True)
+class _InternalExtensionDescriptor:
+    """Config-derived first-party extension wiring kept out of public API."""
+
+    enabled: _InternalExtensionPredicate
+    build: _InternalExtensionBuilder
+
+
+def _has_oauth_extension(config: LitestarAuthConfig[Any, Any]) -> bool:
+    oauth_config = config.oauth_config
+    return oauth_config is not None and bool(oauth_config.oauth_providers)
+
+
+def _build_oauth_extension(_config: LitestarAuthConfig[Any, Any]) -> AuthExtension:
+    from litestar_auth.oauth._extension import _OAuthExtension  # noqa: PLC0415
+
+    return _OAuthExtension()
+
+
+def _has_totp_extension(config: LitestarAuthConfig[Any, Any]) -> bool:
+    return config.totp_config is not None
+
+
+def _build_totp_extension(_config: LitestarAuthConfig[Any, Any]) -> AuthExtension:
+    from litestar_auth._plugin.totp_controller._extension import _TotpExtension  # noqa: PLC0415
+
+    return _TotpExtension()
+
+
+def _has_api_key_extension(config: LitestarAuthConfig[Any, Any]) -> bool:
+    return config.api_keys.enabled
+
+
+def _build_api_key_extension(_config: LitestarAuthConfig[Any, Any]) -> AuthExtension:
+    from litestar_auth._plugin.api_key_controller._extension import _ApiKeyExtension  # noqa: PLC0415
+
+    return _ApiKeyExtension()
+
+
+def _has_organization_cli_extension(config: LitestarAuthConfig[Any, Any]) -> bool:
+    return config.organization_config.include_organization_admin
+
+
+def _build_organization_cli_extension(_config: LitestarAuthConfig[Any, Any]) -> AuthExtension:
+    from litestar_auth._plugin.organization_cli import _OrganizationCliExtension  # noqa: PLC0415
+
+    return _OrganizationCliExtension()
+
+
+def _has_organization_admin_extension(config: LitestarAuthConfig[Any, Any]) -> bool:
+    organization_config = config.organization_config
+    return organization_config.include_organization_admin or organization_config.include_organization_invitations
+
+
+def _build_organization_admin_extension(config: LitestarAuthConfig[Any, Any]) -> AuthExtension:
+    from litestar_auth.contrib.organization_admin import OrganizationAdminExtension  # noqa: PLC0415
+
+    organization_config = config.organization_config
+    return OrganizationAdminExtension(
+        include_invitations=organization_config.include_organization_invitations,
+        _include_admin_controller=organization_config.include_organization_admin,
+        _mark_auth_owned=False,
+        _use_plugin_openapi_security=True,
+    )
+
+
+_INTERNAL_EXTENSION_DESCRIPTORS: tuple[_InternalExtensionDescriptor, ...] = (
+    _InternalExtensionDescriptor(_has_oauth_extension, _build_oauth_extension),
+    _InternalExtensionDescriptor(_has_totp_extension, _build_totp_extension),
+    _InternalExtensionDescriptor(_has_api_key_extension, _build_api_key_extension),
+    _InternalExtensionDescriptor(_has_organization_cli_extension, _build_organization_cli_extension),
+    _InternalExtensionDescriptor(_has_organization_admin_extension, _build_organization_admin_extension),
+)

@@ -24,6 +24,7 @@ from litestar_auth.models import User  # or your own model
 | `TotpConfig` fields, TOTP route behavior, and TOTP step-up policy | [TOTP](configuration/totp.md) |
 | `OAuthConfig`, provider inventory, redirect policy, and token encryption | [OAuth](configuration/oauth.md) |
 | `OrganizationConfig`, organization model imports, and organization store wiring | [Organizations](configuration/organizations.md) |
+| `extensions` config field, Step-1 `AuthExtension` contract, and extension context interfaces | [Extensions](configuration/extensions.md) |
 | CSRF, legacy-token policy, dependency keys, and shared helpers | [Security and DI](configuration/security.md) |
 | Operator-side proxy, cookie, and secrets-at-rest preconditions | [Deployment security contract](deployment.md#deployment-security-contract) |
 

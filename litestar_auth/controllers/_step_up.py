@@ -11,7 +11,6 @@ from litestar.openapi.spec import Example
 
 from litestar_auth.controllers._error_responses import raise_step_up_required, raise_wrong_current_password
 from litestar_auth.exceptions import ErrorCode
-from litestar_auth.totp import verify_totp
 from litestar_auth.types import LoginIdentifier, TotpUserProtocol, UserProtocol
 
 if TYPE_CHECKING:
@@ -155,6 +154,8 @@ async def require_totp_stepup[UP: UserProtocol[Any]](
         if mode == "always_required":
             raise_step_up_required()
         return
+    from litestar_auth.totp import verify_totp  # noqa: PLC0415
+
     if check.totp_code is not None and verify_totp(secret, check.totp_code, algorithm=check.totp_algorithm):
         return
     session_id = await _resolve_current_session_id(request, user_manager=check.user_manager)

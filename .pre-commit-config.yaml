@@ -87,7 +87,8 @@ repos:
         exclude: |
           (?x)^(
             tests/_helpers\.py|
-            tests/integration/_di_probes\.py
+            tests/integration/_di_probes\.py|
+            tests/support/extensions\.py
           )$
       - id: no-commit-to-branch
         args: [--branch, main]

@@ -147,6 +147,9 @@ def test_root_package_exposes_documented_public_surface_and_null_logger() -> Non
         expected_names=(
             "AuthenticationBackend",
             "Authenticator",
+            "AuthExtension",
+            "AuthExtensionRegistrationContext",
+            "AuthExtensionValidationContext",
             "ApiKeyConfig",
             "BaseUserManager",
             "BaseUserManagerConfig",
