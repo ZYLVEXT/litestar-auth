@@ -14,7 +14,7 @@ from sqlalchemy import select
 
 from litestar_auth.authentication.backend import AuthenticationBackend
 from litestar_auth.authentication.strategy.db import DatabaseTokenStrategy
-from litestar_auth.authentication.strategy.db_models import AccessToken, RefreshToken
+from litestar_auth.authentication.strategy.db_models import AccessToken, RefreshToken, RefreshTokenConsumedDigest
 from litestar_auth.authentication.transport.bearer import BearerTransport
 from litestar_auth.controllers import create_auth_controller
 from litestar_auth.exceptions import ErrorCode
@@ -270,7 +270,13 @@ async def test_login_and_refresh_rotate_refresh_tokens(
     assert rotated_persisted_refresh_token.created_at == login_created_at
     assert rotated_persisted_refresh_token.last_used_at is not None
     assert rotated_persisted_refresh_token.client_metadata == {"user_agent": "LitestarAuth Refresh Test/2.0"}
-    assert rotated_persisted_refresh_token.consumed_token_digests == [first_refresh_digest]
+    consumed_digest = session.scalar(
+        select(RefreshTokenConsumedDigest).where(
+            RefreshTokenConsumedDigest.token_digest == first_refresh_digest,
+        ),
+    )
+    assert consumed_digest is not None
+    assert consumed_digest.session_id == login_session_id
 
     replay_response = await test_client.post("/auth/refresh", json={"refresh_token": first_refresh_token})
 

@@ -13,14 +13,19 @@ import jwt
 from jwt import ExpiredSignatureError, InvalidTokenError
 
 from litestar_auth._jwt_headers import JwtDecodeConfig, decode_signed_jwt, jwt_encode_headers
-from litestar_auth._keyed_digest import keyed_hex
+from litestar_auth._keyed_digest import hkdf_sha256_32, keyed_hex
 from litestar_auth._roles import normalize_role_name
-from litestar_auth.authentication.strategy import _jwt_denylist
+from litestar_auth.authentication.strategy._jwt_denylist import (
+    InMemoryJWTDenylistStore as InMemoryJWTDenylistStore,  # noqa: PLC0414
+)
 from litestar_auth.authentication.strategy._jwt_denylist import (
     JWTDenylistStore,
     JWTRevocationPosture,
     _resolve_jwt_revocation,
     denylist_ttl_seconds,
+)
+from litestar_auth.authentication.strategy._jwt_denylist import (
+    RedisJWTDenylistStore as RedisJWTDenylistStore,  # noqa: PLC0414
 )
 from litestar_auth.authentication.strategy.base import Strategy, UserManagerProtocol
 from litestar_auth.config import JWT_ACCESS_TOKEN_AUDIENCE, validate_production_secret
@@ -34,8 +39,6 @@ if TYPE_CHECKING:
 
 DEFAULT_ALGORITHM = "HS256"
 DEFAULT_LIFETIME = timedelta(minutes=15)
-InMemoryJWTDenylistStore = _jwt_denylist.InMemoryJWTDenylistStore
-RedisJWTDenylistStore = _jwt_denylist.RedisJWTDenylistStore
 _ALLOWED_ALGORITHMS = frozenset(
     {
         "HS256",
@@ -53,6 +56,8 @@ _ALLOWED_ALGORITHMS = frozenset(
 # Falling back to the private signing secret as the verify key would leak
 # private material into anywhere the verify side is read or shared.
 _ASYMMETRIC_ALGORITHMS = frozenset({"RS256", "RS384", "RS512", "ES256", "ES384", "ES512"})
+_SESSION_FINGERPRINT_HKDF_SALT = b"litestar-auth:jwt-session-fingerprint:v1"
+_SESSION_FINGERPRINT_HKDF_INFO = b"litestar-auth JWT session-fingerprint HMAC key"
 
 
 def _default_session_fingerprint(key: bytes) -> Callable[[object], str | None]:
@@ -239,9 +244,13 @@ class JWTStrategy(Strategy[UP, ID]):
             settings.denylist_store,
             allow_inmemory_denylist=settings.allow_inmemory_denylist,
         )
-        # Security: always derive the fingerprint HMAC key from the signing secret
-        # (kept private by the strategy), never from the public verify_key.
-        fingerprint_key = self.secret.encode()
+        # Security: derive a domain-separated fingerprint HMAC key from the signing secret
+        # (kept private by the strategy), never from the public verify_key or raw secret bytes.
+        fingerprint_key = hkdf_sha256_32(
+            self.secret.encode("utf-8"),
+            salt=_SESSION_FINGERPRINT_HKDF_SALT,
+            info=_SESSION_FINGERPRINT_HKDF_INFO,
+        )
         self.session_fingerprint_getter = settings.session_fingerprint_getter or _default_session_fingerprint(
             fingerprint_key,
         )

@@ -422,9 +422,21 @@ async def test_sqlalchemy_api_key_store_lists_signing_rotation_candidates(sessio
         make_signing_api_key_data(user.id, key_id="akid_revoked_old", encrypted_secret=b"old:revoked"),
     )
     await store.revoke(revoked_old.key_id, revoked_at=datetime.now(tz=UTC))
-    await store.create(make_signing_api_key_data(user.id, key_id="akid_current", encrypted_secret=b"current:active"))
-    await store.create(make_signing_api_key_data(user.id, key_id="akid_missing_secret", encrypted_secret=None))
-    await store.create(make_api_key_data(user.id, key_id="akid_bearer"))
+    current = await store.create(
+        make_signing_api_key_data(user.id, key_id="akid_current", encrypted_secret=b"current:active"),
+    )
+    missing_secret = await store.create(
+        make_signing_api_key_data(user.id, key_id="akid_missing_secret", encrypted_secret=None),
+    )
+    bearer = await store.create(make_api_key_data(user.id, key_id="akid_bearer"))
+
+    # created_at comes from server_default CURRENT_TIMESTAMP with second granularity,
+    # so rows created across a wall-clock second boundary reorder the created_at scan.
+    # Freeze created_at so ordering deterministically falls back to the key_id tiebreak.
+    frozen_created_at = datetime(2026, 1, 1, tzinfo=UTC)
+    for row in (active_old, revoked_old, current, missing_secret, bearer):
+        row.created_at = frozen_created_at
+    session.commit()
 
     seen_rows: list[str] = []
 

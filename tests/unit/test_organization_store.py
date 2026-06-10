@@ -568,7 +568,7 @@ async def test_sqlalchemy_organization_store_creates_and_fetches_invitation_by_t
     organization = await store.create_organization(OrganizationData(slug="invite-team", name="Invite Team"))
     raw_token = "invite-token-secret"
     token_hash = b"hashed-invitation-token-reference".ljust(64, b"0")
-    expires_at = datetime.now(UTC) + timedelta(hours=1)
+    expires_at = datetime.now(tz=UTC) + timedelta(hours=1)
 
     invitation = await store.create_invitation(
         OrganizationInvitationData(
@@ -596,7 +596,7 @@ async def test_sqlalchemy_organization_store_lists_pending_and_revokes_invitatio
     """Pending invitation listing excludes expired and revoked rows."""
     store = create_store(organization_session)
     organization = await store.create_organization(OrganizationData(slug="pending-team", name="Pending Team"))
-    now = datetime.now(UTC)
+    now = datetime.now(tz=UTC)
     pending = await store.create_invitation(
         OrganizationInvitationData(
             organization_id=organization.id,
@@ -642,7 +642,7 @@ async def test_sqlalchemy_organization_store_consumes_invitation_once(
     """Invitation consumption is a single conditional status transition."""
     store = create_store(organization_session)
     organization = await store.create_organization(OrganizationData(slug="consume-team", name="Consume Team"))
-    now = datetime.now(UTC)
+    now = datetime.now(tz=UTC)
     invitation = await store.create_invitation(
         OrganizationInvitationData(
             organization_id=organization.id,
@@ -952,7 +952,7 @@ async def test_sqlalchemy_organization_store_rejects_invitation_for_unknown_orga
                 invited_email="missing@example.com",
                 roles=["member"],
                 token_hash=b"unknown".ljust(64, b"0"),
-                expires_at=datetime.now(UTC) + timedelta(hours=1),
+                expires_at=datetime.now(tz=UTC) + timedelta(hours=1),
             ),
         )
 

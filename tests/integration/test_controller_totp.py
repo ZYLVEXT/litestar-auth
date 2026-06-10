@@ -25,6 +25,7 @@ from litestar.testing import AsyncTestClient
 
 import litestar_auth._optional_deps as optional_deps_module
 import litestar_auth._totp_enrollment as totp_enrollment_module
+import litestar_auth._totp_primitive as totp_primitive_module
 import litestar_auth.controllers.totp as totp_controller_module
 import litestar_auth.controllers.totp_handlers as totp_handlers_module
 import litestar_auth.controllers.totp_session_handlers as totp_session_handlers_module
@@ -70,8 +71,8 @@ _totp_resolve_pending_jti_store = totp_controller_module._totp_resolve_pending_j
 _totp_validate_replay_and_password = totp_controller_module._totp_validate_replay_and_password
 InMemoryTotpEnrollmentStore = _totp_mod.InMemoryTotpEnrollmentStore
 InMemoryUsedTotpCodeStore = _totp_mod.InMemoryUsedTotpCodeStore
-_current_counter = _totp_mod._current_counter
-_generate_totp_code = _totp_mod._generate_totp_code
+_current_counter = totp_primitive_module._current_counter
+_generate_totp_code = totp_primitive_module._generate_totp_code
 
 if TYPE_CHECKING:
     from litestar_auth._manager.api_key_config import ApiKeyConfigProtocol
@@ -2778,7 +2779,7 @@ async def test_disable_2fa_with_valid_code_clears_secret(
     """Providing the correct TOTP code via /disable removes the stored secret."""
     client, user_db = client_and_db
     fixed_counter = 123_456
-    monkeypatch.setattr("litestar_auth.totp._current_counter", lambda: fixed_counter)
+    monkeypatch.setattr("litestar_auth._totp_primitive._current_counter", lambda: fixed_counter)
 
     login_resp = await client.post(
         "/auth/login",
@@ -2807,7 +2808,7 @@ async def test_disable_2fa_with_valid_code_clears_secret(
     )
     full_token = verify_resp.json()["access_token"]
 
-    monkeypatch.setattr("litestar_auth.totp._current_counter", lambda: fixed_counter + 1)
+    monkeypatch.setattr("litestar_auth._totp_primitive._current_counter", lambda: fixed_counter + 1)
     disable_code = _generate_totp_code(secret, fixed_counter + 1)
     disable_resp = await client.post(
         "/auth/2fa/disable",
@@ -2841,7 +2842,7 @@ async def test_disable_then_enable_allows_reenrollment(
     """Users can rotate their TOTP secret only through disable-then-enable."""
     client, user_db = client_and_db
     fixed_counter = 123_456
-    monkeypatch.setattr("litestar_auth.totp._current_counter", lambda: fixed_counter)
+    monkeypatch.setattr("litestar_auth._totp_primitive._current_counter", lambda: fixed_counter)
 
     login_resp = await client.post(
         "/auth/login",
@@ -2872,7 +2873,7 @@ async def test_disable_then_enable_allows_reenrollment(
     assert verify_resp.status_code == HTTP_CREATED
     full_token = verify_resp.json()["access_token"]
 
-    monkeypatch.setattr("litestar_auth.totp._current_counter", lambda: fixed_counter + 1)
+    monkeypatch.setattr("litestar_auth._totp_primitive._current_counter", lambda: fixed_counter + 1)
     disable_resp = await client.post(
         "/auth/2fa/disable",
         json={"code": _generate_totp_code(first_secret, fixed_counter + 1)},
@@ -2881,7 +2882,7 @@ async def test_disable_then_enable_allows_reenrollment(
     assert disable_resp.status_code == HTTP_CREATED
     assert next(iter(user_db.users_by_id.values())).totp_secret is None
 
-    monkeypatch.setattr("litestar_auth.totp._current_counter", lambda: fixed_counter + 2)
+    monkeypatch.setattr("litestar_auth._totp_primitive._current_counter", lambda: fixed_counter + 2)
     second_enable_resp = await client.post(
         "/auth/2fa/enable",
         json={"password": "correct-password"},
@@ -3091,7 +3092,10 @@ async def _confirm_enrollment(
 ) -> None:
     """Complete the two-phase TOTP enrollment by confirming with a valid code."""
     secret = enable_body["secret"]
-    confirm_code = _generate_totp_code(secret, counter if counter is not None else _totp_mod._current_counter())
+    confirm_code = _generate_totp_code(
+        secret,
+        counter if counter is not None else totp_primitive_module._current_counter(),
+    )
     resp = await client.post(
         "/auth/2fa/enable/confirm",
         json={"enrollment_token": enable_body["enrollment_token"], "code": confirm_code},
@@ -3113,7 +3117,7 @@ async def _enable_totp_and_get_secret(client: AsyncTestClient[Litestar]) -> str:
     )
     enable_body = enable_resp.json()
     secret = enable_body["secret"]
-    confirm_code = _generate_totp_code(secret, _totp_mod._current_counter())
+    confirm_code = _generate_totp_code(secret, totp_primitive_module._current_counter())
     confirm_resp = await client.post(
         "/auth/2fa/enable/confirm",
         json={"enrollment_token": enable_body["enrollment_token"], "code": confirm_code},
@@ -3408,7 +3412,7 @@ async def test_verify_accepts_datetime_expiration_payload(
     )
     user = next(iter(user_db.users_by_id.values()))
 
-    monkeypatch.setattr("litestar_auth.totp._current_counter", lambda: fixed_counter)
+    monkeypatch.setattr("litestar_auth._totp_primitive._current_counter", lambda: fixed_counter)
 
     async with AsyncTestClient(app=app) as client:
         secret = await _enable_totp_and_get_secret(client)
@@ -3445,7 +3449,7 @@ async def test_verify_rejects_pending_token_with_unparseable_expiration(
     app, user_db, _, _ = build_app(rate_limit_config=rate_limit_config)
     user = next(iter(user_db.users_by_id.values()))
 
-    monkeypatch.setattr("litestar_auth.totp._current_counter", lambda: fixed_counter)
+    monkeypatch.setattr("litestar_auth._totp_primitive._current_counter", lambda: fixed_counter)
 
     async with AsyncTestClient(app=app) as client:
         secret = await _enable_totp_and_get_secret(client)
@@ -3651,7 +3655,7 @@ async def test_confirm_enable_failures_and_success_use_confirm_enable_rate_limit
     )
     app, _, _, _ = build_app(rate_limit_config=rate_limit_config, totp_enable_requires_password=True)
     fixed_counter = 123_456
-    monkeypatch.setattr("litestar_auth.totp._current_counter", lambda: fixed_counter)
+    monkeypatch.setattr("litestar_auth._totp_primitive._current_counter", lambda: fixed_counter)
 
     async with AsyncTestClient(app=app) as client:
         login_resp = await client.post(
@@ -3711,7 +3715,7 @@ async def test_disable_failures_and_success_use_disable_rate_limit_backend(
     )
     app, _, _, _ = build_app(rate_limit_config=rate_limit_config)
     fixed_counter = 123_456
-    monkeypatch.setattr("litestar_auth.totp._current_counter", lambda: fixed_counter)
+    monkeypatch.setattr("litestar_auth._totp_primitive._current_counter", lambda: fixed_counter)
 
     async with AsyncTestClient(app=app) as client:
         secret = await _enable_totp_and_get_secret(client)
@@ -3732,7 +3736,7 @@ async def test_disable_failures_and_success_use_disable_rate_limit_backend(
         )
         assert wrong_code_resp.status_code == HTTP_BAD_REQUEST
 
-        monkeypatch.setattr("litestar_auth.totp._current_counter", lambda: fixed_counter + 1)
+        monkeypatch.setattr("litestar_auth._totp_primitive._current_counter", lambda: fixed_counter + 1)
         correct_code_resp = await client.post(
             "/auth/2fa/disable",
             json={"code": _generate_totp_code(secret, fixed_counter + 1)},

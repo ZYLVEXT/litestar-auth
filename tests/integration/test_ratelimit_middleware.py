@@ -12,6 +12,7 @@ from litestar.middleware import DefineMiddleware
 from litestar.testing import AsyncTestClient
 
 import litestar_auth.totp as _totp_mod
+from litestar_auth import _totp_primitive
 from litestar_auth._plugin.config import DEFAULT_USER_MANAGER_DEPENDENCY_KEY
 from litestar_auth.authentication.authenticator import Authenticator
 from litestar_auth.authentication.backend import AuthenticationBackend
@@ -38,7 +39,7 @@ from tests._helpers import auth_middleware_get_request_session, litestar_app_wit
 from tests.integration.conftest import DummySessionMaker, ExampleUser, InMemoryTokenStrategy, InMemoryUserDatabase
 
 InMemoryUsedTotpCodeStore = _totp_mod.InMemoryUsedTotpCodeStore
-_generate_totp_code = _totp_mod._generate_totp_code
+_generate_totp_code = _totp_primitive._generate_totp_code
 
 if TYPE_CHECKING:
     from httpx import Response
@@ -416,7 +417,7 @@ async def test_totp_verify_rate_limit_returns_429_after_invalid_codes(
     assert enable_body["secret"]
 
     # Confirm enrollment
-    confirm_code = _generate_totp_code(enable_body["secret"], _totp_mod._current_counter())
+    confirm_code = _generate_totp_code(enable_body["secret"], _totp_primitive._current_counter())
     confirm_response = await client.post(
         "/auth/2fa/enable/confirm",
         json={"enrollment_token": enable_body["enrollment_token"], "code": confirm_code},
@@ -479,7 +480,7 @@ async def test_shared_backend_recipe_preserves_login_and_totp_verify_reset_contr
             "/auth/2fa/enable/confirm",
             json={
                 "enrollment_token": enable_body["enrollment_token"],
-                "code": _generate_totp_code(enable_body["secret"], _totp_mod._current_counter()),
+                "code": _generate_totp_code(enable_body["secret"], _totp_primitive._current_counter()),
             },
             headers={"Authorization": f"Bearer {access_token}"},
         )
@@ -505,7 +506,7 @@ async def test_shared_backend_recipe_preserves_login_and_totp_verify_reset_contr
             "/auth/2fa/verify",
             json={
                 "pending_token": pending_for_success.json()["pending_token"],
-                "code": _generate_totp_code(enable_body["secret"], _totp_mod._current_counter()),
+                "code": _generate_totp_code(enable_body["secret"], _totp_primitive._current_counter()),
             },
         )
         assert verify_success.status_code == HTTP_CREATED
@@ -559,7 +560,7 @@ async def test_totp_management_endpoints_do_not_trigger_verify_throttle(
     enable_body = enable_response.json()
     secret = enable_body["secret"]
 
-    confirm_code = _generate_totp_code(secret, _totp_mod._current_counter())
+    confirm_code = _generate_totp_code(secret, _totp_primitive._current_counter())
     confirm_response = await client.post(
         "/auth/2fa/enable/confirm",
         json={"enrollment_token": enable_body["enrollment_token"], "code": confirm_code},
@@ -576,7 +577,7 @@ async def test_totp_management_endpoints_do_not_trigger_verify_throttle(
 
     verify_response = await client.post(
         "/auth/2fa/verify",
-        json={"pending_token": pending_token, "code": _generate_totp_code(secret, _totp_mod._current_counter())},
+        json={"pending_token": pending_token, "code": _generate_totp_code(secret, _totp_primitive._current_counter())},
     )
     assert verify_response.status_code == HTTP_CREATED
     full_token = verify_response.json()["access_token"]

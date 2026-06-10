@@ -16,6 +16,7 @@ from litestar.testing import AsyncTestClient
 
 import litestar_auth._optional_deps as optional_deps_module
 from litestar_auth._plugin.config import DEFAULT_USER_MANAGER_DEPENDENCY_KEY
+from litestar_auth._totp_primitive import _current_counter, _generate_totp_code
 from litestar_auth.authentication.authenticator import Authenticator
 from litestar_auth.authentication.backend import AuthenticationBackend
 from litestar_auth.authentication.middleware import LitestarAuthMiddleware
@@ -27,8 +28,6 @@ from litestar_auth.password import PasswordHelper
 from litestar_auth.totp import (
     InMemoryTotpEnrollmentStore,
     InMemoryUsedTotpCodeStore,
-    _current_counter,
-    _generate_totp_code,
 )
 from tests._helpers import auth_middleware_get_request_session, litestar_app_with_user_manager
 from tests.integration.conftest import DummySessionMaker, ExampleUser, InMemoryTokenStrategy, InMemoryUserDatabase

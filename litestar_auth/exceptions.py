@@ -7,6 +7,10 @@ from litestar.exceptions import ClientException
 from litestar_auth._error_codes import ApiKeyErrorCode, ErrorCode, UserIdentifier
 
 
+class SecurityWarning(UserWarning):
+    """Warning emitted for security-sensitive insecure defaults."""
+
+
 class LitestarAuthError(Exception):
     """Base exception for all library-specific errors."""
 

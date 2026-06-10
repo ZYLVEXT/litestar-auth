@@ -9,7 +9,7 @@ from collections.abc import Sequence as SequenceABC
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any
 
-from litestar_auth import config as _config
+import litestar_auth.config as _config
 from litestar_auth._secrets_at_rest import FernetKey, FernetKeyring, SecretAtRestError, validate_fernet_key_id
 from litestar_auth.exceptions import ConfigurationError
 

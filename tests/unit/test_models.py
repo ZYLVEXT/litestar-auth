@@ -24,7 +24,12 @@ from litestar_auth._roles import normalize_role_name, normalize_roles
 from litestar_auth.authentication.strategy import (
     DatabaseTokenModels as DatabaseTokenModelsFromStrategy,
 )
-from litestar_auth.authentication.strategy.db_models import AccessToken, DatabaseTokenModels, RefreshToken
+from litestar_auth.authentication.strategy.db_models import (
+    AccessToken,
+    DatabaseTokenModels,
+    RefreshToken,
+    RefreshTokenConsumedDigest,
+)
 from litestar_auth.exceptions import ConfigurationError
 from litestar_auth.models._oauth_encrypted_types import (
     oauth_access_token_type,
@@ -528,12 +533,12 @@ def test_access_token_model_creates_schema_and_relationship() -> None:
 
 def test_models_package_import_token_orm_models_returns_token_model_classes() -> None:
     """The canonical models-layer helper returns the mapped token model classes."""
-    assert import_token_orm_models_from_models() == (AccessToken, RefreshToken)
+    assert import_token_orm_models_from_models() == (AccessToken, RefreshToken, RefreshTokenConsumedDigest)
 
 
 def test_models_package_import_token_orm_models_matches_database_token_models_defaults() -> None:
     """The canonical models helper stays aligned with the explicit DB-token model contract."""
-    access_token_model, refresh_token_model = import_token_orm_models_from_models()
+    access_token_model, refresh_token_model, consumed_digest_model = import_token_orm_models_from_models()
     token_models = DatabaseTokenModels()
 
     assert import_token_orm_models_from_models.__module__ == "litestar_auth.models.tokens"
@@ -541,13 +546,14 @@ def test_models_package_import_token_orm_models_matches_database_token_models_de
         access_token_model,
         refresh_token_model,
     )
+    assert token_models.consumed_refresh_token_digest_model is consumed_digest_model is RefreshTokenConsumedDigest
 
 
 def test_models_package_import_token_orm_models_annotations_are_runtime_resolvable() -> None:
     """The canonical models helper keeps runtime-resolvable token-model annotations."""
     hints = get_type_hints(import_token_orm_models_from_models)
 
-    assert hints["return"] == tuple[type[AccessToken], type[RefreshToken]]
+    assert hints["return"] == tuple[type[AccessToken], type[RefreshToken], type[RefreshTokenConsumedDigest]]
 
 
 def test_database_token_models_default_to_bundled_token_model_classes() -> None:
@@ -557,15 +563,32 @@ def test_database_token_models_default_to_bundled_token_model_classes() -> None:
     assert DatabaseTokenModelsFromStrategy is DatabaseTokenModels
     assert token_models.access_token_model is AccessToken
     assert token_models.refresh_token_model is RefreshToken
+    assert token_models.consumed_refresh_token_digest_model is RefreshTokenConsumedDigest
+
+
+def test_database_token_models_accept_custom_consumed_digest_model_contract() -> None:
+    """The explicit DB-token model contract accepts a custom consumed-digest lookup model."""
+
+    class CustomConsumedRefreshTokenDigest:
+        token_digest = object()
+        session_id = object()
+        consumed_at = object()
+
+    token_models = DatabaseTokenModels(
+        consumed_refresh_token_digest_model=CustomConsumedRefreshTokenDigest,
+    )
+
+    assert token_models.consumed_refresh_token_digest_model is CustomConsumedRefreshTokenDigest
 
 
 @pytest.mark.parametrize(
-    ("field_name", "access_token_model", "refresh_token_model", "missing_attribute"),
+    ("field_name", "access_token_model", "refresh_token_model", "consumed_digest_model", "missing_attribute"),
     [
         pytest.param(
             "access_token_model",
             type("BadAccessToken", (), {}),
             RefreshToken,
+            RefreshTokenConsumedDigest,
             "token",
             id="invalid-access-token-model",
         ),
@@ -573,6 +596,7 @@ def test_database_token_models_default_to_bundled_token_model_classes() -> None:
             "refresh_token_model",
             AccessToken,
             type("BadRefreshToken", (), {}),
+            RefreshTokenConsumedDigest,
             "token",
             id="invalid-refresh-token-model",
         ),
@@ -589,8 +613,17 @@ def test_database_token_models_default_to_bundled_token_model_classes() -> None:
                     "user": object(),
                 },
             ),
+            RefreshTokenConsumedDigest,
             "session_id",
             id="refresh-token-model-missing-session-contract",
+        ),
+        pytest.param(
+            "consumed_refresh_token_digest_model",
+            AccessToken,
+            RefreshToken,
+            type("BadConsumedRefreshTokenDigest", (), {}),
+            "token_digest",
+            id="invalid-consumed-digest-model",
         ),
     ],
 )
@@ -598,6 +631,7 @@ def test_database_token_models_reject_invalid_model_contracts(
     field_name: str,
     access_token_model: type[object],
     refresh_token_model: type[object],
+    consumed_digest_model: type[object],
     missing_attribute: str,
 ) -> None:
     """Invalid token-model classes fail fast with a stable configuration error."""
@@ -605,6 +639,7 @@ def test_database_token_models_reject_invalid_model_contracts(
         DatabaseTokenModels(
             access_token_model=access_token_model,
             refresh_token_model=refresh_token_model,
+            consumed_refresh_token_digest_model=consumed_digest_model,
         )
 
 
@@ -998,7 +1033,7 @@ def test_organization_mixins_map_columns_relationships_and_normalize_roles() -> 
                 invited_email=" Invitee@Example.COM ",
                 roles=[" Member ", "member", "admin"],
                 token_hash=b"custom-invitation-token-hash".ljust(64, b"0"),
-                expires_at=datetime.now(UTC) + timedelta(hours=1),
+                expires_at=datetime.now(tz=UTC) + timedelta(hours=1),
             )
             session.add_all([membership, invitation])
             session.commit()
@@ -1022,7 +1057,7 @@ def test_organization_invitation_mixin_rejects_invalid_email() -> None:
             invited_email="not-an-email",
             roles=["member"],
             token_hash=b"invalid-invitation-token-hash".ljust(64, b"0"),
-            expires_at=datetime.now(UTC) + timedelta(hours=1),
+            expires_at=datetime.now(tz=UTC) + timedelta(hours=1),
         )
 
 
@@ -1181,10 +1216,14 @@ def test_models_package_import_token_orm_models_keeps_user_relationship_unresolv
         "import sys\n"
         "from sqlalchemy.exc import InvalidRequestError\n"
         "from litestar_auth.models import import_token_orm_models\n"
-        "AccessToken, RefreshToken = import_token_orm_models()\n"
+        "AccessToken, RefreshToken, RefreshTokenConsumedDigest = import_token_orm_models()\n"
         'assert "litestar_auth.models.user" not in sys.modules\n'
         'assert "litestar_auth.models.oauth" not in sys.modules\n'
-        "assert (AccessToken.__name__, RefreshToken.__name__) == ('AccessToken', 'RefreshToken')\n"
+        "assert (AccessToken.__name__, RefreshToken.__name__, RefreshTokenConsumedDigest.__name__) == (\n"
+        "    'AccessToken',\n"
+        "    'RefreshToken',\n"
+        "    'RefreshTokenConsumedDigest',\n"
+        ")\n"
         "try:\n"
         "    _ = AccessToken.user.property\n"
         "except InvalidRequestError as exc:\n"
@@ -1407,6 +1446,7 @@ def test_refresh_token_model_creates_schema_and_relationship() -> None:
 
         assert "refresh_token" in inspector.get_table_names()
         assert primary_key["constrained_columns"] == ["token"]
+        assert "consumed_token_digests" not in refresh_token_columns
         assert set(refresh_token_columns).issuperset(
             {
                 "token",
@@ -1415,14 +1455,12 @@ def test_refresh_token_model_creates_schema_and_relationship() -> None:
                 "session_id",
                 "last_used_at",
                 "client_metadata",
-                "consumed_token_digests",
             },
         )
         assert refresh_token_columns["created_at"]["default"] is not None
         assert refresh_token_columns["session_id"]["nullable"] is False
         assert refresh_token_columns["last_used_at"]["nullable"] is True
         assert refresh_token_columns["client_metadata"]["nullable"] is True
-        assert refresh_token_columns["consumed_token_digests"]["nullable"] is True
         assert any(index["name"] == "ix_refresh_token_session_id" for index in inspector.get_indexes("refresh_token"))
         assert foreign_keys[0]["referred_table"] == "user"
 
@@ -1442,7 +1480,43 @@ def test_refresh_token_model_creates_schema_and_relationship() -> None:
             assert isinstance(UUID(refresh_token.session_id), UUID)
             assert refresh_token.last_used_at is None
             assert refresh_token.client_metadata is None
-            assert refresh_token.consumed_token_digests is None
+
+
+def test_refresh_token_consumed_digest_model_creates_indexed_lookup_table() -> None:
+    """Consumed refresh-token digests are indexed separately for replay lookup."""
+    with create_test_engine() as engine:
+        access_token_model, refresh_token_model, consumed_digest_model = import_token_orm_models_from_models()
+        access_token_model.metadata.create_all(engine)
+
+        inspector = inspect(engine)
+        consumed_digest_columns = {
+            column["name"]: column for column in inspector.get_columns("refresh_token_consumed_digest")
+        }
+        primary_key = inspector.get_pk_constraint("refresh_token_consumed_digest")
+
+        assert (access_token_model, refresh_token_model, consumed_digest_model) == (
+            AccessToken,
+            RefreshToken,
+            RefreshTokenConsumedDigest,
+        )
+        assert {"access_token", "refresh_token", "refresh_token_consumed_digest"}.issubset(inspector.get_table_names())
+        assert "refresh_token_consumed_digest" in inspector.get_table_names()
+        assert primary_key["constrained_columns"] == ["token_digest"]
+        assert set(consumed_digest_columns) == {"token_digest", "session_id", "consumed_at"}
+        assert consumed_digest_columns["session_id"]["nullable"] is False
+        assert consumed_digest_columns["consumed_at"]["nullable"] is False
+        assert any(
+            index["name"] == "ix_refresh_token_consumed_digest_session_id"
+            for index in inspector.get_indexes("refresh_token_consumed_digest")
+        )
+
+        with Session(engine) as session:
+            marker = consumed_digest_model(token_digest="consumed-digest", session_id="session-id")
+            session.add(marker)
+            session.commit()
+            session.refresh(marker)
+
+            assert marker.consumed_at is not None
 
 
 def test_refresh_token_model_enforces_foreign_key_constraint() -> None:
@@ -1592,7 +1666,7 @@ def test_models_package_import_token_orm_models_resolves_to_reference_user_relat
     code = (
         "from sqlalchemy import inspect\n"
         "from litestar_auth.models import import_token_orm_models\n"
-        "AccessToken, RefreshToken = import_token_orm_models()\n"
+        "AccessToken, RefreshToken, RefreshTokenConsumedDigest = import_token_orm_models()\n"
         "from litestar_auth.models import ApiKey\n"
         "from litestar_auth.models import User\n"
         "from litestar_auth.models.oauth import OAuthAccount\n"
@@ -1603,6 +1677,7 @@ def test_models_package_import_token_orm_models_resolves_to_reference_user_relat
         "assert user_relationships['access_tokens'].back_populates == 'user'\n"
         "assert user_relationships['refresh_tokens'].mapper.class_ is RefreshToken\n"
         "assert user_relationships['refresh_tokens'].back_populates == 'user'\n"
+        "assert RefreshTokenConsumedDigest.__tablename__ == 'refresh_token_consumed_digest'\n"
         "assert user_relationships['oauth_accounts'].mapper.class_ is OAuthAccount\n"
         "assert user_relationships['oauth_accounts'].back_populates == 'user'\n"
     )
@@ -1624,8 +1699,9 @@ def test_db_models_module_still_exposes_low_level_token_registration_helper() ->
         "from importlib import import_module\n"
         "db_models = import_module('litestar_auth.authentication.strategy.db_models')\n"
         "from litestar_auth.models import import_token_orm_models as import_token_orm_models_from_models\n"
-        "assert db_models.import_token_orm_models() == (db_models.AccessToken, db_models.RefreshToken)\n"
-        "assert import_token_orm_models_from_models() == (db_models.AccessToken, db_models.RefreshToken)\n"
+        "expected = (db_models.AccessToken, db_models.RefreshToken, db_models.RefreshTokenConsumedDigest)\n"
+        "assert db_models.import_token_orm_models() == expected\n"
+        "assert import_token_orm_models_from_models() == expected\n"
     )
     result = subprocess.run(
         [sys.executable, "-c", code],
@@ -1674,7 +1750,11 @@ def test_plugin_runtime_bootstrap_is_idempotent_with_models_helper() -> None:
         "first = import_token_orm_models()\n"
         "second = import_token_orm_models()\n"
         "assert first == second\n"
-        "assert [model.__name__ for model in first] == ['AccessToken', 'RefreshToken']\n"
+        "assert [model.__name__ for model in first] == [\n"
+        "    'AccessToken',\n"
+        "    'RefreshToken',\n"
+        "    'RefreshTokenConsumedDigest',\n"
+        "]\n"
         "assert 'litestar_auth.models.user' not in sys.modules\n"
         "assert 'litestar_auth.models.oauth' not in sys.modules\n"
     )

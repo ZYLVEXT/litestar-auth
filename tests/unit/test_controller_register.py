@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import warnings
 from types import CellType, FunctionType
 from typing import Any, cast
 from unittest.mock import AsyncMock, MagicMock
@@ -15,6 +16,7 @@ from litestar.testing import AsyncTestClient
 import litestar_auth.controllers.register as register_module
 from litestar_auth.exceptions import AuthorizationError, ErrorCode, InvalidPasswordError, UserAlreadyExistsError
 from litestar_auth.ratelimit import AuthRateLimitConfig, EndpointRateLimit
+from litestar_auth.totp import SecurityWarning
 from tests._helpers import litestar_app_with_user_manager
 
 DEFAULT_REGISTER_MINIMUM_RESPONSE_SECONDS = register_module.DEFAULT_REGISTER_MINIMUM_RESPONSE_SECONDS
@@ -132,6 +134,35 @@ def test_register_controller_rejects_negative_minimum_response_seconds() -> None
     """Negative timing envelopes fail at controller construction."""
     with pytest.raises(ValueError, match="register_minimum_response_seconds must be non-negative"):
         create_register_controller(register_minimum_response_seconds=-0.001)
+
+
+def test_register_controller_warns_when_rate_limit_is_missing() -> None:
+    """Public registration emits an explicit signal when unthrottled."""
+    with pytest.warns(SecurityWarning, match="POST /register"):
+        create_register_controller(register_minimum_response_seconds=0)
+
+
+def test_register_controller_does_not_warn_when_rate_limit_is_configured() -> None:
+    """Configured registration rate limits preserve controller assembly without warnings."""
+    rate_limit = EndpointRateLimit(backend=_make_rate_limit_backend(), scope="ip", namespace="register")
+
+    with warnings.catch_warnings(record=True) as records:
+        warnings.simplefilter("always")
+        create_register_controller(
+            rate_limit_config=AuthRateLimitConfig(register=rate_limit),
+            register_minimum_response_seconds=0,
+        )
+
+    assert not [record for record in records if issubclass(record.category, SecurityWarning)]
+
+
+def test_register_controller_unsafe_testing_suppresses_missing_rate_limit_warning() -> None:
+    """The existing testing escape hatch suppresses missing registration-rate-limit warnings."""
+    with warnings.catch_warnings(record=True) as records:
+        warnings.simplefilter("always")
+        create_register_controller(register_minimum_response_seconds=0, unsafe_testing=True)
+
+    assert not [record for record in records if issubclass(record.category, SecurityWarning)]
 
 
 async def test_register_duplicate_user_returns_400_and_increments_rate_limit() -> None:

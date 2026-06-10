@@ -17,7 +17,7 @@ from litestar.response import Response
 from litestar_auth import plugin as plugin_module
 from litestar_auth._plugin import _hooks as plugin_hooks
 from litestar_auth._plugin import config as plugin_config
-from litestar_auth._plugin.dependencies import client_exception_handler
+from litestar_auth._plugin.exception_handlers import client_exception_handler
 from litestar_auth.authentication import LitestarAuthMiddleware
 from litestar_auth.authentication.backend import AuthenticationBackend
 from litestar_auth.authentication.transport.bearer import BearerTransport

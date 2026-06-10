@@ -11,6 +11,7 @@ from litestar import Litestar
 from litestar.testing import AsyncTestClient
 
 import litestar_auth.totp as _totp_mod
+from litestar_auth import _totp_primitive
 from litestar_auth._plugin.config import TotpConfig
 from litestar_auth.authentication.backend import AuthenticationBackend
 from litestar_auth.authentication.strategy.jwt import InMemoryJWTDenylistStore
@@ -121,7 +122,7 @@ async def _enable_totp(
         "/auth/2fa/enable/confirm",
         json={
             "enrollment_token": enable_body["enrollment_token"],
-            "code": _totp_mod._generate_totp_code(enable_body["secret"], _totp_mod._current_counter()),
+            "code": _totp_primitive._generate_totp_code(enable_body["secret"], _totp_primitive._current_counter()),
         },
         headers={"Authorization": f"Bearer {access_token}"},
     )
@@ -170,7 +171,7 @@ async def test_totp_extension_mounts_routes_and_preserves_totp_flow(monkeypatch:
     assert _is_litestar_auth_route_handler(totp_controller) is False
 
     fixed_counter = 123_456
-    monkeypatch.setattr(_totp_mod, "_current_counter", lambda: fixed_counter)
+    monkeypatch.setattr(_totp_primitive, "_current_counter", lambda: fixed_counter)
     async with AsyncTestClient(app=app) as client:
         login_response = await client.post(
             "/auth/login",
@@ -195,7 +196,7 @@ async def test_totp_extension_mounts_routes_and_preserves_totp_flow(monkeypatch:
             "/auth/2fa/verify",
             json={
                 "pending_token": pending_response.json()["pending_token"],
-                "code": _totp_mod._generate_totp_code(secret, fixed_counter),
+                "code": _totp_primitive._generate_totp_code(secret, fixed_counter),
             },
         )
         assert verify_response.status_code == HTTP_CREATED
@@ -206,7 +207,7 @@ async def test_totp_extension_mounts_routes_and_preserves_totp_flow(monkeypatch:
             "/auth/2fa/recovery-codes/regenerate",
             json={
                 "current_password": "correct-password",
-                "totp_code": _totp_mod._generate_totp_code(secret, fixed_counter),
+                "totp_code": _totp_primitive._generate_totp_code(secret, fixed_counter),
             },
             headers={"Authorization": f"Bearer {verified_access_token}"},
         )
@@ -216,14 +217,14 @@ async def test_totp_extension_mounts_routes_and_preserves_totp_flow(monkeypatch:
         fixed_counter += 1
         disable_response = await client.post(
             "/auth/2fa/disable",
-            json={"code": _totp_mod._generate_totp_code(secret, fixed_counter)},
+            json={"code": _totp_primitive._generate_totp_code(secret, fixed_counter)},
             headers={"Authorization": f"Bearer {verified_access_token}"},
         )
         assert disable_response.status_code == HTTP_CREATED
         assert next(iter(user_db.users_by_id.values())).totp_secret is None
 
         fixed_counter += 1
-        monkeypatch.setattr(_totp_mod, "_current_counter", lambda: fixed_counter)
+        monkeypatch.setattr(_totp_primitive, "_current_counter", lambda: fixed_counter)
         second_secret, _ = await _enable_totp(client, access_token=verified_access_token)
 
         missing_stepup_response = await client.patch(
@@ -240,7 +241,7 @@ async def test_totp_extension_mounts_routes_and_preserves_totp_flow(monkeypatch:
             json={
                 "email": "updated@example.com",
                 "current_password": "correct-password",
-                "totp_code": _totp_mod._generate_totp_code(second_secret, fixed_counter),
+                "totp_code": _totp_primitive._generate_totp_code(second_secret, fixed_counter),
             },
             headers={"Authorization": f"Bearer {verified_access_token}"},
         )

@@ -57,6 +57,7 @@ from litestar_auth.controllers._utils import (
 from litestar_auth.exceptions import ConfigurationError, ErrorCode
 from litestar_auth.guards import is_authenticated
 from litestar_auth.payloads import LoginCredentials, RefreshTokenRequest  # noqa: TC001
+from litestar_auth.ratelimit._config import warn_missing_public_rate_limits
 from litestar_auth.types import LoginIdentifier, TotpUserProtocol, UserProtocol
 
 if TYPE_CHECKING:
@@ -582,6 +583,13 @@ def create_auth_controller[UP: UserProtocol[Any], ID](
             label="totp_pending_secret",
             unsafe_testing=settings.unsafe_testing,
         )
+    warn_missing_public_rate_limits(
+        settings.rate_limit_config,
+        endpoint_names=("login", "refresh") if settings.enable_refresh else ("login",),
+        controller_name="create_auth_controller()",
+        unsafe_testing=settings.unsafe_testing,
+        stacklevel=2,
+    )
     ctx = _make_auth_controller_context(
         _AuthControllerSettings(
             backend=settings.backend,

@@ -17,8 +17,10 @@ import pytest
 import litestar_auth as litestar_auth_package
 from litestar_auth import _totp_primitive as totp_primitive
 from litestar_auth import _totp_recovery as totp_recovery
+from litestar_auth import _totp_verify as totp_verify
 from litestar_auth import totp
 from litestar_auth.contrib.redis import RedisAuthClientProtocol, RedisAuthPreset
+from litestar_auth.exceptions import ConfigurationError
 from litestar_auth.password import PasswordHelper
 from tests._helpers import cast_fakeredis
 
@@ -69,7 +71,7 @@ def test_generate_totp_secret_returns_base32_secret() -> None:
 def test_generate_totp_secret_size_matches_algorithm(algorithm: str, expected_bytes: int) -> None:
     """Secret byte length matches the HMAC output length per RFC 4226 S4."""
     secret = totp.generate_totp_secret(algorithm=algorithm)  # ty: ignore[invalid-argument-type]
-    decoded = totp._decode_secret(secret)
+    decoded = totp_primitive._decode_secret(secret)
     assert len(decoded) == expected_bytes
 
 
@@ -112,14 +114,6 @@ def test_importing_totp_does_not_eagerly_hash_dummy_recovery_code(monkeypatch: p
 
     assert imported_totp.generate_totp_secret
     assert hash_calls == 0
-
-
-def test_totp_primitive_facade_override_falls_back_without_public_facade(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Primitive helpers remain usable before the public facade is imported."""
-    sentinel = object()
-    monkeypatch.delitem(sys.modules, "litestar_auth.totp", raising=False)
-
-    assert totp_primitive._get_facade_override("_current_counter", sentinel) is sentinel
 
 
 def _recovery_lookup(code: str) -> str:
@@ -184,7 +178,7 @@ async def test_consume_matching_recovery_code_uses_lookup_index() -> None:
     )
     manager = _RecoveryCodeManager(code_index)
 
-    assert await totp._consume_matching_recovery_code(
+    assert await totp_recovery._consume_matching_recovery_code(
         manager,
         object(),
         "MATCHING-CODE",
@@ -208,7 +202,12 @@ async def test_consume_matching_recovery_code_miss_runs_dummy_verify(monkeypatch
     monkeypatch.setattr(password_helper, "verify", record_verify)
     manager = _RecoveryCodeManager({})
 
-    assert not await totp._consume_matching_recovery_code(manager, object(), "missing", password_helper=password_helper)
+    assert not await totp_recovery._consume_matching_recovery_code(
+        manager,
+        object(),
+        "missing",
+        password_helper=password_helper,
+    )
     assert verify_calls == [("missing", dummy_hash)]
 
 
@@ -216,7 +215,7 @@ async def test_consume_matching_recovery_code_rejects_missing_lookup_secret() ->
     """Recovery-code verification fails closed without a lookup secret."""
     manager = _RecoveryCodeManager({}, lookup_secret=None)
 
-    assert not await totp._consume_matching_recovery_code(manager, object(), "missing")
+    assert not await totp_recovery._consume_matching_recovery_code(manager, object(), "missing")
 
 
 async def test_consume_matching_recovery_code_collision_runs_single_verify(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -239,7 +238,7 @@ async def test_consume_matching_recovery_code_collision_runs_single_verify(monke
     monkeypatch.setattr(password_helper, "verify", record_verify)
     manager = _RecoveryCodeManager({_recovery_lookup("submitted-code"): wrong_hash})
 
-    assert not await totp._consume_matching_recovery_code(
+    assert not await totp_recovery._consume_matching_recovery_code(
         manager,
         object(),
         "submitted-code",
@@ -293,8 +292,8 @@ def test_generate_totp_uri_preserves_selected_algorithm(algorithm: str) -> None:
 def test_generate_totp_code_uses_selected_algorithm() -> None:
     """Different algorithms produce different codes for the same inputs."""
     counter = 1
-    sha256_code = totp._generate_totp_code(RFC_SECRET, counter, algorithm="SHA256")
-    sha512_code = totp._generate_totp_code(RFC_SECRET, counter, algorithm="SHA512")
+    sha256_code = totp_primitive._generate_totp_code(RFC_SECRET, counter, algorithm="SHA256")
+    sha512_code = totp_primitive._generate_totp_code(RFC_SECRET, counter, algorithm="SHA512")
 
     assert sha256_code != sha512_code
 
@@ -302,40 +301,40 @@ def test_generate_totp_code_uses_selected_algorithm() -> None:
 @pytest.mark.parametrize("algorithm", ["SHA256", "SHA512"])
 def test_verify_totp_accepts_current_window_code(monkeypatch: pytest.MonkeyPatch, algorithm: str) -> None:
     """Verification succeeds for the current 30-second time step across algorithms."""
-    monkeypatch.setattr(totp.time, "time", lambda: 59.0)
-    current_code = totp._generate_totp_code(RFC_SECRET, 1, algorithm=algorithm)  # ty: ignore[invalid-argument-type]
+    monkeypatch.setattr(totp_primitive.time, "time", lambda: 59.0)
+    current_code = totp_primitive._generate_totp_code(RFC_SECRET, 1, algorithm=algorithm)  # ty: ignore[invalid-argument-type]
 
     assert totp.verify_totp(RFC_SECRET, current_code, algorithm=algorithm) is True  # ty: ignore[invalid-argument-type]
 
 
 def test_verify_totp_accepts_previous_window_code(monkeypatch: pytest.MonkeyPatch) -> None:
     """Codes from the immediately previous time window are accepted."""
-    monkeypatch.setattr(totp.time, "time", lambda: 89.0)
-    previous_code = totp._generate_totp_code(RFC_SECRET, 1)
+    monkeypatch.setattr(totp_primitive.time, "time", lambda: 89.0)
+    previous_code = totp_primitive._generate_totp_code(RFC_SECRET, 1)
 
     assert totp.verify_totp(RFC_SECRET, previous_code) is True
 
 
 def test_verify_totp_accepts_next_window_code(monkeypatch: pytest.MonkeyPatch) -> None:
     """Codes from the immediately next time window are accepted."""
-    monkeypatch.setattr(totp.time, "time", lambda: 59.0)
+    monkeypatch.setattr(totp_primitive.time, "time", lambda: 59.0)
     next_counter = 2
-    next_code = totp._generate_totp_code(RFC_SECRET, next_counter)
+    next_code = totp_primitive._generate_totp_code(RFC_SECRET, next_counter)
 
     assert totp.verify_totp(RFC_SECRET, next_code) is True
 
 
 def test_verify_totp_rejects_outside_drift_window_code(monkeypatch: pytest.MonkeyPatch) -> None:
     """Codes more than one time window away are rejected."""
-    monkeypatch.setattr(totp.time, "time", lambda: 119.0)
-    old_code = totp._generate_totp_code(RFC_SECRET, 1)
+    monkeypatch.setattr(totp_primitive.time, "time", lambda: 119.0)
+    old_code = totp_primitive._generate_totp_code(RFC_SECRET, 1)
 
     assert totp.verify_totp(RFC_SECRET, old_code) is False
 
 
 def test_verify_totp_rejects_invalid_codes_and_secrets(monkeypatch: pytest.MonkeyPatch) -> None:
     """Malformed codes or secrets do not verify."""
-    monkeypatch.setattr(totp.time, "time", lambda: 59.0)
+    monkeypatch.setattr(totp_primitive.time, "time", lambda: 59.0)
 
     assert totp.verify_totp(RFC_SECRET, "ABC123") is False
     assert totp.verify_totp(RFC_SECRET, "12345") is False
@@ -344,9 +343,9 @@ def test_verify_totp_rejects_invalid_codes_and_secrets(monkeypatch: pytest.Monke
 
 async def test_verify_totp_with_store_rejects_same_window_replay(monkeypatch: pytest.MonkeyPatch) -> None:
     """Replay protection rejects the same `(user, counter)` after one success."""
-    monkeypatch.setattr(totp.time, "time", lambda: 59.0)
+    monkeypatch.setattr(totp_primitive.time, "time", lambda: 59.0)
     store = totp.InMemoryUsedTotpCodeStore()
-    current_code = totp._generate_totp_code(RFC_SECRET, 1)
+    current_code = totp_primitive._generate_totp_code(RFC_SECRET, 1)
 
     assert (
         await totp.verify_totp_with_store(
@@ -368,8 +367,8 @@ async def test_verify_totp_with_store_rejects_same_window_replay(monkeypatch: py
 
 async def test_verify_totp_with_store_warns_when_replay_protection_disabled(monkeypatch: pytest.MonkeyPatch) -> None:
     """Developers get an explicit warning when used-token replay protection is disabled."""
-    monkeypatch.setattr(totp.time, "time", lambda: 59.0)
-    current_code = totp._generate_totp_code(RFC_SECRET, 1)
+    monkeypatch.setattr(totp_primitive.time, "time", lambda: 59.0)
+    current_code = totp_primitive._generate_totp_code(RFC_SECRET, 1)
 
     with pytest.warns(totp.SecurityWarning, match=r"replay.*used_tokens_store|used_tokens_store.*replay"):
         assert (
@@ -384,17 +383,17 @@ async def test_verify_totp_with_store_warns_when_replay_protection_disabled(monk
 
 async def test_verify_totp_with_store_requires_store_outside_testing(monkeypatch: pytest.MonkeyPatch) -> None:
     """Production mode rejects missing replay stores when protection is required."""
-    monkeypatch.setattr(totp.time, "time", lambda: 59.0)
-    current_code = totp._generate_totp_code(RFC_SECRET, 1)
+    monkeypatch.setattr(totp_primitive.time, "time", lambda: 59.0)
+    current_code = totp_primitive._generate_totp_code(RFC_SECRET, 1)
 
-    with pytest.raises(totp.ConfigurationError, match="UsedTotpCodeStore"):
+    with pytest.raises(ConfigurationError, match="UsedTotpCodeStore"):
         await totp.verify_totp_with_store(RFC_SECRET, current_code, replay=_replay())
 
 
 async def test_verify_totp_with_store_warns_in_testing_without_store(monkeypatch: pytest.MonkeyPatch) -> None:
     """Testing mode allows missing replay stores but still emits a warning."""
-    monkeypatch.setattr(totp.time, "time", lambda: 59.0)
-    current_code = totp._generate_totp_code(RFC_SECRET, 1)
+    monkeypatch.setattr(totp_primitive.time, "time", lambda: 59.0)
+    current_code = totp_primitive._generate_totp_code(RFC_SECRET, 1)
 
     with pytest.warns(totp.SecurityWarning, match="used_tokens_store=None"):
         assert (
@@ -409,9 +408,9 @@ async def test_verify_totp_with_store_warns_in_testing_without_store(monkeypatch
 
 async def test_verify_totp_with_store_does_not_warn_when_store_provided(monkeypatch: pytest.MonkeyPatch) -> None:
     """No warning is emitted when replay protection is enabled via used_tokens_store."""
-    monkeypatch.setattr(totp.time, "time", lambda: 59.0)
+    monkeypatch.setattr(totp_primitive.time, "time", lambda: 59.0)
     store = totp.InMemoryUsedTotpCodeStore()
-    current_code = totp._generate_totp_code(RFC_SECRET, 1)
+    current_code = totp_primitive._generate_totp_code(RFC_SECRET, 1)
 
     with warnings.catch_warnings(record=True) as records:
         warnings.simplefilter("always")
@@ -432,9 +431,9 @@ async def test_verify_totp_with_store_logs_warning_on_invalid_code(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     """Log a structured WARNING when the provided TOTP code is invalid."""
-    monkeypatch.setattr(totp.time, "time", lambda: 59.0)
+    monkeypatch.setattr(totp_primitive.time, "time", lambda: 59.0)
 
-    with caplog.at_level(logging.WARNING, logger=totp.logger.name):
+    with caplog.at_level(logging.WARNING, logger=totp_verify.logger.name):
         assert await totp.verify_totp_with_store(RFC_SECRET, "000000", replay=_replay()) is False
 
     assert len(caplog.records) == 1
@@ -450,9 +449,9 @@ async def test_verify_totp_with_store_logs_warning_on_replay(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     """Log a structured WARNING when replay protection rejects a reused code."""
-    monkeypatch.setattr(totp.time, "time", lambda: 59.0)
+    monkeypatch.setattr(totp_primitive.time, "time", lambda: 59.0)
     store = totp.InMemoryUsedTotpCodeStore()
-    current_code = totp._generate_totp_code(RFC_SECRET, 1)
+    current_code = totp_primitive._generate_totp_code(RFC_SECRET, 1)
 
     assert (
         await totp.verify_totp_with_store(
@@ -464,7 +463,7 @@ async def test_verify_totp_with_store_logs_warning_on_replay(
     )
 
     caplog.clear()
-    with caplog.at_level(logging.WARNING, logger=totp.logger.name):
+    with caplog.at_level(logging.WARNING, logger=totp_verify.logger.name):
         assert (
             await totp.verify_totp_with_store(
                 RFC_SECRET,
@@ -487,9 +486,9 @@ async def test_verify_totp_with_store_logs_capacity_event_when_in_memory_store_f
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     """Capacity exhaustion logs totp_replay_store_capacity, not totp_replay."""
-    monkeypatch.setattr(totp.time, "time", lambda: 59.0)
+    monkeypatch.setattr(totp_primitive.time, "time", lambda: 59.0)
     store = totp.InMemoryUsedTotpCodeStore(max_entries=2)
-    current_code = totp._generate_totp_code(RFC_SECRET, 1)
+    current_code = totp_primitive._generate_totp_code(RFC_SECRET, 1)
 
     assert (
         await totp.verify_totp_with_store(
@@ -509,7 +508,7 @@ async def test_verify_totp_with_store_logs_capacity_event_when_in_memory_store_f
     )
 
     caplog.clear()
-    with caplog.at_level(logging.DEBUG, logger=totp.logger.name):
+    with caplog.at_level(logging.DEBUG, logger=totp_verify.logger.name):
         assert (
             await totp.verify_totp_with_store(
                 RFC_SECRET,
@@ -530,9 +529,9 @@ async def test_verify_totp_with_store_logs_capacity_event_when_in_memory_store_f
 
 async def test_verify_totp_with_store_keys_replay_on_matched_counter(monkeypatch: pytest.MonkeyPatch) -> None:
     """Replay protection keys off the matched counter, not the current counter."""
-    monkeypatch.setattr(totp.time, "time", lambda: 59.0)
+    monkeypatch.setattr(totp_primitive.time, "time", lambda: 59.0)
     matched_counter = 2
-    code = totp._generate_totp_code(RFC_SECRET, matched_counter)
+    code = totp_primitive._generate_totp_code(RFC_SECRET, matched_counter)
     seen_counters: list[int] = []
 
     class RecordingStore:
@@ -558,10 +557,10 @@ async def test_verify_totp_with_store_isolated_per_user_and_ttl(monkeypatch: pyt
         def __call__(self) -> float:
             return self.current
 
-    monkeypatch.setattr(totp.time, "time", lambda: 59.0)
+    monkeypatch.setattr(totp_primitive.time, "time", lambda: 59.0)
     clock = Clock()
     store = totp.InMemoryUsedTotpCodeStore(clock=clock)
-    current_code = totp._generate_totp_code(RFC_SECRET, 1)
+    current_code = totp_primitive._generate_totp_code(RFC_SECRET, 1)
 
     assert (
         await totp.verify_totp_with_store(
@@ -580,19 +579,19 @@ async def test_verify_totp_with_store_isolated_per_user_and_ttl(monkeypatch: pyt
         is True
     )
 
-    clock.current = float(totp.USED_TOTP_CODE_TTL_SECONDS - 1)
-    replay_result = await store.mark_used("user-1", 1, totp.USED_TOTP_CODE_TTL_SECONDS)
+    clock.current = float(totp_primitive.USED_TOTP_CODE_TTL_SECONDS - 1)
+    replay_result = await store.mark_used("user-1", 1, totp_primitive.USED_TOTP_CODE_TTL_SECONDS)
     assert replay_result.stored is False
     assert replay_result.rejected_as_replay is True
 
-    clock.current = float(totp.USED_TOTP_CODE_TTL_SECONDS)
-    ok_result = await store.mark_used("user-1", 1, totp.USED_TOTP_CODE_TTL_SECONDS)
+    clock.current = float(totp_primitive.USED_TOTP_CODE_TTL_SECONDS)
+    ok_result = await store.mark_used("user-1", 1, totp_primitive.USED_TOTP_CODE_TTL_SECONDS)
     assert ok_result.stored is True
 
 
 def test_used_totp_code_ttl_matches_full_drift_validation_window() -> None:
     """TTL tracks drift steps so replay protection spans all accepted counter windows."""
-    assert totp.USED_TOTP_CODE_TTL_SECONDS == totp.TIME_STEP_SECONDS * (2 * totp.TOTP_DRIFT_STEPS + 1)
+    assert totp_primitive.USED_TOTP_CODE_TTL_SECONDS == totp.TIME_STEP_SECONDS * (2 * totp.TOTP_DRIFT_STEPS + 1)
 
 
 async def test_inmemory_totp_replay_store_covers_full_drift_window() -> None:
@@ -607,7 +606,7 @@ async def test_inmemory_totp_replay_store_covers_full_drift_window() -> None:
 
     clock = Clock()
     store = totp.InMemoryUsedTotpCodeStore(clock=clock)
-    ttl = totp.USED_TOTP_CODE_TTL_SECONDS
+    ttl = totp_primitive.USED_TOTP_CODE_TTL_SECONDS
     counter_t = 42
 
     assert (await store.mark_used("user-1", counter_t, ttl)).stored is True
@@ -626,11 +625,11 @@ async def test_in_memory_used_totp_store_rejects_insert_when_at_capacity_fail_cl
     """At capacity with only active entries, new mark_used fails closed (no eviction)."""
     store = totp.InMemoryUsedTotpCodeStore(max_entries=STORE_CAP)
 
-    assert (await store.mark_used("user-1", 1, totp.USED_TOTP_CODE_TTL_SECONDS)).stored is True
-    assert (await store.mark_used("user-2", 2, totp.USED_TOTP_CODE_TTL_SECONDS)).stored is True
+    assert (await store.mark_used("user-1", 1, totp_primitive.USED_TOTP_CODE_TTL_SECONDS)).stored is True
+    assert (await store.mark_used("user-2", 2, totp_primitive.USED_TOTP_CODE_TTL_SECONDS)).stored is True
     assert len(store._entries) == STORE_CAP
 
-    cap_result = await store.mark_used("user-3", 3, totp.USED_TOTP_CODE_TTL_SECONDS)
+    cap_result = await store.mark_used("user-3", 3, totp_primitive.USED_TOTP_CODE_TTL_SECONDS)
     assert cap_result.stored is False
     assert cap_result.rejected_as_replay is False
     assert len(store._entries) == STORE_CAP
@@ -655,7 +654,7 @@ async def test_in_memory_used_totp_store_logs_error_when_capacity_blocks_insert(
     assert (await store.mark_used("later", 1, 10.0)).stored is True
     assert (await store.mark_used("sooner", 2, 5.0)).stored is True
 
-    with caplog.at_level(logging.ERROR, logger=totp.logger.name):
+    with caplog.at_level(logging.ERROR, logger=totp_verify.logger.name):
         cap_block = await store.mark_used("fresh", 3, 15.0)
         assert cap_block.stored is False
         assert cap_block.rejected_as_replay is False
@@ -723,7 +722,7 @@ async def test_in_memory_totp_enrollment_store_fails_closed_at_capacity(
     store = totp.InMemoryTotpEnrollmentStore(clock=clock, max_entries=1)
 
     assert await store.save(user_id="user-1", jti="jti-1", secret="secret-1", ttl_seconds=10) is True
-    with caplog.at_level(logging.ERROR, logger=totp.logger.name):
+    with caplog.at_level(logging.ERROR, logger=totp_verify.logger.name):
         assert await store.save(user_id="user-2", jti="jti-2", secret="secret-2", ttl_seconds=10) is False
 
     assert set(store._entries) == {"user-1"}
@@ -948,17 +947,17 @@ async def test_contrib_redis_preset_builds_totp_store_with_prefix_override(
 
 def test_current_counter_uses_time_step(monkeypatch: pytest.MonkeyPatch) -> None:
     """The RFC counter is derived from the configured 30-second step size."""
-    monkeypatch.setattr(totp.time, "time", lambda: 91.0)
+    monkeypatch.setattr(totp_primitive.time, "time", lambda: 91.0)
 
-    assert totp._current_counter() == EXPECTED_COUNTER_AT_91_SECONDS
+    assert totp_primitive._current_counter() == EXPECTED_COUNTER_AT_91_SECONDS
 
 
 def test_decode_secret_restores_padding_and_normalizes_case() -> None:
     """Secret decoding tolerates whitespace, lowercase input, and missing padding."""
-    assert totp._decode_secret("  my======  ") == b"f"
+    assert totp_primitive._decode_secret("  my======  ") == b"f"
 
 
 def test_decode_secret_rejects_invalid_base32_input() -> None:
     """Malformed base32 secrets raise the decoder error directly."""
     with pytest.raises(binascii.Error):
-        totp._decode_secret("invalid***")
+        totp_primitive._decode_secret("invalid***")

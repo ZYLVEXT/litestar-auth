@@ -749,4 +749,3 @@ class RefreshTokenMixin(_TokenModelMixin):
     )
     last_used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), default=None, nullable=True)
     client_metadata: Mapped[dict[str, str] | None] = mapped_column(JSON, default=None, nullable=True)
-    consumed_token_digests: Mapped[list[str] | None] = mapped_column(JSON, default=None, nullable=True)

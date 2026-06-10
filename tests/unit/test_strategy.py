@@ -441,8 +441,8 @@ def test_jwt_strategy_skips_secret_length_check_for_asymmetric_algorithm() -> No
     )
 
 
-async def test_jwt_strategy_uses_secret_key_for_default_session_fingerprint() -> None:
-    """Default fingerprints are keyed with the JWT secret for symmetric algorithms."""
+async def test_jwt_strategy_uses_derived_key_for_default_session_fingerprint() -> None:
+    """Default fingerprints use a key derived from the JWT secret for symmetric algorithms."""
     password = "hashed-password"
     user = type("FingerprintUser", (), {"id": uuid4(), "email": "user@example.com", "hashed_password": password})()
     strategy = JWTStrategy(secret=DEFAULT_SECRET, allow_inmemory_denylist=True)
@@ -451,12 +451,13 @@ async def test_jwt_strategy_uses_secret_key_for_default_session_fingerprint() ->
     payload = jwt.decode(token, DEFAULT_SECRET, algorithms=["HS256"], audience=JWT_ACCESS_TOKEN_AUDIENCE)
 
     material = f"{user.id}\x1f{user.email.casefold()}\x1f{password}".encode()
-    expected = hmac.new(DEFAULT_SECRET.encode(), material, hashlib.sha256).hexdigest()
-    assert payload["sfp"] == expected
+    raw_secret_fingerprint = hmac.new(DEFAULT_SECRET.encode(), material, hashlib.sha256).hexdigest()
+    assert payload["sfp"] == strategy.session_fingerprint_getter(user)
+    assert payload["sfp"] != raw_secret_fingerprint
 
 
-async def test_jwt_strategy_uses_signing_secret_for_default_session_fingerprint_with_rs256() -> None:
-    """Default fingerprints always use the signing secret, even for asymmetric algorithms."""
+async def test_jwt_strategy_uses_derived_signing_secret_for_default_session_fingerprint_with_rs256() -> None:
+    """Default fingerprints derive from the signing secret, even for asymmetric algorithms."""
     password = "hashed-password"
     user = type("FingerprintUser", (), {"id": uuid4(), "email": "user@example.com", "hashed_password": password})()
     strategy = JWTStrategy(
@@ -470,8 +471,9 @@ async def test_jwt_strategy_uses_signing_secret_for_default_session_fingerprint_
     payload = jwt.decode(token, RSA_PUBLIC_KEY, algorithms=["RS256"], audience=JWT_ACCESS_TOKEN_AUDIENCE)
 
     material = f"{user.id}\x1f{user.email.casefold()}\x1f{password}".encode()
-    expected = hmac.new(RSA_PRIVATE_KEY.encode(), material, hashlib.sha256).hexdigest()
-    assert payload["sfp"] == expected
+    raw_secret_fingerprint = hmac.new(RSA_PRIVATE_KEY.encode(), material, hashlib.sha256).hexdigest()
+    assert payload["sfp"] == strategy.session_fingerprint_getter(user)
+    assert payload["sfp"] != raw_secret_fingerprint
 
 
 async def test_jwt_strategy_preserves_custom_session_fingerprint_getter() -> None:

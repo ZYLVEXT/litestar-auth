@@ -12,7 +12,21 @@ import asyncio
 from typing import TYPE_CHECKING, Literal
 
 from litestar_auth.exceptions import ConfigurationError
-from litestar_auth.oauth._client import features
+from litestar_auth.oauth._client.features import (
+    as_account_identity_tuple,
+    as_mapping,
+    extract_identity_from_profile,
+    identity_and_email_verified_from_profile,
+    is_httpx_oauth_client,
+    parse_email_verified_from_profile,
+    supports_access_token,
+    supports_authorization_url,
+    supports_direct_identity,
+    supports_email_verified,
+    supports_profile,
+    validate_email_verified_result,
+    validate_oauth_client_adapter_fields,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
@@ -51,7 +65,7 @@ class _AsyncEmailVerificationClientAdapter:
 
         """
         result = await asyncio.to_thread(self._sync_client.get_email_verified, access_token)
-        return features.validate_email_verified_result(result)
+        return validate_email_verified_result(result)
 
 
 def make_async_email_verification_client(
@@ -130,7 +144,7 @@ class OAuthClientAdapter:
 
     def __init__(self, oauth_client: OAuthClientProtocol) -> None:
         """Bind the raw OAuth client implementation."""
-        features.validate_oauth_client_adapter_fields(oauth_client)
+        validate_oauth_client_adapter_fields(oauth_client)
         self._oauth_client = oauth_client
 
     async def get_authorization_url(
@@ -147,13 +161,13 @@ class OAuthClientAdapter:
         Raises:
             ConfigurationError: If the provider method is missing or returns an invalid URL.
         """
-        if not features.supports_authorization_url(self._oauth_client):
+        if not supports_authorization_url(self._oauth_client):
             msg = "OAuth client must define get_authorization_url()."
             raise ConfigurationError(msg)
 
         scope: str | list[str] | None = None
         if scopes:
-            scope = scopes if features.is_httpx_oauth_client(self._oauth_client) else " ".join(scopes)
+            scope = scopes if is_httpx_oauth_client(self._oauth_client) else " ".join(scopes)
         authorization_url = await self._oauth_client.get_authorization_url(
             redirect_uri,
             state,
@@ -181,12 +195,12 @@ class OAuthClientAdapter:
         Raises:
             ConfigurationError: If the provider method is missing or returns an invalid payload.
         """
-        if not features.supports_access_token(self._oauth_client):
+        if not supports_access_token(self._oauth_client):
             msg = "OAuth client must define get_access_token()."
             raise ConfigurationError(msg)
 
         raw_payload = await self._oauth_client.get_access_token(code, redirect_uri, code_verifier=code_verifier)
-        payload = features.as_mapping(raw_payload, message="OAuth client returned an invalid access-token payload.")
+        payload = as_mapping(raw_payload, message="OAuth client returned an invalid access-token payload.")
         access_token = payload.get("access_token")
         expires_at = payload.get("expires_at")
         refresh_token = payload.get("refresh_token")
@@ -218,13 +232,13 @@ class OAuthClientAdapter:
         Raises:
             ConfigurationError: If the provider returns malformed identity.
         """
-        if not features.supports_direct_identity(self._oauth_client):
+        if not supports_direct_identity(self._oauth_client):
             return None
 
         account_identity = await self._oauth_client.get_id_email(access_token)
         if account_identity is None:
             return None
-        parsed_identity = features.as_account_identity_tuple(account_identity)
+        parsed_identity = as_account_identity_tuple(account_identity)
         if parsed_identity is not None:
             return parsed_identity
 
@@ -237,25 +251,25 @@ class OAuthClientAdapter:
         Raises:
             ConfigurationError: If the profile contract is missing or malformed.
         """
-        if not features.supports_profile(self._oauth_client):
+        if not supports_profile(self._oauth_client):
             msg = "OAuth client must define get_id_email() or get_profile()."
             raise ConfigurationError(msg)
 
         raw_profile = await self._oauth_client.get_profile(access_token)
-        profile = features.as_mapping(raw_profile, message="OAuth client returned an invalid profile payload.")
-        return features.extract_identity_from_profile(profile)
+        profile = as_mapping(raw_profile, message="OAuth client returned an invalid profile payload.")
+        return extract_identity_from_profile(profile)
 
     async def get_email_verified(self, access_token: str) -> bool | None:
         """Return a provider asserted email-verification signal for the access token."""
-        if features.supports_email_verified(self._oauth_client):
+        if supports_email_verified(self._oauth_client):
             return await self._call_dedicated_email_verified(self._oauth_client, access_token)
 
-        if not features.supports_profile(self._oauth_client):
+        if not supports_profile(self._oauth_client):
             return None
 
         raw_profile = await self._oauth_client.get_profile(access_token)
-        profile = features.as_mapping(raw_profile, message="OAuth client returned an invalid profile payload.")
-        return features.parse_email_verified_from_profile(profile)
+        profile = as_mapping(raw_profile, message="OAuth client returned an invalid profile payload.")
+        return parse_email_verified_from_profile(profile)
 
     async def get_account_identity_and_email_verified(
         self,
@@ -271,17 +285,17 @@ class OAuthClientAdapter:
             email_verified = await self.get_email_verified(access_token)
             return identity, email_verified
 
-        if not features.supports_profile(self._oauth_client):
+        if not supports_profile(self._oauth_client):
             msg = "OAuth client must define get_id_email() or get_profile()."
             raise ConfigurationError(msg)
 
         raw_profile = await self._oauth_client.get_profile(access_token)
-        profile = features.as_mapping(raw_profile, message="OAuth client returned an invalid profile payload.")
-        return features.identity_and_email_verified_from_profile(profile)
+        profile = as_mapping(raw_profile, message="OAuth client returned an invalid profile payload.")
+        return identity_and_email_verified_from_profile(profile)
 
     @staticmethod
     async def _call_dedicated_email_verified(
         oauth_client: OAuthEmailVerificationAsyncClientProtocol,
         access_token: str,
     ) -> bool:
-        return features.validate_email_verified_result(await oauth_client.get_email_verified(access_token))
+        return validate_email_verified_result(await oauth_client.get_email_verified(access_token))

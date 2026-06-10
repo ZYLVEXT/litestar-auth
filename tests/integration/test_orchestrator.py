@@ -17,6 +17,7 @@ from litestar.plugins import InitPlugin
 from litestar.testing import AsyncTestClient
 
 import litestar_auth.totp as _totp_mod
+from litestar_auth import _totp_primitive
 from litestar_auth._plugin.config import TotpConfig
 from litestar_auth.authentication.backend import AuthenticationBackend
 from litestar_auth.authentication.strategy.base import Strategy, UserManagerProtocol
@@ -32,8 +33,8 @@ from tests.integration.conftest import ExampleUser, InMemoryUserDatabase
 
 InMemoryTotpEnrollmentStore = _totp_mod.InMemoryTotpEnrollmentStore
 InMemoryUsedTotpCodeStore = _totp_mod.InMemoryUsedTotpCodeStore
-_current_counter = _totp_mod._current_counter
-_generate_totp_code = _totp_mod._generate_totp_code
+_current_counter = _totp_primitive._current_counter
+_generate_totp_code = _totp_primitive._generate_totp_code
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -681,7 +682,7 @@ async def test_plugin_allows_overriding_minimum_password_length() -> None:
 @pytest.mark.filterwarnings("ignore::litestar_auth.totp.SecurityWarning")
 async def test_plugin_passes_advanced_controller_options_through_config(monkeypatch: pytest.MonkeyPatch) -> None:
     """Advanced controller options remain available when the plugin generates routes."""
-    monkeypatch.setattr("litestar_auth.totp.time.time", lambda: 59.0)
+    monkeypatch.setattr("litestar_auth._totp_primitive.time.time", lambda: 59.0)
     app, user_db, strategy, used_tokens_store = build_advanced_app()
     helper_manager = TokenCaptureUserManager(
         user_db,
@@ -797,7 +798,7 @@ async def _verify_totp_replay_protection(
     enable_body = enable_response.json()
     secret = enable_body["secret"]
 
-    confirm_code = _generate_totp_code(secret, _totp_mod._current_counter())
+    confirm_code = _generate_totp_code(secret, _totp_primitive._current_counter())
     confirm_response = await client.post(
         "/auth/2fa/enable/confirm",
         json={"enrollment_token": enable_body["enrollment_token"], "code": confirm_code},
@@ -807,7 +808,7 @@ async def _verify_totp_replay_protection(
 
     admin_user = await user_db.get_by_email("admin@example.com")
     assert admin_user is not None
-    code = _generate_totp_code(secret, _totp_mod._current_counter())
+    code = _generate_totp_code(secret, _totp_primitive._current_counter())
 
     pending_response = await client.post(
         "/auth/login",

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import warnings
 from datetime import timedelta
 from types import CellType, FunctionType
 from typing import Any, cast
@@ -23,6 +24,7 @@ from litestar_auth.controllers._auth_helpers import _LOGIN_EMAIL_MAX_LENGTH, _LO
 from litestar_auth.exceptions import ConfigurationError, ErrorCode, InactiveUserError
 from litestar_auth.guards import is_authenticated
 from litestar_auth.ratelimit import AuthRateLimitConfig, EndpointRateLimit
+from litestar_auth.totp import SecurityWarning
 
 AuthControllerConfig = auth_controller_module.AuthControllerConfig
 DEFAULT_LOGIN_MINIMUM_RESPONSE_SECONDS = auth_controller_module.DEFAULT_LOGIN_MINIMUM_RESPONSE_SECONDS
@@ -202,6 +204,45 @@ def _make_minimal_strategy() -> Strategy[_MinimalUser, UUID]:
     return S()
 
 
+def _make_rate_limit_backend() -> MagicMock:
+    """Return a mock backend suitable for EndpointRateLimit construction."""
+    backend = MagicMock()
+    backend.check = AsyncMock(return_value=True)
+    backend.increment = AsyncMock()
+    backend.reset = AsyncMock()
+    return backend
+
+
+def _make_refresh_strategy() -> Strategy[_MinimalUser, UUID]:
+    """Return a minimal refresh-capable strategy for controller construction."""
+
+    class S(Strategy[_MinimalUser, UUID]):
+        async def read_token(
+            self,
+            token: str | None,
+            user_manager: UserManagerProtocol[_MinimalUser, UUID],
+        ) -> _MinimalUser | None:
+            return None
+
+        async def write_token(self, user: _MinimalUser) -> str:
+            return "access-token"
+
+        async def destroy_token(self, token: str, user: _MinimalUser) -> None:
+            return None
+
+        async def write_refresh_token(self, user: _MinimalUser) -> str:
+            return "refresh-token"
+
+        async def rotate_refresh_token(
+            self,
+            refresh_token: str,
+            user_manager: UserManagerProtocol[_MinimalUser, UUID],
+        ) -> tuple[_MinimalUser, str] | None:
+            return _MinimalUser(), "rotated-refresh-token"
+
+    return S()
+
+
 class _TransportReturningNone(BearerTransport):
     """Transport whose read_token returns None to exercise logout credential check."""
 
@@ -315,6 +356,71 @@ def test_create_auth_controller_accepts_config_object() -> None:
 
     assert controller_class.path == "/session"
     assert controller_class.__name__ == "BearerAuthController"
+
+
+def test_create_auth_controller_warns_when_login_rate_limit_is_missing() -> None:
+    """Public login controllers emit an explicit signal when unthrottled."""
+    backend = AuthenticationBackend(
+        name="bearer",
+        transport=BearerTransport(),
+        strategy=cast("Any", _make_minimal_strategy()),
+    )
+
+    with pytest.warns(SecurityWarning, match="POST /login"):
+        create_auth_controller(backend=backend)
+
+
+def test_create_auth_controller_warns_when_refresh_rate_limit_is_missing() -> None:
+    """Refresh-capable controllers identify the missing refresh slot."""
+    backend = AuthenticationBackend(
+        name="bearer",
+        transport=BearerTransport(),
+        strategy=cast("Any", _make_refresh_strategy()),
+    )
+    login_limit = EndpointRateLimit(backend=_make_rate_limit_backend(), scope="ip", namespace="login")
+
+    with pytest.warns(SecurityWarning, match="POST /refresh"):
+        create_auth_controller(
+            backend=backend,
+            enable_refresh=True,
+            rate_limit_config=AuthRateLimitConfig(login=login_limit),
+        )
+
+
+def test_create_auth_controller_does_not_warn_when_public_slots_are_configured() -> None:
+    """Configured login and refresh slots preserve controller assembly without warnings."""
+    backend = AuthenticationBackend(
+        name="bearer",
+        transport=BearerTransport(),
+        strategy=cast("Any", _make_refresh_strategy()),
+    )
+    login_limit = EndpointRateLimit(backend=_make_rate_limit_backend(), scope="ip", namespace="login")
+    refresh_limit = EndpointRateLimit(backend=_make_rate_limit_backend(), scope="ip", namespace="refresh")
+
+    with warnings.catch_warnings(record=True) as records:
+        warnings.simplefilter("always")
+        create_auth_controller(
+            backend=backend,
+            enable_refresh=True,
+            rate_limit_config=AuthRateLimitConfig(login=login_limit, refresh=refresh_limit),
+        )
+
+    assert not [record for record in records if issubclass(record.category, SecurityWarning)]
+
+
+def test_create_auth_controller_unsafe_testing_suppresses_missing_rate_limit_warning() -> None:
+    """The existing testing escape hatch suppresses missing public-rate-limit warnings."""
+    backend = AuthenticationBackend(
+        name="bearer",
+        transport=BearerTransport(),
+        strategy=cast("Any", _make_refresh_strategy()),
+    )
+
+    with warnings.catch_warnings(record=True) as records:
+        warnings.simplefilter("always")
+        create_auth_controller(backend=backend, enable_refresh=True, unsafe_testing=True)
+
+    assert not [record for record in records if issubclass(record.category, SecurityWarning)]
 
 
 def test_auth_controller_context_validates_login_minimum_response_seconds() -> None:

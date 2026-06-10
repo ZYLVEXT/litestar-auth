@@ -24,6 +24,7 @@ from litestar_auth.controllers._utils import (
     _to_user_schema,
 )
 from litestar_auth.exceptions import AuthorizationError, ErrorCode, InvalidPasswordError, UserAlreadyExistsError
+from litestar_auth.ratelimit._config import warn_missing_public_rate_limits
 from litestar_auth.schemas import UserCreate, UserRead
 from litestar_auth.types import RoleCapableUserProtocol
 
@@ -291,6 +292,13 @@ def create_register_controller[UP: RegisterControllerUserProtocol[Any], ID](
         settings.user_create_schema,
         parameter_name="user_create_schema",
         require_forbid_unknown_fields=True,
+    )
+    warn_missing_public_rate_limits(
+        settings.rate_limit_config,
+        endpoint_names=("register",),
+        controller_name="create_register_controller()",
+        unsafe_testing=settings.unsafe_testing,
+        stacklevel=2,
     )
     register_rate_limit = settings.rate_limit_config.register if settings.rate_limit_config else None
     register_rate_limit_increment, register_rate_limit_reset = _create_rate_limit_handlers(register_rate_limit)

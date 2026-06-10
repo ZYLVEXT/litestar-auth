@@ -39,7 +39,7 @@ import litestar_auth.plugin as plugin_module
 import litestar_auth.ratelimit as ratelimit_module
 import litestar_auth.schemas as schemas_module
 import litestar_auth.totp as totp_module
-from litestar_auth.authentication.strategy.db_models import AccessToken, RefreshToken
+from litestar_auth.authentication.strategy.db_models import AccessToken, RefreshToken, RefreshTokenConsumedDigest
 from litestar_auth.authentication.strategy.jwt import (
     InMemoryJWTDenylistStore,
     JWTDenylistStore,
@@ -689,11 +689,12 @@ def test_change_password_request_reuse_surface_stays_importable() -> None:
 
 def test_models_and_strategy_modules_expose_documented_orm_setup_surface() -> None:
     """The ORM docs point to models-owned bootstrap plus the strategy runtime contract."""
-    access_token_model, refresh_token_model = models_module.import_token_orm_models()
+    access_token_model, refresh_token_model, consumed_digest_model = models_module.import_token_orm_models()
     token_models = strategy_module.DatabaseTokenModels(
         access_token_model=access_token_model,
         refresh_token_model=refresh_token_model,
     )
+    assert consumed_digest_model is RefreshTokenConsumedDigest
 
     assert models_module.__all__ == (
         "AccessTokenMixin",

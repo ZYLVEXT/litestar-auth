@@ -17,3 +17,13 @@ def keyed_hex(key: bytes, *parts: bytes) -> str:
     for part in parts:
         hmac_digest.update(part)
     return hmac_digest.hexdigest()
+
+
+def hkdf_sha256_32(key_material: bytes, *, salt: bytes, info: bytes) -> bytes:
+    """Derive a 32-byte HKDF-SHA256 output with explicit domain separation.
+
+    Returns:
+        The single-block HKDF-SHA256 output.
+    """
+    pseudorandom_key = keyed_bytes(salt, key_material)
+    return keyed_bytes(pseudorandom_key, info + b"\x01")

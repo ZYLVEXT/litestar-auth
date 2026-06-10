@@ -35,9 +35,9 @@ from litestar_auth._plugin import (
 )
 from litestar_auth._plugin.dependencies import (
     DependencyProviders,
-    client_exception_handler,
     register_dependencies,
 )
+from litestar_auth._plugin.exception_handlers import client_exception_handler
 from litestar_auth.authentication import Authenticator, LitestarAuthMiddleware
 from litestar_auth.authentication.backend import AuthenticationBackend
 from litestar_auth.authentication.strategy.db import DatabaseTokenStrategy
@@ -178,6 +178,35 @@ def _current_inmemory_totp_enrollment_store() -> object:
     totp_module = importlib.import_module("litestar_auth.totp")
     store_type = cast("type[Any]", totp_module.InMemoryTotpEnrollmentStore)
     return store_type()
+
+
+class _SharedRateLimitBackend:
+    """Rate-limit backend double that represents worker-shared state."""
+
+    @property
+    def is_shared_across_workers(self) -> bool:
+        return True
+
+    async def check(self, key: str) -> bool:
+        return True
+
+    async def increment(self, key: str) -> None:
+        return None
+
+    async def reset(self, key: str) -> None:
+        return None
+
+    async def retry_after(self, key: str) -> int:
+        return 0
+
+
+def _shared_public_rate_limit_config() -> AuthRateLimitConfig:
+    """Return shared-backed limits for plugin auth and register controllers."""
+    backend = _SharedRateLimitBackend()
+    return AuthRateLimitConfig(
+        login=EndpointRateLimit(backend=backend, scope="ip", namespace="login"),
+        register=EndpointRateLimit(backend=backend, scope="ip", namespace="register"),
+    )
 
 
 def _minimal_config(  # noqa: PLR0913
@@ -602,9 +631,9 @@ def test_bundled_token_bootstrap_loader_is_cached(monkeypatch: pytest.MonkeyPatc
         def __init__(self) -> None:
             self.calls = 0
 
-        def import_token_orm_models(self) -> tuple[type[object], type[object]]:
+        def import_token_orm_models(self) -> tuple[type[object], type[object], type[object]]:
             self.calls += 1
-            return object, object
+            return object, object, object
 
     models_module = _ModelsModule()
     startup_module._load_bundled_token_orm_models.cache_clear()
@@ -613,7 +642,7 @@ def test_bundled_token_bootstrap_loader_is_cached(monkeypatch: pytest.MonkeyPatc
     first_result = startup_module._load_bundled_token_orm_models()
     second_result = startup_module._load_bundled_token_orm_models()
 
-    assert first_result == (object, object)
+    assert first_result == (object, object, object)
     assert second_result == first_result
     assert models_module.calls == 1
     startup_module._load_bundled_token_orm_models.cache_clear()
@@ -642,7 +671,6 @@ def test_bundled_token_bootstrap_detection_skips_custom_token_models() -> None:
         session_id = None
         last_used_at = None
         client_metadata = None
-        consumed_token_digests = None
 
     custom_strategy = DatabaseTokenStrategy(
         session=cast("Any", object()),
@@ -809,15 +837,21 @@ def test_on_app_init_does_not_warn_for_redis_rate_limiter(
 
     config = _minimal_config()
     config.deployment_worker_count = 2
+    redis_backend = RedisRateLimiter(
+        redis=cast_fakeredis(async_fakeredis, RedisClientProtocol),
+        max_attempts=3,
+        window_seconds=60,
+    )
     config.rate_limit_config = AuthRateLimitConfig(
         login=EndpointRateLimit(
-            backend=RedisRateLimiter(
-                redis=cast_fakeredis(async_fakeredis, RedisClientProtocol),
-                max_attempts=3,
-                window_seconds=60,
-            ),
+            backend=redis_backend,
             scope="ip",
             namespace="login",
+        ),
+        register=EndpointRateLimit(
+            backend=redis_backend,
+            scope="ip",
+            namespace="register",
         ),
     )
     plugin = LitestarAuth(config)
@@ -921,6 +955,7 @@ def test_on_app_init_allows_oauth_providers_when_encryption_key_is_configured() 
         oauth_token_encryption_key="YWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWE=",
         oauth_flow_cookie_secret=OAUTH_FLOW_COOKIE_SECRET,
     )
+    config.rate_limit_config = _shared_public_rate_limit_config()
     plugin = LitestarAuth(config)
 
     with warnings.catch_warnings(record=True) as records:

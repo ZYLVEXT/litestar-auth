@@ -5,8 +5,8 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any, Unpack, cast
 
-from litestar_auth._manager import api_key_creation as _api_key_creation
-from litestar_auth._manager import api_key_secrets as _api_key_secrets
+import litestar_auth._manager.api_key_creation as _api_key_creation
+import litestar_auth._manager.api_key_secrets as _api_key_secrets
 from litestar_auth._manager.api_key_config import (
     ApiKeyConfigProtocol,
     ApiKeyManagerConfig,

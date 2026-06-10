@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
+import litestar_auth._plugin.validation.totp as _totp_validation
 from litestar_auth._plugin.features import TOTP_STEPUP_POLICY_ENDPOINTS
-from litestar_auth._plugin.validation import totp as _totp_validation
 from litestar_auth._plugin.validation._core import format_configuration_message
 from litestar_auth._plugin.validation._predicates import user_model_defines_field
 from litestar_auth.exceptions import ConfigurationError

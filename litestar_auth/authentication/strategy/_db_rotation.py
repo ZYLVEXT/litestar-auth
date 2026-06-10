@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any, Protocol, cast
 
-from sqlalchemy import delete, select, update
+from sqlalchemy import delete, insert, select, update
 
 from litestar_auth.authentication.strategy._db_metadata import _DatabaseRefreshTokenMetadataMixin
 from litestar_auth.authentication.strategy._db_time import _DatabaseTokenTimeMixin
@@ -18,6 +18,7 @@ if TYPE_CHECKING:
 
     from litestar_auth.authentication.strategy._db_repositories import AsyncSessionT, TokenRepositoryType
     from litestar_auth.authentication.strategy.base import UserManagerProtocol
+    from litestar_auth.authentication.strategy.db_models import RefreshTokenConsumedDigest
 
 
 class _RefreshTokenRow(Protocol):
@@ -28,7 +29,6 @@ class _RefreshTokenRow(Protocol):
     session_id: str
     last_used_at: datetime | None
     client_metadata: dict[str, str] | None
-    consumed_token_digests: list[str] | None
     user_id: object
     user: object
 
@@ -45,6 +45,7 @@ class _DatabaseRefreshTokenRotationMixin[UP: UserProtocol[Any], ID](
     token_bytes: int
     _token_hash_secret: bytes
     _refresh_token_repository_type: TokenRepositoryType
+    consumed_refresh_token_digest_model: type[RefreshTokenConsumedDigest]
 
     def _repository(self, repository_type: TokenRepositoryType) -> SQLAlchemyAsyncRepository[Any]:
         """Create a repository bound to the current session."""
@@ -93,13 +94,22 @@ class _DatabaseRefreshTokenRotationMixin[UP: UserProtocol[Any], ID](
     async def _find_refresh_token_row_by_consumed_digest(self, token_digest: str) -> _RefreshTokenRow | None:
         """Return the active refresh-session row that recorded ``token_digest`` as already consumed."""
         result = await self.session.execute(
-            select(self.refresh_token_model).where(self.refresh_token_model.consumed_token_digests.is_not(None)),
+            select(self.refresh_token_model)
+            .join(
+                self.consumed_refresh_token_digest_model,
+                self.consumed_refresh_token_digest_model.session_id == self.refresh_token_model.session_id,
+            )
+            .where(self.consumed_refresh_token_digest_model.token_digest == token_digest),
         )
-        rows = cast("list[_RefreshTokenRow]", result.scalars().all())
-        return next((row for row in rows if token_digest in (row.consumed_token_digests or ())), None)
+        return cast("_RefreshTokenRow | None", result.scalars().first())
 
     async def _revoke_refresh_session_chain(self, session_id: str) -> None:
         """Delete every refresh-token row for a compromised refresh-session chain."""
+        await self._execute_delete(
+            delete(self.consumed_refresh_token_digest_model).where(
+                self.consumed_refresh_token_digest_model.session_id == session_id,
+            ),
+        )
         await self._execute_delete(
             delete(self.refresh_token_model).where(self.refresh_token_model.session_id == session_id),
         )
@@ -120,7 +130,6 @@ class _DatabaseRefreshTokenRotationMixin[UP: UserProtocol[Any], ID](
             token_bytes=self.token_bytes,
             token_hash_secret=self._token_hash_secret,
         )
-        consumed_token_digests = [*(persisted_token.consumed_token_digests or ()), consumed_token_digest]
         replaced_count = await self._execute_delete(
             update(self.refresh_token_model)
             .where(self.refresh_token_model.token == persisted_token.token)
@@ -128,7 +137,6 @@ class _DatabaseRefreshTokenRotationMixin[UP: UserProtocol[Any], ID](
                 token=rotated_token_digest,
                 last_used_at=datetime.now(tz=UTC),
                 client_metadata=client_metadata if client_metadata is not None else persisted_token.client_metadata,
-                consumed_token_digests=consumed_token_digests,
             ),
         )
         if replaced_count != 1:
@@ -136,6 +144,12 @@ class _DatabaseRefreshTokenRotationMixin[UP: UserProtocol[Any], ID](
             if compromised_row is not None:
                 await self._revoke_refresh_session_chain(compromised_row.session_id)
             return None
+        await self.session.execute(
+            insert(self.consumed_refresh_token_digest_model).values(
+                token_digest=consumed_token_digest,
+                session_id=persisted_token.session_id,
+            ),
+        )
         return rotated_refresh_token
 
     async def rotate_refresh_token(
@@ -158,6 +172,11 @@ class _DatabaseRefreshTokenRotationMixin[UP: UserProtocol[Any], ID](
                 await self.session.commit()
             return None
         if self._is_token_expired(persisted_token.created_at, self.refresh_max_age):
+            await self._execute_delete(
+                delete(self.consumed_refresh_token_digest_model).where(
+                    self.consumed_refresh_token_digest_model.session_id == persisted_token.session_id,
+                ),
+            )
             await self._delete_refresh_token_row(persisted_token)
             return None
 

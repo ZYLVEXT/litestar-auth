@@ -128,6 +128,11 @@ AuthRateLimitSlot.TOTP_VERIFY
 ## Behavior
 
 - When a limit is exceeded, clients receive **429 Too Many Requests** with **`Retry-After`**.
+- Controller assembly emits `SecurityWarning` when public unauthenticated endpoints are exposed
+  without their matching rate-limit slots: `login` for `POST .../login`, `refresh` when
+  refresh-token rotation is enabled, and `register` for `POST .../register`. Configure the
+  matching `AuthRateLimitConfig` fields for production. `unsafe_testing=True` suppresses this
+  warning for controlled tests and local-only scaffolding.
 - Backends: **`InMemoryRateLimiter`** (single process / dev) or **`RedisRateLimiter`** (production, multiple workers). See [Deployment](../deployment.md).
 - `InMemoryRateLimiter` fails closed for new keys when `max_keys` is reached and no expired counters can be pruned. It logs `event=rate_limit_memory_capacity`; size `max_keys` for local/dev traffic or use Redis for public multi-worker deployments.
 - `LitestarAuthConfig.deployment_worker_count` is the explicit topology declaration for startup validation. `None` means unknown worker count and preserves warning-only diagnostics, `1` means known single-worker, and values greater than `1` fail closed if any enabled auth rate-limit slot uses a process-local backend.

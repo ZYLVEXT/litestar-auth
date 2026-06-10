@@ -30,7 +30,7 @@ HTTP_BAD_REQUEST = 400
 HTTP_NOT_FOUND = 404
 TOKEN_HASH_SECRET = "test-token-hash-secret-1234567890-1234567890"
 
-AccessToken, RefreshToken = import_token_orm_models()
+AccessToken, RefreshToken, RefreshTokenConsumedDigest = import_token_orm_models()
 
 
 @pytest.fixture
@@ -40,7 +40,7 @@ def sqlalchemy_metadata() -> tuple[MetaData, ...]:
     Returns:
         Metadata collections required by this module.
     """
-    return tuple(dict.fromkeys((User.metadata, AccessToken.metadata, RefreshToken.metadata)))
+    return tuple(dict.fromkeys((User.metadata, AccessToken.metadata, RefreshTokenConsumedDigest.metadata)))
 
 
 @pytest.fixture

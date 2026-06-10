@@ -9,6 +9,7 @@ import pytest
 from cryptography.fernet import Fernet
 from litestar import Litestar
 
+from litestar_auth._totp_primitive import _current_counter, _generate_totp_code
 from litestar_auth.authentication.backend import AuthenticationBackend
 from litestar_auth.authentication.transport.bearer import BearerTransport
 from litestar_auth.controllers._utils import _is_litestar_auth_route_handler
@@ -16,7 +17,7 @@ from litestar_auth.exceptions import ErrorCode
 from litestar_auth.manager import UserManagerSecurity
 from litestar_auth.password import PasswordHelper
 from litestar_auth.plugin import ApiKeyConfig, LitestarAuth, LitestarAuthConfig
-from litestar_auth.totp import _current_counter, _generate_totp_code, generate_totp_secret
+from litestar_auth.totp import generate_totp_secret
 from tests.integration.conftest import ExampleUser, InMemoryTokenStrategy, InMemoryUserDatabase
 from tests.integration.test_controller_api_keys import (
     API_KEY_HASH_SECRET,

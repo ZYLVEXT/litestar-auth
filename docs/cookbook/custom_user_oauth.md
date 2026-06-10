@@ -73,10 +73,10 @@ That same `litestar_auth.models` package is also the main ORM setup entrypoint f
 ```python
 from litestar_auth.models import import_token_orm_models
 
-AccessToken, RefreshToken = import_token_orm_models()
+AccessToken, RefreshToken, RefreshTokenConsumedDigest = import_token_orm_models()
 ```
 
-Call that helper during metadata registration or Alembic setup when the app reuses the library `AccessToken` / `RefreshToken` models. `LitestarAuth.on_app_init()` also bootstraps those classes at plugin startup when the configured database-token strategy still uses the library models, so an extra import is not required for runtime correctness alone.
+Call that helper during metadata registration or Alembic setup when the app reuses the library `AccessToken` / `RefreshToken` models and the bundled consumed-digest lookup table. `LitestarAuth.on_app_init()` also bootstraps those classes at plugin startup when the configured database-token strategy still uses the library models, so an extra import is not required for runtime correctness alone.
 
 ## Plugin and user database
 

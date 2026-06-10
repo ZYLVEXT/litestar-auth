@@ -12,16 +12,12 @@ from litestar_auth._totp_primitive import (
     TotpAlgorithm,
     _verify_totp_counter,
 )
-from litestar_auth.exceptions import ConfigurationError
+from litestar_auth.exceptions import ConfigurationError, SecurityWarning
 
 if TYPE_CHECKING:
     from litestar_auth._totp_stores import TotpReplayProtection
 
 logger = logging.getLogger("litestar_auth.totp")
-
-
-class SecurityWarning(UserWarning):
-    """Warning emitted for security-sensitive insecure defaults (TOTP, plugin startup, etc.)."""
 
 
 async def verify_totp_with_store(

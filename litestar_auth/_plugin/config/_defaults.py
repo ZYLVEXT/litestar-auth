@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
-from litestar_auth._plugin import features as _features
+import litestar_auth._plugin.features as _features
 from litestar_auth.config import UNSET, UnsetType
 from litestar_auth.types import UserProtocol
 

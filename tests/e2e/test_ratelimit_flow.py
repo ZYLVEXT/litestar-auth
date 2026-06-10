@@ -16,6 +16,7 @@ from sqlalchemy.orm import Session as SASession
 from sqlalchemy.pool import StaticPool
 
 import litestar_auth.totp as _totp_mod
+from litestar_auth import _totp_primitive
 from litestar_auth._plugin.config import TotpConfig
 from litestar_auth.authentication.backend import AuthenticationBackend
 from litestar_auth.authentication.strategy.jwt import InMemoryJWTDenylistStore, JWTStrategy
@@ -35,8 +36,8 @@ from tests.e2e.conftest import SessionMaker
 
 InMemoryTotpEnrollmentStore = _totp_mod.InMemoryTotpEnrollmentStore
 InMemoryUsedTotpCodeStore = _totp_mod.InMemoryUsedTotpCodeStore
-_current_counter = _totp_mod._current_counter
-_generate_totp_code = _totp_mod._generate_totp_code
+_current_counter = _totp_primitive._current_counter
+_generate_totp_code = _totp_primitive._generate_totp_code
 
 pytestmark = [pytest.mark.e2e]
 
@@ -324,7 +325,7 @@ async def test_totp_verify_throttle_is_independent_from_enable_disable_failures(
     enable_body = enable_response.json()
     secret = enable_body["secret"]
 
-    confirm_code = _generate_totp_code(secret, _totp_mod._current_counter())
+    confirm_code = _generate_totp_code(secret, _totp_primitive._current_counter())
     confirm_response = await test_client.post(
         "/auth/2fa/enable/confirm",
         json={"enrollment_token": enable_body["enrollment_token"], "code": confirm_code},
@@ -415,7 +416,7 @@ async def test_plugin_shared_builder_migration_recipe_keeps_login_and_totp_verif
             "/auth/2fa/enable/confirm",
             json={
                 "enrollment_token": enable_body["enrollment_token"],
-                "code": _generate_totp_code(enable_body["secret"], _totp_mod._current_counter()),
+                "code": _generate_totp_code(enable_body["secret"], _totp_primitive._current_counter()),
             },
             headers={"Authorization": f"Bearer {access_token}"},
         )

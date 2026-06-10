@@ -11,9 +11,8 @@ from litestar_auth._plugin.config import (
 )
 from litestar_auth._plugin.middleware import get_cookie_transports
 from litestar_auth._plugin.validation._core import format_configuration_message
-from litestar_auth._totp_verify import SecurityWarning
 from litestar_auth.config import MINIMUM_SECRET_LENGTH, validate_production_secret
-from litestar_auth.exceptions import ConfigurationError
+from litestar_auth.exceptions import ConfigurationError, SecurityWarning
 
 if TYPE_CHECKING:
     from litestar_auth._plugin.config import LitestarAuthConfig, TotpConfig

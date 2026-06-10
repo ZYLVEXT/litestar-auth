@@ -15,10 +15,14 @@ from litestar_auth.authentication.strategy.base import RefreshSession
 from litestar_auth.types import UserProtocol
 
 if TYPE_CHECKING:
+    from collections.abc import Iterable
+
     from advanced_alchemy.repository import SQLAlchemyAsyncRepository
     from sqlalchemy.sql.base import Executable
+    from sqlalchemy.sql.roles import InElementRole
 
     from litestar_auth.authentication.strategy._db_repositories import AsyncSessionT, TokenRepositoryType
+    from litestar_auth.authentication.strategy.db_models import RefreshTokenConsumedDigest
 
 
 class _DatabaseRefreshSessionMixin[UP: UserProtocol[Any], ID](
@@ -32,6 +36,7 @@ class _DatabaseRefreshSessionMixin[UP: UserProtocol[Any], ID](
     token_bytes: int
     _token_hash_secret: bytes
     _refresh_token_repository_type: TokenRepositoryType
+    consumed_refresh_token_digest_model: type[RefreshTokenConsumedDigest]
 
     def _repository(self, repository_type: TokenRepositoryType) -> SQLAlchemyAsyncRepository[Any]:
         """Create a repository bound to the current session."""
@@ -96,13 +101,19 @@ class _DatabaseRefreshSessionMixin[UP: UserProtocol[Any], ID](
             ``True`` when a matching active session was deleted, otherwise ``False``.
         """
         expired_count = await self._delete_expired_refresh_sessions_for_user(user)
+        deleted_marker_count = await self._delete_refresh_session_consumed_digests(
+            select(self.refresh_token_model.session_id).where(
+                self.refresh_token_model.user_id == user.id,
+                self.refresh_token_model.session_id == session_id,
+            ),
+        )
         deleted_count = await self._execute_delete(
             delete(self.refresh_token_model).where(
                 self.refresh_token_model.user_id == user.id,
                 self.refresh_token_model.session_id == session_id,
             ),
         )
-        if expired_count or deleted_count:
+        if expired_count or deleted_marker_count or deleted_count:
             await self.session.commit()
         return deleted_count > 0
 
@@ -116,8 +127,11 @@ class _DatabaseRefreshSessionMixin[UP: UserProtocol[Any], ID](
         conditions = [self.refresh_token_model.user_id == user.id]
         if current_session_id is not None:
             conditions.append(self.refresh_token_model.session_id != current_session_id)
+        deleted_marker_count = await self._delete_refresh_session_consumed_digests(
+            select(self.refresh_token_model.session_id).where(*conditions),
+        )
         deleted_count = await self._execute_delete(delete(self.refresh_token_model).where(*conditions))
-        if expired_count or deleted_count:
+        if expired_count or deleted_marker_count or deleted_count:
             await self.session.commit()
         return deleted_count
 
@@ -197,9 +211,27 @@ class _DatabaseRefreshSessionMixin[UP: UserProtocol[Any], ID](
             Number of deleted rows.
         """
         cutoff = datetime.now(tz=UTC) - self.refresh_max_age
+        await self._delete_refresh_session_consumed_digests(
+            select(self.refresh_token_model.session_id).where(
+                self.refresh_token_model.user_id == user.id,
+                self.refresh_token_model.created_at <= cutoff,
+            ),
+        )
         return await self._execute_delete(
             delete(self.refresh_token_model).where(
                 self.refresh_token_model.user_id == user.id,
                 self.refresh_token_model.created_at <= cutoff,
+            ),
+        )
+
+    async def _delete_refresh_session_consumed_digests(self, session_ids: Iterable[Any] | InElementRole) -> int:
+        """Delete consumed-digest index rows for the selected refresh sessions.
+
+        Returns:
+            Number of consumed-digest rows deleted.
+        """
+        return await self._execute_delete(
+            delete(self.consumed_refresh_token_digest_model).where(
+                self.consumed_refresh_token_digest_model.session_id.in_(session_ids),
             ),
         )

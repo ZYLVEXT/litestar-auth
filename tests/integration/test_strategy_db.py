@@ -19,7 +19,7 @@ from litestar_auth.authentication.strategy import DatabaseTokenModels
 from litestar_auth.authentication.strategy._db_time import _DatabaseTokenTimeMixin
 from litestar_auth.authentication.strategy._opaque_tokens import digest_opaque_token
 from litestar_auth.authentication.strategy.base import RefreshableStrategy, RefreshSessionManagementStrategy, Strategy
-from litestar_auth.authentication.strategy.db_models import AccessToken, RefreshToken
+from litestar_auth.authentication.strategy.db_models import AccessToken, RefreshToken, RefreshTokenConsumedDigest
 from litestar_auth.exceptions import ConfigurationError
 from litestar_auth.models import (
     AccessTokenMixin,
@@ -736,6 +736,16 @@ async def test_database_token_strategy_cleanup_expired_tokens(session: Session) 
                 user_id=user.id,
                 created_at=now - timedelta(days=5),
             ),
+            RefreshTokenConsumedDigest(
+                token_digest="expired-orphan-consumed-digest",
+                session_id="orphan-refresh-session-id",
+                consumed_at=now - timedelta(days=40),
+            ),
+            RefreshTokenConsumedDigest(
+                token_digest="fresh-orphan-consumed-digest",
+                session_id="fresh-orphan-refresh-session-id",
+                consumed_at=now - timedelta(days=5),
+            ),
         ],
     )
     session.commit()
@@ -754,6 +764,22 @@ async def test_database_token_strategy_cleanup_expired_tokens(session: Session) 
     assert session.scalar(select(RefreshToken).where(RefreshToken.token == "expired-refresh-token")) is None
     assert session.scalar(select(AccessToken).where(AccessToken.token == "fresh-access-token")) is not None
     assert session.scalar(select(RefreshToken).where(RefreshToken.token == "fresh-refresh-token")) is not None
+    assert (
+        session.scalar(
+            select(RefreshTokenConsumedDigest).where(
+                RefreshTokenConsumedDigest.token_digest == "expired-orphan-consumed-digest",
+            ),
+        )
+        is None
+    )
+    assert (
+        session.scalar(
+            select(RefreshTokenConsumedDigest).where(
+                RefreshTokenConsumedDigest.token_digest == "fresh-orphan-consumed-digest",
+            ),
+        )
+        is not None
+    )
 
 
 async def test_database_token_strategy_writes_and_rotates_refresh_tokens(session: Session) -> None:
@@ -1013,6 +1039,33 @@ async def test_database_token_strategy_rotate_refresh_token_returns_none_when_mi
     assert await strategy.rotate_refresh_token("missing-refresh-token", UnusedUserManager()) is None
 
 
+async def test_database_token_strategy_unknown_refresh_token_keeps_unrelated_sessions(session: Session) -> None:
+    """Unknown refresh tokens do not revoke sessions with unrelated consumed-digest markers."""
+    user = _create_user(session, email="refresh-unknown@example.com")
+    strategy = DatabaseTokenStrategy(
+        session=_strategy_session(session),
+        token_hash_secret=_TOKEN_HASH_SECRET,
+    )
+    await strategy.write_refresh_token(user)
+    persisted_refresh_token = session.scalar(select(RefreshToken).where(RefreshToken.user_id == user.id))
+    assert persisted_refresh_token is not None
+    session.add(
+        RefreshTokenConsumedDigest(
+            token_digest=digest_opaque_token(token_hash_secret=_TOKEN_HASH_SECRET.encode(), token="consumed-elsewhere"),
+            session_id=persisted_refresh_token.session_id,
+        ),
+    )
+    session.commit()
+
+    assert await strategy.rotate_refresh_token("unknown-refresh-token", UnusedUserManager()) is None
+    assert (
+        session.scalar(
+            select(RefreshToken).where(RefreshToken.session_id == persisted_refresh_token.session_id),
+        )
+        is not None
+    )
+
+
 async def test_database_token_strategy_refresh_token_replay_revokes_session_chain(session: Session) -> None:
     """Replaying a consumed refresh token revokes the active refresh session."""
     user = _create_user(session, email="refresh-replay@example.com")
@@ -1026,11 +1079,27 @@ async def test_database_token_strategy_refresh_token_replay_revokes_session_chai
     session_id = persisted_refresh_token.session_id
 
     rotation = await strategy.rotate_refresh_token(refresh_token, UnusedUserManager())
+    consumed_digest = digest_opaque_token(token_hash_secret=_TOKEN_HASH_SECRET.encode(), token=refresh_token)
+    assert (
+        session.scalar(
+            select(RefreshTokenConsumedDigest).where(
+                RefreshTokenConsumedDigest.token_digest == consumed_digest,
+                RefreshTokenConsumedDigest.session_id == session_id,
+            ),
+        )
+        is not None
+    )
     replay_rotation = await strategy.rotate_refresh_token(refresh_token, UnusedUserManager())
 
     assert rotation is not None
     assert replay_rotation is None
     assert session.scalar(select(RefreshToken).where(RefreshToken.session_id == session_id)) is None
+    assert (
+        session.scalar(
+            select(RefreshTokenConsumedDigest).where(RefreshTokenConsumedDigest.session_id == session_id),
+        )
+        is None
+    )
 
 
 async def test_database_token_strategy_concurrent_refresh_rotation_has_single_winner(
@@ -1201,8 +1270,45 @@ async def test_database_token_strategy_rotate_refresh_token_deletes_expired_rows
     assert session.scalar(select(RefreshToken).where(RefreshToken.user_id == user.id)) is None
 
 
+async def test_database_token_strategy_rotate_expired_refresh_token_deletes_consumed_digests(
+    session: Session,
+) -> None:
+    """Expired refresh-token rotation removes consumed-digest rows for the session."""
+    user = _create_user(session, email="expired-refresh-digest@example.com")
+    strategy = DatabaseTokenStrategy(
+        session=_strategy_session(session),
+        token_hash_secret=_TOKEN_HASH_SECRET,
+        refresh_max_age=timedelta(days=30),
+    )
+    refresh_token = await strategy.write_refresh_token(user)
+    initial_row = session.scalar(select(RefreshToken).where(RefreshToken.user_id == user.id))
+    assert initial_row is not None
+    session_id = initial_row.session_id
+
+    rotation = await strategy.rotate_refresh_token(refresh_token, UnusedUserManager())
+    assert rotation is not None
+    _, rotated_refresh_token = rotation
+    session.execute(
+        update(RefreshToken)
+        .where(RefreshToken.session_id == session_id)
+        .values(created_at=datetime.now(tz=UTC) - timedelta(days=31)),
+    )
+    session.commit()
+
+    expired_rotation = await strategy.rotate_refresh_token(rotated_refresh_token, UnusedUserManager())
+
+    assert expired_rotation is None
+    assert session.scalar(select(RefreshToken).where(RefreshToken.session_id == session_id)) is None
+    assert (
+        session.scalar(
+            select(RefreshTokenConsumedDigest).where(RefreshTokenConsumedDigest.session_id == session_id),
+        )
+        is None
+    )
+
+
 async def test_database_token_strategy_invalidate_all_tokens_removes_user_rows(session: Session) -> None:
-    """invalidate_all_tokens() should remove both access and refresh rows for the user."""
+    """invalidate_all_tokens() should remove all persisted rows for the user."""
     user = _create_user(session, email="invalidate-all@example.com")
     strategy = DatabaseTokenStrategy(
         session=_strategy_session(session),
@@ -1210,11 +1316,25 @@ async def test_database_token_strategy_invalidate_all_tokens_removes_user_rows(s
     )
     await strategy.write_token(user)
     await strategy.write_refresh_token(user)
+    refresh_session_id = session.scalar(select(RefreshToken.session_id).where(RefreshToken.user_id == user.id))
+    assert refresh_session_id is not None
+    consumed_digest = RefreshTokenConsumedDigest(
+        session_id=refresh_session_id,
+        token_digest=digest_opaque_token(token_hash_secret=_TOKEN_HASH_SECRET.encode(), token="consumed-refresh"),
+    )
+    session.add(consumed_digest)
+    session.commit()
 
     await strategy.invalidate_all_tokens(user)
 
     assert session.scalar(select(AccessToken).where(AccessToken.user_id == user.id)) is None
     assert session.scalar(select(RefreshToken).where(RefreshToken.user_id == user.id)) is None
+    assert (
+        session.scalar(
+            select(RefreshTokenConsumedDigest).where(RefreshTokenConsumedDigest.session_id == refresh_session_id),
+        )
+        is None
+    )
 
 
 def test_database_token_strategy_rejects_short_hash_secret(session: Session) -> None:

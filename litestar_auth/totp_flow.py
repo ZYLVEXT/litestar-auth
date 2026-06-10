@@ -17,16 +17,15 @@ import jwt
 from jwt import ExpiredSignatureError, InvalidTokenError
 
 from litestar_auth._jwt_headers import JwtDecodeConfig, decode_signed_jwt, jwt_encode_headers
+from litestar_auth._totp_recovery import _consume_matching_recovery_code
 from litestar_auth.config import TOTP_PENDING_AUDIENCE
-from litestar_auth.exceptions import ConfigurationError, TokenError
+from litestar_auth.exceptions import ConfigurationError, SecurityWarning, TokenError
 from litestar_auth.password import PasswordHelper
 from litestar_auth.ratelimit._client_host import _client_host
 from litestar_auth.totp import (
-    SecurityWarning,
     TotpAlgorithm,
     TotpReplayProtection,
     UsedTotpCodeStore,
-    _consume_matching_recovery_code,
     verify_totp_with_store,
 )
 from litestar_auth.types import TotpUserProtocol

@@ -5,6 +5,7 @@ from __future__ import annotations
 from functools import partial
 from typing import TYPE_CHECKING, Any, cast
 
+from litestar_auth._totp_recovery import _consume_matching_recovery_code
 from litestar_auth.controllers._error_responses import (
     INVALID_REQUEST_PAYLOAD_DETAIL,
     raise_client_error,
@@ -35,7 +36,6 @@ from litestar_auth.payloads import (
 )
 from litestar_auth.totp import (
     TotpReplayProtection,
-    _consume_matching_recovery_code,
     build_recovery_code_index,
     generate_totp_recovery_codes,
     verify_totp_with_store,

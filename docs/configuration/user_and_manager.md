@@ -38,15 +38,15 @@ password-column hook.
 
 ### Bundled `AccessToken` / `RefreshToken` lifecycle {#bundled-accesstoken--refreshtoken-lifecycle}
 
-`litestar_auth.models.import_token_orm_models()` is the explicit mapper-registration entrypoint for the library token models:
+`litestar_auth.models.import_token_orm_models()` is the explicit mapper-registration entrypoint for all bundled library token models:
 
 ```python
 from litestar_auth.models import import_token_orm_models
 
-AccessToken, RefreshToken = import_token_orm_models()
+AccessToken, RefreshToken, RefreshTokenConsumedDigest = import_token_orm_models()
 ```
 
-Call that helper yourself during metadata registration or Alembic-style autogenerate so token discovery stays with the models boundary. For plugin-managed runtime, `LitestarAuth.on_app_init()` also calls the same helper lazily when the active DB-token strategy uses the bundled `AccessToken` / `RefreshToken` classes, so apps do not need a separate import side effect only to make the plugin work. Keep the explicit helper for metadata/Alembic flows or any non-plugin code path that needs the tables.
+Call that helper yourself during metadata registration or Alembic-style autogenerate so token discovery stays with the models boundary, including the `refresh_token_consumed_digest` lookup table. For plugin-managed runtime, `LitestarAuth.on_app_init()` also calls the same helper lazily when the active DB-token strategy uses the bundled `AccessToken` / `RefreshToken` classes, so apps do not need a separate import side effect only to make the plugin work. Keep the explicit helper for metadata/Alembic flows or any non-plugin code path that needs the tables.
 
 If you use the library `AccessToken` and `RefreshToken` models, your user class should declare relationships compatible with them instead of copying mapper wiring from the reference `User` class:
 
@@ -227,22 +227,24 @@ backend = AuthenticationBackend(
 ```
 
 Custom refresh-token classes have a session-management and reuse-detection contract in addition to
-the shared token contract. They must expose mapped `session_id`, `last_used_at`, `client_metadata`, and
-`consumed_token_digests` attributes. The recommended path is still to compose `RefreshTokenMixin`, which
+the shared token contract. They must expose mapped `session_id`, `last_used_at`, and `client_metadata`
+attributes, while consumed digest lookup lives in the separate `refresh_token_consumed_digest` table.
+The recommended path is still to compose `RefreshTokenMixin`, which
 provides:
 
 - a unique public `session_id` UUID string that is not the stored token digest;
 - `last_used_at`, updated on successful refresh rotation;
 - nullable bounded `client_metadata`, currently populated by the built-in auth controller with a
-  normalized `user_agent` value capped at 255 characters;
-- nullable `consumed_token_digests` JSON storage for already-rotated keyed refresh-token digests.
+  normalized `user_agent` value capped at 255 characters.
 
 Refresh rotation preserves `session_id` and the original `created_at` value, updates `last_used_at`,
-records the consumed digest, and writes a new digest-only `token` value for the rotated refresh token.
-Re-presenting a consumed refresh token revokes the whole refresh-session chain. Existing refresh-token
-tables must be migrated by adding `session_id`, `last_used_at`, `client_metadata`, and
-`consumed_token_digests`; backfill `session_id` with one unique non-sensitive UUID per row and leave
-`consumed_token_digests` null for historical rows before enabling session/device APIs.
+records the consumed digest in `refresh_token_consumed_digest`, and writes a new digest-only `token` value
+for the rotated refresh token. Re-presenting a consumed refresh token revokes the whole refresh-session
+chain through the indexed lookup table. Existing refresh-token tables must be migrated by adding
+`session_id`, `last_used_at`, and `client_metadata`; backfill `session_id` with one unique non-sensitive
+UUID per row, create the `refresh_token_consumed_digest` table, backfill legacy JSON digests there if
+upgrading from a version that had `consumed_token_digests`, and drop that legacy column before enabling
+session/device APIs.
 
 `DatabaseTokenAuthConfig` / `LitestarAuthConfig(..., database_token_auth=...)` remains the direct shortcut for the bundled `AccessToken` / `RefreshToken` tables. The plugin bootstraps those bundled token mappers at `on_app_init()` for runtime use, but that does not replace the explicit helper for metadata bootstrap or Alembic autogenerate. Use the manual backend assembly above only when you intentionally replace the token ORM classes or need another transport/strategy combination.
 

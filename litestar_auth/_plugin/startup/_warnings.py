@@ -9,7 +9,7 @@ from litestar_auth._plugin.middleware import get_cookie_transports
 from litestar_auth._plugin.oauth_contract import _build_oauth_route_registration_contract
 from litestar_auth._plugin.rate_limit import iter_rate_limit_endpoint_items
 from litestar_auth._plugin.security_policy import _describe_jwt_revocation_policy
-from litestar_auth._totp_verify import SecurityWarning
+from litestar_auth.exceptions import SecurityWarning
 
 if TYPE_CHECKING:
     from litestar_auth._plugin.config import LitestarAuthConfig

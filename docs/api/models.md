@@ -10,7 +10,7 @@ Names are loaded lazily (PEP 562) when accessed on the package.
 | Goal | Import |
 |------|--------|
 | Shared auth-model mixins without registering reference mappers | `from litestar_auth.models.mixins import UserModelMixin, UserAuthRelationshipMixin, UserRoleRelationshipMixin, RoleMixin, UserRoleAssociationMixin, OrganizationMixin, OrganizationMembershipMixin, OAuthAccountMixin, ApiKeyMixin, AccessTokenMixin, RefreshTokenMixin` |
-| Bundled `AccessToken` / `RefreshToken` mapper bootstrap | `from litestar_auth.models import import_token_orm_models` |
+| Bundled `AccessToken` / `RefreshToken` / `RefreshTokenConsumedDigest` mapper bootstrap | `from litestar_auth.models import import_token_orm_models` |
 | Bundled role tables without loading reference `User` | `from litestar_auth.models.role import Role, UserRole` |
 | Bundled organization tables without loading root package models | `from litestar_auth.models.organization import Organization, OrganizationMembership` |
 | API-key table contract **without** loading reference `User` | `from litestar_auth.models.api_key import ApiKey` |
@@ -24,7 +24,7 @@ OAuth cookbook](../cookbook/custom_user_oauth.md) when the application owns the 
 
 Avoid `from litestar_auth.models import User` (or the `user` submodule) in apps that already map table `user` to a custom model. That import registers the bundled reference mapper and conflicts with an app-owned mapping. Likewise, importing `OAuthAccount` from `litestar_auth.models.oauth` only keeps the reference `User` lazy; when the app owns a different user class, table, or registry, prefer an `OAuthAccountMixin` subclass that points back at the custom user contract.
 
-`import_token_orm_models()` remains the explicit helper for bundled token metadata bootstrap and Alembic-style autogenerate. `LitestarAuth.on_app_init()` also calls the same helper lazily for plugin-managed runtime when bundled DB-token models are active, so no extra import side effect is required only to make the plugin work.
+`import_token_orm_models()` remains the explicit helper for bundled token metadata bootstrap and Alembic-style autogenerate. It returns `AccessToken`, `RefreshToken`, and `RefreshTokenConsumedDigest` so the bundled refresh-token consumed-digest lookup table is part of the documented bootstrap surface. `LitestarAuth.on_app_init()` also calls the same helper lazily for plugin-managed runtime when bundled DB-token models are active, so no extra import side effect is required only to make the plugin work. `DatabaseTokenModels` defaults to those same three classes at runtime; pass `consumed_refresh_token_digest_model=...` only when a custom consumed-digest lookup table should back refresh-token replay detection.
 
 For custom SQLAlchemy models, compose the mixins on your own declarative base instead of copying
 columns or relationship wiring from the reference classes.
@@ -42,21 +42,26 @@ session metadata required by session/device management:
 - `last_used_at` — nullable timestamp set when a refresh token is successfully rotated.
 - `client_metadata` — nullable bounded JSON metadata derived from login/refresh requests. The built-in
   controller stores only a normalized `user_agent` value capped at 255 characters.
-- `consumed_token_digests` — nullable JSON list of keyed refresh-token digests that were previously
-  rotated within this session and are retained only for replay detection.
 
 Refresh rotation keeps the same `session_id` and `created_at`, atomically replaces only the token digest,
 records the consumed digest, updates `last_used_at`, and refreshes `client_metadata` when request metadata
 is available. Re-presenting any consumed refresh token is treated as a compromise signal and revokes the
-entire refresh-session chain.
+entire refresh-session chain. The bundled strategy also stores each consumed digest in
+`refresh_token_consumed_digest`, keyed by digest with an index on `session_id`, so replay checks perform an
+indexed equality lookup instead of scanning refresh-token rows.
 
 Existing deployments using the bundled `refresh_token` table must add `session_id`, `last_used_at`, and
 `client_metadata` columns before using this version. Deployments upgrading to refresh-token reuse detection
-must also add nullable `consumed_token_digests` JSON storage. Backfill `session_id` with a unique
-non-sensitive UUID per existing row and leave `consumed_token_digests` null for historical rows. Existing
-custom refresh-token models passed through `DatabaseTokenModels` must expose mapped `session_id`,
-`last_used_at`, `client_metadata`, and `consumed_token_digests` attributes; otherwise configuration fails
-fast with `ConfigurationError`.
+must also create the `refresh_token_consumed_digest` lookup table. Backfill `session_id` with a unique
+non-sensitive UUID per existing row. If the deployment is upgrading from a version that stored legacy
+digests in `refresh_token.consumed_token_digests`, backfill every legacy digest into
+`refresh_token_consumed_digest`, then drop the legacy JSON column before serving traffic with the new code.
+Skipping the lookup-table backfill means refresh tokens consumed before the upgrade and replayed after
+it are rejected as ordinary missing tokens instead of revoking the compromised session chain until the
+legacy sessions expire or are explicitly revoked. Existing custom refresh-token models passed through
+`DatabaseTokenModels` must expose mapped `session_id`, `last_used_at`, and `client_metadata` attributes;
+custom consumed-digest models must expose mapped `token_digest`, `session_id`, and `consumed_at` attributes.
+Otherwise configuration fails fast with `ConfigurationError`.
 
 ## `api_key` shape
 

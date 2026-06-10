@@ -1,3 +1,82 @@
+## Unreleased
+
+### Added
+
+- **Rate-limit posture warnings for public auth endpoints.** Assembling the login/refresh controllers
+  (via `create_auth_controller()` or the plugin) or the registration controller without an
+  `AuthRateLimitConfig` covering those endpoints now emits a `SecurityWarning` naming the unthrottled
+  routes (`POST /login`, `POST /refresh`, `POST /register`) and the `AuthRateLimitConfig` fields to set.
+  Pass `unsafe_testing=True` to silence it for tests and local development. Deployments that already
+  configure rate limiting are unaffected.
+
+- **`DatabaseTokenModels.consumed_refresh_token_digest_model`.** The explicit DB-token model contract
+  now also carries the consumed-digest lookup model (default: bundled `RefreshTokenConsumedDigest`),
+  validated eagerly like the other two models: a custom class must expose mapped `token_digest`,
+  `session_id`, and `consumed_at` attributes. Existing configurations need no changes.
+
+### Security
+
+- **Refresh-token replay detection now uses an indexed lookup table.** Consumed refresh-token digests are
+  stored in a new `refresh_token_consumed_digest` table (digest primary key, indexed `session_id`) and
+  matched with an indexed equality lookup, replacing the previous full scan of the
+  `refresh_token.consumed_token_digests` JSON column performed on every unauthenticated `POST /refresh`.
+  The legacy JSON dual-write is removed, the expired-session and periodic cleanup paths also reclaim
+  consumed-digest rows so the table cannot grow unbounded, and replayed-token session-chain revocation is
+  unchanged. **Breaking:** the bundled schema gains the `refresh_token_consumed_digest` table, and
+  `RefreshTokenMixin` / custom refresh-token model validation no longer require a `consumed_token_digests`
+  attribute — see Migration.
+
+- **JWT session-fingerprint keys are now derived with HKDF-SHA256 domain separation.** The fingerprint
+  HMAC key is derived from the JWT signing secret via HKDF (dedicated salt/info) instead of using the raw
+  secret bytes directly, keeping the fingerprint key cryptographically separated from the signing key.
+  **Breaking:** access tokens carrying a session fingerprint that were issued before this release no
+  longer validate, so affected sessions must re-authenticate.
+
+### Changed
+
+- **`import_token_orm_models()` now returns three models.** Both the public
+  `litestar_auth.models.import_token_orm_models()` and the low-level strategy helper return
+  `(AccessToken, RefreshToken, RefreshTokenConsumedDigest)` so metadata bootstrap and Alembic
+  autogenerate flows see the full bundled token-model set rather than relying on an import side effect.
+  **Breaking:** call sites that unpack the previous two-tuple must be updated.
+
+- **`SecurityWarning` moved to `litestar_auth.exceptions`.** The warning category emitted for insecure
+  defaults (rate-limit posture, TOTP, plugin startup) now lives alongside the other public error types;
+  `litestar_auth.totp.SecurityWarning` keeps working as a public re-export. The private
+  `litestar_auth._totp_verify` definition site is gone.
+
+### Removed
+
+- **`litestar_auth.totp` no longer leaks private internals.** Underscored helpers
+  (`_current_counter`, `_generate_totp_code`, `_consume_matching_recovery_code`, and friends), the
+  `hmac` / `time` / `logger` module attributes, and `USED_TOTP_CODE_TTL_SECONDS` are no longer
+  importable from the facade; the public `__all__` surface is unchanged. **Breaking for test code:**
+  the facade-override hook was removed with them, so monkeypatching
+  `litestar_auth.totp._current_counter` no longer affects verification — patch
+  `litestar_auth._totp_primitive` directly instead.
+
+### Internal
+
+- Merged `controllers/_session_devices_handlers.py` back into `controllers.session_devices`
+  (drops a mid-file `noqa: E402` import cycle workaround), switched the OAuth client adapter to direct
+  function imports, and normalized several private modules to `import package.module as alias` form to
+  reduce circular-import fragility. No behavior change.
+
+### Packaging
+
+- `pyproject.toml` now uses the PEP 639 SPDX license expression (`license = "MIT"` plus
+  `license-files`) instead of the deprecated table form; LICENSE copyright year refreshed.
+
+### Migration
+
+- **Add the `refresh_token_consumed_digest` lookup table, backfill it, then drop the legacy JSON column.**
+  Create the table (DDL and Alembic variants in `docs/migration.md`), copy existing
+  `refresh_token.consumed_token_digests` digests into it keyed by `session_id` *before* serving this code,
+  then `DROP COLUMN refresh_token.consumed_token_digests`. Skipping the backfill leaves a transition
+  window in which refresh tokens consumed before the upgrade are not recognized as replays (no
+  session-chain revocation) until those legacy sessions expire or are revoked. Custom refresh-token models
+  passed to `DatabaseTokenModels` no longer need a `consumed_token_digests` attribute.
+
 ## 5.0.0 (2026-06-09)
 
 ### Added

@@ -14,6 +14,7 @@ from sqlalchemy.orm import Session as SASession
 from sqlalchemy.pool import StaticPool
 
 from litestar_auth._plugin.config import TotpConfig
+from litestar_auth._totp_primitive import _generate_totp_code
 from litestar_auth.authentication.backend import AuthenticationBackend
 from litestar_auth.authentication.strategy.jwt import InMemoryJWTDenylistStore, JWTStrategy
 from litestar_auth.authentication.transport.bearer import BearerTransport
@@ -23,7 +24,7 @@ from litestar_auth.manager import BaseUserManager, UserManagerSecurity
 from litestar_auth.models import User
 from litestar_auth.password import PasswordHelper
 from litestar_auth.plugin import LitestarAuth, LitestarAuthConfig
-from litestar_auth.totp import InMemoryTotpEnrollmentStore, InMemoryUsedTotpCodeStore, _generate_totp_code
+from litestar_auth.totp import InMemoryTotpEnrollmentStore, InMemoryUsedTotpCodeStore
 from tests.e2e.conftest import SessionMaker
 
 if TYPE_CHECKING:
@@ -148,7 +149,7 @@ async def test_totp_enable_verify_disable_flow(
 ) -> None:
     """A persisted user can enable, verify, and disable TOTP through the plugin."""
     fixed_counter = 123_456
-    monkeypatch.setattr("litestar_auth.totp._current_counter", lambda: fixed_counter)
+    monkeypatch.setattr("litestar_auth._totp_primitive._current_counter", lambda: fixed_counter)
     initial_login_response = await client.post(
         "/auth/login",
         json={"identifier": "user@example.com", "password": "correct-password"},
@@ -217,7 +218,7 @@ async def test_totp_enable_verify_disable_flow(
     assert protected_response.status_code == HTTP_OK
     assert protected_response.json() == {"email": "user@example.com"}
 
-    monkeypatch.setattr("litestar_auth.totp._current_counter", lambda: fixed_counter + 1)
+    monkeypatch.setattr("litestar_auth._totp_primitive._current_counter", lambda: fixed_counter + 1)
     disable_code = _generate_totp_code(enable_payload["secret"], fixed_counter + 1)
     disable_response = await client.post(
         "/auth/2fa/disable",
@@ -242,7 +243,7 @@ async def test_totp_recovery_code_fallback_authenticates_pending_login_flow(
 ) -> None:
     """A persisted user can complete a TOTP-required login with an issued recovery code."""
     fixed_counter = 123_456
-    monkeypatch.setattr("litestar_auth.totp._current_counter", lambda: fixed_counter)
+    monkeypatch.setattr("litestar_auth._totp_primitive._current_counter", lambda: fixed_counter)
     initial_login_response = await client.post(
         "/auth/login",
         json={"identifier": "user@example.com", "password": "correct-password"},
@@ -297,7 +298,7 @@ async def test_totp_stepup_enforced_on_email_change(
 ) -> None:
     """Email changes require an inline TOTP step-up proof for enrolled users."""
     fixed_counter = 123_456
-    monkeypatch.setattr("litestar_auth.totp._current_counter", lambda: fixed_counter)
+    monkeypatch.setattr("litestar_auth._totp_primitive._current_counter", lambda: fixed_counter)
     initial_login_response = await client.post(
         "/auth/login",
         json={"identifier": "user@example.com", "password": "correct-password"},

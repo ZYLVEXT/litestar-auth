@@ -614,6 +614,29 @@ async def test_jwt_strategy_read_token_rejects_fingerprint_mismatch() -> None:
     assert await strategy.read_token(token, user_manager) is None
 
 
+async def test_jwt_strategy_read_token_rejects_legacy_raw_secret_fingerprint() -> None:
+    """Tokens carrying the pre-HKDF raw-secret fingerprint are intentionally invalidated."""
+    user = ExampleUser(id=uuid4(), email="user@example.com", hashed_password="hashed")
+    strategy = JWTStrategy(secret=DEFAULT_SECRET, subject_decoder=UUID, allow_inmemory_denylist=True)
+    legacy_fingerprint = _default_session_fingerprint(DEFAULT_SECRET.encode())(user)
+    assert legacy_fingerprint is not None
+    now = datetime.now(tz=UTC)
+    token = _make_token(
+        payload={
+            "sub": str(user.id),
+            "aud": JWT_ACCESS_TOKEN_AUDIENCE,
+            "iat": now,
+            "nbf": now,
+            "exp": now + timedelta(minutes=5),
+            "jti": "legacy-raw-secret-fingerprint",
+            strategy.session_fingerprint_claim: legacy_fingerprint,
+        },
+    )
+
+    assert strategy.session_fingerprint_getter(user) != legacy_fingerprint
+    assert await strategy.read_token(token, ExampleUserManager(user)) is None
+
+
 async def test_jwt_strategy_read_token_returns_user_when_subject_is_used_directly() -> None:
     """Without a subject decoder, the raw ``sub`` value is passed to the user manager."""
     user = ExampleUser(id=uuid4(), email="user@example.com", hashed_password="hashed")

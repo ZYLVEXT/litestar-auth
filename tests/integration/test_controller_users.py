@@ -11,7 +11,8 @@ import pytest
 from litestar import Request, get
 from litestar.middleware import DefineMiddleware
 
-from litestar_auth._plugin.dependencies import authorization_error_handler
+from litestar_auth._plugin.exception_handlers import authorization_error_handler
+from litestar_auth._totp_primitive import _current_counter, _generate_totp_code
 from litestar_auth.authentication.authenticator import Authenticator
 from litestar_auth.authentication.backend import AuthenticationBackend
 from litestar_auth.authentication.middleware import LitestarAuthMiddleware
@@ -33,7 +34,7 @@ from litestar_auth.ratelimit import (
     RedisClientProtocol,
     RedisRateLimiter,
 )
-from litestar_auth.totp import _current_counter, _generate_totp_code, generate_totp_secret
+from litestar_auth.totp import generate_totp_secret
 from tests._helpers import auth_middleware_get_request_session, cast_fakeredis, litestar_app_with_user_manager
 from tests.integration.conftest import (
     DummySessionMaker,

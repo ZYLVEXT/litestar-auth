@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import warnings
 from collections.abc import Iterable, Mapping  # noqa: TC003
 from dataclasses import dataclass, fields
 from enum import StrEnum
 from typing import Any, ClassVar, Self, cast
+
+from litestar_auth.exceptions import SecurityWarning
 
 from ._client_host import _DEFAULT_TRUSTED_HEADERS
 from ._endpoint import _DEFAULT_IDENTITY_FIELDS, EndpointRateLimit
@@ -49,6 +52,11 @@ _LENIENT_AUTH_RATE_LIMIT_SHARED_SLOTS: frozenset[AuthRateLimitSlot] = frozenset(
     },
 )
 _LENIENT_STRICT_MAX_ATTEMPTS_CAP = 5
+_PUBLIC_RATE_LIMIT_SLOT_LABELS = {
+    "login": "POST /login",
+    "refresh": "POST /refresh",
+    "register": "POST /register",
+}
 
 
 @dataclass(slots=True, frozen=True)
@@ -474,6 +482,38 @@ class AuthRateLimitConfig:
             ),
         )
         return cls(**cast("Any", config_kwargs))
+
+
+def warn_missing_public_rate_limits(
+    rate_limit_config: AuthRateLimitConfig | None,
+    *,
+    endpoint_names: Iterable[str],
+    controller_name: str,
+    unsafe_testing: bool = False,
+    stacklevel: int = 2,
+) -> None:
+    """Warn when public unauthenticated endpoints are assembled without throttles."""
+    if unsafe_testing:
+        return
+
+    missing_endpoint_names = tuple(
+        endpoint_name
+        for endpoint_name in endpoint_names
+        if rate_limit_config is None or getattr(rate_limit_config, endpoint_name) is None
+    )
+    if not missing_endpoint_names:
+        return
+
+    endpoint_labels = ", ".join(
+        _PUBLIC_RATE_LIMIT_SLOT_LABELS.get(endpoint_name, endpoint_name) for endpoint_name in missing_endpoint_names
+    )
+    config_fields = ", ".join(f"AuthRateLimitConfig.{endpoint_name}" for endpoint_name in missing_endpoint_names)
+    warnings.warn(
+        f"{controller_name} is exposing {endpoint_labels} without auth rate limiting. "
+        f"Configure {config_fields} or pass unsafe_testing=True for controlled tests/local development.",
+        SecurityWarning,
+        stacklevel=stacklevel,
+    )
 
 
 if tuple(field.name for field in fields(AuthRateLimitConfig)) != tuple(slot.value for slot in _SLOT_CATALOG.slots):

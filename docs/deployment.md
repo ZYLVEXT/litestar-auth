@@ -158,16 +158,19 @@ metadata columns:
 - `session_id` — unique non-sensitive public id for the refresh session;
 - `created_at` — original row creation timestamp;
 - `last_used_at` — nullable timestamp updated on successful refresh rotation;
-- `client_metadata` — nullable bounded JSON for safe hints such as normalized User-Agent;
-- `consumed_token_digests` — nullable JSON list of already-rotated keyed refresh-token digests used
-  to detect replay.
+- `client_metadata` — nullable bounded JSON for safe hints such as normalized User-Agent.
 
 For bundled models, these fields come from `RefreshTokenMixin`. Existing installations must run an
 application-owned migration before rollout: add missing columns, backfill each existing row with a
 unique UUID-style `session_id`, leave `last_used_at` null for historical sessions, and only store
-bounded non-secret metadata. Leave `consumed_token_digests` null for historical rows; new rotations
-populate it automatically. Custom refresh-token models must expose the same mapped attributes or
-`DatabaseTokenModels` validation fails at startup.
+bounded non-secret metadata. Also create the bundled `refresh_token_consumed_digest` table; it stores
+keyed consumed digests as the primary key plus indexed `session_id` values so replay detection does
+not scan the active refresh-token table. If you are upgrading from a version that populated the legacy
+`consumed_token_digests` JSON column, backfill those digest values into the lookup table before dropping
+the column and serving the new code. Custom refresh-token models must expose the same mapped attributes
+or `DatabaseTokenModels` validation fails at startup. Custom consumed-digest models supplied through
+`DatabaseTokenModels.consumed_refresh_token_digest_model` must expose mapped `token_digest`, `session_id`,
+and `consumed_at` attributes.
 
 Do not migrate by copying raw token values into public metadata. The API exposes only `session_id`
 and safe metadata; raw access tokens, raw refresh tokens, stored token digests, and keyed token
@@ -316,6 +319,11 @@ startup because per-worker counters cannot enforce one shared budget.
 ## Rate limiting behavior
 
 When `rate_limit_config` is set, throttled endpoints return **429** with **`Retry-After`**. Covered surfaces include login, register, forgot/reset password, change-password, refresh, verify / request-verify-token, and TOTP enable / confirm / verify / disable (see [Rate limiting guide](guides/rate_limiting.md)).
+
+Public login, refresh, and registration controllers warn at assembly time when their matching
+`AuthRateLimitConfig` slot is missing. Treat that `SecurityWarning` as a production configuration
+gap unless an upstream proxy or another edge control owns throttling; `unsafe_testing=True`
+suppresses the warning only for controlled tests and local-only scaffolding.
 
 ## OAuth
 

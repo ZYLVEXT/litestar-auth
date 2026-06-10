@@ -20,6 +20,7 @@ from litestar.response import Response
 from litestar.testing import AsyncTestClient
 
 import litestar_auth._plugin.dependencies as dependencies_module
+import litestar_auth._plugin.exception_handlers as exception_handlers_module
 from litestar_auth._current_organization import (
     CurrentOrganizationContext,
     read_scope_current_organization_context,
@@ -58,10 +59,10 @@ DependencyProviders = dependencies_module.DependencyProviders
 _make_backends_dependency_provider = dependencies_module._make_backends_dependency_provider
 _make_db_session_provide = dependencies_module._make_db_session_provide
 _make_user_manager_dependency_provider = dependencies_module._make_user_manager_dependency_provider
-authorization_error_handler = dependencies_module.authorization_error_handler
-client_exception_handler = dependencies_module.client_exception_handler
+authorization_error_handler = exception_handlers_module.authorization_error_handler
+client_exception_handler = exception_handlers_module.client_exception_handler
 register_dependencies = dependencies_module.register_dependencies
-register_exception_handlers = dependencies_module.register_exception_handlers
+register_exception_handlers = exception_handlers_module.register_exception_handlers
 
 if TYPE_CHECKING:
     from datetime import datetime
@@ -660,8 +661,8 @@ def test_register_exception_handlers_preserves_existing_handlers() -> None:
     handlers = cast("dict[type[Exception], object]", ExistingController.exception_handlers)
 
     assert handlers[RuntimeError] is existing_handler
-    assert handlers[ClientException] is dependencies_module.client_exception_handler
-    assert handlers[AuthorizationError] is dependencies_module.authorization_error_handler
+    assert handlers[ClientException] is exception_handlers_module.client_exception_handler
+    assert handlers[AuthorizationError] is exception_handlers_module.authorization_error_handler
 
 
 def test_register_exception_handlers_preserves_existing_client_exception_handler() -> None:
@@ -702,7 +703,9 @@ def test_register_exception_handlers_only_mutates_handlers_it_receives() -> None
     register_exception_handlers([PluginOwnedController])
 
     assert PluginOwnedController.exception_handlers is not None
-    assert PluginOwnedController.exception_handlers[ClientException] is dependencies_module.client_exception_handler
+    assert (
+        PluginOwnedController.exception_handlers[ClientException] is exception_handlers_module.client_exception_handler
+    )
     assert NonAuthController.exception_handlers is None
 
 
@@ -717,7 +720,7 @@ def test_register_exception_handlers_adds_authorization_handler_to_non_auth_rout
 
     handlers = cast("dict[type[Exception], object]", ApplicationRoute.exception_handlers)
 
-    assert handlers[AuthorizationError] is dependencies_module.authorization_error_handler
+    assert handlers[AuthorizationError] is exception_handlers_module.authorization_error_handler
     assert ClientException not in handlers
 
 

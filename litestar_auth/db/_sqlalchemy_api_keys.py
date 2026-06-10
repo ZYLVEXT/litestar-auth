@@ -199,7 +199,7 @@ class SQLAlchemyApiKeyStore[AK: _ApiKeyRow](BaseApiKeyStore[AK, UUID]):
             ._active_statement(select(self.api_key_model), include_inactive=include_inactive)
             .where(api_key_columns.user_id == user_id)
             .order_by(api_key_columns.created_at, api_key_columns.key_id)
-        )
+        )  # fmt: skip
         result = await self.session.execute(statement)
         return list(result.scalars().all())
 
@@ -270,7 +270,7 @@ class SQLAlchemyApiKeyStore[AK: _ApiKeyRow](BaseApiKeyStore[AK, UUID]):
                 api_key_columns.encrypted_secret.is_not(None),
             )
             .order_by(api_key_columns.created_at, api_key_columns.key_id)
-        )
+        )  # fmt: skip
         result = await self.session.execute(statement)
         candidates = result.scalars().all()
         return [api_key for api_key in candidates if requires_reencrypt(api_key)]

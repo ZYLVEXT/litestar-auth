@@ -3,7 +3,8 @@ name = "litestar-auth"
 version = "5.0.0"
 description = "Litestar Auth"
 readme = "README.md"
-license = {text = "MIT"}
+license = "MIT"
+license-files = ["LICENSE"]
 authors = [
     {name = "Vladislav Shepilov", email = "shepilov.v@protonmail.com"},
 ]
@@ -78,7 +79,6 @@ include = ["litestar_auth", "tests"]
 
 [tool.deptry]
 experimental_namespace_package = true
-optional_dependencies_dev_groups = ["dev", "docs"]
 
 [tool.deptry.per_rule_ignores]
 DEP001 = ["uvicorn"]

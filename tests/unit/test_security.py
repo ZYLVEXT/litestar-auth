@@ -1,4 +1,4 @@
-"""Security-oriented tests for constant-time comparisons."""
+"""Security-oriented tests for token, password, TOTP, and delegation safeguards."""
 
 from __future__ import annotations
 
@@ -20,7 +20,7 @@ from litestar_auth.manager import RESET_PASSWORD_TOKEN_AUDIENCE
 from litestar_auth.manager import logger as manager_logger
 from litestar_auth.password import PasswordHelper
 from litestar_auth.schemas import AdminUserUpdate, UserCreate, UserPasswordField
-from litestar_auth.totp import verify_totp
+from litestar_auth.totp import TOTP_DRIFT_STEPS, verify_totp
 from tests.unit.test_manager import TrackingUserManager, _build_user
 
 MAX_PASSWORD_LENGTH = config_module.MAX_PASSWORD_LENGTH
@@ -126,14 +126,22 @@ def test_timing_verify_totp_uses_compare_digest_for_prefix_and_non_prefix_mismat
         return left == right
 
     with (
-        patch("litestar_auth.totp._current_counter", return_value=1),
-        patch("litestar_auth.totp._generate_totp_code", return_value="123456"),
-        patch("litestar_auth.totp.hmac.compare_digest", side_effect=record_compare_digest),
+        patch("litestar_auth._totp_primitive._current_counter", return_value=1),
+        patch("litestar_auth._totp_primitive._generate_totp_code", return_value="123456"),
+        patch("litestar_auth._totp_primitive.hmac.compare_digest", side_effect=record_compare_digest),
     ):
         assert verify_totp("SECRET", "123450") is False
         assert verify_totp("SECRET", "999999") is False
 
-    assert calls == [("123456", "123450")] * 3 + [("123456", "999999")] * 3
+    drift_window_attempts = 2 * TOTP_DRIFT_STEPS + 1
+    assert (
+        calls
+        == [("123456", "123450")] * drift_window_attempts
+        + [
+            ("123456", "999999"),
+        ]
+        * drift_window_attempts
+    )
 
 
 def test_timing_password_helper_verify_delegates_to_pwdlib_verify() -> None:

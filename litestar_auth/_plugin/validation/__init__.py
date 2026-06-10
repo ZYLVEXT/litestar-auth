@@ -46,8 +46,7 @@ from litestar_auth._plugin.validation.totp_domain import (
     validate_totp_stepup_policy_config,
     validate_totp_user_model_protocol,
 )
-from litestar_auth._totp_verify import SecurityWarning
-from litestar_auth.exceptions import ConfigurationError
+from litestar_auth.exceptions import ConfigurationError, SecurityWarning
 
 __all__ = (
     "ConfigurationError",

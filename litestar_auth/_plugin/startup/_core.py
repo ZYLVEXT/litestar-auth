@@ -21,11 +21,10 @@ from litestar_auth._plugin.startup._requirements import (
     require_shared_rate_limit_backends_for_multiworker,
 )
 from litestar_auth._plugin.startup._warnings import (
-    SecurityWarning,
     _collect_process_local_rate_limit_endpoint_names,
     warn_insecure_plugin_startup_defaults,
 )
-from litestar_auth.exceptions import ConfigurationError
+from litestar_auth.exceptions import ConfigurationError, SecurityWarning
 
 if TYPE_CHECKING:
     from litestar.config.app import AppConfig
@@ -44,11 +43,11 @@ __all__ = (
 
 
 @cache
-def _load_bundled_token_orm_models() -> tuple[object, object]:
+def _load_bundled_token_orm_models() -> tuple[object, object, object]:
     """Load the bundled DB-token ORM classes exactly once per process.
 
     Returns:
-        The bundled access-token and refresh-token ORM classes.
+        The bundled access-token, refresh-token, and consumed refresh-token digest ORM classes.
     """
     models_module = importlib.import_module("litestar_auth.models")
     return cast("Any", models_module).import_token_orm_models()

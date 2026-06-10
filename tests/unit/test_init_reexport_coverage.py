@@ -20,7 +20,12 @@ import litestar_auth.payloads as payloads_module
 import litestar_auth.ratelimit as ratelimit_module
 import litestar_auth.ratelimit._endpoint as ratelimit_endpoint_module
 import litestar_auth.ratelimit._slot_catalog as ratelimit_slot_catalog_module
-from litestar_auth.authentication.strategy.db_models import AccessToken, DatabaseTokenModels, RefreshToken
+from litestar_auth.authentication.strategy.db_models import (
+    AccessToken,
+    DatabaseTokenModels,
+    RefreshToken,
+    RefreshTokenConsumedDigest,
+)
 from tests.conftest import project_version_from_pyproject
 
 AuthRateLimitEndpointGroup = ratelimit_module.AuthRateLimitEndpointGroup
@@ -244,7 +249,7 @@ def test_models_package_owns_token_registration_helper_and_strategy_keeps_db_tok
     assert not hasattr(litestar_auth_module, "import_token_orm_models")
     assert not hasattr(strategy_module, "import_token_orm_models")
     assert strategy_module.DatabaseTokenModels is DatabaseTokenModels
-    assert models_module.import_token_orm_models() == (AccessToken, RefreshToken)
+    assert models_module.import_token_orm_models() == (AccessToken, RefreshToken, RefreshTokenConsumedDigest)
 
 
 def test_ratelimit_reexport_module_keeps_private_helpers_internal() -> None:

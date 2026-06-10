@@ -28,11 +28,6 @@ from litestar_auth._plugin.config import (
     OAUTH_ASSOCIATE_USER_MANAGER_DEPENDENCY_KEY,
     LitestarAuthConfig,
 )
-from litestar_auth._plugin.exception_handlers import (
-    authorization_error_handler,  # noqa: F401
-    client_exception_handler,  # noqa: F401
-    register_exception_handlers,  # noqa: F401
-)
 from litestar_auth._plugin.oauth_contract import _build_oauth_route_registration_contract
 from litestar_auth._plugin.scoped_session import (
     SESSION_SCOPE_KEY,

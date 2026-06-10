@@ -7,9 +7,8 @@ import binascii
 import hmac
 import secrets
 import struct
-import sys
 import time
-from typing import Literal, cast
+from typing import Literal
 from urllib.parse import quote, urlencode
 
 TIME_STEP_SECONDS = 30
@@ -107,28 +106,16 @@ def _verify_totp_counter(secret: str, code: str, *, algorithm: TotpAlgorithm = T
         return None
 
     try:
-        current_counter = _get_facade_override("_current_counter", _current_counter)()
-        generate_totp_code = _get_facade_override("_generate_totp_code", _generate_totp_code)
+        current_counter = _current_counter()
         for drift in range(-TOTP_DRIFT_STEPS, TOTP_DRIFT_STEPS + 1):
             candidate_counter = current_counter + drift
-            expected_code = generate_totp_code(secret, candidate_counter, algorithm=algorithm)
+            expected_code = _generate_totp_code(secret, candidate_counter, algorithm=algorithm)
             if hmac.compare_digest(expected_code, code):
                 return candidate_counter
     except binascii.Error:
         return None
 
     return None
-
-
-def _get_facade_override[CallableT](name: str, default: CallableT) -> CallableT:
-    """Return a patched ``litestar_auth.totp`` helper when tests replace one."""
-    facade = sys.modules.get("litestar_auth.totp")
-    if facade is None:
-        return default
-    value = getattr(facade, name, default)
-    if value is default:
-        return default
-    return cast("CallableT", value)
 
 
 def _decode_secret(secret: str) -> bytes:

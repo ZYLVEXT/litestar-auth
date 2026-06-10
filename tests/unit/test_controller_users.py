@@ -15,6 +15,7 @@ from litestar.status_codes import HTTP_400_BAD_REQUEST
 
 import litestar_auth._account_state as account_state_module
 import litestar_auth.controllers.users as users_module
+from litestar_auth._totp_primitive import _current_counter, _generate_totp_code
 from litestar_auth.controllers._step_up import (
     PasswordStepUpCheck,
     TotpStepUpCheck,
@@ -34,7 +35,7 @@ from litestar_auth.exceptions import AuthorizationError, ErrorCode, UnverifiedUs
 from litestar_auth.ratelimit import EndpointRateLimit, InMemoryRateLimiter
 from litestar_auth.ratelimit._key_derivation import _safe_key_part
 from litestar_auth.schemas import AdminUserUpdate, ChangePasswordRequest, UserRead, UserUpdate
-from litestar_auth.totp import _current_counter, _generate_totp_code, generate_totp_secret
+from litestar_auth.totp import generate_totp_secret
 
 UsersControllerConfig = users_module.UsersControllerConfig
 _users_get_user_or_404 = users_module._users_get_user_or_404

@@ -17,7 +17,7 @@ from typing import (
     runtime_checkable,
 )
 
-from sqlalchemy import delete
+from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_scoped_session
 
 from litestar_auth.authentication.strategy._db_refresh import _DatabaseRefreshSessionMixin
@@ -133,6 +133,7 @@ class DatabaseTokenStrategy[UP: UserProtocol[Any], ID](
         self.token_models = DatabaseTokenModels() if settings.token_models is None else settings.token_models
         self.access_token_model = self.token_models.access_token_model
         self.refresh_token_model = self.token_models.refresh_token_model
+        self.consumed_refresh_token_digest_model = self.token_models.consumed_refresh_token_digest_model
         self._access_token_repository_type = build_token_repository(self.access_token_model)
         self._refresh_token_repository_type = build_token_repository(self.refresh_token_model)
         self.max_age = settings.max_age
@@ -209,6 +210,19 @@ class DatabaseTokenStrategy[UP: UserProtocol[Any], ID](
 
         access_result = await session.execute(
             delete(self.access_token_model).where(self.access_token_model.created_at <= access_cutoff),
+        )
+        expired_refresh_session_ids = select(self.refresh_token_model.session_id).where(
+            self.refresh_token_model.created_at <= refresh_cutoff,
+        )
+        await session.execute(
+            delete(self.consumed_refresh_token_digest_model).where(
+                self.consumed_refresh_token_digest_model.session_id.in_(expired_refresh_session_ids),
+            ),
+        )
+        await session.execute(
+            delete(self.consumed_refresh_token_digest_model).where(
+                self.consumed_refresh_token_digest_model.consumed_at <= refresh_cutoff,
+            ),
         )
         refresh_result = await session.execute(
             delete(self.refresh_token_model).where(self.refresh_token_model.created_at <= refresh_cutoff),
@@ -288,5 +302,8 @@ class DatabaseTokenStrategy[UP: UserProtocol[Any], ID](
     async def invalidate_all_tokens(self, user: UP) -> None:
         """Delete all persisted access and refresh tokens for the given user."""
         await self._repository(self._access_token_repository_type).delete_where(user_id=user.id, auto_commit=False)
+        await self._delete_refresh_session_consumed_digests(
+            select(self.refresh_token_model.session_id).where(self.refresh_token_model.user_id == user.id),
+        )
         await self._repository(self._refresh_token_repository_type).delete_where(user_id=user.id, auto_commit=False)
         await self.session.commit()

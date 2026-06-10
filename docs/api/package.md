@@ -26,10 +26,10 @@ For the bundled `AccessToken` / `RefreshToken` ORM tables, keep explicit mapper 
 ```python
 from litestar_auth.models import import_token_orm_models
 
-AccessToken, RefreshToken = import_token_orm_models()
+AccessToken, RefreshToken, RefreshTokenConsumedDigest = import_token_orm_models()
 ```
 
-Call that helper explicitly during metadata bootstrap or Alembic-style autogenerate when your app uses the bundled token tables. For plugin-managed runtime, `LitestarAuth.on_app_init()` bootstraps the same bundled token mappers lazily when bundled DB-token models are active. The helper is intentionally not re-exported from `litestar_auth`.
+Call that helper explicitly during metadata bootstrap or Alembic-style autogenerate when your app uses the bundled token tables, including the `refresh_token_consumed_digest` lookup table. For plugin-managed runtime, `LitestarAuth.on_app_init()` bootstraps the same bundled token mappers lazily when bundled DB-token models are active. The helper is intentionally not re-exported from `litestar_auth`.
 
 The DB-token preset entrypoint is exported from both the root package and `litestar_auth.plugin` as `DatabaseTokenAuthConfig`.
 The root package also exports `DEFAULT_SUPERUSER_ROLE_NAME` for applications that want to reference

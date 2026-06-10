@@ -97,11 +97,17 @@ uses pytest `filterwarnings = ["error"]` in `pyproject.toml`, so `DeprecationWar
 
 DB-backed refresh-token rotation records consumed refresh-token digests so a replayed refresh token
 revokes the entire refresh-session chain instead of looking like an ordinary missing token. Existing
-deployments using the bundled `refresh_token` table must add nullable JSON storage for consumed
-digests:
+deployments using the bundled `refresh_token` table must add the separate indexed lookup table for
+consumed digests:
 
 ```sql
-ALTER TABLE refresh_token ADD COLUMN consumed_token_digests JSON NULL;
+CREATE TABLE refresh_token_consumed_digest (
+    token_digest VARCHAR(255) NOT NULL PRIMARY KEY,
+    session_id VARCHAR(36) NOT NULL,
+    consumed_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP NOT NULL
+);
+CREATE INDEX ix_refresh_token_consumed_digest_session_id
+    ON refresh_token_consumed_digest (session_id);
 ```
 
 SQLAlchemy metadata equivalent for a hand-written migration:
@@ -109,17 +115,88 @@ SQLAlchemy metadata equivalent for a hand-written migration:
 ```python
 import sqlalchemy as sa
 from alembic import op
-from sqlalchemy.dialects.postgresql import JSONB
 
 
 def upgrade() -> None:
-    op.add_column("refresh_token", sa.Column("consumed_token_digests", JSONB(), nullable=True))
+    op.create_table(
+        "refresh_token_consumed_digest",
+        sa.Column("token_digest", sa.String(length=255), primary_key=True),
+        sa.Column("session_id", sa.String(length=36), nullable=False),
+        sa.Column("consumed_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
+    )
+    op.create_index(
+        "ix_refresh_token_consumed_digest_session_id",
+        "refresh_token_consumed_digest",
+        ["session_id"],
+    )
 ```
 
-Leave the column `NULL` for existing rows. New refresh rotations populate it with keyed token digests
-only; do not store raw refresh tokens there. Custom refresh-token models passed to
-`DatabaseTokenModels` must expose a mapped `consumed_token_digests` attribute. The recommended path is
-to compose `RefreshTokenMixin`, which includes the column.
+If your deployment is upgrading from a version that still had the legacy
+`refresh_token.consumed_token_digests` JSON array, run the data backfill after the lookup table exists
+and before serving traffic with code that removes the JSON column. Copy those values into
+`refresh_token_consumed_digest` using the row's `session_id`. PostgreSQL deployments can use:
+
+```sql
+INSERT INTO refresh_token_consumed_digest (token_digest, session_id, consumed_at)
+SELECT legacy.token_digest, rt.session_id, CURRENT_TIMESTAMP
+FROM refresh_token AS rt
+CROSS JOIN LATERAL jsonb_array_elements_text(rt.consumed_token_digests::jsonb) AS legacy(token_digest)
+WHERE rt.consumed_token_digests IS NOT NULL
+ON CONFLICT (token_digest) DO NOTHING;
+```
+
+For other SQL dialects, use the dialect's JSON-array table function to unnest
+`refresh_token.consumed_token_digests` into one `(token_digest, session_id)` row per digest before
+the application starts. SQLite uses `json_each`; MySQL and MariaDB use `JSON_TABLE`.
+
+Alembic data-migration variant for PostgreSQL:
+
+```python
+import sqlalchemy as sa
+from alembic import op
+
+
+def upgrade() -> None:
+    op.execute(
+        sa.text(
+            """
+            INSERT INTO refresh_token_consumed_digest (token_digest, session_id, consumed_at)
+            SELECT legacy.token_digest, rt.session_id, CURRENT_TIMESTAMP
+            FROM refresh_token AS rt
+            CROSS JOIN LATERAL jsonb_array_elements_text(rt.consumed_token_digests::jsonb) AS legacy(token_digest)
+            WHERE rt.consumed_token_digests IS NOT NULL
+            ON CONFLICT (token_digest) DO NOTHING
+            """,
+        ),
+    )
+```
+
+Skipping this backfill creates a transition-window downgrade: a refresh token consumed before the
+upgrade and replayed after the upgrade will not be found in the indexed lookup table, so the replay
+will be rejected as an ordinary missing token instead of revoking the compromised session chain. The
+window lasts until those legacy refresh sessions expire or are explicitly revoked.
+
+After the backfill succeeds, drop the legacy JSON column before or in the same deployment that serves
+the new code:
+
+```sql
+ALTER TABLE refresh_token DROP COLUMN consumed_token_digests;
+```
+
+Alembic variant:
+
+```python
+from alembic import op
+
+
+def upgrade() -> None:
+    op.drop_column("refresh_token", "consumed_token_digests")
+```
+
+New refresh rotations write each consumed digest only to `refresh_token_consumed_digest` for indexed
+replay lookup; do not store raw refresh tokens in that table. Custom refresh-token models passed to
+`DatabaseTokenModels` must expose mapped `session_id`, `last_used_at`, and `client_metadata`
+attributes. The recommended path is to compose `RefreshTokenMixin`, which includes those columns.
 
 ## API-key persistence table
 

@@ -1337,8 +1337,13 @@ def test_models_package_token_registration_helper_keeps_user_and_oauth_submodule
         "assert 'litestar_auth.models.user' not in sys.modules\n"
         "assert 'litestar_auth.models.oauth' not in sys.modules\n"
         "token_models = models.import_token_orm_models()\n"
-        "assert [model.__name__ for model in token_models] == ['AccessToken', 'RefreshToken']\n"
+        "assert [model.__name__ for model in token_models] == [\n"
+        "    'AccessToken',\n"
+        "    'RefreshToken',\n"
+        "    'RefreshTokenConsumedDigest',\n"
+        "]\n"
         "assert [model.__module__ for model in token_models] == [\n"
+        "    'litestar_auth.authentication.strategy.db_models',\n"
         "    'litestar_auth.authentication.strategy.db_models',\n"
         "    'litestar_auth.authentication.strategy.db_models',\n"
         "]\n"
@@ -1354,7 +1359,7 @@ def test_models_package_token_registration_helper_stays_lazy_until_reference_map
         "import sys\n"
         "from sqlalchemy import inspect\n"
         "import litestar_auth.models as models\n"
-        "access_token_model, refresh_token_model = models.import_token_orm_models()\n"
+        "access_token_model, refresh_token_model, consumed_digest_model = models.import_token_orm_models()\n"
         "assert 'litestar_auth.models.oauth' not in sys.modules\n"
         "assert 'litestar_auth.models.api_key' not in sys.modules\n"
         "assert 'litestar_auth.models.user' not in sys.modules\n"
@@ -1369,6 +1374,7 @@ def test_models_package_token_registration_helper_stays_lazy_until_reference_map
         "assert relationships['api_keys'].mapper.class_.__module__ == 'litestar_auth.models.api_key'\n"
         "assert relationships['access_tokens'].mapper.class_ is access_token_model\n"
         "assert relationships['refresh_tokens'].mapper.class_ is refresh_token_model\n"
+        "assert consumed_digest_model.__tablename__ == 'refresh_token_consumed_digest'\n"
         "assert relationships['oauth_accounts'].mapper.class_ is OAuthAccount\n",
     )
     assert proc.returncode == 0, proc.stdout + proc.stderr

@@ -9,9 +9,9 @@ from typing import TYPE_CHECKING, Any, cast
 
 from sqlalchemy.ext.asyncio import AsyncSession  # noqa: TC002
 
+import litestar_auth._plugin._hooks as _plugin_hooks
+import litestar_auth._plugin.features as _features
 from litestar_auth._permissions import StaticRolePermissionResolver
-from litestar_auth._plugin import _hooks as _plugin_hooks
-from litestar_auth._plugin import features as _features
 from litestar_auth._plugin.config._defaults import ResolvedAuthConfigDefaults, _resolve_config_defaults
 from litestar_auth._plugin.config._protocols import (  # noqa: TC001
     PasswordValidatorFactory,
