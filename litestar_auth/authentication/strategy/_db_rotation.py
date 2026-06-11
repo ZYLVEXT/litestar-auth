@@ -143,6 +143,7 @@ class _DatabaseRefreshTokenRotationMixin[UP: UserProtocol[Any], ID](
             compromised_row = await self._find_refresh_token_row_by_consumed_digest(consumed_token_digest)
             if compromised_row is not None:
                 await self._revoke_refresh_session_chain(compromised_row.session_id)
+                await self.session.commit()
             return None
         await self.session.execute(
             insert(self.consumed_refresh_token_digest_model).values(
@@ -178,6 +179,7 @@ class _DatabaseRefreshTokenRotationMixin[UP: UserProtocol[Any], ID](
                 ),
             )
             await self._delete_refresh_token_row(persisted_token)
+            await self.session.commit()
             return None
 
         user = cast("UP", persisted_token.user)

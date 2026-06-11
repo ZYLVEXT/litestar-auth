@@ -1089,10 +1089,12 @@ async def test_database_token_strategy_refresh_token_replay_revokes_session_chai
         )
         is not None
     )
+    session.commit()
     replay_rotation = await strategy.rotate_refresh_token(refresh_token, UnusedUserManager())
 
     assert rotation is not None
     assert replay_rotation is None
+    session.rollback()
     assert session.scalar(select(RefreshToken).where(RefreshToken.session_id == session_id)) is None
     assert (
         session.scalar(
@@ -1242,21 +1244,52 @@ async def test_database_token_strategy_rotate_returns_none_when_atomic_replace_l
         token_hash_secret=_TOKEN_HASH_SECRET,
     )
     refresh_token = await strategy.write_refresh_token(user)
+    stale_row = await strategy._load_refresh_token_for_rotation(refresh_token)
+    assert stale_row is not None
+    session.expunge(stale_row)
+    session.add(
+        RefreshTokenConsumedDigest(
+            token_digest=digest_opaque_token(token_hash_secret=_TOKEN_HASH_SECRET.encode(), token=refresh_token),
+            session_id=stale_row.session_id,
+        ),
+    )
+    session.execute(
+        update(RefreshToken)
+        .where(RefreshToken.token == stale_row.token)
+        .values(token="externally-replaced-refresh-race-loser-digest"),
+    )
+    session.commit()
 
-    monkeypatch.setattr(strategy, "_replace_refresh_token_digest", AsyncMock(return_value=None))
+    monkeypatch.setattr(strategy, "_load_refresh_token_for_rotation", AsyncMock(return_value=stale_row))
 
     assert await strategy.rotate_refresh_token(refresh_token, UnusedUserManager()) is None
+    session.rollback()
+    assert session.scalar(select(RefreshToken).where(RefreshToken.session_id == stale_row.session_id)) is None
+    assert (
+        session.scalar(
+            select(RefreshTokenConsumedDigest).where(RefreshTokenConsumedDigest.session_id == stale_row.session_id),
+        )
+        is None
+    )
 
 
 async def test_database_token_strategy_rotate_refresh_token_deletes_expired_rows(session: Session) -> None:
     """Expired refresh tokens are deleted and rejected during rotation."""
     user = _create_user(session, email="expired-refresh@example.com")
     refresh_token = "expired-refresh-token"
+    session_id = "expired-refresh-session"
     session.add(
         RefreshToken(
             token=digest_opaque_token(token_hash_secret=_TOKEN_HASH_SECRET.encode(), token=refresh_token),
             user_id=user.id,
+            session_id=session_id,
             created_at=datetime.now(tz=UTC) - timedelta(days=31),
+        ),
+    )
+    session.add(
+        RefreshTokenConsumedDigest(
+            token_digest="expired-refresh-consumed-digest",
+            session_id=session_id,
         ),
     )
     session.commit()
@@ -1267,7 +1300,12 @@ async def test_database_token_strategy_rotate_refresh_token_deletes_expired_rows
     )
 
     assert await strategy.rotate_refresh_token(refresh_token, UnusedUserManager()) is None
+    session.rollback()
     assert session.scalar(select(RefreshToken).where(RefreshToken.user_id == user.id)) is None
+    assert (
+        session.scalar(select(RefreshTokenConsumedDigest).where(RefreshTokenConsumedDigest.session_id == session_id))
+        is None
+    )
 
 
 async def test_database_token_strategy_rotate_expired_refresh_token_deletes_consumed_digests(
