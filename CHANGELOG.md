@@ -1,3 +1,9 @@
+## 5.0.2 (2026-06-11)
+
+### Fix
+
+- **security**: persist refresh-rotation revocations across autocommit rollback
+
 ## 5.0.1 (2026-06-10)
 
 ### Added

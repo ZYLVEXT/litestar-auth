@@ -1,6 +1,6 @@
 [project]
 name = "litestar-auth"
-version = "5.0.1"
+version = "5.0.2"
 description = "Litestar Auth"
 readme = "README.md"
 license = "MIT"
