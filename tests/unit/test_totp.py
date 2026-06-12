@@ -15,6 +15,7 @@ from urllib.parse import parse_qs, urlparse
 import pytest
 
 import litestar_auth as litestar_auth_package
+import litestar_auth._concurrency as concurrency_module
 from litestar_auth import _totp_primitive as totp_primitive
 from litestar_auth import _totp_recovery as totp_recovery
 from litestar_auth import _totp_verify as totp_verify
@@ -22,7 +23,7 @@ from litestar_auth import totp
 from litestar_auth.contrib.redis import RedisAuthClientProtocol, RedisAuthPreset
 from litestar_auth.exceptions import ConfigurationError
 from litestar_auth.password import PasswordHelper
-from tests._helpers import cast_fakeredis
+from tests._helpers import cast_fakeredis, make_run_sync_spy
 
 if TYPE_CHECKING:
     from tests._helpers import AsyncFakeRedis
@@ -168,6 +169,23 @@ def test_build_recovery_code_index_uses_lookup_digest_and_password_hash() -> Non
     assert password_helper.verify("wrong-code", code_index[first_lookup]) is False
 
 
+async def test_build_recovery_code_index_worker_wrapper_offloads_hashing(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The async recovery-code index wrapper runs synchronous hashing in an AnyIO worker."""
+    password_helper = PasswordHelper.from_defaults()
+    run_sync_spy, offloaded = make_run_sync_spy()
+
+    monkeypatch.setattr(totp_recovery, "_run_password_op", run_sync_spy)
+
+    code_index = await totp.abuild_recovery_code_index(
+        ("worker-code",),
+        password_helper=password_helper,
+        lookup_secret=RECOVERY_LOOKUP_SECRET,
+    )
+
+    assert offloaded == ["build_recovery_code_index"]
+    assert password_helper.verify("worker-code", code_index[_recovery_lookup("worker-code")]) is True
+
+
 async def test_consume_matching_recovery_code_uses_lookup_index() -> None:
     """A matching recovery code consumes only its HMAC lookup entry."""
     password_helper = PasswordHelper.from_defaults()
@@ -188,6 +206,42 @@ async def test_consume_matching_recovery_code_uses_lookup_index() -> None:
     assert manager.code_index == {}
 
 
+async def test_consume_matching_recovery_code_offloads_argon2_verify_branches(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Recovery-code consumption offloads the single verify on hit and miss paths."""
+    password_helper = PasswordHelper.from_defaults()
+    dummy_hash = password_helper.hash("dummy")
+    code_index = totp.build_recovery_code_index(
+        ("matching-code",),
+        password_helper=password_helper,
+        lookup_secret=RECOVERY_LOOKUP_SECRET,
+    )
+    manager = _RecoveryCodeManager(code_index)
+    run_sync_spy, offloaded = make_run_sync_spy()
+
+    def build_dummy_hash(_helper: PasswordHelper) -> str:
+        return dummy_hash
+
+    monkeypatch.setattr(concurrency_module, "build_dummy_hash", build_dummy_hash)
+    monkeypatch.setattr(concurrency_module, "run_password_op_in_worker_thread", run_sync_spy)
+    monkeypatch.setattr(totp_recovery, "_run_password_op", run_sync_spy)
+
+    assert await totp_recovery._consume_matching_recovery_code(
+        manager,
+        object(),
+        "matching-code",
+        password_helper=password_helper,
+    )
+    assert not await totp_recovery._consume_matching_recovery_code(
+        manager,
+        object(),
+        "missing-code",
+        password_helper=password_helper,
+    )
+    assert offloaded == ["verify", "build_dummy_hash", "verify"]
+
+
 async def test_consume_matching_recovery_code_miss_runs_dummy_verify(monkeypatch: pytest.MonkeyPatch) -> None:
     """A recovery-code miss performs a dummy Argon2 verify and returns false."""
     password_helper = PasswordHelper.from_defaults()
@@ -198,7 +252,10 @@ async def test_consume_matching_recovery_code_miss_runs_dummy_verify(monkeypatch
         verify_calls.append((password, hashed))
         return False
 
-    monkeypatch.setattr(totp_recovery, "_DUMMY_ARGON2_HASH", dummy_hash)
+    def build_dummy_hash(_helper: PasswordHelper) -> str:
+        return dummy_hash
+
+    monkeypatch.setattr(concurrency_module, "build_dummy_hash", build_dummy_hash)
     monkeypatch.setattr(password_helper, "verify", record_verify)
     manager = _RecoveryCodeManager({})
 
@@ -226,7 +283,6 @@ async def test_consume_matching_recovery_code_collision_runs_single_verify(monke
     double the Argon2 work an attacker can amortise per submitted code.
     """
     password_helper = PasswordHelper.from_defaults()
-    dummy_hash = password_helper.hash("dummy")
     wrong_hash = password_helper.hash("different-code")
     verify_calls: list[tuple[str, str]] = []
 
@@ -234,7 +290,6 @@ async def test_consume_matching_recovery_code_collision_runs_single_verify(monke
         verify_calls.append((password, hashed))
         return False
 
-    monkeypatch.setattr(totp_recovery, "_DUMMY_ARGON2_HASH", dummy_hash)
     monkeypatch.setattr(password_helper, "verify", record_verify)
     manager = _RecoveryCodeManager({_recovery_lookup("submitted-code"): wrong_hash})
 

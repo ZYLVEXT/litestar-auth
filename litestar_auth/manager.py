@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING, Any, Unpack, cast, overload
 
+from litestar_auth._concurrency import get_cached_dummy_hash as _get_cached_dummy_hash
 from litestar_auth._manager import security as _manager_security
 from litestar_auth._manager.account_tokens import (
     AccountTokenAudiences,
@@ -29,7 +30,6 @@ from litestar_auth._manager.construction import (
     BaseUserManagerConfig,
     BaseUserManagerConstructorKwargs,
     ConstructorAttributes,
-    get_dummy_hash,
     login_identifier_digest,
     resolve_oauth_account_store,
     resolve_secret_inputs,
@@ -77,7 +77,6 @@ UserManagerSecurity = _manager_security.UserManagerSecurity
 logger = logging.getLogger(__name__)
 
 
-_get_dummy_hash = get_dummy_hash
 _login_identifier_digest = login_identifier_digest
 
 
@@ -226,8 +225,6 @@ class BaseUserManager[UP: UserProtocol[Any], ID](
             field_policy=self.field_policy,
         )
         self.password_helper = self.policy.password_helper
-        self._dummy_password_hash: str | None = None
-        self._dummy_password_hash_helper: PasswordHelper | None = None
         self._hook_bus = ManagerHookBus(self)
         self._totp_stepup = TotpStepUpDispatcher.from_backends(self.backends)
         self._user_lifecycle = UserLifecycleService(self, hook_bus=self._hook_bus, policy=self.policy)
@@ -315,12 +312,9 @@ class BaseUserManager[UP: UserProtocol[Any], ID](
         """Return the TOTP secret service backing storage and decryption flows."""
         return self._totp_secrets
 
-    def _get_dummy_hash(self) -> str:
-        """Return the manager-scoped dummy hash used for unknown-user timing equalization."""
-        if self._dummy_password_hash is None or self._dummy_password_hash_helper is not self.password_helper:
-            self._dummy_password_hash = _get_dummy_hash(self.password_helper)
-            self._dummy_password_hash_helper = self.password_helper
-        return self._dummy_password_hash
+    async def _get_dummy_hash(self) -> str:
+        """Return the helper-scoped dummy hash used for unknown-user timing equalization."""
+        return await _get_cached_dummy_hash(self.password_helper)
 
     async def get(self, user_id: ID) -> UP | None:
         """Return a user by identifier.
@@ -379,7 +373,7 @@ class BaseUserManager[UP: UserProtocol[Any], ID](
             identifier,
             password,
             login_identifier=mode,
-            dummy_hash=self._get_dummy_hash(),
+            dummy_hash=await self._get_dummy_hash(),
             logger=logger,
         )
         if user is None:
@@ -424,7 +418,7 @@ class BaseUserManager[UP: UserProtocol[Any], ID](
 
     async def forgot_password(self, email: str) -> None:
         """Trigger the forgot-password flow without revealing whether a user exists."""
-        await self._account_tokens.forgot_password(email, dummy_hash=self._get_dummy_hash())
+        await self._account_tokens.forgot_password(email, dummy_hash=await self._get_dummy_hash())
 
     async def reset_password(self, token: str, password: str) -> UP:
         """Reset a user's password using a signed reset token.

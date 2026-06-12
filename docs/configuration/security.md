@@ -80,6 +80,15 @@ Before deploying that default into an environment with unsupported stored hashes
 those credentials out of band. If you inject `UserManagerSecurity(password_helper=...)`, that
 password policy is fully application-owned and outside the library default described here.
 
+Password hashing and TOTP recovery-code hashing run through a shared AnyIO worker-thread limiter
+instead of the event loop. The default cap is **8** concurrent password operations per event loop —
+equivalent to per process for the typical one-loop server. Set
+`LITESTAR_AUTH_PASSWORD_WORKER_THREAD_LIMIT` to a positive integer before importing `litestar_auth`
+when a deployment needs a different cap. Size this with the memory formula
+`limit * Argon2 memory cost`; with the bundled default Argon2 policy, plan for roughly
+`limit * 64 MiB` per event loop before other application memory. Invalid values fail fast with
+`ConfigurationError` at import time.
+
 ## Schemas and DI
 
 | Field | Default | Meaning |

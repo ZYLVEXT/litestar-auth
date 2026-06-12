@@ -1,5 +1,45 @@
 # Migration Guide
 
+## Litestar 2.24: explicit dependency annotations
+
+litestar-auth now requires Litestar `>=2.24.0`. Litestar 2.24 deprecates *inferred*
+dependencies — handler parameters that are resolved purely by matching a registered
+dependency key by name. Every such parameter must carry an explicit
+`NamedDependency[...]` annotation, or Litestar emits a `LitestarDeprecationWarning`
+(and stops injecting the value entirely in Litestar 3.0).
+
+All bundled controllers and the plugin's dependency providers are already migrated.
+If your application or extension defines handlers that consume litestar-auth
+dependencies (`litestar_auth_user_manager`, `litestar_auth_backends`,
+`litestar_auth_organization_store`, `litestar_auth_permissions`), annotate them with
+the typed aliases exported from `litestar_auth.extensions`:
+
+```python
+from litestar import get
+from litestar_auth.extensions import UserManagerDependency
+
+
+@get("/admin/probe")
+async def probe(litestar_auth_user_manager: UserManagerDependency) -> dict[str, bool]:
+    return {"has_manager": litestar_auth_user_manager is not None}
+```
+
+For the request-scoped database session (default key `db_session`, configurable via
+`db_session_dependency_key`), annotate with `NamedDependency` directly:
+
+```python
+from litestar import get
+from litestar.di import NamedDependency
+from sqlalchemy.ext.asyncio import AsyncSession
+
+_DbSessionDep = NamedDependency[AsyncSession]
+
+
+@get("/admin/session-probe")
+async def probe(db_session: _DbSessionDep) -> dict[str, bool]:
+    return {"in_transaction": db_session.in_transaction()}
+```
+
 ## User hard-delete cascade
 
 Bundled user-owned auth tables declare `ON DELETE CASCADE` on foreign keys that point at the

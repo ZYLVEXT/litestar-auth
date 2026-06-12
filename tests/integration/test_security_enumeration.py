@@ -225,7 +225,7 @@ async def test_forgot_password_always_returns_202_and_same_body(
 async def test_login_timing_does_not_depend_on_email_existence() -> None:
     """Login timing stays within a narrow bound for missing and existing emails."""
     app, _, user_manager = build_app(password_helper=SlowPasswordHelper(delay_seconds=SLOW_OPERATION_SECONDS))
-    user_manager._get_dummy_hash()
+    await user_manager._get_dummy_hash()
 
     async with AsyncTestClient(app=app) as client:
         warmup_response = await client.post(

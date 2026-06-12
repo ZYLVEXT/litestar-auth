@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING, Any, Unpack, cast
 
 import litestar_auth._manager.api_key_creation as _api_key_creation
 import litestar_auth._manager.api_key_secrets as _api_key_secrets
+from litestar_auth._concurrency import run_password_op_in_worker_thread as _run_password_op
 from litestar_auth._manager.api_key_config import (
     ApiKeyConfigProtocol,
     ApiKeyManagerConfig,
@@ -50,7 +51,7 @@ class ApiKeyManagerService[UP: UserProtocol[Any], ID]:
     ) -> _api_key_secrets.ApiKeyCreateResult[ApiKeyRowProtocol]:
         """Create an API key and return the one-time raw credential."""  # noqa: DOC201, DOC501
         data = _api_key_creation.coerce_api_key_create_options(options)
-        self._verify_current_password_if_supplied(user, data.current_password)
+        await self._verify_current_password_if_supplied(user, data.current_password)
         normalized_scopes = self._normalize_requested_scopes(data.scopes)
         store = self._require_store()
         user_id = cast("ID", user.id)
@@ -119,7 +120,7 @@ class ApiKeyManagerService[UP: UserProtocol[Any], ID]:
         current_password: str | None = None,
     ) -> ApiKeyRowProtocol:
         """Update mutable API-key metadata owned by ``user``."""  # noqa: DOC201, DOC501
-        self._verify_current_password_if_supplied(user, current_password)
+        await self._verify_current_password_if_supplied(user, current_password)
         api_key = await self.get_api_key(user, key_id)
         normalized_scopes = None if scopes is None else self._normalize_requested_scopes(scopes)
         if name is None and normalized_scopes is None:
@@ -194,11 +195,12 @@ class ApiKeyManagerService[UP: UserProtocol[Any], ID]:
             raise ApiKeyScopeDeniedError(denied_scopes=denied)
         return list(requested)
 
-    def _verify_current_password_if_supplied(self, user: UP, current_password: str | None) -> None:
+    async def _verify_current_password_if_supplied(self, user: UP, current_password: str | None) -> None:
         if current_password is None:
             return
         hashed_password = getattr(user, "hashed_password", None)
-        if not isinstance(hashed_password, str) or not self._manager.password_helper.verify(
+        if not isinstance(hashed_password, str) or not await _run_password_op(
+            self._manager.password_helper.verify,
             current_password,
             hashed_password,
         ):

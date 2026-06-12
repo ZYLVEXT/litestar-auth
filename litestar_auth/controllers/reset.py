@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
 import msgspec  # noqa: TC002
 from litestar import Controller, Request, post
+from litestar.di import NamedDependency
 from litestar.status_codes import HTTP_200_OK, HTTP_202_ACCEPTED
 
 from litestar_auth.controllers._utils import (
@@ -46,6 +47,9 @@ class ResetPasswordControllerUserManagerProtocol[UP: ResetPasswordControllerUser
 
     async def reset_password(self, token: str, password: str) -> UP:
         """Reset a user's password from a valid token."""
+
+
+_UserManagerDep = NamedDependency[ResetPasswordControllerUserManagerProtocol[Any, Any]]
 
 
 @dataclass(frozen=True, slots=True)
@@ -117,7 +121,7 @@ def _define_reset_password_controller_class(ctx: _ResetPasswordControllerContext
             self,
             request: Request[Any, Any, Any],
             data: ForgotPassword,
-            litestar_auth_user_manager: ResetPasswordControllerUserManagerProtocol[Any, Any],
+            litestar_auth_user_manager: _UserManagerDep,
         ) -> None:
             # Security: increment in `finally` so transient manager errors (e.g.
             # broken email transport, DB hiccup) cannot yield a free unrate-limited
@@ -134,7 +138,7 @@ def _define_reset_password_controller_class(ctx: _ResetPasswordControllerContext
             self,
             request: Request[Any, Any, Any],
             data: ResetPassword,
-            litestar_auth_user_manager: ResetPasswordControllerUserManagerProtocol[Any, Any],
+            litestar_auth_user_manager: _UserManagerDep,
         ) -> msgspec.Struct:
             async def _increment_rate_limit() -> None:
                 await ctx.reset_password_increment(request)

@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING, Any, Protocol, cast
 
 import jwt
 
+from litestar_auth._concurrency import run_password_op_in_worker_thread as _run_password_op
 from litestar_auth._jwt_headers import JwtDecodeConfig, decode_signed_jwt, jwt_encode_headers
 from litestar_auth._manager._coercions import _managed_user
 from litestar_auth._manager._protocols import UserDatabaseManagerProtocol
@@ -535,7 +536,9 @@ class AccountTokensService[UP, ID]:
             raise InvalidResetPasswordTokenError
 
         self._policy.validate_password(password)
-        update_dict = {"hashed_password": self._policy.password_helper.hash(password)}
+        update_dict = {
+            "hashed_password": await _run_password_op(self._policy.password_helper.hash, password),
+        }
         updated_user = await self._manager.user_db.update(user, update_dict)
         await self._manager._invalidate_all_tokens(updated_user)
         await self._consume_token(payload)

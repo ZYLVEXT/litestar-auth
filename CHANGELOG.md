@@ -1,3 +1,66 @@
+## Unreleased
+
+### Added
+
+- **`litestar_auth.totp.abuild_recovery_code_index()` is now public.** Async extension and controller
+  code can build TOTP recovery-code lookup indexes through the worker-thread-offloaded helper instead
+  of calling the synchronous `build_recovery_code_index()` on the event loop. The existing synchronous
+  export is unchanged for CLI and script contexts.
+
+- **`LITESTAR_AUTH_PASSWORD_WORKER_THREAD_LIMIT` environment variable.** The shared Argon2
+  worker-thread cap (default **8** concurrent password operations per event loop — per process for
+  the typical one-loop server) is now configurable.
+  The value is read once, at import of `litestar_auth`, and must be a positive integer; invalid
+  values fail fast with `ConfigurationError`. Size it with the memory formula
+  `limit * Argon2 memory cost` (roughly `limit * 64 MiB` with the bundled default policy) — see
+  the security configuration guide. This is the library's first environment-variable setting; it is
+  environment-based rather than config-object-based because the limiter cap is resolved at import,
+  before any `LitestarAuthConfig` exists, and applies to every loop in the process.
+
+### Changed
+
+- **Litestar 2.24 explicit dependency annotations; minimum Litestar is now `>=2.24.0,<3.0`.**
+  Litestar 2.24 deprecates inferred dependencies (removal in 3.0), so every bundled controller
+  handler and dynamically built dependency provider now marks injected parameters with
+  `NamedDependency[...]`. **Breaking:** Litestar 2.23 is no longer supported. Applications and
+  extensions that define their own handlers consuming litestar-auth dependencies should annotate
+  those parameters with the new typed aliases exported from `litestar_auth.extensions`
+  (`UserManagerDependency`, `AuthBackendsDependency`, `OrganizationStoreDependency`,
+  `ResolvedPermissionsDependency`) — see the Migration guide.
+
+- **Argon2 work no longer blocks the event loop.** All password hashing, verification, and dummy-hash
+  construction in async flows — registration, login (including eager unknown-user timing
+  equalization), password change, password reset, forgot-password token construction, API-key
+  current-password confirmation — and the TOTP recovery-code paths (recovery-code verification and
+  recovery-code index construction, previously up to N sequential Argon2 hashes per request) now run
+  in an AnyIO worker thread. The public synchronous `PasswordHelper` API and the
+  one-Argon2-verify-per-call timing-equalization properties are unchanged. Custom `password_helper`
+  implementations supplied to managers now execute in a worker thread and must not rely on
+  event-loop thread affinity. Password and TOTP recovery-code Argon2 offloads now share one dedicated
+  AnyIO `CapacityLimiter` per event loop capped at 8 concurrent operations, bounding default pwdlib
+  Argon2 memory pressure to roughly 8 x 64 MiB per loop instead of AnyIO's broader default
+  worker-thread pool.
+
+- **Unknown-user dummy hashes are cached per `PasswordHelper` identity.** The timing-equalization
+  dummy hash for unknown-user login and forgot-password paths is now cached process-globally for the
+  `PasswordHelper` instance that produced it instead of per manager instance. Because the plugin builds
+  a manager per request and memoizes the default `PasswordHelper` per config, the default dummy Argon2
+  hash is now computed once per process rather than once per request on unknown-user paths.
+
+- **`anyio` is now a direct dependency** (`anyio>=4.13.0,<5.0`). It was already required
+  transitively via Litestar, so dependency trees do not change.
+
+- **`cryptography` minimum for the OAuth and TOTP extras is now `>=48.0.1`.** The upstream 48.0.1
+  release updates official wheels to OpenSSL 4.0.1; its release notes do not list a CVE-specific fix.
+
+### Internal
+
+- Removed the accidentally committed `demo_litestar_auth.db` SQLite artifact from the repository and
+  added a `*.db` ignore rule; runnable demos create their databases at startup as before.
+- Removed the inert setuptools-era `zip-safe` key from `[tool.hatch.build.targets.wheel]`; it is not
+  a hatchling option and had no effect on built wheels.
+- Raised the development `pip-audit` minimum to `>=2.10.1`.
+
 ## 5.0.2 (2026-06-11)
 
 ### Fix

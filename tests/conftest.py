@@ -63,7 +63,7 @@ _RFC_RESERVED_DNS_SUFFIXES: tuple[str, ...] = (
 _HERMETIC_PUBLIC_IPV4 = "93.184.216.34"
 
 
-@pytest.fixture(autouse=True)
+@pytest.fixture(autouse=True)  # noqa: RUF076
 def _hermetic_reserved_dns_for_redirect_validation(monkeypatch: pytest.MonkeyPatch) -> None:
     """Resolve RFC 6761/2606/6762 test hostnames to a fixed public IP for ``socket.getaddrinfo``.
 

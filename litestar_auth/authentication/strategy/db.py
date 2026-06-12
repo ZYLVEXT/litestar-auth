@@ -173,7 +173,7 @@ class DatabaseTokenStrategy[UP: UserProtocol[Any], ID](
         return expires_at <= datetime.now(tz=UTC)
 
     async def _execute_delete(self, statement: Executable) -> int:
-        """Execute a delete statement and return its matched row count.
+        """Execute a delete/update statement and return its matched row count.
 
         Returns:
             Number of rows matched by the statement.

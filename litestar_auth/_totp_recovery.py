@@ -5,16 +5,17 @@ from __future__ import annotations
 import hashlib
 import hmac
 import secrets
+from functools import partial
 from typing import Protocol
 
+from litestar_auth._concurrency import get_cached_dummy_hash as _get_cached_dummy_hash
+from litestar_auth._concurrency import run_password_op_in_worker_thread as _run_password_op
 from litestar_auth.password import PasswordHelper
 
 DEFAULT_TOTP_RECOVERY_CODE_COUNT = 10
 # DECISION: 28 hex chars gives 112 bits per single-use recovery code, matching
 # NIST SP 800-63B lookup-secret entropy guidance while still remaining printable.
 TOTP_RECOVERY_CODE_HEX_BYTES = 14
-
-_DUMMY_ARGON2_HASH: str | None = None
 
 
 def generate_totp_recovery_codes(*, count: int = DEFAULT_TOTP_RECOVERY_CODE_COUNT) -> tuple[str, ...]:
@@ -50,6 +51,9 @@ def build_recovery_code_index(
 ) -> dict[str, str]:
     """Build a keyed lookup index for TOTP recovery-code hashes.
 
+    Async callers should use :func:`abuild_recovery_code_index` to keep Argon2
+    hashing off the event loop.
+
     Returns:
         Mapping of HMAC-SHA-256 lookup hex digests to Argon2 hashes.
     """
@@ -57,6 +61,22 @@ def build_recovery_code_index(
     return {
         _recovery_code_lookup_hex(code, lookup_secret=lookup_secret): helper.hash(code.casefold()) for code in codes
     }
+
+
+async def abuild_recovery_code_index(
+    codes: tuple[str, ...],
+    *,
+    lookup_secret: bytes,
+    password_helper: PasswordHelper | None = None,
+) -> dict[str, str]:
+    """Build the recovery-code index without running Argon2 on the event loop.
+
+    Returns:
+        Mapping of HMAC-SHA-256 lookup hex digests to Argon2 hashes.
+    """
+    return await _run_password_op(
+        partial(build_recovery_code_index, codes, lookup_secret=lookup_secret, password_helper=password_helper),
+    )
 
 
 class TotpRecoveryCodeUserManager[UP](Protocol):
@@ -105,16 +125,8 @@ async def _consume_matching_recovery_code[UP](
     normalized_code = submitted_code.casefold()
     lookup_hex = _recovery_code_lookup_hex(normalized_code, lookup_secret=lookup_secret)
     candidate_hash = await user_manager.find_recovery_code_hash_by_lookup(user, lookup_hex)
-    target_hash = candidate_hash if candidate_hash is not None else _get_dummy_argon2_hash()
-    matched = helper.verify(normalized_code, target_hash)
+    target_hash = candidate_hash if candidate_hash is not None else await _get_cached_dummy_hash(helper)
+    matched = await _run_password_op(helper.verify, normalized_code, target_hash)
     if not matched or candidate_hash is None:
         return False
     return await user_manager.consume_recovery_code_by_lookup(user, lookup_hex)
-
-
-def _get_dummy_argon2_hash() -> str:
-    """Return the process-local dummy recovery-code hash, creating it lazily."""
-    global _DUMMY_ARGON2_HASH  # noqa: PLW0603
-    if _DUMMY_ARGON2_HASH is None:
-        _DUMMY_ARGON2_HASH = PasswordHelper.from_defaults().hash(secrets.token_hex(16))
-    return _DUMMY_ARGON2_HASH

@@ -17,6 +17,7 @@ from litestar_auth._totp_recovery import (
     DEFAULT_TOTP_RECOVERY_CODE_COUNT,
     TOTP_RECOVERY_CODE_HEX_BYTES,
     TotpRecoveryCodeUserManager,
+    abuild_recovery_code_index,
     build_recovery_code_index,
     generate_totp_recovery_codes,
 )
@@ -58,6 +59,7 @@ __all__ = (
     "TotpReplayProtection",
     "UsedTotpCodeStore",
     "UsedTotpMarkResult",
+    "abuild_recovery_code_index",
     "build_recovery_code_index",
     "generate_totp_recovery_codes",
     "generate_totp_secret",

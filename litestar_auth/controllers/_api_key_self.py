@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Annotated, Any, cast
 
 from litestar import Controller, Request, delete, get, patch, post
+from litestar.di import NamedDependency
 from litestar.params import PathParameter
 
 from litestar_auth.controllers._api_key_common import (
@@ -35,6 +36,9 @@ if TYPE_CHECKING:
 
     from litestar_auth.controllers._utils import RequestBodyRouteHandler
 
+_UserManagerDep = NamedDependency[ApiKeysControllerUserManagerProtocol[Any, Any]]
+
+
 _KeyIdPath = Annotated[str, PathParameter()]
 
 
@@ -58,7 +62,7 @@ def _create_self_api_key_create_handler[ID](ctx: ApiKeysControllerContext[ID]) -
         self: Controller,  # noqa: ARG001
         request: Request[Any, Any, Any],
         data: ApiKeyCreateRequest,
-        litestar_auth_user_manager: ApiKeysControllerUserManagerProtocol[Any, Any],
+        litestar_auth_user_manager: _UserManagerDep,
     ) -> object:
         return await create_api_key_for_user(
             request,
@@ -78,7 +82,7 @@ def _create_self_api_key_list_handler[ID](ctx: ApiKeysControllerContext[ID]) -> 
     async def list_api_keys(
         self: Controller,  # noqa: ARG001
         request: Request[Any, Any, Any],
-        litestar_auth_user_manager: ApiKeysControllerUserManagerProtocol[Any, Any],
+        litestar_auth_user_manager: _UserManagerDep,
     ) -> ApiKeyListResponse:
         api_keys = await litestar_auth_user_manager.list_api_keys(request.user)
         return ApiKeyListResponse(api_keys=[to_api_key_read(api_key) for api_key in api_keys])
@@ -94,7 +98,7 @@ def _create_self_api_key_get_handler[ID](ctx: ApiKeysControllerContext[ID]) -> C
         self: Controller,  # noqa: ARG001
         request: Request[Any, Any, Any],
         key_id: _KeyIdPath,
-        litestar_auth_user_manager: ApiKeysControllerUserManagerProtocol[Any, Any],
+        litestar_auth_user_manager: _UserManagerDep,
     ) -> ApiKeyRead:
         try:
             api_key = await litestar_auth_user_manager.get_api_key(request.user, key_id)
@@ -126,7 +130,7 @@ def _create_self_api_key_update_handler[ID](ctx: ApiKeysControllerContext[ID]) -
         request: Request[Any, Any, Any],
         key_id: _KeyIdPath,
         data: ApiKeyUpdateRequest,
-        litestar_auth_user_manager: ApiKeysControllerUserManagerProtocol[Any, Any],
+        litestar_auth_user_manager: _UserManagerDep,
     ) -> ApiKeyRead:
         try:
             api_key = await update_api_key_for_request(
@@ -158,7 +162,7 @@ def _create_self_api_key_revoke_handler[ID](ctx: ApiKeysControllerContext[ID]) -
         self: Controller,  # noqa: ARG001
         request: Request[Any, Any, Any],
         key_id: _KeyIdPath,
-        litestar_auth_user_manager: ApiKeysControllerUserManagerProtocol[Any, Any],
+        litestar_auth_user_manager: _UserManagerDep,
     ) -> ApiKeyRead:
         await require_totp_stepup(
             request,

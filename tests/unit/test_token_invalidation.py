@@ -72,7 +72,7 @@ async def test_manager_reset_password_invalidates_tokens_when_supported() -> Non
     invalidate = AsyncMock()
     cast("object", manager).backends = [_Backend(strategy=_Strategy(invalidate_all_tokens=invalidate))]  # ty: ignore[unresolved-attribute]
 
-    token = manager.tokens.write_reset_password_token(user, dummy_hash=manager._get_dummy_hash())
+    token = manager.tokens.write_reset_password_token(user, dummy_hash=await manager._get_dummy_hash())
 
     result = await manager.reset_password(token, "new-password")
 

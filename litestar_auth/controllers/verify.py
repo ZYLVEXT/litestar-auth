@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
 import msgspec  # noqa: TC002
 from litestar import Controller, Request, post
+from litestar.di import NamedDependency
 from litestar.status_codes import HTTP_200_OK, HTTP_202_ACCEPTED
 
 from litestar_auth.controllers._error_responses import raise_client_error
@@ -45,6 +46,9 @@ class VerifyControllerUserManagerProtocol[UP: VerifyControllerUserProtocol[Any],
 
     async def request_verify_token(self, email: str) -> None:
         """Request a new verification token for the provided email."""
+
+
+_UserManagerDep = NamedDependency[VerifyControllerUserManagerProtocol[Any, Any]]
 
 
 @dataclass(frozen=True, slots=True)
@@ -138,7 +142,7 @@ def _define_verify_controller_class(ctx: _VerifyControllerContext) -> type[Contr
             self,
             request: Request[Any, Any, Any],
             data: VerifyToken,
-            litestar_auth_user_manager: VerifyControllerUserManagerProtocol[Any, Any],
+            litestar_auth_user_manager: _UserManagerDep,
         ) -> msgspec.Struct:
             async def _verify_work() -> msgspec.Struct:
                 try:
@@ -165,7 +169,7 @@ def _define_verify_controller_class(ctx: _VerifyControllerContext) -> type[Contr
             self,
             request: Request[Any, Any, Any],
             data: RequestVerifyToken,
-            litestar_auth_user_manager: VerifyControllerUserManagerProtocol[Any, Any],
+            litestar_auth_user_manager: _UserManagerDep,
         ) -> None:
             async def _request_verify_work() -> None:
                 # Security: increment in `finally` so transient manager errors do not

@@ -969,6 +969,43 @@ def test_oauth_package_exposes_canonical_login_helper_and_not_advanced_controlle
     assert controllers_package.create_oauth_associate_controller is create_oauth_associate_controller
 
 
+def test_totp_module_exposes_canonical_public_surface() -> None:
+    """The TOTP facade exports stable helpers without private internals."""
+    assert totp_module.__all__ == (
+        "DEFAULT_TOTP_ENROLLMENT_KEY_PREFIX",
+        "DEFAULT_TOTP_RECOVERY_CODE_COUNT",
+        "DEFAULT_TOTP_USED_KEY_PREFIX",
+        "TIME_STEP_SECONDS",
+        "TOTP_ALGORITHM",
+        "TOTP_DIGITS",
+        "TOTP_DRIFT_STEPS",
+        "TOTP_RECOVERY_CODE_HEX_BYTES",
+        "InMemoryTotpEnrollmentStore",
+        "InMemoryUsedTotpCodeStore",
+        "RedisTotpEnrollmentStore",
+        "RedisTotpEnrollmentStoreClient",
+        "RedisUsedTotpCodeStore",
+        "RedisUsedTotpCodeStoreClient",
+        "SecurityWarning",
+        "TotpAlgorithm",
+        "TotpEnrollmentStore",
+        "TotpRecoveryCodeUserManager",
+        "TotpReplayProtection",
+        "UsedTotpCodeStore",
+        "UsedTotpMarkResult",
+        "abuild_recovery_code_index",
+        "build_recovery_code_index",
+        "generate_totp_recovery_codes",
+        "generate_totp_secret",
+        "generate_totp_uri",
+        "verify_totp",
+        "verify_totp_with_store",
+    )
+    assert inspect.iscoroutinefunction(totp_module.abuild_recovery_code_index)
+    assert callable(totp_module.build_recovery_code_index)
+    assert all(not symbol.startswith("_") for symbol in totp_module.__all__)
+
+
 def test_oauth_controller_module_keeps_removed_adapter_shims_off_the_import_surface() -> None:
     """Removed controller shim names stay absent from the tested import boundary."""
     module_members = vars(oauth_controller_module)

@@ -10,6 +10,7 @@ from functools import partial
 from types import ModuleType
 from typing import TYPE_CHECKING, Any, Literal, Protocol, Self, cast
 
+from anyio.to_thread import run_sync as run_sync_in_worker_thread
 from litestar import Litestar
 from litestar.di import Provide
 
@@ -312,6 +313,18 @@ def cast_fakeredis[T](redis: AsyncFakeRedis, _protocol: type[T]) -> T:
         The same client instance typed as the target protocol.
     """
     return cast("T", redis)
+
+
+def make_run_sync_spy() -> tuple[Callable[..., object], list[str]]:
+    """Return a fresh worker-thread spy and its recorded callable names."""
+    offloaded_names: list[str] = []
+
+    async def run_sync_spy(func: Callable[..., object], *args: object) -> object:
+        wrapped = getattr(func, "func", func)
+        offloaded_names.append(getattr(wrapped, "__name__", type(wrapped).__name__))
+        return await run_sync_in_worker_thread(func, *args)
+
+    return run_sync_spy, offloaded_names
 
 
 def auth_middleware_get_request_session(session_maker: SessionFactory) -> Callable[[State, Scope], AsyncSession]:

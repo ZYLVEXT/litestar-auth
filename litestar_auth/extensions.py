@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from importlib import import_module
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
+
+from litestar.di import NamedDependency
 
 from litestar_auth._manager.hooks import ExtensionManagerHookEvent, ExtensionManagerHookSubscriber
 from litestar_auth._plugin.extensions._contracts import (
@@ -15,6 +18,8 @@ from litestar_auth._plugin.extensions._contracts import (
     AuthExtensionRegistrationContext,
     AuthExtensionValidationContext,
 )
+from litestar_auth.authentication import AuthenticationBackend
+from litestar_auth.db import BaseOrganizationStore
 
 if TYPE_CHECKING:
     from litestar_auth.contrib.organization_admin import (
@@ -50,10 +55,22 @@ if TYPE_CHECKING:
     )
     from litestar_auth.oauth import ProviderOAuthControllerConfig, create_provider_oauth_controller
 
+# Litestar 2.24 deprecates inferred dependencies: handler parameters that consume
+# plugin-provided dependencies must carry an explicit ``NamedDependency`` annotation.
+# These aliases cover the dependency keys the plugin registers for extension-authored
+# handlers (``litestar_auth_user_manager``, ``litestar_auth_backends``,
+# ``litestar_auth_organization_store``, ``litestar_auth_permissions``). The user-manager
+# element type is ``Any`` because the concrete manager class is application-specific.
+UserManagerDependency = NamedDependency[Any]
+AuthBackendsDependency = NamedDependency[Sequence[AuthenticationBackend[Any, Any]]]
+OrganizationStoreDependency = NamedDependency[BaseOrganizationStore[Any, Any, Any, Any]]
+ResolvedPermissionsDependency = NamedDependency[frozenset[str]]
+
 __all__ = (
     "EXTENSION_API_VERSION",
     "EXTENSION_ENTRY_POINT_GROUP",
     "ApiKeysControllerConfig",
+    "AuthBackendsDependency",
     "AuthCliExtension",
     "AuthControllerConfig",
     "AuthEventSubscriberExtension",
@@ -67,12 +84,15 @@ __all__ = (
     "OrganizationAdminControllerConfig",
     "OrganizationControllerConfig",
     "OrganizationInvitationControllerConfig",
+    "OrganizationStoreDependency",
     "ProviderOAuthControllerConfig",
     "RegisterControllerConfig",
+    "ResolvedPermissionsDependency",
     "RoleAdminControllerConfig",
     "SessionDevicesControllerConfig",
     "TotpControllerOptions",
     "TotpUserManagerProtocol",
+    "UserManagerDependency",
     "UsersControllerConfig",
     "backend_supports_organization_tokens",
     "create_api_keys_controllers",

@@ -75,6 +75,8 @@ _current_counter = totp_primitive_module._current_counter
 _generate_totp_code = totp_primitive_module._generate_totp_code
 
 if TYPE_CHECKING:
+    from collections.abc import Awaitable, Callable
+
     from litestar_auth._manager.api_key_config import ApiKeyConfigProtocol
     from litestar_auth.authentication.strategy.base import Strategy
     from litestar_auth.db.base import BaseUserStore
@@ -110,6 +112,28 @@ SHA256_HEX_LENGTH = 64
 _DEFAULT_USED_TOKENS_STORE = object()
 _DEFAULT_PENDING_JTI_STORE = object()
 _DEFAULT_ENROLLMENT_STORE = object()
+
+
+def _make_recovery_code_index_spy(
+    *,
+    expected_lookup_secret: bytes,
+    expected_password_helper: PasswordHelper,
+) -> Callable[..., Awaitable[dict[str, str]]]:
+    """Return an async spy that validates recovery-code index builder inputs."""
+
+    async def build_recovery_code_index_spy(
+        codes: tuple[str, ...],
+        *,
+        lookup_secret: bytes,
+        password_helper: PasswordHelper | None = None,
+    ) -> dict[str, str]:
+        await asyncio.sleep(0)
+        assert len(codes) == _totp_mod.DEFAULT_TOTP_RECOVERY_CODE_COUNT
+        assert lookup_secret == expected_lookup_secret
+        assert password_helper is expected_password_helper
+        return {"lookup": "hash"}
+
+    return build_recovery_code_index_spy
 
 
 def _decrypt_test_totp_secret(stored_secret: str) -> str:
@@ -1057,7 +1081,17 @@ async def test_handle_regenerate_recovery_codes_accepts_valid_decoded_payload(
         await asyncio.sleep(0)
         return totp_controller_module.TotpRegenerateRecoveryCodesRequest(current_password="correct-password")
 
+    build_recovery_code_index_spy = _make_recovery_code_index_spy(
+        expected_lookup_secret=TOTP_RECOVERY_CODE_LOOKUP_SECRET.encode(),
+        expected_password_helper=user_manager.password_helper,
+    )
+
     monkeypatch.setattr(totp_handlers_module, "_decode_request_body", return_valid_payload)
+    monkeypatch.setattr(
+        totp_session_handlers_module,
+        "abuild_recovery_code_index",
+        build_recovery_code_index_spy,
+    )
 
     response = await _totp_handle_regenerate_recovery_codes(
         cast("Any", SimpleNamespace(user=user)),
@@ -1072,6 +1106,7 @@ async def test_handle_regenerate_recovery_codes_accepts_valid_decoded_payload(
         login_identifier="email",
     )
     user_manager.set_recovery_code_hashes.assert_awaited_once()
+    assert user_manager.set_recovery_code_hashes.await_args.args[1] == {"lookup": "hash"}
     rate_limit.on_success.assert_awaited_once()
 
 
@@ -2118,6 +2153,42 @@ async def test_handle_confirm_enable_rolls_back_totp_secret_when_recovery_code_p
 
     assert user.totp_secret is None
     assert user.recovery_codes is None
+
+
+async def test_persist_confirmed_secret_builds_recovery_code_index_via_async_builder(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Confirmed TOTP enrollment persists the async-built recovery-code index."""
+    _app, user_db, _strategy, _user_manager = build_app()
+    user = next(iter(user_db.users_by_id.values()))
+    password_helper = PasswordHelper()
+    user_manager = SimpleNamespace(
+        password_helper=password_helper,
+        recovery_code_lookup_secret=TOTP_RECOVERY_CODE_LOOKUP_SECRET.encode(),
+        set_totp_secret=AsyncMock(return_value=user),
+        set_recovery_code_hashes=AsyncMock(return_value=user),
+    )
+
+    build_recovery_code_index_spy = _make_recovery_code_index_spy(
+        expected_lookup_secret=TOTP_RECOVERY_CODE_LOOKUP_SECRET.encode(),
+        expected_password_helper=user_manager.password_helper,
+    )
+
+    monkeypatch.setattr(
+        totp_handlers_module,
+        "abuild_recovery_code_index",
+        build_recovery_code_index_spy,
+    )
+
+    recovery_codes = await totp_handlers_module._totp_persist_confirmed_secret(
+        user,
+        secret="confirmed-secret",
+        user_manager=cast("Any", user_manager),
+    )
+
+    assert len(recovery_codes) == _totp_mod.DEFAULT_TOTP_RECOVERY_CODE_COUNT
+    user_manager.set_totp_secret.assert_awaited_once_with(user, "confirmed-secret")
+    user_manager.set_recovery_code_hashes.assert_awaited_once_with(user, {"lookup": "hash"})
 
 
 async def test_handle_confirm_enable_requires_recovery_code_lookup_secret_directly() -> None:

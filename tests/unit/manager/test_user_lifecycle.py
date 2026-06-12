@@ -21,7 +21,7 @@ from litestar_auth.exceptions import (
 )
 from litestar_auth.password import PasswordHelper
 from litestar_auth.schemas import AdminUserUpdate, UserCreate
-from tests._helpers import ExampleUser
+from tests._helpers import ExampleUser, make_run_sync_spy
 from tests.unit.test_manager import TrackingUserManager
 
 pytestmark = pytest.mark.unit
@@ -138,6 +138,37 @@ async def test_create_uses_injected_policy_for_normalization_and_hashing() -> No
     assert result is created_user
     create_payload = user_db.create.await_args.args[0]
     assert password_helper.verify("test-password", create_payload["hashed_password"]) is True
+
+
+async def test_password_work_is_offloaded_from_async_lifecycle_paths(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Async lifecycle paths should run password helper calls through AnyIO worker offload."""
+    user_db = AsyncMock()
+    password_helper = PasswordHelper()
+    manager = TrackingUserManager(user_db, password_helper)
+    service = UserLifecycleService(manager, policy=manager.policy)
+    user = _build_user(password_helper, email="offload@example.com")
+    updated_user = replace(user)
+    run_sync_spy, offloaded = make_run_sync_spy()
+
+    monkeypatch.setattr("litestar_auth._manager.user_lifecycle._run_password_op", run_sync_spy)
+    user_db.get_by_email.return_value = None
+    user_db.create.return_value = user
+
+    await service.create({"email": "offload@example.com", "password": "test-password"})
+
+    user_db.get_by_field.return_value = None
+    await service.authenticate(
+        "missing@example.com",
+        "test-password",
+        login_identifier="email",
+        dummy_hash=await manager._get_dummy_hash(),
+        logger=Mock(),
+    )
+
+    user_db.update.return_value = updated_user
+    await service.update(AdminUserUpdate(password="new-password"), user)
+
+    assert offloaded == ["hash", "verify_and_update", "hash"]
 
 
 async def test_list_users_delegates_to_user_db() -> None:
@@ -378,7 +409,7 @@ def test_non_null_update_dict_filters_none_values() -> None:
     }
 
 
-def test_apply_password_update_returns_false_when_password_missing() -> None:
+async def test_apply_password_update_returns_false_when_password_missing() -> None:
     """_apply_password_update() is a no-op without a password field."""
     user_db = AsyncMock()
     password_helper = PasswordHelper()
@@ -386,7 +417,7 @@ def test_apply_password_update_returns_false_when_password_missing() -> None:
     service = UserLifecycleService(manager, policy=manager.policy)
     update_dict = {"email": "user@example.com"}
 
-    changed = service._apply_password_update(update_dict)
+    changed = await service._apply_password_update(update_dict)
 
     assert changed is False
     assert update_dict == {"email": "user@example.com"}
@@ -460,7 +491,7 @@ async def test_delete_invalidates_dependent_stores_before_user_delete() -> None:
     assert calls == ["tokens", "api_keys", "user"]
 
 
-def test_apply_password_update_propagates_validation_errors() -> None:
+async def test_apply_password_update_propagates_validation_errors() -> None:
     """Weak passwords should raise before mutation of the persistence payload."""
     user_db = AsyncMock()
     password_helper = PasswordHelper()
@@ -469,6 +500,6 @@ def test_apply_password_update_propagates_validation_errors() -> None:
     update_dict = {"password": "short"}
 
     with pytest.raises(InvalidPasswordError):
-        service._apply_password_update(update_dict)
+        await service._apply_password_update(update_dict)
 
     assert update_dict == {"password": "short"}

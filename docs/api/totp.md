@@ -10,7 +10,10 @@ Time-based one-time passwords in **litestar-auth** split into a **low-level cryp
 
 Generated recovery codes are 28 lowercase hex characters (112 bits). They are returned only from
 confirm-enable or regenerate responses and are stored as HMAC lookup digests mapped to Argon2
-hashes by the manager/store surface.
+hashes by the manager/store surface. Async extension or controller code should build that persisted
+index with **`abuild_recovery_code_index()`** so Argon2 hashing runs in the library's worker-thread
+offload path; the synchronous **`build_recovery_code_index()`** remains available for CLI and script
+contexts.
 
 ## Persisted secret encryption
 

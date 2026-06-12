@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING, Any, cast
 
 from advanced_alchemy.extensions.litestar import async_autocommit_handler_maker
 from litestar.datastructures.state import State
-from litestar.di import Provide
+from litestar.di import NamedDependency, Provide
 from litestar.types import Scope
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -108,7 +108,7 @@ def _make_dependency_signature(parameter_name: str) -> inspect.Signature:
             inspect.Parameter(
                 name=parameter_name,
                 kind=inspect.Parameter.POSITIONAL_OR_KEYWORD,
-                annotation=Any,
+                annotation=NamedDependency[Any],
             ),
         ],
     )
@@ -161,7 +161,7 @@ def _make_user_manager_dependency_provider[TManager](
     provider = cast("DependencyProvider", _provide_user_manager)
     provider.__signature__ = signature
     provider.__annotations__ = {
-        db_session_key: Any,
+        db_session_key: NamedDependency[Any],
         "return": AsyncGenerator[object, None],
     }
     setattr(_provide_user_manager, _RETURNS_ASYNC_GENERATOR_MARKER, True)
@@ -186,7 +186,7 @@ def _make_backends_dependency_provider[UP: UserProtocol[Any], ID](
     provider = cast("DependencyProvider", _provide_backends)
     provider.__signature__ = signature
     provider.__annotations__ = {
-        db_session_key: Any,
+        db_session_key: NamedDependency[Any],
         "return": Sequence[AuthenticationBackend[Any, Any]],
     }
     return cast("Callable[..., Sequence[AuthenticationBackend[UP, ID]]]", _provide_backends)
@@ -210,7 +210,7 @@ def _make_organization_store_dependency_provider(
     provider = cast("DependencyProvider", _provide_organization_store)
     provider.__signature__ = signature
     provider.__annotations__ = {
-        db_session_key: Any,
+        db_session_key: NamedDependency[Any],
         "return": Any,
     }
     return _provide_organization_store

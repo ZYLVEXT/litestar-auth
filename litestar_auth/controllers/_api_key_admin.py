@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Annotated, Any, cast
 
 from litestar import Controller, Request, delete, get, post
+from litestar.di import NamedDependency
 from litestar.params import PathParameter
 
 from litestar_auth.controllers._api_key_common import (
@@ -31,6 +32,9 @@ if TYPE_CHECKING:
 
     from litestar_auth.controllers._utils import RequestBodyRouteHandler
 
+_UserManagerDep = NamedDependency[ApiKeysControllerUserManagerProtocol[Any, Any]]
+
+
 _UserIdPath = Annotated[str, PathParameter()]
 _KeyIdPath = Annotated[str, PathParameter()]
 
@@ -50,7 +54,7 @@ def _create_admin_api_key_create_handler[ID](ctx: ApiKeysControllerContext[ID]) 
         request: Request[Any, Any, Any],
         user_id: _UserIdPath,
         data: ApiKeyAdminCreateRequest,
-        litestar_auth_user_manager: ApiKeysControllerUserManagerProtocol[Any, Any],
+        litestar_auth_user_manager: _UserManagerDep,
     ) -> ApiKeyCreateResponse:
         await require_totp_stepup(
             request,
@@ -80,7 +84,7 @@ def _create_admin_api_key_list_handler[ID](ctx: ApiKeysControllerContext[ID]) ->
     async def list_user_api_keys(
         self: Controller,  # noqa: ARG001
         user_id: _UserIdPath,
-        litestar_auth_user_manager: ApiKeysControllerUserManagerProtocol[Any, Any],
+        litestar_auth_user_manager: _UserManagerDep,
     ) -> ApiKeyListResponse:
         user = await load_user_or_404(user_id, ctx=ctx, user_manager=litestar_auth_user_manager)
         api_keys = await litestar_auth_user_manager.list_api_keys(user)
@@ -104,7 +108,7 @@ def _create_admin_api_key_revoke_handler[ID](ctx: ApiKeysControllerContext[ID]) 
         request: Request[Any, Any, Any],
         user_id: _UserIdPath,
         key_id: _KeyIdPath,
-        litestar_auth_user_manager: ApiKeysControllerUserManagerProtocol[Any, Any],
+        litestar_auth_user_manager: _UserManagerDep,
     ) -> ApiKeyRead:
         await require_totp_stepup(
             request,

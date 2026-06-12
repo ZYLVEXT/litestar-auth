@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any, cast
 
 from litestar import get
+from litestar.di import NamedDependency
 from litestar.enums import MediaType
 from litestar.exceptions import ClientException
 from litestar.middleware import DefineMiddleware
@@ -23,6 +24,9 @@ EXTENSION_HTTP_BAD_REQUEST = 400
 EXTENSION_HTTP_TEAPOT = 418
 EXTERNAL_DISCOVERED_EVENTS: list[str] = []
 EXTERNAL_DISCOVERED_MANAGER_EVENTS: list[ExtensionManagerHookEvent] = []
+
+
+_ExtensionValueDep = NamedDependency[str]
 
 
 class ExtensionFailureError(RuntimeError):
@@ -74,7 +78,7 @@ class WiringProbeExtension:
             return "extension-value"
 
         @get("/extension/value", sync_to_thread=False)
-        def extension_value(extension_value: str) -> dict[str, str]:
+        def extension_value(extension_value: _ExtensionValueDep) -> dict[str, str]:
             return {"value": extension_value}
 
         @get("/extension/failure", sync_to_thread=False)
@@ -163,7 +167,7 @@ class ExternalGoldenPathExtension:
             return "external-extension-value"
 
         @get("/external-extension/value", sync_to_thread=False)
-        def external_extension_value(external_extension_value: str) -> dict[str, str]:
+        def external_extension_value(external_extension_value: _ExtensionValueDep) -> dict[str, str]:
             return {"value": external_extension_value}
 
         context.add_dependency(self.name, "external_extension_value", provide_external_extension_value)

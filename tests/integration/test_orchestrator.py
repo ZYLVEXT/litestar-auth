@@ -252,7 +252,7 @@ _LitestarAuthUserManagerProbe = NamedDependency[PluginUserManager]
 @get("/dependency-probe", sync_to_thread=False)
 def dependency_probe(
     litestar_auth_user_manager: _LitestarAuthUserManagerProbe,
-    litestar_auth_config: object,
+    litestar_auth_config: NamedDependency[object],
 ) -> dict[str, bool]:
     """Expose whether the plugin registered DI providers.
 

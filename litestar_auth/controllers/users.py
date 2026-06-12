@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING, Annotated, Any, Protocol, TypedDict, Unpack, c
 
 import msgspec
 from litestar import Controller, Request, delete, get, patch, post
+from litestar.di import NamedDependency
 from litestar.exceptions import NotFoundException
 from litestar.openapi.datastructures import ResponseSpec
 from litestar.openapi.spec import Example
@@ -105,6 +106,9 @@ class UsersControllerUserManagerProtocol[UP: UsersControllerUserProtocol[Any], I
 
     async def delete(self, user_id: ID) -> None:
         """Delete a user permanently."""
+
+
+_UserManagerDep = NamedDependency[UsersControllerUserManagerProtocol[Any, Any]]
 
 
 @dataclass(frozen=True, slots=True)
@@ -604,7 +608,7 @@ def _make_list_users_signature(
             inspect.Parameter(
                 "litestar_auth_user_manager",
                 inspect.Parameter.KEYWORD_ONLY,
-                annotation=UsersControllerUserManagerProtocol[Any, Any],
+                annotation=_UserManagerDep,
             ),
         ],
         return_annotation=msgspec.Struct,
@@ -624,7 +628,7 @@ def _list_users_handler_annotations(*, max_limit: int) -> dict[str, object]:
             QueryParameter(name="limit", ge=1, le=max_limit),
         ],
         "offset": Annotated[int, QueryParameter(name="offset", ge=0)],
-        "litestar_auth_user_manager": UsersControllerUserManagerProtocol[Any, Any],
+        "litestar_auth_user_manager": _UserManagerDep,
         "return": msgspec.Struct,
     }
 
@@ -642,7 +646,7 @@ def _create_get_me_handler[UP: UsersControllerUserProtocol[Any], ID](
     async def get_me(
         self: object,  # noqa: ARG001
         request: Request[Any, Any, Any],
-        litestar_auth_user_manager: UsersControllerUserManagerProtocol[Any, Any],
+        litestar_auth_user_manager: _UserManagerDep,
     ) -> msgspec.Struct:
         return await _users_handle_get_me(request, ctx=ctx, user_manager=litestar_auth_user_manager)
 
@@ -673,7 +677,7 @@ def _create_update_me_handler[UP: UsersControllerUserProtocol[Any], ID](
         self: object,  # noqa: ARG001
         request: Request[Any, Any, Any],
         data: msgspec.Struct,
-        litestar_auth_user_manager: UsersControllerUserManagerProtocol[Any, Any],
+        litestar_auth_user_manager: _UserManagerDep,
     ) -> msgspec.Struct:
         return await _users_handle_update_me(
             request,
@@ -705,7 +709,7 @@ def _create_change_password_handler[UP: UsersControllerUserProtocol[Any], ID](
         self: object,  # noqa: ARG001
         request: Request[Any, Any, Any],
         data: msgspec.Struct,
-        litestar_auth_user_manager: UsersControllerUserManagerProtocol[Any, Any],
+        litestar_auth_user_manager: _UserManagerDep,
     ) -> None:
         await _users_handle_change_password(
             request,
@@ -730,7 +734,7 @@ def _create_get_user_handler[UP: UsersControllerUserProtocol[Any], ID](
     async def get_user(
         self: object,  # noqa: ARG001
         user_id: _UserIdPath,
-        litestar_auth_user_manager: UsersControllerUserManagerProtocol[Any, Any],
+        litestar_auth_user_manager: _UserManagerDep,
     ) -> msgspec.Struct:
         return await _users_handle_get_user(
             user_id,
@@ -756,7 +760,7 @@ def _create_update_user_handler[UP: UsersControllerUserProtocol[Any], ID](
         request: Request[Any, Any, Any],
         user_id: _UserIdPath,
         data: msgspec.Struct,
-        litestar_auth_user_manager: UsersControllerUserManagerProtocol[Any, Any],
+        litestar_auth_user_manager: _UserManagerDep,
     ) -> msgspec.Struct:
         return await _users_handle_update_user(
             user_id,
@@ -784,7 +788,7 @@ def _create_delete_user_handler[UP: UsersControllerUserProtocol[Any], ID](
         user_id: _UserIdPath,
         request: Request[Any, Any, Any],
         data: AdminUserDeleteStepUpRequest,
-        litestar_auth_user_manager: UsersControllerUserManagerProtocol[Any, Any],
+        litestar_auth_user_manager: _UserManagerDep,
     ) -> msgspec.Struct:
         return await _users_handle_delete_user(
             user_id,

@@ -35,7 +35,7 @@ from litestar_auth.exceptions import (
 )
 from litestar_auth.manager import FernetKeyringConfig
 from litestar_auth.password import PasswordHelper
-from tests._helpers import ExampleUser
+from tests._helpers import ExampleUser, make_run_sync_spy
 from tests.unit.test_manager import TrackingUserManager
 
 if TYPE_CHECKING:
@@ -346,12 +346,17 @@ def _build_manager(
     )
 
 
-async def test_create_api_key_returns_raw_secret_once_and_persists_only_digest() -> None:
+async def test_create_api_key_returns_raw_secret_once_and_persists_only_digest(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """Creation returns a masked one-time secret while the store keeps only the digest."""
     password_helper = PasswordHelper()
     store = ApiKeyStore()
     manager = _build_manager(store, password_helper)
     user = _build_user(password_helper)
+    run_sync_spy, offloaded = make_run_sync_spy()
+
+    monkeypatch.setattr("litestar_auth._manager.api_key_service._run_password_op", run_sync_spy)
 
     created = await manager.create_api_key(
         user,
@@ -379,6 +384,7 @@ async def test_create_api_key_returns_raw_secret_once_and_persists_only_digest()
     assert created.api_key.encrypted_secret is None
     assert created.api_key.client_metadata == {"user_agent": "tests"}
     assert manager.created_api_key_events == [(user, created.api_key)]
+    assert offloaded == ["verify"]
     assert all(raw_key not in repr(row) for row in store.rows.values())
 
 
@@ -728,13 +734,18 @@ async def test_create_api_key_enforces_max_keys_under_concurrent_request_manager
     assert store.create_calls == 1
 
 
-async def test_update_api_key_applies_name_scope_policy_and_current_password_step_up() -> None:
+async def test_update_api_key_applies_name_scope_policy_and_current_password_step_up(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """Updates verify optional current password and re-run scope allow-list checks."""
     password_helper = PasswordHelper()
     store = ApiKeyStore()
     manager = _build_manager(store, password_helper)
     user = _build_user(password_helper)
     created = await manager.create_api_key(user, name="old", scopes=("read",))
+    run_sync_spy, offloaded = make_run_sync_spy()
+
+    monkeypatch.setattr("litestar_auth._manager.api_key_service._run_password_op", run_sync_spy)
 
     with pytest.raises(InvalidPasswordError):
         await manager.update_api_key(user, created.api_key.key_id, name="bad", current_password="wrong-password")
@@ -751,6 +762,7 @@ async def test_update_api_key_applies_name_scope_policy_and_current_password_ste
 
     assert updated.name == "new"
     assert updated.scopes == ["write"]
+    assert offloaded == ["verify", "verify"]
 
 
 async def test_get_update_and_revoke_raise_for_missing_or_foreign_rows() -> None:

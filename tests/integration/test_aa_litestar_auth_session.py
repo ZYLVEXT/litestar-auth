@@ -11,6 +11,7 @@ from advanced_alchemy.config import AsyncSessionConfig
 from advanced_alchemy.extensions.litestar import SQLAlchemyAsyncConfig, SQLAlchemyPlugin
 from advanced_alchemy.extensions.litestar._utils import get_aa_scope_state
 from litestar import Litestar, Request, get
+from litestar.di import NamedDependency
 from litestar.testing import AsyncTestClient
 from sqlalchemy import create_engine
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
@@ -48,6 +49,9 @@ def _disposing_engine(engine: Engine) -> Iterator[Engine]:
         engine.dispose()
 
 
+_DbSessionDep = NamedDependency[object]
+
+
 def _aa_auth_session_probe(session_scope_key: str) -> HTTPRouteHandler:
     """Build a route that compares handler DI with AA scope session identity.
 
@@ -58,7 +62,7 @@ def _aa_auth_session_probe(session_scope_key: str) -> HTTPRouteHandler:
     @get("/aa-auth-session-probe", sync_to_thread=False)
     def probe(
         request: Request[Any, Any, Any],
-        db_session: object,
+        db_session: _DbSessionDep,
     ) -> dict[str, bool]:
         """Expose whether handler DI and AA scope state reference the same session.
 

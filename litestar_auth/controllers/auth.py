@@ -18,6 +18,7 @@ from typing import (
 )
 
 from litestar import Controller, Request, post
+from litestar.di import NamedDependency
 from litestar.enums import MediaType
 from litestar.exceptions import ClientException
 from litestar.response import Response
@@ -97,6 +98,9 @@ class AuthControllerUserManagerProtocol[UP: UserProtocol[Any], ID](
 
     async def read_totp_secret(self, secret: str | None) -> str | None:
         """Return a plain-text TOTP secret from storage."""
+
+
+_UserManagerDep = NamedDependency[AuthControllerUserManagerProtocol[Any, Any]]
 
 
 @dataclass(slots=True)
@@ -473,7 +477,7 @@ def _define_auth_controller_class_di[UP: UserProtocol[Any], ID](
             self: Controller,
             request: Request[Any, Any, Any],
             data: LoginCredentials,
-            litestar_auth_user_manager: AuthControllerUserManagerProtocol[Any, Any],
+            litestar_auth_user_manager: _UserManagerDep,
         ) -> object:
             return await _handle_auth_login(
                 request,
@@ -521,7 +525,7 @@ def _define_refresh_auth_controller_class_di[UP: UserProtocol[Any], ID](
             self: Controller,
             request: Request[Any, Any, Any],
             data: RefreshTokenRequest,
-            litestar_auth_user_manager: AuthControllerUserManagerProtocol[Any, Any],
+            litestar_auth_user_manager: _UserManagerDep,
         ) -> Response[Any]:
             return await _handle_auth_refresh(
                 request,

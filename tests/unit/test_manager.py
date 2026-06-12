@@ -16,6 +16,7 @@ import jwt
 import pytest
 from cryptography.fernet import Fernet
 
+import litestar_auth._concurrency as concurrency_module
 import litestar_auth._manager.account_tokens as account_tokens_module
 import litestar_auth._manager.totp_facade as totp_facade_module
 import litestar_auth._optional_deps as optional_deps_module
@@ -42,7 +43,7 @@ from litestar_auth.exceptions import (
 from litestar_auth.password import PasswordHelper
 from litestar_auth.schemas import AdminUserUpdate, UserCreate, UserUpdate
 from litestar_auth.totp import SecurityWarning
-from tests._helpers import ExampleUser
+from tests._helpers import ExampleUser, make_run_sync_spy
 
 RESET_PASSWORD_TOKEN_AUDIENCE = manager_module.RESET_PASSWORD_TOKEN_AUDIENCE
 BaseUserManager = manager_module.BaseUserManager
@@ -62,7 +63,6 @@ JTI_HEX_LENGTH = 32
 # ``secrets.token_hex(32)`` is 64 lowercase hex characters.
 EXPECTED_TOKEN_HEX_32_LEN = 64
 EXPECTED_SECRET_FALLBACK_WARNINGS = 2
-EXPECTED_SHARED_HELPER_DUMMY_HASH_CALLS = 2
 LOGIN_IDENTIFIER_TELEMETRY_SECRET = "login-telemetry-secret-1234567890"
 
 pytestmark = pytest.mark.unit
@@ -1403,7 +1403,7 @@ async def test_authenticate_verifies_dummy_hash_for_unknown_email() -> None:
 
     assert len(verify_calls) == 1
     assert verify_calls[0][0] == "test-password"
-    assert verify_calls[0][1] == manager._get_dummy_hash()
+    assert verify_calls[0][1] == await manager._get_dummy_hash()
 
 
 def test_manager_module_does_not_hash_dummy_password_at_import(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1417,61 +1417,107 @@ def test_manager_module_does_not_hash_dummy_password_at_import(monkeypatch: pyte
 
     monkeypatch.setattr(PasswordHelper, "hash", record_hash, raising=True)
 
-    reloaded_module = importlib.reload(manager_module)
+    importlib.reload(manager_module)
 
     assert hash_calls == []
     helper = PasswordHelper()
-    dummy_hash = reloaded_module._get_dummy_hash(helper)
+    dummy_hash = concurrency_module.build_dummy_hash(helper)
 
     assert isinstance(dummy_hash, str)
     assert len(hash_calls) == 1
 
 
-def test_manager_get_dummy_hash_is_lazy_and_cached_per_instance() -> None:
-    """A manager computes one dummy hash lazily and reuses it across later lookups."""
-    user_db = AsyncMock()
-    password_helper = PasswordHelper()
-    manager = TrackingUserManager(user_db, password_helper)
-    hash_calls: list[str] = []
-    original_hash = password_helper.hash
-
-    def record_hash(password: str) -> str:
-        hash_calls.append(password)
-        return original_hash(password)
-
-    with patch.object(password_helper, "hash", side_effect=record_hash):
-        first = manager._get_dummy_hash()
-        second = manager._get_dummy_hash()
-
-    assert first == second
-    assert len(hash_calls) == 1
-
-
-def test_manager_get_dummy_hash_is_scoped_per_manager() -> None:
-    """Managers do not share cached dummy hashes, even when they share a helper."""
+async def test_manager_get_dummy_hash_is_offloaded_and_cached_per_helper(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Managers sharing a helper reuse one offloaded dummy hash."""
     password_helper = PasswordHelper()
     first_manager = TrackingUserManager(AsyncMock(), password_helper)
     second_manager = TrackingUserManager(AsyncMock(), password_helper)
-    hash_calls: list[str] = []
-    original_hash = password_helper.hash
+    hash_calls: list[PasswordHelper] = []
 
-    def record_hash(password: str) -> str:
-        hash_calls.append(password)
-        return original_hash(password)
+    def build_dummy_hash(helper: PasswordHelper) -> str:
+        hash_calls.append(helper)
+        return f"dummy-hash-{len(hash_calls)}"
 
-    with patch.object(password_helper, "hash", side_effect=record_hash):
-        first_dummy_hash = first_manager._get_dummy_hash()
-        second_dummy_hash = second_manager._get_dummy_hash()
-        assert first_manager._get_dummy_hash() == first_dummy_hash
-        assert second_manager._get_dummy_hash() == second_dummy_hash
+    run_sync_spy, offloaded = make_run_sync_spy()
 
-    assert len(hash_calls) == EXPECTED_SHARED_HELPER_DUMMY_HASH_CALLS
+    monkeypatch.setattr(concurrency_module, "build_dummy_hash", build_dummy_hash)
+    monkeypatch.setattr(concurrency_module, "run_password_op_in_worker_thread", run_sync_spy)
+
+    first = await first_manager._get_dummy_hash()
+    second = await first_manager._get_dummy_hash()
+    shared = await second_manager._get_dummy_hash()
+
+    assert first == "dummy-hash-1"
+    assert first == second
+    assert shared == first
+    assert hash_calls == [password_helper]
+    assert offloaded == ["build_dummy_hash"]
+
+
+async def test_manager_get_dummy_hash_recomputes_for_new_helper_identity(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Replacing the helper identity warms one independent dummy hash."""
+    first_helper = PasswordHelper()
+    second_helper = PasswordHelper()
+    first_manager = TrackingUserManager(AsyncMock(), first_helper)
+    second_manager = TrackingUserManager(AsyncMock(), second_helper)
+    hash_calls: list[PasswordHelper] = []
+
+    def build_dummy_hash(helper: PasswordHelper) -> str:
+        hash_calls.append(helper)
+        return f"dummy-hash-{len(hash_calls)}"
+
+    run_sync_spy, _offloaded = make_run_sync_spy()
+
+    monkeypatch.setattr(concurrency_module, "build_dummy_hash", build_dummy_hash)
+    monkeypatch.setattr(concurrency_module, "run_password_op_in_worker_thread", run_sync_spy)
+
+    assert await first_manager._get_dummy_hash() == "dummy-hash-1"
+    assert await second_manager._get_dummy_hash() == "dummy-hash-2"
+    assert await first_manager._get_dummy_hash() == "dummy-hash-1"
+    assert await second_manager._get_dummy_hash() == "dummy-hash-2"
+    assert hash_calls == [first_helper, second_helper]
+
+
+async def test_manager_get_dummy_hash_concurrent_cold_misses_allow_duplicate_warmups(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Concurrent cold lookups may duplicate helper-scoped dummy-hash construction."""
+    password_helper = PasswordHelper()
+    managers = [TrackingUserManager(AsyncMock(), password_helper) for _ in range(3)]
+    hash_calls: list[PasswordHelper] = []
+    offloaded: list[str] = []
+    all_offloads_started = asyncio.Event()
+
+    def build_dummy_hash(helper: PasswordHelper) -> str:
+        hash_calls.append(helper)
+        return f"dummy-hash-{len(hash_calls)}"
+
+    async def run_password_op_spy(func: Callable[[PasswordHelper], str], helper: PasswordHelper) -> str:
+        call_index = len(offloaded)
+        offloaded.append(getattr(func, "__name__", type(func).__name__))
+        if len(offloaded) == len(managers):
+            all_offloads_started.set()
+        await all_offloads_started.wait()
+        await asyncio.sleep((len(managers) - call_index) / 1000)
+        return func(helper)
+
+    monkeypatch.setattr(concurrency_module, "build_dummy_hash", build_dummy_hash)
+    monkeypatch.setattr(concurrency_module, "run_password_op_in_worker_thread", run_password_op_spy)
+
+    async with asyncio.timeout(5), asyncio.TaskGroup() as task_group:
+        tasks = [task_group.create_task(manager._get_dummy_hash()) for manager in managers]
+
+    assert sorted(task.result() for task in tasks) == ["dummy-hash-1", "dummy-hash-2", "dummy-hash-3"]
+    assert hash_calls == [password_helper] * len(managers)
+    assert offloaded == ["build_dummy_hash"] * len(managers)
+    assert await managers[0]._get_dummy_hash() == "dummy-hash-3"
+    assert offloaded == ["build_dummy_hash"] * len(managers)
 
 
 def test_get_dummy_hash_returns_valid_password_hash() -> None:
     """The dummy hash helper should return a valid password hash value."""
     password_helper = PasswordHelper()
-    dummy_hash = manager_module._get_dummy_hash(password_helper)
+    dummy_hash = concurrency_module.build_dummy_hash(password_helper)
 
     assert password_helper.verify("not-the-secret", dummy_hash) is False
 
@@ -1684,7 +1730,7 @@ async def test_forgot_password_uses_dummy_fingerprint_for_missing_users() -> Non
     ) as fingerprint:
         assert await manager.forgot_password("missing@example.com") is None
 
-    fingerprint.assert_called_once_with(manager._get_dummy_hash())
+    fingerprint.assert_called_once_with(await manager._get_dummy_hash())
     assert len(manager.forgot_password_events) == 1
     assert manager.forgot_password_events[0] == (None, None)
 
@@ -1782,7 +1828,7 @@ async def test_authenticate_delegates_to_lifecycle_service_with_effective_mode(
         "lookup-value",
         "test-password",
         login_identifier=expected_mode,
-        dummy_hash=manager._get_dummy_hash(),
+        dummy_hash=await manager._get_dummy_hash(),
         logger=manager_logger,
     )
 
@@ -1800,7 +1846,7 @@ def test_require_account_state_delegates_to_user_policy() -> None:
     require_account_state.assert_called_once_with(user, require_verified=True)
 
 
-async def test_reset_password_hashes_new_password_and_calls_hook() -> None:
+async def test_reset_password_hashes_new_password_and_calls_hook(monkeypatch: pytest.MonkeyPatch) -> None:
     """Resetting a password replaces the stored hash."""
     user_db = AsyncMock()
     password_helper = PasswordHelper()
@@ -1809,11 +1855,15 @@ async def test_reset_password_hashes_new_password_and_calls_hook() -> None:
     updated_user = replace(user, hashed_password=password_helper.hash("new-password"))
     user_db.get.return_value = user
     user_db.update.return_value = updated_user
-    reset_token = manager.tokens.write_reset_password_token(user, dummy_hash=manager._get_dummy_hash())
+    reset_token = manager.tokens.write_reset_password_token(user, dummy_hash=await manager._get_dummy_hash())
+    run_sync_spy, offloaded = make_run_sync_spy()
+
+    monkeypatch.setattr("litestar_auth._manager.account_tokens._run_password_op", run_sync_spy)
 
     result = await manager.reset_password(reset_token, "new-password")
 
     assert result is updated_user
+    assert offloaded == ["hash"]
     user_db.update.assert_awaited_once()
     update_payload = user_db.update.await_args.args[1]
     assert update_payload["hashed_password"] != "new-password"
@@ -1832,7 +1882,7 @@ async def test_reset_password_consumes_jti_and_rejects_replay() -> None:
     # matches: any rejection on the second call is the jti denylist, not fingerprint rotation.
     user_db.get.return_value = user
     user_db.update.return_value = updated_user
-    reset_token = manager.tokens.write_reset_password_token(user, dummy_hash=manager._get_dummy_hash())
+    reset_token = manager.tokens.write_reset_password_token(user, dummy_hash=await manager._get_dummy_hash())
 
     assert await manager.reset_password(reset_token, "new-password") is updated_user
 
@@ -1893,7 +1943,7 @@ async def test_reset_password_rejects_weak_password_before_hashing() -> None:
     manager = TrackingUserManager(user_db, password_helper, password_validator=require_password_length)
     user = _build_user(password_helper)
     user_db.get.return_value = user
-    reset_token = manager.tokens.write_reset_password_token(user, dummy_hash=manager._get_dummy_hash())
+    reset_token = manager.tokens.write_reset_password_token(user, dummy_hash=await manager._get_dummy_hash())
 
     with pytest.raises(InvalidPasswordError, match="at least 12 characters"):
         await manager.reset_password(reset_token, "short")
@@ -1925,7 +1975,7 @@ async def test_verify_and_account_token_flows_delegate_to_account_tokens_service
 
     verify.assert_awaited_once_with("verify-token")
     request_verify_token.assert_awaited_once_with("user@example.com")
-    forgot_password.assert_awaited_once_with("user@example.com", dummy_hash=manager._get_dummy_hash())
+    forgot_password.assert_awaited_once_with("user@example.com", dummy_hash=await manager._get_dummy_hash())
     reset_password.assert_awaited_once_with("reset-token", "new-password")
 
 

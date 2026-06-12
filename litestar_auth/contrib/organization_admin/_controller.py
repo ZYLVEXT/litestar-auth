@@ -68,6 +68,7 @@ _InvitationIdPath = Annotated[str, PathParameter()]
 _UserIdPath = Annotated[str, PathParameter()]
 _UserIdQuery = Annotated[str, QueryParameter(name="user_id")]
 _OrganizationStoreDep = NamedDependency[BaseOrganizationStore[Any, Any, Any, Any]]
+_UserManagerDep = NamedDependency[object]
 type IdParser[ID] = Callable[[str], ID]
 
 
@@ -518,7 +519,7 @@ def _create_controller_type(controller_name: str) -> type[_OrganizationAdminCont
             organization_id: _OrganizationIdPath,
             data: msgspec.Struct,
             litestar_auth_organization_store: _OrganizationStoreDep,
-            litestar_auth_user_manager: object,
+            litestar_auth_user_manager: _UserManagerDep,
         ) -> OrganizationInvitationRead:
             context = _context(self)
             payload = cast("OrganizationInvitationCreate", data)
@@ -767,7 +768,7 @@ def _create_organization_invitation_controller_type(
             request: Request[Any, Any, Any],
             data: msgspec.Struct,
             litestar_auth_organization_store: _OrganizationStoreDep,
-            litestar_auth_user_manager: object,
+            litestar_auth_user_manager: _UserManagerDep,
         ) -> MembershipRead:
             try:
                 membership = await _admin(litestar_auth_organization_store).accept_invitation(
@@ -794,7 +795,7 @@ def _create_organization_invitation_controller_type(
             request: Request[Any, Any, Any],
             data: msgspec.Struct,
             litestar_auth_organization_store: _OrganizationStoreDep,
-            litestar_auth_user_manager: object,
+            litestar_auth_user_manager: _UserManagerDep,
         ) -> None:
             try:
                 await _admin(litestar_auth_organization_store).decline_invitation(

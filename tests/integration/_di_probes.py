@@ -24,7 +24,7 @@ from tests.integration.test_orchestrator import ExampleUser, PluginUserManager
 LitestarAuthUserManagerProbe = NamedDependency[PluginUserManager]
 LitestarAuthBackendsProbe = NamedDependency[Sequence[AuthenticationBackend[ExampleUser, UUID]]]
 LitestarAuthUserModelProbe = NamedDependency[type[ExampleUser]]
-LitestarAuthConfigProbe = object
+LitestarAuthConfigProbe = NamedDependency[object]
 
 
 @runtime_checkable
@@ -35,3 +35,4 @@ class SessionIdentityProbe(Protocol):
 
 
 DbSessionIdentityProbe = NamedDependency[SessionIdentityProbe]
+DbSessionObjectProbe = NamedDependency[object]

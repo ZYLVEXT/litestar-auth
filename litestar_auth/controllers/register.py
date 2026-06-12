@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING, Any, Protocol, TypedDict, Unpack, cast, overlo
 
 import msgspec  # noqa: TC002
 from litestar import Controller, Request, post
+from litestar.di import NamedDependency
 from litestar.openapi.datastructures import ResponseSpec
 from litestar.openapi.spec import Example
 
@@ -118,6 +119,9 @@ class RegisterControllerUserManagerProtocol[UP: RegisterControllerUserProtocol[A
         """Create and return a new user."""
 
 
+_UserManagerDep = NamedDependency[RegisterControllerUserManagerProtocol[Any, Any]]
+
+
 @dataclass(frozen=True, slots=True)
 class _RegisterControllerSettings:
     """Resolved settings for the generated registration controller."""
@@ -208,7 +212,7 @@ def _create_register_handler(settings: _RegisterControllerSettings) -> RequestBo
         self: object,  # noqa: ARG001
         request: Request[Any, Any, Any],
         data: msgspec.Struct,
-        litestar_auth_user_manager: RegisterControllerUserManagerProtocol[Any, Any],
+        litestar_auth_user_manager: _UserManagerDep,
     ) -> msgspec.Struct:
         async def _register_work() -> msgspec.Struct:
             user = await _create_user_or_register_failure(

@@ -557,7 +557,7 @@ async def test_plugin_respects_public_mount_paths_and_dependency_keys() -> None:
 
     @get("/contract-probe", sync_to_thread=False)
     def contract_probe(
-        litestar_auth_config: object,
+        litestar_auth_config: _di_probes.LitestarAuthConfigProbe,
         litestar_auth_user_manager: _di_probes.LitestarAuthUserManagerProbe,
         litestar_auth_backends: _di_probes.LitestarAuthBackendsProbe,
         litestar_auth_user_model: _di_probes.LitestarAuthUserModelProbe,
@@ -571,7 +571,7 @@ async def test_plugin_respects_public_mount_paths_and_dependency_keys() -> None:
 
     @get("/di-session-probe", sync_to_thread=False)
     def di_session_probe(
-        db_session: object,
+        db_session: _di_probes.DbSessionObjectProbe,
         litestar_auth_user_manager: _di_probes.LitestarAuthUserManagerProbe,
     ) -> dict[str, bool]:
         """Assert user_manager DI is wired to the same db_session key as the plugin.
@@ -893,7 +893,7 @@ async def test_database_token_preset_backends_dependency_uses_request_session() 
 
     @get("/preset-backends-probe", sync_to_thread=False)
     def preset_backends_probe(
-        db_session: object,
+        db_session: _di_probes.DbSessionObjectProbe,
         litestar_auth_backends: _di_probes.LitestarAuthBackendsProbe,
     ) -> dict[str, object]:
         backends = cast("list[AuthenticationBackend[ExampleUser, UUID]]", litestar_auth_backends)
@@ -948,7 +948,7 @@ async def test_database_token_preset_accepts_advanced_alchemy_session_maker() ->
 
     @get("/preset-aa-session-maker-probe", sync_to_thread=False)
     def preset_backends_probe(
-        db_session: object,
+        db_session: _di_probes.DbSessionObjectProbe,
         litestar_auth_backends: _di_probes.LitestarAuthBackendsProbe,
     ) -> dict[str, object]:
         backends = cast("list[AuthenticationBackend[ExampleUser, UUID]]", litestar_auth_backends)

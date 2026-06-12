@@ -1296,13 +1296,7 @@ def test_oauth_associate_di_callback_exposes_configured_dependency_parameter_nam
     assert signature.parameters["self"].annotation is object
     assert signature.parameters["request"].annotation == Request[Any, Any, Any]
     assert signature.parameters["code"].annotation == _OAuthCodeQuery
-    assert (
-        signature.parameters[dependency_parameter_name].annotation
-        == oauth_module.OAuthControllerUserManagerProtocol[
-            Any,
-            Any,
-        ]
-    )
+    assert signature.parameters[dependency_parameter_name].annotation == oauth_module._UserManagerDep
     oauth_state_parameter = signature.parameters["oauth_state"]
     assert oauth_state_parameter.annotation == _OAuthStateQuery
     assert signature.return_annotation == Response[Any]
@@ -1310,7 +1304,7 @@ def test_oauth_associate_di_callback_exposes_configured_dependency_parameter_nam
         "self": object,
         "request": Request[Any, Any, Any],
         "code": _OAuthCodeQuery,
-        dependency_parameter_name: oauth_module.OAuthControllerUserManagerProtocol[Any, Any],
+        dependency_parameter_name: oauth_module._UserManagerDep,
         "oauth_state": _OAuthStateQuery,
         "return": Response[Any],
     }

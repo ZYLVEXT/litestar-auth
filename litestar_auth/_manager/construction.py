@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import hashlib
-import secrets
 from collections.abc import Callable, Collection
 from dataclasses import dataclass, replace
 from datetime import timedelta
@@ -143,11 +142,6 @@ def resolve_oauth_account_store[UP: UserProtocol[Any], ID](
         return user_db
 
     return None
-
-
-def get_dummy_hash(password_helper: PasswordHelper) -> str:
-    """Return a freshly computed dummy password hash for the provided helper."""
-    return password_helper.hash(secrets.token_urlsafe(32))
 
 
 def login_identifier_digest(identifier: str, *, key: str) -> str:

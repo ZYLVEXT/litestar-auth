@@ -5,6 +5,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any, Literal, Protocol, cast, runtime_checkable
 
+from litestar_auth._concurrency import run_password_op_in_worker_thread as _run_password_op
 from litestar_auth._manager._coercions import _as_dict, _managed_user, _require_str
 from litestar_auth._manager._protocols import UserDatabaseManagerProtocol
 from litestar_auth._manager.hooks import ManagerHookBus
@@ -95,7 +96,7 @@ class UserLifecycleService[UP, ID]:
         email = self._policy.normalize_email(_require_str(user_dict, "email"))
         password = _require_str(user_dict, "password")
         self._policy.validate_password(password)
-        hashed_password = self._policy.password_helper.hash(password)
+        hashed_password = await _run_password_op(self._policy.password_helper.hash, password)
         existing_user = await self._manager.user_db.get_by_email(email)
         if existing_user is not None:
             await self._hook_bus.fire("after_register_duplicate", existing_user)
@@ -137,7 +138,11 @@ class UserLifecycleService[UP, ID]:
             lookup = self._policy.normalize_username_lookup(identifier)
             user = None if not lookup else await self._manager.user_db.get_by_field("username", lookup)
         hashed_password = _managed_user(user).hashed_password if user is not None else dummy_hash
-        verified, new_hash = self._policy.password_helper.verify_and_update(password, hashed_password)
+        verified, new_hash = await _run_password_op(
+            self._policy.password_helper.verify_and_update,
+            password,
+            hashed_password,
+        )
         if not verified or user is None:
             return None
 
@@ -176,7 +181,7 @@ class UserLifecycleService[UP, ID]:
         if email_changed and self._manager.reset_verification_on_email_change:
             update_dict["is_verified"] = False
 
-        password_changed = self._apply_password_update(update_dict)
+        password_changed = await self._apply_password_update(update_dict)
 
         updated_user = await self._manager.user_db.update(user, update_dict)
         await self._run_post_update_side_effects(
@@ -212,14 +217,14 @@ class UserLifecycleService[UP, ID]:
             )
         return new_email
 
-    def _apply_password_update(self, update_dict: dict[str, Any]) -> bool:
+    async def _apply_password_update(self, update_dict: dict[str, Any]) -> bool:
         """Hash and map password updates into persistence payload."""
         if "password" not in update_dict:
             return False
 
         password = _require_str(update_dict, "password")
         self._policy.validate_password(password)
-        update_dict["hashed_password"] = self._policy.password_helper.hash(password)
+        update_dict["hashed_password"] = await _run_password_op(self._policy.password_helper.hash, password)
         update_dict.pop("password", None)
         return True
 

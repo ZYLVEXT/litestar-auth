@@ -13,6 +13,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Annotated, Any, NotRequired, Required, TypedDict, Unpack, cast, overload
 
 from litestar import Controller, Request, get, post
+from litestar.di import NamedDependency
 from litestar.enums import MediaType
 from litestar.openapi.datastructures import ResponseSpec
 from litestar.openapi.spec import Example
@@ -111,6 +112,7 @@ _OAUTH_OPENAPI_RESPONSES = {
 
 _OAuthCodeQuery = Annotated[str, QueryParameter()]
 _OAuthStateQuery = Annotated[str, QueryParameter(name="state")]
+_UserManagerDep = NamedDependency[OAuthControllerUserManagerProtocol[Any, Any]]
 
 
 @dataclass(frozen=True, slots=True)
@@ -143,7 +145,7 @@ def _make_oauth_callback_signature(dependency_parameter_name: str | None) -> ins
             inspect.Parameter(
                 dependency_parameter_name,
                 inspect.Parameter.POSITIONAL_OR_KEYWORD,
-                annotation=OAuthControllerUserManagerProtocol[Any, Any],
+                annotation=_UserManagerDep,
             ),
         )
     parameters.append(
@@ -311,7 +313,7 @@ def _oauth_callback_annotations(dependency_parameter_name: str | None) -> dict[s
         "return": Response[Any],
     }
     if dependency_parameter_name is not None:
-        annotations[dependency_parameter_name] = OAuthControllerUserManagerProtocol[Any, Any]
+        annotations[dependency_parameter_name] = _UserManagerDep
     return annotations
 
 

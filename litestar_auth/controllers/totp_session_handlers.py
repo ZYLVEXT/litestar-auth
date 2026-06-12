@@ -36,7 +36,7 @@ from litestar_auth.payloads import (
 )
 from litestar_auth.totp import (
     TotpReplayProtection,
-    build_recovery_code_index,
+    abuild_recovery_code_index,
     generate_totp_recovery_codes,
     verify_totp_with_store,
 )
@@ -330,7 +330,7 @@ async def _totp_handle_regenerate_recovery_codes[UP: UserProtocol[Any], ID](
     if lookup_secret is None:
         msg = "totp_recovery_code_lookup_secret is required to persist TOTP recovery codes."
         raise RuntimeError(msg)
-    recovery_code_index = build_recovery_code_index(
+    recovery_code_index = await abuild_recovery_code_index(
         recovery_codes,
         password_helper=user_manager.password_helper,
         lookup_secret=lookup_secret,
