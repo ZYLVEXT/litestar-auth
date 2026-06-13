@@ -20,3 +20,17 @@ def _validate_configuration(*, max_attempts: int, window_seconds: float) -> None
     if window_seconds <= 0:
         msg = "window_seconds must be greater than 0"
         raise ValueError(msg)
+
+
+def _validate_account_lockout_configuration(*, failure_threshold: int, window_seconds: float) -> None:
+    """Validate shared account-lockout settings.
+
+    Raises:
+        ValueError: If ``failure_threshold`` or ``window_seconds`` is invalid.
+    """
+    if failure_threshold < 1:
+        msg = "failure_threshold must be at least 1"
+        raise ValueError(msg)
+    if window_seconds <= 0:
+        msg = "window_seconds must be greater than 0"
+        raise ValueError(msg)

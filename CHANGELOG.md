@@ -1,3 +1,26 @@
+## Unreleased
+
+### Added
+
+- **Opt-in per-account login lockout.** New `AccountLockoutConfig` on `LitestarAuthConfig`
+  (`account_lockout_config`, disabled by default) locks an account key after `failure_threshold`
+  failed password logins (default **5**) for a `window_seconds` TTL (default **900s**). Lockout state lives behind the new
+  `AccountLockoutStore` protocol with bundled `InMemoryAccountLockoutStore` and `RedisAccountLockoutStore`
+  backends (or a custom `store_factory`), all exported from `litestar_auth.ratelimit`. Account keys are
+  non-reversible keyed digests of the login identifier (`account_lockout_key`), so the store never holds a
+  plaintext email/username; enabling lockout requires an `account_lockout_key_secret` (startup fails closed
+  with `ConfigurationError` otherwise). This complements — it does not replace — the existing IP/identifier
+  rate limiting, covering distributed brute force against a single account that per-IP limits miss.
+
+### Security
+
+- **Account lockout is non-enumerating and timing-safe.** A locked account, a wrong password, and an
+  unknown identifier all return the same generic bad-credentials response, and the lockout check runs inside
+  the existing minimum-response-time padding so the short-circuited locked path is not a timing oracle. The
+  failure counter resets on successful authentication; the Redis backend increments and checks atomically via
+  Lua so multi-worker deployments share one consistent count (the in-memory backend is process-local and
+  warns when used across workers).
+
 ## 5.0.3 (2026-06-13)
 
 ### Added

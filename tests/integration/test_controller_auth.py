@@ -21,6 +21,7 @@ from litestar_auth.authentication.transport.bearer import BearerTransport
 from litestar_auth.authentication.transport.cookie import CookieTransport
 from litestar_auth.controllers import create_auth_controller
 from litestar_auth.exceptions import ErrorCode
+from litestar_auth.ratelimit import AccountLockoutConfig, AuthRateLimitConfig, EndpointRateLimit, InMemoryRateLimiter
 
 if TYPE_CHECKING:
     from litestar_auth.db.base import BaseUserStore
@@ -42,6 +43,7 @@ HTTP_CREATED = 201
 HTTP_OK = 200
 HTTP_BAD_REQUEST = 400
 HTTP_FORBIDDEN = 403
+HTTP_TOO_MANY_REQUESTS = 429
 HTTP_UNPROCESSABLE_ENTITY = 422
 TIMING_MINIMUM_SECONDS = 0.12
 TIMING_TOLERANCE_SECONDS = 0.25
@@ -53,6 +55,7 @@ VERIFICATION_SECRET = "0123456789abcdef" * 4
 RESET_PASSWORD_SECRET = "fedcba9876543210" * 4
 TOTP_PENDING_SECRET = "76543210fedcba98" * 4
 CSRF_SECRET = "456789abcdef0123" * 4
+ACCOUNT_LOCKOUT_SECRET = "89abcdef01234567" * 4
 
 
 def _encrypt_test_totp_secret(secret: str) -> str:
@@ -135,6 +138,9 @@ def build_app(  # noqa: PLR0913
     totp_pending_secret: str | None = None,
     initial_totp_secret: str | None = None,
     login_minimum_response_seconds: float = 0,
+    rate_limit_config: AuthRateLimitConfig | None = None,
+    account_lockout_config: AccountLockoutConfig | None = None,
+    account_lockout_key_secret: str | None = None,
 ) -> tuple[Litestar, InMemoryTokenStrategy | InMemoryRefreshTokenStrategy, TrackingUserManager]:
     """Create an application wired with the generated auth controller.
 
@@ -150,6 +156,9 @@ def build_app(  # noqa: PLR0913
         totp_pending_secret: Optional TOTP pending secret enabling 2FA pending-login responses.
         initial_totp_secret: Optional persisted TOTP secret for the seeded user.
         login_minimum_response_seconds: Minimum wall-clock duration for login responses.
+        rate_limit_config: Optional login rate-limit config for the generated controller.
+        account_lockout_config: Optional per-account lockout config for the generated controller.
+        account_lockout_key_secret: Secret used to derive opaque account-lockout keys.
 
     Returns:
         Litestar application, the backing token strategy, and the tracking manager.
@@ -181,6 +190,9 @@ def build_app(  # noqa: PLR0913
     controller = create_auth_controller(
         backend=backend,
         enable_refresh=enable_refresh,
+        rate_limit_config=rate_limit_config,
+        account_lockout_config=account_lockout_config,
+        account_lockout_key_secret=account_lockout_key_secret,
         requires_verification=requires_verification,
         login_identifier=login_identifier,
         login_minimum_response_seconds=login_minimum_response_seconds,
@@ -465,6 +477,131 @@ async def test_login_error_response_contains_code() -> None:
     assert "detail" in data
     code = data.get("code") or (data.get("extra") or {}).get("code")
     assert code == ErrorCode.LOGIN_BAD_CREDENTIALS
+
+
+async def test_account_lockout_blocks_correct_password_after_threshold() -> None:
+    """Repeated failures lock the account key and deny a later correct password."""
+    account_lockout_config = AccountLockoutConfig(enabled=True, failure_threshold=2, window_seconds=30)
+    app, strategy, user_manager = build_app(
+        account_lockout_config=account_lockout_config,
+        account_lockout_key_secret=ACCOUNT_LOCKOUT_SECRET,
+    )
+
+    async with AsyncTestClient(app=app) as client:
+        first_failure = await client.post(
+            "/auth/login",
+            json={"identifier": _LOGIN_TEST_EMAIL, "password": "wrong-password"},
+        )
+        second_failure = await client.post(
+            "/auth/login",
+            json={"identifier": _LOGIN_TEST_EMAIL, "password": "wrong-password"},
+        )
+        locked_correct_password = await client.post(
+            "/auth/login",
+            json={"identifier": _LOGIN_TEST_EMAIL, "password": "correct-password"},
+        )
+
+    assert first_failure.status_code == HTTP_BAD_REQUEST
+    assert second_failure.status_code == HTTP_BAD_REQUEST
+    assert locked_correct_password.status_code == HTTP_BAD_REQUEST
+    assert locked_correct_password.content == first_failure.content
+    assert locked_correct_password.json()["detail"] == "Invalid credentials."
+    assert strategy.tokens == {}
+    assert user_manager.logged_in_users == []
+
+
+async def test_account_lockout_success_before_threshold_resets_counter() -> None:
+    """A successful password login before lockout clears previous failures."""
+    account_lockout_config = AccountLockoutConfig(enabled=True, failure_threshold=2, window_seconds=30)
+    app, strategy, _ = build_app(
+        account_lockout_config=account_lockout_config,
+        account_lockout_key_secret=ACCOUNT_LOCKOUT_SECRET,
+    )
+
+    async with AsyncTestClient(app=app) as client:
+        first_failure = await client.post(
+            "/auth/login",
+            json={"identifier": _LOGIN_TEST_EMAIL, "password": "wrong-password"},
+        )
+        success = await client.post(
+            "/auth/login",
+            json={"identifier": _LOGIN_TEST_EMAIL, "password": "correct-password"},
+        )
+        second_failure = await client.post(
+            "/auth/login",
+            json={"identifier": _LOGIN_TEST_EMAIL, "password": "wrong-password"},
+        )
+        second_success = await client.post(
+            "/auth/login",
+            json={"identifier": _LOGIN_TEST_EMAIL, "password": "correct-password"},
+        )
+
+    assert first_failure.status_code == HTTP_BAD_REQUEST
+    assert success.status_code == HTTP_CREATED
+    assert second_failure.status_code == HTTP_BAD_REQUEST
+    assert second_success.status_code == HTTP_CREATED
+    assert list(strategy.tokens) == ["token-1", "token-2"]
+
+
+async def test_account_lockout_wrong_missing_and_locked_responses_are_indistinguishable() -> None:
+    """Lockout does not disclose account existence or lock state through the login response."""
+    account_lockout_config = AccountLockoutConfig(enabled=True, failure_threshold=1, window_seconds=30)
+    app, _, _ = build_app(
+        account_lockout_config=account_lockout_config,
+        account_lockout_key_secret=ACCOUNT_LOCKOUT_SECRET,
+    )
+
+    async with AsyncTestClient(app=app) as client:
+        wrong_password = await client.post(
+            "/auth/login",
+            json={"identifier": _LOGIN_TEST_EMAIL, "password": "wrong-password"},
+        )
+        locked_password = await client.post(
+            "/auth/login",
+            json={"identifier": _LOGIN_TEST_EMAIL, "password": "correct-password"},
+        )
+        missing_user = await client.post(
+            "/auth/login",
+            json={"identifier": missing_user_identifier("email"), "password": "correct-password"},
+        )
+
+    assert wrong_password.status_code == HTTP_BAD_REQUEST
+    assert locked_password.status_code == HTTP_BAD_REQUEST
+    assert missing_user.status_code == HTTP_BAD_REQUEST
+    assert locked_password.content == wrong_password.content
+    assert missing_user.content == wrong_password.content
+    assert "Retry-After" not in locked_password.headers
+    assert "Retry-After" not in missing_user.headers
+
+
+async def test_account_lockout_and_login_rate_limit_apply_independently() -> None:
+    """Per-account lockout composes with the existing request rate limit."""
+    account_lockout_config = AccountLockoutConfig(enabled=True, failure_threshold=1, window_seconds=30)
+    login_rate_limit = EndpointRateLimit(
+        backend=InMemoryRateLimiter(max_attempts=1, window_seconds=30),
+        scope="ip",
+        namespace="login",
+    )
+    app, _, _ = build_app(
+        rate_limit_config=AuthRateLimitConfig(login=login_rate_limit),
+        account_lockout_config=account_lockout_config,
+        account_lockout_key_secret=ACCOUNT_LOCKOUT_SECRET,
+    )
+
+    async with AsyncTestClient(app=app) as client:
+        locked_response = await client.post(
+            "/auth/login",
+            json={"identifier": _LOGIN_TEST_EMAIL, "password": "wrong-password"},
+        )
+        rate_limited_response = await client.post(
+            "/auth/login",
+            json={"identifier": _LOGIN_TEST_EMAIL, "password": "correct-password"},
+        )
+
+    assert locked_response.status_code == HTTP_BAD_REQUEST
+    assert locked_response.json()["detail"] == "Invalid credentials."
+    assert rate_limited_response.status_code == HTTP_TOO_MANY_REQUESTS
+    assert "Retry-After" in rate_limited_response.headers
 
 
 async def test_login_returns_pending_token_when_totp_is_enabled() -> None:

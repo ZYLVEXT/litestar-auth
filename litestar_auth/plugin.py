@@ -73,6 +73,7 @@ if TYPE_CHECKING:
 from litestar_auth.manager import FernetKeyringConfig
 
 ApiKeyConfig = _plugin_config.ApiKeyConfig
+AccountLockoutConfig = _plugin_config.AccountLockoutConfig
 DatabaseTokenAuthConfig = _plugin_config.DatabaseTokenAuthConfig
 ControllerHook = _plugin_config.ControllerHook
 ExceptionResponseHook = _plugin_config.ExceptionResponseHook

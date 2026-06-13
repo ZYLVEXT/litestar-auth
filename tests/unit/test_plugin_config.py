@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import re
 import sys
+import warnings
 from collections.abc import Callable, Sequence
+from dataclasses import FrozenInstanceError
 from datetime import timedelta
 from functools import partial
 from operator import eq
@@ -19,6 +21,7 @@ import litestar_auth._plugin.api_key as api_key_module
 import litestar_auth._plugin.config as plugin_config_module
 import litestar_auth._plugin.database_token as database_token_module
 import litestar_auth._plugin.features as plugin_features_module
+import litestar_auth._plugin.startup as startup_module
 import litestar_auth.guards._api_key_guards as api_key_guards_module
 from litestar_auth import DEFAULT_SUPERUSER_ROLE_NAME, AuthExtension
 from litestar_auth._permissions import StaticRolePermissionResolver, permissions_grant
@@ -43,7 +46,13 @@ from litestar_auth.exceptions import ConfigurationError, InvalidPasswordError
 from litestar_auth.manager import BaseUserManager, FernetKeyringConfig, UserManagerSecurity
 from litestar_auth.password import PasswordHelper
 from litestar_auth.plugin import LitestarAuth, LitestarAuthConfig
-from litestar_auth.ratelimit import AuthRateLimitConfig
+from litestar_auth.ratelimit import (
+    DEFAULT_ACCOUNT_LOCKOUT_FAILURE_THRESHOLD,
+    DEFAULT_ACCOUNT_LOCKOUT_WINDOW_SECONDS,
+    AccountLockoutConfig,
+    AccountLockoutKey,
+    AuthRateLimitConfig,
+)
 from litestar_auth.schemas import UserCreate
 from litestar_auth.types import LoginIdentifier, PermissionResolver
 from tests.e2e.conftest import assert_structural_session_factory
@@ -89,6 +98,26 @@ TOTP_PENDING_SECRET = "76543210fedcba98" * 4
 CSRF_SECRET = "456789abcdef0123" * 4
 
 
+class _SharedAccountLockoutStore:
+    """Shared-store test double for account lockout config resolution."""
+
+    @property
+    def is_shared_across_workers(self) -> bool:
+        """Return that this store is shared across workers."""
+        return True
+
+    async def register_failure(self, key: AccountLockoutKey) -> int:
+        """Return a placeholder failure count."""
+        return 1
+
+    async def is_locked(self, key: AccountLockoutKey) -> bool:
+        """Return unlocked state."""
+        return False
+
+    async def reset(self, key: AccountLockoutKey) -> None:
+        """Clear tracked state."""
+
+
 def _fernet_key() -> str:
     """Return a valid Fernet key for configuration tests."""
     return Fernet.generate_key().decode()
@@ -105,6 +134,7 @@ def _oauth_provider(*, name: str, client: object) -> OAuthProviderConfig:
 
 def test_plugin_config_reexports_feature_config_contracts() -> None:
     """Historical config-module imports resolve to the relocated feature config classes."""
+    assert plugin_config_module.AccountLockoutConfig is AccountLockoutConfig
     assert plugin_config_module.ApiKeyConfig is plugin_features_module.ApiKeyConfig
     assert plugin_config_module.DatabaseTokenAuthConfig is plugin_features_module.DatabaseTokenAuthConfig
     assert plugin_config_module.OAuthConfig is plugin_features_module.OAuthConfig
@@ -354,6 +384,148 @@ def test_feature_configs_module_constructors_apply_documented_defaults() -> None
         oauth_config_type(oauth_token_encryption_key=_fernet_key(), oauth_token_encryption_keyring=keyring)
 
 
+def test_litestar_auth_config_declares_disabled_account_lockout_config_field() -> None:
+    """Account lockout is exposed on plugin config but remains disabled by default."""
+    config = _minimal_config()
+
+    assert "account_lockout_config" in LitestarAuthConfig.__dataclass_fields__
+    assert isinstance(config.account_lockout_config, AccountLockoutConfig)
+    assert config.account_lockout_config.enabled is False
+
+
+def test_account_lockout_config_resolves_memoized_default_memory_store() -> None:
+    """Enabled account lockout resolves the built-in memory store with safe defaults."""
+    config = _minimal_config(account_lockout_config=AccountLockoutConfig(enabled=True))
+
+    store = config.account_lockout_config.resolve_store()
+
+    assert store is config.account_lockout_config.resolve_store()
+    assert store.is_shared_across_workers is False
+    assert cast("Any", store).failure_threshold == DEFAULT_ACCOUNT_LOCKOUT_FAILURE_THRESHOLD
+    assert cast("Any", store).window_seconds == pytest.approx(DEFAULT_ACCOUNT_LOCKOUT_WINDOW_SECONDS)
+
+
+def test_account_lockout_config_resolves_custom_shared_store_once() -> None:
+    """Custom store factories can provide shared lockout state such as Redis."""
+    stores: list[_SharedAccountLockoutStore] = []
+
+    def _store_factory() -> _SharedAccountLockoutStore:
+        store = _SharedAccountLockoutStore()
+        stores.append(store)
+        return store
+
+    config = _minimal_config(
+        account_lockout_config=AccountLockoutConfig(
+            enabled=True,
+            failure_threshold=3,
+            window_seconds=30,
+            store_factory=_store_factory,
+        ),
+    )
+    store = config.account_lockout_config.resolve_store()
+
+    assert store is stores[0]
+    assert store is config.account_lockout_config.resolve_store()
+    assert store.is_shared_across_workers is True
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "match"),
+    [
+        pytest.param({"failure_threshold": 0}, "failure_threshold", id="threshold"),
+        pytest.param({"failure_threshold": cast("Any", "3")}, "failure_threshold", id="typed-threshold"),
+        pytest.param({"window_seconds": 0}, "window_seconds", id="window"),
+        pytest.param({"enabled": cast("Any", "yes")}, "enabled", id="enabled"),
+        pytest.param({"store_factory": cast("Any", object())}, "store_factory", id="store-factory"),
+    ],
+)
+def test_account_lockout_config_rejects_invalid_settings(kwargs: dict[str, object], match: str) -> None:
+    """Account lockout settings fail closed before plugin startup uses them."""
+    with pytest.raises(ConfigurationError, match=match):
+        AccountLockoutConfig(**cast("Any", kwargs))
+
+
+def test_account_lockout_config_is_frozen_after_construction() -> None:
+    """Account lockout settings are immutable after construction."""
+    account_lockout_config = AccountLockoutConfig()
+    field_name = "failure_threshold"
+
+    with pytest.raises(FrozenInstanceError):
+        setattr(account_lockout_config, field_name, 3)
+
+    _minimal_config(account_lockout_config=account_lockout_config)
+
+
+def test_warn_insecure_plugin_startup_defaults_warns_for_enabled_memory_account_lockout() -> None:
+    """Production startup warns when account lockout state is process-local."""
+    config = _minimal_config(account_lockout_config=AccountLockoutConfig(enabled=True))
+
+    with pytest.warns(startup_module.SecurityWarning, match="Account lockout.*process-local"):
+        startup_module.warn_insecure_plugin_startup_defaults(config)
+
+
+def test_warn_insecure_plugin_startup_defaults_skips_shared_account_lockout_store() -> None:
+    """Shared account lockout stores do not emit process-local startup warnings."""
+    config = _minimal_config(
+        account_lockout_config=AccountLockoutConfig(enabled=True, store_factory=_SharedAccountLockoutStore),
+    )
+
+    with warnings.catch_warnings(record=True) as records:
+        warnings.simplefilter("always")
+        startup_module.warn_insecure_plugin_startup_defaults(config)
+
+    assert not [record for record in records if "Account lockout" in str(record.message)]
+
+
+def test_warn_insecure_plugin_startup_defaults_warns_for_low_lockout_response_floor() -> None:
+    """Account lockout with a response floor below the Argon2 cost warns about a timing oracle."""
+    config = _minimal_config(account_lockout_config=AccountLockoutConfig(enabled=True))
+    config.login_minimum_response_seconds = 0.05
+
+    with pytest.warns(startup_module.SecurityWarning, match="timing-distinguishable"):
+        startup_module.warn_insecure_plugin_startup_defaults(config)
+
+
+def test_warn_insecure_plugin_startup_defaults_skips_lockout_floor_warning_at_default() -> None:
+    """The default response floor comfortably dominates Argon2, so no timing warning is emitted."""
+    config = _minimal_config(account_lockout_config=AccountLockoutConfig(enabled=True))
+
+    with warnings.catch_warnings(record=True) as records:
+        warnings.simplefilter("always")
+        startup_module.warn_insecure_plugin_startup_defaults(config)
+
+    assert not [record for record in records if "timing-distinguishable" in str(record.message)]
+
+
+def test_require_shared_account_lockout_store_for_multiworker_skips_disabled_config() -> None:
+    """Disabled account lockout leaves the multi-worker startup guard inert."""
+    config = _minimal_config()
+    config.deployment_worker_count = 2
+
+    startup_module.require_shared_account_lockout_store_for_multiworker(config)
+
+
+def test_require_shared_account_lockout_store_for_multiworker_rejects_default_memory_store() -> None:
+    """Declared multi-worker deployments require shared account-lockout state."""
+    config = _minimal_config(
+        account_lockout_config=AccountLockoutConfig(enabled=True),
+    )
+    config.deployment_worker_count = 2
+
+    with pytest.raises(ConfigurationError, match="RedisAccountLockoutStore"):
+        startup_module.require_shared_account_lockout_store_for_multiworker(config)
+
+
+def test_require_shared_account_lockout_store_for_multiworker_accepts_shared_store() -> None:
+    """Shared account lockout stores satisfy the declared multi-worker startup guard."""
+    config = _minimal_config(
+        account_lockout_config=AccountLockoutConfig(enabled=True, store_factory=_SharedAccountLockoutStore),
+    )
+    config.deployment_worker_count = 2
+
+    startup_module.require_shared_account_lockout_store_for_multiworker(config)
+
+
 def test_plugin_config_module_does_not_reexport_database_token_helpers() -> None:
     """DB-token helpers are owned by ``database_token``, not lazily forwarded by config."""
     for name in (
@@ -386,6 +558,7 @@ def _minimal_config(  # noqa: PLR0913
     include_users: bool = False,
     totp_config: TotpConfig | None = None,
     api_keys: ApiKeyConfig | None = None,
+    account_lockout_config: AccountLockoutConfig | None = None,
     organization_config: OrganizationConfig | None = None,
     user_manager_security: UserManagerSecurity[UUID] | None = None,
     user_manager_class: type[Any] | None = None,
@@ -423,6 +596,7 @@ def _minimal_config(  # noqa: PLR0913
         user_manager_security=resolved_manager_security,
         include_users=include_users,
         api_keys=api_keys or ApiKeyConfig(),
+        account_lockout_config=AccountLockoutConfig() if account_lockout_config is None else account_lockout_config,
         organization_config=OrganizationConfig() if organization_config is None else organization_config,
         id_parser=id_parser,
         totp_config=totp_config,

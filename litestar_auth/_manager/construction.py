@@ -8,6 +8,7 @@ from dataclasses import dataclass, replace
 from datetime import timedelta
 from typing import TYPE_CHECKING, Any, Protocol, TypedDict
 
+from litestar_auth._keyed_digest import normalize_login_identifier
 from litestar_auth._manager.security import validate_user_manager_security_secret_roles_are_distinct
 from litestar_auth._manager.user_policy import DEFAULT_CREATABLE_FIELDS, DEFAULT_UPDATABLE_FIELDS, UserFieldPolicy
 from litestar_auth._superuser_role import DEFAULT_SUPERUSER_ROLE_NAME
@@ -146,7 +147,7 @@ def resolve_oauth_account_store[UP: UserProtocol[Any], ID](
 
 def login_identifier_digest(identifier: str, *, key: str) -> str:
     """Return a keyed, non-reversible digest for login-failure correlation."""
-    normalized_identifier = identifier.strip().casefold()
+    normalized_identifier = normalize_login_identifier(identifier)
     digest_key = hashlib.sha256(key.encode()).digest()
     return hashlib.blake2b(
         normalized_identifier.encode(),

@@ -44,15 +44,20 @@ from litestar_auth.exceptions import ConfigurationError
 from tests._helpers import cast_fakeredis
 
 DEFAULT_KEY_PREFIX = ratelimit_module.DEFAULT_KEY_PREFIX
+DEFAULT_ACCOUNT_LOCKOUT_KEY_PREFIX = ratelimit_module.DEFAULT_ACCOUNT_LOCKOUT_KEY_PREFIX
+AccountLockoutKey = ratelimit_module.AccountLockoutKey
+AccountLockoutStore = ratelimit_module.AccountLockoutStore
 AuthRateLimitConfig = ratelimit_module.AuthRateLimitConfig
 AuthRateLimitEndpointGroup = ratelimit_module.AuthRateLimitEndpointGroup
 AuthRateLimitSlot = ratelimit_module.AuthRateLimitSlot
 EndpointRateLimit = ratelimit_module.EndpointRateLimit
+InMemoryAccountLockoutStore = ratelimit_module.InMemoryAccountLockoutStore
 InMemoryRateLimiter = ratelimit_module.InMemoryRateLimiter
 KnownRateLimitConnection = ratelimit_module.KnownRateLimitConnection
 RateLimitKey = ratelimit_module.RateLimitKey
 RateLimiterBackend = ratelimit_module.RateLimiterBackend
 RedisClientProtocol = ratelimit_module.RedisClientProtocol
+RedisAccountLockoutStore = ratelimit_module.RedisAccountLockoutStore
 RedisRateLimiter = ratelimit_module.RedisRateLimiter
 SharedRateLimitConfigOptions = ratelimit_module.SharedRateLimitConfigOptions
 
@@ -69,6 +74,15 @@ PARTIAL_RETRY_AFTER = 8
 REDIS_WINDOW_SECONDS = 5
 REDIS_TOKEN_HASH_SECRET = "redis-token-hash-secret-1234567890"
 REDIS_RETRY_AFTER = 4
+ACCOUNT_LOCKOUT_SECRET = "account-lockout-secret-1234567890"
+ACCOUNT_LOCKOUT_DIGEST_HEX_LENGTH = 64
+ACCOUNT_LOCKOUT_THRESHOLD = 2
+ACCOUNT_LOCKOUT_CONCURRENT_FAILURES = 20
+
+
+def _account_lockout_key(identifier: str = "User@Example.COM") -> AccountLockoutKey:
+    """Return a deterministic account-lockout key for tests."""
+    return ratelimit_module.account_lockout_key(identifier, key=ACCOUNT_LOCKOUT_SECRET)
 
 
 def _redis_member_text(member: object) -> str:
@@ -228,6 +242,12 @@ async def test_ratelimit_module_exposes_public_limiter_api() -> None:
     """The public limiter API stays accessible through the ratelimit package."""
     clock = FakeClock()
     backend = ratelimit_module.InMemoryRateLimiter(max_attempts=2, window_seconds=10, clock=clock)
+    lockout_store = ratelimit_module.InMemoryAccountLockoutStore(
+        failure_threshold=ACCOUNT_LOCKOUT_THRESHOLD,
+        window_seconds=10,
+        clock=clock,
+    )
+    lockout_key = ratelimit_module.account_lockout_key("Reloaded@Example.com", key=ACCOUNT_LOCKOUT_SECRET)
     request = cast(
         "Request[Any, Any, Any]",
         JsonRequestStub(
@@ -244,11 +264,16 @@ async def test_ratelimit_module_exposes_public_limiter_api() -> None:
     orchestrator = ratelimit_module.TotpRateLimitOrchestrator(verify=limiter)
 
     assert ratelimit_module.DEFAULT_KEY_PREFIX == DEFAULT_KEY_PREFIX
+    assert ratelimit_module.DEFAULT_ACCOUNT_LOCKOUT_KEY_PREFIX == DEFAULT_ACCOUNT_LOCKOUT_KEY_PREFIX
     assert ratelimit_module.InMemoryRateLimiter.__name__ == "InMemoryRateLimiter"
+    assert ratelimit_module.InMemoryAccountLockoutStore.__name__ == "InMemoryAccountLockoutStore"
     assert isinstance(backend, ratelimit_module.RateLimiterBackend)
+    assert isinstance(lockout_store, ratelimit_module.AccountLockoutStore)
     assert config.login is limiter
     assert orchestrator._limiters == {"verify": limiter}
 
+    assert await lockout_store.register_failure(lockout_key) == 1
+    assert await lockout_store.is_locked(lockout_key) is False
     await backend.increment("127.0.0.1")
     assert await backend.check("127.0.0.1") is True
     assert await limiter.build_key(request) == (
@@ -1622,6 +1647,7 @@ def test_public_ratelimit_all_lists_only_documented_exports() -> None:
     for symbol in (
         "_DEFAULT_TRUSTED_HEADERS",
         "_extract_email",
+        "_load_account_lockout_redis_asyncio",
         "_load_redis_asyncio",
         "_safe_key_part",
         "_validate_configuration",
@@ -1638,8 +1664,10 @@ async def test_ratelimit_protocol_stubs_behave_as_type_contracts() -> None:
     pipeline_protocol = protocol_module.RedisPipelineProtocol
     client_protocol = protocol_module.RedisClientProtocol
     backend_protocol = protocol_module.RateLimiterBackend
+    lockout_store_protocol = protocol_module.AccountLockoutStore
     dummy = cast("Any", object())
     property_getter = backend_protocol.is_shared_across_workers.fget
+    lockout_property_getter = lockout_store_protocol.is_shared_across_workers.fget
     enter = pipeline_protocol.__dict__["__aenter__"]
     exit_ = pipeline_protocol.__dict__["__aexit__"]
 
@@ -1653,10 +1681,182 @@ async def test_ratelimit_protocol_stubs_behave_as_type_contracts() -> None:
     assert await client_protocol.eval(dummy, "return 1", 1, "key") is None
     assert property_getter is not None
     assert property_getter(dummy) is None
+    assert lockout_property_getter is not None
+    assert lockout_property_getter(dummy) is None
+    assert await lockout_store_protocol.register_failure(dummy, "key") is None
+    assert await lockout_store_protocol.is_locked(dummy, "key") is None
+    assert await lockout_store_protocol.reset(dummy, "key") is None
     assert await backend_protocol.check(dummy, "key") is None
     assert await backend_protocol.increment(dummy, "key") is None
     assert await backend_protocol.reset(dummy, "key") is None
     assert await backend_protocol.retry_after(dummy, "key") is None
+
+
+def test_account_lockout_key_uses_normalized_keyed_digest() -> None:
+    """Account lockout keys pseudonymize normalized login identifiers."""
+    digest = _account_lockout_key(" User@Example.COM ")
+
+    assert digest == _account_lockout_key("user@example.com")
+    assert digest == ratelimit_module.account_lockout_key("user@example.com", key=ACCOUNT_LOCKOUT_SECRET.encode())
+    assert digest != _account_lockout_key("other@example.com")
+    assert len(digest) == ACCOUNT_LOCKOUT_DIGEST_HEX_LENGTH
+    assert "user@example.com" not in digest
+    assert ":" not in digest
+
+
+def test_account_lockout_key_mirrors_store_identity_normalization() -> None:
+    """Lockout keys follow the user-store identity policy so they cannot be evaded or collided."""
+    # Email mode applies NFKC: a fullwidth-compatibility spelling resolves to the same
+    # account in the store and must therefore map to the same lockout key (no evasion).
+    fullwidth_email = "foo@example.com"
+    assert ratelimit_module.account_lockout_key(fullwidth_email, key=ACCOUNT_LOCKOUT_SECRET) == (
+        ratelimit_module.account_lockout_key("foo@example.com", key=ACCOUNT_LOCKOUT_SECRET)
+    )
+
+    # Username mode mirrors strip + lowercase (no NFKC), matching UserPolicy.normalize_username_lookup.
+    username_key = ratelimit_module.account_lockout_key(
+        " Alice ",
+        key=ACCOUNT_LOCKOUT_SECRET,
+        login_identifier="username",
+    )
+    assert username_key == ratelimit_module.account_lockout_key(
+        "alice",
+        key=ACCOUNT_LOCKOUT_SECRET,
+        login_identifier="username",
+    )
+
+    # A malformed email identifier (which the store lookup would also miss) falls back to a
+    # stable lowercased key instead of raising, keeping the lockout path non-throwing.
+    assert ratelimit_module.account_lockout_key(" Bad Identifier ", key=ACCOUNT_LOCKOUT_SECRET) == (
+        ratelimit_module.account_lockout_key("bad identifier", key=ACCOUNT_LOCKOUT_SECRET)
+    )
+
+
+async def test_memory_account_lockout_store_counts_failures_and_resets() -> None:
+    """The memory lockout store flips to locked at the configured threshold."""
+    clock = FakeClock()
+    store = InMemoryAccountLockoutStore(failure_threshold=ACCOUNT_LOCKOUT_THRESHOLD, window_seconds=10, clock=clock)
+    key = _account_lockout_key()
+
+    assert isinstance(store, AccountLockoutStore)
+    assert await store.is_locked(key) is False
+    assert await store.register_failure(key) == 1
+    assert await store.is_locked(key) is False
+    assert await store.register_failure(key) == ACCOUNT_LOCKOUT_THRESHOLD
+    assert await store.is_locked(key) is True
+    assert "user@example.com" not in next(iter(store._counters))
+
+    await store.reset(key)
+
+    assert await store.is_locked(key) is False
+
+
+async def test_memory_account_lockout_store_ttl_releases_lock() -> None:
+    """The memory lockout store drops counters once their TTL expires."""
+    clock = FakeClock()
+    store = InMemoryAccountLockoutStore(failure_threshold=ACCOUNT_LOCKOUT_THRESHOLD, window_seconds=5, clock=clock)
+    key = _account_lockout_key()
+
+    await store.register_failure(key)
+    await store.register_failure(key)
+    assert await store.is_locked(key) is True
+
+    clock.advance(5.1)
+
+    assert await store.is_locked(key) is False
+    assert key not in store._counters
+
+
+async def test_memory_account_lockout_store_is_async_safe_under_concurrent_failures() -> None:
+    """Concurrent failure registrations do not lose updates under asyncio scheduling."""
+    store = InMemoryAccountLockoutStore(failure_threshold=ACCOUNT_LOCKOUT_CONCURRENT_FAILURES, window_seconds=30)
+    key = _account_lockout_key()
+
+    async with asyncio.TaskGroup() as task_group:
+        for _ in range(ACCOUNT_LOCKOUT_CONCURRENT_FAILURES):
+            task_group.create_task(store.register_failure(key))
+
+    assert await store.is_locked(key) is True
+    assert store._counters[key].count == ACCOUNT_LOCKOUT_CONCURRENT_FAILURES
+    assert store.is_shared_across_workers is False
+
+
+def test_memory_account_lockout_store_rejects_invalid_configuration() -> None:
+    """The memory lockout store rejects invalid threshold and window values."""
+    with pytest.raises(ValueError, match="failure_threshold"):
+        InMemoryAccountLockoutStore(failure_threshold=0, window_seconds=10)
+    with pytest.raises(ValueError, match="window_seconds"):
+        InMemoryAccountLockoutStore(failure_threshold=1, window_seconds=0)
+
+
+def test_memory_account_lockout_store_rejects_invalid_storage_configuration() -> None:
+    """The in-memory lockout store validates the key-cap and sweep settings."""
+    with pytest.raises(ValueError, match="max_keys"):
+        InMemoryAccountLockoutStore(failure_threshold=1, window_seconds=10, max_keys=0)
+    with pytest.raises(ValueError, match="sweep_interval"):
+        InMemoryAccountLockoutStore(failure_threshold=1, window_seconds=10, sweep_interval=0)
+
+
+async def test_memory_account_lockout_store_global_sweep_prunes_expired_idle_keys() -> None:
+    """Periodic sweeping removes expired account counters even if they are never touched again."""
+    clock = FakeClock()
+    store = InMemoryAccountLockoutStore(
+        failure_threshold=ACCOUNT_LOCKOUT_THRESHOLD,
+        window_seconds=5,
+        clock=clock,
+        sweep_interval=ACCOUNT_LOCKOUT_THRESHOLD,
+    )
+    stale_key = _account_lockout_key("stale@example.com")
+
+    await store.register_failure(stale_key)
+    clock.advance(5.1)
+    assert await store.is_locked(_account_lockout_key("fresh@example.com")) is False
+
+    assert stale_key not in store._counters
+
+
+async def test_memory_account_lockout_store_fails_closed_for_new_keys_at_capacity(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Capacity pressure locks new keys instead of evicting active counters by default."""
+    store = InMemoryAccountLockoutStore(
+        failure_threshold=ACCOUNT_LOCKOUT_THRESHOLD,
+        window_seconds=60,
+        max_keys=1,
+        sweep_interval=100,
+    )
+    first_key = _account_lockout_key("first@example.com")
+    second_key = _account_lockout_key("second@example.com")
+
+    await store.register_failure(first_key)
+
+    with caplog.at_level(logging.WARNING, logger=ratelimit_client_host_module.logger.name):
+        assert await store.is_locked(second_key) is True
+        assert await store.register_failure(second_key) == store.failure_threshold
+
+    assert set(store._counters) == {first_key}
+    assert any(getattr(record, "event", None) == "account_lockout_memory_capacity" for record in caplog.records)
+
+
+async def test_memory_account_lockout_store_reclaims_expired_keys_before_capacity_rejection() -> None:
+    """Capacity checks prune expired account counters before rejecting a new key."""
+    clock = FakeClock()
+    store = InMemoryAccountLockoutStore(
+        failure_threshold=ACCOUNT_LOCKOUT_THRESHOLD,
+        window_seconds=1,
+        clock=clock,
+        max_keys=1,
+        sweep_interval=100,
+    )
+    expired_key = _account_lockout_key("expired@example.com")
+    fresh_key = _account_lockout_key("fresh@example.com")
+
+    await store.register_failure(expired_key)
+    clock.advance(1.1)
+
+    assert await store.is_locked(fresh_key) is False
+    assert await store.register_failure(fresh_key) == 1
+    assert set(store._counters) == {fresh_key}
 
 
 async def test_memory_rate_limiter_blocks_after_max_attempts_within_window() -> None:
@@ -2208,6 +2408,133 @@ async def test_memory_rate_limiter_reclaims_expired_keys_before_capacity_rejecti
     assert set(limiter._windows) == {"fresh"}
 
 
+async def test_redis_account_lockout_store_counts_failures_and_resets(
+    async_fakeredis: AsyncFakeRedis,
+    patch_redis_loader: None,
+) -> None:
+    """The Redis lockout store atomically counts failures behind an opaque key."""
+    store = RedisAccountLockoutStore(
+        redis=cast_fakeredis(async_fakeredis, RedisClientProtocol),
+        failure_threshold=ACCOUNT_LOCKOUT_THRESHOLD,
+        window_seconds=REDIS_WINDOW_SECONDS,
+    )
+    key = _account_lockout_key()
+    redis_key = f"{DEFAULT_ACCOUNT_LOCKOUT_KEY_PREFIX}{key}"
+
+    assert isinstance(store, AccountLockoutStore)
+    assert store.is_shared_across_workers is True
+    assert await store.register_failure(key) == 1
+    assert await store.is_locked(key) is False
+    assert await store.register_failure(key) == ACCOUNT_LOCKOUT_THRESHOLD
+    assert await store.is_locked(key) is True
+
+    assert await async_fakeredis.get(redis_key) == b"2"
+    ttl_seconds = await async_fakeredis.ttl(redis_key)
+    assert 0 < ttl_seconds <= REDIS_WINDOW_SECONDS
+    stored_keys = {
+        stored_key.decode() if isinstance(stored_key, bytes) else stored_key
+        for stored_key in await async_fakeredis.keys("*")
+    }
+    assert stored_keys == {redis_key}
+    assert all("user@example.com" not in stored_key for stored_key in stored_keys)
+
+    await store.reset(key)
+
+    assert await async_fakeredis.exists(redis_key) == 0
+    assert await store.is_locked(key) is False
+
+
+async def test_redis_account_lockout_store_ttl_expiry_releases_lock(
+    async_fakeredis: AsyncFakeRedis,
+    patch_redis_loader: None,
+) -> None:
+    """The Redis lockout store relies on key TTL expiry to release locks."""
+    store = RedisAccountLockoutStore(
+        redis=cast_fakeredis(async_fakeredis, RedisClientProtocol),
+        failure_threshold=1,
+        window_seconds=REDIS_WINDOW_SECONDS,
+    )
+    key = _account_lockout_key()
+    redis_key = f"{DEFAULT_ACCOUNT_LOCKOUT_KEY_PREFIX}{key}"
+
+    assert await store.register_failure(key) == 1
+    assert await store.is_locked(key) is True
+
+    # Simulate the elapsed TTL by removing the counter. Real Redis EXPIRE with a 0 TTL
+    # deletes the key, but fakeredis applies it lazily and can leave the key briefly
+    # readable on coarse-resolution clocks (observed on Windows), so delete deterministically
+    # reproduces the post-expiry state the store reads via GET.
+    await async_fakeredis.delete(redis_key)
+
+    assert await store.is_locked(key) is False
+
+
+async def test_redis_account_lockout_store_register_failure_is_atomic(
+    async_fakeredis: AsyncFakeRedis,
+    patch_redis_loader: None,
+) -> None:
+    """Concurrent Redis failure registrations converge on the exact count."""
+    store = RedisAccountLockoutStore(
+        redis=cast_fakeredis(async_fakeredis, RedisClientProtocol),
+        failure_threshold=ACCOUNT_LOCKOUT_CONCURRENT_FAILURES,
+        window_seconds=REDIS_WINDOW_SECONDS,
+    )
+    key = _account_lockout_key()
+
+    async with asyncio.TaskGroup() as task_group:
+        for _ in range(ACCOUNT_LOCKOUT_CONCURRENT_FAILURES):
+            task_group.create_task(store.register_failure(key))
+
+    assert await store.is_locked(key) is True
+    assert (
+        await async_fakeredis.get(f"{DEFAULT_ACCOUNT_LOCKOUT_KEY_PREFIX}{key}")
+        == str(
+            ACCOUNT_LOCKOUT_CONCURRENT_FAILURES,
+        ).encode()
+    )
+
+
+def test_redis_account_lockout_store_rejects_invalid_configuration(
+    async_fakeredis: AsyncFakeRedis,
+    patch_redis_loader: None,
+) -> None:
+    """The Redis lockout store rejects invalid threshold and window values."""
+    redis = cast_fakeredis(async_fakeredis, RedisClientProtocol)
+    with pytest.raises(ValueError, match="failure_threshold"):
+        RedisAccountLockoutStore(redis=redis, failure_threshold=0, window_seconds=10)
+    with pytest.raises(ValueError, match="window_seconds"):
+        RedisAccountLockoutStore(redis=redis, failure_threshold=1, window_seconds=0)
+
+
+def test_redis_account_lockout_store_lazy_import_error_message(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The Redis lockout store explains how to install the optional dependency."""
+
+    def fail_import(name: str) -> None:
+        raise ImportError(name)
+
+    monkeypatch.setattr(importlib, "import_module", fail_import)
+
+    with pytest.raises(ImportError, match="Install litestar-auth\\[redis\\] to use RedisAccountLockoutStore"):
+        ratelimit_redis_module._load_account_lockout_redis_asyncio()
+
+
+async def test_redis_account_lockout_store_propagates_connection_error(
+    async_fakeredis: AsyncFakeRedis,
+    fakeredis_server: fakeredis.FakeServer,
+    patch_redis_loader: None,
+) -> None:
+    """RedisAccountLockoutStore does not swallow connection errors from Redis."""
+    store = RedisAccountLockoutStore(
+        redis=cast_fakeredis(async_fakeredis, RedisClientProtocol),
+        failure_threshold=ACCOUNT_LOCKOUT_THRESHOLD,
+        window_seconds=10,
+    )
+    fakeredis_server.connected = False
+
+    with pytest.raises(RedisConnectionError):
+        await store.is_locked(_account_lockout_key())
+
+
 def test_redis_rate_limiter_implements_shared_backend_protocol(
     async_fakeredis: AsyncFakeRedis,
     patch_redis_loader: None,
@@ -2270,9 +2597,9 @@ async def test_redis_rate_limiter_check_and_retry_after_use_lua_scripts(
     assert await limiter.retry_after(retry_after_key) == REDIS_RETRY_AFTER
 
 
-def test_redis_rate_limiter_decode_integer_accepts_bytes() -> None:
+def test_redis_decode_integer_accepts_bytes() -> None:
     """Redis script results may arrive as bytes and still decode cleanly."""
-    assert RedisRateLimiter._decode_integer(str(REDIS_RETRY_AFTER).encode()) == REDIS_RETRY_AFTER
+    assert ratelimit_redis_module._decode_integer(str(REDIS_RETRY_AFTER).encode()) == REDIS_RETRY_AFTER
 
 
 async def test_redis_rate_limiter_increments_with_atomic_pipeline(

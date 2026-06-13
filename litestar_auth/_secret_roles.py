@@ -47,7 +47,7 @@ _ORGANIZATION_INVITATION_TOKEN_SECRET_ROLE = _SecretRole(
 )
 _LOGIN_IDENTIFIER_TELEMETRY_SECRET_ROLE = _SecretRole(
     setting_name="login_identifier_telemetry_secret",
-    protected_surface="failed-login identifier digest telemetry",
+    protected_surface="failed-login identifier digest telemetry and account-lockout key derivation",
 )
 _TOTP_SECRET_KEY_ROLE = _SecretRole(
     setting_name="totp_secret_key",

@@ -23,7 +23,7 @@ from litestar_auth.authentication.transport.cookie import CookieTransport
 from litestar_auth.controllers._auth_helpers import _LOGIN_EMAIL_MAX_LENGTH, _LOGIN_USERNAME_MAX_LENGTH
 from litestar_auth.exceptions import ConfigurationError, ErrorCode, InactiveUserError
 from litestar_auth.guards import is_authenticated
-from litestar_auth.ratelimit import AuthRateLimitConfig, EndpointRateLimit
+from litestar_auth.ratelimit import AccountLockoutConfig, AuthRateLimitConfig, EndpointRateLimit
 from litestar_auth.totp import SecurityWarning
 
 AuthControllerConfig = auth_controller_module.AuthControllerConfig
@@ -1198,3 +1198,18 @@ def test_create_auth_controller_accepts_username_login_identifier() -> None:
 
     controller_class = create_auth_controller(backend=backend, login_identifier="username")
     assert controller_class.__name__.endswith("AuthController")
+
+
+def test_create_auth_controller_requires_lockout_key_secret_when_lockout_enabled() -> None:
+    """Enabled account lockout needs secret material for digest key derivation."""
+    backend = AuthenticationBackend(
+        name="test",
+        transport=BearerTransport(),
+        strategy=cast("Any", _make_minimal_strategy()),
+    )
+
+    with pytest.raises(ConfigurationError, match="account_lockout_key_secret"):
+        create_auth_controller(
+            backend=backend,
+            account_lockout_config=AccountLockoutConfig(enabled=True),
+        )

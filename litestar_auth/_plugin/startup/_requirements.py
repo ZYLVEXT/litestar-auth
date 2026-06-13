@@ -5,7 +5,10 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any, cast
 
 from litestar_auth._plugin.oauth_contract import _build_oauth_route_registration_contract
-from litestar_auth._plugin.startup._warnings import _collect_process_local_rate_limit_endpoint_names
+from litestar_auth._plugin.startup._warnings import (
+    _collect_process_local_rate_limit_endpoint_names,
+    _has_process_local_account_lockout_store,
+)
 from litestar_auth.exceptions import ConfigurationError
 
 if TYPE_CHECKING:
@@ -46,6 +49,25 @@ def require_shared_rate_limit_backends_for_multiworker(config: LitestarAuthConfi
         "Auth rate limiting cannot use process-local backends when deployment_worker_count is greater than 1. "
         f"The following endpoint slots are not shared across workers: {formatted_endpoint_names}. "
         "Use RedisRateLimiter or RedisAuthPreset for multi-worker deployments."
+    )
+    raise ConfigurationError(msg)
+
+
+def require_shared_account_lockout_store_for_multiworker(config: LitestarAuthConfig[Any, Any]) -> None:
+    """Fail closed when declared multi-worker deployments use process-local account lockout state.
+
+    Raises:
+        ConfigurationError: If account lockout is enabled with process-local state
+            in a known multi-worker deployment.
+    """
+    if config.unsafe_testing or config.deployment_worker_count is None or config.deployment_worker_count <= 1:
+        return
+    if not _has_process_local_account_lockout_store(config):
+        return
+
+    msg = (
+        "Account lockout cannot use a process-local store when deployment_worker_count is greater than 1. "
+        "Use RedisAccountLockoutStore for multi-worker deployments."
     )
     raise ConfigurationError(msg)
 

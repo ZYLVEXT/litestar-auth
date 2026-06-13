@@ -3,11 +3,46 @@
 from __future__ import annotations
 
 import hashlib
+from typing import TYPE_CHECKING
+
+from litestar_auth._keyed_digest import keyed_account_identifier_hex
+
+from ._protocol import AccountLockoutKey
+
+if TYPE_CHECKING:
+    from litestar_auth.types import LoginIdentifier
 
 DEFAULT_KEY_PREFIX = "litestar_auth:ratelimit:"
+DEFAULT_ACCOUNT_LOCKOUT_KEY_PREFIX = "litestar_auth:account-lockout:"
+_ACCOUNT_LOCKOUT_KEY_CONTEXT = b"litestar-auth:account-lockout-key:v1"
 _RATE_LIMIT_KEY_DERIVATION_SALT = b"litestar-auth:rate-limit-key:v5"
 _RATE_LIMIT_KEY_DERIVATION_ITERATIONS = 4096
 _RATE_LIMIT_KEY_PART_BYTES = 16
+
+
+def account_lockout_key(
+    identifier: str,
+    *,
+    key: str | bytes,
+    login_identifier: LoginIdentifier = "email",
+) -> AccountLockoutKey:
+    """Return the opaque keyed digest used for account lockout storage.
+
+    The identifier is normalized with the same policy the user store uses for the
+    given ``login_identifier`` mode, so the lockout key maps 1:1 to the resolved
+    account and cannot be evaded or collided via normalization drift.
+
+    Returns:
+        Non-reversible digest of the store-normalized login identifier.
+    """
+    return AccountLockoutKey(
+        keyed_account_identifier_hex(
+            key,
+            identifier,
+            login_identifier=login_identifier,
+            context=_ACCOUNT_LOCKOUT_KEY_CONTEXT,
+        ),
+    )
 
 
 def _safe_key_part(value: str) -> str:

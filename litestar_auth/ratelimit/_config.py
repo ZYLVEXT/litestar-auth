@@ -2,18 +2,19 @@
 
 from __future__ import annotations
 
+import dataclasses
 import warnings
-from collections.abc import Iterable, Mapping  # noqa: TC003
+from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, fields
 from enum import StrEnum
 from typing import Any, ClassVar, Self, cast
 
-from litestar_auth.exceptions import SecurityWarning
+from litestar_auth.exceptions import ConfigurationError, SecurityWarning
 
 from ._client_host import _DEFAULT_TRUSTED_HEADERS
 from ._endpoint import _DEFAULT_IDENTITY_FIELDS, EndpointRateLimit
-from ._memory import InMemoryRateLimiter
-from ._protocol import RateLimiterBackend  # noqa: TC001
+from ._memory import InMemoryAccountLockoutStore, InMemoryRateLimiter
+from ._protocol import AccountLockoutStore, RateLimiterBackend
 from ._redis import RedisRateLimiter
 from ._slot_catalog import (
     _AUTH_RATE_LIMIT_ENDPOINT_RECIPES as _SLOT_RECIPES,
@@ -57,6 +58,71 @@ _PUBLIC_RATE_LIMIT_SLOT_LABELS = {
     "refresh": "POST /refresh",
     "register": "POST /register",
 }
+DEFAULT_ACCOUNT_LOCKOUT_FAILURE_THRESHOLD = 5
+DEFAULT_ACCOUNT_LOCKOUT_WINDOW_SECONDS = 900.0
+type AccountLockoutStoreFactory = Callable[[], AccountLockoutStore]
+
+
+@dataclass(slots=True, frozen=True)
+class AccountLockoutConfig:
+    """Opt-in per-account lockout settings for password-login failures.
+
+    Args:
+        enabled: Whether the account lockout policy is active.
+        failure_threshold: Failed password attempts before an account key is locked.
+        window_seconds: Counter TTL and lockout window duration in seconds.
+        store_factory: Optional factory for a shared custom store such as ``RedisAccountLockoutStore``.
+    """
+
+    enabled: bool = False
+    failure_threshold: int = DEFAULT_ACCOUNT_LOCKOUT_FAILURE_THRESHOLD
+    window_seconds: float = DEFAULT_ACCOUNT_LOCKOUT_WINDOW_SECONDS
+    store_factory: AccountLockoutStoreFactory | None = None
+    _resolved_store: AccountLockoutStore | None = dataclasses.field(
+        default=None,
+        init=False,
+        repr=False,
+        compare=False,
+    )
+
+    def __post_init__(self) -> None:
+        """Validate the public lockout policy inputs.
+
+        Raises:
+            ConfigurationError: If any account-lockout setting is invalid.
+        """
+        if not isinstance(self.enabled, bool):
+            msg = "account_lockout_config.enabled must be a boolean."
+            raise ConfigurationError(msg)
+        threshold_is_positive_int = (
+            isinstance(self.failure_threshold, int)
+            and not isinstance(self.failure_threshold, bool)
+            and self.failure_threshold >= 1
+        )
+        if not threshold_is_positive_int:
+            msg = "account_lockout_config.failure_threshold must be a positive integer."
+            raise ConfigurationError(msg)
+        if not isinstance(self.window_seconds, int | float) or self.window_seconds <= 0:
+            msg = "account_lockout_config.window_seconds must be greater than 0."
+            raise ConfigurationError(msg)
+        if self.store_factory is not None and not callable(self.store_factory):
+            msg = "account_lockout_config.store_factory must be callable when provided."
+            raise ConfigurationError(msg)
+
+    def resolve_store(self) -> AccountLockoutStore:
+        """Return the memoized account-lockout store for this config."""
+        if self._resolved_store is not None:
+            return self._resolved_store
+        resolved_store = (
+            self.store_factory()
+            if self.store_factory is not None
+            else InMemoryAccountLockoutStore(
+                failure_threshold=self.failure_threshold,
+                window_seconds=self.window_seconds,
+            )
+        )
+        object.__setattr__(self, "_resolved_store", resolved_store)  # noqa: PLC2801
+        return resolved_store
 
 
 @dataclass(slots=True, frozen=True)

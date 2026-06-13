@@ -18,6 +18,7 @@ from litestar_auth._plugin.startup._requirements import (
     has_configured_oauth_providers_for,
     require_oauth_token_encryption_for_configured_providers,
     require_refreshable_strategy_when_enable_refresh,
+    require_shared_account_lockout_store_for_multiworker,
     require_shared_rate_limit_backends_for_multiworker,
 )
 from litestar_auth._plugin.startup._warnings import (
@@ -39,6 +40,7 @@ __all__ = (
     "_is_unsafe_redirect_host",
     "has_configured_oauth_providers",
     "has_configured_oauth_providers_for",
+    "require_shared_account_lockout_store_for_multiworker",
 )
 
 
@@ -93,6 +95,9 @@ def _build_startup_hook_map(
             require_shared_rate_limit_backends_for_multiworker(
                 config,
             )
+        ),
+        "require_shared_account_lockout_store_for_multiworker": lambda: (
+            require_shared_account_lockout_store_for_multiworker(config)
         ),
         "require_refreshable_strategy_when_enable_refresh": lambda: require_refreshable_strategy_when_enable_refresh(
             config,

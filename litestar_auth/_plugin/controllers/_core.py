@@ -90,6 +90,12 @@ def _build_auth_controllers[UP: UserProtocol[Any], ID](
                     backend_inventory=inventory,
                     backend_index=backend_index,
                     rate_limit_config=config.rate_limit_config,
+                    account_lockout_config=config.account_lockout_config,
+                    account_lockout_key_secret=(
+                        None
+                        if config.user_manager_security is None
+                        else config.user_manager_security.login_identifier_telemetry_secret
+                    ),
                     enable_refresh=config.enable_refresh,
                     requires_verification=config.requires_verification,
                     login_identifier=config.login_identifier,

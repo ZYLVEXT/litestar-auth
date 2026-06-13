@@ -37,6 +37,12 @@ Before production rollout, verify the deployment-owned security contract in
 - **Failed-login telemetry** — failed-login logs never include the submitted email/username. Configure
   `UserManagerSecurity.login_identifier_telemetry_secret` when you want a stable, non-reversible
   `identifier_digest`; the digest is omitted when that dedicated secret is unset.
+- **Per-account lockout** — optional password-login brute-force protection through
+  `AccountLockoutConfig`. It is disabled by default; when enabled, login identifiers are normalized
+  and stored only as keyed digests, repeated failed password checks lock that account key for the
+  configured window, and a successful password login before lockout resets the counter. Locked
+  accounts deliberately return the same `LOGIN_BAD_CREDENTIALS` response as wrong credentials or a
+  missing user, without a distinct lockout code, status, or `Retry-After` header.
 - **Rate limiting** — optional per-endpoint limits; in-memory backend is single-process only and fails closed for new keys when its capacity cap is reached.
 - **Route-level role checks** — `is_superuser`, `has_any_role(...)`, and `has_all_roles(...)` reuse the same normalized flat-role semantics as persistence and manager writes, and they fail closed if the authenticated user does not expose the documented role-capable contract. Role guard matching uses fixed-work internal comparisons over normalized role strings to avoid role-membership short-circuit predicates; this is a defense-in-depth posture, not a claim of cryptographic constant-time behavior across Python or the network.
 
@@ -64,8 +70,9 @@ When you assemble `JWTStrategy` or `BaseUserManager` yourself, inspect the runti
   `TOTP_STEPUP_REQUIRED` 403 contract, default endpoint policies, recovery-code behavior, and the
   API-key transport rationale.
 - `BaseUserManager` uses `UserManagerSecurity.login_identifier_telemetry_secret` only for
-  failed-login identifier digests. It is optional; omitting it keeps logs correlation-safe by
-  leaving `identifier_digest` out rather than reusing another auth secret.
+  failed-login identifier digests and plugin-managed account-lockout key derivation. It is optional
+  while lockout is disabled; enabling `AccountLockoutConfig` without this secret is rejected. Omit it
+  only when you do not need correlated failed-login telemetry and do not enable account lockout.
 
 ## OAuth redirect-host DNS validation
 
@@ -124,6 +131,7 @@ Additional opt-ins to weaker behavior:
 | `CookieTransport(allow_insecure_cookie_auth=True)` | Allows cookie auth without CSRF for controlled non-browser scenarios only. |
 | `ApiKeyConfig(signing_enabled=True, secret_encryption_keyring=...)` | Enables request signing, but stores an encrypted copy of signing-required key secrets so signatures can be verified. |
 | `InMemoryApiKeyNonceStore` | Process-local API-key signing replay cache; use `RedisApiKeyNonceStore` for multi-worker deployments. |
+| `AccountLockoutConfig(enabled=True)` with the default in-memory store | Process-local per-account lockout counters; use `RedisAccountLockoutStore` for multi-worker deployments. |
 
 ## Bearer failure-code taxonomy
 
@@ -157,6 +165,10 @@ expired, timestamp-skewed, or nonce-replayed keys, still consume the limiter bef
 - No built-in **email** sending — you must implement hooks.
 - No **RBAC** or **WebAuthn** in core — the built-in role guards are flat membership checks only; extend in your application for permission matrices or object-level policy.
 - **Durable JWT revocation** requires a shared store — `JWTStrategy(secret=...)` without `denylist_store` or `allow_inmemory_denylist=True` fails closed at construction time. Use Redis (or equivalent) denylist for multi-worker production if you rely on revoke; reserve `allow_inmemory_denylist=True` for single-process development or tests.
+- **Per-account lockout** requires a shared store in multi-worker deployments. The default
+  `InMemoryAccountLockoutStore` is single-process only and is a development/single-worker tool; use
+  `RedisAccountLockoutStore` or a custom shared `AccountLockoutStore` when multiple workers can
+  receive login attempts for the same account.
 - **API keys** are user-owned delegated credentials only. Service-account-only keys, HKDF child keys,
   IP allowlists, per-key audit tables, and mTLS binding are outside this release.
 - API-key signing-secret rotation is operator-owned row processing. The library does not provide

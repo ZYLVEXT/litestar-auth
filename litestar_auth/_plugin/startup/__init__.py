@@ -38,6 +38,9 @@ from litestar_auth._plugin.startup._core import (
     require_secure_oauth_redirect_in_production as require_secure_oauth_redirect_in_production,
 )
 from litestar_auth._plugin.startup._core import (
+    require_shared_account_lockout_store_for_multiworker as require_shared_account_lockout_store_for_multiworker,
+)
+from litestar_auth._plugin.startup._core import (
     require_shared_rate_limit_backends_for_multiworker as require_shared_rate_limit_backends_for_multiworker,
 )
 from litestar_auth._plugin.startup._core import (

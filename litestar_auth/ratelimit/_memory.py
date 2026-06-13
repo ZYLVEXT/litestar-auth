@@ -5,12 +5,157 @@ from __future__ import annotations
 import asyncio
 import time
 from collections import deque
+from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
 from litestar_auth._clock import Clock, read_clock
 
 from ._client_host import logger
-from ._validation import SlidingWindow, _validate_configuration
+from ._validation import SlidingWindow, _validate_account_lockout_configuration, _validate_configuration
 from ._window_math import cutoff_for_now, retry_seconds
+
+if TYPE_CHECKING:
+    from ._protocol import AccountLockoutKey
+
+
+@dataclass(slots=True)
+class _AccountLockoutCounter:
+    """In-memory counter value with its absolute expiry timestamp."""
+
+    count: int
+    expires_at: float
+
+
+class InMemoryAccountLockoutStore:
+    """Async-safe in-memory per-account lockout store.
+
+    Not safe for multi-process or multi-host deployments; use :class:`RedisAccountLockoutStore`
+    for shared storage (e.g. multi-worker or multi-pod).
+
+    When the store reaches ``max_keys`` after pruning expired counters, unknown account keys fail
+    closed and are reported as locked. This preserves account lockout safety under memory pressure,
+    but a flood of distinct identifiers can deny new login attempts until counters expire. Use
+    :class:`RedisAccountLockoutStore` or raise ``max_keys`` for public or multi-tenant deployments.
+    """
+
+    def __init__(
+        self,
+        *,
+        failure_threshold: int,
+        window_seconds: float,
+        max_keys: int = 100_000,
+        sweep_interval: int = 1_000,
+        clock: Clock = time.monotonic,
+    ) -> None:
+        """Store the lockout configuration and failure counters.
+
+        Raises:
+            ValueError: If any lockout or storage configuration is invalid.
+        """
+        _validate_account_lockout_configuration(
+            failure_threshold=failure_threshold,
+            window_seconds=window_seconds,
+        )
+        if max_keys < 1:
+            msg = "max_keys must be at least 1"
+            raise ValueError(msg)
+        if sweep_interval < 1:
+            msg = "sweep_interval must be at least 1"
+            raise ValueError(msg)
+
+        self.failure_threshold = failure_threshold
+        self.window_seconds = window_seconds
+        self.max_keys = max_keys
+        self.sweep_interval = sweep_interval
+        self._clock: Clock = clock
+        self._lock = asyncio.Lock()
+        self._counters: dict[AccountLockoutKey, _AccountLockoutCounter] = {}
+        self._operation_count = 0
+
+    @property
+    def is_shared_across_workers(self) -> bool:
+        """In-memory lockout counters are process-local and not shared across workers."""
+        return False
+
+    async def register_failure(self, key: AccountLockoutKey) -> int:
+        """Record a failed password-login attempt and return the active count.
+
+        Returns:
+            Current active failure count for ``key``.
+        """
+        async with self._lock:
+            now = read_clock(self._clock)
+            self._maybe_sweep(now)
+            counter = self._prune(key, now)
+            if counter is None:
+                if self._is_at_capacity_after_prune(now):
+                    self._log_capacity_rejection()
+                    return self.failure_threshold
+                counter = _AccountLockoutCounter(count=0, expires_at=now + self.window_seconds)
+                self._counters[key] = counter
+
+            counter.count += 1
+            counter.expires_at = now + self.window_seconds
+            return counter.count
+
+    async def is_locked(self, key: AccountLockoutKey) -> bool:
+        """Return whether ``key`` is locked in the current window."""
+        async with self._lock:
+            now = read_clock(self._clock)
+            self._maybe_sweep(now)
+            counter = self._prune(key, now)
+            if counter is None:
+                if self._is_at_capacity_after_prune(now):
+                    self._log_capacity_rejection()
+                    return True
+                return False
+
+            return counter.count >= self.failure_threshold
+
+    async def reset(self, key: AccountLockoutKey) -> None:
+        """Clear the in-memory lockout counter for ``key``."""
+        async with self._lock:
+            self._counters.pop(key, None)
+
+    def _prune(self, key: AccountLockoutKey, now: float) -> _AccountLockoutCounter | None:
+        """Remove an expired counter for ``key`` and return active state.
+
+        Returns:
+            Active lockout counter for ``key`` or ``None`` when no active state remains.
+        """
+        counter = self._counters.get(key)
+        if counter is None:
+            return None
+        if counter.expires_at <= now:
+            self._counters.pop(key, None)
+            return None
+        return counter
+
+    def _maybe_sweep(self, now: float) -> None:
+        """Run periodic global pruning based on the configured sweep interval."""
+        self._operation_count += 1
+        if self._operation_count % self.sweep_interval == 0:
+            self._sweep_all(now)
+
+    def _sweep_all(self, now: float) -> None:
+        """Prune all expired lockout counters."""
+        for key in tuple(self._counters):
+            self._prune(key, now)
+
+    def _is_at_capacity_after_prune(self, now: float) -> bool:
+        """Return whether the key cap still holds after reclaiming expired counters."""
+        if len(self._counters) < self.max_keys:
+            return False
+        self._sweep_all(now)
+        return len(self._counters) >= self.max_keys
+
+    def _log_capacity_rejection(self) -> None:
+        """Emit structured telemetry for fail-closed capacity pressure."""
+        logger.warning(
+            "In-memory account lockout store rejected a new key at capacity (fail closed). "
+            "Use RedisAccountLockoutStore or increase max_keys for high-volume deployments.",
+            extra={"event": "account_lockout_memory_capacity", "max_keys": self.max_keys},
+        )
 
 
 class InMemoryRateLimiter:

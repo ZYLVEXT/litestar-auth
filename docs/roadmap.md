@@ -4,7 +4,7 @@ What this library aims to cover today, what it deliberately does not include, an
 
 ## In scope today
 
-Registration, login/logout, email verification and password reset, Bearer / cookie / API-key transports, JWT / database / Redis / API-key strategies, guards, role-derived permission authorization, optional user CRUD, TOTP, OAuth login and account linking, rate limiting, hooks, configurable login identifier (`email` or `username`). See [Features on the home page](index.md).
+Registration, login/logout, email verification and password reset, Bearer / cookie / API-key transports, JWT / database / Redis / API-key strategies, guards, role-derived permission authorization, optional user CRUD, TOTP, OAuth login and account linking, rate limiting, per-account password-login lockout, hooks, configurable login identifier (`email` or `username`). See [Features on the home page](index.md).
 
 Opt-in **multi-tenant organizations** (roadmap #10) are complete for the library's intended scope:
 global `User` plus `OrganizationMembership`, tenant resolution, verified current-organization
@@ -15,6 +15,12 @@ posture, and extension points are documented in
 applications deliver the raw token from `on_after_organization_invitation`. Application-table data
 isolation remains the application's responsibility: the library does not add tenant foreign keys,
 mutate application queries, or filter application-owned tables.
+
+Opt-in **per-account brute-force protection** is delivered for plugin-owned password login through
+`AccountLockoutConfig`. The library ships digest-only account keys, process-local in-memory storage
+for single-worker deployments, Redis-backed shared storage for multi-worker deployments, generic
+non-enumerating login failures for locked accounts, and independent composition with auth endpoint
+rate limiting.
 
 ## Explicitly out of scope (library core)
 

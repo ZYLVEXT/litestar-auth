@@ -32,6 +32,7 @@ from litestar_auth.config import UnsetType
 from litestar_auth.controllers._response_timing import DEFAULT_MINIMUM_RESPONSE_SECONDS
 from litestar_auth.exceptions import ConfigurationError
 from litestar_auth.password import PasswordHelper
+from litestar_auth.ratelimit import AccountLockoutConfig
 from litestar_auth.types import (
     DbSessionDependencyKey,
     LoginIdentifier,
@@ -125,6 +126,7 @@ class LitestarAuthConfig[UP: UserProtocol[Any], ID](_ConfigValidationMixin):
     # Advanced path: callable that fully constructs the manager per request. Use when the
     # constructor is not the default BaseUserManager surface or you need custom DI.
     user_manager_factory: UserManagerFactory[UP, ID] | None = None
+    account_lockout_config: AccountLockoutConfig = field(default_factory=AccountLockoutConfig)
     rate_limit_config: AuthRateLimitConfig | None = None
     exception_response_hook: ExceptionResponseHook | None = None
     middleware_hook: MiddlewareHook | None = None

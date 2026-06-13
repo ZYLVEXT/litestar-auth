@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import timedelta
 from typing import (
     TYPE_CHECKING,
@@ -59,6 +59,7 @@ from litestar_auth.exceptions import ConfigurationError, ErrorCode
 from litestar_auth.guards import is_authenticated
 from litestar_auth.payloads import LoginCredentials, RefreshTokenRequest  # noqa: TC001
 from litestar_auth.ratelimit._config import warn_missing_public_rate_limits
+from litestar_auth.ratelimit._key_derivation import account_lockout_key
 from litestar_auth.types import LoginIdentifier, TotpUserProtocol, UserProtocol
 
 if TYPE_CHECKING:
@@ -67,7 +68,8 @@ if TYPE_CHECKING:
     from litestar.openapi.spec import SecurityRequirement
 
     from litestar_auth.authentication.backend import AuthenticationBackend
-    from litestar_auth.ratelimit import AuthRateLimitConfig
+    from litestar_auth.ratelimit import AccountLockoutConfig, AuthRateLimitConfig
+    from litestar_auth.ratelimit._protocol import AccountLockoutKey, AccountLockoutStore
 
 INVALID_CREDENTIALS_DETAIL = "Invalid credentials."
 INVALID_REFRESH_TOKEN_DETAIL = "The refresh token is invalid."  # noqa: S105
@@ -117,6 +119,8 @@ class _AuthControllerContext[UP: UserProtocol[Any], ID]:
     login_reset: RequestHandler
     refresh_inc: RequestHandler
     refresh_reset: RequestHandler
+    account_lockout_store: AccountLockoutStore | None
+    account_lockout_key_secret: str | None
     totp_pending_secret: str | None
     totp_pending_lifetime: timedelta
     totp_pending_require_client_binding: bool
@@ -132,6 +136,8 @@ class AuthControllerConfig[UP: UserProtocol[Any], ID]:
 
     backend: AuthenticationBackend[UP, ID]
     rate_limit_config: AuthRateLimitConfig | None = None
+    account_lockout_config: AccountLockoutConfig | None = None
+    account_lockout_key_secret: str | None = field(default=None, repr=False)
     enable_refresh: bool = False
     requires_verification: bool = True
     login_identifier: LoginIdentifier = "email"
@@ -150,6 +156,8 @@ class AuthControllerOptions[UP: UserProtocol[Any], ID](TypedDict):
 
     backend: Required[AuthenticationBackend[UP, ID]]
     rate_limit_config: NotRequired[AuthRateLimitConfig | None]
+    account_lockout_config: NotRequired[AccountLockoutConfig | None]
+    account_lockout_key_secret: NotRequired[str | None]
     enable_refresh: NotRequired[bool]
     requires_verification: NotRequired[bool]
     login_identifier: NotRequired[LoginIdentifier]
@@ -176,6 +184,8 @@ class _AuthControllerSettings[UP: UserProtocol[Any], ID]:
     totp_pending_lifetime: timedelta
     totp_pending_require_client_binding: bool = True
     login_minimum_response_seconds: float = DEFAULT_LOGIN_MINIMUM_RESPONSE_SECONDS
+    account_lockout_config: AccountLockoutConfig | None = None
+    account_lockout_key_secret: str | None = field(default=None, repr=False)
 
 
 def _make_auth_controller_context[UP: UserProtocol[Any], ID](
@@ -192,6 +202,10 @@ def _make_auth_controller_context[UP: UserProtocol[Any], ID](
     totp_verify_rate_limit = settings.rate_limit_config.totp_verify if settings.rate_limit_config else None
     login_inc, login_reset = _create_rate_limit_handlers(login_rate_limit)
     refresh_inc, refresh_reset = _create_rate_limit_handlers(refresh_rate_limit)
+    account_lockout_store = _resolve_account_lockout_store(
+        settings.account_lockout_config,
+        key_secret=settings.account_lockout_key_secret,
+    )
     return _AuthControllerContext(
         backend=settings.backend,
         refresh_strategy=refresh_strategy,
@@ -203,6 +217,8 @@ def _make_auth_controller_context[UP: UserProtocol[Any], ID](
         login_reset=login_reset,
         refresh_inc=refresh_inc,
         refresh_reset=refresh_reset,
+        account_lockout_store=account_lockout_store,
+        account_lockout_key_secret=settings.account_lockout_key_secret,
         totp_pending_secret=settings.totp_pending_secret,
         totp_pending_lifetime=settings.totp_pending_lifetime,
         totp_pending_require_client_binding=settings.totp_pending_require_client_binding,
@@ -220,6 +236,28 @@ def _make_auth_controller_context[UP: UserProtocol[Any], ID](
             1 if totp_verify_rate_limit is None else totp_verify_rate_limit.trusted_proxy_hops
         ),
     )
+
+
+def _resolve_account_lockout_store(
+    account_lockout_config: AccountLockoutConfig | None,
+    *,
+    key_secret: str | None,
+) -> AccountLockoutStore | None:
+    """Return the enabled account-lockout store or leave lockout inert.
+
+    Raises:
+        ConfigurationError: If lockout is enabled without key-derivation secret material.
+    """
+    if account_lockout_config is None or not account_lockout_config.enabled:
+        return None
+    if key_secret is None:
+        msg = (
+            "account_lockout_config.enabled=True requires login-identifier key material: set "
+            "UserManagerSecurity.login_identifier_telemetry_secret (plugin) or pass "
+            "account_lockout_key_secret (create_auth_controller)."
+        )
+        raise ConfigurationError(msg)
+    return account_lockout_config.resolve_store()
 
 
 async def _handle_auth_logout[UP: UserProtocol[Any], ID](
@@ -293,6 +331,14 @@ async def _handle_auth_login[UP: UserProtocol[Any], ID](
     )
 
 
+@dataclass(frozen=True, slots=True)
+class _RequestAccountLockout:
+    """Resolved account-lockout store and request key, present or absent together."""
+
+    store: AccountLockoutStore
+    key: AccountLockoutKey
+
+
 async def _authenticate_login_request[UP: UserProtocol[Any], ID](
     request: Request[Any, Any, Any],
     data: LoginCredentials,
@@ -307,14 +353,37 @@ async def _authenticate_login_request[UP: UserProtocol[Any], ID](
 
     """
     resolved_identifier = _resolve_login_identifier(data.identifier, ctx.login_identifier)
+    account_lockout_store = ctx.account_lockout_store
+    lockout = (
+        None
+        if account_lockout_store is None or ctx.account_lockout_key_secret is None
+        else _RequestAccountLockout(
+            store=account_lockout_store,
+            key=account_lockout_key(
+                resolved_identifier,
+                key=ctx.account_lockout_key_secret,
+                login_identifier=ctx.login_identifier,
+            ),
+        )
+    )
+    if lockout is not None and await lockout.store.is_locked(lockout.key):
+        await ctx.login_inc(request)
+        raise_login_bad_credentials()
+
     user = await user_manager.authenticate(
         resolved_identifier,
         data.password,
         login_identifier=ctx.login_identifier,
     )
     if user is None:
+        if lockout is not None:
+            # Lock state is read separately via is_locked(); the returned count is unused here.
+            await lockout.store.register_failure(lockout.key)
         await ctx.login_inc(request)
         raise_login_bad_credentials()
+
+    if lockout is not None:
+        await lockout.store.reset(lockout.key)
 
     return user
 
@@ -605,6 +674,8 @@ def create_auth_controller[UP: UserProtocol[Any], ID](
             totp_pending_lifetime=settings.totp_pending_lifetime,
             totp_pending_require_client_binding=settings.totp_pending_require_client_binding,
             login_minimum_response_seconds=settings.login_minimum_response_seconds,
+            account_lockout_config=settings.account_lockout_config,
+            account_lockout_key_secret=settings.account_lockout_key_secret,
         ),
     )
     base_cls = _define_auth_controller_class_di(ctx, security=settings.security)

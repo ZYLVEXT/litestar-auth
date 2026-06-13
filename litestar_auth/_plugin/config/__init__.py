@@ -83,6 +83,9 @@ from litestar_auth._plugin.config._core import (
     OAUTH_ASSOCIATE_USER_MANAGER_DEPENDENCY_KEY as OAUTH_ASSOCIATE_USER_MANAGER_DEPENDENCY_KEY,
 )
 from litestar_auth._plugin.config._core import (
+    AccountLockoutConfig as AccountLockoutConfig,
+)
+from litestar_auth._plugin.config._core import (
     ApiKeyConfig as ApiKeyConfig,
 )
 from litestar_auth._plugin.config._core import (

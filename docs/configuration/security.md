@@ -14,6 +14,7 @@ Use this page for CSRF settings, token downgrade policy, schemas, dependency key
 | `verify_minimum_response_seconds` | `0.4` | Minimum wall-clock duration for plugin-owned `POST /auth/verify` success and invalid-token responses. |
 | `request_verify_minimum_response_seconds` | `0.4` | Minimum wall-clock duration for plugin-owned `POST /auth/request-verify-token` responses, including manager failures after rate-limit accounting runs. |
 | `id_parser` | `None` | Parse path/query user ids (e.g. `UUID`). Effective parser: `user_manager_security.id_parser` when set; otherwise `LitestarAuthConfig.id_parser` is applied (including the no-`user_manager_security` default builder path). |
+| `account_lockout_config` | `AccountLockoutConfig()` | Opt-in per-account password-login lockout. Disabled by default; when enabled it uses `failure_threshold=5`, `window_seconds=900.0`, and an in-memory store unless `store_factory` supplies a shared store. |
 
 ### CSRF cookie name and login telemetry
 
@@ -27,6 +28,99 @@ Failed-login **telemetry** is not a `LitestarAuthConfig` field.
 Set optional `UserManagerSecurity.login_identifier_telemetry_secret` so structured logs can carry
 an HMAC digest of the identifier on failures (no raw identifier in logs). Details:
 [Manager customization — Login failure telemetry secret](manager.md#login-failure-telemetry-secret).
+
+### Per-account password-login lockout
+
+`LitestarAuthConfig.account_lockout_config` enables a per-account counter for plugin-owned password
+login failures. It is separate from IP/request rate limiting: account lockout tracks the normalized
+login identifier behind a keyed digest, while `rate_limit_config.login` still throttles by its
+configured request identity.
+
+The shipped fields are:
+
+| `AccountLockoutConfig` field | Default | Meaning |
+| ---------------------------- | ------- | ------- |
+| `enabled` | `False` | Leaves account lockout inert unless explicitly enabled. |
+| `failure_threshold` | `5` | Number of failed password checks for the same account key before the key is locked. |
+| `window_seconds` | `900.0` | Counter TTL and lockout window in seconds. A successful password login before the threshold resets the counter. |
+| `store_factory` | `None` | Optional zero-argument factory returning an `AccountLockoutStore`. When omitted, the config memoizes an `InMemoryAccountLockoutStore`. |
+
+Plugin-managed lockout key derivation uses
+`UserManagerSecurity.login_identifier_telemetry_secret`. Set a high-entropy, role-separated value
+before enabling lockout:
+
+```python
+from litestar_auth import LitestarAuthConfig, UserManagerSecurity
+from litestar_auth.ratelimit import AccountLockoutConfig
+
+config = LitestarAuthConfig(
+    user_model=User,
+    user_manager_class=UserManager,
+    session_maker=session_maker,
+    account_lockout_config=AccountLockoutConfig(enabled=True),
+    user_manager_security=UserManagerSecurity(
+        login_identifier_telemetry_secret=login_identifier_secret,
+        reset_password_token_secret=reset_password_secret,
+        verification_token_secret=verification_token_secret,
+    ),
+)
+```
+
+The default `InMemoryAccountLockoutStore` is process-local. It is appropriate for single-process
+development, tests, and deployments that explicitly accept single-worker state. Production
+multi-worker deployments need a shared store such as `RedisAccountLockoutStore`; when
+`deployment_worker_count > 1`, plugin startup fails closed if enabled account lockout resolves to a
+process-local store.
+
+The in-memory store also has a bounded key capacity. If it reaches `max_keys` after expired counters
+are pruned, unknown account keys are treated as locked and the login path fails closed. That protects
+existing lockout counters from being dropped under capacity pressure, but a flood of distinct
+identifiers can deny new logins until counters expire. For publicly exposed, high-volume, or
+multi-tenant deployments, prefer `RedisAccountLockoutStore`; if you intentionally keep the in-memory
+store, supply it through `store_factory` with a `max_keys` sized for the expected identifier
+cardinality and memory budget:
+
+```python
+from litestar_auth.ratelimit import AccountLockoutConfig, InMemoryAccountLockoutStore
+
+account_lockout_config = AccountLockoutConfig(
+    enabled=True,
+    failure_threshold=5,
+    window_seconds=900.0,
+    store_factory=lambda: InMemoryAccountLockoutStore(
+        failure_threshold=5,
+        window_seconds=900.0,
+        max_keys=500_000,
+    ),
+)
+```
+
+```python
+from litestar_auth.ratelimit import AccountLockoutConfig, RedisAccountLockoutStore
+
+account_lockout_config = AccountLockoutConfig(
+    enabled=True,
+    failure_threshold=5,
+    window_seconds=900.0,
+    store_factory=lambda: RedisAccountLockoutStore(
+        redis=redis_client,
+        failure_threshold=5,
+        window_seconds=900.0,
+    ),
+)
+```
+
+Locked accounts intentionally receive the same `LOGIN_BAD_CREDENTIALS` response as a wrong password
+or missing user. The response has no lockout-specific status, error code, or `Retry-After` header, so
+attackers cannot distinguish account existence or lock state through the login endpoint.
+
+This non-enumerating property is *timing*-safe only while `login_minimum_response_seconds` dominates
+the Argon2 verification cost. A locked account short-circuits before password hashing, whereas wrong-password
+and unknown-account failures both pay the Argon2 verification; the shared response-time floor pads all three
+paths (including the locked short-circuit) to the same duration, masking the difference. The default `0.4s`
+floor comfortably exceeds typical Argon2 cost. If you lower it below your Argon2 verification time the locked
+path becomes timing-distinguishable, reopening account enumeration — plugin startup emits a `SecurityWarning`
+when account lockout is enabled and `login_minimum_response_seconds` is below `0.2s` for this reason.
 
 The plugin-managed JWT/TOTP security surfaces use the same shared posture wording as runtime startup and validation:
 

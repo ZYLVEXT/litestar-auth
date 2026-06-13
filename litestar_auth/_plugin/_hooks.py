@@ -99,6 +99,7 @@ FEATURE_WIRING: tuple[FeatureWiring, ...] = (
         feature="core",
         before_startup=(
             "require_shared_rate_limit_backends_for_multiworker",
+            "require_shared_account_lockout_store_for_multiworker",
             "require_refreshable_strategy_when_enable_refresh",
             "warn_insecure_plugin_startup_defaults",
         ),

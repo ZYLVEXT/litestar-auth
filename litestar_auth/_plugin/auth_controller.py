@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import timedelta
 from typing import TYPE_CHECKING, Any
 
@@ -41,7 +41,7 @@ if TYPE_CHECKING:
     from litestar.types import ExceptionHandlersMap
 
     from litestar_auth._plugin.config import StartupBackendInventory, StartupBackendTemplate
-    from litestar_auth.ratelimit import AuthRateLimitConfig
+    from litestar_auth.ratelimit import AccountLockoutConfig, AuthRateLimitConfig
     from litestar_auth.types import LoginIdentifier
 
 
@@ -57,6 +57,8 @@ class PluginAuthControllerSettings[UP: UserProtocol[Any], ID]:
     backend_inventory: StartupBackendInventory[UP, ID]
     backend_index: int
     rate_limit_config: AuthRateLimitConfig | None = None
+    account_lockout_config: AccountLockoutConfig | None = None
+    account_lockout_key_secret: str | None = field(default=None, repr=False)
     enable_refresh: bool = False
     requires_verification: bool = True
     login_identifier: LoginIdentifier = "email"
@@ -124,6 +126,8 @@ def _build_plugin_auth_controller_assembly[UP: UserProtocol[Any], ID](
             _AuthControllerSettings(
                 backend=request_backend,
                 rate_limit_config=settings.rate_limit_config,
+                account_lockout_config=settings.account_lockout_config,
+                account_lockout_key_secret=settings.account_lockout_key_secret,
                 enable_refresh=settings.enable_refresh,
                 requires_verification=settings.requires_verification,
                 login_identifier=settings.login_identifier,

@@ -16,6 +16,7 @@ if TYPE_CHECKING:
     from types import TracebackType
 
 RateLimitKey = NewType("RateLimitKey", str)
+AccountLockoutKey = NewType("AccountLockoutKey", str)
 type RedisPipelineExecuteResult = tuple[int, bool]
 
 
@@ -81,11 +82,29 @@ class RedisPipelineProtocol(Protocol):
 
 
 class RedisClientProtocol(RedisDeleteClient, RedisScriptEvalClient, Protocol):
-    """Minimal async Redis client interface used by the rate limiter.
+    """Minimal async Redis client interface used by Redis-backed rate-limit state.
 
     The higher-level Redis contrib shared-client protocol adds ``set(...)`` on
-    top of this rate-limiter contract.
+    top of this contract.
     """
+
+
+@runtime_checkable
+class AccountLockoutStore(Protocol):
+    """Protocol shared by per-account lockout stores."""
+
+    @property
+    def is_shared_across_workers(self) -> bool:
+        """Return whether store state is shared across worker processes."""
+
+    async def register_failure(self, key: AccountLockoutKey) -> int:
+        """Record a failed password-login attempt and return the current count."""
+
+    async def is_locked(self, key: AccountLockoutKey) -> bool:
+        """Return whether the account key is currently locked."""
+
+    async def reset(self, key: AccountLockoutKey) -> None:
+        """Clear tracked failures for the account key."""
 
 
 @runtime_checkable

@@ -28,6 +28,8 @@ def warn_insecure_plugin_startup_defaults(config: LitestarAuthConfig[Any, Any]) 
     _warn_jwt_revocation_policy(config)
     _warn_jwt_default_fingerprint_user_model_gap(config)
     _warn_process_local_rate_limit_backend(config)
+    _warn_process_local_account_lockout_store(config)
+    _warn_account_lockout_response_floor_too_low(config)
     _warn_process_local_totp_stores(config)
     _warn_refresh_cookie_max_age_mismatch(config)
     _warn_api_key_unbounded_default_ttl(config)
@@ -122,6 +124,43 @@ def _warn_process_local_rate_limit_backend(config: LitestarAuthConfig[Any, Any])
         )
 
 
+def _warn_process_local_account_lockout_store(config: LitestarAuthConfig[Any, Any]) -> None:
+    account_lockout_config = config.account_lockout_config
+    if not account_lockout_config.enabled or account_lockout_config.resolve_store().is_shared_across_workers:
+        return
+    warnings.warn(
+        "Account lockout is configured with a process-local in-memory store. "
+        "Lockout state will not be shared across workers in multi-worker deployments. "
+        "Use RedisAccountLockoutStore to enforce consistent account lockouts across processes.",
+        SecurityWarning,
+        stacklevel=2,
+    )
+
+
+# Below this response floor the locked-account short-circuit (which skips the Argon2
+# verification that genuine and unknown-account failures pay) can become timing-
+# distinguishable, reopening an account-enumeration oracle. The default floor (0.4s)
+# comfortably dominates typical Argon2 cost; warn only when an operator lowers it.
+_MIN_SAFE_LOCKOUT_RESPONSE_SECONDS = 0.2
+
+
+def _warn_account_lockout_response_floor_too_low(config: LitestarAuthConfig[Any, Any]) -> None:
+    if not config.account_lockout_config.enabled:
+        return
+    if config.login_minimum_response_seconds >= _MIN_SAFE_LOCKOUT_RESPONSE_SECONDS:
+        return
+    warnings.warn(
+        "Account lockout is enabled but login_minimum_response_seconds "
+        f"({config.login_minimum_response_seconds:.3f}s) is below the safe floor "
+        f"({_MIN_SAFE_LOCKOUT_RESPONSE_SECONDS:.2f}s). The locked-account path skips password "
+        "hashing, so a floor under the Argon2 verification cost makes locked accounts "
+        "timing-distinguishable and enables account enumeration. Keep the response-time "
+        "floor above your Argon2 verification time.",
+        SecurityWarning,
+        stacklevel=2,
+    )
+
+
 def _warn_process_local_totp_stores(config: LitestarAuthConfig[Any, Any]) -> None:
     totp_config = config.totp_config
     if totp_config is None:
@@ -175,6 +214,12 @@ def _warn_api_key_unbounded_default_ttl(config: LitestarAuthConfig[Any, Any]) ->
 def _has_inmemory_rate_limit_backend(config: LitestarAuthConfig[Any, Any]) -> bool:
     """Return whether any endpoint uses a process-local rate-limit backend."""
     return bool(_collect_process_local_rate_limit_endpoint_names(config))
+
+
+def _has_process_local_account_lockout_store(config: LitestarAuthConfig[Any, Any]) -> bool:
+    """Return whether account lockout uses process-local state."""
+    account_lockout_config = config.account_lockout_config
+    return account_lockout_config.enabled and not account_lockout_config.resolve_store().is_shared_across_workers
 
 
 def _collect_process_local_rate_limit_endpoint_names(config: LitestarAuthConfig[Any, Any]) -> tuple[str, ...]:

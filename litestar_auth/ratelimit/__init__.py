@@ -30,6 +30,10 @@ Examples:
 from __future__ import annotations
 
 from ._config import (
+    DEFAULT_ACCOUNT_LOCKOUT_FAILURE_THRESHOLD,
+    DEFAULT_ACCOUNT_LOCKOUT_WINDOW_SECONDS,
+    AccountLockoutConfig,
+    AccountLockoutStoreFactory,
     AuthRateLimitConfig,
     AuthRateLimitEndpointGroup,
     AuthRateLimitSlot,
@@ -37,30 +41,41 @@ from ._config import (
     SharedRateLimitConfigOptions,
 )
 from ._endpoint import RateLimitScope
-from ._key_derivation import DEFAULT_KEY_PREFIX
-from ._memory import InMemoryRateLimiter
+from ._key_derivation import DEFAULT_ACCOUNT_LOCKOUT_KEY_PREFIX, DEFAULT_KEY_PREFIX, account_lockout_key
+from ._memory import InMemoryAccountLockoutStore, InMemoryRateLimiter
 from ._orchestrator import TotpRateLimitOrchestrator, TotpSensitiveEndpoint
 from ._protocol import (
+    AccountLockoutKey,
+    AccountLockoutStore,
     KnownRateLimitConnection,
     RateLimiterBackend,
     RateLimitKey,
     RedisClientProtocol,
     RedisPipelineProtocol,
 )
-from ._redis import RedisRateLimiter
+from ._redis import RedisAccountLockoutStore, RedisRateLimiter
 from ._validation import RedisScriptResult, SlidingWindow
 
 __all__ = (
+    "DEFAULT_ACCOUNT_LOCKOUT_FAILURE_THRESHOLD",
+    "DEFAULT_ACCOUNT_LOCKOUT_KEY_PREFIX",
+    "DEFAULT_ACCOUNT_LOCKOUT_WINDOW_SECONDS",
     "DEFAULT_KEY_PREFIX",
+    "AccountLockoutConfig",
+    "AccountLockoutKey",
+    "AccountLockoutStore",
+    "AccountLockoutStoreFactory",
     "AuthRateLimitConfig",
     "AuthRateLimitEndpointGroup",
     "AuthRateLimitSlot",
     "EndpointRateLimit",
+    "InMemoryAccountLockoutStore",
     "InMemoryRateLimiter",
     "KnownRateLimitConnection",
     "RateLimitKey",
     "RateLimitScope",
     "RateLimiterBackend",
+    "RedisAccountLockoutStore",
     "RedisClientProtocol",
     "RedisPipelineProtocol",
     "RedisRateLimiter",
@@ -69,4 +84,5 @@ __all__ = (
     "SlidingWindow",
     "TotpRateLimitOrchestrator",
     "TotpSensitiveEndpoint",
+    "account_lockout_key",
 )
