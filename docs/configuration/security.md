@@ -47,7 +47,8 @@ The shipped fields are:
 
 Plugin-managed lockout key derivation uses
 `UserManagerSecurity.login_identifier_telemetry_secret`. Set a high-entropy, role-separated value
-before enabling lockout:
+before enabling lockout. Because account keys are keyed digests of this secret, rotating it changes
+every key and clears all active lockout counters — plan rotations accordingly:
 
 ```python
 from litestar_auth import LitestarAuthConfig, UserManagerSecurity
@@ -119,8 +120,9 @@ the Argon2 verification cost. A locked account short-circuits before password ha
 and unknown-account failures both pay the Argon2 verification; the shared response-time floor pads all three
 paths (including the locked short-circuit) to the same duration, masking the difference. The default `0.4s`
 floor comfortably exceeds typical Argon2 cost. If you lower it below your Argon2 verification time the locked
-path becomes timing-distinguishable, reopening account enumeration — plugin startup emits a `SecurityWarning`
-when account lockout is enabled and `login_minimum_response_seconds` is below `0.2s` for this reason.
+path becomes timing-distinguishable, reopening account enumeration — both plugin startup and direct
+`create_auth_controller(...)` assembly emit a `SecurityWarning` when account lockout is enabled and
+`login_minimum_response_seconds` is below `0.2s` for this reason.
 
 The plugin-managed JWT/TOTP security surfaces use the same shared posture wording as runtime startup and validation:
 

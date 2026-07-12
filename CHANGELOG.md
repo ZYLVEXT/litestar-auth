@@ -1,3 +1,14 @@
+## Unreleased
+
+### Security
+
+- **Direct `create_auth_controller(...)` now emits the low-timing-floor `SecurityWarning`.** When account
+  lockout is enabled with `login_minimum_response_seconds` below the safe floor (`0.2s`), the locked-account
+  short-circuit can become timing-distinguishable; previously only plugin-managed startup warned about it.
+  The check is shared (`warn_account_lockout_response_floor_too_low`) and respects `unsafe_testing=True`.
+- **Dev-dependency audit**: bumped transitive `msgpack` 1.2.0 → 1.2.1 in `uv.lock`
+  (GHSA-6v7p-g79w-8964 — Unpacker OOB-read on reuse after error; dev-only via `pip-audit` → `cachecontrol`).
+
 ## 5.1.0 (2026-06-17)
 
 ### Added

@@ -1213,3 +1213,60 @@ def test_create_auth_controller_requires_lockout_key_secret_when_lockout_enabled
             backend=backend,
             account_lockout_config=AccountLockoutConfig(enabled=True),
         )
+
+
+def test_create_auth_controller_warns_for_low_lockout_response_floor() -> None:
+    """Direct controller assembly warns when the locked-account path undercuts the timing floor."""
+    backend = AuthenticationBackend(
+        name="test",
+        transport=BearerTransport(),
+        strategy=cast("Any", _make_minimal_strategy()),
+    )
+
+    with pytest.warns(SecurityWarning, match="timing-distinguishable"):
+        create_auth_controller(
+            backend=backend,
+            account_lockout_config=AccountLockoutConfig(enabled=True),
+            account_lockout_key_secret="lockout-key-secret",
+            login_minimum_response_seconds=0.05,
+        )
+
+
+def test_create_auth_controller_skips_lockout_floor_warning_at_default() -> None:
+    """The default response floor dominates Argon2, so direct assembly emits no timing warning."""
+    backend = AuthenticationBackend(
+        name="test",
+        transport=BearerTransport(),
+        strategy=cast("Any", _make_minimal_strategy()),
+    )
+
+    with warnings.catch_warnings(record=True) as records:
+        warnings.simplefilter("always")
+        create_auth_controller(
+            backend=backend,
+            account_lockout_config=AccountLockoutConfig(enabled=True),
+            account_lockout_key_secret="lockout-key-secret",
+        )
+
+    assert not [record for record in records if "timing-distinguishable" in str(record.message)]
+
+
+def test_create_auth_controller_unsafe_testing_suppresses_lockout_floor_warning() -> None:
+    """The existing testing escape hatch suppresses the lockout timing-floor warning."""
+    backend = AuthenticationBackend(
+        name="test",
+        transport=BearerTransport(),
+        strategy=cast("Any", _make_minimal_strategy()),
+    )
+
+    with warnings.catch_warnings(record=True) as records:
+        warnings.simplefilter("always")
+        create_auth_controller(
+            backend=backend,
+            account_lockout_config=AccountLockoutConfig(enabled=True),
+            account_lockout_key_secret="lockout-key-secret",
+            login_minimum_response_seconds=0.05,
+            unsafe_testing=True,
+        )
+
+    assert not [record for record in records if "timing-distinguishable" in str(record.message)]

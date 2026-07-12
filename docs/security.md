@@ -42,7 +42,9 @@ Before production rollout, verify the deployment-owned security contract in
   and stored only as keyed digests, repeated failed password checks lock that account key for the
   configured window, and a successful password login before lockout resets the counter. Locked
   accounts deliberately return the same `LOGIN_BAD_CREDENTIALS` response as wrong credentials or a
-  missing user, without a distinct lockout code, status, or `Retry-After` header.
+  missing user, without a distinct lockout code, status, or `Retry-After` header. Lockout keys are
+  derived from `login_identifier_telemetry_secret` under a dedicated domain-separation context;
+  rotating that secret changes every account key and therefore clears all active lockout counters.
 - **Rate limiting** — optional per-endpoint limits; in-memory backend is single-process only and fails closed for new keys when its capacity cap is reached.
 - **Route-level role checks** — `is_superuser`, `has_any_role(...)`, and `has_all_roles(...)` reuse the same normalized flat-role semantics as persistence and manager writes, and they fail closed if the authenticated user does not expose the documented role-capable contract. Role guard matching uses fixed-work internal comparisons over normalized role strings to avoid role-membership short-circuit predicates; this is a defense-in-depth posture, not a claim of cryptographic constant-time behavior across Python or the network.
 
@@ -168,7 +170,10 @@ expired, timestamp-skewed, or nonce-replayed keys, still consume the limiter bef
 - **Per-account lockout** requires a shared store in multi-worker deployments. The default
   `InMemoryAccountLockoutStore` is single-process only and is a development/single-worker tool; use
   `RedisAccountLockoutStore` or a custom shared `AccountLockoutStore` when multiple workers can
-  receive login attempts for the same account.
+  receive login attempts for the same account. Lockout counters are TTL-bound state, not durable
+  records: a Redis restart without persistence (or a worker restart with the in-memory store) clears
+  active lockouts, so keep `rate_limit_config.login` configured as the primary brute-force brake and
+  treat lockout as a complementary per-account layer.
 - **API keys** are user-owned delegated credentials only. Service-account-only keys, HKDF child keys,
   IP allowlists, per-key audit tables, and mTLS binding are outside this release.
 - API-key signing-secret rotation is operator-owned row processing. The library does not provide

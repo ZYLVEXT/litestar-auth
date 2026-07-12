@@ -10,6 +10,7 @@ from litestar_auth._plugin.oauth_contract import _build_oauth_route_registration
 from litestar_auth._plugin.rate_limit import iter_rate_limit_endpoint_items
 from litestar_auth._plugin.security_policy import _describe_jwt_revocation_policy
 from litestar_auth.exceptions import SecurityWarning
+from litestar_auth.ratelimit._config import warn_account_lockout_response_floor_too_low
 
 if TYPE_CHECKING:
     from litestar_auth._plugin.config import LitestarAuthConfig
@@ -137,27 +138,11 @@ def _warn_process_local_account_lockout_store(config: LitestarAuthConfig[Any, An
     )
 
 
-# Below this response floor the locked-account short-circuit (which skips the Argon2
-# verification that genuine and unknown-account failures pay) can become timing-
-# distinguishable, reopening an account-enumeration oracle. The default floor (0.4s)
-# comfortably dominates typical Argon2 cost; warn only when an operator lowers it.
-_MIN_SAFE_LOCKOUT_RESPONSE_SECONDS = 0.2
-
-
 def _warn_account_lockout_response_floor_too_low(config: LitestarAuthConfig[Any, Any]) -> None:
-    if not config.account_lockout_config.enabled:
-        return
-    if config.login_minimum_response_seconds >= _MIN_SAFE_LOCKOUT_RESPONSE_SECONDS:
-        return
-    warnings.warn(
-        "Account lockout is enabled but login_minimum_response_seconds "
-        f"({config.login_minimum_response_seconds:.3f}s) is below the safe floor "
-        f"({_MIN_SAFE_LOCKOUT_RESPONSE_SECONDS:.2f}s). The locked-account path skips password "
-        "hashing, so a floor under the Argon2 verification cost makes locked accounts "
-        "timing-distinguishable and enables account enumeration. Keep the response-time "
-        "floor above your Argon2 verification time.",
-        SecurityWarning,
-        stacklevel=2,
+    warn_account_lockout_response_floor_too_low(
+        config.account_lockout_config,
+        login_minimum_response_seconds=config.login_minimum_response_seconds,
+        stacklevel=3,
     )
 
 

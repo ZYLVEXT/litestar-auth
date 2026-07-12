@@ -582,6 +582,39 @@ def warn_missing_public_rate_limits(
     )
 
 
+# Below this response floor the locked-account short-circuit (which skips the Argon2
+# verification that genuine and unknown-account failures pay) can become timing-
+# distinguishable, reopening an account-enumeration oracle. The default floor (0.4s)
+# comfortably dominates typical Argon2 cost; warn only when an operator lowers it.
+_MIN_SAFE_ACCOUNT_LOCKOUT_RESPONSE_SECONDS = 0.2
+
+
+def warn_account_lockout_response_floor_too_low(
+    account_lockout_config: AccountLockoutConfig | None,
+    *,
+    login_minimum_response_seconds: float,
+    unsafe_testing: bool = False,
+    stacklevel: int = 2,
+) -> None:
+    """Warn when the locked-account short-circuit undercuts the login timing floor."""
+    if unsafe_testing:
+        return
+    if account_lockout_config is None or not account_lockout_config.enabled:
+        return
+    if login_minimum_response_seconds >= _MIN_SAFE_ACCOUNT_LOCKOUT_RESPONSE_SECONDS:
+        return
+    warnings.warn(
+        "Account lockout is enabled but login_minimum_response_seconds "
+        f"({login_minimum_response_seconds:.3f}s) is below the safe floor "
+        f"({_MIN_SAFE_ACCOUNT_LOCKOUT_RESPONSE_SECONDS:.2f}s). The locked-account path skips password "
+        "hashing, so a floor under the Argon2 verification cost makes locked accounts "
+        "timing-distinguishable and enables account enumeration. Keep the response-time "
+        "floor above your Argon2 verification time.",
+        SecurityWarning,
+        stacklevel=stacklevel,
+    )
+
+
 if tuple(field.name for field in fields(AuthRateLimitConfig)) != tuple(slot.value for slot in _SLOT_CATALOG.slots):
     msg = "AuthRateLimitConfig fields must stay aligned with the private auth rate-limit endpoint catalog."
     raise RuntimeError(msg)

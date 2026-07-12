@@ -58,7 +58,10 @@ from litestar_auth.controllers._utils import (
 from litestar_auth.exceptions import ConfigurationError, ErrorCode
 from litestar_auth.guards import is_authenticated
 from litestar_auth.payloads import LoginCredentials, RefreshTokenRequest  # noqa: TC001
-from litestar_auth.ratelimit._config import warn_missing_public_rate_limits
+from litestar_auth.ratelimit._config import (
+    warn_account_lockout_response_floor_too_low,
+    warn_missing_public_rate_limits,
+)
 from litestar_auth.ratelimit._key_derivation import account_lockout_key
 from litestar_auth.types import LoginIdentifier, TotpUserProtocol, UserProtocol
 
@@ -660,6 +663,12 @@ def create_auth_controller[UP: UserProtocol[Any], ID](
         settings.rate_limit_config,
         endpoint_names=("login", "refresh") if settings.enable_refresh else ("login",),
         controller_name="create_auth_controller()",
+        unsafe_testing=settings.unsafe_testing,
+        stacklevel=2,
+    )
+    warn_account_lockout_response_floor_too_low(
+        settings.account_lockout_config,
+        login_minimum_response_seconds=settings.login_minimum_response_seconds,
         unsafe_testing=settings.unsafe_testing,
         stacklevel=2,
     )
