@@ -39,6 +39,7 @@ class _PluginTotpControllerSettings[UP: UserProtocol[Any], ID]:
     """Raw plugin TOTP controller factory inputs."""
 
     backend: StartupBackendTemplate[UP, ID]
+    enable_refresh: bool
     backend_inventory: StartupBackendInventory[UP, ID]
     backend_index: int
     used_tokens_store: UsedTotpCodeStore | None
@@ -67,6 +68,7 @@ class PluginTotpControllerOptions[UP: UserProtocol[Any], ID](TypedDict):
     """Keyword options accepted by plugin-managed ``create_totp_controller``."""
 
     backend: Required[StartupBackendTemplate[UP, ID]]
+    enable_refresh: NotRequired[bool]
     backend_inventory: Required[StartupBackendInventory[UP, ID]]
     backend_index: Required[int]
     user_manager_dependency_key: Required[str]
@@ -143,6 +145,7 @@ def _build_plugin_totp_context_settings[UP: UserProtocol[Any], ID](
     totp_verify_rate_limit = None if settings.rate_limit_config is None else settings.rate_limit_config.totp_verify
     return _TotpControllerContextSettings(
         backend=cast("AuthenticationBackend[UP, ID]", settings.backend),
+        enable_refresh=settings.enable_refresh,
         used_tokens_store=settings.used_tokens_store,
         require_replay_protection=settings.require_replay_protection,
         requires_verification=settings.requires_verification,

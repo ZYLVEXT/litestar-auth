@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
+from litestar_auth.controllers._auth_helpers import _get_refresh_strategy
 from litestar_auth.controllers.totp_contracts import logger
 from litestar_auth.exceptions import ConfigurationError
 from litestar_auth.totp import InMemoryTotpEnrollmentStore, TotpAlgorithm, TotpEnrollmentStore, UsedTotpCodeStore
@@ -15,6 +16,7 @@ if TYPE_CHECKING:
 
     from litestar_auth._secrets_at_rest import FernetKeyring
     from litestar_auth.authentication.backend import AuthenticationBackend
+    from litestar_auth.authentication.strategy.base import RefreshableStrategy
     from litestar_auth.authentication.strategy.jwt import JWTDenylistStore
     from litestar_auth.controllers._step_up import TotpStepUpPolicyMode
     from litestar_auth.ratelimit import TotpRateLimitOrchestrator
@@ -26,6 +28,7 @@ class _TotpControllerRuntimeContext[UP: UserProtocol[Any], ID]:
 
     backend: AuthenticationBackend[UP, ID]
     rate_limit: TotpRateLimitOrchestrator
+    refresh_strategy: RefreshableStrategy[UP, ID] | None
 
 
 @dataclass(slots=True)
@@ -100,6 +103,7 @@ class _TotpControllerContextSettings[UP: UserProtocol[Any], ID]:
     enrollment_token_cipher: FernetKeyring
     enrollment_store: TotpEnrollmentStore
     totp_stepup_policy: dict[str, TotpStepUpPolicyMode] = field(default_factory=dict)
+    enable_refresh: bool = False
 
 
 def _totp_validate_replay_and_password(
@@ -201,6 +205,7 @@ def _build_totp_controller_context[UP: UserProtocol[Any], ID](
         runtime=_TotpControllerRuntimeContext(
             backend=settings.backend,
             rate_limit=settings.totp_rate_limit,
+            refresh_strategy=_get_refresh_strategy(settings.backend.strategy) if settings.enable_refresh else None,
         ),
         security=_TotpControllerSecurityContext(
             used_tokens_store=settings.used_tokens_store,

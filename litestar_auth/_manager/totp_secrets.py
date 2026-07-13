@@ -66,7 +66,7 @@ class TotpSecretStoragePosture:
 
     @property
     def production_validation_error(self) -> str | None:
-        """Return the plugin validation error for this posture, if any."""
+        """The plugin validation error for this posture, if any."""
         if not self.requires_explicit_production_opt_in:
             return None
         return _TOTP_STORAGE_VALIDATION_ERROR
@@ -107,7 +107,7 @@ class TotpSecretsService[UP]:
 
     @property
     def storage_posture(self) -> TotpSecretStoragePosture:
-        """Return the explicit storage posture for the manager's current key."""
+        """The explicit storage posture for the manager's current key."""
         return TotpSecretStoragePosture.fernet_encrypted(key_configured=self._has_configured_keyring())
 
     async def set_secret(self, user: UP, secret: str | None) -> UP:

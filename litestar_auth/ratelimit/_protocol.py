@@ -23,7 +23,10 @@ type RedisPipelineExecuteResult = tuple[int, bool]
 class RateLimitClientAddress(Protocol):
     """Client address data needed for rate-limit key derivation."""
 
-    host: str | None
+    @property
+    def host(self) -> str | None:
+        """Direct client host when the transport exposes one."""
+        ...
 
 
 class KnownRateLimitConnection(Protocol):
@@ -31,15 +34,15 @@ class KnownRateLimitConnection(Protocol):
 
     @property
     def headers(self) -> Mapping[str, str]:
-        """Return request headers."""
+        """Request headers."""
 
     @property
     def client(self) -> RateLimitClientAddress | None:
-        """Return the direct client address, when Litestar exposes one."""
+        """The direct client address, when Litestar exposes one."""
 
     @property
     def scope(self) -> Mapping[str, object]:
-        """Return the ASGI connection scope."""
+        """The ASGI connection scope."""
 
     async def json(self) -> object:
         """Parse and return the request JSON body."""
@@ -95,7 +98,7 @@ class AccountLockoutStore(Protocol):
 
     @property
     def is_shared_across_workers(self) -> bool:
-        """Return whether store state is shared across worker processes."""
+        """Whether store state is shared across worker processes."""
 
     async def register_failure(self, key: AccountLockoutKey) -> int:
         """Record a failed password-login attempt and return the current count."""
@@ -113,7 +116,7 @@ class RateLimiterBackend(Protocol):
 
     @property
     def is_shared_across_workers(self) -> bool:
-        """Return whether backend state is shared across worker processes."""
+        """Whether backend state is shared across worker processes."""
 
     async def check(self, key: RateLimitKey) -> bool:
         """Return whether another attempt is allowed for ``key``."""

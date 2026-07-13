@@ -94,7 +94,7 @@ class _AttributeState:
 
     @property
     def history(self) -> _History:
-        """Return the tracked change history."""
+        """The tracked change history."""
         return _History(self.changed)
 
 

@@ -819,7 +819,11 @@ async def _verify_totp_replay_protection(
 
     verify_response = await client.post("/auth/2fa/verify", json={"pending_token": pending_token, "code": code})
     assert verify_response.status_code == HTTP_CREATED
-    assert verify_response.json() == {"access_token": "plugin-3", "token_type": "bearer"}
+    assert verify_response.json() == {
+        "access_token": "plugin-3",
+        "refresh_token": "plugin-refresh-3",
+        "token_type": "bearer",
+    }
 
     replay_response = await client.post("/auth/2fa/verify", json={"pending_token": pending_token, "code": code})
     assert replay_response.status_code == HTTP_BAD_REQUEST

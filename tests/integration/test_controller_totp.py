@@ -2119,12 +2119,12 @@ async def test_handle_confirm_enable_rolls_back_totp_secret_when_recovery_code_p
 
         @property
         def recovery_code_lookup_secret(self) -> bytes:
-            """Return the recovery-code lookup secret."""
+            """The recovery-code lookup secret."""
             return TOTP_RECOVERY_CODE_LOOKUP_SECRET.encode()
 
         @property
         def password_helper(self) -> PasswordHelper:
-            """Return the password helper used for recovery-code hashing."""
+            """The password helper used for recovery-code hashing."""
             return PasswordHelper()
 
         async def set_recovery_code_hashes(
@@ -2221,12 +2221,12 @@ async def test_handle_confirm_enable_requires_recovery_code_lookup_secret_direct
 
         @property
         def recovery_code_lookup_secret(self) -> None:
-            """Return no recovery-code lookup secret."""
+            """No recovery-code lookup secret."""
             return None
 
         @property
         def password_helper(self) -> PasswordHelper:
-            """Return the password helper used for recovery-code hashing."""
+            """The password helper used for recovery-code hashing."""
             return PasswordHelper()
 
     with pytest.raises(RuntimeError, match="totp_recovery_code_lookup_secret"):
@@ -2276,12 +2276,12 @@ async def test_handle_confirm_enable_logs_recovery_code_count_without_plaintext(
 
         @property
         def recovery_code_lookup_secret(self) -> bytes:
-            """Return the recovery-code lookup secret."""
+            """The recovery-code lookup secret."""
             return TOTP_RECOVERY_CODE_LOOKUP_SECRET.encode()
 
         @property
         def password_helper(self) -> PasswordHelper:
-            """Return the password helper used for recovery-code hashing."""
+            """The password helper used for recovery-code hashing."""
             return PasswordHelper()
 
         async def set_recovery_code_hashes(

@@ -103,7 +103,7 @@ class _SharedAccountLockoutStore:
 
     @property
     def is_shared_across_workers(self) -> bool:
-        """Return that this store is shared across workers."""
+        """Whether this store is shared across workers."""
         return True
 
     async def register_failure(self, key: AccountLockoutKey) -> int:

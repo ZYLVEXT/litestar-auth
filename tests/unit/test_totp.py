@@ -131,7 +131,7 @@ class _RecoveryCodeManager:
 
     @property
     def recovery_code_lookup_secret(self) -> bytes | None:
-        """Return the configured lookup secret."""
+        """The configured lookup secret."""
         return self._lookup_secret
 
     async def find_recovery_code_hash_by_lookup(self, user: object, lookup_hex: str) -> str | None:

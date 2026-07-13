@@ -216,7 +216,7 @@ class RedisTokenStrategy(Strategy[UP, ID]):
 
     @property
     def _ttl_seconds(self) -> int:
-        """Return the configured token lifetime in whole seconds."""
+        """The configured token lifetime in whole seconds."""
         return max(int(self.lifetime.total_seconds()), 1)
 
     @override

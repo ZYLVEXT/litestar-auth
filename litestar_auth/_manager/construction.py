@@ -106,7 +106,7 @@ class BaseUserManagerConfig[UP: UserProtocol[Any], ID]:
 
     @property
     def field_policy(self) -> UserFieldPolicy:
-        """Return the explicit user-field policy declared for this manager."""
+        """The explicit user-field policy declared for this manager."""
         return UserFieldPolicy(
             creatable_fields=frozenset(self.creatable_fields),
             updatable_fields=frozenset(self.updatable_fields),
@@ -311,14 +311,14 @@ class ManagerConstructorInputs[ID]:
 
     @property
     def resolved_security_id_parser(self) -> Callable[[str], ID] | None:
-        """Return the parser contributed by the typed contract or top-level config."""
+        """The parser contributed by the typed contract or top-level config."""
         if self.manager_security is None:
             return None
         return self.manager_security.id_parser if self.manager_security.id_parser is not None else self.id_parser
 
     @property
     def effective_security(self) -> UserManagerSecurity[ID]:
-        """Return the plugin-managed security bundle for the current inputs."""
+        """The plugin-managed security bundle for the current inputs."""
         if self.manager_security is None:
             return _build_user_manager_security(id_parser=self.id_parser)
 

@@ -63,11 +63,11 @@ class TotpUserManagerProtocol[UP: UserProtocol[Any], ID](AccountStateValidatorPr
 
     @property
     def recovery_code_lookup_secret(self) -> bytes | None:
-        """Return the HMAC lookup key for recovery-code verification."""
+        """The HMAC lookup key for recovery-code verification."""
 
     @property
     def password_helper(self) -> PasswordHelper:
-        """Return the configured password helper used for recovery-code hashing."""
+        """The configured password helper used for recovery-code hashing."""
 
     async def authenticate(
         self,

@@ -134,76 +134,76 @@ class ExtensionValidationContext[UP: UserProtocol[Any], ID]:
 
     @property
     def resolved_defaults(self) -> object:
-        """Return the canonical resolved-defaults snapshot for the plugin config."""
+        """The canonical resolved-defaults snapshot for the plugin config."""
         return self.config.resolve_defaults()
 
     @property
     def user_model(self) -> type[UP]:
-        """Return the configured user model type."""
+        """The configured user model type."""
         return self.config.user_model
 
     @property
     def user_manager_class(self) -> type[object] | None:
-        """Return the configured plugin-managed user manager class."""
+        """The configured plugin-managed user manager class."""
         return self.config.user_manager_class
 
     @property
     def user_manager_factory(self) -> object | None:
-        """Return the configured custom user-manager factory."""
+        """The configured custom user-manager factory."""
         return self.config.user_manager_factory
 
     @property
     def manager_construction_mode(self) -> str:
-        """Return the active manager construction path name."""
+        """The active manager construction path name."""
         return "factory" if self.config.user_manager_factory is not None else "class"
 
     @property
     def startup_backend_inventory(self) -> StartupBackendInventory[UP, ID]:
-        """Return the canonical startup backend inventory."""
+        """The canonical startup backend inventory."""
         return resolve_backend_inventory(self.config)
 
     @property
     def startup_backends(self) -> tuple[StartupBackendTemplate[UP, ID], ...]:
-        """Return canonical startup backend templates."""
+        """Canonical startup backend templates."""
         return self.startup_backend_inventory.startup_backends()
 
     @property
     def backend_names(self) -> tuple[str, ...]:
-        """Return configured startup backend names in registration order."""
+        """Configured startup backend names in registration order."""
         return tuple(backend.name for backend in self.startup_backends)
 
     @property
     def security_requirements(self) -> list[SecurityRequirement]:
-        """Return derived OpenAPI security requirements for configured backends."""
+        """Derived OpenAPI security requirements for configured backends."""
         return self.config.resolve_openapi_security_requirements()
 
     @property
     def organization_enabled(self) -> bool:
-        """Return whether organization support is enabled."""
+        """Whether organization support is enabled."""
         return self.feature_registry.is_enabled("organization")
 
     @property
     def organization_config(self) -> object:
-        """Return the organization feature config object."""
+        """The organization feature config object."""
         return self.config.organization_config
 
     @property
     def organization_model(self) -> type[object] | None:
-        """Return a statically discoverable organization model, if the store exposes one."""
+        """A statically discoverable organization model, if the store exposes one."""
         store_factory = self.config.organization_config.store_factory
         model = getattr(store_factory, "organization_model", None)
         return model if isinstance(model, type) else None
 
     @property
     def tenant_resolver(self) -> object | None:
-        """Return the configured tenant resolver when organizations are enabled."""
+        """The configured tenant resolver when organizations are enabled."""
         if not self.organization_enabled:
             return None
         return self.config.organization_config.tenant_resolver
 
     @property
     def unsafe_testing(self) -> bool:
-        """Return whether explicit unsafe testing shortcuts are enabled."""
+        """Whether explicit unsafe testing shortcuts are enabled."""
         return self.config.unsafe_testing
 
     @staticmethod
@@ -271,7 +271,7 @@ class ExtensionRegistrationContext[UP: UserProtocol[Any], ID](ExtensionValidatio
 
     @property
     def dependency_keys(self) -> ExtensionDependencyKeys:
-        """Return plugin-owned dependency keys visible to extension providers."""
+        """plugin-owned dependency keys visible to extension providers."""
         return ExtensionDependencyKeys(
             config=DEFAULT_CONFIG_DEPENDENCY_KEY,
             user_manager=DEFAULT_USER_MANAGER_DEPENDENCY_KEY,

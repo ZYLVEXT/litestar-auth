@@ -73,6 +73,7 @@ def _resolve_plugin_totp_controller_settings[UP: UserProtocol[Any], ID](
     options.pop("totp_pending_lifetime", None)
     return _PluginTotpControllerSettings(
         backend=options["backend"],
+        enable_refresh=options.get("enable_refresh", False),
         backend_inventory=options["backend_inventory"],
         backend_index=options["backend_index"],
         used_tokens_store=options.get("used_tokens_store"),

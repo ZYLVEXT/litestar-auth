@@ -94,7 +94,7 @@ class TotpRecoveryCodeUserManager[UP](Protocol):
 
     @property
     def recovery_code_lookup_secret(self) -> bytes | None:
-        """Return the HMAC lookup key for recovery-code verification."""
+        """The HMAC lookup key for recovery-code verification."""
 
 
 async def _consume_matching_recovery_code[UP](

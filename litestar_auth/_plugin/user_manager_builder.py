@@ -61,7 +61,7 @@ class _DefaultUserManagerBuilderContract[UP: UserProtocol[Any], ID]:
 
     @property
     def manager_inputs(self) -> ManagerConstructorInputs[ID]:
-        """Return the normalized constructor inputs for the default builder."""
+        """The normalized constructor inputs for the default builder."""
         return ManagerConstructorInputs(
             manager_security=self.config.user_manager_security,
             password_validator=self.password_validator,

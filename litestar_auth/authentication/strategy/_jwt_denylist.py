@@ -218,7 +218,7 @@ class JWTRevocationPosture:
 
     @property
     def production_validation_error(self) -> str | None:
-        """Return the plugin validation error for this posture, if any.
+        """The plugin validation error for this posture, if any.
 
         JWT revocation storage is validated at strategy construction time, so
         constructed postures do not require a second plugin-level compatibility
@@ -228,7 +228,7 @@ class JWTRevocationPosture:
 
     @property
     def startup_warning(self) -> str | None:
-        """Return the startup warning for this posture, if any."""
+        """The startup warning for this posture, if any."""
         if self.revocation_is_durable:
             return None
         return _INMEMORY_JWT_DENYLIST_STARTUP_WARNING

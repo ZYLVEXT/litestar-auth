@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import Any, Literal, Protocol, cast
+from typing import TYPE_CHECKING, Any, Literal, Protocol, cast
 
 from litestar_auth._email import normalize_email
 from litestar_auth._roles import normalize_role_name, normalize_roles
@@ -18,6 +18,9 @@ from litestar_auth.exceptions import (
     OrganizationMembershipNotFoundError,
     OrganizationNotFoundError,
 )
+
+if TYPE_CHECKING:
+    from litestar_auth._manager.account_tokens import OrganizationInvitationLookupStore
 
 _PENDING_INVITATION_REVOKE_PAGE_SIZE = 100
 
@@ -33,9 +36,17 @@ class OrganizationInvitationIssue[INVITATION]:
 class _OrganizationInvitationToken(Protocol):
     """Signed organization-invitation token material from the manager service."""
 
-    token: str
-    token_hash: bytes
-    expires_at: datetime
+    @property
+    def token(self) -> str:
+        """Raw invitation token delivered out-of-band."""
+
+    @property
+    def token_hash(self) -> bytes:
+        """Persisted digest for invitation lookup."""
+
+    @property
+    def expires_at(self) -> datetime:
+        """Invitation token expiry timestamp."""
 
 
 class _OrganizationInvitationTokenService(Protocol):
@@ -48,7 +59,7 @@ class _OrganizationInvitationTokenService(Protocol):
         self,
         token: str,
         *,
-        organization_store: object,
+        organization_store: OrganizationInvitationLookupStore[INVITATION],
         now: datetime | None = None,
     ) -> INVITATION:
         """Return the pending invitation row for a valid signed invitation token."""
@@ -71,18 +82,23 @@ class _OrganizationInvitationManager(Protocol):
 
     @property
     def tokens(self) -> _OrganizationInvitationTokenService:
-        """Return the account-token service."""
+        """The account-token service."""
 
     @property
     def hook_bus(self) -> _OrganizationInvitationHookBus:
-        """Return the manager hook dispatcher."""
+        """The manager hook dispatcher."""
 
 
 class _OrganizationInvitationUser[ID](Protocol):
     """Authenticated user fields required to accept or decline an invitation."""
 
-    id: ID
-    email: str
+    @property
+    def id(self) -> ID:
+        """Authenticated user identifier."""
+
+    @property
+    def email(self) -> str:
+        """Authenticated user email address."""
 
 
 def _normalize_invited_email(email: str) -> str:

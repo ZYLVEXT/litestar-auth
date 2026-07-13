@@ -30,29 +30,29 @@ class _OAuthRouteRegistrationContract:
 
     @property
     def has_configured_providers(self) -> bool:
-        """Return whether any plugin-owned OAuth provider inventory was declared."""
+        """Whether any plugin-owned OAuth provider inventory was declared."""
         return bool(self.providers)
 
     @property
     def has_plugin_owned_login_routes(self) -> bool:
-        """Return whether the plugin will auto-mount OAuth login routes."""
+        """Whether the plugin will auto-mount OAuth login routes."""
         return bool(self.providers)
 
     @property
     def has_plugin_owned_associate_routes(self) -> bool:
-        """Return whether the plugin will auto-mount associate routes."""
+        """Whether the plugin will auto-mount associate routes."""
         return bool(self.providers) and self.include_oauth_associate
 
     @property
     def login_redirect_base_url(self) -> str | None:
-        """Return the absolute OAuth login redirect base URL when routes are mounted."""
+        """The absolute OAuth login redirect base URL when routes are mounted."""
         if not self.has_plugin_owned_login_routes or self.redirect_base_url is None:
             return None
         return f"{self.redirect_base_url.rstrip('/')}/oauth"
 
     @property
     def associate_redirect_base_url(self) -> str | None:
-        """Return the absolute OAuth associate redirect base URL when routes are mounted."""
+        """The absolute OAuth associate redirect base URL when routes are mounted."""
         if not self.has_plugin_owned_associate_routes or self.redirect_base_url is None:
             return None
         return f"{self.redirect_base_url.rstrip('/')}/associate"

@@ -29,82 +29,82 @@ class AuthExtensionValidationContext(Protocol):
 
     @property
     def config(self) -> LitestarAuthConfig[Any, Any]:
-        """Return the plugin configuration being validated."""
+        """The plugin configuration being validated."""
         ...
 
     @property
     def feature_registry(self) -> FeatureRegistry[Any, Any]:
-        """Return the resolved feature registry for this plugin instance."""
+        """The resolved feature registry for this plugin instance."""
         ...
 
     @property
     def resolved_defaults(self) -> object:
-        """Return the canonical resolved-defaults snapshot for the plugin config."""
+        """The canonical resolved-defaults snapshot for the plugin config."""
         ...
 
     @property
     def user_model(self) -> type[Any]:
-        """Return the configured user model type."""
+        """The configured user model type."""
         ...
 
     @property
     def user_manager_class(self) -> type[object] | None:
-        """Return the configured plugin-managed user manager class."""
+        """The configured plugin-managed user manager class."""
         ...
 
     @property
     def user_manager_factory(self) -> object | None:
-        """Return the configured custom user-manager factory."""
+        """The configured custom user-manager factory."""
         ...
 
     @property
     def manager_construction_mode(self) -> str:
-        """Return the active manager construction path name."""
+        """The active manager construction path name."""
         ...
 
     @property
     def startup_backend_inventory(self) -> StartupBackendInventory[Any, Any]:
-        """Return the canonical startup backend inventory."""
+        """The canonical startup backend inventory."""
         ...
 
     @property
     def startup_backends(self) -> tuple[StartupBackendTemplate[Any, Any], ...]:
-        """Return canonical startup backend templates."""
+        """Canonical startup backend templates."""
         ...
 
     @property
     def backend_names(self) -> tuple[str, ...]:
-        """Return configured startup backend names in registration order."""
+        """Configured startup backend names in registration order."""
         ...
 
     @property
     def security_requirements(self) -> list[SecurityRequirement]:
-        """Return derived OpenAPI security requirements for configured backends."""
+        """Derived OpenAPI security requirements for configured backends."""
         ...
 
     @property
     def organization_enabled(self) -> bool:
-        """Return whether organization support is enabled."""
+        """Whether organization support is enabled."""
         ...
 
     @property
     def organization_config(self) -> object:
-        """Return the organization feature config object."""
+        """The organization feature config object."""
         ...
 
     @property
     def organization_model(self) -> type[object] | None:
-        """Return a statically discoverable organization model, if the store exposes one."""
+        """A statically discoverable organization model, if the store exposes one."""
         ...
 
     @property
     def tenant_resolver(self) -> object | None:
-        """Return the configured tenant resolver when organizations are enabled."""
+        """The configured tenant resolver when organizations are enabled."""
         ...
 
     @property
     def unsafe_testing(self) -> bool:
-        """Return whether explicit unsafe testing shortcuts are enabled."""
+        """Whether explicit unsafe testing shortcuts are enabled."""
         ...
 
     @staticmethod
@@ -134,12 +134,12 @@ class AuthExtensionRegistrationContext(AuthExtensionValidationContext, Protocol)
 
     @property
     def app_config(self) -> AppConfig:
-        """Return the Litestar application config being initialized."""
+        """The Litestar application config being initialized."""
         ...
 
     @property
     def dependency_keys(self) -> ExtensionDependencyKeys:
-        """Return plugin-owned dependency keys visible to extension providers."""
+        """plugin-owned dependency keys visible to extension providers."""
         ...
 
     def add_controller(self, controller: object) -> None:
@@ -203,7 +203,10 @@ class AuthExtensionRegistrationContext(AuthExtensionValidationContext, Protocol)
 class AuthExtension(Protocol):
     """Structural contract for first-phase litestar-auth extensions."""
 
-    name: str
+    @property
+    def name(self) -> str:
+        """Extension name used for registration and diagnostics."""
+        ...
 
     def validate(self, context: AuthExtensionValidationContext) -> None:
         """Validate extension configuration before plugin startup wiring runs."""

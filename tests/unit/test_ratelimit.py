@@ -1959,7 +1959,7 @@ def patch_redis_loader(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(ratelimit_redis_module, "_load_redis_asyncio", load_redis)
 
 
-@pytest.fixture(autouse=True)  # noqa: RUF076
+@pytest.fixture(autouse=True)
 def _reset_proxy_header_warning_throttle() -> Iterator[None]:
     """Keep trusted-proxy warning throttle state isolated per test."""
     ratelimit_client_host_module._warned_missing_proxy_headers.clear()

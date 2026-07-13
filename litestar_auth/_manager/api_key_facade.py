@@ -22,7 +22,7 @@ class ApiKeyManagerFacade[UP: UserProtocol[Any], ID]:
 
     @property
     def api_keys(self) -> ApiKeyManagerService[UP, ID]:
-        """Return the API-key service backing manager API-key operations."""
+        """The API-key service backing manager API-key operations."""
         return self._api_keys
 
     async def create_api_key(

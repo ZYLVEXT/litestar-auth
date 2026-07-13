@@ -89,7 +89,7 @@ return 0
 
     @property
     def _ttl_seconds(self) -> int:
-        """Return the lockout window in whole seconds for Redis ``EXPIRE``.
+        """The lockout window in whole seconds for Redis ``EXPIRE``.
 
         Redis key expiry is second-granular, so the window is floored to whole seconds
         (minimum 1). Sub-second ``window_seconds`` therefore round to 1s here, unlike the
@@ -226,7 +226,7 @@ return math.max(math.ceil(window - (now - tonumber(score_raw))), 1)
 
     @property
     def _ttl_seconds(self) -> int:
-        """Return the configured window in whole seconds."""
+        """The configured window in whole seconds."""
         return max(int(self.window_seconds), 1)
 
     async def _eval(self, script: str, key: str, *args: object) -> RedisScriptResult:

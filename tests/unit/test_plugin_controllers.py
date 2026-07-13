@@ -201,6 +201,7 @@ def test_build_totp_controller_forwards_named_backend_and_config(monkeypatch: py
             totp_pending_require_client_binding=False,
         ),
     )
+    config.enable_refresh = True
     captured: dict[str, object] = {}
 
     def _create_totp_controller(**kwargs: object) -> str:
@@ -220,6 +221,7 @@ def test_build_totp_controller_forwards_named_backend_and_config(monkeypatch: py
     assert captured["enrollment_store"] is enrollment_store
     assert captured["require_replay_protection"] is False
     assert captured["requires_verification"] is True
+    assert captured["enable_refresh"] is True
     assert captured["totp_pending_secret"] == "76543210fedcba98" * 4
     assert captured["totp_secret_key"] is None
     assert captured["totp_secret_keyring"] is None

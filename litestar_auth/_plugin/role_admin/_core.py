@@ -144,17 +144,17 @@ class SQLAlchemyRoleAdmin[UP: UserProtocol[Any]](
 
     @property
     def user_model(self) -> type[UP]:
-        """Return the configured SQLAlchemy user model."""
+        """The configured SQLAlchemy user model."""
         return self.model_family.user_model
 
     @property
     def role_model(self) -> type[Any]:
-        """Return the resolved SQLAlchemy role model."""
+        """The resolved SQLAlchemy role model."""
         return self.model_family.role_model
 
     @property
     def user_role_model(self) -> type[Any]:
-        """Return the resolved SQLAlchemy user-role association model."""
+        """The resolved SQLAlchemy user-role association model."""
         return self.model_family.user_role_model
 
     @asynccontextmanager

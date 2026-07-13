@@ -12,6 +12,7 @@ from litestar.di import NamedDependency
 
 from litestar_auth._plugin.controller_factory import ControllerFactoryKit
 from litestar_auth.authentication.backend import AuthenticationBackend
+from litestar_auth.controllers._auth_helpers import _get_refresh_strategy
 from litestar_auth.controllers._utils import (
     RequestBodyErrorConfig,
     RequestBodyRouteHandler,
@@ -66,6 +67,11 @@ def _plugin_runtime_context_factory[UP: UserProtocol[Any], ID](
         runtime=replace(
             startup_ctx.runtime,
             backend=request_backend,
+            refresh_strategy=(
+                _get_refresh_strategy(request_backend.strategy)
+                if startup_ctx.runtime.refresh_strategy is not None
+                else None
+            ),
         ),
     )
 

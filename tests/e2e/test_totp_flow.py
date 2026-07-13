@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import sqlite3
+from datetime import timedelta
 from typing import TYPE_CHECKING, Any, cast
 from uuid import UUID
 
@@ -13,15 +14,13 @@ from sqlalchemy import create_engine, event
 from sqlalchemy.orm import Session as SASession
 from sqlalchemy.pool import StaticPool
 
-from litestar_auth._plugin.config import TotpConfig
+from litestar_auth._plugin.config import DatabaseTokenAuthConfig, TotpConfig
 from litestar_auth._totp_primitive import _generate_totp_code
-from litestar_auth.authentication.backend import AuthenticationBackend
-from litestar_auth.authentication.strategy.jwt import InMemoryJWTDenylistStore, JWTStrategy
-from litestar_auth.authentication.transport.bearer import BearerTransport
+from litestar_auth.authentication.strategy.jwt import InMemoryJWTDenylistStore
 from litestar_auth.exceptions import ErrorCode
 from litestar_auth.guards import is_authenticated
 from litestar_auth.manager import BaseUserManager, UserManagerSecurity
-from litestar_auth.models import User
+from litestar_auth.models import User, import_token_orm_models
 from litestar_auth.password import PasswordHelper
 from litestar_auth.plugin import LitestarAuth, LitestarAuthConfig
 from litestar_auth.totp import InMemoryTotpEnrollmentStore, InMemoryUsedTotpCodeStore
@@ -41,6 +40,9 @@ HTTP_FORBIDDEN = 403
 HTTP_OK = 200
 TOTP_PENDING_SECRET = "test-totp-pending-secret-1234567890"
 TOTP_RECOVERY_CODE_LOOKUP_SECRET = "test-recovery-code-lookup-secret-123"
+TOKEN_HASH_SECRET = "test-token-hash-secret-1234567890-1234567890"
+
+AccessToken, RefreshToken, RefreshTokenConsumedDigest = import_token_orm_models()
 
 
 class TOTPUserManager(BaseUserManager[User, UUID]):
@@ -82,7 +84,8 @@ def app() -> Iterator[Litestar]:
         finally:
             cursor.close()
 
-    User.metadata.create_all(engine)
+    for metadata in (User.metadata, AccessToken.metadata, RefreshTokenConsumedDigest.metadata):
+        metadata.create_all(engine)
     password_helper = PasswordHelper()
 
     with SASession(engine) as session:
@@ -95,20 +98,11 @@ def app() -> Iterator[Litestar]:
         )
         session.commit()
 
-    backend = AuthenticationBackend[User, UUID](
-        name="bearer",
-        transport=BearerTransport(),
-        strategy=cast(
-            "Any",
-            JWTStrategy[User, UUID](
-                secret="jwt-bearer-secret-1234567890-extra",
-                subject_decoder=UUID,
-                allow_inmemory_denylist=True,
-            ),
-        ),
-    )
     config = LitestarAuthConfig[User, UUID](
-        backends=[backend],
+        database_token_auth=DatabaseTokenAuthConfig(
+            token_hash_secret=TOKEN_HASH_SECRET,
+            refresh_max_age=timedelta(days=30),
+        ),
         session_maker=cast("Any", SessionMaker(engine)),
         user_model=User,
         user_manager_class=TOTPUserManager,
@@ -127,6 +121,7 @@ def app() -> Iterator[Litestar]:
             totp_enrollment_store=InMemoryTotpEnrollmentStore(),
             totp_used_tokens_store=InMemoryUsedTotpCodeStore(),
         ),
+        enable_refresh=True,
     )
     yield Litestar(route_handlers=[protected_route], plugins=[LitestarAuth(config)])
     engine.dispose()
@@ -210,6 +205,7 @@ async def test_totp_enable_verify_disable_flow(
     )
     assert verify_response.status_code == HTTP_CREATED
     verified_access_token = verify_response.json()["access_token"]
+    assert verify_response.json()["refresh_token"]
 
     protected_response = await client.get(
         "/protected",

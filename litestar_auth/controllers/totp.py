@@ -96,6 +96,7 @@ class TotpControllerOptions[UP: UserProtocol[Any], ID](TypedDict):
     """Keyword options accepted by :func:`create_totp_controller`."""
 
     backend: Required[AuthenticationBackend[UP, ID]]
+    enable_refresh: NotRequired[bool]
     user_manager_dependency_key: Required[str]
     totp_pending_secret: Required[str]
     used_tokens_store: NotRequired[UsedTotpCodeStore | None]
@@ -125,6 +126,7 @@ class _TotpControllerFactorySettings[UP: UserProtocol[Any], ID]:
     """Raw public factory inputs before validation and default resolution."""
 
     backend: AuthenticationBackend[UP, ID]
+    enable_refresh: bool
     used_tokens_store: UsedTotpCodeStore | None
     pending_jti_store: JWTDenylistStore | None
     enrollment_store: TotpEnrollmentStore | None
@@ -206,6 +208,7 @@ def _create_totp_context_settings[UP: UserProtocol[Any], ID](
     )
     return _TotpControllerContextSettings(
         backend=settings.backend,
+        enable_refresh=settings.enable_refresh,
         used_tokens_store=settings.used_tokens_store,
         require_replay_protection=settings.require_replay_protection,
         requires_verification=settings.requires_verification,
@@ -307,6 +310,7 @@ def _resolve_totp_controller_factory_settings[UP: UserProtocol[Any], ID](
     return (
         _TotpControllerFactorySettings(
             backend=options["backend"],
+            enable_refresh=options.get("enable_refresh", False),
             used_tokens_store=options.get("used_tokens_store"),
             pending_jti_store=options.get("pending_jti_store"),
             enrollment_store=options.get("enrollment_store"),

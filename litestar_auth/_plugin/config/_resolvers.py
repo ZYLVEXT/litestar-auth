@@ -27,7 +27,10 @@ if TYPE_CHECKING:
 class _FeatureRegistryWithInventory[UP: UserProtocol[Any], ID](Protocol):
     """Feature registry surface needed by backend inventory resolution."""
 
-    backend_inventory: StartupBackendInventory[UP, ID]
+    @property
+    def backend_inventory(self) -> StartupBackendInventory[UP, ID]:
+        """Resolved startup backend inventory for the active config."""
+        ...
 
 
 class _BackendInventoryConfig[UP: UserProtocol[Any], ID](Protocol):
@@ -42,19 +45,19 @@ class _TotpSecretPolicyConfig[ID](Protocol):
 
     @property
     def totp_config(self) -> object | None:
-        """Return the configured TOTP feature settings."""
+        """The configured TOTP feature settings."""
 
     @property
     def user_manager_factory(self) -> object | None:
-        """Return the custom user-manager factory, when configured."""
+        """The custom user-manager factory, when configured."""
 
     @property
     def user_manager_security(self) -> UserManagerSecurity[ID] | None:
-        """Return manager-owned security settings, when configured."""
+        """manager-owned security settings, when configured."""
 
     @property
     def id_parser(self) -> Callable[[str], ID] | None:
-        """Return the configured ID parser, when configured."""
+        """The configured ID parser, when configured."""
 
 
 class _SessionMakerConfig(Protocol):

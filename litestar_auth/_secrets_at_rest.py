@@ -139,7 +139,7 @@ class FernetKeyring:
 
     @property
     def is_encryption_configured(self) -> bool:
-        """Return whether this keyring has mounted Fernet ciphers."""
+        """Whether this keyring has mounted Fernet ciphers."""
         return bool(self._fernet_by_key_id)
 
     def encrypt(self, plaintext: object) -> str:

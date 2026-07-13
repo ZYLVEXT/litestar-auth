@@ -11,22 +11,69 @@ if TYPE_CHECKING:
 class _RateLimitConfigProtocol(Protocol):
     """Typed surface shared by startup and validation rate-limit helpers."""
 
-    login: EndpointRateLimit | None
-    change_password: EndpointRateLimit | None
-    refresh: EndpointRateLimit | None
-    register: EndpointRateLimit | None
-    forgot_password: EndpointRateLimit | None
-    reset_password: EndpointRateLimit | None
-    totp_enable: EndpointRateLimit | None
-    totp_confirm_enable: EndpointRateLimit | None
-    totp_verify: EndpointRateLimit | None
-    totp_disable: EndpointRateLimit | None
-    totp_regenerate_recovery_codes: EndpointRateLimit | None
-    verify_token: EndpointRateLimit | None
-    request_verify_token: EndpointRateLimit | None
-    api_key_create: EndpointRateLimit | None
-    api_key_update: EndpointRateLimit | None
-    api_key_use: EndpointRateLimit | None
+    @property
+    def login(self) -> EndpointRateLimit | None:
+        """Configured login endpoint rate limit."""
+
+    @property
+    def change_password(self) -> EndpointRateLimit | None:
+        """Configured change-password endpoint rate limit."""
+
+    @property
+    def refresh(self) -> EndpointRateLimit | None:
+        """Configured refresh endpoint rate limit."""
+
+    @property
+    def register(self) -> EndpointRateLimit | None:
+        """Configured register endpoint rate limit."""
+
+    @property
+    def forgot_password(self) -> EndpointRateLimit | None:
+        """Configured forgot-password endpoint rate limit."""
+
+    @property
+    def reset_password(self) -> EndpointRateLimit | None:
+        """Configured reset-password endpoint rate limit."""
+
+    @property
+    def totp_enable(self) -> EndpointRateLimit | None:
+        """Configured TOTP enable endpoint rate limit."""
+
+    @property
+    def totp_confirm_enable(self) -> EndpointRateLimit | None:
+        """Configured TOTP confirm-enable endpoint rate limit."""
+
+    @property
+    def totp_verify(self) -> EndpointRateLimit | None:
+        """Configured TOTP verify endpoint rate limit."""
+
+    @property
+    def totp_disable(self) -> EndpointRateLimit | None:
+        """Configured TOTP disable endpoint rate limit."""
+
+    @property
+    def totp_regenerate_recovery_codes(self) -> EndpointRateLimit | None:
+        """Configured TOTP recovery-code regeneration endpoint rate limit."""
+
+    @property
+    def verify_token(self) -> EndpointRateLimit | None:
+        """Configured verify-token endpoint rate limit."""
+
+    @property
+    def request_verify_token(self) -> EndpointRateLimit | None:
+        """Configured request-verify-token endpoint rate limit."""
+
+    @property
+    def api_key_create(self) -> EndpointRateLimit | None:
+        """Configured API-key create endpoint rate limit."""
+
+    @property
+    def api_key_update(self) -> EndpointRateLimit | None:
+        """Configured API-key update endpoint rate limit."""
+
+    @property
+    def api_key_use(self) -> EndpointRateLimit | None:
+        """Configured API-key use endpoint rate limit."""
 
 
 _RATE_LIMIT_ENDPOINT_SLOT_NAMES = (

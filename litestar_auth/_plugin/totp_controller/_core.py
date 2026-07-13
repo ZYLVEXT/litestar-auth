@@ -67,6 +67,7 @@ def build_totp_controller[UP: UserProtocol[Any], ID](
     )
     return create_totp_controller(
         backend=backend,
+        enable_refresh=config.enable_refresh,
         backend_inventory=inventory,
         backend_index=backend_index,
         user_manager_dependency_key=DEFAULT_USER_MANAGER_DEPENDENCY_KEY,

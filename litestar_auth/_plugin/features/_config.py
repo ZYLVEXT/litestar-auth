@@ -82,7 +82,7 @@ class OAuthConfig:
 
     @property
     def has_oauth_token_encryption(self) -> bool:
-        """Return whether OAuth token-at-rest encryption material is configured."""
+        """Whether OAuth token-at-rest encryption material is configured."""
         return self.oauth_token_encryption_key is not None or self.oauth_token_encryption_keyring is not None
 
 

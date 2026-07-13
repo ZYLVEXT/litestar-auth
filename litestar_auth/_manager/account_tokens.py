@@ -201,7 +201,7 @@ class AccountTokenSecurityService[UP, ID]:
 
     @property
     def token_writer(self) -> TokenWriter:
-        """Return the canonical account-token writer."""
+        """The canonical account-token writer."""
         return self._token_writer
 
     def password_fingerprint(self, hashed_password: str) -> str:
@@ -434,7 +434,7 @@ class AccountTokensService[UP, ID]:
 
     @property
     def security(self) -> AccountTokenSecurityService[UP, ID]:
-        """Return the low-level JWT and fingerprint helper surface."""
+        """The low-level JWT and fingerprint helper surface."""
         return self._token_security
 
     def _write_token(

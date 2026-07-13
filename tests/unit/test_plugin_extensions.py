@@ -436,7 +436,10 @@ def test_auth_extension_public_facade_rejects_unknown_helper() -> None:
 
 def test_auth_extension_protocol_exposes_expected_shape() -> None:
     """The public extension surface is exactly one protocol with validate/register hooks."""
-    assert AuthExtension.__annotations__ == {"name": "str"}
+    name_property = AuthExtension.__dict__["name"]
+    assert isinstance(name_property, property)
+    assert name_property.fget is not None
+    assert name_property.fget.__annotations__["return"] == "str"
     assert not hasattr(AuthExtension, "enabled")
     assert EXTENSION_API_VERSION == (1, 0)
 

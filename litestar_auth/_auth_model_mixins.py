@@ -145,7 +145,7 @@ class UserRoleRelationshipMixin:
 
     @property
     def roles(self) -> list[str]:
-        """Return normalized flat role membership for the current user."""
+        """Normalized flat role membership for the current user."""
         return normalize_roles([assignment.role_name for assignment in self.role_assignments])
 
     @roles.setter

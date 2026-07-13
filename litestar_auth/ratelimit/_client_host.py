@@ -25,7 +25,7 @@ class _HostHeaderConnection(Protocol):
 
     @property
     def headers(self) -> Mapping[str, str]:
-        """Return request headers."""
+        """Request headers."""
 
 
 def _get_header_value(headers: Mapping[str, str], header_name: str) -> str | None:

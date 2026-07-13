@@ -258,12 +258,12 @@ class JWTStrategy(Strategy[UP, ID]):
 
     @property
     def revocation_posture(self) -> JWTRevocationPosture:
-        """Return the explicit revocation durability contract for this strategy."""
+        """The explicit revocation durability contract for this strategy."""
         return self._revocation_posture
 
     @property
     def revocation_is_durable(self) -> bool:
-        """Return whether token revocation is backed by a shared store."""
+        """Whether token revocation is backed by a shared store."""
         return self.revocation_posture.revocation_is_durable
 
     async def _is_token_denied(self, payload: dict[str, object]) -> bool:

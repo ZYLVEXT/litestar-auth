@@ -277,39 +277,39 @@ class BaseUserManager[UP: UserProtocol[Any], ID](
 
     @property
     def account_token_secrets(self) -> AccountTokenSecrets:
-        """Return the resolved verify/reset secret bundle used by account-token services."""
+        """The resolved verify/reset secret bundle used by account-token services."""
         return self._account_token_secrets
 
     @property
     def totp_secret_storage_posture(self) -> TotpSecretStoragePosture:
-        """Return the explicit storage contract for persisted TOTP secrets."""
+        """The explicit storage contract for persisted TOTP secrets."""
         return self._totp_secrets.storage_posture
 
     @property
     def recovery_code_lookup_secret(self) -> bytes | None:
-        """Return the configured TOTP recovery-code lookup HMAC key."""
+        """The configured TOTP recovery-code lookup HMAC key."""
         if self._totp_recovery_code_lookup_secret is None:
             return None
         return self._totp_recovery_code_lookup_secret.encode("utf-8")
 
     @property
     def hook_bus(self) -> ManagerHookBus[UP]:
-        """Return the lifecycle-hook dispatcher for this manager instance."""
+        """The lifecycle-hook dispatcher for this manager instance."""
         return self._hook_bus
 
     @property
     def users(self) -> UserLifecycleService[UP, ID]:
-        """Return the lifecycle service backing CRUD and authentication flows."""
+        """The lifecycle service backing CRUD and authentication flows."""
         return self._user_lifecycle
 
     @property
     def tokens(self) -> AccountTokensService[UP, ID]:
-        """Return the token service backing verify and reset flows."""
+        """The token service backing verify and reset flows."""
         return self._account_tokens
 
     @property
     def totp(self) -> TotpSecretsService[UP]:
-        """Return the TOTP secret service backing storage and decryption flows."""
+        """The TOTP secret service backing storage and decryption flows."""
         return self._totp_secrets
 
     async def _get_dummy_hash(self) -> str:
