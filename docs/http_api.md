@@ -25,8 +25,8 @@ mount protected controllers manually, pass `security=` to the relevant controlle
 | POST | `{auth}/refresh` | `RefreshTokenRequest` (`refresh_token`) | `enable_refresh=True` | New access token from refresh token / cookie. |
 | GET | `{auth}/sessions` | None | `include_session_devices=True` | Authenticated; list the current user's active DB-backed refresh sessions. CookieTransport clients can be marked current from the refresh cookie. |
 | POST | `{auth}/sessions` | `RefreshTokenRequest` (`refresh_token`) | `include_session_devices=True` | Authenticated; list active refresh sessions while identifying the current bearer refresh session. |
-| DELETE | `{auth}/sessions/{session_id}` | None | `include_session_devices=True` | Authenticated; revoke one of the current user's refresh sessions by public session id. |
-| POST | `{auth}/sessions/revoke-others` | Optional `RefreshTokenRequest` (`refresh_token`) for bearer clients | `include_session_devices=True` | Authenticated; revoke the current user's other refresh sessions. |
+| DELETE | `{auth}/sessions/{session_id}` | None | `include_session_devices=True` | Authenticated; revoke one of the current user's DB sessions and its linked access tokens by public session id. |
+| POST | `{auth}/sessions/revoke-others` | Optional `RefreshTokenRequest` (`refresh_token`) for bearer clients | `include_session_devices=True` | Authenticated; revoke the current user's other DB sessions and their linked access tokens. |
 | POST | `{auth}/switch-organization` | `SwitchOrganizationRequest` (`organization_slug`) | `organization_config.enabled=True`, `organization_config.include_switch_organization=True`, and a JWT-capable non-API-key backend | Authenticated; verifies target organization membership and returns an organization-bound JWT through the configured transport. |
 | POST | `{auth}/organization-invitations/accept` | `OrganizationInvitationTokenRequest` (`token`) | `organization_config.enabled=True`, `organization_config.include_organization_invitations=True` | Authenticated; validates a single-use invitation token, requires the authenticated user's normalized email to match the invitation, creates membership roles from the invitation, and consumes the invitation. |
 | POST | `{auth}/organization-invitations/decline` | `OrganizationInvitationTokenRequest` (`token`) | `organization_config.enabled=True`, `organization_config.include_organization_invitations=True` | Authenticated; validates the token and authenticated email, then revokes the pending invitation without creating membership. |
@@ -75,6 +75,11 @@ under `auth_path`. They are authenticated routes and always scope strategy calls
 The first controller slice supports strategies implementing the refresh-session management protocol,
 including the built-in DB token strategy. JWT and Redis token strategies do not provide a session
 dashboard in this slice.
+
+The built-in DB strategy links each newly issued access token to the refresh session that issued it.
+Deleting a session, revoking other sessions, detecting refresh-token replay, or expiring a refresh
+session therefore invalidates its access tokens immediately rather than waiting for their access TTL.
+Custom strategies control their own revocation semantics.
 
 | Status | Error code | Applies to | Meaning |
 | ------ | ---------- | ---------- | ------- |

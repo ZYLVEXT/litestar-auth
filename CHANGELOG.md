@@ -1,3 +1,14 @@
+## Unreleased
+
+### Security
+
+- **DB session revocation now invalidates access tokens immediately.** Database access-token rows carry the
+  nullable public refresh-session id that issued them. Revoking one session, revoking other sessions,
+  detecting refresh-token replay, or expiring a refresh session now deletes every linked access token as
+  well as the refresh chain. Previously, an already-issued access token remained usable until its access
+  TTL elapsed. **Breaking schema change:** bundled and custom access-token tables need a nullable indexed
+  `session_id` column before rollout; see Migration.
+
 ## 5.2.0 (2026-07-13)
 
 ### Security

@@ -21,7 +21,7 @@ from litestar_auth._auth_model_mixins import AccessTokenMixin, RefreshTokenMixin
 from litestar_auth.exceptions import ConfigurationError
 
 _MISSING = object()
-_REQUIRED_ACCESS_TOKEN_MODEL_ATTRIBUTES = ("token", "created_at", "user_id", "user")
+_REQUIRED_ACCESS_TOKEN_MODEL_ATTRIBUTES = ("token", "created_at", "user_id", "user", "session_id")
 _REQUIRED_REFRESH_TOKEN_MODEL_ATTRIBUTES = (
     "token",
     "created_at",
@@ -93,8 +93,8 @@ class RefreshTokenConsumedDigest(DefaultBase):
 class DatabaseTokenModels:
     """Explicit token ORM contract for ``DatabaseTokenStrategy``.
 
-    The supplied access-token model must expose mapped ``token``, ``created_at``, ``user_id``, and ``user``
-    attributes compatible with the persistence operations performed by the DB token strategy. The supplied
+    The supplied access-token model must expose mapped ``token``, ``created_at``, ``user_id``, ``user``, and
+    nullable ``session_id`` attributes compatible with the persistence operations performed by the DB token strategy. The supplied
     refresh-token model must also expose ``session_id``, ``last_used_at``, and ``client_metadata`` so
     DB-backed refresh sessions have a non-sensitive public session identifier and bounded client metadata.
     The consumed refresh-token digest model must expose mapped ``token_digest``, ``session_id``, and

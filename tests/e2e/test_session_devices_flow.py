@@ -28,6 +28,7 @@ HTTP_OK = 200
 HTTP_NO_CONTENT = 204
 HTTP_BAD_REQUEST = 400
 HTTP_NOT_FOUND = 404
+HTTP_UNAUTHORIZED = 401
 TOKEN_HASH_SECRET = "test-token-hash-secret-1234567890-1234567890"
 
 AccessToken, RefreshToken, RefreshTokenConsumedDigest = import_token_orm_models()
@@ -135,6 +136,12 @@ async def _assert_refresh_token_invalid(client: AsyncTestClient[Litestar], refre
     assert code == ErrorCode.REFRESH_TOKEN_INVALID
 
 
+async def _assert_access_token_invalid(client: AsyncTestClient[Litestar], access_token: str) -> None:
+    response = await client.get("/users/me", headers=_auth_headers(access_token))
+
+    assert response.status_code == HTTP_UNAUTHORIZED
+
+
 async def test_db_backed_session_devices_full_plugin_flow(client: AsyncTestClient[Litestar]) -> None:
     """Users manage only their own DB refresh sessions and revoked refresh tokens fail."""
     await _register(client, "owner@example.com")
@@ -189,6 +196,7 @@ async def test_db_backed_session_devices_full_plugin_flow(client: AsyncTestClien
     )
     assert revoke_owner_other.status_code == HTTP_NO_CONTENT
     await _assert_refresh_token_invalid(client, owner_other["refresh_token"])
+    await _assert_access_token_invalid(client, owner_other["access_token"])
     owner_current = await _refresh(client, owner_current["refresh_token"], "Owner Current Survived/3.0")
 
     owner_extra = await _login(client, "owner@example.com", "Owner Extra/1.0")
@@ -208,6 +216,7 @@ async def test_db_backed_session_devices_full_plugin_flow(client: AsyncTestClien
     )
     assert revoke_others.status_code == HTTP_NO_CONTENT
     await _assert_refresh_token_invalid(client, owner_extra["refresh_token"])
+    await _assert_access_token_invalid(client, owner_extra["access_token"])
 
     owner_after_revoke_others = await _list_sessions(
         client,

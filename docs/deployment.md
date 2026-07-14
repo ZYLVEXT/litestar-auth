@@ -160,6 +160,12 @@ metadata columns:
 - `last_used_at` — nullable timestamp updated on successful refresh rotation;
 - `client_metadata` — nullable bounded JSON for safe hints such as normalized User-Agent.
 
+The access-token table also requires a nullable indexed `session_id VARCHAR(36)` column. New login,
+TOTP verification, and refresh flows copy the refresh session's public id into that column so session
+revocation can delete linked access tokens immediately. Existing access-token rows cannot be mapped
+reliably to historical refresh sessions: leave them null to let the normal access TTL expire, or delete
+them during the migration to force immediate re-authentication.
+
 For bundled models, these fields come from `RefreshTokenMixin`. Existing installations must run an
 application-owned migration before rollout: add missing columns, backfill each existing row with a
 unique UUID-style `session_id`, leave `last_used_at` null for historical sessions, and only store

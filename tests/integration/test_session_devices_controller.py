@@ -280,7 +280,7 @@ async def test_session_device_routes_list_and_revoke_only_current_user_sessions(
         "code": ErrorCode.REFRESH_SESSION_NOT_FOUND.value,
     }
     assert revoke.status_code == HTTP_NO_CONTENT
-    assert owner_after_revoke.json() == {"sessions": []}
+    assert owner_after_revoke.status_code == HTTP_UNAUTHORIZED
     assert [session_item["session_id"] for session_item in other_after_revoke.json()["sessions"]] == [other_session_id]
 
 
@@ -411,7 +411,7 @@ async def test_session_device_routes_revoke_other_sessions_with_unknown_current_
 
     remaining_refresh_tokens = session.scalars(select(RefreshToken).where(RefreshToken.user_id == user.id)).all()
     assert response.status_code == HTTP_NO_CONTENT
-    assert after_revoke.json() == {"sessions": []}
+    assert after_revoke.status_code == HTTP_UNAUTHORIZED
     assert remaining_refresh_tokens == []
 
 

@@ -78,6 +78,39 @@ async def test_backend_login_composes_strategy_and_transport() -> None:
     assert called_token == "issued-token"
 
 
+async def test_backend_login_binds_access_token_to_refresh_session() -> None:
+    """Session-aware login issues an access token owned by the refresh session."""
+    user = ExampleUser(id=uuid4())
+    transport = Mock()
+    strategy = Mock()
+    strategy.write_token_for_session = AsyncMock(return_value="session-access-token")
+    backend = AuthenticationBackend[ExampleUser, UUID](
+        name="database-bearer",
+        transport=transport,
+        strategy=cast("Any", strategy),
+    )
+    response = Response(content=None)
+    transport.set_login_token.return_value = response
+
+    result = await backend.login(user, session_id="refresh-session-id")
+
+    assert result is response
+    strategy.write_token_for_session.assert_awaited_once_with(user, "refresh-session-id")
+    transport.set_login_token.assert_called_once()
+
+
+async def test_backend_login_rejects_session_binding_for_unsupported_strategy() -> None:
+    """A requested session binding never silently creates an unlinked access token."""
+    backend = AuthenticationBackend[ExampleUser, UUID](
+        name="unsupported",
+        transport=Mock(),
+        strategy=cast("Any", object()),
+    )
+
+    with pytest.raises(TypeError, match="cannot bind access tokens"):
+        await backend.login(ExampleUser(id=uuid4()), session_id="refresh-session-id")
+
+
 async def test_backend_logout_composes_strategy_and_transport() -> None:
     """Logout destroys the token before clearing transport state."""
     user = ExampleUser(id=uuid4())

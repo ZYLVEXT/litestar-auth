@@ -9,7 +9,11 @@ from typing import TYPE_CHECKING, Any, Protocol, cast, runtime_checkable
 from litestar.enums import MediaType
 
 import litestar_auth._schema_fields as schema_fields
-from litestar_auth.authentication.strategy.base import RefreshableStrategy
+from litestar_auth.authentication.strategy.base import (
+    RefreshableStrategy,
+    RefreshSessionAccessTokenStrategy,
+    RefreshSessionIdentifierStrategy,
+)
 from litestar_auth.authentication.transport.cookie import CookieTransport
 from litestar_auth.controllers._error_responses import raise_invalid_login_payload
 from litestar_auth.exceptions import ConfigurationError
@@ -54,6 +58,36 @@ def _record_refresh_token_request_context(
     """Record request metadata when the concrete refresh strategy supports it."""
     if isinstance(refresh_strategy, RefreshTokenRequestContextRecorder):
         refresh_strategy.set_refresh_token_request_context(request)
+
+
+async def _resolve_access_token_session_id[UP: UserProtocol[Any], ID](
+    backend: AuthenticationBackend[UP, ID],
+    refresh_strategy: RefreshableStrategy[UP, ID],
+    user: UP,
+    refresh_token: str,
+) -> str | None:
+    """Resolve the refresh-session id used to bind a new access token.
+
+    Returns:
+        Public refresh-session id, or ``None`` when the access strategy does not
+        support session ownership.
+
+    Raises:
+        ConfigurationError: If a session-aware strategy cannot resolve the freshly
+            issued refresh token.
+    """
+    if not isinstance(backend.strategy, RefreshSessionAccessTokenStrategy):
+        return None
+    if not isinstance(refresh_strategy, RefreshSessionIdentifierStrategy):
+        msg = "A session-aware access strategy requires refresh-session identification support."
+        raise ConfigurationError(msg)
+
+    identifier_strategy = cast("RefreshSessionIdentifierStrategy[UP]", refresh_strategy)
+    session_id = await identifier_strategy.identify_refresh_session(user, refresh_token)
+    if session_id is None:
+        msg = "The freshly issued refresh token could not be resolved to its session."
+        raise ConfigurationError(msg)
+    return session_id
 
 
 def _attach_refresh_token(

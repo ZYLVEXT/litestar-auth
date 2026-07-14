@@ -60,6 +60,7 @@ class _AccessTokenRow[UP: UserProtocol[Any]](Protocol):
     """Persisted access-token fields required for authentication."""
 
     created_at: datetime
+    session_id: str | None
     user: UP
 
 
@@ -214,6 +215,9 @@ class DatabaseTokenStrategy[UP: UserProtocol[Any], ID](
         expired_refresh_session_ids = select(self.refresh_token_model.session_id).where(
             self.refresh_token_model.created_at <= refresh_cutoff,
         )
+        linked_access_result = await session.execute(
+            delete(self.access_token_model).where(self.access_token_model.session_id.in_(expired_refresh_session_ids)),
+        )
         await session.execute(
             delete(self.consumed_refresh_token_digest_model).where(
                 self.consumed_refresh_token_digest_model.session_id.in_(expired_refresh_session_ids),
@@ -230,8 +234,9 @@ class DatabaseTokenStrategy[UP: UserProtocol[Any], ID](
         await session.commit()
 
         access_rowcount = getattr(access_result, "rowcount", 0) or 0
+        linked_access_rowcount = getattr(linked_access_result, "rowcount", 0) or 0
         refresh_rowcount = getattr(refresh_result, "rowcount", 0) or 0
-        return access_rowcount + refresh_rowcount
+        return access_rowcount + linked_access_rowcount + refresh_rowcount
 
     @override
     async def read_token(
@@ -271,8 +276,24 @@ class DatabaseTokenStrategy[UP: UserProtocol[Any], ID](
         Returns:
             Newly created opaque token string.
         """
+        return await self._write_token(user, session_id=None)
+
+    async def write_token_for_session(self, user: UP, session_id: str) -> str:
+        """Persist and return an access token linked to a refresh session.
+
+        Returns:
+            Newly created opaque access-token string.
+        """
+        return await self._write_token(user, session_id=session_id)
+
+    async def _write_token(self, user: UP, *, session_id: str | None) -> str:
+        """Persist an access token with optional refresh-session ownership.
+
+        Returns:
+            Newly created opaque access-token string.
+        """
         token, token_digest = mint_opaque_token(token_bytes=self.token_bytes, token_hash_secret=self._token_hash_secret)
-        access_token = self.access_token_model(token=token_digest, user_id=user.id)
+        access_token = self.access_token_model(token=token_digest, user_id=user.id, session_id=session_id)
         await self._repository(self._access_token_repository_type).add(access_token, auto_refresh=True)
         return token
 

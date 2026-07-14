@@ -129,6 +129,14 @@ class RefreshSessionIdentifierStrategy[UP: UserProtocol[Any]](Protocol):
 
 
 @runtime_checkable
+class RefreshSessionAccessTokenStrategy[UP: UserProtocol[Any]](Protocol):
+    """Protocol for strategies that can bind an access token to a refresh session."""
+
+    async def write_token_for_session(self, user: UP, session_id: str) -> str:
+        """Issue an access token linked to ``session_id`` for targeted revocation."""
+
+
+@runtime_checkable
 class TotpStepUpStrategy[UP: UserProtocol[Any]](Protocol):
     """Protocol for strategies that persist recent TOTP verification markers."""
 

@@ -7,7 +7,12 @@ from typing import TYPE_CHECKING, Any, Protocol, cast
 from litestar.exceptions import ClientException, NotAuthorizedException
 from litestar.response import Response
 
-from litestar_auth.authentication.strategy.base import ContextualStrategy, SessionBindable, TokenInvalidationCapable
+from litestar_auth.authentication.strategy.base import (
+    ContextualStrategy,
+    RefreshSessionAccessTokenStrategy,
+    SessionBindable,
+    TokenInvalidationCapable,
+)
 from litestar_auth.authentication.transport.base import LogoutTokenReadable
 from litestar_auth.authentication.transport.cookie import CookieTransport
 from litestar_auth.exceptions import TokenError
@@ -44,13 +49,23 @@ class AuthenticationBackend[UP: UserProtocol[Any], ID]:
 
         return type(self)(name=self.name, transport=self.transport, strategy=bound_strategy)
 
-    async def login(self, user: UP) -> Response[Any]:
+    async def login(self, user: UP, *, session_id: str | None = None) -> Response[Any]:
         """Issue a token through the configured strategy and transport.
 
         Returns:
             Response mutated by the configured transport for login.
+
+        Raises:
+            TypeError: If session binding is requested for an unsupported strategy.
         """
-        token = await self.strategy.write_token(user)
+        if session_id is None:
+            token = await self.strategy.write_token(user)
+        elif isinstance(self.strategy, RefreshSessionAccessTokenStrategy):
+            session_strategy = cast("RefreshSessionAccessTokenStrategy[UP]", self.strategy)
+            token = await session_strategy.write_token_for_session(user, session_id)
+        else:
+            msg = "The configured authentication strategy cannot bind access tokens to refresh sessions."
+            raise TypeError(msg)
         return self.transport.set_login_token(Response(content=None), token)
 
     async def logout(self, user: UP, token: str) -> Response[Any]:

@@ -34,6 +34,7 @@ from litestar_auth.controllers._auth_helpers import (
     _attach_refresh_token,
     _get_refresh_strategy,
     _record_refresh_token_request_context,
+    _resolve_access_token_session_id,
     _resolve_cookie_transport,
     _resolve_login_identifier,
     _validate_manual_cookie_auth_contract,
@@ -457,17 +458,23 @@ async def _build_authenticated_login_response[UP: UserProtocol[Any], ID](
         Backend login response with a refresh token attached when refresh support is enabled.
     """
     await ctx.login_reset(request)
-    response = await ctx.backend.login(user)
+    if ctx.refresh_strategy is None:
+        response = await ctx.backend.login(user)
+        from litestar_auth._manager.hooks import dispatch_after_login  # noqa: PLC0415
+
+        await dispatch_after_login(user_manager, user)
+        return response
+    _record_refresh_token_request_context(ctx.refresh_strategy, request)
+    refresh_token = await ctx.refresh_strategy.write_refresh_token(user)
+    session_id = await _resolve_access_token_session_id(ctx.backend, ctx.refresh_strategy, user, refresh_token)
+    response = await ctx.backend.login(user, session_id=session_id)
     from litestar_auth._manager.hooks import dispatch_after_login  # noqa: PLC0415
 
     await dispatch_after_login(user_manager, user)
-    if ctx.refresh_strategy is None:
-        return response
-    _record_refresh_token_request_context(ctx.refresh_strategy, request)
     cookie_transport = _resolve_cookie_transport(ctx.backend)
     return _attach_refresh_token(
         response,
-        await ctx.refresh_strategy.write_refresh_token(user),
+        refresh_token,
         cookie_transport=cookie_transport,
     )
 
@@ -514,7 +521,8 @@ async def _handle_auth_refresh[UP: UserProtocol[Any], ID](
         if isinstance(refresh_strategy, TokenInvalidationCapable):
             await cast("TokenInvalidationCapable[UP]", refresh_strategy).invalidate_all_tokens(user)
         raise
-    response = await ctx.backend.login(user)
+    session_id = await _resolve_access_token_session_id(ctx.backend, refresh_strategy, user, rotated_refresh_token)
+    response = await ctx.backend.login(user, session_id=session_id)
     cookie_transport = _resolve_cookie_transport(ctx.backend)
     await ctx.refresh_reset(request)
     return _attach_refresh_token(response, rotated_refresh_token, cookie_transport=cookie_transport)

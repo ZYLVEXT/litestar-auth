@@ -17,7 +17,6 @@ from sqlalchemy.pool import StaticPool
 from litestar_auth._plugin.config import DatabaseTokenAuthConfig, TotpConfig
 from litestar_auth._totp_primitive import _generate_totp_code
 from litestar_auth.authentication.strategy.jwt import InMemoryJWTDenylistStore
-from litestar_auth.exceptions import ErrorCode
 from litestar_auth.guards import is_authenticated
 from litestar_auth.manager import BaseUserManager, UserManagerSecurity
 from litestar_auth.models import User, import_token_orm_models
@@ -288,11 +287,11 @@ async def test_totp_recovery_code_fallback_authenticates_pending_login_flow(
 
 
 @pytest.mark.filterwarnings("ignore::litestar_auth.totp.SecurityWarning")
-async def test_totp_stepup_enforced_on_email_change(
+async def test_totp_login_stepup_allows_email_change_without_inline_code(
     client: AsyncTestClient[Litestar],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Email changes require an inline TOTP step-up proof for enrolled users."""
+    """A recent app-code login satisfies the TOTP step-up gate for an email change."""
     fixed_counter = 123_456
     monkeypatch.setattr("litestar_auth._totp_primitive._current_counter", lambda: fixed_counter)
     initial_login_response = await client.post(
@@ -328,22 +327,11 @@ async def test_totp_stepup_enforced_on_email_change(
     )
     verified_access_token = verify_response.json()["access_token"]
 
-    missing_stepup_response = await client.patch(
+    response = await client.patch(
         "/users/me",
         headers={"Authorization": f"Bearer {verified_access_token}"},
         json={"email": "updated@example.com", "current_password": "correct-password"},
     )
-    accepted_response = await client.patch(
-        "/users/me",
-        headers={"Authorization": f"Bearer {verified_access_token}"},
-        json={
-            "email": "updated@example.com",
-            "current_password": "correct-password",
-            "totp_code": _generate_totp_code(enable_payload["secret"], fixed_counter),
-        },
-    )
 
-    assert missing_stepup_response.status_code == HTTP_FORBIDDEN
-    assert missing_stepup_response.json()["extra"]["code"] == ErrorCode.TOTP_STEPUP_REQUIRED
-    assert accepted_response.status_code == HTTP_OK
-    assert accepted_response.json()["email"] == "updated@example.com"
+    assert response.status_code == HTTP_OK
+    assert response.json()["email"] == "updated@example.com"

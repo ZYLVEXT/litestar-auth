@@ -20,7 +20,11 @@ from litestar_auth.authentication.backend import AuthenticationBackend
 from litestar_auth.authentication.strategy.base import Strategy, UserManagerProtocol
 from litestar_auth.authentication.transport.bearer import BearerTransport
 from litestar_auth.authentication.transport.cookie import CookieTransport
-from litestar_auth.controllers._auth_helpers import _LOGIN_EMAIL_MAX_LENGTH, _LOGIN_USERNAME_MAX_LENGTH
+from litestar_auth.controllers._auth_helpers import (
+    _LOGIN_EMAIL_MAX_LENGTH,
+    _LOGIN_USERNAME_MAX_LENGTH,
+    _resolve_access_token_session_id,
+)
 from litestar_auth.exceptions import ConfigurationError, ErrorCode, InactiveUserError
 from litestar_auth.guards import is_authenticated
 from litestar_auth.ratelimit import AccountLockoutConfig, AuthRateLimitConfig, EndpointRateLimit
@@ -61,6 +65,64 @@ def test_get_refresh_strategy_raises_when_strategy_not_refreshable() -> None:
         _get_refresh_strategy(PlainStrategy())
 
     assert "enable_refresh=True requires a strategy with refresh-token support" in str(exc_info.value)
+
+
+async def test_resolve_access_token_session_id_fails_closed_for_unresolved_fresh_token() -> None:
+    """A session-aware backend must not issue an unbound access token."""
+
+    class SessionAwareStrategy(Strategy[_MinimalUser, UUID]):
+        async def read_token(
+            self,
+            token: str | None,
+            user_manager: UserManagerProtocol[_MinimalUser, UUID],
+        ) -> _MinimalUser | None:
+            return None
+
+        async def write_token(self, user: _MinimalUser) -> str:
+            return "access-token"
+
+        async def write_token_for_session(self, user: _MinimalUser, session_id: str) -> str:
+            return "linked-access-token"
+
+        async def destroy_token(self, token: str, user: _MinimalUser) -> None:
+            return None
+
+    class UnresolvableRefreshStrategy:
+        async def write_refresh_token(self, user: _MinimalUser) -> str:
+            return "refresh-token"
+
+        async def rotate_refresh_token(
+            self,
+            refresh_token: str,
+            user_manager: UserManagerProtocol[_MinimalUser, UUID],
+        ) -> tuple[_MinimalUser, str] | None:
+            return None
+
+        async def identify_refresh_session(self, user: _MinimalUser, refresh_token: str) -> None:
+            return None
+
+    backend = AuthenticationBackend(
+        name="test",
+        transport=BearerTransport(),
+        strategy=cast("Any", SessionAwareStrategy()),
+    )
+
+    with pytest.raises(ConfigurationError, match="freshly issued refresh token"):
+        await _resolve_access_token_session_id(
+            cast("Any", backend),
+            cast("Any", UnresolvableRefreshStrategy()),
+            _MinimalUser(),
+            "refresh-token",
+        )
+
+    refresh_strategy_without_identifier = cast("Any", _make_refresh_strategy())
+    with pytest.raises(ConfigurationError, match="requires refresh-session identification"):
+        await _resolve_access_token_session_id(
+            cast("Any", backend),
+            refresh_strategy_without_identifier,
+            _MinimalUser(),
+            "refresh-token",
+        )
 
 
 def test_attach_refresh_token_without_cookie_sets_json_body() -> None:

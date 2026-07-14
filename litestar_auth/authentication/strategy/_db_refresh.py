@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any, Protocol, cast
 
 from sqlalchemy import delete, select
 
@@ -25,6 +25,13 @@ if TYPE_CHECKING:
     from litestar_auth.authentication.strategy.db_models import RefreshTokenConsumedDigest
 
 
+class _SessionBoundAccessTokenRow(Protocol):
+    """Access-token fields needed to resolve its refresh session."""
+
+    user_id: object
+    session_id: str | None
+
+
 class _DatabaseRefreshSessionMixin[UP: UserProtocol[Any], ID](
     _DatabaseRefreshTokenRotationMixin[UP, ID],
 ):
@@ -36,6 +43,7 @@ class _DatabaseRefreshSessionMixin[UP: UserProtocol[Any], ID](
     token_bytes: int
     _token_hash_secret: bytes
     _refresh_token_repository_type: TokenRepositoryType
+    _access_token_repository_type: TokenRepositoryType
     consumed_refresh_token_digest_model: type[RefreshTokenConsumedDigest]
 
     def _repository(self, repository_type: TokenRepositoryType) -> SQLAlchemyAsyncRepository[Any]:
@@ -101,11 +109,15 @@ class _DatabaseRefreshSessionMixin[UP: UserProtocol[Any], ID](
             ``True`` when a matching active session was deleted, otherwise ``False``.
         """
         expired_count = await self._delete_expired_refresh_sessions_for_user(user)
+        session_ids = select(self.refresh_token_model.session_id).where(
+            self.refresh_token_model.user_id == user.id,
+            self.refresh_token_model.session_id == session_id,
+        )
+        deleted_access_count = await self._execute_delete(
+            delete(self.access_token_model).where(self.access_token_model.session_id.in_(session_ids)),
+        )
         deleted_marker_count = await self._delete_refresh_session_consumed_digests(
-            select(self.refresh_token_model.session_id).where(
-                self.refresh_token_model.user_id == user.id,
-                self.refresh_token_model.session_id == session_id,
-            ),
+            session_ids,
         )
         deleted_count = await self._execute_delete(
             delete(self.refresh_token_model).where(
@@ -113,7 +125,7 @@ class _DatabaseRefreshSessionMixin[UP: UserProtocol[Any], ID](
                 self.refresh_token_model.session_id == session_id,
             ),
         )
-        if expired_count or deleted_marker_count or deleted_count:
+        if expired_count or deleted_access_count or deleted_marker_count or deleted_count:
             await self.session.commit()
         return deleted_count > 0
 
@@ -127,11 +139,15 @@ class _DatabaseRefreshSessionMixin[UP: UserProtocol[Any], ID](
         conditions = [self.refresh_token_model.user_id == user.id]
         if current_session_id is not None:
             conditions.append(self.refresh_token_model.session_id != current_session_id)
+        session_ids = select(self.refresh_token_model.session_id).where(*conditions)
+        deleted_access_count = await self._execute_delete(
+            delete(self.access_token_model).where(self.access_token_model.session_id.in_(session_ids)),
+        )
         deleted_marker_count = await self._delete_refresh_session_consumed_digests(
-            select(self.refresh_token_model.session_id).where(*conditions),
+            session_ids,
         )
         deleted_count = await self._execute_delete(delete(self.refresh_token_model).where(*conditions))
-        if expired_count or deleted_marker_count or deleted_count:
+        if expired_count or deleted_access_count or deleted_marker_count or deleted_count:
             await self.session.commit()
         return deleted_count
 
@@ -157,7 +173,7 @@ class _DatabaseRefreshSessionMixin[UP: UserProtocol[Any], ID](
                 await self.session.commit()
             return None
         if self._is_token_expired(persisted_token.created_at, self.refresh_max_age):
-            await self._delete_refresh_token_row(persisted_token)
+            await self._revoke_refresh_session_chain(persisted_token.session_id)
             await self.session.commit()
             return None
         return persisted_token.session_id
@@ -172,9 +188,30 @@ class _DatabaseRefreshSessionMixin[UP: UserProtocol[Any], ID](
         )
         return cast("_RefreshTokenRow | None", result.scalars().first())
 
+    async def _load_totp_stepup_refresh_session_row(self, user: UP, session_id: str) -> _RefreshTokenRow | None:
+        """Resolve a refresh session from either its public id or a linked access token.
+
+        Returns:
+            Matching refresh-session row, otherwise ``None``.
+        """
+        row = await self._load_refresh_session_row(user, session_id)
+        if row is not None:
+            return row
+        access_token = cast(
+            "_SessionBoundAccessTokenRow | None",
+            await self._resolve_token(
+                self._repository(self._access_token_repository_type),
+                session_id,
+                load=[],
+            ),
+        )
+        if access_token is None or access_token.user_id != user.id or access_token.session_id is None:
+            return None
+        return await self._load_refresh_session_row(user, access_token.session_id)
+
     async def issue_totp_stepup(self, user: UP, session_id: str, *, ttl_seconds: int) -> None:
         """Store a short-lived TOTP step-up marker on a DB-backed refresh session."""
-        row = await self._load_refresh_session_row(user, session_id)
+        row = await self._load_totp_stepup_refresh_session_row(user, session_id)
         if row is None:
             return
         metadata = dict(row.client_metadata or {})
@@ -188,7 +225,7 @@ class _DatabaseRefreshSessionMixin[UP: UserProtocol[Any], ID](
 
     async def has_recent_totp_verification(self, user: UP, session_id: str) -> bool:
         """Return whether a DB-backed refresh session has a live TOTP step-up marker."""
-        row = await self._load_refresh_session_row(user, session_id)
+        row = await self._load_totp_stepup_refresh_session_row(user, session_id)
         if row is None:
             return False
         metadata = row.client_metadata or {}
@@ -211,11 +248,15 @@ class _DatabaseRefreshSessionMixin[UP: UserProtocol[Any], ID](
             Number of deleted rows.
         """
         cutoff = datetime.now(tz=UTC) - self.refresh_max_age
+        expired_session_ids = select(self.refresh_token_model.session_id).where(
+            self.refresh_token_model.user_id == user.id,
+            self.refresh_token_model.created_at <= cutoff,
+        )
+        await self._execute_delete(
+            delete(self.access_token_model).where(self.access_token_model.session_id.in_(expired_session_ids)),
+        )
         await self._delete_refresh_session_consumed_digests(
-            select(self.refresh_token_model.session_id).where(
-                self.refresh_token_model.user_id == user.id,
-                self.refresh_token_model.created_at <= cutoff,
-            ),
+            expired_session_ids,
         )
         return await self._execute_delete(
             delete(self.refresh_token_model).where(

@@ -116,7 +116,7 @@ async def test_database_token_strategy_cleanup_expired_tokens_uses_rowcount_and_
 
     deleted = await strategy.cleanup_expired_tokens(cast("Any", session))
 
-    expected_deleted = 2
+    expected_deleted = 3
     assert deleted == expected_deleted
     assert session.committed is True
     # Ensure both AccessToken and RefreshToken DELETEs were executed (matches ``delete(Model).where(...)``).

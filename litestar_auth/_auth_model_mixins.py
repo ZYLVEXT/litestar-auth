@@ -734,6 +734,12 @@ class AccessTokenMixin(_TokenModelMixin):
 
     auth_user_back_populates: ClassVar[str] = "access_tokens"
 
+    session_id: Mapped[str | None] = mapped_column(
+        String(length=_SESSION_ID_LENGTH),
+        index=True,
+        nullable=True,
+    )
+
 
 class RefreshTokenMixin(_TokenModelMixin):
     """Shared mapped attributes for refresh-token models."""

@@ -513,8 +513,10 @@ def test_access_token_model_creates_schema_and_relationship() -> None:
 
         assert "access_token" in inspector.get_table_names()
         assert primary_key["constrained_columns"] == ["token"]
-        assert set(access_token_columns).issuperset({"token", "user_id", "created_at"})
+        assert set(access_token_columns).issuperset({"token", "user_id", "created_at", "session_id"})
         assert access_token_columns["created_at"]["default"] is not None
+        assert access_token_columns["session_id"]["nullable"] is True
+        assert any(index["name"] == "ix_access_token_session_id" for index in inspector.get_indexes("access_token"))
         assert foreign_keys[0]["referred_table"] == "user"
 
         with Session(engine) as session:
@@ -529,6 +531,7 @@ def test_access_token_model_creates_schema_and_relationship() -> None:
             assert access_token.user is user
             assert user.access_tokens == [access_token]
             assert access_token.created_at is not None
+            assert access_token.session_id is None
 
 
 def test_models_package_import_token_orm_models_returns_token_model_classes() -> None:
@@ -616,6 +619,23 @@ def test_database_token_models_accept_custom_consumed_digest_model_contract() ->
             RefreshTokenConsumedDigest,
             "session_id",
             id="refresh-token-model-missing-session-contract",
+        ),
+        pytest.param(
+            "access_token_model",
+            type(
+                "IncompleteAccessToken",
+                (),
+                {
+                    "token": object(),
+                    "created_at": object(),
+                    "user_id": object(),
+                    "user": object(),
+                },
+            ),
+            RefreshToken,
+            RefreshTokenConsumedDigest,
+            "session_id",
+            id="access-token-model-missing-session-contract",
         ),
         pytest.param(
             "consumed_refresh_token_digest_model",

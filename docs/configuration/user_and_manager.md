@@ -226,6 +226,9 @@ backend = AuthenticationBackend(
 )
 ```
 
+Custom access-token classes must expose a nullable mapped `session_id`; `AccessTokenMixin` provides
+the indexed column used for immediate session-scoped revocation.
+
 Custom refresh-token classes have a session-management and reuse-detection contract in addition to
 the shared token contract. They must expose mapped `session_id`, `last_used_at`, and `client_metadata`
 attributes, while consumed digest lookup lives in the separate `refresh_token_consumed_digest` table.

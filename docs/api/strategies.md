@@ -36,6 +36,8 @@ queries. `DatabaseTokenStrategy` implements that protocol and can:
 - revoke one current-user session by public `session_id`;
 - revoke all other current-user sessions, preserving the current session when the current refresh
   credential can be identified;
+- bind newly issued access tokens to their refresh session and delete those access tokens when that
+  session is revoked, expires, or is invalidated after refresh-token replay;
 - identify a public `session_id` from a raw refresh token by hashing the supplied value and comparing
   it with stored digests;
 - record consumed refresh-token digests during rotation and revoke the whole refresh-session chain when

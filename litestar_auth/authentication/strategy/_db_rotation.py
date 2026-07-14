@@ -40,6 +40,7 @@ class _DatabaseRefreshTokenRotationMixin[UP: UserProtocol[Any], ID](
     """Refresh-token rotation operations for database-backed sessions."""
 
     session: AsyncSessionT
+    access_token_model: type[Any]
     refresh_token_model: type[Any]
     refresh_max_age: timedelta
     token_bytes: int
@@ -84,13 +85,6 @@ class _DatabaseRefreshTokenRotationMixin[UP: UserProtocol[Any], ID](
             ),
         )
 
-    async def _delete_refresh_token_row(self, persisted_token: _RefreshTokenRow) -> None:
-        """Mark a persisted refresh-token row for deletion within the current transaction."""
-        await self._repository(self._refresh_token_repository_type).delete_where(
-            token=persisted_token.token,
-            auto_commit=False,
-        )
-
     async def _find_refresh_token_row_by_consumed_digest(self, token_digest: str) -> _RefreshTokenRow | None:
         """Return the active refresh-session row that recorded ``token_digest`` as already consumed."""
         result = await self.session.execute(
@@ -104,7 +98,10 @@ class _DatabaseRefreshTokenRotationMixin[UP: UserProtocol[Any], ID](
         return cast("_RefreshTokenRow | None", result.scalars().first())
 
     async def _revoke_refresh_session_chain(self, session_id: str) -> None:
-        """Delete every refresh-token row for a compromised refresh-session chain."""
+        """Delete every access and refresh token for a compromised refresh-session chain."""
+        await self._execute_delete(
+            delete(self.access_token_model).where(self.access_token_model.session_id == session_id),
+        )
         await self._execute_delete(
             delete(self.consumed_refresh_token_digest_model).where(
                 self.consumed_refresh_token_digest_model.session_id == session_id,
@@ -173,12 +170,7 @@ class _DatabaseRefreshTokenRotationMixin[UP: UserProtocol[Any], ID](
                 await self.session.commit()
             return None
         if self._is_token_expired(persisted_token.created_at, self.refresh_max_age):
-            await self._execute_delete(
-                delete(self.consumed_refresh_token_digest_model).where(
-                    self.consumed_refresh_token_digest_model.session_id == persisted_token.session_id,
-                ),
-            )
-            await self._delete_refresh_token_row(persisted_token)
+            await self._revoke_refresh_session_chain(persisted_token.session_id)
             await self.session.commit()
             return None
 

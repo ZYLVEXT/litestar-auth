@@ -9,6 +9,7 @@ from litestar_auth._totp_recovery import _consume_matching_recovery_code
 from litestar_auth.controllers._auth_helpers import (
     _attach_refresh_token,
     _record_refresh_token_request_context,
+    _resolve_access_token_session_id,
     _resolve_cookie_transport,
 )
 from litestar_auth.controllers._error_responses import (
@@ -197,15 +198,25 @@ async def _totp_handle_verify[UP: UserProtocol[Any], ID](
 
     verified_user = cast("UP", completed_login.user)
     await totp_rate_limit.on_success("verify", request)
-    response = await runtime.backend.login(verified_user)
     if runtime.refresh_strategy is not None:
         _record_refresh_token_request_context(runtime.refresh_strategy, request)
+        refresh_token = await runtime.refresh_strategy.write_refresh_token(verified_user)
+        refresh_session_id = await _resolve_access_token_session_id(
+            runtime.backend,
+            runtime.refresh_strategy,
+            verified_user,
+            refresh_token,
+        )
+        response = await runtime.backend.login(verified_user, session_id=refresh_session_id)
         response = _attach_refresh_token(
             response,
-            await runtime.refresh_strategy.write_refresh_token(verified_user),
+            refresh_token,
             cookie_transport=_resolve_cookie_transport(runtime.backend),
         )
-    session_id = _extract_login_session_id(response)
+    else:
+        refresh_session_id = None
+        response = await runtime.backend.login(verified_user)
+    session_id = refresh_session_id or _extract_login_session_id(response)
     if session_id is not None and (not completed_login.used_recovery_code or ctx.security.totp_stepup_allow_recovery):
         await user_manager.issue_totp_stepup_verification(
             verified_user,

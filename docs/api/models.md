@@ -31,6 +31,13 @@ columns or relationship wiring from the reference classes.
 [Configuration](../configuration/user_and_manager.md#custom-sqlalchemy-user-and-token-models) covers the full
 support matrix and migration notes.
 
+## `access_token` session ownership
+
+`AccessTokenMixin.session_id` is a nullable, indexed copy of the public refresh-session id. Access-only
+flows leave it `null`; login, TOTP verification, and refresh rotation link newly issued DB access tokens
+to the corresponding refresh session. The DB strategy uses that index to invalidate only the access
+tokens owned by a revoked, expired, or replay-compromised session.
+
 ## `refresh_token` session metadata
 
 The bundled `RefreshTokenMixin` stores refresh tokens as keyed digests only. It also adds the DB-backed

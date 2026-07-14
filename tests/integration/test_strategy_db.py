@@ -48,6 +48,7 @@ if TYPE_CHECKING:
 
 pytestmark = pytest.mark.integration
 EXPECTED_CLEANUP_DELETIONS = 2
+EXPECTED_LINKED_CLEANUP_DELETIONS = 3
 EXPECTED_REVOKED_SESSIONS_WITHOUT_CURRENT = 2
 _TOKEN_HASH_SECRET = "test-token-hash-secret-1234567890-1234567890"
 CONCURRENT_REFRESH_ROTATION_COUNT = 2
@@ -726,9 +727,16 @@ async def test_database_token_strategy_cleanup_expired_tokens(session: Session) 
                 user_id=user.id,
                 created_at=now - timedelta(minutes=2),
             ),
+            AccessToken(
+                token="linked-access-token",
+                user_id=user.id,
+                session_id="expired-refresh-session-id",
+                created_at=now - timedelta(minutes=2),
+            ),
             RefreshToken(
                 token="expired-refresh-token",
                 user_id=user.id,
+                session_id="expired-refresh-session-id",
                 created_at=now - timedelta(days=40),
             ),
             RefreshToken(
@@ -759,10 +767,11 @@ async def test_database_token_strategy_cleanup_expired_tokens(session: Session) 
 
     deleted_count = await strategy.cleanup_expired_tokens(_strategy_session(session))
 
-    assert deleted_count == EXPECTED_CLEANUP_DELETIONS
+    assert deleted_count == EXPECTED_LINKED_CLEANUP_DELETIONS
     assert session.scalar(select(AccessToken).where(AccessToken.token == "expired-access-token")) is None
     assert session.scalar(select(RefreshToken).where(RefreshToken.token == "expired-refresh-token")) is None
     assert session.scalar(select(AccessToken).where(AccessToken.token == "fresh-access-token")) is not None
+    assert session.scalar(select(AccessToken).where(AccessToken.token == "linked-access-token")) is None
     assert session.scalar(select(RefreshToken).where(RefreshToken.token == "fresh-refresh-token")) is not None
     assert (
         session.scalar(
@@ -888,6 +897,8 @@ async def test_database_token_strategy_persists_totp_stepup_marker_on_refresh_se
         session=_strategy_session(session),
         token_hash_secret=_TOKEN_HASH_SECRET,
     )
+    access_token = await strategy.write_token_for_session(user, session_id)
+    foreign_access_token = await strategy.write_token_for_session(foreign_user, foreign_session_id)
 
     await strategy.issue_totp_stepup(user, "missing-session", ttl_seconds=300)
     await strategy.issue_totp_stepup(user, foreign_session_id, ttl_seconds=300)
@@ -896,7 +907,9 @@ async def test_database_token_strategy_persists_totp_stepup_marker_on_refresh_se
     persisted = session.scalar(select(RefreshToken).where(RefreshToken.session_id == session_id))
     assert persisted is not None
     assert await strategy.has_recent_totp_verification(user, session_id) is True
+    assert await strategy.has_recent_totp_verification(user, access_token) is True
     assert await strategy.has_recent_totp_verification(user, foreign_session_id) is False
+    assert await strategy.has_recent_totp_verification(user, foreign_access_token) is False
     assert (persisted.client_metadata or {}).get("totp_stepup_expires_at") is not None
 
     await strategy.issue_totp_stepup(user, session_id, ttl_seconds=0)
@@ -1077,6 +1090,7 @@ async def test_database_token_strategy_refresh_token_replay_revokes_session_chai
     persisted_refresh_token = session.scalar(select(RefreshToken).where(RefreshToken.user_id == user.id))
     assert persisted_refresh_token is not None
     session_id = persisted_refresh_token.session_id
+    access_token = await strategy.write_token_for_session(user, session_id)
 
     rotation = await strategy.rotate_refresh_token(refresh_token, UnusedUserManager())
     consumed_digest = digest_opaque_token(token_hash_secret=_TOKEN_HASH_SECRET.encode(), token=refresh_token)
@@ -1095,6 +1109,7 @@ async def test_database_token_strategy_refresh_token_replay_revokes_session_chai
     assert rotation is not None
     assert replay_rotation is None
     session.rollback()
+    assert await strategy.read_token(access_token, UnusedUserManager()) is None
     assert session.scalar(select(RefreshToken).where(RefreshToken.session_id == session_id)) is None
     assert (
         session.scalar(
@@ -1253,6 +1268,13 @@ async def test_database_token_strategy_rotate_returns_none_when_atomic_replace_l
             session_id=stale_row.session_id,
         ),
     )
+    session.add(
+        AccessToken(
+            token="race-loser-session-access-token",
+            user_id=user.id,
+            session_id=stale_row.session_id,
+        ),
+    )
     session.execute(
         update(RefreshToken)
         .where(RefreshToken.token == stale_row.token)
@@ -1264,6 +1286,7 @@ async def test_database_token_strategy_rotate_returns_none_when_atomic_replace_l
 
     assert await strategy.rotate_refresh_token(refresh_token, UnusedUserManager()) is None
     session.rollback()
+    assert session.scalar(select(AccessToken).where(AccessToken.session_id == stale_row.session_id)) is None
     assert session.scalar(select(RefreshToken).where(RefreshToken.session_id == stale_row.session_id)) is None
     assert (
         session.scalar(
@@ -1292,6 +1315,13 @@ async def test_database_token_strategy_rotate_refresh_token_deletes_expired_rows
             session_id=session_id,
         ),
     )
+    session.add(
+        AccessToken(
+            token="expired-session-access-token",
+            user_id=user.id,
+            session_id=session_id,
+        ),
+    )
     session.commit()
     strategy = DatabaseTokenStrategy(
         session=_strategy_session(session),
@@ -1301,6 +1331,7 @@ async def test_database_token_strategy_rotate_refresh_token_deletes_expired_rows
 
     assert await strategy.rotate_refresh_token(refresh_token, UnusedUserManager()) is None
     session.rollback()
+    assert session.scalar(select(AccessToken).where(AccessToken.session_id == session_id)) is None
     assert session.scalar(select(RefreshToken).where(RefreshToken.user_id == user.id)) is None
     assert (
         session.scalar(select(RefreshTokenConsumedDigest).where(RefreshTokenConsumedDigest.session_id == session_id))

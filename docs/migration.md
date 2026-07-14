@@ -1,5 +1,27 @@
 # Migration Guide
 
+## DB access-token session ownership
+
+DB session revocation now invalidates access tokens immediately instead of revoking only the refresh
+chain. Before deploying the new code, add a nullable indexed `session_id` column to the bundled or
+custom access-token table:
+
+```python
+import sqlalchemy as sa
+from alembic import op
+
+
+def upgrade() -> None:
+    op.add_column("access_token", sa.Column("session_id", sa.String(length=36), nullable=True))
+    op.create_index("ix_access_token_session_id", "access_token", ["session_id"])
+```
+
+Historical access tokens cannot be matched safely to historical refresh sessions. Leaving
+`session_id` null preserves them until their configured access TTL expires. For a strict rollout with
+immediate revocation semantics, delete existing access-token rows in the migration window and require
+users to authenticate again. Custom access-token models supplied through `DatabaseTokenModels` must
+expose the nullable mapped `session_id` attribute.
+
 ## Litestar 2.24: explicit dependency annotations
 
 litestar-auth now requires Litestar `>=2.24.0`. Litestar 2.24 deprecates *inferred*
