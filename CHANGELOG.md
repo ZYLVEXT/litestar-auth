@@ -1,4 +1,4 @@
-## Unreleased
+## 5.3.0 (2026-07-14)
 
 ### Security
 
