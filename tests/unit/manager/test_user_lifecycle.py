@@ -306,6 +306,36 @@ async def test_update_password_change_hashes_password_invalidates_tokens_and_run
     assert manager.after_update_events == [(updated_user, update_payload)]
 
 
+async def test_update_deactivation_revokes_tokens_and_api_keys() -> None:
+    """Deactivation removes every credential that could revive the account later."""
+    user_db = AsyncMock()
+    password_helper = PasswordHelper()
+    invalidator = AsyncMock()
+    deleted_api_key_users: list[object] = []
+
+    class ApiKeyStore:
+        async def delete_for_user(self, user_id: object) -> int:
+            deleted_api_key_users.append(user_id)
+            return 1
+
+    manager = TrackingUserManager(
+        user_db,
+        password_helper,
+        backends=(_Backend(strategy=type("InvalidateStrategy", (), {"invalidate_all_tokens": invalidator})()),),
+        api_key_store=ApiKeyStore(),
+    )
+    service = UserLifecycleService(manager, policy=manager.policy)
+    user = _build_user(password_helper)
+    updated_user = replace(user, is_active=False)
+    user_db.update.return_value = updated_user
+
+    result = await service.update({"is_active": False}, user, allow_privileged=True)
+
+    assert result is updated_user
+    invalidator.assert_awaited_once_with(updated_user)
+    assert deleted_api_key_users == [user.id]
+
+
 async def test_update_rejects_duplicate_email_for_another_user() -> None:
     """update() raises when a different user already owns the target email."""
     user_db = AsyncMock()

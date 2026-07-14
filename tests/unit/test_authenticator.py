@@ -86,3 +86,17 @@ async def test_authenticator_returns_none_when_all_backends_miss() -> None:
     assert result == (None, None)
     first_backend.authenticate.assert_awaited_once_with(connection, user_manager)
     second_backend.authenticate.assert_awaited_once_with(connection, user_manager)
+
+
+async def test_authenticator_rejects_inactive_users() -> None:
+    """Inactive accounts never become authenticated request users."""
+    connection = _build_connection()
+    user_manager = AsyncMock()
+    inactive_user = ExampleUser(id=uuid4(), is_active=False)
+    backend = AsyncMock()
+    backend.name = "api-key"
+    backend.authenticate.return_value = inactive_user
+
+    result = await Authenticator(cast("Any", [backend]), user_manager).authenticate(connection)
+
+    assert result == (None, None)

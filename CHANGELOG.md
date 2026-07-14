@@ -8,6 +8,18 @@
   well as the refresh chain. Previously, an already-issued access token remained usable until its access
   TTL elapsed. **Breaking schema change:** bundled and custom access-token tables need a nullable indexed
   `session_id` column before rollout; see Migration.
+- **Inactive accounts no longer authenticate with existing credentials.** The shared authenticator rejects
+  inactive users for every backend. Deactivation removes API keys and tokens from backends that support bulk
+  invalidation. Stateless JWTs remain unusable while the account is inactive, but after reactivation they retain
+  their configured TTL and denylist lifecycle.
+
+### Fixed
+
+- **Database logout now revokes only the current refresh session.** Session-bound access-token logout removes
+  its linked refresh chain while leaving the user's other devices signed in.
+- **Concurrent duplicate-email writes use the public error contract.** The SQLAlchemy adapter rolls back failed
+  user writes, maps email uniqueness races to `UserAlreadyExistsError`, and leaves best-effort password-hash
+  upgrades with a usable request session.
 
 ## 5.2.0 (2026-07-13)
 

@@ -21,7 +21,7 @@ mount protected controllers manually, pass `security=` to the relevant controlle
 | Method | Path | Request body | Enabled when | Description |
 | ------ | ---- | ------------ | ------------ | ----------- |
 | POST | `{auth}/login` | `LoginCredentials` (`identifier`, `password`) | Always (auth controller) | Credentials → tokens / session. |
-| POST | `{auth}/logout` | None | Always | Authenticated; clears session per strategy. |
+| POST | `{auth}/logout` | None | Always | Authenticated; clears the current access token and its linked DB refresh session, if any. |
 | POST | `{auth}/refresh` | `RefreshTokenRequest` (`refresh_token`) | `enable_refresh=True` | New access token from refresh token / cookie. |
 | GET | `{auth}/sessions` | None | `include_session_devices=True` | Authenticated; list the current user's active DB-backed refresh sessions. CookieTransport clients can be marked current from the refresh cookie. |
 | POST | `{auth}/sessions` | `RefreshTokenRequest` (`refresh_token`) | `include_session_devices=True` | Authenticated; list active refresh sessions while identifying the current bearer refresh session. |

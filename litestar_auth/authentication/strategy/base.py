@@ -74,8 +74,9 @@ class RefreshableStrategy[UP: UserProtocol[Any], ID](Protocol):
 
     Note:
         Refresh tokens are intentionally modeled as a separate lifecycle artifact from
-        access tokens. In particular, `Strategy.destroy_token()` only targets the access
-        token used for request authentication; refresh-token invalidation (if any) is
+        access tokens. `Strategy.destroy_token()` invalidates the access token used for
+        request authentication; a strategy with session-bound access tokens may also
+        revoke the linked refresh session. Independent refresh-session invalidation is
         managed by the refresh strategy itself.
     """
 

@@ -2,8 +2,7 @@
 
 from __future__ import annotations
 
-import importlib
-from typing import TYPE_CHECKING, Any, cast
+from typing import Any, cast
 from unittest.mock import AsyncMock, Mock
 from uuid import UUID, uuid4
 
@@ -19,21 +18,9 @@ from litestar_auth.authentication.transport.cookie import CookieTransport
 from litestar_auth.exceptions import ErrorCode, TokenError
 from tests._helpers import ExampleUser
 
-if TYPE_CHECKING:
-    from types import ModuleType
-
 pytestmark = pytest.mark.unit
 
 HTTP_SERVICE_UNAVAILABLE = 503
-
-
-def _backend_module() -> ModuleType:
-    """Import the backend module lazily so coverage records module execution.
-
-    Returns:
-        The runtime backend module object.
-    """
-    return importlib.import_module("litestar_auth.authentication.backend")
 
 
 def _build_connection() -> ASGIConnection[Any, Any, Any, Any]:
@@ -181,21 +168,20 @@ async def test_backend_logout_does_not_read_transport_token() -> None:
 
 
 async def test_terminate_session_reads_transport_token_then_delegates_to_logout() -> None:
-    """Session termination revokes refresh artifacts before logout invalidation+cleanup."""
+    """Session termination delegates exactly the current transport token to logout."""
     user = ExampleUser(id=uuid4())
     connection = _build_connection()
     transport = Mock()
     transport.read_token = AsyncMock(return_value="authenticate-token")
     transport.read_logout_token = AsyncMock(return_value="logout-token")
 
-    class StrategyWithRevocation:
+    class Strategy:
         def __init__(self) -> None:
             self.read_token = AsyncMock()
             self.write_token = AsyncMock()
             self.destroy_token = AsyncMock()
-            self.invalidate_all_tokens = AsyncMock()
 
-    strategy = StrategyWithRevocation()
+    strategy = Strategy()
     expected_response = Response(content=None)
     transport.set_logout.return_value = expected_response
     backend = AuthenticationBackend[ExampleUser, UUID](
@@ -209,11 +195,8 @@ async def test_terminate_session_reads_transport_token_then_delegates_to_logout(
     assert response is expected_response
     transport.read_logout_token.assert_awaited_once_with(connection)
     transport.read_token.assert_not_called()
-    strategy.invalidate_all_tokens.assert_awaited_once_with(user)
     strategy.destroy_token.assert_awaited_once_with("logout-token", user)
     transport.set_logout.assert_called_once()
-    assert strategy.destroy_token.await_count == 1
-    assert strategy.invalidate_all_tokens.await_count == 1
 
 
 async def test_terminate_session_falls_back_to_read_token_without_logout_reader() -> None:
@@ -223,45 +206,13 @@ async def test_terminate_session_falls_back_to_read_token_without_logout_reader(
     transport = Mock()
     transport.read_token = AsyncMock(return_value="authenticate-token")
 
-    class StrategyWithRevocation:
-        def __init__(self) -> None:
-            self.read_token = AsyncMock()
-            self.write_token = AsyncMock()
-            self.destroy_token = AsyncMock()
-            self.invalidate_all_tokens = AsyncMock()
-
-    strategy = StrategyWithRevocation()
-    expected_response = Response(content=None)
-    transport.set_logout.return_value = expected_response
-    backend = AuthenticationBackend[ExampleUser, UUID](
-        name="bearer-db",
-        transport=transport,
-        strategy=cast("Any", strategy),
-    )
-
-    response = await backend.terminate_session(connection, user)
-
-    assert response is expected_response
-    transport.read_token.assert_awaited_once_with(connection)
-    strategy.invalidate_all_tokens.assert_awaited_once_with(user)
-    strategy.destroy_token.assert_awaited_once_with("authenticate-token", user)
-    transport.set_logout.assert_called_once()
-
-
-async def test_terminate_session_skips_refresh_invalidation_when_strategy_lacks_protocol() -> None:
-    """Session termination only revokes all artifacts for protocol-matching strategies."""
-    user = ExampleUser(id=uuid4())
-    connection = _build_connection()
-    transport = Mock()
-    transport.read_token = AsyncMock(return_value="authenticate-token")
-
-    class StrategyWithoutRevocation:
+    class Strategy:
         def __init__(self) -> None:
             self.read_token = AsyncMock()
             self.write_token = AsyncMock()
             self.destroy_token = AsyncMock()
 
-    strategy = StrategyWithoutRevocation()
+    strategy = Strategy()
     expected_response = Response(content=None)
     transport.set_logout.return_value = expected_response
     backend = AuthenticationBackend[ExampleUser, UUID](
@@ -467,25 +418,5 @@ async def test_terminate_session_raises_when_transport_has_no_current_token() ->
     with pytest.raises(NotAuthorizedException, match=r"Authentication credentials were not provided\."):
         await backend.terminate_session(connection, user)
 
-    strategy.invalidate_all_tokens.assert_not_called()
     strategy.destroy_token.assert_not_called()
     transport.set_logout.assert_not_called()
-
-
-async def test_invalidate_refresh_artifacts_is_noop_for_non_capable_strategy() -> None:
-    """Refresh invalidation helper skips strategies without bulk-invalidation support."""
-
-    class StrategyWithoutRefreshInvalidation:
-        async def read_token(self, token: str | None, user_manager: object) -> object:
-            return None
-
-        async def write_token(self, user: object) -> str:
-            return "token"
-
-        async def destroy_token(self, token: str, user: object) -> None:
-            pass
-
-    strategy = StrategyWithoutRefreshInvalidation()
-    user = ExampleUser(id=uuid4())
-
-    await _backend_module()._invalidate_refresh_artifacts(cast("Any", strategy), user)

@@ -9,6 +9,7 @@ from uuid import UUID
 from advanced_alchemy.base import ModelProtocol
 from advanced_alchemy.filters import LimitOffset
 from sqlalchemy import func, inspect, select, update
+from sqlalchemy.exc import IntegrityError
 
 from litestar_auth.db._contract import _validate_oauth_account_model_contract
 from litestar_auth.db._repositories import (
@@ -21,7 +22,12 @@ from litestar_auth.db._repositories import (
 from litestar_auth.db._sqlalchemy_api_keys import SQLAlchemyApiKeyStore
 from litestar_auth.db._sqlalchemy_organizations import SQLAlchemyOrganizationStore
 from litestar_auth.db.base import BaseUserStore, OAuthAccountData
-from litestar_auth.exceptions import ConfigurationError, OAuthAccountAlreadyLinkedError
+from litestar_auth.exceptions import (
+    ConfigurationError,
+    OAuthAccountAlreadyLinkedError,
+    UserAlreadyExistsError,
+    UserIdentifier,
+)
 from litestar_auth.oauth_encryption import (
     OAuthTokenEncryption,
     bind_oauth_token_encryption,
@@ -496,9 +502,26 @@ class SQLAlchemyUserDatabase[UP: SQLAlchemyUserModelProtocol](BaseUserStore[UP, 
 
         Returns:
             Newly persisted user instance.
+
+        Raises:
+            UserAlreadyExistsError: If another user already owns the email.
         """
         user = self.user_model(**dict(user_dict))
-        created_user = await self._repository().add(user, auto_refresh=True)
+        try:
+            created_user = await self._repository().add(user, auto_refresh=True)
+        except Exception as exc:
+            await self.session.rollback()
+            email = user_dict.get("email")
+            if (
+                isinstance(exc.__cause__, IntegrityError)
+                and isinstance(email, str)
+                and await self.get_by_email(email) is not None
+            ):
+                raise UserAlreadyExistsError(
+                    identifier=UserIdentifier(identifier_type="email", identifier_value=email),
+                    message=UserAlreadyExistsError.default_message,
+                ) from exc
+            raise
         return await self._reload_with_relationships(created_user)
 
     @override
@@ -524,6 +547,7 @@ class SQLAlchemyUserDatabase[UP: SQLAlchemyUserModelProtocol](BaseUserStore[UP, 
             Updated user instance.
 
         Raises:
+            UserAlreadyExistsError: If another user already owns the updated email.
             ValueError: If ``update_dict`` references fields that are neither
                 mapped attributes (columns or relationships) nor settable
                 Python properties on the configured user model.
@@ -539,11 +563,25 @@ class SQLAlchemyUserDatabase[UP: SQLAlchemyUserModelProtocol](BaseUserStore[UP, 
         for field_name, value in update_dict.items():
             setattr(persistent_user, field_name, value)
 
-        return await self._repository().update(
-            persistent_user,
-            auto_refresh=True,
-            load=self._user_load or None,
-        )
+        try:
+            return await self._repository().update(
+                persistent_user,
+                auto_refresh=True,
+                load=self._user_load or None,
+            )
+        except Exception as exc:
+            await self.session.rollback()
+            email = update_dict.get("email")
+            if (
+                isinstance(exc.__cause__, IntegrityError)
+                and isinstance(email, str)
+                and await self.get_by_email(email) is not None
+            ):
+                raise UserAlreadyExistsError(
+                    identifier=UserIdentifier(identifier_type="email", identifier_value=email),
+                    message=UserAlreadyExistsError.default_message,
+                ) from exc
+            raise
 
     async def set_recovery_code_hashes(self, user: UP, code_index: dict[str, str]) -> UP:
         """Replace the user's active TOTP recovery-code lookup index.

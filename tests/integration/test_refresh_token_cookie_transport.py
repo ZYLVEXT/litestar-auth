@@ -421,6 +421,13 @@ async def test_refresh_is_rejected_after_logout(
     """After logout, the pre-logout refresh token is rejected immediately."""
     test_client, _session, controller_class, user = client
 
+    surviving_login_response = await test_client.post(
+        "/auth/login",
+        json={"identifier": "user@example.com", "password": "correct-password"},
+    )
+    surviving_refresh_cookie = surviving_login_response.cookies.get("litestar_auth_refresh")
+    assert isinstance(surviving_refresh_cookie, str)
+
     login_response = await test_client.post(
         "/auth/login",
         json={"identifier": "user@example.com", "password": "correct-password"},
@@ -440,6 +447,11 @@ async def test_refresh_is_rejected_after_logout(
     await logout_handler(controller, request)
 
     refresh_response = await test_client.post("/auth/refresh", json={"refresh_token": refresh_cookie})
+    surviving_refresh_response = await test_client.post(
+        "/auth/refresh",
+        json={"refresh_token": surviving_refresh_cookie},
+    )
 
     assert refresh_response.status_code == HTTP_BAD_REQUEST
     assert refresh_response.json()["detail"] == "The refresh token is invalid."
+    assert surviving_refresh_response.status_code == HTTP_CREATED

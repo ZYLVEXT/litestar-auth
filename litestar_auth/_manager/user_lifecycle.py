@@ -188,6 +188,7 @@ class UserLifecycleService[UP, ID]:
             updated_user=updated_user,
             email_changed=email_changed,
             password_changed=password_changed,
+            deactivated=update_dict.get("is_active") is False,
         )
         await self._hook_bus.fire("after_update", updated_user, update_dict)
         return updated_user
@@ -241,10 +242,13 @@ class UserLifecycleService[UP, ID]:
         updated_user: UP,
         email_changed: bool,
         password_changed: bool,
+        deactivated: bool,
     ) -> None:
         """Invalidate tokens and issue re-verification token where required."""
-        if email_changed or password_changed:
+        if email_changed or password_changed or deactivated:
             await self.invalidate_all_tokens(updated_user)
+        if deactivated:
+            await self._delete_api_keys_for_user(_managed_user(updated_user).id)
         if email_changed and self._manager.reset_verification_on_email_change:
             token = self._manager.write_verify_token(updated_user)
             await self._hook_bus.fire("after_request_verify_token", updated_user, token)

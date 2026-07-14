@@ -881,7 +881,7 @@ async def test_organization_invitation_routes_require_active_verified_invitees(
     route_path: str,
     account_state: Literal["inactive", "unverified"],
 ) -> None:
-    """Invitee route guards deny account-state failures before mutating invitation rows."""
+    """Authentication and route guards deny invalid invitee account states before mutation."""
     user = ExampleUser(
         id=uuid4(),
         email="invited@example.com",
@@ -920,7 +920,7 @@ async def test_organization_invitation_routes_require_active_verified_invitees(
             headers={"Authorization": f"Bearer {auth_token}"},
         )
 
-    assert response.status_code == HTTP_FORBIDDEN
+    assert response.status_code == (401 if account_state == "inactive" else HTTP_FORBIDDEN)
     assert invitation.status == "pending"
     assert store.memberships == {}
 

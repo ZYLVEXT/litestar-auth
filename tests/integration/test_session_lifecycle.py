@@ -492,7 +492,7 @@ async def test_database_token_preset_login_authenticate_logout_use_one_session_e
     assert logout_sessions == 1
     assert state.write_session_ids == [1]
     assert state.read_session_ids == [2, 3]
-    assert state.invalidate_session_ids == [3]
+    assert state.invalidate_session_ids == []
     assert state.destroy_session_ids == [3]
 
 

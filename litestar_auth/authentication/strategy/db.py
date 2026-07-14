@@ -299,7 +299,14 @@ class DatabaseTokenStrategy[UP: UserProtocol[Any], ID](
 
     @override
     async def destroy_token(self, token: str, user: UP) -> None:
-        """Delete a persisted token."""
+        """Delete a persisted token and its linked refresh session, if any."""
+        access_token = await self._resolve_access_token(token)
+        if (
+            access_token is not None
+            and access_token.session_id is not None
+            and await self.revoke_refresh_session(user, access_token.session_id)
+        ):
+            return
         token_digest = self._token_digest(token)
         await self._repository(self._access_token_repository_type).delete_where(token=token_digest, auto_commit=False)
         await self.session.commit()

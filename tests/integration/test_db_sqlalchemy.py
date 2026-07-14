@@ -7,11 +7,12 @@ import base64
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from typing import TYPE_CHECKING, Any, cast
+from unittest.mock import AsyncMock, patch
 from uuid import uuid4
 
 import pytest
 from advanced_alchemy.base import UUIDBase, UUIDPrimaryKey, create_registry
-from advanced_alchemy.exceptions import NotFoundError
+from advanced_alchemy.exceptions import NotFoundError, RepositoryError
 from sqlalchemy import String, inspect, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
@@ -21,7 +22,7 @@ from litestar_auth.authentication.strategy.db_models import AccessToken, Refresh
 from litestar_auth.db import ApiKeyData, BaseApiKeyStore, BaseOAuthAccountStore, BaseUserStore, OAuthAccountData
 from litestar_auth.db._repositories import _build_oauth_repository, _build_user_load, _build_user_repository
 from litestar_auth.db.sqlalchemy import SQLAlchemyApiKeyStore, SQLAlchemyUserDatabase
-from litestar_auth.exceptions import ConfigurationError, OAuthAccountAlreadyLinkedError
+from litestar_auth.exceptions import ConfigurationError, OAuthAccountAlreadyLinkedError, UserAlreadyExistsError
 from litestar_auth.models import (
     AccessTokenMixin,
     ApiKey,
@@ -195,6 +196,10 @@ class AsyncSessionAdapter:
     async def commit(self) -> None:
         """Commit the current transaction."""
         self._session.commit()
+
+    async def rollback(self) -> None:
+        """Roll back the current transaction."""
+        self._session.rollback()
 
     async def delete(self, instance: object) -> None:
         """Delete an instance from the session."""
@@ -423,6 +428,63 @@ async def test_sqlalchemy_user_database_crud(session: SASession) -> None:
     await database.delete(updated_user.id)
 
     assert await database.get(updated_user.id) is None
+
+
+async def test_sqlalchemy_user_database_maps_duplicate_email_and_recovers_session(session: SASession) -> None:
+    """Database uniqueness races use the public duplicate-user contract and leave the session usable."""
+    database = create_database(session)
+    await database.create({"email": "duplicate@example.com", "hashed_password": "hashed-password"})
+    await database.session.commit()
+
+    with pytest.raises(UserAlreadyExistsError):
+        await database.create({"email": "duplicate@example.com", "hashed_password": "other-hash"})
+
+    created = await database.create({"email": "after-duplicate@example.com", "hashed_password": "hashed-password"})
+    assert created.email == "after-duplicate@example.com"
+
+
+async def test_sqlalchemy_user_database_maps_duplicate_email_update(session: SASession) -> None:
+    """Concurrent-style duplicate email updates use the same public error contract."""
+    database = create_database(session)
+    first = await database.create({"email": "first@example.com", "hashed_password": "hashed-password"})
+    second = await database.create({"email": "second@example.com", "hashed_password": "hashed-password"})
+    await database.session.commit()
+
+    with pytest.raises(UserAlreadyExistsError):
+        await database.update(second, {"email": first.email})
+
+    assert await database.get_by_email("second@example.com") is not None
+
+
+async def test_sqlalchemy_user_database_rolls_back_failed_create(session: SASession) -> None:
+    """A failed create rolls back before exposing the repository error."""
+    database = create_database(session)
+    repository = SimpleNamespace(add=AsyncMock(side_effect=RepositoryError("db unavailable")))
+
+    with (
+        patch.object(database, "_repository", return_value=repository),
+        patch.object(database.session, "rollback", wraps=database.session.rollback) as rollback,
+        pytest.raises(RepositoryError),
+    ):
+        await database.create({"email": "failed@example.com", "hashed_password": "hash"})
+
+    rollback.assert_awaited_once()
+
+
+async def test_sqlalchemy_user_database_rolls_back_failed_update(session: SASession) -> None:
+    """A swallowed best-effort update error cannot poison the shared request session."""
+    database = create_database(session)
+    user = await database.create({"email": "rehash@example.com", "hashed_password": "old-hash"})
+    repository = SimpleNamespace(update=AsyncMock(side_effect=RepositoryError("db unavailable")))
+
+    with (
+        patch.object(database, "_repository", return_value=repository),
+        patch.object(database.session, "rollback", wraps=database.session.rollback) as rollback,
+        pytest.raises(RepositoryError),
+    ):
+        await database.update(user, {"hashed_password": "new-hash"})
+
+    rollback.assert_awaited_once()
 
 
 async def test_sqlalchemy_api_key_store_round_trips_bundled_api_key_model(session: SASession) -> None:

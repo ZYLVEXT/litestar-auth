@@ -41,7 +41,7 @@ class Authenticator[UP: UserProtocol[Any], ID]:
             else:
                 user = await backend.authenticate(connection, self.user_manager)
                 result = None if user is None else (user, backend.name)
-            if result is not None:
+            if result is not None and getattr(result[0], "is_active", True) is not False:
                 return result
 
         return None, None

@@ -11,7 +11,6 @@ from litestar_auth.authentication.strategy.base import (
     ContextualStrategy,
     RefreshSessionAccessTokenStrategy,
     SessionBindable,
-    TokenInvalidationCapable,
 )
 from litestar_auth.authentication.transport.base import LogoutTokenReadable
 from litestar_auth.authentication.transport.cookie import CookieTransport
@@ -119,7 +118,6 @@ class AuthenticationBackend[UP: UserProtocol[Any], ID]:
         if token is None:
             msg = "Authentication credentials were not provided."
             raise NotAuthorizedException(detail=msg)
-        await _invalidate_refresh_artifacts(self.strategy, user)
         return await self.logout(user, token)
 
     async def authenticate(
@@ -178,14 +176,3 @@ def _bind_strategy_session[UP: UserProtocol[Any], ID, S](
     # SessionBindable is checked structurally at runtime, but the session type parameter is known only to callers.
     bindable = cast("SessionBindable[UP, ID, S]", strategy)
     return bindable.with_session(session)
-
-
-async def _invalidate_refresh_artifacts[UP: UserProtocol[Any], ID](
-    strategy: StrategyProtocol[UP, ID],
-    user: UP,
-) -> None:
-    """Invalidate refresh/session artifacts for strategies that support full revocation."""
-    if isinstance(strategy, TokenInvalidationCapable):
-        # Runtime-checkable generic protocols narrow their type parameter to Never here.
-        revocation_strategy = cast("TokenInvalidationCapable[UP]", strategy)
-        await revocation_strategy.invalidate_all_tokens(user)

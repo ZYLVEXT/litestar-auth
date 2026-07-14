@@ -28,7 +28,7 @@ def test_bind_auth_session_to_alchemy_uses_post_init_scope_key() -> None:
     first_binding = bind_auth_session_to_alchemy(first)
     second_binding = bind_auth_session_to_alchemy(second)
 
-    assert first_binding.session_scope_key == SESSION_SCOPE_KEY
+    assert first_binding.session_scope_key == first.session_scope_key
     assert second_binding.session_scope_key != first_binding.session_scope_key
 
 

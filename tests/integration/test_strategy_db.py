@@ -575,6 +575,30 @@ async def test_database_token_strategy_destroy_token_removes_row(session: Sessio
     assert session.scalar(select(AccessToken).where(AccessToken.user_id == user.id)) is None
 
 
+async def test_database_token_strategy_destroy_token_revokes_only_its_refresh_session(session: Session) -> None:
+    """Logout revokes the current refresh chain without signing out other devices."""
+    user = _create_user(session, email="destroy-session-token@example.com")
+    strategy = DatabaseTokenStrategy(
+        session=_strategy_session(session),
+        token_hash_secret=_TOKEN_HASH_SECRET,
+    )
+    first_refresh = await strategy.write_refresh_token(user)
+    first_session_id = await strategy.identify_refresh_session(user, first_refresh)
+    second_refresh = await strategy.write_refresh_token(user)
+    second_session_id = await strategy.identify_refresh_session(user, second_refresh)
+    assert first_session_id is not None
+    assert second_session_id is not None
+    first_access = await strategy.write_token_for_session(user, first_session_id)
+    second_access = await strategy.write_token_for_session(user, second_session_id)
+
+    await strategy.destroy_token(first_access, user)
+
+    assert await strategy.read_token(first_access, UnusedUserManager()) is None
+    assert await strategy.rotate_refresh_token(first_refresh, UnusedUserManager()) is None
+    assert await strategy.read_token(second_access, UnusedUserManager()) is not None
+    assert await strategy.rotate_refresh_token(second_refresh, UnusedUserManager()) is not None
+
+
 async def test_database_token_strategy_rejects_missing_and_expired_tokens(session: Session) -> None:
     """Missing and expired tokens do not authenticate a user."""
     user = _create_user(session, email="expired-token@example.com")

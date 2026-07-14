@@ -753,9 +753,7 @@ async def test_users_me_rejects_deactivated_user_with_existing_session(
     assert deactivate_response.json()["is_active"] is False
 
     me_response = await test_client.get("/users/me", headers=member_headers)
-    assert me_response.status_code == HTTP_BAD_REQUEST
-    assert me_response.json()["detail"] == "Account is not available for sign-in."
-    assert me_response.json()["code"] == ErrorCode.LOGIN_ACCOUNT_UNAVAILABLE
+    assert me_response.status_code == HTTP_UNAUTHORIZED
 
 
 async def test_role_guards_and_request_user_roles_survive_relational_storage(

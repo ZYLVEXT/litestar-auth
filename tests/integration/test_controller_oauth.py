@@ -1844,30 +1844,7 @@ async def test_associate_rejects_inactive_authenticated_user() -> None:
             headers={"Authorization": "Bearer bearer-token"},
             follow_redirects=False,
         )
-        assert authorize_response.status_code == HTTP_FOUND
-        state_cookie = authorize_response.cookies["__oauth_associate_state_github"]
-        state = _oauth_state_from_cookie(state_cookie)
-        client.cookies.set(
-            "__oauth_associate_state_github",
-            state_cookie,
-            domain="testserver.local",
-            path="/auth/associate/github",
-        )
-        callback_response = await client.get(
-            "/auth/associate/github/callback",
-            params={"code": "associate-code", "state": state},
-            headers={"Authorization": "Bearer bearer-token"},
-        )
-
-    assert callback_response.status_code == HTTP_BAD_REQUEST
-    body = callback_response.json()
-    code = body.get("code") or (body.get("extra") or {}).get("code")
-    assert code == ErrorCode.LOGIN_ACCOUNT_UNAVAILABLE
-    _assert_state_cookie_cleared(
-        callback_response,
-        cookie_name="__oauth_associate_state_github",
-        cookie_path="/auth/associate/github",
-    )
+    assert authorize_response.status_code == HTTP_UNAUTHORIZED
     assert user_db.oauth_accounts == {}
 
 

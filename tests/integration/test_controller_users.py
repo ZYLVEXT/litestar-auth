@@ -883,15 +883,9 @@ async def test_me_endpoints_reject_inactive_users(
         json={"current_password": "user-password", "new_password": "rotated-password"},
     )
 
-    assert get_response.status_code == HTTP_BAD_REQUEST
-    assert get_response.json()["detail"] == "Account is not available for sign-in."
-    assert (get_response.json().get("extra") or {}).get("code") == ErrorCode.LOGIN_ACCOUNT_UNAVAILABLE
-    assert patch_response.status_code == HTTP_BAD_REQUEST
-    assert patch_response.json()["detail"] == "Account is not available for sign-in."
-    assert (patch_response.json().get("extra") or {}).get("code") == ErrorCode.LOGIN_ACCOUNT_UNAVAILABLE
-    assert change_password_response.status_code == HTTP_BAD_REQUEST
-    assert change_password_response.json()["detail"] == "Account is not available for sign-in."
-    assert (change_password_response.json().get("extra") or {}).get("code") == ErrorCode.LOGIN_ACCOUNT_UNAVAILABLE
+    assert get_response.status_code == HTTP_UNAUTHORIZED
+    assert patch_response.status_code == HTTP_UNAUTHORIZED
+    assert change_password_response.status_code == HTTP_UNAUTHORIZED
 
 
 async def test_update_me_maps_user_manager_errors(
