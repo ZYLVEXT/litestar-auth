@@ -47,7 +47,7 @@ from litestar_auth.exceptions import (
     OrganizationMembershipNotFoundError,
     OrganizationNotFoundError,
 )
-from litestar_auth.guards import is_active, is_superuser, is_verified
+from litestar_auth.guards import is_active, is_superuser, is_verified, requires_password_session
 
 if TYPE_CHECKING:
     from datetime import datetime
@@ -198,7 +198,7 @@ def _resolve_admin_guards(settings: OrganizationAdminControllerConfig[Any]) -> l
         ConfigurationError: If an empty guard sequence is supplied.
     """
     if settings.guards is None:
-        return [is_superuser]
+        return [is_superuser, requires_password_session]
     if not settings.guards:
         msg = "create_organization_admin_controller guards must not be empty."
         raise ConfigurationError(msg)
@@ -368,7 +368,7 @@ async def _require_path_organization_authority(
     )
 
 
-def _create_controller_type(controller_name: str) -> type[_OrganizationAdminControllerBase]:  # noqa: C901
+def _create_controller_type(controller_name: str) -> type[_OrganizationAdminControllerBase]:  # ruff: ignore[complex-structure]
     exception_handlers = _create_request_body_exception_handlers(
         RequestBodyErrorConfig(
             validation_detail="Invalid organization-admin payload.",
@@ -402,7 +402,7 @@ def _create_controller_type(controller_name: str) -> type[_OrganizationAdminCont
             )
 
         @post(status_code=201, exception_handlers=exception_handlers)
-        async def create_organization(  # noqa: PLR6301
+        async def create_organization(  # ruff: ignore[no-self-use]
             self,
             request: Request[Any, Any, Any],
             data: msgspec.Struct,
@@ -757,13 +757,13 @@ def _create_organization_invitation_controller_type(
     class OrganizationInvitationController(_OrganizationInvitationControllerBase):
         @post(
             "/organization-invitations/accept",
-            guards=[is_active, is_verified],
+            guards=[is_active, is_verified, requires_password_session],
             status_code=HTTP_200_OK,
             before_request=ctx.accept_before_request,
             security=security,
             exception_handlers=exception_handlers,
         )
-        async def accept_invitation(  # noqa: PLR6301
+        async def accept_invitation(  # ruff: ignore[no-self-use]
             self,
             request: Request[Any, Any, Any],
             data: msgspec.Struct,
@@ -784,13 +784,13 @@ def _create_organization_invitation_controller_type(
 
         @post(
             "/organization-invitations/decline",
-            guards=[is_active, is_verified],
+            guards=[is_active, is_verified, requires_password_session],
             status_code=HTTP_204_NO_CONTENT,
             before_request=ctx.decline_before_request,
             security=security,
             exception_handlers=exception_handlers,
         )
-        async def decline_invitation(  # noqa: PLR6301
+        async def decline_invitation(  # ruff: ignore[no-self-use]
             self,
             request: Request[Any, Any, Any],
             data: msgspec.Struct,
@@ -854,7 +854,7 @@ def create_organization_invitation_controller(
 
 
 @overload
-def create_organization_admin_controller[ID](  # noqa: D418
+def create_organization_admin_controller[ID](  # ruff: ignore[overload-with-docstring]
     *,
     controller_config: OrganizationAdminControllerConfig[ID],
 ) -> type[Controller]:
@@ -862,7 +862,7 @@ def create_organization_admin_controller[ID](  # noqa: D418
 
 
 @overload
-def create_organization_admin_controller[ID](  # noqa: D418
+def create_organization_admin_controller[ID](  # ruff: ignore[overload-with-docstring]
     **options: Unpack[OrganizationAdminControllerOptions[ID]],
 ) -> type[Controller]:
     """Build an organization-admin controller from keyword settings."""

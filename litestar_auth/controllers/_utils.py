@@ -73,7 +73,7 @@ def _is_litestar_auth_route_handler(route_handler: object) -> bool:
     return bool(getattr(route_handler, _LITESTAR_AUTH_ROUTE_HANDLER_ATTR, False))
 
 
-from litestar_auth.controllers._request_body import (  # noqa: E402
+from litestar_auth.controllers._request_body import (  # ruff: ignore[module-import-not-at-top-of-file]
     _HTTP_BAD_REQUEST,
     ErrorCallback,
     RequestBodyErrorConfig,
@@ -86,7 +86,10 @@ from litestar_auth.controllers._request_body import (  # noqa: E402
     _finalize_route_handler,
     _set_data_parameter_annotation,
 )
-from litestar_auth.controllers._user_schema import _require_msgspec_struct, _to_user_schema  # noqa: E402
+from litestar_auth.controllers._user_schema import (  # ruff: ignore[module-import-not-at-top-of-file]
+    _require_msgspec_struct,
+    _to_user_schema,
+)
 
 __all__ = (
     "_HTTP_BAD_REQUEST",

@@ -13,9 +13,9 @@ if TYPE_CHECKING:
 
     from litestar_auth.oauth_encryption import OAuthTokenEncryption
 
-_OAUTH_TOKEN_ENCRYPTION_INSTANCE_KEY = "_litestar_auth_oauth_token_encryption"  # noqa: S105
-_OAUTH_TOKEN_ENCRYPTION_SNAPSHOT_KEY = "_litestar_auth_oauth_token_snapshot"  # noqa: S105
-_OAUTH_TOKEN_ENCRYPTION_TRACKED_TARGETS_KEY = "_litestar_auth_oauth_snapshot_targets"  # noqa: S105
+_OAUTH_TOKEN_ENCRYPTION_INSTANCE_KEY = "_litestar_auth_oauth_token_encryption"  # ruff: ignore[hardcoded-password-string]
+_OAUTH_TOKEN_ENCRYPTION_SNAPSHOT_KEY = "_litestar_auth_oauth_token_snapshot"  # ruff: ignore[hardcoded-password-string]
+_OAUTH_TOKEN_ENCRYPTION_TRACKED_TARGETS_KEY = "_litestar_auth_oauth_snapshot_targets"  # ruff: ignore[hardcoded-password-string]
 _OAUTH_TOKEN_FIELDS: tuple[str, str] = ("access_token", "refresh_token")
 
 
@@ -30,7 +30,7 @@ def _resolve_instance_oauth_token_encryption(
     session: object | None = None,
 ) -> OAuthTokenEncryption | None:
     """Return the policy for one ORM instance, preferring the active session binding."""
-    from litestar_auth.oauth_encryption import (  # noqa: PLC0415
+    from litestar_auth.oauth_encryption import (  # ruff: ignore[import-outside-top-level]
         OAuthTokenEncryption,
         get_bound_oauth_token_encryption,
     )
@@ -50,7 +50,7 @@ def _resolve_instance_oauth_token_encryption(
 
 def _require_instance_oauth_token_encryption(target: object) -> OAuthTokenEncryption:
     """Return the explicit policy for a mapped OAuth instance before persistence."""
-    from litestar_auth.oauth_encryption import require_oauth_token_encryption  # noqa: PLC0415
+    from litestar_auth.oauth_encryption import require_oauth_token_encryption  # ruff: ignore[import-outside-top-level]
 
     policy = _resolve_instance_oauth_token_encryption(target)
     return require_oauth_token_encryption(policy, context="persisting OAuth access and refresh tokens")
@@ -171,13 +171,13 @@ def _restore_oauth_token_snapshots_after_rollback(session: object, *_args: objec
         _restore_oauth_token_snapshot(target)
 
 
-def _encrypt_oauth_tokens_before_insert(mapper: object, connection: object, target: object) -> None:  # noqa: ARG001
+def _encrypt_oauth_tokens_before_insert(mapper: object, connection: object, target: object) -> None:  # ruff: ignore[unused-function-argument]
     """Encrypt OAuth token fields immediately before INSERT statements."""
     policy = _require_instance_oauth_token_encryption(target)
     _snapshot_and_encrypt_oauth_tokens(target, field_names=_OAUTH_TOKEN_FIELDS, policy=policy)
 
 
-def _encrypt_oauth_tokens_before_update(mapper: object, connection: object, target: object) -> None:  # noqa: ARG001
+def _encrypt_oauth_tokens_before_update(mapper: object, connection: object, target: object) -> None:  # ruff: ignore[unused-function-argument]
     """Encrypt changed OAuth token fields immediately before UPDATE statements."""
     state: Any = sa_inspect(target)
     changed_fields = tuple(
@@ -189,6 +189,6 @@ def _encrypt_oauth_tokens_before_update(mapper: object, connection: object, targ
     _snapshot_and_encrypt_oauth_tokens(target, field_names=changed_fields, policy=policy)
 
 
-def _restore_oauth_tokens_after_write(mapper: object, connection: object, target: object) -> None:  # noqa: ARG001
+def _restore_oauth_tokens_after_write(mapper: object, connection: object, target: object) -> None:  # ruff: ignore[unused-function-argument]
     """Restore plaintext OAuth token fields after a successful INSERT/UPDATE."""
     _restore_oauth_token_snapshot(target)

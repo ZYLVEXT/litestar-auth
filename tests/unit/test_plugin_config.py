@@ -36,7 +36,12 @@ from litestar_auth._plugin.user_manager_builder import (
 )
 from litestar_auth._tenant_resolution import DEFAULT_ORGANIZATION_HEADER, ClaimTenantResolver, HeaderTenantResolver
 from litestar_auth.authentication.backend import AuthenticationBackend
-from litestar_auth.authentication.strategy._jwt_denylist import InMemoryJWTDenylistStore, JWTDenylistStore
+from litestar_auth.authentication.strategy._jwt_denylist import (
+    InMemoryJWTDenylistStore,
+    JWTDenylistStore,
+    JWTReplayStore,
+    JWTReplayStoreResult,
+)
 from litestar_auth.authentication.strategy.db import DatabaseTokenStrategy
 from litestar_auth.authentication.strategy.db_models import AccessToken, RefreshToken
 from litestar_auth.authentication.transport.bearer import BearerTransport
@@ -116,6 +121,30 @@ class _SharedAccountLockoutStore:
 
     async def reset(self, key: AccountLockoutKey) -> None:
         """Clear tracked state."""
+
+
+class _CustomSharedJWTReplayStore:
+    """Structural shared replay store without an optional durability marker."""
+
+    async def deny(self, jti: str, *, ttl_seconds: int) -> bool:
+        """Record a revocation.
+
+        Returns:
+            Always ``True`` for this shared-store contract double.
+        """
+        return True
+
+    async def is_denied(self, jti: str) -> bool:
+        """Return whether a JTI is revoked."""
+        return False
+
+    async def mark_used(self, jti: str, *, ttl_seconds: int) -> JWTReplayStoreResult:
+        """Atomically record a consumed JTI.
+
+        Returns:
+            A successful atomic-store outcome.
+        """
+        return JWTReplayStoreResult(stored=True)
 
 
 def _fernet_key() -> str:
@@ -445,6 +474,13 @@ def test_account_lockout_config_rejects_invalid_settings(kwargs: dict[str, objec
         AccountLockoutConfig(**cast("Any", kwargs))
 
 
+@pytest.mark.parametrize("window_seconds", [float("nan"), float("inf"), float("-inf")])
+def test_account_lockout_config_rejects_non_finite_window(window_seconds: float) -> None:
+    """Lockout TTLs must remain finite so every counter expires predictably."""
+    with pytest.raises(ConfigurationError, match="window_seconds"):
+        AccountLockoutConfig(window_seconds=window_seconds)
+
+
 def test_account_lockout_config_is_frozen_after_construction() -> None:
     """Account lockout settings are immutable after construction."""
     account_lockout_config = AccountLockoutConfig()
@@ -526,6 +562,41 @@ def test_require_shared_account_lockout_store_for_multiworker_accepts_shared_sto
     startup_module.require_shared_account_lockout_store_for_multiworker(config)
 
 
+def test_plugin_config_defaults_to_no_account_token_replay_store() -> None:
+    """The portable default remains unset and is diagnosed at production startup."""
+    assert _minimal_config().account_token_denylist_store is None
+
+
+def test_require_shared_account_token_replay_store_for_multiworker_rejects_process_local_store() -> None:
+    """Known multi-worker verify/reset routes reject misleading process-local replay state."""
+    config = _minimal_config()
+    config.deployment_worker_count = 2
+    config.account_token_denylist_store = InMemoryJWTDenylistStore()
+
+    with pytest.raises(ConfigurationError, match="shared JWTReplayStore"):
+        startup_module.require_shared_account_token_replay_store_for_multiworker(config)
+
+
+def test_require_shared_account_token_replay_store_for_multiworker_accepts_shared_store() -> None:
+    """A structural custom store retains the established shared-store default."""
+    config = _minimal_config()
+    config.deployment_worker_count = 2
+    config.account_token_denylist_store = _CustomSharedJWTReplayStore()
+
+    startup_module.require_shared_account_token_replay_store_for_multiworker(config)
+
+
+def test_account_token_replay_topology_guard_skips_disabled_routes() -> None:
+    """No shared replay store is required when both account-token routes are disabled."""
+    config = _minimal_config()
+    config.include_verify = False
+    config.include_reset_password = False
+    config.deployment_worker_count = 2
+    config.account_token_denylist_store = None
+
+    startup_module.require_shared_account_token_replay_store_for_multiworker(config)
+
+
 def test_plugin_config_module_does_not_reexport_database_token_helpers() -> None:
     """DB-token helpers are owned by ``database_token``, not lazily forwarded by config."""
     for name in (
@@ -552,7 +623,7 @@ def test_default_builder_constructor_mismatch_diagnostic_matches_security_bundle
     assert "directly instead" not in msg
 
 
-def _minimal_config(  # noqa: PLR0913
+def _minimal_config(  # ruff: ignore[too-many-arguments]
     *,
     backends: list[AuthenticationBackend[ExampleUser, UUID]] | None = None,
     include_users: bool = False,
@@ -1237,6 +1308,17 @@ def test_litestar_auth_config_rejects_negative_register_minimum_response_seconds
             user_model=ExampleUser,
             user_manager_class=PluginUserManager,
             request_verify_minimum_response_seconds=-0.001,
+        )
+
+
+@pytest.mark.parametrize("value", [float("nan"), float("inf"), float("-inf")])
+def test_litestar_auth_config_rejects_non_finite_timing_floor(value: float) -> None:
+    """Plugin timing floors cannot be disabled or made unbounded by non-finite values."""
+    with pytest.raises(ConfigurationError, match="login_minimum_response_seconds must be non-negative and finite"):
+        LitestarAuthConfig[ExampleUser, UUID](
+            user_model=ExampleUser,
+            user_manager_class=PluginUserManager,
+            login_minimum_response_seconds=value,
         )
 
 
@@ -2691,7 +2773,7 @@ def test_build_user_manager_injects_default_password_helper_without_prior_materi
     """The default builder always supplies the shared helper even before app-owned code asks for it."""
 
     class _PasswordHelperRequiredManager(PluginUserManager):
-        def __init__(  # noqa: PLR0913
+        def __init__(  # ruff: ignore[too-many-arguments]
             self,
             user_db: object,
             *,
@@ -2913,7 +2995,7 @@ def test_build_user_manager_passes_typed_security_to_security_only_manager() -> 
     """The fixed default builder forwards the typed security bundle end-to-end."""
 
     class _SecurityOnlyManager(PluginUserManager):
-        def __init__(  # noqa: PLR0913
+        def __init__(  # ruff: ignore[too-many-arguments]
             self,
             user_db: object,
             *,
@@ -2980,7 +3062,7 @@ def test_build_user_manager_requires_canonical_default_constructor_contract() ->
     """Managers that narrow the default constructor surface must use `user_manager_factory`."""
 
     class _LegacyManagerWithoutSecurity(PluginUserManager):
-        def __init__(  # noqa: PLR0913
+        def __init__(  # ruff: ignore[too-many-arguments]
             self,
             user_db: object,
             *,
@@ -3036,7 +3118,7 @@ def test_build_user_manager_preserves_configured_unsafe_testing_flag() -> None:
     """The default builder forwards the top-level unsafe-testing flag unchanged."""
 
     class _UnsafeTestingManager(PluginUserManager):
-        def __init__(  # noqa: PLR0913
+        def __init__(  # ruff: ignore[too-many-arguments]
             self,
             user_db: object,
             *,
@@ -3145,6 +3227,7 @@ def test_litestar_auth_config_session_maker_annotation_is_runtime_resolvable() -
             "AuthExtension": AuthExtension,
             "AuthRateLimitConfig": AuthRateLimitConfig,
             "JWTDenylistStore": JWTDenylistStore,
+            "JWTReplayStore": JWTReplayStore,
             "msgspec": msgspec,
         },
     )
@@ -3182,7 +3265,7 @@ def test_litestar_auth_config_builds_deferred_default_user_db_factory() -> None:
 
 def test_uses_bundled_database_token_models_detects_manual_db_backend_with_bundled_models() -> None:
     """Bundled DB-token models still trigger startup bootstrap for manual backend assembly."""
-    from litestar_auth.authentication.strategy.db import DatabaseTokenStrategy  # noqa: PLC0415
+    from litestar_auth.authentication.strategy.db import DatabaseTokenStrategy  # ruff: ignore[import-outside-top-level]
 
     strategy = DatabaseTokenStrategy(session=cast("Any", object()), token_hash_secret="0123456789abcdef" * 4)
     backend = AuthenticationBackend[ExampleUser, UUID](

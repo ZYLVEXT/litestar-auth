@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from datetime import UTC, datetime, timedelta, timezone, tzinfo
 from typing import TYPE_CHECKING, Any
 from unittest.mock import AsyncMock
@@ -265,7 +266,7 @@ class UnusedUserManager:
     """Placeholder user manager for the shared strategy interface."""
 
     @staticmethod
-    async def get(user_id: object) -> User | None:  # noqa: ARG004
+    async def get(user_id: object) -> User | None:  # ruff: ignore[unused-static-method-argument]
         """Return ``None`` because the DB strategy resolves users directly.
 
         Returns:
@@ -278,7 +279,7 @@ class UnusedCustomUserManager:
     """Placeholder user manager for custom-user strategy tests."""
 
     @staticmethod
-    async def get(user_id: object) -> CustomTokenUser | None:  # noqa: ARG004
+    async def get(user_id: object) -> CustomTokenUser | None:  # ruff: ignore[unused-static-method-argument]
         """Return ``None`` because the DB strategy resolves custom users directly.
 
         Returns:
@@ -291,7 +292,7 @@ class UnusedPasswordHashColumnUserManager:
     """Placeholder user manager for custom password-column strategy tests."""
 
     @staticmethod
-    async def get(user_id: object) -> PasswordHashColumnUser | None:  # noqa: ARG004
+    async def get(user_id: object) -> PasswordHashColumnUser | None:  # ruff: ignore[unused-static-method-argument]
         """Return ``None`` because the DB strategy resolves custom users directly.
 
         Returns:
@@ -1103,8 +1104,11 @@ async def test_database_token_strategy_unknown_refresh_token_keeps_unrelated_ses
     )
 
 
-async def test_database_token_strategy_refresh_token_replay_revokes_session_chain(session: Session) -> None:
-    """Replaying a consumed refresh token revokes the active refresh session."""
+async def test_database_token_strategy_refresh_token_replay_revokes_session_chain(
+    session: Session,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Replaying a consumed refresh token revokes the active refresh session and reports it."""
     user = _create_user(session, email="refresh-replay@example.com")
     strategy = DatabaseTokenStrategy(
         session=_strategy_session(session),
@@ -1128,10 +1132,16 @@ async def test_database_token_strategy_refresh_token_replay_revokes_session_chai
         is not None
     )
     session.commit()
-    replay_rotation = await strategy.rotate_refresh_token(refresh_token, UnusedUserManager())
+    with caplog.at_level(logging.WARNING, logger="litestar_auth.security"):
+        replay_rotation = await strategy.rotate_refresh_token(refresh_token, UnusedUserManager())
 
     assert rotation is not None
     assert replay_rotation is None
+    reuse_events = [
+        record for record in caplog.records if getattr(record, "event", None) == "refresh_token_reuse_detected"
+    ]
+    assert len(reuse_events) == 1
+    assert getattr(reuse_events[0], "session_id", None) == session_id
     session.rollback()
     assert await strategy.read_token(access_token, UnusedUserManager()) is None
     assert session.scalar(select(RefreshToken).where(RefreshToken.session_id == session_id)) is None

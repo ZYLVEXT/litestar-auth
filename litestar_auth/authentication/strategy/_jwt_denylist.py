@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import math
 import time
@@ -14,7 +15,7 @@ from litestar_auth._optional_deps import _require_redis_asyncio
 if TYPE_CHECKING:
     from litestar_auth._redis_protocols import RedisExpiringValueStoreClient
 
-logger = logging.getLogger(__name__)
+_SECURITY_LOGGER = logging.getLogger("litestar_auth.security")
 
 
 def denylist_ttl_seconds(exp: object, *, now: float | None = None) -> int:
@@ -67,12 +68,34 @@ class JWTDenylistStore(Protocol):
         """Return whether the JTI is revoked."""
 
 
+@dataclass(frozen=True, slots=True)
+class JWTReplayStoreResult:
+    """Outcome of atomically recording a JTI as consumed.
+
+    Attributes:
+        stored: ``True`` only when this call recorded a previously unseen JTI.
+        rejected_as_replay: When ``stored`` is ``False``, ``True`` if the JTI was
+            already present. ``False`` means the store rejected a new JTI for
+            another reason, such as in-memory capacity pressure.
+    """
+
+    stored: bool
+    rejected_as_replay: bool = False
+
+
+class JWTReplayStore(JWTDenylistStore, Protocol):
+    """JWT denylist that can also consume a JTI exactly once."""
+
+    async def mark_used(self, jti: str, *, ttl_seconds: int) -> JWTReplayStoreResult:
+        """Atomically record an unseen JTI and reject concurrent replays."""
+
+
 class InMemoryJWTDenylistStore:
     """Process-local denylist store (best-effort).
 
     **Capacity:** Each :meth:`deny` call prunes expired JTIs first. When the map is already at
-    ``max_entries`` and no expired entries remain, :meth:`deny` **fails closed**: it logs an
-    error and does **not** insert the new JTI, preserving every existing active revocation.
+    ``max_entries`` and no expired entries remain, :meth:`deny` reports failure and does
+    **not** insert the new JTI, preserving every existing active revocation.
     The store never evicts a still-valid revoked JTI to admit another (older releases dropped
     the soonest-expiring entry under pressure, which could revive a revoked token). Size
     ``max_entries`` for peak concurrent revocations or use :class:`RedisJWTDenylistStore` for
@@ -95,12 +118,13 @@ class InMemoryJWTDenylistStore:
 
         self.max_entries = max_entries
         self._denylisted_until: dict[str, float] = {}
+        self._lock = asyncio.Lock()
 
     async def deny(self, jti: str, *, ttl_seconds: int) -> bool:
         """Record the revoked JTI (TTL is best-effort in memory).
 
         When the store is at capacity and no expired rows can be reclaimed, the new revocation
-        is skipped (fail-closed) so existing denylist entries are never dropped to make room.
+        is skipped and the caller is told it failed; existing entries are never dropped.
 
         Returns:
             ``False`` when a new JTI could not be inserted at capacity; ``True`` otherwise.
@@ -112,11 +136,11 @@ class InMemoryJWTDenylistStore:
             self._denylisted_until[jti] = expires_at
             return True
         if len(self._denylisted_until) >= self.max_entries:
-            logger.error(
-                "Rejected in-memory JWT denylist insert: capacity %d reached with no "
-                "expired entries to reclaim (fail closed). Use RedisJWTDenylistStore or "
-                "increase max_entries for high-volume deployments.",
-                self.max_entries,
+            _SECURITY_LOGGER.error(
+                "Rejected in-memory JWT denylist insert: capacity reached with no expired "
+                "entries to reclaim. Use RedisJWTDenylistStore or increase "
+                "max_entries for high-volume deployments.",
+                extra={"event": "jwt_denylist_capacity_exceeded", "max_entries": self.max_entries},
             )
             return False
 
@@ -132,6 +156,22 @@ class InMemoryJWTDenylistStore:
             self._denylisted_until.pop(jti, None)
             return False
         return True
+
+    async def mark_used(self, jti: str, *, ttl_seconds: int) -> JWTReplayStoreResult:
+        """Atomically record a JTI only when it has not already been consumed.
+
+        Returns:
+            Stored, replay, or capacity-pressure outcome.
+        """
+        async with self._lock:
+            now = time.time()
+            self._prune_expired(now)
+            if jti in self._denylisted_until:
+                return JWTReplayStoreResult(stored=False, rejected_as_replay=True)
+            if len(self._denylisted_until) >= self.max_entries:
+                return JWTReplayStoreResult(stored=False, rejected_as_replay=False)
+            self._denylisted_until[jti] = now + max(ttl_seconds, 1)
+            return JWTReplayStoreResult(stored=True)
 
     def _prune_expired(self, now: float) -> None:
         """Remove all entries whose TTL has elapsed."""
@@ -182,6 +222,17 @@ class RedisJWTDenylistStore:
     async def is_denied(self, jti: str) -> bool:
         """Return whether the JTI key exists in Redis."""
         return await self.redis.get(self._key(jti)) is not None
+
+    async def mark_used(self, jti: str, *, ttl_seconds: int) -> JWTReplayStoreResult:
+        """Atomically record an unseen JTI using ``SET NX EX``.
+
+        Returns:
+            Stored or replay outcome for the JTI.
+        """
+        stored = await self.redis.set(self._key(jti), "1", nx=True, ex=max(ttl_seconds, 1))
+        if stored is True:
+            return JWTReplayStoreResult(stored=True)
+        return JWTReplayStoreResult(stored=False, rejected_as_replay=True)
 
 
 @dataclass(slots=True, frozen=True)

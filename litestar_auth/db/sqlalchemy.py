@@ -39,7 +39,7 @@ if TYPE_CHECKING:
 
     from advanced_alchemy.repository import SQLAlchemyAsyncRepository
     from sqlalchemy.ext.asyncio import AsyncSession, async_scoped_session
-    from sqlalchemy.orm import InstrumentedAttribute
+    from sqlalchemy.orm import InstrumentedAttribute, Mapper
     from sqlalchemy.sql import Select
 
     from litestar_auth.types import LoginIdentifier
@@ -162,7 +162,7 @@ class _SqliteJsonRemoveStrategy:
         Returns:
             ``True`` when a lookup entry was removed; otherwise ``False``.
         """
-        mapper = inspect(request.user_model)
+        mapper = cast("Mapper[Any]", inspect(request.user_model))
         primary_key_column = mapper.primary_key[0]
         recovery_codes_column = mapper.columns["recovery_codes"]
         lookup_path = f'$."{request.lookup_hex}"'
@@ -199,7 +199,8 @@ class _SelectForUpdateStrategy:
         Returns:
             ``True`` when a lookup entry was removed; otherwise ``False``.
         """
-        primary_key_column = inspect(request.user_model).primary_key[0]
+        mapper = cast("Mapper[Any]", inspect(request.user_model))
+        primary_key_column = mapper.primary_key[0]
         result = await request.session.execute(
             select(request.user_model).where(primary_key_column == request.user.id).with_for_update(),
         )

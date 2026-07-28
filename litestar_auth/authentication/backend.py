@@ -86,7 +86,7 @@ class AuthenticationBackend[UP: UserProtocol[Any], ID]:
         except TokenError as exc:
             raise ClientException(
                 status_code=503,
-                detail=str(exc),
+                detail=TokenError.default_message,
                 extra={"code": exc.code},
             ) from exc
         response = self.transport.set_logout(Response(content=None))

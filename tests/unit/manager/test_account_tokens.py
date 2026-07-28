@@ -317,6 +317,43 @@ def test_write_token_subject_includes_expected_typ_header() -> None:
     assert jwt.get_unverified_header(token)["typ"] == EXPECTED_JWT_TYPE
 
 
+@pytest.mark.parametrize("claim", ["aud", "exp", "iat", "jti", "nbf", "sub"])
+def test_write_token_subject_rejects_protected_claim_overrides(claim: str) -> None:
+    """Custom account-token claims cannot replace signer-owned security claims."""
+    with pytest.raises(ValueError, match="protected JWT claims"):
+        account_tokens_module.AccountTokenSecurityService.write_token_subject(
+            subject="user-123",
+            secret="verification-token-secret-1234567890",
+            audience=VERIFY_TOKEN_AUDIENCE,
+            lifetime=timedelta(minutes=5),
+            extra_claims={claim: "attacker-controlled"},
+        )
+
+
+def test_reset_token_writer_ignores_custom_password_fingerprint() -> None:
+    """Reset tokens always bind to the user's current persisted password hash."""
+    user_db = AsyncMock()
+    password_helper = PasswordHelper()
+    manager = TrackingUserManager(user_db, password_helper)
+    user = _build_user(password_helper)
+
+    token = manager.tokens.write_user_token(
+        user,
+        secret=manager.reset_password_token_secret.get_secret_value(),
+        audience=RESET_PASSWORD_TOKEN_AUDIENCE,
+        lifetime=manager.reset_password_token_lifetime,
+        extra_claims={"password_fingerprint": "attacker-controlled"},
+    )
+    payload = jwt.decode(
+        token,
+        manager.reset_password_token_secret.get_secret_value(),
+        algorithms=["HS256"],
+        audience=RESET_PASSWORD_TOKEN_AUDIENCE,
+    )
+
+    assert payload["password_fingerprint"] == manager.tokens.password_fingerprint(user.hashed_password)
+
+
 def test_security_write_token_keeps_compatibility_kwargs() -> None:
     """The token-security compatibility writer still signs the provided subject."""
     user_db = AsyncMock()
@@ -498,8 +535,8 @@ async def test_reset_password_rejects_token_without_password_fingerprint() -> No
     password_helper = PasswordHelper()
     manager = TrackingUserManager(user_db, password_helper)
     user = _build_user(password_helper)
-    token = manager._account_tokens.write_user_token(
-        user,
+    token = manager.tokens.security.write_token(
+        subject=str(user.id),
         secret=manager.reset_password_token_secret.get_secret_value(),
         audience=RESET_PASSWORD_TOKEN_AUDIENCE,
         lifetime=manager.reset_password_token_lifetime,

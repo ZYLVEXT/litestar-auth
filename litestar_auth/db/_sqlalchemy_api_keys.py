@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING, ClassVar, Protocol, TypedDict, Unpack, cast, override
+from typing import TYPE_CHECKING, Any, ClassVar, Protocol, TypedDict, Unpack, cast, override
 from uuid import UUID
 
 from advanced_alchemy.base import ModelProtocol
@@ -17,7 +17,7 @@ if TYPE_CHECKING:
     from collections.abc import Callable
 
     from sqlalchemy.ext.asyncio import AsyncSession, async_scoped_session
-    from sqlalchemy.orm import InstrumentedAttribute
+    from sqlalchemy.orm import InstrumentedAttribute, Mapper
     from sqlalchemy.sql import Select
     from sqlalchemy.sql.elements import ColumnElement
 
@@ -323,7 +323,8 @@ class SQLAlchemyApiKeyStore[AK: _ApiKeyRow](BaseApiKeyStore[AK, UUID]):
         Raises:
             ConfigurationError: If the API-key model does not expose exactly one ``user_id`` foreign key.
         """
-        api_key_columns = inspect(self.api_key_model).columns
+        mapper = cast("Mapper[Any]", inspect(self.api_key_model))
+        api_key_columns = mapper.columns
         if "user_id" not in api_key_columns:
             msg = "api_key_model must map a user_id column."
             raise ConfigurationError(msg)

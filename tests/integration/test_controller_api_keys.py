@@ -181,7 +181,7 @@ def _api_key_is_active(row: InMemoryApiKeyRow) -> bool:
     return row.expires_at is None or row.expires_at > datetime.now(tz=UTC)
 
 
-def _error_code(response: Any) -> object:  # noqa: ANN401
+def _error_code(response: Any) -> object:  # ruff: ignore[any-type]
     body = response.json()
     extra = body.get("extra")
     if isinstance(extra, dict):
@@ -201,7 +201,7 @@ def scoped_read() -> dict[str, bool]:
     return {"ok": True}
 
 
-def build_app(  # noqa: PLR0913
+def build_app(  # ruff: ignore[too-many-arguments]
     *,
     max_keys_per_user: int = 5,
     allowed_scopes: tuple[str, ...] = ("read", "write"),
@@ -328,7 +328,7 @@ def build_app(  # noqa: PLR0913
     return app, api_key_store, bearer_strategy, owner, other
 
 
-async def _login(_client: Any, user: ExampleUser, strategy: InMemoryTokenStrategy) -> dict[str, str]:  # noqa: ANN401
+async def _login(_client: Any, user: ExampleUser, strategy: InMemoryTokenStrategy) -> dict[str, str]:  # ruff: ignore[any-type]
     token = await strategy.write_token(user)
     return {"Authorization": f"Bearer {token}"}
 
@@ -393,7 +393,7 @@ def _hmac_headers(
     }
 
 
-async def test_create_returns_raw_secret_once_and_get_never_exposes_it(async_test_client_factory: Any) -> None:  # noqa: ANN401
+async def test_create_returns_raw_secret_once_and_get_never_exposes_it(async_test_client_factory: Any) -> None:  # ruff: ignore[any-type]
     """POST returns the raw API key once; password-session GETs return metadata only."""
     app, _store, strategy, owner, _other = build_app()
     async with async_test_client_factory(app) as test_client:
@@ -435,7 +435,7 @@ async def test_create_returns_raw_secret_once_and_get_never_exposes_it(async_tes
         assert jwt_list_response.json() == list_response.json()
 
 
-async def test_self_routes_do_not_expose_foreign_keys(async_test_client_factory: Any) -> None:  # noqa: ANN401
+async def test_self_routes_do_not_expose_foreign_keys(async_test_client_factory: Any) -> None:  # ruff: ignore[any-type]
     """A user cannot read another user's API-key metadata by key id."""
     app, _store, strategy, owner, other = build_app()
     async with async_test_client_factory(app) as test_client:
@@ -454,7 +454,7 @@ async def test_self_routes_do_not_expose_foreign_keys(async_test_client_factory:
         assert _error_code(response) == ErrorCode.API_KEY_INVALID
 
 
-async def test_create_enforces_current_password_scope_and_limit(async_test_client_factory: Any) -> None:  # noqa: ANN401
+async def test_create_enforces_current_password_scope_and_limit(async_test_client_factory: Any) -> None:  # ruff: ignore[any-type]
     """Create fails closed for bad step-up credentials, denied scopes, and max-key limit."""
     app, _store, strategy, owner, _other = build_app(max_keys_per_user=1, allowed_scopes=("read",))
     async with async_test_client_factory(app) as test_client:
@@ -492,7 +492,7 @@ async def test_create_enforces_current_password_scope_and_limit(async_test_clien
 
 
 async def test_create_rejects_signing_required_when_signing_is_not_configured(
-    async_test_client_factory: Any,  # noqa: ANN401
+    async_test_client_factory: Any,  # ruff: ignore[any-type]
 ) -> None:
     """Signing-required create requests fail with a structured 400 unless signing support is configured."""
     app, _store, strategy, owner, _other = build_app()
@@ -515,7 +515,7 @@ async def test_create_rejects_signing_required_when_signing_is_not_configured(
 
 
 async def test_create_current_password_requirement_follows_controller_config(
-    async_test_client_factory: Any,  # noqa: ANN401
+    async_test_client_factory: Any,  # ruff: ignore[any-type]
 ) -> None:
     """Self-service create requires current_password by default but can be explicitly relaxed."""
     required_app, _required_store, required_strategy, required_owner, _other = build_app()
@@ -542,7 +542,7 @@ async def test_create_current_password_requirement_follows_controller_config(
     assert relaxed_response.status_code == HTTP_CREATED
 
 
-async def test_create_requires_totp_stepup_for_enrolled_user(async_test_client_factory: Any) -> None:  # noqa: ANN401
+async def test_create_requires_totp_stepup_for_enrolled_user(async_test_client_factory: Any) -> None:  # ruff: ignore[any-type]
     """API-key creation fails before persistence when an enrolled user lacks TOTP step-up."""
     secret = generate_totp_secret()
     app, store, strategy, owner, _other = build_app(owner_totp_secret=secret)
@@ -560,7 +560,7 @@ async def test_create_requires_totp_stepup_for_enrolled_user(async_test_client_f
     assert store.rows == {}
 
 
-async def test_create_accepts_inline_totp_code_for_enrolled_user(async_test_client_factory: Any) -> None:  # noqa: ANN401
+async def test_create_accepts_inline_totp_code_for_enrolled_user(async_test_client_factory: Any) -> None:  # ruff: ignore[any-type]
     """A valid inline TOTP code satisfies the API-key create step-up gate."""
     secret = generate_totp_secret()
     app, _store, strategy, owner, _other = build_app(owner_totp_secret=secret)
@@ -581,7 +581,7 @@ async def test_create_accepts_inline_totp_code_for_enrolled_user(async_test_clie
     assert response.status_code == HTTP_CREATED
 
 
-async def test_api_key_authenticates_then_revoke_blocks_future_use(async_test_client_factory: Any) -> None:  # noqa: ANN401
+async def test_api_key_authenticates_then_revoke_blocks_future_use(async_test_client_factory: Any) -> None:  # ruff: ignore[any-type]
     """A created API key authenticates protected routes until revoked."""
     app, _store, strategy, owner, _other = build_app()
     async with async_test_client_factory(app) as test_client:
@@ -606,7 +606,7 @@ async def test_api_key_authenticates_then_revoke_blocks_future_use(async_test_cl
 
 
 async def test_successful_api_key_use_updates_last_used_without_consuming_invalid_attempt_bucket(
-    async_test_client_factory: Any,  # noqa: ANN401
+    async_test_client_factory: Any,  # ruff: ignore[any-type]
 ) -> None:
     """Successful API-key authentication records use without consuming the invalid-attempt bucket."""
     backend = InMemoryRateLimiter(max_attempts=1, window_seconds=60)
@@ -633,7 +633,7 @@ async def test_successful_api_key_use_updates_last_used_without_consuming_invali
 
 
 async def test_unknown_api_key_ids_do_not_consume_use_rate_limit_budget(
-    async_test_client_factory: Any,  # noqa: ANN401
+    async_test_client_factory: Any,  # ruff: ignore[any-type]
 ) -> None:
     """Malformed and unknown API-key credentials are classified without rate-limit accounting."""
     backend = InMemoryRateLimiter(max_attempts=1, window_seconds=60)
@@ -659,7 +659,7 @@ async def test_unknown_api_key_ids_do_not_consume_use_rate_limit_budget(
 
 
 async def test_expired_api_key_use_still_consumes_rate_limit_budget(
-    async_test_client_factory: Any,  # noqa: ANN401
+    async_test_client_factory: Any,  # ruff: ignore[any-type]
 ) -> None:
     """Resolved unusable API keys still consume the API-key-use limiter."""
     backend = InMemoryRateLimiter(max_attempts=1, window_seconds=60)
@@ -692,7 +692,7 @@ async def test_expired_api_key_use_still_consumes_rate_limit_budget(
 
 
 async def test_signing_required_api_key_authenticates_signed_request_and_rejects_bearer(
-    async_test_client_factory: Any,  # noqa: ANN401
+    async_test_client_factory: Any,  # ruff: ignore[any-type]
 ) -> None:
     """Signing-required keys authenticate only through signed requests."""
     keyring = FernetKeyring(active_key_id="current", keys={"current": Fernet.generate_key().decode()})
@@ -729,7 +729,7 @@ async def test_signing_required_api_key_authenticates_signed_request_and_rejects
 
 
 async def test_orphaned_signing_required_api_key_reports_invalid_without_consuming_nonce(
-    async_test_client_factory: Any,  # noqa: ANN401
+    async_test_client_factory: Any,  # ruff: ignore[any-type]
 ) -> None:
     """Signing keys whose owner disappeared remain generic invalid failures without burning nonces."""
     keyring = FernetKeyring(active_key_id="current", keys={"current": Fernet.generate_key().decode()})
@@ -767,7 +767,7 @@ async def test_orphaned_signing_required_api_key_reports_invalid_without_consumi
 
 
 async def test_signed_request_omitting_host_signed_header_is_invalid(
-    async_test_client_factory: Any,  # noqa: ANN401
+    async_test_client_factory: Any,  # ruff: ignore[any-type]
 ) -> None:
     """Signed requests must commit the request Host header in SignedHeaders."""
     keyring = FernetKeyring(active_key_id="current", keys={"current": Fernet.generate_key().decode()})
@@ -798,7 +798,7 @@ async def test_signed_request_omitting_host_signed_header_is_invalid(
     assert _error_code(response) == ErrorCode.API_KEY_SIGNATURE_INVALID
 
 
-async def test_signed_request_rejects_body_over_configured_limit(async_test_client_factory: Any) -> None:  # noqa: ANN401
+async def test_signed_request_rejects_body_over_configured_limit(async_test_client_factory: Any) -> None:  # ruff: ignore[any-type]
     """Signed requests fail before authentication when the raw body exceeds the configured cap."""
     keyring = FernetKeyring(active_key_id="current", keys={"current": Fernet.generate_key().decode()})
     app, _store, strategy, owner, _other = build_app(
@@ -834,7 +834,7 @@ async def test_signed_request_rejects_body_over_configured_limit(async_test_clie
 
 
 async def test_api_key_scope_guard_allows_matching_scope_and_rejects_missing_scope(
-    async_test_client_factory: Any,  # noqa: ANN401
+    async_test_client_factory: Any,  # ruff: ignore[any-type]
 ) -> None:
     """A scoped API-key route accepts matching key scopes and rejects missing scopes."""
     app, _store, strategy, owner, _other = build_app()
@@ -866,7 +866,7 @@ async def test_api_key_scope_guard_allows_matching_scope_and_rejects_missing_sco
 
 
 async def test_api_key_scope_guard_reflects_user_role_revocation_immediately(
-    async_test_client_factory: Any,  # noqa: ANN401
+    async_test_client_factory: Any,  # ruff: ignore[any-type]
 ) -> None:
     """Current user roles downscope API keys without revoking the key row."""
     app, store, strategy, owner, _other = build_app()
@@ -891,7 +891,7 @@ async def test_api_key_scope_guard_reflects_user_role_revocation_immediately(
 
 
 async def test_password_session_boundary_rejects_api_key_mutations(
-    async_test_client_factory: Any,  # noqa: ANN401
+    async_test_client_factory: Any,  # ruff: ignore[any-type]
 ) -> None:
     """API-key callers cannot create, update, or revoke API keys through self-service routes."""
     app, _store, strategy, owner, _other = build_app()
@@ -925,7 +925,7 @@ async def test_password_session_boundary_rejects_api_key_mutations(
 
 
 async def test_password_session_boundary_rejects_api_key_reads(
-    async_test_client_factory: Any,  # noqa: ANN401
+    async_test_client_factory: Any,  # ruff: ignore[any-type]
 ) -> None:
     """API-key callers cannot list or inspect self-service API-key metadata."""
     app, _store, strategy, owner, _other = build_app()
@@ -950,7 +950,7 @@ async def test_password_session_boundary_rejects_api_key_reads(
 
 
 async def test_admin_api_key_routes_reject_api_key_authenticated_superuser(
-    async_test_client_factory: Any,  # noqa: ANN401
+    async_test_client_factory: Any,  # ruff: ignore[any-type]
 ) -> None:
     """Admin API-key inventory routes require a password session even for superusers."""
     app, _store, strategy, owner, admin = build_app()
@@ -990,7 +990,7 @@ async def test_admin_api_key_routes_reject_api_key_authenticated_superuser(
 
 
 async def test_admin_api_key_routes_allow_password_session_superuser(
-    async_test_client_factory: Any,  # noqa: ANN401
+    async_test_client_factory: Any,  # ruff: ignore[any-type]
 ) -> None:
     """Password-session superusers can still mint, list, and revoke user API keys."""
     app, _store, strategy, owner, admin = build_app()
@@ -1014,7 +1014,7 @@ async def test_admin_api_key_routes_allow_password_session_superuser(
     assert revoke_response.json()["key_id"] == key_id
 
 
-async def test_api_key_authentication_failures_are_structured(async_test_client_factory: Any) -> None:  # noqa: ANN401
+async def test_api_key_authentication_failures_are_structured(async_test_client_factory: Any) -> None:  # ruff: ignore[any-type]
     """Invalid, missing, expired, and bad-secret API-key credentials return stable codes."""
     backend = InMemoryRateLimiter(max_attempts=3, window_seconds=60)
     rate_limit_config = AuthRateLimitConfig(
@@ -1061,7 +1061,7 @@ async def test_api_key_authentication_failures_are_structured(async_test_client_
         assert wrong_scheme.status_code == HTTP_UNAUTHORIZED
 
 
-async def test_update_and_admin_routes_pin_user_scope(async_test_client_factory: Any) -> None:  # noqa: ANN401
+async def test_update_and_admin_routes_pin_user_scope(async_test_client_factory: Any) -> None:  # ruff: ignore[any-type]
     """Self update and admin nested routes operate on the intended user only."""
     app, _store, strategy, owner, admin = build_app()
     async with async_test_client_factory(app) as test_client:
@@ -1103,7 +1103,7 @@ async def test_update_and_admin_routes_pin_user_scope(async_test_client_factory:
         assert malformed_user.status_code == HTTP_NOT_FOUND
 
 
-async def test_admin_create_and_delete_missing_key(async_test_client_factory: Any) -> None:  # noqa: ANN401
+async def test_admin_create_and_delete_missing_key(async_test_client_factory: Any) -> None:  # ruff: ignore[any-type]
     """Admin create uses the path user id and missing deletes keep the API-key invalid code."""
     app, _store, strategy, owner, admin = build_app()
     async with async_test_client_factory(app) as test_client:
@@ -1121,7 +1121,7 @@ async def test_admin_create_and_delete_missing_key(async_test_client_factory: An
         assert _error_code(missing_delete) == ErrorCode.API_KEY_INVALID
 
 
-async def test_create_rate_limit_slot_is_used(async_test_client_factory: Any) -> None:  # noqa: ANN401
+async def test_create_rate_limit_slot_is_used(async_test_client_factory: Any) -> None:  # ruff: ignore[any-type]
     """The api_key_create limiter is checked before create and reset after success."""
     backend = InMemoryRateLimiter(max_attempts=1, window_seconds=60)
     rate_limit_config = AuthRateLimitConfig(
@@ -1150,7 +1150,7 @@ async def test_create_rate_limit_slot_is_used(async_test_client_factory: Any) ->
         assert limited_response.status_code == HTTP_TOO_MANY_REQUESTS
 
 
-async def test_update_rate_limit_slot_blocks_repeated_bad_passwords(async_test_client_factory: Any) -> None:  # noqa: ANN401
+async def test_update_rate_limit_slot_blocks_repeated_bad_passwords(async_test_client_factory: Any) -> None:  # ruff: ignore[any-type]
     """The update limiter counts failed password checks and blocks once exhausted."""
     backend = InMemoryRateLimiter(max_attempts=1, window_seconds=60)
     rate_limit_config = AuthRateLimitConfig(
@@ -1183,7 +1183,7 @@ async def test_update_rate_limit_slot_blocks_repeated_bad_passwords(async_test_c
         assert limited_response.headers["Retry-After"].isdigit()
 
 
-async def test_successful_update_resets_update_rate_limit_counter(async_test_client_factory: Any) -> None:  # noqa: ANN401
+async def test_successful_update_resets_update_rate_limit_counter(async_test_client_factory: Any) -> None:  # ruff: ignore[any-type]
     """A successful API-key update clears the failed update counter for the request key."""
     backend = InMemoryRateLimiter(max_attempts=2, window_seconds=60)
     rate_limit_config = AuthRateLimitConfig(
@@ -1233,7 +1233,7 @@ async def test_successful_update_resets_update_rate_limit_counter(async_test_cli
 
 
 async def test_update_without_rate_limit_config_preserves_unthrottled_baseline(
-    async_test_client_factory: Any,  # noqa: ANN401
+    async_test_client_factory: Any,  # ruff: ignore[any-type]
 ) -> None:
     """Leaving AuthRateLimitConfig.api_key_update unset preserves pre-change PATCH behavior."""
     app, _store, strategy, owner, _admin = build_app(rate_limit_config=AuthRateLimitConfig())

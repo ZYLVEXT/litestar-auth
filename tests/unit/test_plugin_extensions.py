@@ -339,7 +339,7 @@ def _raise_factory_error() -> object:
     raise ValueError
 
 
-def _minimal_config(  # noqa: PLR0913 - tests use a compact config factory with feature toggles.
+def _minimal_config(  # ruff: ignore[too-many-arguments] - tests use a compact config factory with feature toggles.
     *,
     extensions: tuple[AuthExtension, ...] = (),
     auto_discover_extensions: bool = False,

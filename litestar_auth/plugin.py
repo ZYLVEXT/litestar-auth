@@ -100,7 +100,9 @@ class LitestarAuth[UP: UserProtocol[Any], ID](InitPlugin, CLIPlugin):
         validate_config(self.config)
         self._session_maker = _plugin_config.require_session_maker(self.config)
         self._session_scope_key = _resolve_session_scope_key(self.config)
-        from litestar_auth._plugin.user_manager_builder import resolve_user_manager_factory  # noqa: PLC0415
+        from litestar_auth._plugin.user_manager_builder import (  # ruff: ignore[import-outside-top-level]
+            resolve_user_manager_factory,
+        )
 
         self._user_manager_factory = resolve_user_manager_factory(self.config)
         self._provide_user_manager = _make_user_manager_dependency_provider(
@@ -136,12 +138,12 @@ class LitestarAuth[UP: UserProtocol[Any], ID](InitPlugin, CLIPlugin):
     @override
     def on_cli_init(self, cli: Group) -> None:
         """Register plugin-owned CLI commands without affecting app startup wiring."""
-        from litestar_auth._plugin.extensions import (  # noqa: PLC0415
+        from litestar_auth._plugin.extensions import (  # ruff: ignore[import-outside-top-level]
             build_extension_validation_context,
             resolve_version_gated_extensions,
         )
-        from litestar_auth._plugin.role_cli import register_roles_cli  # noqa: PLC0415
-        from litestar_auth.extensions import AuthCliExtension  # noqa: PLC0415
+        from litestar_auth._plugin.role_cli import register_roles_cli  # ruff: ignore[import-outside-top-level]
+        from litestar_auth.extensions import AuthCliExtension  # ruff: ignore[import-outside-top-level]
 
         extensions = resolve_version_gated_extensions(self.config)
         validation_context = build_extension_validation_context(self.config)
@@ -183,7 +185,7 @@ class LitestarAuth[UP: UserProtocol[Any], ID](InitPlugin, CLIPlugin):
         return manager
 
     def _attach_extension_manager_hook_subscribers(self, manager: BaseUserManager[UP, ID]) -> None:
-        from litestar_auth._plugin.user_manager_builder import (  # noqa: PLC0415
+        from litestar_auth._plugin.user_manager_builder import (  # ruff: ignore[import-outside-top-level]
             attach_extension_manager_hook_subscribers,
         )
 
@@ -210,7 +212,10 @@ class LitestarAuth[UP: UserProtocol[Any], ID](InitPlugin, CLIPlugin):
         """
         if not self.config.include_openapi_security:
             return None
-        from litestar_auth._plugin.openapi import build_security_requirement, register_openapi_security  # noqa: PLC0415
+        from litestar_auth._plugin.openapi import (  # ruff: ignore[import-outside-top-level]
+            build_security_requirement,
+            register_openapi_security,
+        )
 
         backend_inventory = self.config.resolve_feature_registry().backend_inventory
         schemes = register_openapi_security(app_config, backend_inventory.startup_backends())
@@ -337,7 +342,7 @@ class LitestarAuth[UP: UserProtocol[Any], ID](InitPlugin, CLIPlugin):
         self._register_extension_middleware(app_config, after_index=1)
 
     def _register_extensions(self, app_config: AppConfig) -> None:
-        from litestar_auth._plugin.extensions import register_extensions  # noqa: PLC0415
+        from litestar_auth._plugin.extensions import register_extensions  # ruff: ignore[import-outside-top-level]
 
         self._extension_registration_context = register_extensions(app_config=app_config, config=self.config)
         self._manager_hook_subscribers = tuple(
@@ -345,14 +350,18 @@ class LitestarAuth[UP: UserProtocol[Any], ID](InitPlugin, CLIPlugin):
         )
 
     def _extension_contributions(self) -> ExtensionRegistrationContributions:
-        from litestar_auth._plugin.extensions import ExtensionRegistrationContributions  # noqa: PLC0415
+        from litestar_auth._plugin.extensions import (  # ruff: ignore[import-outside-top-level]
+            ExtensionRegistrationContributions,
+        )
 
         if self._extension_registration_context is None:
             return ExtensionRegistrationContributions()
         return self._extension_registration_context.contributions
 
     def _register_extension_middleware(self, app_config: AppConfig, *, after_index: int) -> None:
-        from litestar_auth._plugin.extensions import apply_extension_middleware  # noqa: PLC0415
+        from litestar_auth._plugin.extensions import (  # ruff: ignore[import-outside-top-level]
+            apply_extension_middleware,
+        )
 
         apply_extension_middleware(
             app_config,
@@ -366,7 +375,9 @@ class LitestarAuth[UP: UserProtocol[Any], ID](InitPlugin, CLIPlugin):
         *,
         core_security_scheme_names: Collection[str] = (),
     ) -> dict[str, object]:
-        from litestar_auth._plugin.extensions import register_extension_openapi_security  # noqa: PLC0415
+        from litestar_auth._plugin.extensions import (  # ruff: ignore[import-outside-top-level]
+            register_extension_openapi_security,
+        )
 
         return register_extension_openapi_security(
             app_config,
@@ -375,14 +386,18 @@ class LitestarAuth[UP: UserProtocol[Any], ID](InitPlugin, CLIPlugin):
         )
 
     def _build_extension_controllers(self) -> list[ControllerRouterHandler]:
-        from litestar_auth._plugin.extensions import build_extension_controllers  # noqa: PLC0415
+        from litestar_auth._plugin.extensions import (  # ruff: ignore[import-outside-top-level]
+            build_extension_controllers,
+        )
 
         return build_extension_controllers(contributions=self._extension_contributions())
 
     def _register_extension_exception_handlers(self) -> None:
         if self._extension_registration_context is None:
             return
-        from litestar_auth._plugin.extensions import register_extension_exception_handlers  # noqa: PLC0415
+        from litestar_auth._plugin.extensions import (  # ruff: ignore[import-outside-top-level]
+            register_extension_exception_handlers,
+        )
 
         register_extension_exception_handlers(
             self._extension_registration_context.app_config,
@@ -400,7 +415,7 @@ class LitestarAuth[UP: UserProtocol[Any], ID](InitPlugin, CLIPlugin):
 
     def _totp_backend(self) -> StartupBackendTemplate[UP, ID]:
         backend_inventory = self.config.resolve_feature_registry().backend_inventory
-        from litestar_auth._plugin.totp_controller import totp_backend  # noqa: PLC0415
+        from litestar_auth._plugin.totp_controller import totp_backend  # ruff: ignore[import-outside-top-level]
 
         return totp_backend(self.config, backend_inventory=backend_inventory)
 

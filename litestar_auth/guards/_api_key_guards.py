@@ -185,7 +185,11 @@ def requires_password_session(
     connection: ASGIConnection[Any, Any, Any, Any],
     _handler: BaseRouteHandler,
 ) -> None:
-    """Reject API-key-authenticated callers from password-session-only routes."""
+    """Reject API-key callers from routes reserved for user-session credentials.
+
+    The historical public name denotes the API-key delegation boundary; this
+    guard does not itself perform password re-verification.
+    """
     if _api_key_context(connection) is None:
         return
     _raise_authorization_denied(_SESSION_AUTH_REQUIRED_DETAIL)

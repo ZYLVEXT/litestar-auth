@@ -59,7 +59,7 @@ if TYPE_CHECKING:
 pytestmark = pytest.mark.unit
 
 
-def _as_any(value: object) -> Any:  # noqa: ANN401
+def _as_any(value: object) -> Any:  # ruff: ignore[any-type]
     """Return a value through the test-only dynamic type boundary."""
     return cast("Any", value)
 
@@ -276,7 +276,7 @@ def test_on_cli_init_registers_roles_group_without_changing_on_app_init(
     monkeypatch.setattr(
         plugin,
         "_register_controllers",
-        lambda _app_config, *, security=None: calls.append("controllers") or [],  # noqa: ARG005
+        lambda _app_config, *, security=None: calls.append("controllers") or [],  # ruff: ignore[unused-lambda-argument]
     )
     monkeypatch.setattr(plugin, "_register_exception_handlers", lambda _route_handlers: calls.append("exceptions"))
 

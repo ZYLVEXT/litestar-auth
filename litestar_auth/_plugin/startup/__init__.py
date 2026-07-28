@@ -1,6 +1,6 @@
 """Startup warnings and fail-closed guards for plugin app initialization."""
 
-# ruff: noqa: RUF067
+# ruff: file-ignore[non-empty-init-module]
 
 from __future__ import annotations
 
@@ -39,6 +39,9 @@ from litestar_auth._plugin.startup._core import (
 )
 from litestar_auth._plugin.startup._core import (
     require_shared_account_lockout_store_for_multiworker as require_shared_account_lockout_store_for_multiworker,
+)
+from litestar_auth._plugin.startup._core import (
+    require_shared_account_token_replay_store_for_multiworker as require_shared_account_token_replay_store_for_multiworker,
 )
 from litestar_auth._plugin.startup._core import (
     require_shared_rate_limit_backends_for_multiworker as require_shared_rate_limit_backends_for_multiworker,

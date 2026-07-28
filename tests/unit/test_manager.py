@@ -36,6 +36,7 @@ from litestar_auth.exceptions import (
     InvalidPasswordError,
     InvalidResetPasswordTokenError,
     InvalidVerifyTokenError,
+    TokenError,
     UnverifiedUserError,
     UserAlreadyExistsError,
     UserNotExistsError,
@@ -115,7 +116,7 @@ def _assert_manager_account_token_settings(
     assert manager.organization_invitation_token_lifetime == expected.organization_invitation_lifetime
 
 
-def _as_any(value: object) -> Any:  # noqa: ANN401
+def _as_any(value: object) -> Any:  # ruff: ignore[any-type]
     """Return a value through the test-only dynamic type boundary."""
     return cast("Any", value)
 
@@ -139,7 +140,7 @@ def test_privileged_fields_cover_only_live_privileged_state() -> None:
 class TrackingUserManager(BaseUserManager[ExampleUser, UUID]):
     """Concrete manager that records hook invocations for assertions."""
 
-    def __init__(  # noqa: PLR0913
+    def __init__(  # ruff: ignore[too-many-arguments]
         self,
         user_db: AsyncMock,
         password_helper: PasswordHelper,
@@ -1890,6 +1891,45 @@ async def test_reset_password_consumes_jti_and_rejects_replay() -> None:
         await manager.reset_password(reset_token, "another-password")
 
 
+async def test_reset_password_replay_store_allows_only_one_concurrent_reset() -> None:
+    """A captured reset token cannot win a concurrent second password update."""
+    user_db = AsyncMock()
+    password_helper = PasswordHelper()
+    manager = TrackingUserManager(user_db, password_helper, account_token_denylist_store=InMemoryJWTDenylistStore())
+    user = _build_user(password_helper)
+    updated_user = replace(user, hashed_password=password_helper.hash("new-password"))
+    user_db.get.return_value = user
+    user_db.update.return_value = updated_user
+    reset_token = manager.tokens.write_reset_password_token(user, dummy_hash=await manager._get_dummy_hash())
+
+    results = await asyncio.gather(
+        manager.reset_password(reset_token, "new-password"),
+        manager.reset_password(reset_token, "another-password"),
+        return_exceptions=True,
+    )
+
+    assert results.count(updated_user) == 1
+    assert sum(isinstance(result, InvalidResetPasswordTokenError) for result in results) == 1
+    user_db.update.assert_awaited_once()
+
+
+async def test_reset_password_fails_before_update_when_replay_store_is_full() -> None:
+    """Replay-store capacity pressure rejects reset before account mutation."""
+    user_db = AsyncMock()
+    password_helper = PasswordHelper()
+    replay_store = InMemoryJWTDenylistStore(max_entries=1)
+    assert (await replay_store.mark_used("capacity-marker", ttl_seconds=60)).stored is True
+    manager = TrackingUserManager(user_db, password_helper, account_token_denylist_store=replay_store)
+    user = _build_user(password_helper)
+    user_db.get.return_value = user
+    reset_token = manager.tokens.write_reset_password_token(user, dummy_hash=await manager._get_dummy_hash())
+
+    with pytest.raises(TokenError):
+        await manager.reset_password(reset_token, "new-password")
+
+    user_db.update.assert_not_awaited()
+
+
 async def test_verify_consumes_jti_and_rejects_replay() -> None:
     """A configured denylist makes verification tokens single-use server-side (VULN-3)."""
     user_db = AsyncMock()
@@ -1907,6 +1947,25 @@ async def test_verify_consumes_jti_and_rejects_replay() -> None:
 
     with pytest.raises(InvalidVerifyTokenError):
         await manager.verify(token)
+
+
+async def test_verify_replay_store_allows_only_one_concurrent_transition() -> None:
+    """Concurrent verification-token use performs one state transition and hook."""
+    user_db = AsyncMock()
+    password_helper = PasswordHelper()
+    manager = TrackingUserManager(user_db, password_helper, account_token_denylist_store=InMemoryJWTDenylistStore())
+    user = _build_user(password_helper)
+    verified_user = replace(user, is_verified=True)
+    user_db.get.return_value = user
+    user_db.update.return_value = verified_user
+    token = manager.write_verify_token(user)
+
+    results = await asyncio.gather(manager.verify(token), manager.verify(token), return_exceptions=True)
+
+    assert results.count(verified_user) == 1
+    assert sum(isinstance(result, InvalidVerifyTokenError) for result in results) == 1
+    user_db.update.assert_awaited_once()
+    assert manager.verified_users == [verified_user]
 
 
 async def test_reset_password_rejects_invalid_token() -> None:
@@ -1949,6 +2008,30 @@ async def test_reset_password_rejects_weak_password_before_hashing() -> None:
         await manager.reset_password(reset_token, "short")
 
     user_db.update.assert_not_awaited()
+
+
+async def test_reset_password_validation_failure_does_not_consume_token() -> None:
+    """A correct reset token remains usable after the replacement password fails policy."""
+    user_db = AsyncMock()
+    password_helper = PasswordHelper()
+    replay_store = InMemoryJWTDenylistStore()
+    manager = TrackingUserManager(
+        user_db,
+        password_helper,
+        password_validator=require_password_length,
+        account_token_denylist_store=replay_store,
+    )
+    user = _build_user(password_helper)
+    updated_user = replace(user, hashed_password=password_helper.hash("strong-password"))
+    user_db.get.return_value = user
+    user_db.update.return_value = updated_user
+    reset_token = manager.tokens.write_reset_password_token(user, dummy_hash=await manager._get_dummy_hash())
+
+    with pytest.raises(InvalidPasswordError, match="at least 12 characters"):
+        await manager.reset_password(reset_token, "short")
+
+    assert await manager.reset_password(reset_token, "strong-password") is updated_user
+    user_db.update.assert_awaited_once()
 
 
 async def test_verify_and_account_token_flows_delegate_to_account_tokens_service() -> None:

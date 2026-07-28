@@ -16,13 +16,15 @@ class _TotpExtension:
     name: str = "totp"
     enabled: bool = True
 
-    def validate(self, context: AuthExtensionValidationContext) -> None:  # noqa: ARG002, PLR6301
+    def validate(self, context: AuthExtensionValidationContext) -> None:  # ruff: ignore[unused-method-argument, no-self-use]
         """Preserve existing TOTP factory-time validation."""
         return
 
-    def register(self, context: AuthExtensionRegistrationContext) -> None:  # noqa: PLR6301
+    def register(self, context: AuthExtensionRegistrationContext) -> None:  # ruff: ignore[no-self-use]
         """Contribute the plugin-owned TOTP controller."""
-        from litestar_auth._plugin.totp_controller import build_totp_controller  # noqa: PLC0415
+        from litestar_auth._plugin.totp_controller import (  # ruff: ignore[import-outside-top-level]
+            build_totp_controller,
+        )
 
         context.add_controller(
             build_totp_controller(

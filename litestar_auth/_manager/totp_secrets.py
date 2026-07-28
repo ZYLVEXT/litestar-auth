@@ -1,5 +1,5 @@
 """Internal TOTP-secret service for ``BaseUserManager``."""
-# ruff: noqa: DOC201, DOC501
+# ruff: file-ignore[docstring-missing-returns, docstring-missing-exception]
 
 from __future__ import annotations
 

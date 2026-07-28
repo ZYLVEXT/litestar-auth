@@ -1,5 +1,5 @@
 """Internal user-lifecycle service for ``BaseUserManager``."""
-# ruff: noqa: ANN401, DOC201, DOC501
+# ruff: file-ignore[any-type, docstring-missing-returns, docstring-missing-exception]
 
 from __future__ import annotations
 

@@ -49,7 +49,7 @@ class ApiKeyManagerService[UP: UserProtocol[Any], ID]:
         user: UP,
         **options: Unpack[_api_key_creation.ApiKeyCreateOptions],
     ) -> _api_key_secrets.ApiKeyCreateResult[ApiKeyRowProtocol]:
-        """Create an API key and return the one-time raw credential."""  # noqa: DOC201, DOC501
+        """Create an API key and return the one-time raw credential."""  # ruff: ignore[docstring-missing-returns, docstring-missing-exception]
         data = _api_key_creation.coerce_api_key_create_options(options)
         await self._verify_current_password_if_supplied(user, data.current_password)
         normalized_scopes = self._normalize_requested_scopes(data.scopes)
@@ -101,7 +101,7 @@ class ApiKeyManagerService[UP: UserProtocol[Any], ID]:
         )
 
     async def get_api_key(self, user: UP, key_id: str, *, include_inactive: bool = False) -> ApiKeyRowProtocol:
-        """Return one API-key row owned by ``user``."""  # noqa: DOC501
+        """Return one API-key row owned by ``user``."""  # ruff: ignore[docstring-missing-exception]
         api_key = cast(
             "ApiKeyRowProtocol | None",
             await self._require_store().get_by_key_id(key_id, include_inactive=include_inactive),
@@ -119,7 +119,7 @@ class ApiKeyManagerService[UP: UserProtocol[Any], ID]:
         scopes: Sequence[str] | None = None,
         current_password: str | None = None,
     ) -> ApiKeyRowProtocol:
-        """Update mutable API-key metadata owned by ``user``."""  # noqa: DOC201, DOC501
+        """Update mutable API-key metadata owned by ``user``."""  # ruff: ignore[docstring-missing-returns, docstring-missing-exception]
         await self._verify_current_password_if_supplied(user, current_password)
         api_key = await self.get_api_key(user, key_id)
         normalized_scopes = None if scopes is None else self._normalize_requested_scopes(scopes)
@@ -134,7 +134,7 @@ class ApiKeyManagerService[UP: UserProtocol[Any], ID]:
         return updated
 
     async def revoke_api_key(self, user: UP, key_id: str, *, revoked_at: datetime | None = None) -> ApiKeyRowProtocol:
-        """Soft-revoke an API key owned by ``user`` and keep repeated revocation idempotent."""  # noqa: DOC201, DOC501
+        """Soft-revoke an API key owned by ``user`` and keep repeated revocation idempotent."""  # ruff: ignore[docstring-missing-returns, docstring-missing-exception]
         await self.get_api_key(user, key_id, include_inactive=True)
         api_key = cast(
             "ApiKeyRowProtocol | None",
@@ -146,7 +146,7 @@ class ApiKeyManagerService[UP: UserProtocol[Any], ID]:
         return api_key
 
     async def record_api_key_used(self, key_id: str, *, used_at: datetime | None = None) -> ApiKeyRowProtocol | None:
-        """Record API-key use when configured and outside the throttle window."""  # noqa: DOC201
+        """Record API-key use when configured and outside the throttle window."""  # ruff: ignore[docstring-missing-returns]
         if self._config.last_used_write_strategy == "disabled":
             return None
         store = self._require_store()
@@ -169,7 +169,7 @@ class ApiKeyManagerService[UP: UserProtocol[Any], ID]:
         return _api_key_secrets.signing_secret_needs_rotation(keyring, encrypted_secret)
 
     async def reencrypt_api_key_signing_secret(self, api_key: ApiKeyRowProtocol | str) -> ApiKeyRowProtocol:
-        """Rewrite one API-key signing secret under the active encryption key."""  # noqa: DOC201, DOC501
+        """Rewrite one API-key signing secret under the active encryption key."""  # ruff: ignore[docstring-missing-returns, docstring-missing-exception]
         store = self._require_store()
         resolved_api_key = await self._resolve_rotation_api_key(api_key, store)
         keyring = _api_key_secrets.require_secret_encryption_keyring(self._config.secret_encryption_keyring)
@@ -204,7 +204,7 @@ class ApiKeyManagerService[UP: UserProtocol[Any], ID]:
             current_password,
             hashed_password,
         ):
-            from litestar_auth.exceptions import InvalidPasswordError  # noqa: PLC0415
+            from litestar_auth.exceptions import InvalidPasswordError  # ruff: ignore[import-outside-top-level]
 
             raise InvalidPasswordError(user_id=user.id)
 

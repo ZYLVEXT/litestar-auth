@@ -77,7 +77,7 @@ def missing_user_identifier(login_identifier: Literal["email", "username"]) -> s
 class TrackingUserManager(BaseUserManager[ExampleUser, UUID]):
     """Concrete manager that records completed login hooks."""
 
-    def __init__(  # noqa: PLR0913
+    def __init__(  # ruff: ignore[too-many-arguments]
         self,
         user_db: BaseUserStore[ExampleUser, UUID],
         password_helper: PasswordHelper,
@@ -126,7 +126,7 @@ async def guarded(request: Request[Any, Any, Any]) -> dict[str, bool]:
     return {"ok": True}
 
 
-def build_app(  # noqa: PLR0913
+def build_app(  # ruff: ignore[too-many-arguments]
     *,
     login_identifier: Literal["email", "username"] = "email",
     initial_hashed_password: str | None = None,

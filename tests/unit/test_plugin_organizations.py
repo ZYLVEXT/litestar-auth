@@ -23,6 +23,7 @@ from litestar_auth._plugin.organization_admin import SQLAlchemyOrganizationAdmin
 from litestar_auth.authentication.backend import AuthenticationBackend
 from litestar_auth.authentication.strategy.jwt import JWTStrategy
 from litestar_auth.authentication.transport.bearer import BearerTransport
+from litestar_auth.controllers.organization import OrganizationControllerConfig, create_organization_controller
 from litestar_auth.db import OrganizationInvitationData
 from litestar_auth.exceptions import (
     ConfigurationError,
@@ -30,7 +31,7 @@ from litestar_auth.exceptions import (
     InvalidOrganizationInvitationTokenError,
     OrganizationInvitationEmailMismatchError,
 )
-from litestar_auth.guards import is_superuser
+from litestar_auth.guards import is_authenticated, is_superuser, requires_password_session
 from litestar_auth.manager import UserManagerSecurity
 from litestar_auth.ratelimit import AuthRateLimitConfig, EndpointRateLimit, InMemoryRateLimiter
 from tests.integration.test_orchestrator import (
@@ -488,7 +489,7 @@ def current_organization_probe(litestar_auth_current_organization: _CurrentOrgan
     return {"slug": getattr(organization, "slug", None)}
 
 
-def _switch_organization_app(  # noqa: PLR0913
+def _switch_organization_app(  # ruff: ignore[too-many-arguments]
     *,
     user: ExampleUser,
     strategy: JWTStrategy[ExampleUser, UUID],
@@ -536,6 +537,30 @@ def _switch_organization_app(  # noqa: PLR0913
     return Litestar(route_handlers=[current_organization_probe], plugins=[LitestarAuth(config)])
 
 
+def test_switch_organization_route_requires_password_session() -> None:
+    """A delegated API key cannot exchange its authority for an organization-bound JWT."""
+    strategy = JWTStrategy[ExampleUser, UUID](
+        secret=TOKEN_HASH_SECRET,
+        algorithm="HS256",
+        subject_decoder=UUID,
+        allow_inmemory_denylist=True,
+    )
+    backend = AuthenticationBackend[ExampleUser, UUID](
+        name="jwt",
+        transport=BearerTransport(),
+        strategy=cast("Any", strategy),
+    )
+    controller = create_organization_controller(
+        OrganizationControllerConfig(
+            backend=cast("Any", backend),
+            backend_inventory=cast("Any", object()),
+            backend_index=0,
+        ),
+    )
+
+    assert controller.__dict__["switch_organization"].guards == [is_authenticated, requires_password_session]
+
+
 class OrganizationInvitationCaptureManager(PluginUserManager):
     """Test manager that records raw organization invitation hook tokens."""
 
@@ -563,7 +588,7 @@ def _organization_invitation_manager(user: ExampleUser) -> PluginUserManager:
     )
 
 
-async def _create_organization_invitation(  # noqa: PLR0913
+async def _create_organization_invitation(  # ruff: ignore[too-many-arguments]
     *,
     store: SwitchOrganizationStore,
     manager: PluginUserManager,
@@ -1576,7 +1601,7 @@ def test_organization_admin_factory_validation_and_lazy_exports() -> None:
         ),
     )
 
-    assert default_guarded_controller.guards == [is_superuser]
+    assert default_guarded_controller.guards == [is_superuser, requires_password_session]
     assert custom_guarded_controller.guards == [custom_admin_guard]
     assert controller.path == "/tenant-admin"
     assert invitation_controller.path == "/auth"

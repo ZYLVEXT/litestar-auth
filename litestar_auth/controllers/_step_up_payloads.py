@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import msgspec
 
-import litestar_auth._schema_fields as schema_fields  # noqa: TC001
-from litestar_auth.schemas import UserPasswordField  # noqa: TC001
+import litestar_auth._schema_fields as schema_fields  # ruff: ignore[typing-only-first-party-import]
+from litestar_auth.schemas import UserPasswordField  # ruff: ignore[typing-only-first-party-import]
 
 
 class _AdminCurrentPasswordStepUpRequest(msgspec.Struct, omit_defaults=True, forbid_unknown_fields=True):

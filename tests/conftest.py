@@ -81,15 +81,15 @@ def _hermetic_reserved_dns_for_redirect_validation(monkeypatch: pytest.MonkeyPat
     """
     real_getaddrinfo = _redirect_validation.socket.getaddrinfo
 
-    def _hermetic_getaddrinfo(  # noqa: PLR0913 — mirrors the stdlib ``socket.getaddrinfo`` signature.
+    def _hermetic_getaddrinfo(  # ruff: ignore[too-many-arguments] — mirrors the stdlib ``socket.getaddrinfo`` signature.
         host: bytes | str | None,
         port: bytes | str | int | None,
         *,
         family: int = 0,
-        type: int = 0,  # noqa: A002 — matches the stdlib ``socket.getaddrinfo`` signature.
+        type: int = 0,  # ruff: ignore[builtin-argument-shadowing] — matches the stdlib ``socket.getaddrinfo`` signature.
         proto: int = 0,
         flags: int = 0,
-    ) -> list[tuple[socket.AddressFamily, socket.SocketKind, int, str, tuple[Any, ...]]]:
+    ) -> list[tuple[Any, ...]]:
         """Resolve reserved test hostnames to a fixed public IP; delegate everything else.
 
         Returns:

@@ -9,11 +9,17 @@ from unittest.mock import AsyncMock, MagicMock
 
 import msgspec
 import pytest
-from litestar.status_codes import HTTP_200_OK, HTTP_202_ACCEPTED, HTTP_400_BAD_REQUEST, HTTP_500_INTERNAL_SERVER_ERROR
+from litestar.status_codes import (
+    HTTP_200_OK,
+    HTTP_202_ACCEPTED,
+    HTTP_400_BAD_REQUEST,
+    HTTP_500_INTERNAL_SERVER_ERROR,
+    HTTP_503_SERVICE_UNAVAILABLE,
+)
 from litestar.testing import AsyncTestClient
 
 from litestar_auth.controllers.verify import create_verify_controller
-from litestar_auth.exceptions import ErrorCode, InvalidVerifyTokenError
+from litestar_auth.exceptions import ErrorCode, InvalidVerifyTokenError, TokenError
 from litestar_auth.ratelimit import AuthRateLimitConfig, EndpointRateLimit
 from tests._helpers import litestar_app_with_user_manager
 
@@ -158,6 +164,13 @@ def test_verify_controller_rejects_negative_minimum_response_seconds() -> None:
         create_verify_controller(request_verify_minimum_response_seconds=-0.001)
 
 
+@pytest.mark.parametrize("value", [float("nan"), float("inf"), float("-inf")])
+def test_verify_controller_rejects_non_finite_minimum_response_seconds(value: float) -> None:
+    """Verification timing envelopes must be finite."""
+    with pytest.raises(ValueError, match="non-negative and finite"):
+        create_verify_controller(verify_minimum_response_seconds=value)
+
+
 async def test_request_verify_token_increments_rate_limit_even_when_manager_raises() -> None:
     """Rate-limit must increment via `finally` so transient manager failures are still counted."""
     backend = MagicMock()
@@ -296,6 +309,18 @@ async def test_verify_invalid_token_increments_rate_limit() -> None:
     assert payload.get("extra", {}).get("code") == ErrorCode.VERIFY_USER_BAD_TOKEN
     backend.increment.assert_awaited_once()
     backend.reset.assert_not_awaited()
+
+
+async def test_verify_replay_store_failure_returns_service_unavailable() -> None:
+    """Replay-store infrastructure failures surface as 503, not bad-token responses."""
+    manager = DummyUserManager(error=TokenError("Redis replay store unavailable at redis.internal:6379."))
+    controller = create_verify_controller()
+
+    status_code, payload = await _invoke_verify(controller, token="valid-token", user_manager=manager)
+
+    assert status_code == HTTP_503_SERVICE_UNAVAILABLE
+    assert payload.get("detail") == TokenError.default_message
+    assert payload.get("extra", {}).get("code") == ErrorCode.TOKEN_PROCESSING_FAILED
 
 
 async def test_verify_invalid_token_increments_rate_limit_once_after_minimum_response() -> None:

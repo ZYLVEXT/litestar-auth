@@ -66,7 +66,7 @@ if TYPE_CHECKING:
 
     from litestar_auth.db.base import BaseUserStore
 
-ENCRYPTED_TOTP_SECRET_PREFIX = "fernet:"  # noqa: S105
+ENCRYPTED_TOTP_SECRET_PREFIX = "fernet:"  # ruff: ignore[hardcoded-password-string]
 DEFAULT_VERIFY_TOKEN_LIFETIME = _DEFAULT_VERIFY_TOKEN_LIFETIME
 DEFAULT_RESET_PASSWORD_TOKEN_LIFETIME = _DEFAULT_RESET_PASSWORD_TOKEN_LIFETIME
 DEFAULT_ORGANIZATION_INVITATION_TOKEN_LIFETIME = _DEFAULT_ORGANIZATION_INVITATION_TOKEN_LIFETIME
@@ -395,7 +395,7 @@ class BaseUserManager[UP: UserProtocol[Any], ID](
         logger.info("User login succeeded", extra={"event": "login", "user_id": str(user.id)})
         return user
 
-    def require_account_state(self, user: UP, *, require_verified: bool = False) -> None:  # noqa: PLR6301
+    def require_account_state(self, user: UP, *, require_verified: bool = False) -> None:  # ruff: ignore[no-self-use]
         """Validate account-state policy for authenticated flows.
 
         Args:

@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING, Annotated, Any, cast
 from litestar import Controller, Request, get
 from litestar.di import NamedDependency
 from litestar.params import QueryParameter
-from litestar.response import Response  # noqa: TC002
+from litestar.response import Response  # ruff: ignore[typing-only-third-party-import]
 
 from litestar_auth._plugin.config import (
     OAUTH_ASSOCIATE_USER_MANAGER_DEPENDENCY_KEY,
@@ -177,8 +177,8 @@ def _create_plugin_oauth_login_callback[UP: UserProtocol[Any], ID](
     """
 
     @get("/callback")
-    async def callback(  # noqa: PLR0913, PLR0917
-        self: object,  # noqa: ARG001
+    async def callback(  # ruff: ignore[too-many-arguments, too-many-positional-arguments]
+        self: object,  # ruff: ignore[unused-function-argument]
         request: Request[Any, Any, Any],
         code: _OAuthCodeQuery,
         litestar_auth_user_manager: _OAuthUserManagerDep,

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import math
 import time
 from typing import TYPE_CHECKING
 
@@ -16,12 +17,12 @@ def validate_minimum_response_seconds(value: float, *, field_name: str) -> float
     """Return a non-negative response timing floor.
 
     Raises:
-        ValueError: If ``value`` is negative.
+        ValueError: If ``value`` is negative or non-finite.
     """
-    if value >= 0:
+    if math.isfinite(value) and value >= 0:
         return value
 
-    msg = f"{field_name} must be non-negative."
+    msg = f"{field_name} must be non-negative and finite."
     raise ValueError(msg)
 
 

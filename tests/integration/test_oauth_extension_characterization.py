@@ -73,7 +73,7 @@ def _oauth_encryption_key() -> str:
     return Fernet.generate_key().decode()
 
 
-def _build_config(  # noqa: PLR0913
+def _build_config(  # ruff: ignore[too-many-arguments]
     *,
     oauth_client: object | None = None,
     include_oauth_associate: bool = False,

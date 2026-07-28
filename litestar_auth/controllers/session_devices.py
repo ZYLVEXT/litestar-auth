@@ -39,7 +39,7 @@ from litestar_auth.controllers._utils import (
     _mark_litestar_auth_route_handler,
 )
 from litestar_auth.exceptions import ErrorCode
-from litestar_auth.guards import is_authenticated
+from litestar_auth.guards import is_authenticated, requires_password_session
 from litestar_auth.payloads import RefreshSessionListResponse, RefreshSessionRead, RefreshTokenRequest
 from litestar_auth.types import UserProtocol
 
@@ -306,7 +306,7 @@ def _build_static_context[UP: UserProtocol[Any], ID](
         Context builder using the configured strategy.
     """
 
-    def _build_context(request_backends: object | None = None) -> _SessionDevicesControllerContext[UP]:  # noqa: ARG001
+    def _build_context(request_backends: object | None = None) -> _SessionDevicesControllerContext[UP]:  # ruff: ignore[unused-function-argument]
         strategy = backend.strategy
         transport = getattr(backend, "transport", None)
         return _SessionDevicesControllerContext(
@@ -324,9 +324,14 @@ def _create_list_refresh_sessions_handler[UP: UserProtocol[Any]](
 ) -> Callable[..., object]:
     """Return the GET refresh-session listing handler."""
 
-    @get("/sessions", guards=[is_authenticated], security=security, responses=_SESSION_DEVICES_OPENAPI_RESPONSES)
+    @get(
+        "/sessions",
+        guards=[is_authenticated, requires_password_session],
+        security=security,
+        responses=_SESSION_DEVICES_OPENAPI_RESPONSES,
+    )
     async def list_refresh_sessions(
-        self: Controller,  # noqa: ARG001
+        self: Controller,  # ruff: ignore[unused-function-argument]
         request: Request[Any, Any, Any],
         litestar_auth_backends: _OptionalBackendsDep = None,
     ) -> RefreshSessionListResponse:
@@ -345,13 +350,13 @@ def _create_list_refresh_sessions_with_token_handler[UP: UserProtocol[Any]](
 
     @post(
         "/sessions",
-        guards=[is_authenticated],
+        guards=[is_authenticated, requires_password_session],
         security=security,
         status_code=200,
         responses=_SESSION_DEVICES_OPENAPI_RESPONSES,
     )
     async def list_refresh_sessions_with_refresh_token(
-        self: Controller,  # noqa: ARG001
+        self: Controller,  # ruff: ignore[unused-function-argument]
         request: Request[Any, Any, Any],
         data: RefreshTokenRequest,
         litestar_auth_backends: _OptionalBackendsDep = None,
@@ -371,13 +376,13 @@ def _create_revoke_refresh_session_handler[UP: UserProtocol[Any]](
 
     @delete(
         "/sessions/{session_id:str}",
-        guards=[is_authenticated],
+        guards=[is_authenticated, requires_password_session],
         security=security,
         status_code=204,
         responses=_SESSION_DEVICES_OPENAPI_RESPONSES,
     )
     async def revoke_refresh_session(
-        self: Controller,  # noqa: ARG001
+        self: Controller,  # ruff: ignore[unused-function-argument]
         request: Request[Any, Any, Any],
         session_id: _SessionIdPath,
         litestar_auth_backends: _OptionalBackendsDep = None,
@@ -397,13 +402,13 @@ def _create_revoke_other_refresh_sessions_handler[UP: UserProtocol[Any]](
 
     @post(
         "/sessions/revoke-others",
-        guards=[is_authenticated],
+        guards=[is_authenticated, requires_password_session],
         security=security,
         status_code=204,
         responses=_SESSION_DEVICES_OPENAPI_RESPONSES,
     )
     async def revoke_other_refresh_sessions(
-        self: Controller,  # noqa: ARG001
+        self: Controller,  # ruff: ignore[unused-function-argument]
         request: Request[Any, Any, Any],
         litestar_auth_backends: _OptionalBackendsDep = None,
         data: RefreshTokenRequest | None = None,

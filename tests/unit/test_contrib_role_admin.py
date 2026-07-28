@@ -17,7 +17,7 @@ import litestar_auth.contrib.role_admin._controller_handler_utils as role_admin_
 from litestar_auth._plugin.role_admin import RoleAdminRoleNotFoundError, RoleAdminUserNotFoundError
 from litestar_auth.contrib.role_admin._schemas import RoleCreate, RoleRead, RoleUpdate, UserBrief
 from litestar_auth.exceptions import ConfigurationError, ErrorCode
-from litestar_auth.guards import is_authenticated, is_superuser
+from litestar_auth.guards import is_authenticated, is_superuser, requires_password_session
 from litestar_auth.models import Role, User, UserRole
 from tests.unit.test_plugin_role_admin import (
     TrackingSessionMaker,
@@ -32,7 +32,7 @@ role_admin_all = role_admin_module.__all__
 pytestmark = pytest.mark.unit
 
 
-def _as_any(value: object) -> Any:  # noqa: ANN401
+def _as_any(value: object) -> Any:  # ruff: ignore[any-type]
     """Return a value through the test-only dynamic type boundary."""
     return cast("Any", value)
 
@@ -59,7 +59,7 @@ def test_contrib_role_admin_factory_builds_controller_from_explicit_models() -> 
 
     assert issubclass(controller, Controller)
     assert controller.path == "/admin/roles"
-    assert controller.guards == [is_superuser]
+    assert controller.guards == [is_superuser, requires_password_session]
     assert context.model_family.user_model is User
     assert context.model_family.role_model is Role
     assert context.model_family.user_role_model is UserRole
@@ -73,13 +73,13 @@ def test_contrib_role_admin_factory_accepts_controller_config_object() -> None:
             role_model=Role,
             user_role_model=UserRole,
             route_prefix="admin/roles",
-            guards=[],
+            guards=[is_authenticated],
         ),
     )
     context = cast("Any", controller).role_admin_context
 
     assert controller.path == "/admin/roles"
-    assert controller.guards == []
+    assert controller.guards == [is_authenticated]
     assert context.model_family.user_model is User
     assert context.model_family.role_model is Role
     assert context.model_family.user_role_model is UserRole
@@ -97,19 +97,13 @@ def test_contrib_role_admin_factory_rejects_controller_config_combined_with_keyw
 
 
 def test_contrib_role_admin_factory_supports_config_driven_model_resolution_and_guard_overrides() -> None:
-    """The factory resolves models from config and accepts both custom and empty guard overrides."""
+    """The factory resolves models from config and accepts custom guard overrides."""
     config = _minimal_config(user_model=User, session_maker=TrackingSessionMaker())
 
     guarded_controller = create_role_admin_controller(
         config=config,
         route_prefix="roles",
         guards=[is_authenticated],
-    )
-    unguarded_controller = create_role_admin_controller(
-        user_model=User,
-        role_model=Role,
-        user_role_model=UserRole,
-        guards=[],
     )
     guarded_context = cast("Any", guarded_controller).role_admin_context
 
@@ -120,7 +114,17 @@ def test_contrib_role_admin_factory_supports_config_driven_model_resolution_and_
     assert guarded_context.model_family.user_model is User
     assert guarded_context.model_family.role_model is Role
     assert guarded_context.model_family.user_role_model is UserRole
-    assert unguarded_controller.guards == []
+
+
+def test_contrib_role_admin_factory_rejects_empty_guards() -> None:
+    """Privileged role-admin routes cannot be assembled without guards."""
+    with pytest.raises(ConfigurationError, match="guards must not be empty"):
+        create_role_admin_controller(
+            user_model=User,
+            role_model=Role,
+            user_role_model=UserRole,
+            guards=[],
+        )
 
 
 def test_contrib_role_admin_factory_tolerates_custom_db_session_dependency_key_with_session_maker() -> None:
@@ -131,7 +135,7 @@ def test_contrib_role_admin_factory_tolerates_custom_db_session_dependency_key_w
     declare that dependency. The rename raised ``KeyError`` because the annotation was
     absent. The factory must now succeed without mutating the handlers and without raising.
     """
-    import inspect  # noqa: PLC0415
+    import inspect  # ruff: ignore[import-outside-top-level]
 
     config = _minimal_config(user_model=User, session_maker=TrackingSessionMaker())
     config.db_session_dependency_key = "custom_db_session"

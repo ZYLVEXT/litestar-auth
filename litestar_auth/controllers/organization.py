@@ -21,8 +21,8 @@ from litestar_auth.controllers._utils import (
 )
 from litestar_auth.db import BaseOrganizationStore
 from litestar_auth.exceptions import ErrorCode
-from litestar_auth.guards import is_authenticated
-from litestar_auth.payloads import SwitchOrganizationRequest  # noqa: TC001
+from litestar_auth.guards import is_authenticated, requires_password_session
+from litestar_auth.payloads import SwitchOrganizationRequest  # ruff: ignore[typing-only-first-party-import]
 from litestar_auth.types import UserProtocol
 
 if TYPE_CHECKING:
@@ -80,13 +80,13 @@ def create_organization_controller[UP: UserProtocol[Any], ID](
 
         @post(
             "/switch-organization",
-            guards=[is_authenticated],
+            guards=[is_authenticated, requires_password_session],
             status_code=200,
             before_request=_create_before_request_handler(switch_rate_limit),
             security=config.security,
             exception_handlers=exception_handlers,
         )
-        async def switch_organization(  # noqa: PLR6301
+        async def switch_organization(  # ruff: ignore[no-self-use]
             self,
             request: Request[Any, Any, Any],
             data: SwitchOrganizationRequest,

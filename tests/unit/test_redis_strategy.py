@@ -28,6 +28,7 @@ FIVE_MINUTES_TTL_SECONDS = 300
 FIVE_MINUTES_TTL_FLOOR = FIVE_MINUTES_TTL_SECONDS - 1
 MINIMUM_TTL_SECONDS = 1
 MINIMUM_TTL_FLOOR = 0
+FRACTIONAL_LIFETIME_REDIS_TTL_SECONDS = 2
 
 if TYPE_CHECKING:
     from tests._helpers import AsyncFakeRedis, AsyncFakeRedisFactory
@@ -205,6 +206,23 @@ def test_redis_strategy_initializes_custom_configuration(
     assert strategy._decode_token_payload("user-123") == (0, "user-123")
     assert strategy._decode_token_payload("v1:3") == (0, "v1:3")
     assert strategy._decode_token_payload("v1:not-int:user-123") == (0, "v1:not-int:user-123")
+
+
+def test_redis_strategy_fractional_lifetime_never_expires_early(
+    monkeypatch: pytest.MonkeyPatch,
+    async_fakeredis: AsyncFakeRedis,
+) -> None:
+    """Redis second precision must round a positive fractional lifetime up."""
+    _disable_optional_import(monkeypatch)
+    strategy = RedisTokenStrategy[ExampleUser, UUID](
+        config=RedisTokenStrategyConfig(
+            redis=cast_fakeredis(async_fakeredis, RedisClientProtocol),
+            token_hash_secret=TOKEN_HASH_SECRET,
+            lifetime=timedelta(seconds=1, microseconds=1),
+        ),
+    )
+
+    assert strategy._ttl_seconds == FRACTIONAL_LIFETIME_REDIS_TTL_SECONDS
 
 
 def test_redis_strategy_user_index_key_hashes_subject_text(

@@ -9,6 +9,7 @@ import logging
 import time
 from dataclasses import dataclass
 from functools import partial
+from math import ceil
 from typing import TYPE_CHECKING, Protocol, runtime_checkable
 
 from litestar_auth._clock import Clock, read_clock
@@ -229,7 +230,7 @@ class RedisUsedTotpCodeStore:
             existed (replay).
         """
         key = self._key(user_id, counter)
-        ttl_ms = int(ttl_seconds * 1000)
+        ttl_ms = max(ceil(ttl_seconds * 1000), 1)
         result = await self._redis.set(key, "1", nx=True, px=ttl_ms)
         if result is True:
             return UsedTotpMarkResult(stored=True)

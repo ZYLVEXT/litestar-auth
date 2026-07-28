@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
-import msgspec  # noqa: TC002
+import msgspec  # ruff: ignore[typing-only-third-party-import]
 from litestar import Controller, Request, post
 from litestar.di import NamedDependency
 from litestar.status_codes import HTTP_200_OK, HTTP_202_ACCEPTED
@@ -21,7 +21,7 @@ from litestar_auth.controllers._utils import (
     _require_msgspec_struct,
     _to_user_schema,
 )
-from litestar_auth.exceptions import ErrorCode, InvalidPasswordError, InvalidResetPasswordTokenError
+from litestar_auth.exceptions import ErrorCode, InvalidPasswordError, InvalidResetPasswordTokenError, TokenError
 from litestar_auth.payloads import ForgotPassword, ResetPassword
 from litestar_auth.schemas import UserRead
 from litestar_auth.types import RoleCapableUserProtocol
@@ -117,7 +117,7 @@ def _define_reset_password_controller_class(ctx: _ResetPasswordControllerContext
         """Endpoints for password reset flows."""
 
         @post("/forgot-password", status_code=HTTP_202_ACCEPTED, before_request=ctx.forgot_password_before_request)
-        async def forgot_password(  # noqa: PLR6301
+        async def forgot_password(  # ruff: ignore[no-self-use]
             self,
             request: Request[Any, Any, Any],
             data: ForgotPassword,
@@ -134,7 +134,7 @@ def _define_reset_password_controller_class(ctx: _ResetPasswordControllerContext
                 await ctx.forgot_password_increment(request)
 
         @post("/reset-password", status_code=HTTP_200_OK, before_request=ctx.reset_password_before_request)
-        async def reset_password(  # noqa: PLR6301
+        async def reset_password(  # ruff: ignore[no-self-use]
             self,
             request: Request[Any, Any, Any],
             data: ResetPassword,
@@ -147,6 +147,7 @@ def _define_reset_password_controller_class(ctx: _ResetPasswordControllerContext
                 {
                     InvalidResetPasswordTokenError: (400, ErrorCode.RESET_PASSWORD_BAD_TOKEN),
                     InvalidPasswordError: (400, ErrorCode.RESET_PASSWORD_INVALID_PASSWORD),
+                    TokenError: (503, ErrorCode.TOKEN_PROCESSING_FAILED),
                 },
                 on_error=_increment_rate_limit,
             ):

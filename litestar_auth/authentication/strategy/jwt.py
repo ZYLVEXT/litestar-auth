@@ -16,7 +16,7 @@ from litestar_auth._jwt_headers import JwtDecodeConfig, decode_signed_jwt, jwt_e
 from litestar_auth._keyed_digest import hkdf_sha256_32, keyed_hex
 from litestar_auth._roles import normalize_role_name
 from litestar_auth.authentication.strategy._jwt_denylist import (
-    InMemoryJWTDenylistStore as InMemoryJWTDenylistStore,  # noqa: PLC0414
+    InMemoryJWTDenylistStore as InMemoryJWTDenylistStore,  # ruff: ignore[useless-import-alias]
 )
 from litestar_auth.authentication.strategy._jwt_denylist import (
     JWTDenylistStore,
@@ -25,7 +25,13 @@ from litestar_auth.authentication.strategy._jwt_denylist import (
     denylist_ttl_seconds,
 )
 from litestar_auth.authentication.strategy._jwt_denylist import (
-    RedisJWTDenylistStore as RedisJWTDenylistStore,  # noqa: PLC0414
+    JWTReplayStore as JWTReplayStore,  # ruff: ignore[useless-import-alias]
+)
+from litestar_auth.authentication.strategy._jwt_denylist import (
+    JWTReplayStoreResult as JWTReplayStoreResult,  # ruff: ignore[useless-import-alias]
+)
+from litestar_auth.authentication.strategy._jwt_denylist import (
+    RedisJWTDenylistStore as RedisJWTDenylistStore,  # ruff: ignore[useless-import-alias]
 )
 from litestar_auth.authentication.strategy.base import Strategy, UserManagerProtocol
 from litestar_auth.config import JWT_ACCESS_TOKEN_AUDIENCE, validate_production_secret
@@ -85,7 +91,7 @@ def _default_session_fingerprint(key: bytes) -> Callable[[object], str | None]:
     # Custom getters supplied by callers do not carry this attribute. Bound via
     # setattr so the dynamic attribute does not bleed into the function's public
     # type and trigger attribute-resolution diagnostics.
-    setattr(getter, "_is_default_session_fingerprint", True)  # noqa: B010
+    setattr(getter, "_is_default_session_fingerprint", True)  # ruff: ignore[set-attr-with-constant]
     return getter
 
 
@@ -318,7 +324,7 @@ class JWTStrategy(Strategy[UP, ID]):
             return None
         return raw
 
-    async def _read_verified_user_and_payload(  # noqa: PLR0911
+    async def _read_verified_user_and_payload(  # ruff: ignore[too-many-return-statements]
         self,
         token: str | None,
         user_manager: UserManagerProtocol[UP, ID],

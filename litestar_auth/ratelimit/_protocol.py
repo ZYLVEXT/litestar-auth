@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping  # noqa: TC003
+from collections.abc import Mapping  # ruff: ignore[typing-only-standard-library-import]
 from typing import TYPE_CHECKING, NewType, Protocol, Self, runtime_checkable
 
 from litestar_auth._redis_protocols import (

@@ -40,6 +40,7 @@ from litestar_auth.exceptions import (
     ErrorCode,
     InactiveUserError,
     InvalidPasswordError,
+    TokenError,
     UnverifiedUserError,
     UserAlreadyExistsError,
 )
@@ -565,6 +566,13 @@ def test_domain_error_public_detail_preserves_non_duplicate_messages() -> None:
     error = InvalidPasswordError(message="too weak")
 
     assert _domain_error_public_detail(error) == "too weak"
+
+
+def test_domain_error_public_detail_redacts_token_backend_message() -> None:
+    """Token failures expose the stable contract, not backend diagnostics."""
+    error = TokenError("Redis replay store unavailable at redis.internal:6379.")
+
+    assert _domain_error_public_detail(error) == TokenError.default_message
 
 
 @pytest.mark.asyncio

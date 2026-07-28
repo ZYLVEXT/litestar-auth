@@ -14,7 +14,7 @@ import litestar_auth.contrib.role_admin as role_admin_module
 from litestar_auth._plugin.extensions import build_extension_registration_context, build_extension_validation_context
 from litestar_auth.contrib.role_admin import RoleAdminControllerConfig, RoleAdminExtension, create_role_admin_controller
 from litestar_auth.exceptions import ConfigurationError
-from litestar_auth.guards import is_authenticated, is_superuser
+from litestar_auth.guards import is_authenticated, is_superuser, requires_password_session
 from litestar_auth.models import Role, User, UserRole
 from tests.unit.test_plugin_role_admin import (
     TrackingSessionMaker,
@@ -96,7 +96,7 @@ def test_role_admin_extension_register_contributes_marked_default_controller() -
     manual_controller = create_role_admin_controller(config=config)
     assert context.is_auth_route_handler(controller) is True
     assert cast("Any", controller).path == manual_controller.path == "/roles"
-    assert cast("Any", controller).guards == manual_controller.guards == [is_superuser]
+    assert cast("Any", controller).guards == manual_controller.guards == [is_superuser, requires_password_session]
     assert cast("Any", controller).role_admin_context.config is config
 
 

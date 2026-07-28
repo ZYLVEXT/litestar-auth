@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, Protocol
 
@@ -186,8 +187,9 @@ class _ConfigValidationMixin:
             "verify_minimum_response_seconds",
             "request_verify_minimum_response_seconds",
         ):
-            if getattr(self, field_name) < 0:
-                msg = f"{field_name} must be non-negative."
+            value = getattr(self, field_name)
+            if not isinstance(value, int | float) or isinstance(value, bool) or not math.isfinite(value) or value < 0:
+                msg = f"{field_name} must be non-negative and finite."
                 raise ConfigurationError(msg)
         if self.deployment_worker_count is None:
             return

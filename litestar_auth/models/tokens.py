@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import importlib
 
-from litestar_auth.authentication.strategy.db_models import (  # noqa: TC001
+from litestar_auth.authentication.strategy.db_models import (  # ruff: ignore[typing-only-first-party-import]
     AccessToken,
     RefreshToken,
     RefreshTokenConsumedDigest,

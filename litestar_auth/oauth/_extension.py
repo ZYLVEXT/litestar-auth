@@ -21,7 +21,7 @@ class _OAuthExtension:
     name: str = "oauth"
     enabled: bool = True
 
-    def validate(self, context: AuthExtensionValidationContext) -> None:  # noqa: PLR6301
+    def validate(self, context: AuthExtensionValidationContext) -> None:  # ruff: ignore[no-self-use]
         """Validate OAuth extension prerequisites before app startup wiring mutates state."""
         contract = _build_oauth_route_registration_contract(
             auth_path=context.config.auth_path,
@@ -36,13 +36,15 @@ class _OAuthExtension:
             context="OAuth providers are configured",
         )
 
-    def register(self, context: AuthExtensionRegistrationContext) -> None:  # noqa: PLR6301
+    def register(self, context: AuthExtensionRegistrationContext) -> None:  # ruff: ignore[no-self-use]
         """Contribute plugin-owned OAuth controllers and production redirect validation."""
-        from litestar_auth._plugin._oauth_controllers import (  # noqa: PLC0415
+        from litestar_auth._plugin._oauth_controllers import (  # ruff: ignore[import-outside-top-level]
             _append_oauth_associate_controllers,
             _append_oauth_login_controllers,
         )
-        from litestar_auth._plugin.startup import require_secure_oauth_redirect_in_production  # noqa: PLC0415
+        from litestar_auth._plugin.startup import (  # ruff: ignore[import-outside-top-level]
+            require_secure_oauth_redirect_in_production,
+        )
 
         require_secure_oauth_redirect_in_production(config=context.config, app_config=context.app_config)
 

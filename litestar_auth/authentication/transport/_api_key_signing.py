@@ -8,9 +8,10 @@ import hmac
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
-from urllib.parse import parse_qsl, quote, urlencode
+from urllib.parse import parse_qsl, quote, quote_from_bytes, urlencode
 
 from litestar_auth._keyed_digest import keyed_hex
+from litestar_auth.authentication.strategy._api_key_format import is_valid_api_key_id
 from litestar_auth.exceptions import ErrorCode
 
 if TYPE_CHECKING:
@@ -95,12 +96,15 @@ def read_signed_api_key_request(connection: ASGIConnection[Any, Any, Any, Any]) 
     if date is None:
         return _reject_signed_api_key_request()
 
-    _store_signed_api_key_request(
-        connection,
-        authorization_parts=authorization_parts,
-        date=date,
-        nonce=signing_headers.nonce,
-    )
+    try:
+        _store_signed_api_key_request(
+            connection,
+            authorization_parts=authorization_parts,
+            date=date,
+            nonce=signing_headers.nonce,
+        )
+    except (UnicodeError, ValueError):
+        return _reject_signed_api_key_request()
     return API_KEY_HMAC_SCHEME
 
 
@@ -276,7 +280,7 @@ def _parse_request_datetime(value: str) -> datetime | None:
 def _canonical_path(scope: Mapping[str, Any]) -> str:
     raw_path = scope.get("raw_path")
     if isinstance(raw_path, bytes):
-        return quote(raw_path.decode("ascii", errors="surrogateescape"), safe="/~%-._")
+        return quote_from_bytes(raw_path, safe="/~%-._")
     return quote(str(scope.get("path", "/")), safe="/~%-._")
 
 
@@ -285,7 +289,7 @@ def _canonical_query_string(raw_query_string: object) -> str:
         query_string = raw_query_string.decode("utf-8")
     else:
         query_string = str(raw_query_string or "")
-    pairs = parse_qsl(query_string, keep_blank_values=True, strict_parsing=False)
+    pairs = parse_qsl(query_string, keep_blank_values=True, strict_parsing=False, errors="strict")
     return urlencode(sorted(pairs), doseq=True, quote_via=quote, safe="~")
 
 
@@ -312,6 +316,7 @@ def _invalid_authorization_parts(
         or signed_headers_value is None
         or signature is None
         or not key_id
+        or not is_valid_api_key_id(key_id)
         or not signature
         or len(signature) > _MAX_SIGNATURE_LENGTH
     )

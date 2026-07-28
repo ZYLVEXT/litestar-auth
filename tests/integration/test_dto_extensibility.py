@@ -18,7 +18,7 @@ from litestar_auth.controllers import create_register_controller, create_users_c
 from litestar_auth.exceptions import ErrorCode
 from litestar_auth.manager import BaseUserManager, UserManagerSecurity
 from litestar_auth.password import PasswordHelper
-from litestar_auth.schemas import UserEmailField, UserPasswordField  # noqa: TC001
+from litestar_auth.schemas import UserEmailField, UserPasswordField  # ruff: ignore[typing-only-first-party-import]
 from tests._helpers import auth_middleware_get_request_session, litestar_app_with_user_manager
 from tests.integration.conftest import (
     DummySessionMaker,

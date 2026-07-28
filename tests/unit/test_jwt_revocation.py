@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+import logging
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any, cast
@@ -13,6 +15,7 @@ import pytest
 from litestar_auth._redis_protocols import RedisExpiringValueStoreClient
 from litestar_auth.authentication.strategy.jwt import (
     InMemoryJWTDenylistStore,
+    JWTReplayStoreResult,
     JWTRevocationPosture,
     JWTStrategy,
     RedisJWTDenylistStore,
@@ -40,7 +43,7 @@ class _UserManager:
     def __init__(self, user: _User) -> None:
         self.user = user
 
-    async def get(self, user_id: Any) -> _User | None:  # noqa: ANN401
+    async def get(self, user_id: Any) -> _User | None:  # ruff: ignore[any-type]
         return self.user if str(user_id) == str(self.user.id) else None
 
 
@@ -57,8 +60,40 @@ class _RecordingDenylistStore:
 
 
 class _MissingUserManager:
-    async def get(self, user_id: Any) -> _User | None:  # noqa: ANN401
+    async def get(self, user_id: Any) -> _User | None:  # ruff: ignore[any-type]
         return None
+
+
+async def test_in_memory_jwt_replay_store_allows_exactly_one_concurrent_consumer() -> None:
+    """Concurrent consumers of one JTI observe one success and one replay."""
+    store = InMemoryJWTDenylistStore()
+
+    results = await asyncio.gather(
+        store.mark_used("single-use-jti", ttl_seconds=60),
+        store.mark_used("single-use-jti", ttl_seconds=60),
+    )
+
+    assert results.count(JWTReplayStoreResult(stored=True)) == 1
+    assert results.count(JWTReplayStoreResult(stored=False, rejected_as_replay=True)) == 1
+
+
+async def test_in_memory_jwt_replay_store_reports_capacity_pressure() -> None:
+    """A full replay store distinguishes capacity pressure from replay."""
+    store = InMemoryJWTDenylistStore(max_entries=1)
+    assert await store.mark_used("first-jti", ttl_seconds=60) == JWTReplayStoreResult(stored=True)
+
+    assert await store.mark_used("second-jti", ttl_seconds=60) == JWTReplayStoreResult(stored=False)
+
+
+async def test_redis_jwt_replay_store_allows_exactly_one_consumer(async_fakeredis: AsyncFakeRedis) -> None:
+    """Redis SET NX gives account-token consumption atomic shared semantics."""
+    store = RedisJWTDenylistStore(redis=cast_fakeredis(async_fakeredis, RedisExpiringValueStoreClient))
+
+    first = await store.mark_used("single-use-jti", ttl_seconds=60)
+    replay = await store.mark_used("single-use-jti", ttl_seconds=60)
+
+    assert first == JWTReplayStoreResult(stored=True)
+    assert replay == JWTReplayStoreResult(stored=False, rejected_as_replay=True)
 
 
 @pytest.mark.unit
@@ -200,13 +235,22 @@ async def test_in_memory_jwt_denylist_refresh_same_jti_at_capacity_succeeds(
 
 
 @pytest.mark.unit
-async def test_in_memory_jwt_denylist_fails_closed_when_at_capacity_with_no_reclaimable_slots() -> None:
+async def test_in_memory_jwt_denylist_fails_closed_when_at_capacity_with_no_reclaimable_slots(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
     """At capacity with only active JTIs, a new deny is rejected and existing revocations stay."""
     store = InMemoryJWTDenylistStore(max_entries=DENYLIST_CAP)
 
     assert await store.deny("jti-1", ttl_seconds=60) is True
     assert await store.deny("jti-2", ttl_seconds=60) is True
-    assert await store.deny("jti-3", ttl_seconds=60) is False
+    with caplog.at_level(logging.ERROR, logger="litestar_auth.security"):
+        assert await store.deny("jti-3", ttl_seconds=60) is False
+
+    capacity_events = [
+        record for record in caplog.records if getattr(record, "event", None) == "jwt_denylist_capacity_exceeded"
+    ]
+    assert len(capacity_events) == 1
+    assert getattr(capacity_events[0], "max_entries", None) == DENYLIST_CAP
 
     assert len(store._denylisted_until) == DENYLIST_CAP
     assert set(store._denylisted_until) == {"jti-1", "jti-2"}

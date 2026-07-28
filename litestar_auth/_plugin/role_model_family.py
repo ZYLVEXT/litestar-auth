@@ -46,7 +46,7 @@ class RoleModelFamily[UP: UserProtocol[Any]]:
     user_role_model: type[Any]
 
 
-def _inspect_user_role_relationships(user_model: object) -> Any:  # noqa: ANN401
+def _inspect_user_role_relationships(user_model: object) -> Any:  # ruff: ignore[any-type]
     """Return SQLAlchemy relationships for ``user_model`` or raise a contract error.
 
     Returns:
@@ -80,7 +80,7 @@ def _inspect_user_role_relationships(user_model: object) -> Any:  # noqa: ANN401
     return user_relationships
 
 
-def _resolve_user_role_model(user_model: object, user_relationships: Any) -> type[Any]:  # noqa: ANN401
+def _resolve_user_role_model(user_model: object, user_relationships: Any) -> type[Any]:  # ruff: ignore[any-type]
     """Return the mapped role-assignment model from inspected user relationships.
 
     Returns:

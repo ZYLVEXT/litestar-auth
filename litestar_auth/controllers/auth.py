@@ -58,7 +58,7 @@ from litestar_auth.controllers._utils import (
 )
 from litestar_auth.exceptions import ConfigurationError, ErrorCode
 from litestar_auth.guards import is_authenticated
-from litestar_auth.payloads import LoginCredentials, RefreshTokenRequest  # noqa: TC001
+from litestar_auth.payloads import LoginCredentials, RefreshTokenRequest  # ruff: ignore[typing-only-first-party-import]
 from litestar_auth.ratelimit._config import (
     warn_account_lockout_response_floor_too_low,
     warn_missing_public_rate_limits,
@@ -76,7 +76,7 @@ if TYPE_CHECKING:
     from litestar_auth.ratelimit._protocol import AccountLockoutKey, AccountLockoutStore
 
 INVALID_CREDENTIALS_DETAIL = "Invalid credentials."
-INVALID_REFRESH_TOKEN_DETAIL = "The refresh token is invalid."  # noqa: S105
+INVALID_REFRESH_TOKEN_DETAIL = "The refresh token is invalid."  # ruff: ignore[hardcoded-password-string]
 TOTP_PENDING_AUDIENCE = _TOTP_PENDING_AUDIENCE
 _DEFAULT_PENDING_TOKEN_LIFETIME = timedelta(minutes=5)
 DEFAULT_LOGIN_MINIMUM_RESPONSE_SECONDS = DEFAULT_MINIMUM_RESPONSE_SECONDS
@@ -403,7 +403,7 @@ async def _maybe_issue_totp_pending_response[UP: UserProtocol[Any], ID](
     if ctx.totp_pending_secret is None:
         return None
 
-    from litestar_auth.totp_flow import (  # noqa: PLC0415
+    from litestar_auth.totp_flow import (  # ruff: ignore[import-outside-top-level]
         TotpFlowUserManagerProtocol,
         TotpLoginFlowConfig,
         TotpLoginFlowService,
@@ -460,7 +460,7 @@ async def _build_authenticated_login_response[UP: UserProtocol[Any], ID](
     await ctx.login_reset(request)
     if ctx.refresh_strategy is None:
         response = await ctx.backend.login(user)
-        from litestar_auth._manager.hooks import dispatch_after_login  # noqa: PLC0415
+        from litestar_auth._manager.hooks import dispatch_after_login  # ruff: ignore[import-outside-top-level]
 
         await dispatch_after_login(user_manager, user)
         return response
@@ -468,7 +468,7 @@ async def _build_authenticated_login_response[UP: UserProtocol[Any], ID](
     refresh_token = await ctx.refresh_strategy.write_refresh_token(user)
     session_id = await _resolve_access_token_session_id(ctx.backend, ctx.refresh_strategy, user, refresh_token)
     response = await ctx.backend.login(user, session_id=session_id)
-    from litestar_auth._manager.hooks import dispatch_after_login  # noqa: PLC0415
+    from litestar_auth._manager.hooks import dispatch_after_login  # ruff: ignore[import-outside-top-level]
 
     await dispatch_after_login(user_manager, user)
     cookie_transport = _resolve_cookie_transport(ctx.backend)
@@ -553,7 +553,7 @@ def _define_auth_controller_class_di[UP: UserProtocol[Any], ID](
             before_request=ctx.login_before,
             exception_handlers=login_exception_handlers,
         )
-        async def login(  # noqa: PLR6301
+        async def login(  # ruff: ignore[no-self-use]
             self: Controller,
             request: Request[Any, Any, Any],
             data: LoginCredentials,
@@ -567,7 +567,7 @@ def _define_auth_controller_class_di[UP: UserProtocol[Any], ID](
             )
 
         @post("/logout", guards=[is_authenticated], security=security)
-        async def logout(  # noqa: PLR6301
+        async def logout(  # ruff: ignore[no-self-use]
             self: Controller,
             request: Request[Any, Any, Any],
         ) -> object:
@@ -601,7 +601,7 @@ def _define_refresh_auth_controller_class_di[UP: UserProtocol[Any], ID](
         """Backend-bound authentication endpoints with refresh-token rotation."""
 
         @post("/refresh", before_request=ctx.refresh_before)
-        async def refresh(  # noqa: PLR6301
+        async def refresh(  # ruff: ignore[no-self-use]
             self: Controller,
             request: Request[Any, Any, Any],
             data: RefreshTokenRequest,

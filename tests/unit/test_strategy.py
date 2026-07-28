@@ -29,7 +29,7 @@ HS512_SECRET = "fedcba9876543210" * 4
 JTI_HEX_LENGTH = 32
 
 
-def _as_any(value: object) -> Any:  # noqa: ANN401
+def _as_any(value: object) -> Any:  # ruff: ignore[any-type]
     """Return a value through the test-only dynamic type boundary."""
     return cast("Any", value)
 

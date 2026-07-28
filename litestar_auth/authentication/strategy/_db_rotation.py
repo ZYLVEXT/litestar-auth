@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any, Protocol, cast
 
@@ -19,6 +20,8 @@ if TYPE_CHECKING:
     from litestar_auth.authentication.strategy._db_repositories import AsyncSessionT, TokenRepositoryType
     from litestar_auth.authentication.strategy.base import UserManagerProtocol
     from litestar_auth.authentication.strategy.db_models import RefreshTokenConsumedDigest
+
+_SECURITY_LOGGER = logging.getLogger("litestar_auth.security")
 
 
 class _RefreshTokenRow(Protocol):
@@ -97,6 +100,24 @@ class _DatabaseRefreshTokenRotationMixin[UP: UserProtocol[Any], ID](
         )
         return cast("_RefreshTokenRow | None", result.scalars().first())
 
+    async def _revoke_chain_on_refresh_token_reuse(self, token_digest: str) -> None:
+        """Revoke the session chain when ``token_digest`` was already consumed by a rotation.
+
+        A consumed digest presented again means the token leaked: the legitimate client
+        already rotated it, so RFC 6819 5.2.2.3 requires revoking the whole chain rather
+        than only denying this request. ``session_id`` is the non-sensitive public session
+        identifier, so it is safe to log for operator correlation.
+        """
+        compromised_row = await self._find_refresh_token_row_by_consumed_digest(token_digest)
+        if compromised_row is None:
+            return
+        await self._revoke_refresh_session_chain(compromised_row.session_id)
+        await self.session.commit()
+        _SECURITY_LOGGER.warning(
+            "Refresh-token reuse detected; the session chain was revoked.",
+            extra={"event": "refresh_token_reuse_detected", "session_id": compromised_row.session_id},
+        )
+
     async def _revoke_refresh_session_chain(self, session_id: str) -> None:
         """Delete every access and refresh token for a compromised refresh-session chain."""
         await self._execute_delete(
@@ -137,10 +158,7 @@ class _DatabaseRefreshTokenRotationMixin[UP: UserProtocol[Any], ID](
             ),
         )
         if replaced_count != 1:
-            compromised_row = await self._find_refresh_token_row_by_consumed_digest(consumed_token_digest)
-            if compromised_row is not None:
-                await self._revoke_refresh_session_chain(compromised_row.session_id)
-                await self.session.commit()
+            await self._revoke_chain_on_refresh_token_reuse(consumed_token_digest)
             return None
         await self.session.execute(
             insert(self.consumed_refresh_token_digest_model).values(
@@ -153,7 +171,7 @@ class _DatabaseRefreshTokenRotationMixin[UP: UserProtocol[Any], ID](
     async def rotate_refresh_token(
         self,
         refresh_token: str,
-        user_manager: UserManagerProtocol[UP, ID],  # noqa: ARG002
+        user_manager: UserManagerProtocol[UP, ID],  # ruff: ignore[unused-method-argument]
     ) -> tuple[UP, str] | None:
         """Rotate a refresh token and return the related user plus replacement.
 
@@ -164,10 +182,7 @@ class _DatabaseRefreshTokenRotationMixin[UP: UserProtocol[Any], ID](
         token_digest = self._token_digest(refresh_token)
         persisted_token = await self._load_refresh_token_for_rotation(refresh_token)
         if persisted_token is None:
-            compromised_row = await self._find_refresh_token_row_by_consumed_digest(token_digest)
-            if compromised_row is not None:
-                await self._revoke_refresh_session_chain(compromised_row.session_id)
-                await self.session.commit()
+            await self._revoke_chain_on_refresh_token_reuse(token_digest)
             return None
         if self._is_token_expired(persisted_token.created_at, self.refresh_max_age):
             await self._revoke_refresh_session_chain(persisted_token.session_id)

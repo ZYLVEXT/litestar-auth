@@ -143,7 +143,7 @@ async def _login(user: ExampleUser, strategy: InMemoryTokenStrategy) -> dict[str
 
 
 async def test_api_key_extension_mounts_controllers_and_preserves_management_and_backend_flow(
-    async_test_client_factory: Any,  # noqa: ANN401
+    async_test_client_factory: Any,  # ruff: ignore[any-type]
 ) -> None:
     """API keys configured by ``api_keys.enabled`` manage keys and still authenticate requests."""
     captured_controllers: list[object] = []

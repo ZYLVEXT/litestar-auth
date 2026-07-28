@@ -1,5 +1,5 @@
 """Internal account-token services for ``BaseUserManager``."""
-# ruff: noqa: ANN401, DOC201, DOC501, SLF001
+# ruff: file-ignore[any-type, docstring-missing-returns, docstring-missing-exception, private-member-access]
 
 from __future__ import annotations
 
@@ -23,6 +23,7 @@ from litestar_auth.exceptions import (
     InvalidOrganizationInvitationTokenError,
     InvalidResetPasswordTokenError,
     InvalidVerifyTokenError,
+    TokenError,
     UserNotExistsError,
 )
 
@@ -32,11 +33,13 @@ if TYPE_CHECKING:
     from litestar_auth._manager.construction import AccountTokenSecrets
     from litestar_auth._manager.hooks import ManagerHookBus
     from litestar_auth._manager.user_policy import UserPolicy
-    from litestar_auth.authentication.strategy._jwt_denylist import JWTDenylistStore
+    from litestar_auth.authentication.strategy._jwt_denylist import JWTReplayStore
 
 type _InvalidTokenError = type[
     InvalidVerifyTokenError | InvalidResetPasswordTokenError | InvalidOrganizationInvitationTokenError
 ]
+
+_PROTECTED_JWT_CLAIMS = frozenset({"aud", "exp", "iat", "jti", "nbf", "sub"})
 
 
 class OrganizationInvitationLookupStore[INVITATION](Protocol):
@@ -85,7 +88,7 @@ class AccountTokensServiceDependencies[UP, ID]:
     token_security: AccountTokenSecurityService[UP, ID]
     logger: Any
     policy: UserPolicy
-    account_token_denylist_store: JWTDenylistStore | None = None
+    account_token_denylist_store: JWTReplayStore | None = None
 
 
 class TokenWriter:
@@ -134,16 +137,21 @@ class TokenWriter:
             token_claims.pop("password_fingerprint", None)
             return token_claims or None
 
-        if "password_fingerprint" not in token_claims:
-            if password_fingerprint_source is None:
-                msg = "reset-password tokens require a password fingerprint source"
-                raise ValueError(msg)
-            token_claims["password_fingerprint"] = self._password_fingerprint(password_fingerprint_source)
+        if password_fingerprint_source is None:
+            msg = "reset-password tokens require a password fingerprint source"
+            raise ValueError(msg)
+        # Reset authorization must always bind to the current stored password;
+        # domain-specific extra claims cannot weaken this invariant.
+        token_claims["password_fingerprint"] = self._password_fingerprint(password_fingerprint_source)
         return token_claims
 
     @staticmethod
     def write_token_subject(request: TokenWriteRequest) -> str:
         """Sign a short-lived JWT bound to an arbitrary subject string."""
+        protected_overrides = _PROTECTED_JWT_CLAIMS.intersection(request.extra_claims or ())
+        if protected_overrides:
+            msg = f"extra_claims cannot override protected JWT claims: {sorted(protected_overrides)}"
+            raise ValueError(msg)
         issued_at = request.issued_at or datetime.now(tz=UTC)
         payload: dict[str, Any] = {
             "sub": request.subject,
@@ -410,27 +418,41 @@ class AccountTokensService[UP, ID]:
         self._policy = dependencies.policy
         self._denylist_store = dependencies.account_token_denylist_store
 
-    async def _reject_if_token_replayed(self, payload: dict[str, Any], invalid_token_error: _InvalidTokenError) -> None:
-        """Reject a verify/reset token whose ``jti`` was already consumed.
+    async def _consume_token_once(
+        self,
+        payload: dict[str, Any],
+        invalid_token_error: _InvalidTokenError,
+    ) -> None:
+        """Atomically consume a verify/reset token before changing account state.
 
-        No-op when no denylist store is configured (the default), in which case
-        account tokens stay single-use only through password/verification-state rotation.
-        ``jti`` is guaranteed present and string-typed here: it is a required claim and
-        PyJWT raises ``InvalidJTIError`` for non-string values during decode.
+        No-op when no replay store is configured, in which case account tokens
+        rely on password/verification-state rotation. ``jti`` is guaranteed
+        present and string-typed by the JWT decoder.
+
+        Raises:
+            TokenError: If the replay store cannot record a new JTI.
         """
         store = self._denylist_store
         if store is None:
             return
-        if await store.is_denied(payload["jti"]):
-            self._logger.warning("Account token replay rejected", extra={"event": "token_validation_failed"})
-            raise invalid_token_error
-
-    async def _consume_token(self, payload: dict[str, Any]) -> None:
-        """Record a verify/reset token's ``jti`` as spent until its original expiry."""
-        store = self._denylist_store
-        if store is None:
+        result = await store.mark_used(
+            payload["jti"],
+            ttl_seconds=denylist_ttl_seconds(payload.get("exp")),
+        )
+        if result.stored:
             return
-        await store.deny(payload["jti"], ttl_seconds=denylist_ttl_seconds(payload.get("exp")))
+        if result.rejected_as_replay:
+            self._logger.warning(
+                "Account token replay rejected",
+                extra={"event": "account_token_replay"},
+            )
+            raise invalid_token_error
+        self._logger.error(
+            "Account-token replay store rejected a new JTI under capacity pressure.",
+            extra={"event": "account_token_replay_store_capacity"},
+        )
+        msg = "Could not record account-token consumption in the replay store."
+        raise TokenError(msg)
 
     @property
     def security(self) -> AccountTokenSecurityService[UP, ID]:
@@ -458,14 +480,13 @@ class AccountTokensService[UP, ID]:
             audience=self._audiences.verify,
             invalid_token_error=InvalidVerifyTokenError,
         )
-        await self._reject_if_token_replayed(payload, InvalidVerifyTokenError)
         managed_user = _managed_user(user)
         if managed_user.is_verified:
             msg = "The user is already verified."
             raise InvalidVerifyTokenError(msg)
 
+        await self._consume_token_once(payload, InvalidVerifyTokenError)
         updated_user = await self._manager.user_db.update(user, {"is_verified": True})
-        await self._consume_token(payload)
         await self._hook_bus.fire("after_verify", updated_user)
         return updated_user
 
@@ -508,7 +529,6 @@ class AccountTokensService[UP, ID]:
     async def reset_password(self, token: str, password: str) -> UP:
         """Reset the subject user's password."""
         user, payload = await self._token_security.get_reset_password_context(token, user_db=self._manager.user_db)
-        await self._reject_if_token_replayed(payload, InvalidResetPasswordTokenError)
 
         # Security: reject password resets for deactivated accounts
         managed = _managed_user(user)
@@ -539,9 +559,9 @@ class AccountTokensService[UP, ID]:
         update_dict = {
             "hashed_password": await _run_password_op(self._policy.password_helper.hash, password),
         }
+        await self._consume_token_once(payload, InvalidResetPasswordTokenError)
         updated_user = await self._manager.user_db.update(user, update_dict)
         await self._manager._invalidate_all_tokens(updated_user)
-        await self._consume_token(payload)
         await self._hook_bus.fire("after_reset_password", updated_user)
         return updated_user
 

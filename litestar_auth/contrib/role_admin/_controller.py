@@ -33,7 +33,7 @@ from litestar_auth.controllers._utils import (
     _mark_litestar_auth_route_handler,
 )
 from litestar_auth.exceptions import ConfigurationError
-from litestar_auth.guards import is_superuser
+from litestar_auth.guards import is_superuser, requires_password_session
 from litestar_auth.types import UserProtocol
 
 if TYPE_CHECKING:
@@ -80,6 +80,23 @@ def _normalize_route_prefix(route_prefix: str) -> str:
 
     msg = "create_role_admin_controller route_prefix must not be empty."
     raise ConfigurationError(msg)
+
+
+def _resolve_role_admin_guards(settings: RoleAdminControllerConfig[Any]) -> tuple[Guard, ...]:
+    """Resolve controller guards and reject an accidentally public admin surface.
+
+    Returns:
+        The default or explicitly configured non-empty guard sequence.
+
+    Raises:
+        ConfigurationError: If an empty guard sequence is supplied.
+    """
+    if settings.guards is None:
+        return cast("tuple[Guard, ...]", (is_superuser, requires_password_session))
+    if not settings.guards:
+        msg = "create_role_admin_controller guards must not be empty."
+        raise ConfigurationError(msg)
+    return tuple(settings.guards)
 
 
 def _resolve_model_family[UP: UserProtocol[Any]](
@@ -317,7 +334,7 @@ def _finalize_role_admin_controller[UP: UserProtocol[Any]](
 
 
 @overload
-def create_role_admin_controller[UP: UserProtocol[Any]](  # noqa: D418
+def create_role_admin_controller[UP: UserProtocol[Any]](  # ruff: ignore[overload-with-docstring]
     *,
     controller_config: RoleAdminControllerConfig[UP],
 ) -> type[Controller]:
@@ -325,7 +342,7 @@ def create_role_admin_controller[UP: UserProtocol[Any]](  # noqa: D418
 
 
 @overload
-def create_role_admin_controller[UP: UserProtocol[Any]](  # noqa: D418
+def create_role_admin_controller[UP: UserProtocol[Any]](  # ruff: ignore[overload-with-docstring]
     **options: Unpack[RoleAdminControllerOptions[UP]],
 ) -> type[Controller]:
     """Build a role-admin controller from keyword settings."""
@@ -351,8 +368,7 @@ def create_role_admin_controller[UP: UserProtocol[Any]](
     settings = _resolve_role_admin_controller_settings(controller_config=controller_config, options=options)
 
     normalized_route_prefix = _normalize_route_prefix(settings.route_prefix)
-    resolved_guards = tuple((is_superuser,) if settings.guards is None else settings.guards)
-    typed_guards = cast("tuple[Guard, ...]", resolved_guards)
+    typed_guards = _resolve_role_admin_guards(settings)
     controller_context = _build_role_admin_controller_context(
         settings=settings,
         normalized_route_prefix=normalized_route_prefix,

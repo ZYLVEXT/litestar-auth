@@ -33,7 +33,7 @@ class ControllerFactoryKit[UP: UserProtocol[Any], ID]:
         """Return the request-scoped backend for this generated controller."""
         return self.backend_inventory.resolve_request_backend(request_backends, backend_index=self.backend_index)
 
-    def runtime_context(self, request_backends: object) -> Any:  # noqa: ANN401
+    def runtime_context(self, request_backends: object) -> Any:  # ruff: ignore[any-type]
         """Build a runtime context from the request-scoped backend.
 
         Returns:
@@ -57,12 +57,12 @@ class ControllerFactoryKit[UP: UserProtocol[Any], ID]:
         return _resolve_cookie_transport(cast("Any", backend))
 
     @staticmethod
-    def controller_base(controller_cls: type[Controller]) -> Any:  # noqa: ANN401
+    def controller_base(controller_cls: type[Controller]) -> Any:  # ruff: ignore[any-type]
         """Return a generated controller class as a dynamic subclass base."""
         return cast("Any", controller_cls)
 
     @staticmethod
-    def controller_handler(controller_cls: type[Controller], handler_name: str) -> Any:  # noqa: ANN401
+    def controller_handler(controller_cls: type[Controller], handler_name: str) -> Any:  # ruff: ignore[any-type]
         """Return a generated route handler for post-definition configuration."""
         return getattr(cast("Any", controller_cls), handler_name)
 

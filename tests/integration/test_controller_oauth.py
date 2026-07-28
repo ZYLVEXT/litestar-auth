@@ -447,7 +447,7 @@ class TrackingUserManager(BaseUserManager[ExampleUser, UUID]):
         self.logged_in_users.append(user)
 
 
-def build_app(  # noqa: PLR0913
+def build_app(  # ruff: ignore[too-many-arguments]
     *,
     users: list[ExampleUser] | None = None,
     oauth_client: FakeOAuthClient | None = None,
@@ -997,7 +997,7 @@ async def test_callback_returns_existing_user_when_provider_identity_already_lin
     oauth_account = user_db.oauth_accounts.get(("github", "shared-provider-id"))
     assert oauth_account is not None
     assert oauth_account.user_id == user_a.id
-    assert len(user_db.users_by_id) == 2  # noqa: PLR2004
+    assert len(user_db.users_by_id) == 2  # ruff: ignore[magic-value-comparison]
     assert user_manager.created_users == []
 
 
@@ -1942,7 +1942,7 @@ async def test_associate_re_link_updates_tokens() -> None:
     record = user_db.oauth_accounts["github", "same-id"]
     assert record.access_token == "provider-access-token"
     assert record.refresh_token == "provider-refresh-token"
-    assert record.expires_at == 1_234_567_890  # noqa: PLR2004
+    assert record.expires_at == 1_234_567_890  # ruff: ignore[magic-value-comparison]
 
 
 async def test_associate_rejects_when_provider_identity_already_linked_to_another_user() -> None:

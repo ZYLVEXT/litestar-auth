@@ -5,9 +5,9 @@ from __future__ import annotations
 from typing import Any, Protocol, cast
 
 from advanced_alchemy.extensions.litestar.plugins.init.config.common import SESSION_SCOPE_KEY
-from litestar.datastructures.state import State  # noqa: TC002
-from litestar.types import Scope  # noqa: TC002
-from sqlalchemy.ext.asyncio import AsyncSession  # noqa: TC002
+from litestar.datastructures.state import State  # ruff: ignore[typing-only-third-party-import]
+from litestar.types import Scope  # ruff: ignore[typing-only-third-party-import]
+from sqlalchemy.ext.asyncio import AsyncSession  # ruff: ignore[typing-only-third-party-import]
 
 _AA_SCOPE_NAMESPACE: str = "_aa_connection_state"
 

@@ -103,7 +103,7 @@ def test_models_package_getattr_unknown_name_raises() -> None:
 
 def test_models_package_dir_lists_lazy_exports() -> None:
     """``__dir__`` advertises the public model exports for tab-completion / introspection."""
-    assert litestar_auth_models.__dir__() == [  # noqa: PLC2801
+    assert litestar_auth_models.__dir__() == [  # ruff: ignore[unnecessary-dunder-call]
         "AccessTokenMixin",
         "ApiKey",
         "ApiKeyMixin",
@@ -1262,7 +1262,7 @@ def test_models_package_import_token_orm_models_keeps_user_relationship_unresolv
     assert result.returncode == 0, (result.stdout, result.stderr)
 
 
-def test_reference_user_model_inverse_relationship_contracts_are_stable() -> None:  # noqa: PLR0915
+def test_reference_user_model_inverse_relationship_contracts_are_stable() -> None:  # ruff: ignore[too-many-statements]
     """The bundled ``User`` model keeps token and OAuth inverse relationships wired to the current classes."""
     user_relationships = inspect(User).relationships
 

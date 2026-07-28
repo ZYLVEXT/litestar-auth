@@ -71,7 +71,7 @@ class ProviderOAuthControllerOptions[UP: UserProtocol[Any], ID](TypedDict):
 
 
 @overload
-def create_provider_oauth_controller[UP: UserProtocol[Any], ID](  # noqa: D418
+def create_provider_oauth_controller[UP: UserProtocol[Any], ID](  # ruff: ignore[overload-with-docstring]
     *,
     config: ProviderOAuthControllerConfig[UP, ID],
 ) -> type[Controller]:
@@ -79,7 +79,7 @@ def create_provider_oauth_controller[UP: UserProtocol[Any], ID](  # noqa: D418
 
 
 @overload
-def create_provider_oauth_controller[UP: UserProtocol[Any], ID](  # noqa: D418
+def create_provider_oauth_controller[UP: UserProtocol[Any], ID](  # ruff: ignore[overload-with-docstring]
     **options: Unpack[ProviderOAuthControllerOptions[UP, ID]],
 ) -> type[Controller]:
     """Build a provider OAuth controller from keyword settings."""

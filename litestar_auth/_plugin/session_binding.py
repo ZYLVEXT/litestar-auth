@@ -16,14 +16,14 @@ if TYPE_CHECKING:
     from litestar_auth.oauth_encryption import OAuthTokenEncryption
 
 
-class _UserManagerFactory[UP: UserProtocol[Any], ID](Protocol):  # noqa: PYI046
+class _UserManagerFactory[UP: UserProtocol[Any], ID](Protocol):  # ruff: ignore[unused-private-protocol]
     """Factory that builds a session-bound user manager."""
 
     def __call__(self, session: AsyncSession) -> BaseUserManager[UP, ID]:
         pass
 
 
-class _AccountStateValidator[UP](Protocol):  # noqa: PYI046
+class _AccountStateValidator[UP](Protocol):  # ruff: ignore[unused-private-protocol]
     """Callable validator contract for ``require_account_state`` on the manager class."""
 
     def __call__(self, user: UP, *, require_verified: bool = False) -> None:

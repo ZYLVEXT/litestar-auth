@@ -24,6 +24,7 @@ from litestar_auth.authentication.strategy.base import RefreshSession, Strategy,
 from litestar_auth.authentication.transport.bearer import BearerTransport
 from litestar_auth.controllers import create_session_devices_controller
 from litestar_auth.exceptions import ErrorCode
+from litestar_auth.guards import is_authenticated, requires_password_session
 from litestar_auth.manager import BaseUserManager, UserManagerSecurity
 from litestar_auth.models import User, import_token_orm_models
 from litestar_auth.password import PasswordHelper
@@ -137,6 +138,24 @@ class _UnsafeMetadataSessionManagementStrategy(_SessionManagementStrategy):
                 ),
             ),
         ]
+
+
+def test_session_device_routes_require_password_session() -> None:
+    """Delegated API keys cannot inspect or revoke the owner's interactive sessions."""
+    backend = AuthenticationBackend[ExampleUser, UUID](
+        name="manual",
+        transport=BearerTransport(),
+        strategy=cast("Any", _SessionManagementStrategy()),
+    )
+    controller = create_session_devices_controller(backend=backend)
+
+    for handler_name in (
+        "list_refresh_sessions",
+        "list_refresh_sessions_with_refresh_token",
+        "revoke_refresh_session",
+        "revoke_other_refresh_sessions",
+    ):
+        assert controller.__dict__[handler_name].guards == [is_authenticated, requires_password_session]
 
 
 @pytest.fixture

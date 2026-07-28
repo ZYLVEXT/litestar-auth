@@ -154,7 +154,7 @@ def _assert_encrypted_totp_secret_matches(stored_secret: str | None, plaintext_s
 class TrackingUserManager(BaseUserManager[ExampleUser, UUID]):
     """Concrete manager that records completed login hooks."""
 
-    def __init__(  # noqa: PLR0913
+    def __init__(  # ruff: ignore[too-many-arguments]
         self,
         user_db: BaseUserStore[ExampleUser, UUID],
         password_helper: PasswordHelper,
@@ -217,7 +217,7 @@ class AccountState:
     is_verified: bool = False
 
 
-def build_app(  # noqa: PLR0913
+def build_app(  # ruff: ignore[too-many-arguments]
     *,
     with_totp: bool = True,
     used_tokens_store: InMemoryUsedTotpCodeStore | object | None = _DEFAULT_USED_TOKENS_STORE,
@@ -519,7 +519,7 @@ async def test_confirm_enable_returns_plaintext_recovery_codes_once_and_stores_o
 
 
 async def test_enable_2fa_keeps_email_in_the_otpauth_uri_under_username_login_mode(
-    async_test_client_factory: Any,  # noqa: ANN401
+    async_test_client_factory: Any,  # ruff: ignore[any-type]
 ) -> None:
     """Username-mode login does not change TOTP enrollment's email-based URI."""
     app_value = build_app(login_identifier="username")
@@ -1178,7 +1178,7 @@ async def test_handle_regenerate_recovery_codes_rejects_invalid_explicit_data_pa
     user_manager.authenticate.assert_not_awaited()
 
 
-async def test_enable_2fa_step_up_requires_password(async_test_client_factory: Any) -> None:  # noqa: ANN401
+async def test_enable_2fa_step_up_requires_password(async_test_client_factory: Any) -> None:  # ruff: ignore[any-type]
     """When step-up is enabled, /enable requires the current password."""
     app_value = build_app(totp_enable_requires_password=True)
     async with async_test_client_factory(app_value) as client_and_db:
@@ -1255,7 +1255,7 @@ async def test_enable_2fa_rejects_reenrollment_when_already_enabled(
     assert next(iter(user_db.users_by_id.values())).totp_secret == stored_secret
 
 
-async def test_enable_2fa_checks_step_up_before_already_enabled(async_test_client_factory: Any) -> None:  # noqa: ANN401
+async def test_enable_2fa_checks_step_up_before_already_enabled(async_test_client_factory: Any) -> None:  # ruff: ignore[any-type]
     """Invalid step-up credentials fail before the already-enabled check runs."""
     app_value = build_app(totp_enable_requires_password=True)
     async with async_test_client_factory(app_value) as client_and_db:
@@ -1682,7 +1682,7 @@ async def test_verify_with_recovery_code_logs_in_once_and_reuse_matches_wrong_to
 
 @pytest.mark.filterwarnings("ignore::litestar_auth.totp.SecurityWarning")
 async def test_verify_concurrent_recovery_code_consumption_has_exactly_one_winner(
-    async_test_client_factory: Any,  # noqa: ANN401
+    async_test_client_factory: Any,  # ruff: ignore[any-type]
 ) -> None:
     """Concurrent submits of the same recovery code cannot both complete login."""
     app_value = build_app()
@@ -2750,7 +2750,7 @@ async def test_verify_routes_through_manager_account_state_validator() -> None:
     # ``setattr`` bypasses static-method-shape inference; instance-attribute shadowing
     # of the bound class method is intentional here so the manager seam fires only for
     # this test scope without monkey-patching the ``BaseUserManager`` class itself.
-    setattr(user_manager, "require_account_state", manager_only_lockout)  # noqa: B010
+    setattr(user_manager, "require_account_state", manager_only_lockout)  # ruff: ignore[set-attr-with-constant]
 
     async with AsyncTestClient(app=app) as client:
         secret = await _enable_totp_and_get_secret(client)
@@ -3383,8 +3383,7 @@ async def test_verify_returns_service_unavailable_when_pending_jti_denylist_cann
     body = resp.json()
     code = body.get("code") or body.get("extra", {}).get("code")
     assert code == ErrorCode.TOKEN_PROCESSING_FAILED
-    detail = body.get("detail", "")
-    assert "pending-login JTI" in detail
+    assert body.get("detail") == TokenError.default_message
 
 
 @pytest.mark.filterwarnings("ignore::litestar_auth.totp.SecurityWarning")

@@ -277,6 +277,17 @@ def test_validate_secret_strength_skips_entropy_when_floor_is_zero() -> None:
     )
 
 
+@pytest.mark.parametrize("minimum_entropy_bits", [float("nan"), float("inf"), float("-inf")])
+def test_validate_secret_strength_rejects_non_finite_entropy_floor(minimum_entropy_bits: float) -> None:
+    """Entropy policy must not be bypassed or made impossible by non-finite values."""
+    with pytest.raises(ConfigurationError, match="minimum_entropy_bits must be finite"):
+        validate_secret_strength(
+            "a" * MINIMUM_SECRET_LENGTH,
+            label="JWT secret",
+            minimum_entropy_bits=minimum_entropy_bits,
+        )
+
+
 def test_validate_secret_strength_exposes_minimum_in_error_message() -> None:
     """Operators get a generation hint and explicit threshold in the failure."""
     with pytest.raises(ConfigurationError) as exc_info:

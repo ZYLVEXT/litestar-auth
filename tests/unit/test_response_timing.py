@@ -15,6 +15,13 @@ FAST_FLOOR_SECONDS = 0.01
 SLOW_WORK_SECONDS = 0.02
 
 
+@pytest.mark.parametrize("value", [float("nan"), float("inf"), float("-inf")])
+def test_minimum_response_validator_rejects_non_finite_values(value: float) -> None:
+    """Timing envelopes cannot silently disable padding or sleep forever."""
+    with pytest.raises(ValueError, match="non-negative and finite"):
+        response_timing.validate_minimum_response_seconds(value, field_name="minimum_response_seconds")
+
+
 async def test_minimum_response_helper_pads_fast_work_to_floor() -> None:
     """Work that finishes quickly is padded to the configured minimum."""
 

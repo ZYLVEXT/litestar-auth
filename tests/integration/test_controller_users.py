@@ -553,6 +553,25 @@ async def test_change_password_rejects_api_key_authenticated_callers(
     assert (response.json().get("extra") or {}).get("code") == ErrorCode.AUTHORIZATION_DENIED
 
 
+async def test_user_admin_routes_reject_scoped_api_key_owned_by_superuser(
+    async_test_client_factory: Callable[[Any], Any],
+) -> None:
+    """A superuser-owned API key cannot inherit global user-administration authority."""
+    app_value = build_app(include_api_keys=True)
+    app, _user_db, manager, _strategy, admin_user, regular_user = app_value
+    created = await manager.create_api_key(user=admin_user, name="Automation", scopes=["member"])
+    headers = {"Authorization": f"Bearer {created.secret.get_secret_value()}"}
+
+    async with async_test_client_factory(app) as test_client:
+        read_response = await test_client.get(f"/users/{regular_user.id}", headers=headers)
+        list_response = await test_client.get("/users", headers=headers)
+
+    assert read_response.status_code == HTTP_FORBIDDEN
+    assert list_response.status_code == HTTP_FORBIDDEN
+    assert (read_response.json().get("extra") or {}).get("code") == ErrorCode.AUTHORIZATION_DENIED
+    assert (list_response.json().get("extra") or {}).get("code") == ErrorCode.AUTHORIZATION_DENIED
+
+
 async def test_patch_me_rejects_password_and_preserves_hash(
     client: tuple[
         AsyncTestClient[Litestar],

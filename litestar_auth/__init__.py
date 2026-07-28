@@ -84,7 +84,7 @@ from litestar_auth.types import (
     UserProtocolStrict,
 )
 
-logging.getLogger(__name__).addHandler(logging.NullHandler())  # noqa: RUF067
+logging.getLogger(__name__).addHandler(logging.NullHandler())  # ruff: ignore[non-empty-init-module]
 
 __version__ = "5.3.0"
 

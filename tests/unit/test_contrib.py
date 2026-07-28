@@ -32,7 +32,7 @@ from litestar_auth.authentication.transport.bearer import BearerTransport
 from litestar_auth.contrib.role_admin._schemas import RoleCreate, RoleRead, RoleUpdate, UserBrief
 from litestar_auth.controllers.oauth import OAuthControllerUserManagerProtocol
 from litestar_auth.exceptions import ConfigurationError, ErrorCode
-from litestar_auth.guards import is_authenticated, is_superuser
+from litestar_auth.guards import is_authenticated, is_superuser, requires_password_session
 from litestar_auth.models import Role, User, UserRole
 from litestar_auth.oauth import create_provider_oauth_controller
 from litestar_auth.totp import RedisTotpEnrollmentStore as BaseRedisTotpEnrollmentStore
@@ -82,7 +82,7 @@ AUTH_RATE_LIMIT_VERIFICATION_SLOT_IDENTIFIERS = frozenset(
 )
 
 
-def _as_any(value: object) -> Any:  # noqa: ANN401
+def _as_any(value: object) -> Any:  # ruff: ignore[any-type]
     """Return a value through the test-only dynamic type boundary."""
     return cast("Any", value)
 
@@ -169,7 +169,7 @@ def test_contrib_role_admin_factory_builds_controller_from_explicit_models() -> 
 
     assert issubclass(controller, Controller)
     assert controller.path == "/admin/roles"
-    assert controller.guards == [is_superuser]
+    assert controller.guards == [is_superuser, requires_password_session]
     assert context.model_family.user_model is User
     assert context.model_family.role_model is Role
     assert context.model_family.user_role_model is UserRole
@@ -213,16 +213,15 @@ def test_contrib_role_admin_factory_supports_config_driven_model_resolution_and_
     assert context.model_family.user_role_model is UserRole
 
 
-def test_contrib_role_admin_factory_accepts_empty_guard_overrides() -> None:
-    """Passing an explicit empty guard list disables the default superuser guard."""
-    controller = create_role_admin_controller(
-        user_model=User,
-        role_model=Role,
-        user_role_model=UserRole,
-        guards=[],
-    )
-
-    assert controller.guards == []
+def test_contrib_role_admin_factory_rejects_empty_guard_overrides() -> None:
+    """An empty guard override cannot expose privileged role-admin routes."""
+    with pytest.raises(ConfigurationError, match="guards must not be empty"):
+        create_role_admin_controller(
+            user_model=User,
+            role_model=Role,
+            user_role_model=UserRole,
+            guards=[],
+        )
 
 
 def test_contrib_role_admin_factory_fails_closed_for_incompatible_configured_user_models() -> None:
@@ -517,7 +516,7 @@ async def test_contrib_role_admin_internal_helpers_cover_listing_loading_and_sig
     assert "custom_session" in controller.list_role_users.fn.__signature__.parameters
 
 
-async def test_contrib_role_admin_assignment_helpers_cover_success_and_paging(  # noqa: C901
+async def test_contrib_role_admin_assignment_helpers_cover_success_and_paging(  # ruff: ignore[complex-structure]
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Assignment helpers normalize ids and page ``UserBrief`` payloads."""
@@ -711,7 +710,7 @@ async def test_contrib_role_admin_assignment_helpers_cover_error_mapping(
     assert missing_page_role_exc.value.extra == {"code": ErrorCode.ROLE_NOT_FOUND}
 
 
-async def test_contrib_role_admin_controller_handlers_cover_config_and_request_bound_error_paths(  # noqa: C901, PLR0915
+async def test_contrib_role_admin_controller_handlers_cover_config_and_request_bound_error_paths(  # ruff: ignore[complex-structure, too-many-statements]
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Generated handlers cover both config-backed and request-bound controller branches."""

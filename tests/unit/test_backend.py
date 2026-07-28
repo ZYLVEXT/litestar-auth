@@ -142,6 +142,8 @@ async def test_backend_logout_maps_token_error_to_service_unavailable() -> None:
         await backend.logout(user, "token-1")
 
     assert exc_info.value.status_code == HTTP_SERVICE_UNAVAILABLE
+    assert exc_info.value.detail == TokenError.default_message
+    assert "denylist" not in exc_info.value.detail
     extra = cast("dict[str, Any]", exc_info.value.extra)
     assert extra["code"] == ErrorCode.TOKEN_PROCESSING_FAILED
     strategy.destroy_token.assert_awaited_once_with("token-1", user)

@@ -19,6 +19,7 @@ from litestar_auth._plugin.startup._requirements import (
     require_oauth_token_encryption_for_configured_providers,
     require_refreshable_strategy_when_enable_refresh,
     require_shared_account_lockout_store_for_multiworker,
+    require_shared_account_token_replay_store_for_multiworker,
     require_shared_rate_limit_backends_for_multiworker,
 )
 from litestar_auth._plugin.startup._warnings import (
@@ -41,6 +42,7 @@ __all__ = (
     "has_configured_oauth_providers",
     "has_configured_oauth_providers_for",
     "require_shared_account_lockout_store_for_multiworker",
+    "require_shared_account_token_replay_store_for_multiworker",
 )
 
 
@@ -57,7 +59,7 @@ def _load_bundled_token_orm_models() -> tuple[object, object, object]:
 
 def bootstrap_bundled_token_orm_models(config: LitestarAuthConfig[Any, Any]) -> None:
     """Load bundled token ORM models during plugin app init when runtime uses them."""
-    from litestar_auth._plugin.database_token import (  # noqa: PLC0415
+    from litestar_auth._plugin.database_token import (  # ruff: ignore[import-outside-top-level]
         _uses_bundled_database_token_models,
     )
 
@@ -99,6 +101,9 @@ def _build_startup_hook_map(
         "require_shared_account_lockout_store_for_multiworker": lambda: (
             require_shared_account_lockout_store_for_multiworker(config)
         ),
+        "require_shared_account_token_replay_store_for_multiworker": lambda: (
+            require_shared_account_token_replay_store_for_multiworker(config)
+        ),
         "require_refreshable_strategy_when_enable_refresh": lambda: require_refreshable_strategy_when_enable_refresh(
             config,
         ),
@@ -116,7 +121,7 @@ def _build_startup_hook_map(
 
 def _validate_extensions(config: LitestarAuthConfig[Any, Any]) -> None:
     """Run extension validation through the internal extension registry."""
-    from litestar_auth._plugin.extensions import validate_extensions  # noqa: PLC0415
+    from litestar_auth._plugin.extensions import validate_extensions  # ruff: ignore[import-outside-top-level]
 
     validate_extensions(config)
 

@@ -55,7 +55,7 @@ class OrganizationAdminExtension:
 
     def register(self, context: AuthExtensionRegistrationContext) -> None:
         """Contribute generated organization-admin controllers through the extension context."""
-        from litestar_auth.contrib.organization_admin import (  # noqa: PLC0415
+        from litestar_auth.contrib.organization_admin import (  # ruff: ignore[import-outside-top-level]
             OrganizationAdminControllerConfig,
             OrganizationInvitationControllerConfig,
             create_organization_admin_controller,

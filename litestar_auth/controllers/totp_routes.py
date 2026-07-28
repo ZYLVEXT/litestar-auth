@@ -5,7 +5,7 @@ from __future__ import annotations
 import inspect
 from typing import TYPE_CHECKING, Any, cast
 
-import msgspec  # noqa: TC002
+import msgspec  # ruff: ignore[typing-only-third-party-import]
 from litestar import Controller, Request, post
 from litestar.di import NamedDependency
 
@@ -78,7 +78,7 @@ def _create_totp_enable_handler[UP: UserProtocol[Any], ID](
 
     @post("/enable", guards=[is_authenticated, requires_password_session], security=security)
     async def enable(
-        self: object,  # noqa: ARG001
+        self: object,  # ruff: ignore[unused-function-argument]
         request: Request[Any, Any, Any],
         litestar_auth_user_manager: _TotpUserManagerDep,
         data: msgspec.Struct | None = None,
@@ -105,7 +105,7 @@ def _create_totp_confirm_enable_handler[UP: UserProtocol[Any], ID](
 
     @post("/enable/confirm", guards=[is_authenticated, requires_password_session], security=security)
     async def confirm_enable(
-        self: object,  # noqa: ARG001
+        self: object,  # ruff: ignore[unused-function-argument]
         request: Request[Any, Any, Any],
         data: TotpConfirmEnableRequest,
         litestar_auth_user_manager: _TotpUserManagerDep,
@@ -132,7 +132,7 @@ def _create_totp_verify_handler[UP: UserProtocol[Any], ID](
 
     @post("/verify", before_request=totp_verify_before_request)
     async def verify(
-        self: object,  # noqa: ARG001
+        self: object,  # ruff: ignore[unused-function-argument]
         request: Request[Any, Any, Any],
         data: TotpVerifyRequest,
         litestar_auth_user_manager: _TotpUserManagerDep,
@@ -164,7 +164,7 @@ def _create_totp_disable_handler[UP: UserProtocol[Any], ID](
         responses={403: TOTP_STEPUP_REQUIRED_OPENAPI_RESPONSE},
     )
     async def disable(
-        self: object,  # noqa: ARG001
+        self: object,  # ruff: ignore[unused-function-argument]
         request: Request[Any, Any, Any],
         data: TotpDisableRequest,
         litestar_auth_user_manager: _TotpUserManagerDep,
@@ -196,7 +196,7 @@ def _create_totp_regenerate_recovery_codes_handler[UP: UserProtocol[Any], ID](
         responses={403: TOTP_STEPUP_REQUIRED_OPENAPI_RESPONSE},
     )
     async def regenerate_recovery_codes(
-        self: object,  # noqa: ARG001
+        self: object,  # ruff: ignore[unused-function-argument]
         request: Request[Any, Any, Any],
         litestar_auth_user_manager: _TotpUserManagerDep,
         data: msgspec.Struct | None = None,

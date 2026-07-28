@@ -18,7 +18,7 @@ OrganizationRolePrecedence = Literal["replace", "merge"]
 type FeatureKey = Literal["database_token", "api_key", "totp", "oauth", "organization"]
 type TotpStepUpPolicyMode = Literal["required_when_enrolled", "always_required", "off"]
 
-DATABASE_TOKEN_FEATURE: FeatureKey = "database_token"  # noqa: S105
+DATABASE_TOKEN_FEATURE: FeatureKey = "database_token"  # ruff: ignore[hardcoded-password-string]
 API_KEY_FEATURE: FeatureKey = "api_key"
 TOTP_FEATURE: FeatureKey = "totp"
 OAUTH_FEATURE: FeatureKey = "oauth"

@@ -29,6 +29,7 @@ if TYPE_CHECKING:
     from tests._helpers import AsyncFakeRedis
 
 pytestmark = pytest.mark.unit
+FRACTIONAL_REPLAY_TTL_MS = 2
 
 RFC_SECRET = "GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ"
 EXPECTED_MIN_SECRET_LENGTH = 32
@@ -817,6 +818,27 @@ async def test_redis_used_totp_code_store_first_call_true_second_false(
     assert replay.rejected_as_replay is True
     assert await async_fakeredis.get(key) == b"1"
     assert 0 < await async_fakeredis.pttl(key) <= int(ttl_seconds * 1000)
+
+
+async def test_redis_used_totp_code_store_fractional_ttl_never_expires_early(
+    async_fakeredis: AsyncFakeRedis,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Redis millisecond precision must round a positive replay TTL up."""
+    recorded_ttls: list[int | None] = []
+    redis_set = async_fakeredis.set
+
+    async def record_set(name: str, value: str, *, nx: bool = False, px: int | None = None) -> object:
+        recorded_ttls.append(px)
+        return await redis_set(name, value, nx=nx, px=px)
+
+    monkeypatch.setattr(async_fakeredis, "set", record_set)
+    store = totp.RedisUsedTotpCodeStore(
+        redis=cast_fakeredis(async_fakeredis, totp.RedisUsedTotpCodeStoreClient),
+    )
+
+    assert (await store.mark_used("user-1", 43, 0.001_001)).stored is True
+    assert recorded_ttls == [FRACTIONAL_REPLAY_TTL_MS]
 
 
 def test_redis_used_totp_code_store_preserves_lazy_dependency_error(monkeypatch: pytest.MonkeyPatch) -> None:

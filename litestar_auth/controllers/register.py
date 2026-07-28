@@ -5,13 +5,17 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Protocol, TypedDict, Unpack, cast, overload, runtime_checkable
 
-import msgspec  # noqa: TC002
+import msgspec  # ruff: ignore[typing-only-third-party-import]
 from litestar import Controller, Request, post
 from litestar.di import NamedDependency
 from litestar.openapi.datastructures import ResponseSpec
 from litestar.openapi.spec import Example
 
-from litestar_auth.controllers._response_timing import DEFAULT_MINIMUM_RESPONSE_SECONDS, await_minimum_response_seconds
+from litestar_auth.controllers._response_timing import (
+    DEFAULT_MINIMUM_RESPONSE_SECONDS,
+    await_minimum_response_seconds,
+    validate_minimum_response_seconds,
+)
 from litestar_auth.controllers._utils import (
     RequestBodyRouteHandler,
     RequestHandler,
@@ -159,19 +163,6 @@ class RegisterControllerOptions(TypedDict, total=False):
     unsafe_testing: bool
 
 
-def _validate_register_minimum_response_seconds(value: float) -> float:
-    """Return a non-negative register timing-envelope value.
-
-    Raises:
-        ValueError: If ``value`` is negative.
-    """
-    if value >= 0:
-        return value
-
-    msg = "register_minimum_response_seconds must be non-negative."
-    raise ValueError(msg)
-
-
 async def _create_user_or_register_failure(
     data: msgspec.Struct,
     *,
@@ -209,7 +200,7 @@ def _create_register_handler(settings: _RegisterControllerSettings) -> RequestBo
 
     @post("/register", before_request=settings.register_before_request, responses=_REGISTER_OPENAPI_RESPONSES)
     async def register(
-        self: object,  # noqa: ARG001
+        self: object,  # ruff: ignore[unused-function-argument]
         request: Request[Any, Any, Any],
         data: msgspec.Struct,
         litestar_auth_user_manager: _UserManagerDep,
@@ -314,8 +305,9 @@ def create_register_controller[UP: RegisterControllerUserProtocol[Any], ID](
             path=settings.path,
             user_read_schema=settings.user_read_schema,
             user_create_schema=settings.user_create_schema,
-            minimum_response_seconds=_validate_register_minimum_response_seconds(
+            minimum_response_seconds=validate_minimum_response_seconds(
                 settings.register_minimum_response_seconds,
+                field_name="register_minimum_response_seconds",
             ),
             unsafe_testing=settings.unsafe_testing,
         ),

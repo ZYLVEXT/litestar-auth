@@ -25,7 +25,7 @@ class ApiKeyRowProtocol(Protocol):
     client_metadata: dict[str, str] | None
 
 
-class _ApiKeyManagerHooks[UP](Protocol):  # noqa: PYI046
+class _ApiKeyManagerHooks[UP](Protocol):  # ruff: ignore[unused-private-protocol]
     """Lifecycle hooks invoked by API-key manager operations."""
 
     async def on_after_api_key_created(
@@ -49,7 +49,7 @@ class _ApiKeyManagerHooks[UP](Protocol):  # noqa: PYI046
         """Run after an API-key last-used write is persisted."""
 
 
-class _ApiKeyManagerProtocol[UP](Protocol):  # noqa: PYI046
+class _ApiKeyManagerProtocol[UP](Protocol):  # ruff: ignore[unused-private-protocol]
     """Manager surface required by API-key service operations."""
 
     api_key_hash_secret: Any

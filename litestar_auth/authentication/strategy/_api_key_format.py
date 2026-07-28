@@ -25,6 +25,11 @@ class ParsedApiKey:
     secret: str
 
 
+def is_valid_api_key_id(value: str) -> bool:
+    """Return whether ``value`` is a bounded canonical API-key identifier."""
+    return _API_KEY_ID_PATTERN.fullmatch(value) is not None
+
+
 def parse_api_key(
     value: str,
     *,
@@ -75,7 +80,7 @@ def _has_valid_public_segments(
         separator == "_"
         and (expected_prefix_env is None or prefix_env == expected_prefix_env)
         and _API_KEY_ENV_PATTERN.fullmatch(prefix_env) is not None
-        and _API_KEY_ID_PATTERN.fullmatch(key_id) is not None
+        and is_valid_api_key_id(key_id)
     )
 
 

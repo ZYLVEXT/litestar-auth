@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from functools import cache
 from typing import TYPE_CHECKING, Any, Protocol, cast
 
-from litestar.cli._utils import ClickException, Context, Group  # noqa: PLC2701
+from litestar.cli._utils import ClickException, Context, Group  # ruff: ignore[import-private-name]
 
 from litestar_auth.exceptions import ConfigurationError, OrganizationAdminError
 
@@ -396,7 +396,9 @@ def _run_organization_cli_operation[T, ID](
     """
 
     async def _run() -> T:
-        from litestar_auth._plugin.organization_admin import SQLAlchemyOrganizationAdmin  # noqa: PLC0415
+        from litestar_auth._plugin.organization_admin import (  # ruff: ignore[import-outside-top-level]
+            SQLAlchemyOrganizationAdmin,
+        )
 
         session_context = cast("Any", context.session_maker())
         if not hasattr(session_context, "__aenter__") or not hasattr(session_context, "__aexit__"):
@@ -428,8 +430,12 @@ def _run_organization_invitation_cli_operation[T, ID](
     """
 
     async def _run() -> T:
-        from litestar_auth._plugin.organization_admin import SQLAlchemyOrganizationAdmin  # noqa: PLC0415
-        from litestar_auth._plugin.user_manager_builder import resolve_user_manager_factory  # noqa: PLC0415
+        from litestar_auth._plugin.organization_admin import (  # ruff: ignore[import-outside-top-level]
+            SQLAlchemyOrganizationAdmin,
+        )
+        from litestar_auth._plugin.user_manager_builder import (  # ruff: ignore[import-outside-top-level]
+            resolve_user_manager_factory,
+        )
 
         session_context = cast("Any", context.session_maker())
         if not hasattr(session_context, "__aenter__") or not hasattr(session_context, "__aexit__"):

@@ -30,8 +30,12 @@ def supports_access_token(oauth_client: object) -> TypeGuard[OAuthAccessTokenCli
 
 
 def is_httpx_oauth_client(oauth_client: object) -> bool:
-    """Return whether the client comes from the optional httpx-oauth package."""
-    return type(oauth_client).__module__.startswith("httpx_oauth.")
+    """Return whether the client or one of its bases comes from httpx-oauth.
+
+    Inspecting the MRO preserves the optional-dependency boundary while still
+    recognizing application-defined subclasses of an httpx-oauth provider.
+    """
+    return any(base.__module__.startswith("httpx_oauth.") for base in type(oauth_client).__mro__)
 
 
 def supports_direct_identity(oauth_client: object) -> TypeGuard[OAuthDirectIdentityClientProtocol]:

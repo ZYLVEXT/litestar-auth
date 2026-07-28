@@ -31,6 +31,8 @@ if TYPE_CHECKING:
     from collections.abc import Iterator
     from types import TracebackType
 
+    from litestar.connection import ASGIConnection
+    from litestar.handlers.base import BaseRouteHandler
     from sqlalchemy.engine import Connection, Engine
     from sqlalchemy.ext.asyncio import AsyncSession
     from sqlalchemy.orm.session import ForUpdateParameter
@@ -46,6 +48,13 @@ HTTP_NO_CONTENT = 204
 HTTP_OK = 200
 HTTP_UNPROCESSABLE_ENTITY = 422
 ROLE_ROUTE_PREFIX = "/roles"
+
+
+def _allow_test_role_admin(
+    _connection: ASGIConnection[Any, Any, Any, Any],
+    _handler: BaseRouteHandler,
+) -> None:
+    """Allow access in the isolated persistence-only integer-id fixture."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -479,7 +488,7 @@ def integer_role_admin_app() -> Iterator[tuple[Litestar, Engine]]:
         include_verify=False,
         include_reset_password=False,
     )
-    role_admin_controller = create_role_admin_controller(config=config, guards=[])
+    role_admin_controller = create_role_admin_controller(config=config, guards=[_allow_test_role_admin])
     yield Litestar(route_handlers=[role_admin_controller]), engine
     IntegerRoleAdminTestUserManager.update_events = []
     engine.dispose()

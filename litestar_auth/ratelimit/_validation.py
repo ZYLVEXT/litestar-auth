@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from collections import deque
 
 type SlidingWindow = deque[float]
@@ -17,8 +18,8 @@ def _validate_configuration(*, max_attempts: int, window_seconds: float) -> None
     if max_attempts < 1:
         msg = "max_attempts must be at least 1"
         raise ValueError(msg)
-    if window_seconds <= 0:
-        msg = "window_seconds must be greater than 0"
+    if not math.isfinite(window_seconds) or window_seconds <= 0:
+        msg = "window_seconds must be finite and greater than 0"
         raise ValueError(msg)
 
 
@@ -31,6 +32,6 @@ def _validate_account_lockout_configuration(*, failure_threshold: int, window_se
     if failure_threshold < 1:
         msg = "failure_threshold must be at least 1"
         raise ValueError(msg)
-    if window_seconds <= 0:
-        msg = "window_seconds must be greater than 0"
+    if not math.isfinite(window_seconds) or window_seconds <= 0:
+        msg = "window_seconds must be finite and greater than 0"
         raise ValueError(msg)

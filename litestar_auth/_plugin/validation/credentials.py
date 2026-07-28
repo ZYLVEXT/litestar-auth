@@ -106,7 +106,7 @@ def validate_default_user_manager_constructor_contract[UP: UserProtocol[Any], ID
     if config.user_manager_factory is not None:
         return
 
-    from litestar_auth._plugin.user_manager_builder import (  # noqa: PLC0415
+    from litestar_auth._plugin.user_manager_builder import (  # ruff: ignore[import-outside-top-level]
         _DEFAULT_USER_MANAGER_FACTORY_GUIDANCE,
         _build_default_user_manager_contract,
         _build_default_user_manager_validation_kwargs,

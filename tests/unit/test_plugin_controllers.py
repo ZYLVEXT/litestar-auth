@@ -142,7 +142,7 @@ def test_build_auth_controllers_builds_backend_specific_paths_and_totp_secret(
     config.login_minimum_response_seconds = login_minimum_response_seconds
     calls: list[dict[str, object]] = []
 
-    def _create_auth_controller(settings: Any) -> str:  # noqa: ANN401
+    def _create_auth_controller(settings: Any) -> str:  # ruff: ignore[any-type]
         calls.append(
             {
                 "backend": settings.backend,
@@ -713,7 +713,7 @@ def test_append_oauth_login_controllers_uses_explicit_redirect_base_url_and_prim
     )
     captured: list[dict[str, object]] = []
 
-    def _create_oauth_login_controller(settings: Any) -> str:  # noqa: ANN401
+    def _create_oauth_login_controller(settings: Any) -> str:  # ruff: ignore[any-type]
         captured.append(_settings_values(settings))
         return "github"
 
@@ -774,7 +774,7 @@ def test_append_oauth_login_controllers_forwards_per_provider_scopes(
     )
     captured: list[dict[str, object]] = []
 
-    def _create_oauth_login_controller(settings: Any) -> str:  # noqa: ANN401
+    def _create_oauth_login_controller(settings: Any) -> str:  # ruff: ignore[any-type]
         values = _settings_values(settings)
         captured.append(values)
         return cast("str", values["provider_name"])
@@ -806,7 +806,7 @@ def test_append_oauth_associate_controllers_uses_explicit_redirect_base_url(
     )
     captured: list[dict[str, object]] = []
 
-    def _create_oauth_associate_controller(settings: Any) -> str:  # noqa: ANN401
+    def _create_oauth_associate_controller(settings: Any) -> str:  # ruff: ignore[any-type]
         captured.append(_settings_values(settings))
         return "github"
 
@@ -851,7 +851,7 @@ def test_append_oauth_associate_controllers_uses_shared_provider_inventory(
     )
     captured: list[dict[str, object]] = []
 
-    def _create_oauth_associate_controller(settings: Any) -> str:  # noqa: ANN401
+    def _create_oauth_associate_controller(settings: Any) -> str:  # ruff: ignore[any-type]
         values = _settings_values(settings)
         captured.append(values)
         return cast("str", values["provider_name"])
@@ -944,7 +944,7 @@ def _oauth_login_call(
     }
 
 
-def _settings_values(settings: Any) -> dict[str, object]:  # noqa: ANN401
+def _settings_values(settings: Any) -> dict[str, object]:  # ruff: ignore[any-type]
     """Return dataclass settings fields as a plain dictionary.
 
     Returns:

@@ -14,7 +14,7 @@ from sqlalchemy.exc import NoInspectionAvailable
 from litestar_auth.types import UserProtocol
 
 if TYPE_CHECKING:
-    from sqlalchemy.orm import InstrumentedAttribute
+    from sqlalchemy.orm import InstrumentedAttribute, Mapper
 
 
 class SQLAlchemyUserModelProtocol(ModelProtocol, UserProtocol[UUID], Protocol):
@@ -67,7 +67,8 @@ def _build_user_load[UP: SQLAlchemyUserModelProtocol](
 ) -> tuple[Any, ...]:
     """Return repository load options required by the configured user model."""
     try:
-        relationships = inspect(user_model).relationships
+        mapper = cast("Mapper[Any]", inspect(user_model))
+        relationships = mapper.relationships
     except NoInspectionAvailable:
         return ()
     if "role_assignments" not in relationships:

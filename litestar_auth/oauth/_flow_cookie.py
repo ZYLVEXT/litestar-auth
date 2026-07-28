@@ -54,9 +54,9 @@ class _OAuthFlowCookieCipher:
         """
         validate_production_secret(secret, label="oauth_flow_cookie_secret")
         try:
-            from cryptography.fernet import Fernet, InvalidToken  # noqa: PLC0415
-            from cryptography.hazmat.primitives import hashes  # noqa: PLC0415
-            from cryptography.hazmat.primitives.kdf.hkdf import HKDF  # noqa: PLC0415
+            from cryptography.fernet import Fernet, InvalidToken  # ruff: ignore[import-outside-top-level]
+            from cryptography.hazmat.primitives import hashes  # ruff: ignore[import-outside-top-level]
+            from cryptography.hazmat.primitives.kdf.hkdf import HKDF  # ruff: ignore[import-outside-top-level]
         except ImportError as exc:
             msg = "Install litestar-auth[oauth] to use encrypted OAuth flow cookies."
             raise ImportError(msg) from exc

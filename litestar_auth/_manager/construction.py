@@ -6,7 +6,7 @@ import hashlib
 from collections.abc import Callable, Collection
 from dataclasses import dataclass, replace
 from datetime import timedelta
-from typing import TYPE_CHECKING, Any, Protocol, TypedDict
+from typing import TYPE_CHECKING, Any, Protocol, TypedDict, cast
 
 from litestar_auth._keyed_digest import normalize_login_identifier
 from litestar_auth._manager.security import validate_user_manager_security_secret_roles_are_distinct
@@ -19,7 +19,7 @@ from litestar_auth.types import LoginIdentifier, UserProtocol
 if TYPE_CHECKING:
     from litestar_auth._manager.api_key_config import ApiKeyConfigProtocol, ApiKeyManagerConfig
     from litestar_auth._manager.security import UserManagerSecurity
-    from litestar_auth.authentication.strategy._jwt_denylist import JWTDenylistStore
+    from litestar_auth.authentication.strategy._jwt_denylist import JWTReplayStore
     from litestar_auth.db.base import BaseApiKeyStore, BaseUserStore
     from litestar_auth.password import PasswordHelper
 
@@ -78,7 +78,7 @@ class ConstructorAttributes[UP: UserProtocol[Any], ID]:
     superuser_role_name: str
     field_policy: UserFieldPolicy
     unsafe_testing: bool
-    account_token_denylist_store: JWTDenylistStore | None
+    account_token_denylist_store: JWTReplayStore | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -102,7 +102,7 @@ class BaseUserManagerConfig[UP: UserProtocol[Any], ID]:
     creatable_fields: Collection[str] = DEFAULT_CREATABLE_FIELDS
     updatable_fields: Collection[str] = DEFAULT_UPDATABLE_FIELDS
     unsafe_testing: bool = False
-    account_token_denylist_store: JWTDenylistStore | None = None
+    account_token_denylist_store: JWTReplayStore | None = None
 
     @property
     def field_policy(self) -> UserFieldPolicy:
@@ -132,7 +132,7 @@ class BaseUserManagerConstructorKwargs[UP: UserProtocol[Any], ID](TypedDict, tot
     creatable_fields: Collection[str]
     updatable_fields: Collection[str]
     unsafe_testing: bool
-    account_token_denylist_store: JWTDenylistStore | None
+    account_token_denylist_store: JWTReplayStore | None
 
 
 def resolve_oauth_account_store[UP: UserProtocol[Any], ID](
@@ -140,7 +140,7 @@ def resolve_oauth_account_store[UP: UserProtocol[Any], ID](
 ) -> BaseOAuthAccountStore[UP, ID] | None:
     """Return an OAuth-account store when the user store also exposes that boundary."""
     if isinstance(user_db, BaseOAuthAccountStore):
-        return user_db
+        return cast("BaseOAuthAccountStore[UP, ID]", user_db)
 
     return None
 
@@ -165,7 +165,7 @@ def _build_user_manager_security[ID](
     id_parser: Callable[[str], ID] | None = None,
 ) -> UserManagerSecurity[ID]:
     """Return the concrete manager-security bundle."""
-    from litestar_auth._manager.security import UserManagerSecurity  # noqa: PLC0415
+    from litestar_auth._manager.security import UserManagerSecurity  # ruff: ignore[import-outside-top-level]
 
     return UserManagerSecurity(
         verification_token_secret=verification_token_secret,
@@ -232,7 +232,7 @@ def resolve_secret_inputs[ID](
     Returns:
         The resolved security bundle, account-token secrets, and telemetry secret.
     """
-    from litestar_auth._manager.security import UserManagerSecurity  # noqa: PLC0415
+    from litestar_auth._manager.security import UserManagerSecurity  # ruff: ignore[import-outside-top-level]
 
     resolved_security = security if security is not None else UserManagerSecurity()
     account_token_secrets = resolve_account_token_secrets(

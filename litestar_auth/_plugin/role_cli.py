@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from functools import cache
 from typing import TYPE_CHECKING, Any, cast
 
-from litestar.cli._utils import ClickException, Context, Group  # noqa: PLC2701
+from litestar.cli._utils import ClickException, Context, Group  # ruff: ignore[import-private-name]
 
 from litestar_auth.exceptions import ConfigurationError
 from litestar_auth.types import UserProtocol
@@ -88,7 +88,7 @@ def _resolve_role_cli_context[UP: UserProtocol[Any]](
     if cached_context is not None:
         return cast("RoleCLIContext[UP]", cached_context)
 
-    from litestar_auth._plugin.role_admin import SQLAlchemyRoleAdmin  # noqa: PLC0415
+    from litestar_auth._plugin.role_admin import SQLAlchemyRoleAdmin  # ruff: ignore[import-outside-top-level]
 
     try:
         role_admin = SQLAlchemyRoleAdmin.from_config(config)
@@ -188,7 +188,9 @@ def _run_role_cli_operation[T](operation: Coroutine[Any, Any, T]) -> T:
     Raises:
         ClickException: If the role-admin operation fails with an operator-facing error.
     """
-    from litestar_auth._plugin.role_admin_contracts import SystemManagedRoleError  # noqa: PLC0415
+    from litestar_auth._plugin.role_admin_contracts import (  # ruff: ignore[import-outside-top-level]
+        SystemManagedRoleError,
+    )
 
     try:
         return asyncio.run(operation)

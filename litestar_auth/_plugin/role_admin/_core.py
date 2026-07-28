@@ -30,6 +30,7 @@ if TYPE_CHECKING:
     from collections.abc import AsyncIterator
 
     from sqlalchemy.ext.asyncio import AsyncSession
+    from sqlalchemy.orm import Mapper
 
     from litestar_auth._plugin.config import LitestarAuthConfig
     from litestar_auth._plugin.scoped_session import SessionFactory
@@ -200,7 +201,8 @@ class SQLAlchemyRoleAdmin[UP: UserProtocol[Any]](
             pass
 
         try:
-            primary_key_column = inspect(self.user_model).primary_key[0]
+            mapper = cast("Mapper[Any]", inspect(self.user_model))
+            primary_key_column = mapper.primary_key[0]
         except (IndexError, NoInspectionAvailable):
             return raw_user_id
 

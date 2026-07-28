@@ -5,13 +5,17 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
-import msgspec  # noqa: TC002
+import msgspec  # ruff: ignore[typing-only-third-party-import]
 from litestar import Controller, Request, post
 from litestar.di import NamedDependency
 from litestar.status_codes import HTTP_200_OK, HTTP_202_ACCEPTED
 
-from litestar_auth.controllers._error_responses import raise_client_error
-from litestar_auth.controllers._response_timing import DEFAULT_MINIMUM_RESPONSE_SECONDS, await_minimum_response_seconds
+from litestar_auth.controllers._error_responses import raise_client_error, raise_transient_token_error
+from litestar_auth.controllers._response_timing import (
+    DEFAULT_MINIMUM_RESPONSE_SECONDS,
+    await_minimum_response_seconds,
+    validate_minimum_response_seconds,
+)
 from litestar_auth.controllers._utils import (
     RequestHandler,
     _create_before_request_handler,
@@ -20,8 +24,8 @@ from litestar_auth.controllers._utils import (
     _require_msgspec_struct,
     _to_user_schema,
 )
-from litestar_auth.exceptions import ErrorCode, InvalidVerifyTokenError
-from litestar_auth.payloads import RequestVerifyToken, VerifyToken  # noqa: TC001
+from litestar_auth.exceptions import ErrorCode, InvalidVerifyTokenError, TokenError
+from litestar_auth.payloads import RequestVerifyToken, VerifyToken  # ruff: ignore[typing-only-first-party-import]
 from litestar_auth.schemas import UserRead
 from litestar_auth.types import RoleCapableUserProtocol
 
@@ -66,7 +70,7 @@ class _VerifyControllerContext:
     request_verify_increment: RequestHandler
 
 
-def create_verify_controller[UP: VerifyControllerUserProtocol[Any], ID](  # noqa: PLR0913
+def create_verify_controller[UP: VerifyControllerUserProtocol[Any], ID](  # ruff: ignore[too-many-arguments]
     *,
     rate_limit_config: AuthRateLimitConfig | None = None,
     path: str = "/auth",
@@ -101,11 +105,11 @@ def create_verify_controller[UP: VerifyControllerUserProtocol[Any], ID](  # noqa
         _VerifyControllerContext(
             user_read_schema=user_read_schema,
             unsafe_testing=unsafe_testing,
-            verify_minimum_response_seconds=_validate_minimum_response_seconds(
+            verify_minimum_response_seconds=validate_minimum_response_seconds(
                 verify_minimum_response_seconds,
                 field_name="verify_minimum_response_seconds",
             ),
-            request_verify_minimum_response_seconds=_validate_minimum_response_seconds(
+            request_verify_minimum_response_seconds=validate_minimum_response_seconds(
                 request_verify_minimum_response_seconds,
                 field_name="request_verify_minimum_response_seconds",
             ),
@@ -120,25 +124,12 @@ def create_verify_controller[UP: VerifyControllerUserProtocol[Any], ID](  # noqa
     return _mark_litestar_auth_route_handler(verify_cls)
 
 
-def _validate_minimum_response_seconds(value: float, *, field_name: str) -> float:
-    """Return a non-negative timing-envelope value.
-
-    Raises:
-        ValueError: If ``value`` is negative.
-    """
-    if value >= 0:
-        return value
-
-    msg = f"{field_name} must be non-negative."
-    raise ValueError(msg)
-
-
 def _define_verify_controller_class(ctx: _VerifyControllerContext) -> type[Controller]:
     class VerifyController(Controller):
         """Endpoints for email verification."""
 
         @post("/verify", status_code=HTTP_200_OK, before_request=ctx.verify_before_request)
-        async def verify(  # noqa: PLR6301
+        async def verify(  # ruff: ignore[no-self-use]
             self,
             request: Request[Any, Any, Any],
             data: VerifyToken,
@@ -155,6 +146,9 @@ def _define_verify_controller_class(ctx: _VerifyControllerContext) -> type[Contr
                         error_code=ErrorCode.VERIFY_USER_BAD_TOKEN,
                         source=exc,
                     )
+                except TokenError as exc:
+                    await ctx.verify_increment(request)
+                    raise_transient_token_error(exc)
 
                 await ctx.verify_reset(request)
                 return _to_user_schema(user, ctx.user_read_schema, unsafe_testing=ctx.unsafe_testing)
@@ -165,7 +159,7 @@ def _define_verify_controller_class(ctx: _VerifyControllerContext) -> type[Contr
             )
 
         @post("/request-verify-token", status_code=HTTP_202_ACCEPTED, before_request=ctx.request_verify_before_request)
-        async def request_verify_token(  # noqa: PLR6301
+        async def request_verify_token(  # ruff: ignore[no-self-use]
             self,
             request: Request[Any, Any, Any],
             data: RequestVerifyToken,

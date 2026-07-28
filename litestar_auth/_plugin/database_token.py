@@ -81,7 +81,7 @@ class _StartupOnlyDatabaseTokenStrategy[UP: UserProtocol[Any], ID]:
         self.token_bytes = self.settings.token_bytes
         self.unsafe_testing = self.settings.unsafe_testing
 
-    def _raise_startup_only_runtime_error(self) -> Never:  # noqa: PLR6301
+    def _raise_startup_only_runtime_error(self) -> Never:  # ruff: ignore[no-self-use]
         return _raise_startup_only_database_token_runtime_error()
 
     def with_session(self, session: AsyncSessionT) -> StrategyProto[UP, ID]:
@@ -101,8 +101,8 @@ class _StartupOnlyDatabaseTokenStrategy[UP: UserProtocol[Any], ID]:
 
     async def read_token(
         self,
-        token: str | None,  # noqa: ARG002
-        user_manager: UserManagerProtocol[UP, ID],  # noqa: ARG002
+        token: str | None,  # ruff: ignore[unused-method-argument]
+        user_manager: UserManagerProtocol[UP, ID],  # ruff: ignore[unused-method-argument]
     ) -> UP | None:
         """Reject token reads until a request ``AsyncSession`` is bound.
 
@@ -111,7 +111,7 @@ class _StartupOnlyDatabaseTokenStrategy[UP: UserProtocol[Any], ID]:
         """
         return self._raise_startup_only_runtime_error()
 
-    async def write_token(self, user: UP) -> str:  # noqa: ARG002
+    async def write_token(self, user: UP) -> str:  # ruff: ignore[unused-method-argument]
         """Reject token writes until a request ``AsyncSession`` is bound.
 
         Returns:
@@ -119,11 +119,11 @@ class _StartupOnlyDatabaseTokenStrategy[UP: UserProtocol[Any], ID]:
         """
         return self._raise_startup_only_runtime_error()
 
-    async def destroy_token(self, token: str, user: UP) -> None:  # noqa: ARG002
+    async def destroy_token(self, token: str, user: UP) -> None:  # ruff: ignore[unused-method-argument]
         """Reject token destruction until a request ``AsyncSession`` is bound."""
         return self._raise_startup_only_runtime_error()
 
-    async def write_refresh_token(self, user: UP) -> str:  # noqa: ARG002
+    async def write_refresh_token(self, user: UP) -> str:  # ruff: ignore[unused-method-argument]
         """Reject refresh-token writes until a request ``AsyncSession`` is bound.
 
         Returns:
@@ -133,8 +133,8 @@ class _StartupOnlyDatabaseTokenStrategy[UP: UserProtocol[Any], ID]:
 
     async def rotate_refresh_token(
         self,
-        refresh_token: str,  # noqa: ARG002
-        user_manager: UserManagerProtocol[UP, ID],  # noqa: ARG002
+        refresh_token: str,  # ruff: ignore[unused-method-argument]
+        user_manager: UserManagerProtocol[UP, ID],  # ruff: ignore[unused-method-argument]
     ) -> tuple[UP, str] | None:
         """Reject refresh-token rotation until a request ``AsyncSession`` is bound.
 
@@ -143,11 +143,11 @@ class _StartupOnlyDatabaseTokenStrategy[UP: UserProtocol[Any], ID]:
         """
         return self._raise_startup_only_runtime_error()
 
-    async def invalidate_all_tokens(self, user: UP) -> None:  # noqa: ARG002
+    async def invalidate_all_tokens(self, user: UP) -> None:  # ruff: ignore[unused-method-argument]
         """Reject token invalidation until a request ``AsyncSession`` is bound."""
         return self._raise_startup_only_runtime_error()
 
-    async def cleanup_expired_tokens(self, session: AsyncSession) -> int:  # noqa: ARG002
+    async def cleanup_expired_tokens(self, session: AsyncSession) -> int:  # ruff: ignore[unused-method-argument]
         """Reject token cleanup on the startup-only strategy.
 
         Returns:
@@ -166,8 +166,10 @@ def _build_startup_only_database_token_strategy[UP: UserProtocol[Any], ID](
     Returns:
         Startup-only strategy carrying DB-token metadata without a placeholder session.
     """
-    from litestar_auth.authentication.strategy.db import DatabaseTokenStrategy  # noqa: PLC0415
-    from litestar_auth.authentication.strategy.db_models import DatabaseTokenModels  # noqa: PLC0415
+    from litestar_auth.authentication.strategy.db import DatabaseTokenStrategy  # ruff: ignore[import-outside-top-level]
+    from litestar_auth.authentication.strategy.db_models import (  # ruff: ignore[import-outside-top-level]
+        DatabaseTokenModels,
+    )
 
     settings = _DatabaseTokenStrategySettings(
         token_hash_secret=database_token_auth.token_hash_secret,
@@ -201,9 +203,9 @@ def _build_database_token_backend[UP: UserProtocol[Any], ID](
     Returns:
         Authentication backend configured for the DB-token bearer path.
     """
-    from litestar_auth.authentication.backend import AuthenticationBackend  # noqa: PLC0415
-    from litestar_auth.authentication.strategy.db import DatabaseTokenStrategy  # noqa: PLC0415
-    from litestar_auth.authentication.transport.bearer import BearerTransport  # noqa: PLC0415
+    from litestar_auth.authentication.backend import AuthenticationBackend  # ruff: ignore[import-outside-top-level]
+    from litestar_auth.authentication.strategy.db import DatabaseTokenStrategy  # ruff: ignore[import-outside-top-level]
+    from litestar_auth.authentication.transport.bearer import BearerTransport  # ruff: ignore[import-outside-top-level]
 
     strategy: StrategyProto[UP, ID]
     if session is None:
@@ -262,7 +264,7 @@ def _build_database_token_backend_template[UP: UserProtocol[Any], ID](
     Returns:
         Startup-only template for the DB-token backend.
     """
-    from litestar_auth._plugin.config import StartupBackendTemplate  # noqa: PLC0415
+    from litestar_auth._plugin.config import StartupBackendTemplate  # ruff: ignore[import-outside-top-level]
 
     startup_backend = _build_database_token_backend(
         database_token_auth,

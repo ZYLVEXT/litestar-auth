@@ -1,6 +1,6 @@
 """Role administration helpers for SQLAlchemy-backed plugin integrations."""
 
-# ruff: noqa: RUF067
+# ruff: file-ignore[non-empty-init-module]
 
 from __future__ import annotations
 

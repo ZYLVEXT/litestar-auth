@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -39,6 +40,8 @@ if TYPE_CHECKING:
     from litestar_auth.authentication.strategy._api_key_nonce_store import ApiKeyNonceStore
     from litestar_auth.authentication.transport._api_key_signing import SignedApiKeyRequest
     from litestar_auth.db.base import BaseApiKeyStore
+
+_SECURITY_LOGGER = logging.getLogger("litestar_auth.security")
 
 type ApiKeyScopeAuthority = Callable[[ASGIConnection[Any, Any, Any, Any], frozenset[str]], bool]
 
@@ -79,7 +82,7 @@ class ApiKeyFailureReason(StrEnum):
     """Internal API-key authentication failure taxonomy."""
 
     @staticmethod
-    def _generate_next_value_(name: str, start: int, count: int, last_values: list[str]) -> str:  # noqa: ARG004
+    def _generate_next_value_(name: str, start: int, count: int, last_values: list[str]) -> str:  # ruff: ignore[unused-static-method-argument]
         return name
 
     INVALID = auto()
@@ -202,7 +205,7 @@ class ApiKeyStrategy[UP: UserProtocol[Any], ID](Strategy[UP, ID]):
         """
         return (await self.read_token_attempt(token, user_manager)).result
 
-    async def _read_bearer_api_key(  # noqa: PLR0911
+    async def _read_bearer_api_key(  # ruff: ignore[too-many-return-statements]
         self,
         token: str,
         user_manager: UserManagerProtocol[UP, ID],
@@ -360,8 +363,19 @@ class ApiKeyStrategy[UP: UserProtocol[Any], ID](Strategy[UP, ID]):
         )
         if nonce_result.stored:
             return None
+        # ``key_id`` is the public lookup half of the API key, never the secret, so it is
+        # safe to log. Replay (an attack) and capacity pressure (a store outage failing
+        # closed) both deny the request but need different operator responses.
         if nonce_result.rejected_as_replay:
+            _SECURITY_LOGGER.warning(
+                "API-key signed-request nonce replay detected.",
+                extra={"event": "api_key_nonce_replay", "key_id": key_id},
+            )
             return ApiKeyFailureReason.SIGNATURE_NONCE_REPLAY
+        _SECURITY_LOGGER.warning(
+            "API-key nonce store rejected a signed request under capacity pressure (fail closed).",
+            extra={"event": "api_key_nonce_store_capacity", "key_id": key_id},
+        )
         return ApiKeyFailureReason.SIGNATURE_INVALID
 
     def _decrypt_signing_secret(self, api_key: _ApiKeyRow[ID]) -> str | None:
@@ -383,7 +397,7 @@ class ApiKeyStrategy[UP: UserProtocol[Any], ID](Strategy[UP, ID]):
         """Return the most specific API-key authentication failure code for ``token``."""
         return api_key_failure_reason_to_error_code(await self.classify_failure_reason(token))
 
-    async def _classify_bearer_failure_reason(self, token: str | None) -> ApiKeyFailureReason:  # noqa: PLR0911
+    async def _classify_bearer_failure_reason(self, token: str | None) -> ApiKeyFailureReason:  # ruff: ignore[too-many-return-statements]
         """Return the bearer API-key failure reason without resolving the owning user."""
         if token is None:
             return ApiKeyFailureReason.INVALID

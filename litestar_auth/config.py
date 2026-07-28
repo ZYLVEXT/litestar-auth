@@ -273,6 +273,9 @@ def validate_secret_strength(
             compatible.
     """
     validate_secret_length(secret, label=label, minimum_length=minimum_length)
+    if not math.isfinite(minimum_entropy_bits):
+        msg = "minimum_entropy_bits must be finite."
+        raise ConfigurationError(msg)
     if minimum_entropy_bits <= 0:
         return
     bits = _estimated_secret_entropy_bits(secret)

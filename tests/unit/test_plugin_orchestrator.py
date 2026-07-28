@@ -209,7 +209,7 @@ def _shared_public_rate_limit_config() -> AuthRateLimitConfig:
     )
 
 
-def _minimal_config(  # noqa: PLR0913
+def _minimal_config(  # ruff: ignore[too-many-arguments]
     *,
     backends: list[AuthenticationBackend[ExampleUser, UUID]] | None = None,
     extensions: tuple[object, ...] = (),
@@ -277,6 +277,11 @@ def test_on_app_init_runs_lifecycle_steps_in_order(monkeypatch: pytest.MonkeyPat
     )
     monkeypatch.setattr(
         startup_module,
+        "require_shared_account_token_replay_store_for_multiworker",
+        lambda _config: calls.append("require-shared-account-token-replay"),
+    )
+    monkeypatch.setattr(
+        startup_module,
         "require_refreshable_strategy_when_enable_refresh",
         lambda _config: calls.append("require-refreshable-strategy"),
     )
@@ -296,7 +301,7 @@ def test_on_app_init_runs_lifecycle_steps_in_order(monkeypatch: pytest.MonkeyPat
     monkeypatch.setattr(
         plugin,
         "_register_controllers",
-        lambda _app_config, *, security=None: calls.append("controllers") or [],  # noqa: ARG005
+        lambda _app_config, *, security=None: calls.append("controllers") or [],  # ruff: ignore[unused-lambda-argument]
     )
     monkeypatch.setattr(plugin, "_register_exception_handlers", lambda _route_handlers: calls.append("exceptions"))
 
@@ -305,6 +310,7 @@ def test_on_app_init_runs_lifecycle_steps_in_order(monkeypatch: pytest.MonkeyPat
     assert result is app_config
     assert calls == [
         "require-shared-rate-limit",
+        "require-shared-account-token-replay",
         "require-refreshable-strategy",
         "warn",
         "bootstrap-token-models",
@@ -341,6 +347,11 @@ def test_on_app_init_runs_extension_validation_after_core_guards(monkeypatch: py
     )
     monkeypatch.setattr(
         startup_module,
+        "require_shared_account_token_replay_store_for_multiworker",
+        lambda _config: calls.append("require-shared-account-token-replay"),
+    )
+    monkeypatch.setattr(
+        startup_module,
         "require_refreshable_strategy_when_enable_refresh",
         lambda _config: calls.append("require-refreshable-strategy"),
     )
@@ -360,7 +371,7 @@ def test_on_app_init_runs_extension_validation_after_core_guards(monkeypatch: py
     monkeypatch.setattr(
         plugin,
         "_register_controllers",
-        lambda _app_config, *, security=None: calls.append("controllers") or [],  # noqa: ARG005
+        lambda _app_config, *, security=None: calls.append("controllers") or [],  # ruff: ignore[unused-lambda-argument]
     )
     monkeypatch.setattr(plugin, "_register_exception_handlers", lambda _route_handlers: calls.append("exceptions"))
 
@@ -368,6 +379,7 @@ def test_on_app_init_runs_extension_validation_after_core_guards(monkeypatch: py
 
     assert calls == [
         "require-shared-rate-limit",
+        "require-shared-account-token-replay",
         "require-refreshable-strategy",
         "warn",
         "extension-validate",
@@ -410,6 +422,7 @@ def test_feature_wiring_snapshots_registered_hook_order() -> None:
             (
                 "require_shared_rate_limit_backends_for_multiworker",
                 "require_shared_account_lockout_store_for_multiworker",
+                "require_shared_account_token_replay_store_for_multiworker",
                 "require_refreshable_strategy_when_enable_refresh",
                 "warn_insecure_plugin_startup_defaults",
             ),
@@ -839,6 +852,8 @@ def test_on_app_init_does_not_warn_for_redis_rate_limiter(
 
     config = _minimal_config()
     config.deployment_worker_count = 2
+    config.include_verify = False
+    config.include_reset_password = False
     redis_backend = RedisRateLimiter(
         redis=cast_fakeredis(async_fakeredis, RedisClientProtocol),
         max_attempts=3,
@@ -951,6 +966,8 @@ def test_on_app_init_requires_oauth_token_encryption_key_for_oauth_providers() -
 def test_on_app_init_allows_oauth_providers_when_encryption_key_is_configured() -> None:
     """Configured OAuth encryption keys keep app-init startup guard silent."""
     config = _minimal_config()
+    config.include_verify = False
+    config.include_reset_password = False
     config.oauth_config = OAuthConfig(
         oauth_providers=[_oauth_provider(name="github", client=object())],
         oauth_redirect_base_url="https://app.example.com/auth",
@@ -1084,6 +1101,8 @@ def test_warn_insecure_plugin_startup_defaults_ignores_reload_stale_inmemory_tot
         {"__module__": "litestar_auth.authentication.strategy.jwt"},
     )()
     config = _minimal_config()
+    config.include_verify = False
+    config.include_reset_password = False
     config.totp_config = TotpConfig(
         totp_pending_secret=TOTP_PENDING_SECRET,
         totp_pending_jti_store=cast("Any", stale_pending_jti_store),
@@ -1426,7 +1445,7 @@ def test_build_user_manager_passes_typed_security_to_security_only_manager() -> 
     """Plugin-owned construction forwards the typed security bundle end-to-end when supported."""
 
     class _SecurityOnlyManager(PluginUserManager):
-        def __init__(  # noqa: PLR0913
+        def __init__(  # ruff: ignore[too-many-arguments]
             self,
             user_db: object,
             *,
@@ -1498,7 +1517,7 @@ def test_build_user_manager_allows_nonstandard_manager_contract_through_factory(
     """`user_manager_factory` remains the escape hatch for non-canonical constructors."""
 
     class LegacyManagerWithoutSecurity(PluginUserManager):
-        def __init__(  # noqa: PLR0913
+        def __init__(  # ruff: ignore[too-many-arguments]
             self,
             user_db: object,
             *,
@@ -1821,7 +1840,7 @@ def test_resolve_account_state_validator_returns_callable_account_state_contract
     )
 
     class _CallableValidatorManager:
-        def __init__(  # noqa: PLR0913
+        def __init__(  # ruff: ignore[too-many-arguments]
             self,
             user_db: object,
             *,

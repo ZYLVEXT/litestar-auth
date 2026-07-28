@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Annotated, Any, cast
 
-import msgspec  # noqa: TC002
+import msgspec  # ruff: ignore[typing-only-third-party-import]
 from litestar import Request, delete, get, patch, post
 from litestar.di import NamedDependency
 from litestar.params import PathParameter, QueryParameter
@@ -29,7 +29,11 @@ from litestar_auth.contrib.role_admin._error_responses import (
     _role_not_found,
     _role_still_assigned,
 )
-from litestar_auth.contrib.role_admin._schemas import RoleCreate, RoleRead, RoleUpdate  # noqa: TC001
+from litestar_auth.contrib.role_admin._schemas import (  # ruff: ignore[typing-only-first-party-import]
+    RoleCreate,
+    RoleRead,
+    RoleUpdate,
+)
 from litestar_auth.controllers._utils import _finalize_route_handler
 from litestar_auth.exceptions import ConfigurationError
 from litestar_auth.manager import BaseUserManager
@@ -100,7 +104,7 @@ def create_create_role_handler() -> RequestBodyRouteHandler:
         role_admin = _resolve_role_admin(context, db_session=db_session)
         payload = cast("RoleCreate", data)
         normalized_role_name = _normalize_input_role_name(payload.name)
-        from sqlalchemy.exc import IntegrityError  # noqa: PLC0415
+        from sqlalchemy.exc import IntegrityError  # ruff: ignore[import-outside-top-level]
 
         try:
             await role_admin.create_role(

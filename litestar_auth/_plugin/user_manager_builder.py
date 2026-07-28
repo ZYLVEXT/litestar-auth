@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING, Any
 
 from litestar_auth._manager.construction import BaseUserManagerConstructorKwargs, ManagerConstructorInputs
 from litestar_auth._manager.hooks import ExtensionManagerHookSubscriber, wrap_extension_manager_hook_subscriber
-from litestar_auth._plugin.config import UserManagerFactory  # noqa: TC001
+from litestar_auth._plugin.config import UserManagerFactory  # ruff: ignore[typing-only-first-party-import]
 from litestar_auth.config import DEFAULT_MINIMUM_PASSWORD_LENGTH, require_password_length
 from litestar_auth.exceptions import ConfigurationError
 from litestar_auth.types import UserProtocol
@@ -175,7 +175,9 @@ def build_user_manager[UP: UserProtocol[Any], ID](
         raise ConfigurationError(msg)
     api_key_store = None
     if config.api_keys.enabled:
-        from litestar_auth._plugin.api_key import resolve_api_key_store_factory  # noqa: PLC0415
+        from litestar_auth._plugin.api_key import (  # ruff: ignore[import-outside-top-level]
+            resolve_api_key_store_factory,
+        )
 
         api_key_store = resolve_api_key_store_factory(config.api_keys)(session)
     constructor_kwargs = _build_default_user_manager_contract(

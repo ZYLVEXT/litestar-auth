@@ -213,7 +213,7 @@ class ExtensionValidationContext[UP: UserProtocol[Any], ID]:
         Returns:
             The imported ``redis.asyncio`` module.
         """
-        from litestar_auth._optional_deps import _require_redis_asyncio  # noqa: PLC0415
+        from litestar_auth._optional_deps import _require_redis_asyncio  # ruff: ignore[import-outside-top-level]
 
         return _require_redis_asyncio(feature_name=feature_name)
 
@@ -224,7 +224,7 @@ class ExtensionValidationContext[UP: UserProtocol[Any], ID]:
         Returns:
             The imported ``cryptography.fernet`` module.
         """
-        from litestar_auth._optional_deps import require_cryptography_fernet  # noqa: PLC0415
+        from litestar_auth._optional_deps import require_cryptography_fernet  # ruff: ignore[import-outside-top-level]
 
         return require_cryptography_fernet(install_hint=install_hint)
 
@@ -336,14 +336,18 @@ class ExtensionRegistrationContext[UP: UserProtocol[Any], ID](ExtensionValidatio
         Returns:
             The same route handler marked for auth-specific exception wiring.
         """
-        from litestar_auth.controllers._utils import _mark_litestar_auth_route_handler  # noqa: PLC0415
+        from litestar_auth.controllers._utils import (  # ruff: ignore[import-outside-top-level]
+            _mark_litestar_auth_route_handler,
+        )
 
         return _mark_litestar_auth_route_handler(route_handler)
 
     @staticmethod
     def is_auth_route_handler(route_handler: object) -> bool:
         """Return whether a route handler is marked as litestar-auth owned."""
-        from litestar_auth.controllers._utils import _is_litestar_auth_route_handler  # noqa: PLC0415
+        from litestar_auth.controllers._utils import (  # ruff: ignore[import-outside-top-level]
+            _is_litestar_auth_route_handler,
+        )
 
         return _is_litestar_auth_route_handler(route_handler)
 

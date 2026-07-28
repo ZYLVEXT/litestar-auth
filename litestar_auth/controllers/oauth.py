@@ -51,7 +51,7 @@ from litestar_auth.controllers._step_up import (
 )
 from litestar_auth.controllers._utils import _mark_litestar_auth_route_handler
 from litestar_auth.exceptions import ErrorCode
-from litestar_auth.guards import is_authenticated
+from litestar_auth.guards import is_authenticated, requires_password_session
 from litestar_auth.oauth import service as _oauth_service
 from litestar_auth.oauth._account_state import require_account_state as _require_oauth_account_state
 from litestar_auth.oauth._client import OAuthClientProtocol, _build_oauth_client_adapter
@@ -248,7 +248,7 @@ def _create_associate_callback_handler[UP: UserProtocol[Any], ID](
         assembly=assembly,
         route_params_spec=_OAuthCallbackRouteParamsSpec(
             path="/callback",
-            guards=[is_authenticated],
+            guards=[is_authenticated, requires_password_session],
             security=security,
             responses=responses,
         ),
@@ -345,7 +345,7 @@ async def _complete_login_callback[UP: UserProtocol[Any], ID](
         )
         response = await callback_inputs.backend.login(user)
         clear_state_cookie(response)
-        from litestar_auth._manager.hooks import dispatch_after_login  # noqa: PLC0415
+        from litestar_auth._manager.hooks import dispatch_after_login  # ruff: ignore[import-outside-top-level]
 
         await dispatch_after_login(callback_inputs.user_manager, user)
         return response
@@ -369,7 +369,7 @@ def _create_login_callback_handler[UP: UserProtocol[Any], ID](
 
     @get("/callback", responses=responses)
     async def callback(
-        self: object,  # noqa: ARG001
+        self: object,  # ruff: ignore[unused-function-argument]
         request: Request[Any, Any, Any],
         code: _OAuthCodeQuery,
         oauth_state: _OAuthStateQuery,
@@ -430,7 +430,7 @@ def _create_authorize_handler[UP: UserProtocol[Any], ID](
 
     @get("/authorize", security=security, responses=responses)
     async def authorize(
-        self: object,  # noqa: ARG001
+        self: object,  # ruff: ignore[unused-function-argument]
         request: Request[Any, Any, Any],
     ) -> Redirect:
         return await _perform_authorize_redirect(request, assembly=assembly)
@@ -453,7 +453,7 @@ def _create_associate_authorize_handler[UP: UserProtocol[Any], ID](
 
     @post("/authorize", guards=guards, security=security, responses=responses)
     async def authorize(
-        self: object,  # noqa: ARG001
+        self: object,  # ruff: ignore[unused-function-argument]
         request: Request[Any, Any, Any],
     ) -> Redirect:
         return await _perform_authorize_redirect(request, assembly=assembly)
@@ -701,7 +701,7 @@ def _create_oauth_associate_controller[UP: UserProtocol[Any], ID](
         authorize_handler=_create_associate_authorize_handler(
             assembly=assembly,
             responses=_OAUTH_OPENAPI_RESPONSES,
-            guards=[is_authenticated],
+            guards=[is_authenticated, requires_password_session],
             security=settings.security,
         ),
         callback_handler=_create_associate_callback_handler(

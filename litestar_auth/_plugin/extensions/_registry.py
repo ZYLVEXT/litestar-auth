@@ -155,7 +155,9 @@ def register_extension_openapi_security(
     if not schemes or not app_config.openapi_config:
         return schemes
 
-    from litestar_auth._plugin.openapi import merge_openapi_security_components  # noqa: PLC0415
+    from litestar_auth._plugin.openapi import (  # ruff: ignore[import-outside-top-level]
+        merge_openapi_security_components,
+    )
 
     merge_openapi_security_components(app_config, schemes)
     return schemes

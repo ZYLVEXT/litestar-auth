@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import logging
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any, cast
@@ -320,6 +321,7 @@ def test_signing_transport_ignores_non_hmac_authorization() -> None:
     [
         f"{API_KEY_HMAC_SCHEME} Credential=keyid, SignedHeaders=host;x-auth-date;x-auth-nonce",
         f"{API_KEY_HMAC_SCHEME} Credential=, SignedHeaders=host;x-auth-date;x-auth-nonce, Signature=sig",
+        f"{API_KEY_HMAC_SCHEME} Credential=invalid.key, SignedHeaders=host;x-auth-date;x-auth-nonce, Signature=sig",
         f"{API_KEY_HMAC_SCHEME} Credential=keyid, SignedHeaders=host;x-auth-date;x-auth-nonce, Signature={'a' * 257}",
     ],
 )
@@ -418,6 +420,36 @@ def test_signing_transport_rejects_unparseable_date_with_nonce_present() -> None
 
     assert read_signed_api_key_request(ASGIConnection(scope)) == API_KEY_HMAC_SCHEME
     assert get_current_signed_api_key_request() is None
+
+
+def test_signing_transport_rejects_invalid_utf8_query_fail_closed() -> None:
+    """Malformed raw query bytes cannot escape authentication as an internal error."""
+    scope = _signed_scope()
+    scope["query_string"] = b"\xff"
+    cast("list[tuple[bytes, bytes]]", scope["headers"]).append(
+        (
+            b"authorization",
+            (
+                f"{API_KEY_HMAC_SCHEME} Credential=keyid, SignedHeaders=host;x-auth-date;x-auth-nonce, Signature=sig"
+            ).encode(),
+        ),
+    )
+
+    assert read_signed_api_key_request(ASGIConnection(scope)) == API_KEY_HMAC_SCHEME
+    assert get_current_signed_api_key_request() is None
+
+
+def test_canonical_request_quotes_arbitrary_raw_path_bytes() -> None:
+    """Raw ASGI path bytes have a deterministic total canonical representation."""
+    scope = _signed_scope()
+    scope["raw_path"] = b"/\xff"
+
+    canonical_request = build_canonical_request(
+        ASGIConnection(scope),
+        signed_headers=("host", "x-auth-date", "x-auth-nonce"),
+    )
+
+    assert canonical_request.splitlines()[1] == "/%FF"
 
 
 @pytest.mark.parametrize(
@@ -593,7 +625,7 @@ async def test_signing_rejects_mismatched_content_sha256_header() -> None:
     assert await strategy.classify_failure_code(token) == ErrorCode.API_KEY_SIGNATURE_INVALID
 
 
-async def test_signing_classifies_timestamp_skew_and_nonce_replay() -> None:
+async def test_signing_classifies_timestamp_skew_and_nonce_replay(caplog: pytest.LogCaptureFixture) -> None:
     """Timestamp and nonce failures expose structured API-key signing codes."""
     secret = "request-signing-secret"
     keyring = _keyring()
@@ -628,9 +660,13 @@ async def test_signing_classifies_timestamp_skew_and_nonce_replay() -> None:
     assert await strategy.read_token_with_context(replay_token, UserManager(user)) is not None
     replay_token = read_signed_api_key_request(ASGIConnection(replay_scope))
 
-    replay_attempt = await strategy.read_token_attempt(replay_token, UserManager(user))
+    with caplog.at_level(logging.WARNING, logger="litestar_auth.security"):
+        replay_attempt = await strategy.read_token_attempt(replay_token, UserManager(user))
     assert replay_attempt.result is None
     assert replay_attempt.failure_reason == ApiKeyFailureReason.SIGNATURE_NONCE_REPLAY
+    replay_events = [record for record in caplog.records if getattr(record, "event", None) == "api_key_nonce_replay"]
+    assert len(replay_events) == 1
+    assert getattr(replay_events[0], "key_id", None) == row.key_id
 
 
 async def test_signing_read_skips_nonce_store_when_user_is_missing() -> None:
@@ -788,7 +824,9 @@ async def test_signing_read_returns_none_for_defensive_failure_paths() -> None:
     )
 
 
-async def test_signing_read_returns_none_for_invalid_signature_and_nonce_capacity() -> None:
+async def test_signing_read_returns_none_for_invalid_signature_and_nonce_capacity(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
     """Signed authentication fails when signature verification or nonce storage fails."""
     secret = "request-signing-secret"
     keyring = _keyring()
@@ -812,13 +850,22 @@ async def test_signing_read_returns_none_for_invalid_signature_and_nonce_capacit
     _authorize_scope(capacity_scope, key_id=row.key_id, secret=secret)
     capacity_token = read_signed_api_key_request(ASGIConnection(capacity_scope))
 
-    assert (
-        await _strategy_for_row(row, keyring=keyring, nonce_store=full_nonce_store).read_token_with_context(
-            capacity_token,
-            UserManager(user),
+    with caplog.at_level(logging.WARNING, logger="litestar_auth.security"):
+        assert (
+            await _strategy_for_row(row, keyring=keyring, nonce_store=full_nonce_store).read_token_with_context(
+                capacity_token,
+                UserManager(user),
+            )
+            is None
         )
-        is None
-    )
+
+    # Capacity pressure is an infrastructure failure, not an attack: it must not be
+    # reported under the same event name as a replay.
+    capacity_events = [
+        record for record in caplog.records if getattr(record, "event", None) == "api_key_nonce_store_capacity"
+    ]
+    assert len(capacity_events) == 1
+    assert getattr(capacity_events[0], "key_id", None) == row.key_id
 
 
 async def test_signing_failure_classification_covers_row_state() -> None:

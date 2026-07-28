@@ -62,8 +62,8 @@ class OAuthDirectIdentityClientProtocol(
     Returning ``None`` requests the documented ``get_profile()`` fallback.
     """
 
-    async def get_id_email(self, access_token: str) -> tuple[str, str] | None:
-        """Return provider account id and email, or ``None`` for profile fallback."""
+    async def get_id_email(self, access_token: str) -> tuple[str, str | None] | None:
+        """Return provider account id and optional email, or ``None`` for profile fallback."""
 
 
 class OAuthProfileClientProtocol(

@@ -78,6 +78,8 @@ ACCOUNT_LOCKOUT_SECRET = "account-lockout-secret-1234567890"
 ACCOUNT_LOCKOUT_DIGEST_HEX_LENGTH = 64
 ACCOUNT_LOCKOUT_THRESHOLD = 2
 ACCOUNT_LOCKOUT_CONCURRENT_FAILURES = 20
+FRACTIONAL_WINDOW_SECONDS = 1.1
+FRACTIONAL_WINDOW_REDIS_TTL_SECONDS = 2
 
 
 def _account_lockout_key(identifier: str = "User@Example.COM") -> AccountLockoutKey:
@@ -1910,6 +1912,9 @@ def test_memory_rate_limiter_rejects_invalid_rate_limit_configuration() -> None:
         InMemoryRateLimiter(max_attempts=0, window_seconds=10)
     with pytest.raises(ValueError, match="window_seconds"):
         InMemoryRateLimiter(max_attempts=1, window_seconds=0)
+    for non_finite_window in (float("nan"), float("inf"), float("-inf")):
+        with pytest.raises(ValueError, match="window_seconds"):
+            InMemoryRateLimiter(max_attempts=1, window_seconds=non_finite_window)
 
 
 async def test_memory_rate_limiter_reports_retry_after_and_supports_reset() -> None:
@@ -2549,6 +2554,27 @@ def test_redis_rate_limiter_implements_shared_backend_protocol(
     assert isinstance(limiter, RateLimiterBackend)
 
 
+def test_redis_fractional_security_windows_never_expire_early(
+    async_fakeredis: AsyncFakeRedis,
+    patch_redis_loader: None,
+) -> None:
+    """Redis TTL rounding preserves the full configured fractional window."""
+    redis_client = cast_fakeredis(async_fakeredis, RedisClientProtocol)
+    limiter = RedisRateLimiter(
+        redis=redis_client,
+        max_attempts=2,
+        window_seconds=FRACTIONAL_WINDOW_SECONDS,
+    )
+    lockout = RedisAccountLockoutStore(
+        redis=redis_client,
+        failure_threshold=2,
+        window_seconds=FRACTIONAL_WINDOW_SECONDS,
+    )
+
+    assert limiter._ttl_seconds == FRACTIONAL_WINDOW_REDIS_TTL_SECONDS
+    assert lockout._ttl_seconds == FRACTIONAL_WINDOW_REDIS_TTL_SECONDS
+
+
 async def test_redis_rate_limiter_blocks_after_max_attempts(
     async_fakeredis: AsyncFakeRedis,
     patch_redis_loader: None,
@@ -3110,7 +3136,7 @@ async def test_extract_email_returns_nfkc_lowercased_canonical_form() -> None:
     """
     fullwidth_request = cast(
         "Request[Any, Any, Any]",
-        JsonRequestStub(payload={"identifier": "  Ｖictim@Example.COM  "}),  # noqa: RUF001
+        JsonRequestStub(payload={"identifier": "  Ｖictim@Example.COM  "}),  # ruff: ignore[ambiguous-unicode-character-string]
     )
 
     assert await ratelimit_identifier_extraction_module._extract_email(fullwidth_request) == "victim@example.com"

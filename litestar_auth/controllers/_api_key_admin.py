@@ -50,7 +50,7 @@ def _create_admin_api_key_create_handler[ID](ctx: ApiKeysControllerContext[ID]) 
         responses={403: TOTP_STEPUP_REQUIRED_OPENAPI_RESPONSE},
     )
     async def create_user_api_key(
-        self: Controller,  # noqa: ARG001
+        self: Controller,  # ruff: ignore[unused-function-argument]
         request: Request[Any, Any, Any],
         user_id: _UserIdPath,
         data: ApiKeyAdminCreateRequest,
@@ -82,7 +82,7 @@ def _create_admin_api_key_list_handler[ID](ctx: ApiKeysControllerContext[ID]) ->
 
     @get("/{user_id:str}/api-keys", guards=[is_superuser, requires_password_session], security=ctx.security)
     async def list_user_api_keys(
-        self: Controller,  # noqa: ARG001
+        self: Controller,  # ruff: ignore[unused-function-argument]
         user_id: _UserIdPath,
         litestar_auth_user_manager: _UserManagerDep,
     ) -> ApiKeyListResponse:
@@ -104,7 +104,7 @@ def _create_admin_api_key_revoke_handler[ID](ctx: ApiKeysControllerContext[ID]) 
         responses={403: TOTP_STEPUP_REQUIRED_OPENAPI_RESPONSE},
     )
     async def revoke_user_api_key(
-        self: Controller,  # noqa: ARG001
+        self: Controller,  # ruff: ignore[unused-function-argument]
         request: Request[Any, Any, Any],
         user_id: _UserIdPath,
         key_id: _KeyIdPath,

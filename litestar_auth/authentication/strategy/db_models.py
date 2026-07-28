@@ -9,7 +9,9 @@ models boundary.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime  # noqa: TC003 - SQLAlchemy resolves Mapped annotations during mapper setup.
+from datetime import (
+    datetime,  # ruff: ignore[typing-only-standard-library-import] - SQLAlchemy resolves Mapped annotations during mapper setup.
+)
 from inspect import getattr_static
 from typing import Any
 

@@ -403,6 +403,41 @@ async def test_get_authorization_url_forwards_httpx_oauth_scope_as_list() -> Non
     ]
 
 
+async def test_get_authorization_url_recognizes_application_httpx_oauth_subclass() -> None:
+    """Application subclasses retain httpx-oauth's list-shaped scope contract."""
+
+    class _HttpxOAuthBase:
+        __module__ = "httpx_oauth.clients.github"
+
+    class _ApplicationOAuthClient(_HttpxOAuthBase):
+        __module__ = "application.oauth"
+
+        def __init__(self) -> None:
+            self.scope: list[str] | None = None
+
+        async def get_authorization_url(
+            self,
+            _redirect_uri: str,
+            _state: str,
+            *,
+            scope: list[str] | None = None,
+            code_challenge: str | None = None,
+            code_challenge_method: str | None = None,
+        ) -> str:
+            self.scope = scope
+            return "https://provider.example/authorize"
+
+    oauth_client = _ApplicationOAuthClient()
+
+    await _build_adapter(oauth_client).get_authorization_url(
+        redirect_uri="https://app.example/callback",
+        state="state",
+        scopes=["openid", "email"],
+    )
+
+    assert oauth_client.scope == ["openid", "email"]
+
+
 @pytest.mark.parametrize("authorization_url", [123, ""])
 async def test_get_authorization_url_rejects_invalid_provider_response(authorization_url: object) -> None:
     """Manual OAuth clients must return a non-empty authorization URL string."""
@@ -552,6 +587,20 @@ async def test_get_account_identity_falls_back_to_profile_when_get_id_email_retu
 
     assert identity == ("provider-id", "user@example.com")
     oauth_client.get_profile.assert_awaited_once_with("access-token")
+
+
+async def test_get_account_identity_maps_httpx_oauth_missing_email_to_client_error() -> None:
+    """httpx-oauth's ``(id, None)`` result uses the stable missing-email response."""
+    oauth_client = _make_oauth_client(
+        get_id_email=AsyncMock(return_value=("provider-id", None)),
+    )
+
+    with pytest.raises(ClientException) as exc_info:
+        await _build_adapter(oauth_client).get_account_identity("access-token")
+
+    extra = exc_info.value.extra
+    assert exc_info.value.status_code == HTTP_400_BAD_REQUEST
+    assert (extra.get("code") if isinstance(extra, dict) else None) == ErrorCode.OAUTH_NOT_AVAILABLE_EMAIL
 
 
 async def test_get_account_identity_accepts_object_profile_payload() -> None:

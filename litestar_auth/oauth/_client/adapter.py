@@ -238,6 +238,17 @@ class OAuthClientAdapter:
         account_identity = await self._oauth_client.get_id_email(access_token)
         if account_identity is None:
             return None
+        if (
+            isinstance(account_identity, tuple)
+            and len(account_identity) == 2  # ruff: ignore[magic-value-comparison] - upstream get_id_email() pair contract
+            and isinstance(account_identity[0], str)
+            and account_identity[0]
+            and account_identity[1] is None
+        ):
+            # httpx-oauth's documented return type is ``tuple[str, str | None]``.
+            # Preserve the same stable 400 response used by profile-based clients
+            # when a provider identity exists but the provider supplies no email.
+            return extract_identity_from_profile({"id": account_identity[0], "email": None})
         parsed_identity = as_account_identity_tuple(account_identity)
         if parsed_identity is not None:
             return parsed_identity

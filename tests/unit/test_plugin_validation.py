@@ -41,6 +41,7 @@ from litestar_auth._plugin.validation._core import (
 from litestar_auth.authentication.backend import AuthenticationBackend
 from litestar_auth.authentication.strategy import InMemoryApiKeyNonceStore
 from litestar_auth.authentication.strategy.db import DatabaseTokenStrategy
+from litestar_auth.authentication.strategy.jwt import JWTReplayStoreResult
 from litestar_auth.authentication.transport.api_key import ApiKeyTransport
 from litestar_auth.authentication.transport.bearer import BearerTransport
 from litestar_auth.authentication.transport.cookie import CookieTransport
@@ -231,11 +232,16 @@ def _current_inmemory_totp_enrollment_store() -> object:
 
 
 class _DurableDenylistStore:
+    revocation_is_durable = True
+
     async def deny(self, jti: str, *, ttl_seconds: int) -> bool:
         return True
 
     async def is_denied(self, jti: str) -> bool:
         return False
+
+    async def mark_used(self, jti: str, *, ttl_seconds: int) -> JWTReplayStoreResult:
+        return JWTReplayStoreResult(stored=True)
 
 
 @dataclass(slots=True, frozen=True)
@@ -833,6 +839,7 @@ def test_warn_insecure_plugin_startup_defaults_is_silent_for_safe_production_con
     )
     config.csrf_secret = JWT_SECRET
     config.enable_refresh = True
+    config.account_token_denylist_store = _DurableDenylistStore()
 
     with warnings.catch_warnings(record=True) as records:
         warnings.simplefilter("always")
@@ -1205,7 +1212,7 @@ def test_validate_config_accepts_default_user_manager_requiring_password_helper(
     """Constructor-shape validation should include the default ``password_helper`` slot."""
 
     class _PasswordHelperRequiredManager(PluginUserManager):
-        def __init__(  # noqa: PLR0913
+        def __init__(  # ruff: ignore[too-many-arguments]
             self,
             user_db: object,
             *,
@@ -1349,7 +1356,7 @@ def test_validate_config_rejects_non_canonical_default_user_manager_constructor(
     class _LegacyManagerWithoutSecurity(PluginUserManager):
         """Constructor intentionally omits ``security=`` so the default builder cannot bind."""
 
-        def __init__(  # noqa: PLR0913
+        def __init__(  # ruff: ignore[too-many-arguments]
             self,
             user_db: object,
             *,
@@ -1383,7 +1390,7 @@ def test_validate_config_rejects_default_user_manager_missing_unsafe_testing_kwa
     """The default builder contract includes ``unsafe_testing`` and should fail fast when missing."""
 
     class _ManagerWithoutUnsafeTesting(PluginUserManager):
-        def __init__(  # noqa: PLR0913
+        def __init__(  # ruff: ignore[too-many-arguments]
             self,
             user_db: object,
             *,
@@ -2300,6 +2307,20 @@ def test_validate_api_key_signing_distinctness_skips_without_security() -> None:
             id="invalid-signing-skew",
         ),
         pytest.param(
+            ApiKeyConfig(enabled=True, allowed_scopes=("read",), signing_skew_seconds=cast("Any", float("nan"))),
+            "signing_skew_seconds",
+            id="non-finite-signing-skew",
+        ),
+        pytest.param(
+            ApiKeyConfig(
+                enabled=True,
+                allowed_scopes=("read",),
+                signing_skew_seconds=cast("Any", True),  # ruff: ignore[boolean-positional-value-in-call] - runtime type-validation regression
+            ),
+            "signing_skew_seconds",
+            id="boolean-signing-skew",
+        ),
+        pytest.param(
             ApiKeyConfig(enabled=True, allowed_scopes=("read",), signed_body_max_bytes=0),
             "signed_body_max_bytes",
             id="invalid-signed-body-limit",
@@ -3174,7 +3195,7 @@ def test_validate_superuser_role_name_config_revalidates_mutated_config_value() 
         validate_superuser_role_name_config(config)
 
 
-def _minimal_config(  # noqa: PLR0913
+def _minimal_config(  # ruff: ignore[too-many-arguments]
     *,
     backends: list[AuthenticationBackend[ExampleUser, UUID]] | None = None,
     deployment_worker_count: int | None = None,

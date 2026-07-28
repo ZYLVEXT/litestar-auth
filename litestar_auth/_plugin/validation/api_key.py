@@ -71,14 +71,14 @@ def _validate_api_key_policy_fields(api_key_config: ApiKeyConfig) -> None:
         ConfigurationError: If a scalar policy value is outside its accepted range.
     """
     collector = IssueCollector()
-    if api_key_config.max_keys_per_user <= 0:
+    if not _is_integer_at_least(api_key_config.max_keys_per_user, minimum=1):
         collector.add("api_keys.max_keys_per_user must be greater than 0.", field="api_keys.max_keys_per_user")
     if api_key_config.scope_subset_check and not api_key_config.allowed_scopes:
         collector.add(
             "api_keys.allowed_scopes must be non-empty when scope_subset_check is True.",
             field="api_keys.allowed_scopes",
         )
-    if api_key_config.last_used_throttle_seconds < 0:
+    if not _is_integer_at_least(api_key_config.last_used_throttle_seconds, minimum=0):
         collector.add(
             "api_keys.last_used_throttle_seconds must be non-negative.",
             field="api_keys.last_used_throttle_seconds",
@@ -88,17 +88,22 @@ def _validate_api_key_policy_fields(api_key_config: ApiKeyConfig) -> None:
             f"api_keys.last_used_write_strategy must be {_API_KEY_LAST_USED_WRITE_STRATEGY_LIST}.",
             field="api_keys.last_used_write_strategy",
         )
-    if api_key_config.signing_skew_seconds < 1:
+    if not _is_integer_at_least(api_key_config.signing_skew_seconds, minimum=1):
         collector.add("api_keys.signing_skew_seconds must be greater than 0.", field="api_keys.signing_skew_seconds")
-    if api_key_config.signed_body_max_bytes < 1:
+    if not _is_integer_at_least(api_key_config.signed_body_max_bytes, minimum=1):
         collector.add("api_keys.signed_body_max_bytes must be greater than 0.", field="api_keys.signed_body_max_bytes")
-    if api_key_config.signed_body_max_messages < 1:
+    if not _is_integer_at_least(api_key_config.signed_body_max_messages, minimum=1):
         collector.add(
             "api_keys.signed_body_max_messages must be greater than 0.",
             field="api_keys.signed_body_max_messages",
         )
     if collector.issues:
         raise ConfigurationError(format_validation_issues(collector.issues))
+
+
+def _is_integer_at_least(value: object, *, minimum: int) -> bool:
+    """Return whether ``value`` is a non-boolean integer at or above ``minimum``."""
+    return isinstance(value, int) and not isinstance(value, bool) and value >= minimum
 
 
 def _validate_api_key_signing_config[UP: UserProtocol[Any], ID](config: LitestarAuthConfig[UP, ID]) -> None:

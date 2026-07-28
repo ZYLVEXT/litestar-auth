@@ -59,7 +59,7 @@ def _create_self_api_key_create_handler[ID](ctx: ApiKeysControllerContext[ID]) -
         ),
     )
     async def create_api_key(
-        self: Controller,  # noqa: ARG001
+        self: Controller,  # ruff: ignore[unused-function-argument]
         request: Request[Any, Any, Any],
         data: ApiKeyCreateRequest,
         litestar_auth_user_manager: _UserManagerDep,
@@ -80,7 +80,7 @@ def _create_self_api_key_list_handler[ID](ctx: ApiKeysControllerContext[ID]) -> 
 
     @get(guards=[is_authenticated, requires_password_session], security=ctx.security)
     async def list_api_keys(
-        self: Controller,  # noqa: ARG001
+        self: Controller,  # ruff: ignore[unused-function-argument]
         request: Request[Any, Any, Any],
         litestar_auth_user_manager: _UserManagerDep,
     ) -> ApiKeyListResponse:
@@ -95,7 +95,7 @@ def _create_self_api_key_get_handler[ID](ctx: ApiKeysControllerContext[ID]) -> C
 
     @get("/{key_id:str}", guards=[is_authenticated, requires_password_session], security=ctx.security)
     async def get_api_key(
-        self: Controller,  # noqa: ARG001
+        self: Controller,  # ruff: ignore[unused-function-argument]
         request: Request[Any, Any, Any],
         key_id: _KeyIdPath,
         litestar_auth_user_manager: _UserManagerDep,
@@ -126,7 +126,7 @@ def _create_self_api_key_update_handler[ID](ctx: ApiKeysControllerContext[ID]) -
         ),
     )
     async def update_api_key(
-        self: Controller,  # noqa: ARG001
+        self: Controller,  # ruff: ignore[unused-function-argument]
         request: Request[Any, Any, Any],
         key_id: _KeyIdPath,
         data: ApiKeyUpdateRequest,
@@ -159,7 +159,7 @@ def _create_self_api_key_revoke_handler[ID](ctx: ApiKeysControllerContext[ID]) -
         responses={403: TOTP_STEPUP_REQUIRED_OPENAPI_RESPONSE},
     )
     async def revoke_api_key(
-        self: Controller,  # noqa: ARG001
+        self: Controller,  # ruff: ignore[unused-function-argument]
         request: Request[Any, Any, Any],
         key_id: _KeyIdPath,
         litestar_auth_user_manager: _UserManagerDep,

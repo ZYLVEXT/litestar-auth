@@ -43,7 +43,9 @@ def _validate_backend_strategy_security[UP: UserProtocol[Any], ID](config: Lites
 
 def _warn_backend_name_strategy_mismatch(*, backend_name: object, strategy: object) -> None:
     """Warn when a backend name implies JWT but the configured strategy is not JWT-backed."""
-    from litestar_auth._plugin.validation._general import _current_jwt_strategy_type  # noqa: PLC0415
+    from litestar_auth._plugin.validation._general import (  # ruff: ignore[import-outside-top-level]
+        _current_jwt_strategy_type,
+    )
 
     if (
         not isinstance(backend_name, str)

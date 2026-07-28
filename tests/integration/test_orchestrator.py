@@ -58,7 +58,7 @@ TOTAL_USERS = 3
 class PluginUserManager(BaseUserManager[ExampleUser, UUID]):
     """Concrete manager exposing paginated listings for plugin tests."""
 
-    def __init__(  # noqa: PLR0913
+    def __init__(  # ruff: ignore[too-many-arguments]
         self,
         user_db: BaseUserStore[ExampleUser, UUID],
         *,
@@ -95,7 +95,7 @@ class PluginUserManager(BaseUserManager[ExampleUser, UUID]):
 class TokenCaptureUserManager(PluginUserManager):
     """Plugin test manager that records generated out-of-band tokens."""
 
-    def __init__(  # noqa: PLR0913
+    def __init__(  # ruff: ignore[too-many-arguments]
         self,
         user_db: BaseUserStore[ExampleUser, UUID],
         *,

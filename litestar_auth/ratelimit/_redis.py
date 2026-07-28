@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import time
 from functools import partial
+from math import ceil
 from typing import TYPE_CHECKING
 from uuid import uuid4
 
@@ -91,12 +92,11 @@ return 0
     def _ttl_seconds(self) -> int:
         """The lockout window in whole seconds for Redis ``EXPIRE``.
 
-        Redis key expiry is second-granular, so the window is floored to whole seconds
-        (minimum 1). Sub-second ``window_seconds`` therefore round to 1s here, unlike the
-        float-precise :class:`InMemoryAccountLockoutStore`; with the 900s default and any
-        realistic lockout window the two backends are equivalent.
+        Redis key expiry is second-granular, so fractional windows are rounded
+        up (minimum 1). The backing key must never expire before the configured
+        float-precise security window has elapsed.
         """
-        return max(int(self.window_seconds), 1)
+        return max(ceil(self.window_seconds), 1)
 
     async def _eval(self, script: str, key: AccountLockoutKey, *args: object) -> RedisScriptResult:
         """Execute a single-key Lua script against Redis.
@@ -226,8 +226,8 @@ return math.max(math.ceil(window - (now - tonumber(score_raw))), 1)
 
     @property
     def _ttl_seconds(self) -> int:
-        """The configured window in whole seconds."""
-        return max(int(self.window_seconds), 1)
+        """The configured window rounded up to whole Redis expiry seconds."""
+        return max(ceil(self.window_seconds), 1)
 
     async def _eval(self, script: str, key: str, *args: object) -> RedisScriptResult:
         """Execute a single-key Lua script against Redis.

@@ -223,7 +223,7 @@ async def _totp_handle_verify[UP: UserProtocol[Any], ID](
             session_id,
             ttl_seconds=ctx.security.totp_stepup_ttl_seconds,
         )
-    from litestar_auth._manager.hooks import dispatch_after_login  # noqa: PLC0415
+    from litestar_auth._manager.hooks import dispatch_after_login  # ruff: ignore[import-outside-top-level]
 
     await dispatch_after_login(user_manager, verified_user)
     return response

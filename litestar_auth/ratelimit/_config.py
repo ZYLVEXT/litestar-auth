@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import dataclasses
+import math
 import warnings
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, fields
@@ -102,8 +103,13 @@ class AccountLockoutConfig:
         if not threshold_is_positive_int:
             msg = "account_lockout_config.failure_threshold must be a positive integer."
             raise ConfigurationError(msg)
-        if not isinstance(self.window_seconds, int | float) or self.window_seconds <= 0:
-            msg = "account_lockout_config.window_seconds must be greater than 0."
+        if (
+            not isinstance(self.window_seconds, int | float)
+            or isinstance(self.window_seconds, bool)
+            or not math.isfinite(self.window_seconds)
+            or self.window_seconds <= 0
+        ):
+            msg = "account_lockout_config.window_seconds must be a finite number greater than 0."
             raise ConfigurationError(msg)
         if self.store_factory is not None and not callable(self.store_factory):
             msg = "account_lockout_config.store_factory must be callable when provided."
@@ -121,7 +127,7 @@ class AccountLockoutConfig:
                 window_seconds=self.window_seconds,
             )
         )
-        object.__setattr__(self, "_resolved_store", resolved_store)  # noqa: PLC2801
+        object.__setattr__(self, "_resolved_store", resolved_store)  # ruff: ignore[unnecessary-dunder-call]
         return resolved_store
 
 

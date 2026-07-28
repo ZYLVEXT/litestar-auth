@@ -11,7 +11,7 @@ rotation.
 
 from __future__ import annotations
 
-import uuid  # noqa: TC003
+import uuid  # ruff: ignore[typing-only-standard-library-import]
 
 import msgspec
 

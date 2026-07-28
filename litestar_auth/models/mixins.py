@@ -62,7 +62,7 @@ class OAuthAccountMixin(_UserOwnedMixin):
 
     @declared_attr.directive
     @classmethod
-    def __table_args__(cls) -> tuple[UniqueConstraint]:  # noqa: PLW3201
+    def __table_args__(cls) -> tuple[UniqueConstraint]:  # ruff: ignore[bad-dunder-method-name]
         """Create the provider-identity uniqueness constraint for each subclass.
 
         Returns:

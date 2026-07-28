@@ -644,7 +644,7 @@ def _create_get_me_handler[UP: UsersControllerUserProtocol[Any], ID](
 
     @get("/me", guards=[is_authenticated])
     async def get_me(
-        self: object,  # noqa: ARG001
+        self: object,  # ruff: ignore[unused-function-argument]
         request: Request[Any, Any, Any],
         litestar_auth_user_manager: _UserManagerDep,
     ) -> msgspec.Struct:
@@ -674,7 +674,7 @@ def _create_update_me_handler[UP: UsersControllerUserProtocol[Any], ID](
         responses={403: TOTP_STEPUP_REQUIRED_OPENAPI_RESPONSE},
     )
     async def update_me(
-        self: object,  # noqa: ARG001
+        self: object,  # ruff: ignore[unused-function-argument]
         request: Request[Any, Any, Any],
         data: msgspec.Struct,
         litestar_auth_user_manager: _UserManagerDep,
@@ -706,7 +706,7 @@ def _create_change_password_handler[UP: UsersControllerUserProtocol[Any], ID](
         responses=_CHANGE_PASSWORD_OPENAPI_RESPONSES,
     )
     async def change_password(
-        self: object,  # noqa: ARG001
+        self: object,  # ruff: ignore[unused-function-argument]
         request: Request[Any, Any, Any],
         data: msgspec.Struct,
         litestar_auth_user_manager: _UserManagerDep,
@@ -730,9 +730,9 @@ def _create_get_user_handler[UP: UsersControllerUserProtocol[Any], ID](
         Decorated Litestar route handler.
     """
 
-    @get("/{user_id:str}", guards=[is_superuser])
+    @get("/{user_id:str}", guards=[is_superuser, requires_password_session])
     async def get_user(
-        self: object,  # noqa: ARG001
+        self: object,  # ruff: ignore[unused-function-argument]
         user_id: _UserIdPath,
         litestar_auth_user_manager: _UserManagerDep,
     ) -> msgspec.Struct:
@@ -754,9 +754,9 @@ def _create_update_user_handler[UP: UsersControllerUserProtocol[Any], ID](
         Decorated Litestar route handler.
     """
 
-    @patch("/{user_id:str}", guards=[is_superuser])
+    @patch("/{user_id:str}", guards=[is_superuser, requires_password_session])
     async def update_user(
-        self: object,  # noqa: ARG001
+        self: object,  # ruff: ignore[unused-function-argument]
         request: Request[Any, Any, Any],
         user_id: _UserIdPath,
         data: msgspec.Struct,
@@ -782,9 +782,9 @@ def _create_delete_user_handler[UP: UsersControllerUserProtocol[Any], ID](
         Decorated Litestar route handler.
     """
 
-    @delete("/{user_id:str}", guards=[is_superuser], status_code=200)
+    @delete("/{user_id:str}", guards=[is_superuser, requires_password_session], status_code=200)
     async def delete_user(
-        self: object,  # noqa: ARG001
+        self: object,  # ruff: ignore[unused-function-argument]
         user_id: _UserIdPath,
         request: Request[Any, Any, Any],
         data: AdminUserDeleteStepUpRequest,
@@ -830,7 +830,7 @@ def _create_list_users_handler[UP: UsersControllerUserProtocol[Any], ID](
         signature=signature,
         annotations=_list_users_handler_annotations(max_limit=ctx.max_limit),
     )
-    return _finalize_route_handler(get(guards=[is_superuser])(list_users))
+    return _finalize_route_handler(get(guards=[is_superuser, requires_password_session])(list_users))
 
 
 def _define_users_controller_class_di[UP: UsersControllerUserProtocol[Any], ID](

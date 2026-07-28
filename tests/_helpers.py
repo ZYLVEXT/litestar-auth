@@ -348,7 +348,7 @@ def litestar_app_with_user_manager(
         Configured :class:`~litestar.Litestar` instance.
     """
 
-    async def _provide_user_manager() -> AsyncIterator[object]:  # noqa: RUF029
+    async def _provide_user_manager() -> AsyncIterator[object]:  # ruff: ignore[unused-async]
         yield user_manager
 
     return Litestar(

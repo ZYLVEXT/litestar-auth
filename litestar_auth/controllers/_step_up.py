@@ -154,7 +154,7 @@ async def require_totp_stepup[UP: UserProtocol[Any]](
         if mode == "always_required":
             raise_step_up_required()
         return
-    from litestar_auth.totp import verify_totp  # noqa: PLC0415
+    from litestar_auth.totp import verify_totp  # ruff: ignore[import-outside-top-level]
 
     if check.totp_code is not None and verify_totp(secret, check.totp_code, algorithm=check.totp_algorithm):
         return

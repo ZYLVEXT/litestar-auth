@@ -14,13 +14,14 @@ from litestar.status_codes import (
     HTTP_202_ACCEPTED,
     HTTP_400_BAD_REQUEST,
     HTTP_500_INTERNAL_SERVER_ERROR,
+    HTTP_503_SERVICE_UNAVAILABLE,
 )
 from litestar.testing import AsyncTestClient
 
 from litestar_auth.controllers.reset import (
     create_reset_password_controller,
 )
-from litestar_auth.exceptions import ErrorCode, InvalidPasswordError, InvalidResetPasswordTokenError
+from litestar_auth.exceptions import ErrorCode, InvalidPasswordError, InvalidResetPasswordTokenError, TokenError
 from litestar_auth.ratelimit import AuthRateLimitConfig, EndpointRateLimit
 from tests._helpers import litestar_app_with_user_manager
 
@@ -148,6 +149,23 @@ async def test_reset_password_maps_invalid_password_error_to_client_exception() 
 
     assert status_code == HTTP_400_BAD_REQUEST
     assert payload.get("extra", {}).get("code") == ErrorCode.RESET_PASSWORD_INVALID_PASSWORD
+
+
+async def test_reset_password_maps_replay_store_failure_to_service_unavailable() -> None:
+    """Replay-store infrastructure failures return the transient token error contract."""
+    manager = DummyUserManager(error=TokenError("Redis replay store unavailable at redis.internal:6379."))
+    controller = create_reset_password_controller()
+
+    status_code, payload = await _invoke_reset_password(
+        controller,
+        token="valid-token",
+        password="new-password",
+        user_manager=manager,
+    )
+
+    assert status_code == HTTP_503_SERVICE_UNAVAILABLE
+    assert payload.get("detail") == TokenError.default_message
+    assert payload.get("extra", {}).get("code") == ErrorCode.TOKEN_PROCESSING_FAILED
 
 
 async def test_forgot_password_success_increments_rate_limit_and_forwards_email() -> None:

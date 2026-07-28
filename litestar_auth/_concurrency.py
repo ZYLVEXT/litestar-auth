@@ -29,7 +29,7 @@ if TYPE_CHECKING:
     from litestar_auth.password import PasswordHelper
 
 _DEFAULT_PASSWORD_WORKER_THREAD_LIMIT = 8
-_PASSWORD_WORKER_THREAD_LIMIT_ENV_VAR = "LITESTAR_AUTH_PASSWORD_WORKER_THREAD_LIMIT"  # noqa: S105
+_PASSWORD_WORKER_THREAD_LIMIT_ENV_VAR = "LITESTAR_AUTH_PASSWORD_WORKER_THREAD_LIMIT"  # ruff: ignore[hardcoded-password-string]
 
 
 def _resolve_password_worker_thread_limit(raw_limit: str | None) -> int:

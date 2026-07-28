@@ -224,7 +224,7 @@ class _AsyncRoleCLIDatabase:
 class _TrackingRoleCLIUserManager[UP: SQLAlchemyUserModelProtocol](_RoleCLIUserManager[UP]):
     """Role CLI test manager that records lifecycle hook payloads."""
 
-    def __init__(  # noqa: PLR0913
+    def __init__(  # ruff: ignore[too-many-arguments]
         self,
         user_db: BaseUserStore[UP, UUID],
         *,
@@ -571,7 +571,7 @@ def _build_root_cli() -> Group:
     return root
 
 
-def _build_config[UP: SQLAlchemyUserModelProtocol](  # noqa: PLR0913
+def _build_config[UP: SQLAlchemyUserModelProtocol](  # ruff: ignore[too-many-arguments]
     engine: Engine | None,
     *,
     user_model: type[UP],
@@ -637,7 +637,7 @@ def _build_config[UP: SQLAlchemyUserModelProtocol](  # noqa: PLR0913
     )
 
 
-def _build_roles_cli[UP: SQLAlchemyUserModelProtocol](  # noqa: PLR0913
+def _build_roles_cli[UP: SQLAlchemyUserModelProtocol](  # ruff: ignore[too-many-arguments]
     engine: Engine | None,
     *,
     user_model: type[UP],

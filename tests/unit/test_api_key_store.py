@@ -30,7 +30,7 @@ def create_store(session: SASession) -> SQLAlchemyApiKeyStore[ApiKey]:
     Returns:
         SQLAlchemy API-key store bound to ``session``.
     """
-    from tests.integration.test_db_sqlalchemy import AsyncSessionAdapter  # noqa: PLC0415
+    from tests.integration.test_db_sqlalchemy import AsyncSessionAdapter  # ruff: ignore[import-outside-top-level]
 
     return SQLAlchemyApiKeyStore(session=cast("Any", AsyncSessionAdapter(session)), api_key_model=ApiKey)
 

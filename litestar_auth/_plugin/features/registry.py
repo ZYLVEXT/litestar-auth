@@ -242,10 +242,12 @@ def _build_startup_backend_templates[UP: UserProtocol[Any], ID](
 ) -> tuple[StartupBackendTemplate[UP, ID], ...]:
     startup_backends: tuple[StartupBackendTemplate[UP, ID], ...]
     if defaults.database_token.config is not None:
-        from litestar_auth._plugin import database_token as _database_token_module  # noqa: PLC0415
+        from litestar_auth._plugin import (  # ruff: ignore[import-outside-top-level]
+            database_token as _database_token_module,
+        )
 
         startup_backends = (
-            _database_token_module._build_database_token_backend_template(  # noqa: SLF001
+            _database_token_module._build_database_token_backend_template(  # ruff: ignore[private-member-access]
                 defaults.database_token.config,
                 unsafe_testing=config.unsafe_testing,
             ),
@@ -254,7 +256,9 @@ def _build_startup_backend_templates[UP: UserProtocol[Any], ID](
         startup_backends = tuple(StartupBackendTemplate.from_runtime_backend(backend) for backend in config.backends)
 
     if defaults.api_key.enabled:
-        from litestar_auth._plugin.api_key import build_api_key_backend_template  # noqa: PLC0415
+        from litestar_auth._plugin.api_key import (  # ruff: ignore[import-outside-top-level]
+            build_api_key_backend_template,
+        )
 
         if not isinstance(defaults.api_key.hash_secret, UnsetType):
             startup_backends = (

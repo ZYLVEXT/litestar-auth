@@ -12,7 +12,7 @@ import pytest
 from litestar import Litestar, Request, get
 from litestar.testing import AsyncTestClient
 from sqlalchemy import create_engine, event, select
-from sqlalchemy.ext.asyncio import AsyncSession  # noqa: TC002
+from sqlalchemy.ext.asyncio import AsyncSession  # ruff: ignore[typing-only-third-party-import]
 from sqlalchemy.pool import StaticPool
 
 from litestar_auth._manager._coercions import _account_state_user

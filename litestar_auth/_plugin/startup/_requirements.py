@@ -8,6 +8,7 @@ from litestar_auth._plugin.oauth_contract import _build_oauth_route_registration
 from litestar_auth._plugin.startup._warnings import (
     _collect_process_local_rate_limit_endpoint_names,
     _has_process_local_account_lockout_store,
+    _has_process_local_account_token_replay_store,
 )
 from litestar_auth.exceptions import ConfigurationError
 
@@ -72,6 +73,25 @@ def require_shared_account_lockout_store_for_multiworker(config: LitestarAuthCon
     raise ConfigurationError(msg)
 
 
+def require_shared_account_token_replay_store_for_multiworker(config: LitestarAuthConfig[Any, Any]) -> None:
+    """Fail closed when configured verify/reset replay state is process-local across declared workers.
+
+    Raises:
+        ConfigurationError: If a known multi-worker deployment configures a process-local replay store.
+    """
+    if config.unsafe_testing or config.deployment_worker_count is None or config.deployment_worker_count <= 1:
+        return
+    if config.account_token_denylist_store is None or not _has_process_local_account_token_replay_store(config):
+        return
+
+    msg = (
+        "Verify/reset account-token replay protection must use a shared JWTReplayStore when "
+        "deployment_worker_count is greater than 1. Configure RedisJWTDenylistStore, omit replay "
+        "storage with the documented weaker posture, or disable the plugin-managed account-token routes."
+    )
+    raise ConfigurationError(msg)
+
+
 def require_refreshable_strategy_when_enable_refresh(config: LitestarAuthConfig[Any, Any]) -> None:
     """Fail closed when refresh routes are enabled without refresh-capable strategies.
 
@@ -87,8 +107,8 @@ def require_refreshable_strategy_when_enable_refresh(config: LitestarAuthConfig[
     if not config.enable_refresh:
         return
 
-    from litestar_auth.authentication.strategy.base import RefreshableStrategy  # noqa: PLC0415
-    from litestar_auth.authentication.transport.api_key import ApiKeyTransport  # noqa: PLC0415
+    from litestar_auth.authentication.strategy.base import RefreshableStrategy  # ruff: ignore[import-outside-top-level]
+    from litestar_auth.authentication.transport.api_key import ApiKeyTransport  # ruff: ignore[import-outside-top-level]
 
     for backend in config.resolve_startup_backends():
         if isinstance(backend.transport, ApiKeyTransport):

@@ -25,15 +25,17 @@ class RoleAdminExtension:
     @staticmethod
     def validate(context: AuthExtensionValidationContext) -> None:
         """Validate role-admin prerequisites before app startup wiring mutates state."""
-        from litestar_auth._plugin.role_admin import resolve_role_model_family  # noqa: PLC0415
-        from litestar_auth._superuser_role import normalize_superuser_role_name  # noqa: PLC0415
+        from litestar_auth._plugin.role_admin import resolve_role_model_family  # ruff: ignore[import-outside-top-level]
+        from litestar_auth._superuser_role import (  # ruff: ignore[import-outside-top-level]
+            normalize_superuser_role_name,
+        )
 
         normalize_superuser_role_name(context.config.superuser_role_name)
         resolve_role_model_family(context.user_model)
 
     def register(self, context: AuthExtensionRegistrationContext) -> None:
         """Contribute the generated role-admin controller through the extension context."""
-        from litestar_auth.contrib.role_admin import (  # noqa: PLC0415
+        from litestar_auth.contrib.role_admin import (  # ruff: ignore[import-outside-top-level]
             RoleAdminControllerConfig,
             create_role_admin_controller,
         )

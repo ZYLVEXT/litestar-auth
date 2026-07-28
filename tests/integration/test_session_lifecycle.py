@@ -17,7 +17,7 @@ from litestar_auth.authentication.transport.bearer import BearerTransport
 from litestar_auth.manager import UserManagerSecurity
 from litestar_auth.password import PasswordHelper
 from litestar_auth.plugin import LitestarAuth, LitestarAuthConfig
-from tests.integration import _di_probes  # noqa: TC001
+from tests.integration import _di_probes  # ruff: ignore[typing-only-first-party-import]
 from tests.integration.conftest import CountingSessionMaker, ExampleUser, InMemoryUserDatabase
 from tests.integration.test_orchestrator import (
     InMemoryRefreshTokenStrategy,

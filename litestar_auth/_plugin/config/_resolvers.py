@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any, Protocol
 
 from litestar_auth._manager.construction import ManagerConstructorInputs
-from litestar_auth._plugin.scoped_session import SessionFactory  # noqa: TC001
+from litestar_auth._plugin.scoped_session import SessionFactory  # ruff: ignore[typing-only-first-party-import]
 from litestar_auth._plugin.security_policy import (
     _describe_totp_secret_storage_policy,
     _PluginSecurityNotice,
@@ -83,7 +83,7 @@ def _build_default_user_db(session: AsyncSession, *, user_model: type[Any]) -> B
     Returns:
         A :class:`~litestar_auth.db.sqlalchemy.SQLAlchemyUserDatabase` bound to ``session``.
     """
-    from litestar_auth.db.sqlalchemy import SQLAlchemyUserDatabase  # noqa: PLC0415
+    from litestar_auth.db.sqlalchemy import SQLAlchemyUserDatabase  # ruff: ignore[import-outside-top-level]
 
     return SQLAlchemyUserDatabase(session, user_model=user_model)
 

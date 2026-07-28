@@ -16,13 +16,15 @@ class _ApiKeyExtension:
     name: str = "api_keys"
     enabled: bool = True
 
-    def validate(self, context: AuthExtensionValidationContext) -> None:  # noqa: ARG002, PLR6301
+    def validate(self, context: AuthExtensionValidationContext) -> None:  # ruff: ignore[unused-method-argument, no-self-use]
         """Preserve existing API-key config and factory validation."""
         return
 
-    def register(self, context: AuthExtensionRegistrationContext) -> None:  # noqa: PLR6301
+    def register(self, context: AuthExtensionRegistrationContext) -> None:  # ruff: ignore[no-self-use]
         """Contribute plugin-owned API-key management controllers."""
-        from litestar_auth.controllers.api_keys import create_api_keys_controllers  # noqa: PLC0415
+        from litestar_auth.controllers.api_keys import (  # ruff: ignore[import-outside-top-level]
+            create_api_keys_controllers,
+        )
 
         for controller in create_api_keys_controllers(
             id_parser=context.config.id_parser,

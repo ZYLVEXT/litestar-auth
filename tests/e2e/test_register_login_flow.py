@@ -48,7 +48,7 @@ class VerificationTracker:
 class E2EUserManager(BaseUserManager[User, UUID]):
     """Concrete manager that records verification tokens for tests."""
 
-    def __init__(  # noqa: PLR0913
+    def __init__(  # ruff: ignore[too-many-arguments]
         self,
         user_db: object,
         *,

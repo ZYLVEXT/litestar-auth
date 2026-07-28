@@ -261,7 +261,7 @@ def _validate_enrollment_token_jti(payload: Mapping[str, Any]) -> str:
         InvalidTotpPendingTokenError: If the identifier is missing or malformed.
     """
     jti = payload.get("jti")
-    if not isinstance(jti, str) or len(jti) != 32:  # noqa: PLR2004
+    if not isinstance(jti, str) or len(jti) != 32:  # ruff: ignore[magic-value-comparison]
         raise InvalidTotpPendingTokenError
     try:
         bytes.fromhex(jti)

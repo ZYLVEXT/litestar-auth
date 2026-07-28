@@ -1,5 +1,5 @@
 """Centralised account-policy logic extracted from BaseUserManager."""
-# ruff: noqa: ANN401
+# ruff: file-ignore[any-type]
 
 from __future__ import annotations
 

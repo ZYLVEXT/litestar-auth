@@ -37,7 +37,7 @@ from litestar_auth.models import (
     UserRole,
 )
 from litestar_auth.oauth_encryption import OAuthTokenEncryption, bind_oauth_token_encryption
-from litestar_auth.types import LoginIdentifier  # noqa: TC001
+from litestar_auth.types import LoginIdentifier  # ruff: ignore[typing-only-first-party-import]
 
 if TYPE_CHECKING:
     from collections.abc import Iterable, Mapping, Sequence
@@ -376,7 +376,7 @@ def test_custom_user_relationship_option_overrides_keep_mapper_contract_stable()
 
 def test_repositories_factory_caches_per_user_model() -> None:
     """The dynamic repository factory returns the same repository class for a given user model."""
-    from litestar_auth.db import _repositories  # noqa: PLC0415
+    from litestar_auth.db import _repositories  # ruff: ignore[import-outside-top-level]
 
     repository = _repositories._build_user_repository(User)
 

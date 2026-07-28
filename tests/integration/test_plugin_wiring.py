@@ -40,7 +40,7 @@ from litestar_auth.plugin import LitestarAuth, LitestarAuthConfig
 from litestar_auth.totp import InMemoryTotpEnrollmentStore, InMemoryUsedTotpCodeStore
 from tests.e2e.conftest import SessionMaker as E2ESessionMaker
 from tests.e2e.conftest import assert_structural_session_factory
-from tests.integration import _di_probes  # noqa: TC001
+from tests.integration import _di_probes  # ruff: ignore[typing-only-first-party-import]
 
 from .test_orchestrator import (
     DummySessionMaker,
@@ -75,7 +75,7 @@ HTTP_NOT_FOUND = 404
 OAUTH_FLOW_COOKIE_SECRET = "oauth-flow-cookie-secret-1234567890"
 
 
-def _as_any(value: object) -> Any:  # noqa: ANN401
+def _as_any(value: object) -> Any:  # ruff: ignore[any-type]
     """Return a value through the test-only dynamic type boundary."""
     return cast("Any", value)
 

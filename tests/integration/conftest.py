@@ -42,7 +42,7 @@ def enable_aiosqlite_foreign_keys(engine: AsyncEngine) -> None:
     SQLite leaves FK constraints disabled by default, so integration tests that
     assert database-level cascade behavior must opt in at connection creation.
     """
-    from sqlalchemy import event  # noqa: PLC0415
+    from sqlalchemy import event  # ruff: ignore[import-outside-top-level]
 
     @event.listens_for(engine.sync_engine, "connect")
     def _enable_sqlite_foreign_keys(dbapi_connection: _SQLitePragmaConnectionProtocol, _: object) -> None:

@@ -146,7 +146,7 @@ def _make_user_manager_dependency_provider[TManager](
 ) -> Callable[..., AsyncGenerator[TManager, None]]:
     signature = _make_dependency_signature(db_session_key)
 
-    async def _yield_user_manager(session: AsyncSession) -> AsyncGenerator[object, None]:  # noqa: RUF029
+    async def _yield_user_manager(session: AsyncSession) -> AsyncGenerator[object, None]:  # ruff: ignore[unused-async]
         yield build_user_manager(session)
 
     def _provide_user_manager(*args: object, **kwargs: object) -> AsyncGenerator[object, None]:

@@ -25,8 +25,8 @@ def _build_default_api_key_store(session: AsyncSession) -> BaseApiKeyStore[Any, 
     Returns:
         API-key store bound to ``session``.
     """
-    from litestar_auth.db.sqlalchemy import SQLAlchemyApiKeyStore  # noqa: PLC0415
-    from litestar_auth.models import ApiKey  # noqa: PLC0415
+    from litestar_auth.db.sqlalchemy import SQLAlchemyApiKeyStore  # ruff: ignore[import-outside-top-level]
+    from litestar_auth.models import ApiKey  # ruff: ignore[import-outside-top-level]
 
     return SQLAlchemyApiKeyStore(session=session, api_key_model=ApiKey)
 
@@ -80,7 +80,9 @@ class _StartupOnlyApiKeyStrategy[UP: UserProtocol[Any], ID](Strategy[UP, ID]):
 
     def with_session(self, session: AsyncSession) -> StrategyProto[UP, ID]:
         """Return a request-bound API-key strategy for ``session``."""
-        from litestar_auth.authentication.strategy.api_key import ApiKeyStrategy  # noqa: PLC0415
+        from litestar_auth.authentication.strategy.api_key import (  # ruff: ignore[import-outside-top-level]
+            ApiKeyStrategy,
+        )
 
         return cast(
             "StrategyProto[UP, ID]",
@@ -129,9 +131,9 @@ def build_api_key_backend_template[UP: UserProtocol[Any], ID](
     Returns:
         Startup backend template for API-key authentication.
     """
-    from litestar_auth._plugin.config import StartupBackendTemplate  # noqa: PLC0415
-    from litestar_auth.authentication.backend import AuthenticationBackend  # noqa: PLC0415
-    from litestar_auth.authentication.transport.api_key import ApiKeyTransport  # noqa: PLC0415
+    from litestar_auth._plugin.config import StartupBackendTemplate  # ruff: ignore[import-outside-top-level]
+    from litestar_auth.authentication.backend import AuthenticationBackend  # ruff: ignore[import-outside-top-level]
+    from litestar_auth.authentication.transport.api_key import ApiKeyTransport  # ruff: ignore[import-outside-top-level]
 
     startup_backend = AuthenticationBackend[UP, ID](
         name=api_key_config.backend_name,
@@ -151,6 +153,8 @@ def build_api_key_backend_template[UP: UserProtocol[Any], ID](
 
 def _default_scope_authority() -> ApiKeyScopeAuthority:
     """Return the default API-key scope authority without importing guards at module import time."""
-    from litestar_auth.guards._api_key_guards import default_api_key_scope_authority  # noqa: PLC0415
+    from litestar_auth.guards._api_key_guards import (  # ruff: ignore[import-outside-top-level]
+        default_api_key_scope_authority,
+    )
 
     return default_api_key_scope_authority

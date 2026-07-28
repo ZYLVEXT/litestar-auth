@@ -136,6 +136,13 @@ def test_register_controller_rejects_negative_minimum_response_seconds() -> None
         create_register_controller(register_minimum_response_seconds=-0.001)
 
 
+@pytest.mark.parametrize("value", [float("nan"), float("inf"), float("-inf")])
+def test_register_controller_rejects_non_finite_minimum_response_seconds(value: float) -> None:
+    """Registration timing envelopes must be finite."""
+    with pytest.raises(ValueError, match="non-negative and finite"):
+        create_register_controller(register_minimum_response_seconds=value)
+
+
 def test_register_controller_warns_when_rate_limit_is_missing() -> None:
     """Public registration emits an explicit signal when unthrottled."""
     with pytest.warns(SecurityWarning, match="POST /register"):

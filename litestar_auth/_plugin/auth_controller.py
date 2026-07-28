@@ -9,7 +9,9 @@ from typing import TYPE_CHECKING, Any
 
 from litestar import Controller, Request, post
 from litestar.di import NamedDependency
-from litestar.response import Response  # noqa: TC002 - Litestar resolves route annotations at runtime.
+from litestar.response import (
+    Response,  # ruff: ignore[typing-only-third-party-import] - Litestar resolves route annotations at runtime.
+)
 
 from litestar_auth._plugin.controller_factory import ControllerFactoryKit, merge_exception_handlers
 from litestar_auth.authentication.backend import AuthenticationBackend
@@ -32,7 +34,7 @@ from litestar_auth.controllers.auth import (
 )
 from litestar_auth.exceptions import ErrorCode
 from litestar_auth.guards import is_authenticated
-from litestar_auth.payloads import LoginCredentials, RefreshTokenRequest  # noqa: TC001
+from litestar_auth.payloads import LoginCredentials, RefreshTokenRequest  # ruff: ignore[typing-only-first-party-import]
 from litestar_auth.ratelimit._config import warn_missing_public_rate_limits
 from litestar_auth.types import UserProtocol
 
@@ -180,7 +182,7 @@ def _define_plugin_auth_controller_class[UP: UserProtocol[Any], ID](
             before_request=assembly.login_before,
             exception_handlers=assembly.login_exception_handlers,
         )
-        async def login(  # noqa: PLR6301
+        async def login(  # ruff: ignore[no-self-use]
             self,
             request: Request[Any, Any, Any],
             data: LoginCredentials,
@@ -195,7 +197,7 @@ def _define_plugin_auth_controller_class[UP: UserProtocol[Any], ID](
             )
 
         @post("/logout", guards=[is_authenticated], security=assembly.settings.security)
-        async def logout(  # noqa: PLR6301
+        async def logout(  # ruff: ignore[no-self-use]
             self,
             request: Request[Any, Any, Any],
             litestar_auth_backends: _AuthBackendsDep,
@@ -223,7 +225,7 @@ def _define_plugin_refresh_auth_controller_class[UP: UserProtocol[Any], ID](
         """Backend-bound authentication endpoints with refresh-token rotation."""
 
         @post("/refresh", before_request=assembly.refresh_before)
-        async def refresh(  # noqa: PLR6301
+        async def refresh(  # ruff: ignore[no-self-use]
             self,
             request: Request[Any, Any, Any],
             data: RefreshTokenRequest,

@@ -47,7 +47,7 @@ CLIENT_BINDING = PendingTotpClientBinding(
 
 def _service(
     user_manager: object,
-    **config_kwargs: Any,  # noqa: ANN401
+    **config_kwargs: Any,  # ruff: ignore[any-type]
 ) -> TotpLoginFlowService[ExampleUser, UUID]:
     return TotpLoginFlowService[ExampleUser, UUID](
         user_manager=cast("Any", user_manager),
@@ -57,7 +57,7 @@ def _service(
 
 def _service_str(
     user_manager: object,
-    **config_kwargs: Any,  # noqa: ANN401
+    **config_kwargs: Any,  # ruff: ignore[any-type]
 ) -> TotpLoginFlowService[ExampleUser, str]:
     return TotpLoginFlowService[ExampleUser, str](
         user_manager=cast("Any", user_manager),

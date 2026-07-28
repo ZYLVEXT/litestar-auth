@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import re
 import uuid
-from datetime import datetime  # noqa: TC003 - SQLAlchemy resolves mapped annotations at runtime.
+from datetime import (
+    datetime,  # ruff: ignore[typing-only-standard-library-import] - SQLAlchemy resolves mapped annotations at runtime.
+)
 from typing import TYPE_CHECKING, Any, ClassVar, cast
 from uuid import uuid4
 
@@ -57,6 +59,9 @@ _API_KEY_CREATED_VIA_LENGTH = 64
 _CLIENT_METADATA_KEY_MAX_LENGTH = 64
 _CLIENT_METADATA_VALUE_MAX_LENGTH = 255
 _CLIENT_METADATA_KEY_PATTERN = re.compile(r"^[a-z][a-z0-9_]*$")
+
+if TYPE_CHECKING:
+    from sqlalchemy.orm import Mapper
 
 
 def _new_session_id() -> str:
@@ -136,7 +141,8 @@ class UserRoleRelationshipMixin:
 
     def _role_assignment_model(self) -> type[Any]:
         """Return the mapped role-assignment class for this user instance."""
-        return cast("type[Any]", inspect(type(self)).relationships[_ROLE_ASSIGNMENTS_RELATIONSHIP_NAME].mapper.class_)
+        mapper = cast("Mapper[Any]", inspect(type(self)))
+        return cast("type[Any]", mapper.relationships[_ROLE_ASSIGNMENTS_RELATIONSHIP_NAME].mapper.class_)
 
     def _set_normalized_roles(self, role_names: list[str]) -> None:
         """Replace the role-assignment collection with normalized names."""
@@ -163,7 +169,7 @@ class RoleMixin:
     name: Mapped[str] = mapped_column(String(length=_ROLE_NAME_LENGTH), primary_key=True)
 
     @validates("name")
-    def _normalize_name(self, key: str, value: str) -> str:  # noqa: ARG002, PLR6301
+    def _normalize_name(self, key: str, value: str) -> str:  # ruff: ignore[unused-method-argument, no-self-use]
         """Normalize role names before persisting them.
 
         Returns:
@@ -208,7 +214,7 @@ class OrganizationMixin:
     )
 
     @validates("slug")
-    def _normalize_slug(self, key: str, value: str) -> str:  # noqa: ARG002, PLR6301
+    def _normalize_slug(self, key: str, value: str) -> str:  # ruff: ignore[unused-method-argument, no-self-use]
         """Normalize organization slugs before persisting them.
 
         Returns:
@@ -321,9 +327,9 @@ class ApiKeyMixin(_UserOwnedMixin):
     client_metadata: Mapped[dict[str, str] | None] = mapped_column(JSON, default=None, nullable=True)
 
     @validates("client_metadata")
-    def _validate_client_metadata(  # noqa: PLR6301
+    def _validate_client_metadata(  # ruff: ignore[no-self-use]
         self,
-        key: str,  # noqa: ARG002
+        key: str,  # ruff: ignore[unused-method-argument]
         value: dict[str, str] | None,
     ) -> dict[str, str] | None:
         """Validate bounded API-key client metadata before persistence.
@@ -385,7 +391,7 @@ class UserRoleAssociationMixin(_UserOwnedMixin):
         )
 
     @validates("role_name")
-    def _normalize_role_name(self, key: str, value: str) -> str:  # noqa: ARG002, PLR6301
+    def _normalize_role_name(self, key: str, value: str) -> str:  # ruff: ignore[unused-method-argument, no-self-use]
         """Normalize role names before persisting the association row.
 
         Returns:
@@ -454,7 +460,7 @@ class OrganizationMembershipMixin(_UserOwnedMixin):
     roles: Mapped[list[str]] = mapped_column(JSON, default=list, nullable=False)
 
     @validates("roles")
-    def _normalize_roles(self, key: str, value: object) -> list[str]:  # noqa: ARG002, PLR6301
+    def _normalize_roles(self, key: str, value: object) -> list[str]:  # ruff: ignore[unused-method-argument, no-self-use]
         """Normalize organization-scoped role membership before persisting it.
 
         Returns:
@@ -516,7 +522,7 @@ class OrganizationInvitationMixin:
         return relationship(cls.auth_organization_model, **relationship_kwargs)
 
     @validates("invited_email")
-    def _normalize_invited_email(self, key: str, value: str) -> str:  # noqa: ARG002, PLR6301
+    def _normalize_invited_email(self, key: str, value: str) -> str:  # ruff: ignore[unused-method-argument, no-self-use]
         """Normalize invited email addresses using the user account policy.
 
         Returns:
@@ -525,7 +531,7 @@ class OrganizationInvitationMixin:
         return _normalize_email(value)
 
     @validates("roles")
-    def _normalize_roles(self, key: str, value: object) -> list[str]:  # noqa: ARG002, PLR6301
+    def _normalize_roles(self, key: str, value: object) -> list[str]:  # ruff: ignore[unused-method-argument, no-self-use]
         """Normalize organization-scoped roles before persisting the invitation.
 
         Returns:
@@ -537,8 +543,8 @@ class OrganizationInvitationMixin:
 @event.listens_for(ORMSession, "before_flush")
 def _materialize_missing_role_rows(
     session: ORMSession,
-    flush_context: object,  # noqa: ARG001
-    instances: object,  # noqa: ARG001
+    flush_context: object,  # ruff: ignore[unused-function-argument]
+    instances: object,  # ruff: ignore[unused-function-argument]
 ) -> None:
     """Create missing role catalog rows before association rows are flushed."""
     role_names_by_model: dict[type[Any], set[str]] = {}

@@ -230,7 +230,7 @@ async def test_config_flag_mounts_exact_organization_admin_routes_guards_and_ope
             "/organizations/invitations/{invitation_id}": ("DELETE", "OPTIONS"),
         }
         for route in _organization_routes(flag_app.app, prefix="/organizations"):
-            assert _owner_guard_names(route) == ("is_superuser",)
+            assert _owner_guard_names(route) == ("is_superuser", "requires_password_session")
         assert all(
             security is None
             for security in _openapi_security_by_operation(flag_app.app, prefix="/organizations").values()
@@ -252,7 +252,11 @@ async def test_config_flag_mounts_exact_invitation_routes_guards_and_openapi_sec
             "/auth/organization-invitations/decline": ("OPTIONS", "POST"),
         }
         for route in _organization_routes(flag_app.app, prefix="/auth/organization-invitations"):
-            assert _handler_guard_names(route, "POST") == ("is_active", "is_verified")
+            assert _handler_guard_names(route, "POST") == (
+                "is_active",
+                "is_verified",
+                "requires_password_session",
+            )
         assert _openapi_security_by_operation(flag_app.app, prefix="/auth/organization-invitations") == {
             ("/auth/organization-invitations/accept", "post"): [{"bearer": []}],
             ("/auth/organization-invitations/decline", "post"): [{"bearer": []}],

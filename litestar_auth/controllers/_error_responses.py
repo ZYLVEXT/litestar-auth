@@ -298,7 +298,12 @@ def raise_request_body_invalid(detail: str, *, source: BaseException | None = No
 
 def raise_transient_token_error(exc: TokenError) -> Never:
     """Raise the token-store unavailable response for token service failures."""
-    raise_client_error(status_code=_HTTP_SERVICE_UNAVAILABLE, detail=str(exc), error_code=exc.code, source=exc)
+    raise_client_error(
+        status_code=_HTTP_SERVICE_UNAVAILABLE,
+        detail=TokenError.default_message,
+        error_code=exc.code,
+        source=exc,
+    )
 
 
 @asynccontextmanager
@@ -330,6 +335,8 @@ def _domain_error_public_detail(exc: Exception) -> str:
     """Return the client-facing detail for a mapped domain exception."""
     if isinstance(exc, UserAlreadyExistsError):
         return UserAlreadyExistsError.default_message
+    if isinstance(exc, TokenError):
+        return type(exc).default_message
     return str(exc)
 
 

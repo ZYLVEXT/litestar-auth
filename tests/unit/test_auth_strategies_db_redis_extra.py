@@ -34,7 +34,7 @@ class _DummyUser:
 
 
 class _DummyUserManager:
-    async def get(self, user_id: Any) -> _DummyUser | None:  # noqa: ANN401
+    async def get(self, user_id: Any) -> _DummyUser | None:  # ruff: ignore[any-type]
         return _DummyUser(UUID(str(user_id)))
 
 
@@ -45,7 +45,7 @@ class _FakeSession:
         self.executed: list[Any] = []
         self.committed = False
 
-    async def execute(self, statement: Any, *args: Any, **kwargs: Any) -> Any:  # noqa: ANN401
+    async def execute(self, statement: Any, *args: Any, **kwargs: Any) -> Any:  # ruff: ignore[any-type]
         self.executed.append(statement)
 
         class _Result:
@@ -129,7 +129,7 @@ async def test_database_token_strategy_execute_delete_defaults_missing_rowcount_
     """_execute_delete() should handle result objects that do not expose rowcount."""
 
     class _NoRowcountSession(_FakeSession):
-        async def execute(self, statement: Any, *args: Any, **kwargs: Any) -> object:  # noqa: ANN401
+        async def execute(self, statement: Any, *args: Any, **kwargs: Any) -> object:  # ruff: ignore[any-type]
             self.executed.append(statement)
             return object()
 

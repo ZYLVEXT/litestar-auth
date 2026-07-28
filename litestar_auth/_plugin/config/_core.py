@@ -7,13 +7,13 @@ from dataclasses import dataclass, field
 from functools import partial
 from typing import TYPE_CHECKING, Any, cast
 
-from sqlalchemy.ext.asyncio import AsyncSession  # noqa: TC002
+from sqlalchemy.ext.asyncio import AsyncSession  # ruff: ignore[typing-only-third-party-import]
 
 import litestar_auth._plugin._hooks as _plugin_hooks
 import litestar_auth._plugin.features as _features
 from litestar_auth._permissions import StaticRolePermissionResolver
 from litestar_auth._plugin.config._defaults import ResolvedAuthConfigDefaults, _resolve_config_defaults
-from litestar_auth._plugin.config._protocols import (  # noqa: TC001
+from litestar_auth._plugin.config._protocols import (  # ruff: ignore[typing-only-first-party-import]
     PasswordValidatorFactory,
     UserDatabaseFactory,
     UserManagerFactory,
@@ -26,7 +26,7 @@ from litestar_auth._plugin.config._resolvers import (
     resolve_backend_inventory,
 )
 from litestar_auth._plugin.config._validation import _VALID_LOGIN_IDENTIFIERS, _ConfigValidationMixin
-from litestar_auth._plugin.scoped_session import SessionFactory  # noqa: TC001
+from litestar_auth._plugin.scoped_session import SessionFactory  # ruff: ignore[typing-only-first-party-import]
 from litestar_auth._superuser_role import DEFAULT_SUPERUSER_ROLE_NAME
 from litestar_auth.config import UnsetType
 from litestar_auth.controllers._response_timing import DEFAULT_MINIMUM_RESPONSE_SECONDS
@@ -47,7 +47,7 @@ if TYPE_CHECKING:
     from litestar.openapi.spec import SecurityRequirement, SecurityScheme
 
     from litestar_auth.authentication.backend import AuthenticationBackend
-    from litestar_auth.authentication.strategy._jwt_denylist import JWTDenylistStore
+    from litestar_auth.authentication.strategy._jwt_denylist import JWTReplayStore
     from litestar_auth.extensions import AuthExtension
     from litestar_auth.manager import BaseUserManager, UserManagerSecurity
     from litestar_auth.ratelimit import AuthRateLimitConfig
@@ -119,9 +119,9 @@ class LitestarAuthConfig[UP: UserProtocol[Any], ID](_ConfigValidationMixin):
     session_maker: SessionFactory | None = None
     user_db_factory: UserDatabaseFactory[UP, ID] | None = None
     user_manager_security: UserManagerSecurity[ID] | None = None
-    # Optional shared denylist (e.g. RedisJWTDenylistStore) that makes verify/reset
-    # account tokens single-use server-side by consuming their ``jti`` on success.
-    account_token_denylist_store: JWTDenylistStore | None = None
+    # Optional atomic replay protection for verify/reset tokens. Known multi-worker
+    # deployments must configure a shared store while those routes are enabled.
+    account_token_denylist_store: JWTReplayStore | None = None
     password_validator_factory: PasswordValidatorFactory[UP, ID] | None = None
     # Advanced path: callable that fully constructs the manager per request. Use when the
     # constructor is not the default BaseUserManager surface or you need custom DI.
@@ -242,7 +242,9 @@ class LitestarAuthConfig[UP: UserProtocol[Any], ID](_ConfigValidationMixin):
                 resolved_extensions = (*resolved_extensions, descriptor.build(self))
 
         if self.auto_discover_extensions:
-            from litestar_auth._plugin.extensions._discovery import discover_extensions  # noqa: PLC0415
+            from litestar_auth._plugin.extensions._discovery import (  # ruff: ignore[import-outside-top-level]
+                discover_extensions,
+            )
 
             resolved_extensions = (*resolved_extensions, *discover_extensions())
 
@@ -270,7 +272,9 @@ class LitestarAuthConfig[UP: UserProtocol[Any], ID](_ConfigValidationMixin):
         Returns:
             Mapping of backend name to OpenAPI security scheme.
         """
-        from litestar_auth._plugin.openapi import build_openapi_security_schemes  # noqa: PLC0415
+        from litestar_auth._plugin.openapi import (  # ruff: ignore[import-outside-top-level]
+            build_openapi_security_schemes,
+        )
 
         return build_openapi_security_schemes(self.resolve_startup_backends())
 
@@ -285,7 +289,7 @@ class LitestarAuthConfig[UP: UserProtocol[Any], ID](_ConfigValidationMixin):
             Operation-level security requirements with OR semantics across the
             configured auth backends.
         """
-        from litestar_auth._plugin.openapi import build_security_requirement  # noqa: PLC0415
+        from litestar_auth._plugin.openapi import build_security_requirement  # ruff: ignore[import-outside-top-level]
 
         return build_security_requirement(self.resolve_openapi_security_schemes())
 
@@ -372,7 +376,7 @@ def _has_oauth_extension(config: LitestarAuthConfig[Any, Any]) -> bool:
 
 
 def _build_oauth_extension(_config: LitestarAuthConfig[Any, Any]) -> AuthExtension:
-    from litestar_auth.oauth._extension import _OAuthExtension  # noqa: PLC0415
+    from litestar_auth.oauth._extension import _OAuthExtension  # ruff: ignore[import-outside-top-level]
 
     return _OAuthExtension()
 
@@ -382,7 +386,9 @@ def _has_totp_extension(config: LitestarAuthConfig[Any, Any]) -> bool:
 
 
 def _build_totp_extension(_config: LitestarAuthConfig[Any, Any]) -> AuthExtension:
-    from litestar_auth._plugin.totp_controller._extension import _TotpExtension  # noqa: PLC0415
+    from litestar_auth._plugin.totp_controller._extension import (  # ruff: ignore[import-outside-top-level]
+        _TotpExtension,
+    )
 
     return _TotpExtension()
 
@@ -392,7 +398,9 @@ def _has_api_key_extension(config: LitestarAuthConfig[Any, Any]) -> bool:
 
 
 def _build_api_key_extension(_config: LitestarAuthConfig[Any, Any]) -> AuthExtension:
-    from litestar_auth._plugin.api_key_controller._extension import _ApiKeyExtension  # noqa: PLC0415
+    from litestar_auth._plugin.api_key_controller._extension import (  # ruff: ignore[import-outside-top-level]
+        _ApiKeyExtension,
+    )
 
     return _ApiKeyExtension()
 
@@ -402,7 +410,9 @@ def _has_organization_cli_extension(config: LitestarAuthConfig[Any, Any]) -> boo
 
 
 def _build_organization_cli_extension(_config: LitestarAuthConfig[Any, Any]) -> AuthExtension:
-    from litestar_auth._plugin.organization_cli import _OrganizationCliExtension  # noqa: PLC0415
+    from litestar_auth._plugin.organization_cli import (  # ruff: ignore[import-outside-top-level]
+        _OrganizationCliExtension,
+    )
 
     return _OrganizationCliExtension()
 
@@ -413,7 +423,9 @@ def _has_organization_admin_extension(config: LitestarAuthConfig[Any, Any]) -> b
 
 
 def _build_organization_admin_extension(config: LitestarAuthConfig[Any, Any]) -> AuthExtension:
-    from litestar_auth.contrib.organization_admin import OrganizationAdminExtension  # noqa: PLC0415
+    from litestar_auth.contrib.organization_admin import (  # ruff: ignore[import-outside-top-level]
+        OrganizationAdminExtension,
+    )
 
     organization_config = config.organization_config
     return OrganizationAdminExtension(

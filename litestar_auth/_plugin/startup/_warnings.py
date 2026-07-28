@@ -28,12 +28,38 @@ def warn_insecure_plugin_startup_defaults(config: LitestarAuthConfig[Any, Any]) 
     _warn_plaintext_oauth_token_storage(config)
     _warn_jwt_revocation_policy(config)
     _warn_jwt_default_fingerprint_user_model_gap(config)
+    _warn_process_local_account_token_replay_store(config)
     _warn_process_local_rate_limit_backend(config)
     _warn_process_local_account_lockout_store(config)
     _warn_account_lockout_response_floor_too_low(config)
     _warn_process_local_totp_stores(config)
     _warn_refresh_cookie_max_age_mismatch(config)
     _warn_api_key_unbounded_default_ttl(config)
+
+
+def _account_token_routes_enabled(config: LitestarAuthConfig[Any, Any]) -> bool:
+    """Return whether plugin-managed verify or reset routes consume account tokens."""
+    return config.include_verify or config.include_reset_password
+
+
+def _has_process_local_account_token_replay_store(config: LitestarAuthConfig[Any, Any]) -> bool:
+    """Return whether enabled account-token routes lack shared replay state."""
+    if not _account_token_routes_enabled(config):
+        return False
+    store = config.account_token_denylist_store
+    return store is None or not bool(getattr(store, "revocation_is_durable", True))
+
+
+def _warn_process_local_account_token_replay_store(config: LitestarAuthConfig[Any, Any]) -> None:
+    if not _has_process_local_account_token_replay_store(config):
+        return
+    warnings.warn(
+        "Verify/reset account-token replay protection is process-local or disabled. "
+        "Concurrent token use is not coordinated across workers; use RedisJWTDenylistStore "
+        "or another shared JWTReplayStore for multi-worker production.",
+        SecurityWarning,
+        stacklevel=2,
+    )
 
 
 def _warn_plaintext_oauth_token_storage(config: LitestarAuthConfig[Any, Any]) -> None:
@@ -151,13 +177,13 @@ def _warn_process_local_totp_stores(config: LitestarAuthConfig[Any, Any]) -> Non
     if totp_config is None:
         return
 
-    from litestar_auth.authentication.strategy.jwt import (  # noqa: PLC0415
+    from litestar_auth.authentication.strategy.jwt import (  # ruff: ignore[import-outside-top-level]
         InMemoryJWTDenylistStore as CurrentInMemoryJWTDenylistStore,
     )
-    from litestar_auth.totp import (  # noqa: PLC0415
+    from litestar_auth.totp import (  # ruff: ignore[import-outside-top-level]
         InMemoryTotpEnrollmentStore as CurrentInMemoryTotpEnrollmentStore,
     )
-    from litestar_auth.totp import (  # noqa: PLC0415
+    from litestar_auth.totp import (  # ruff: ignore[import-outside-top-level]
         InMemoryUsedTotpCodeStore as CurrentInMemoryUsedTotpCodeStore,
     )
 

@@ -13,9 +13,9 @@ if TYPE_CHECKING:
     from litestar_auth.password import PasswordHelper
     from litestar_auth.ratelimit import TotpSensitiveEndpoint
 
-INVALID_TOTP_TOKEN_DETAIL = "Invalid or expired 2FA pending token."  # noqa: S105
+INVALID_TOTP_TOKEN_DETAIL = "Invalid or expired 2FA pending token."  # ruff: ignore[hardcoded-password-string]
 INVALID_TOTP_CODE_DETAIL = "Invalid TOTP code."
-INVALID_ENROLL_TOKEN_DETAIL = "Invalid or expired enrollment token."  # noqa: S105
+INVALID_ENROLL_TOKEN_DETAIL = "Invalid or expired enrollment token."  # ruff: ignore[hardcoded-password-string]
 TOTP_ENROLL_AUDIENCE = _CONFIG_TOTP_ENROLL_AUDIENCE
 TOTP_SENSITIVE_ENDPOINTS: tuple[TotpSensitiveEndpoint, ...] = (
     "enable",
