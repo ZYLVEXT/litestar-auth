@@ -23,6 +23,7 @@ For direct provider-login assembly, `ProviderOAuthControllerConfig(...)` carries
 - Token exchange: the client must provide `get_access_token(...)` with an `access_token` payload and accept the
   PKCE `code_verifier` keyword argument.
 - Identity: provide `get_id_email(...)` or `get_profile(...)` with account id and email fields.
+  A direct `(account_id, None)` result maps to `400 OAUTH_NOT_AVAILABLE_EMAIL`.
 - Optional verification: provide async `get_email_verified(...)` or an `email_verified` field on the profile payload.
 - Invalid import paths, missing methods, or malformed payloads fail closed with `ConfigurationError`.
 

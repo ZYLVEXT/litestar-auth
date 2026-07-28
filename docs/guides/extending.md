@@ -156,11 +156,7 @@ forking the plugin:
 
 ```python
 def filter_plugin_controllers(controllers):
-    return [
-        controller
-        for controller in controllers
-        if getattr(controller, "__name__", "") != "VerifyController"
-    ]
+    return [controller for controller in controllers if getattr(controller, "__name__", "") != "VerifyController"]
 
 
 config.controller_hook = filter_plugin_controllers

@@ -110,8 +110,7 @@ from typing import Protocol
 
 
 class PermissionResolver(Protocol):
-    def resolve(self, user: object, *, context: object | None = None) -> frozenset[str]:
-        ...
+    def resolve(self, user: object, *, context: object | None = None) -> frozenset[str]: ...
 ```
 
 The protocol is exported for explicit typing and structural conformance as

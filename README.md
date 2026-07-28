@@ -134,7 +134,8 @@ Install extras only when you need those features:
 - `litestar-auth[redis]` for Redis-backed token storage, JWT denylist support, and auth rate limiting.
 - `litestar-auth[oauth]` for OAuth flows via `httpx-oauth` and encrypted provider tokens.
 - `litestar-auth[totp]` for built-in TOTP helpers.
-- `litestar-auth[all]` for `redis`, `oauth`, and `totp` together.
+- `litestar-auth[jwt]` for asymmetric RS*/ES* JWT algorithms (`cryptography`).
+- `litestar-auth[all]` for `redis`, `oauth`, `totp`, and `jwt` together.
 
 ## Requirements
 

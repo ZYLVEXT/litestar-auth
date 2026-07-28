@@ -92,7 +92,7 @@ Moved to: [Manager customization](configuration/manager.md#manager-password-surf
 
 Moved to: [Backends](configuration/backends.md#paths-and-http-feature-flags).
 
-`include_session_devices=True` opt-in mounts authenticated refresh-session management routes under
+`include_session_devices=True` opt-in mounts non-API-key refresh-session management routes under
 `auth_path`: `GET /sessions`, `POST /sessions`, `DELETE /sessions/{session_id}`, and
 `POST /sessions/revoke-others`. These routes require a backend strategy that implements the
 refresh-session management protocol, such as the built-in DB token strategy; unsupported JWT or Redis

@@ -30,7 +30,7 @@ Use this controller when your application:
 - Needs custom request/response schemas or handler semantics that are not
   direct factory hooks on `create_role_admin_controller(...)`.
 - Wants to own the authorization policy instead of using the contrib default
-  `guards=[is_superuser]`.
+  `guards=[is_superuser, requires_password_session]`.
 - Expects role names to be normalized (lowercase, trimmed, deduplicated) like
   the CLI.
 
@@ -65,7 +65,7 @@ from msgspec import Struct
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from litestar_auth.guards import is_superuser
+from litestar_auth.guards import is_superuser, requires_password_session
 
 
 def normalize_role_name(role: str) -> str:
@@ -208,7 +208,7 @@ def create_role_admin_controller(
 
     class RoleAdminController(Controller):
         path = f"/{route_prefix}"
-        guards = [is_superuser]
+        guards = [is_superuser, requires_password_session]
 
         # -- role CRUD -------------------------------------------------------
 
@@ -310,9 +310,7 @@ def create_role_admin_controller(
                     raise HTTPException(
                         status_code=HTTP_409_CONFLICT,
                         detail=(
-                            f"Cannot delete role '{normalized}': "
-                            "users are still assigned to it. "
-                            "Unassign users first."
+                            f"Cannot delete role '{normalized}': users are still assigned to it. Unassign users first."
                         ),
                     )
                 await svc.delete(normalized, auto_commit=True)
@@ -467,8 +465,9 @@ automatically — no extra dependency needed.
 
 The controller expects:
 
-- **User model**: Has `id` (UUID or int) and exposes role membership compatible with the
-  configured `is_superuser` guard.
+- **User model**: Has `id` (UUID or int) and exposes role membership compatible with
+  `is_superuser`. `requires_password_session` evaluates the request authentication context,
+  not the user model.
 - **Role model**: Has `name` as primary key.
   The bundled `Role` model already includes an optional `description` column.
 - **UserRole model**: Has `user_id` and `role_name` foreign keys.

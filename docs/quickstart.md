@@ -8,7 +8,9 @@ This walkthrough gives you one working flow on local SQLite: register a user, ve
 uv add litestar-auth aiosqlite
 ```
 
-Add extras only when you need them later: `litestar-auth[redis]` for shared Redis-backed features, `litestar-auth[oauth]` for OAuth, and `litestar-auth[totp]` for built-in TOTP flows.
+Add extras only when you need them later: `litestar-auth[redis]` for shared Redis-backed
+features, `litestar-auth[oauth]` for OAuth, `litestar-auth[totp]` for built-in TOTP flows,
+and `litestar-auth[jwt]` when selecting asymmetric RS*/ES* JWT algorithms.
 
 ## 2. Create the SQLite tables
 

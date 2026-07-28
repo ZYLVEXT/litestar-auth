@@ -93,8 +93,7 @@ class Project:
     owner_id: UUID
 
 
-async def load_project(project_id: UUID) -> Project:
-    ...
+async def load_project(project_id: UUID) -> Project: ...
 
 
 @get("/projects/{project_id:uuid}", guards=[is_authenticated])

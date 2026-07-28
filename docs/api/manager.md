@@ -56,6 +56,11 @@ flows, and `manager.totp` for TOTP secret storage. Low-level JWT helpers sit und
 services, so existing call sites continue to work; prefer the service properties when you are
 working within one subsystem directly.
 
+Custom `extra_claims` passed to the low-level account-token writers may add domain metadata, but
+cannot replace signer-owned `sub`, `aud`, `iat`, `nbf`, `exp`, or `jti` claims. Reset-password
+tokens also always derive `password_fingerprint` from the current persisted password hash; a
+caller-provided claim cannot weaken that binding.
+
 The default no-op lifecycle hook implementations live on `UserManagerHooks`, which
 `BaseUserManager` inherits. Subclass `BaseUserManager` exactly as before; the mixin split only
 keeps the manager surface easier to navigate and document.

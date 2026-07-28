@@ -92,17 +92,14 @@ from litestar_auth.extensions import (
 class AuditExtension:
     name = "audit"
 
-    def validate(self, context) -> None:
-        ...
+    def validate(self, context) -> None: ...
 
-    def register(self, context) -> None:
-        ...
+    def register(self, context) -> None: ...
 
     def manager_hook_subscribers(self) -> tuple[ExtensionManagerHookSubscriber, ...]:
         return (self._record_event,)
 
-    async def _record_event(self, event: ExtensionManagerHookEvent) -> None:
-        ...
+    async def _record_event(self, event: ExtensionManagerHookEvent) -> None: ...
 
 
 extension: AuthEventSubscriberExtension = AuditExtension()
@@ -149,8 +146,7 @@ from litestar_auth.plugin import LitestarAuthConfig
 
 
 class MyCliExtension:
-    def register_cli(self, cli: Group, config: LitestarAuthConfig[Any, Any]) -> None:
-        ...
+    def register_cli(self, cli: Group, config: LitestarAuthConfig[Any, Any]) -> None: ...
 
 
 extension: AuthCliExtension = MyCliExtension()

@@ -86,6 +86,7 @@ Call that helper during metadata registration or Alembic setup when the app reus
 ```python
 from litestar_auth.db.sqlalchemy import SQLAlchemyUserDatabase
 
+
 def user_db_factory(session):
     return SQLAlchemyUserDatabase(
         session,
@@ -114,6 +115,7 @@ If you instantiate `SQLAlchemyUserDatabase` directly for OAuth persistence outsi
 ```python
 from litestar_auth.db.sqlalchemy import SQLAlchemyUserDatabase
 from litestar_auth.oauth_encryption import OAuthTokenEncryption
+
 
 def user_db_factory(session):
     return SQLAlchemyUserDatabase(

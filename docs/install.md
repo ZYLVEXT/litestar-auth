@@ -22,7 +22,8 @@ pip install litestar-auth
 | `redis` | Redis-backed token strategy and Redis JWT denylist / rate limiting helpers. |
 | `oauth` | OAuth flows via `httpx-oauth` and token encryption (`cryptography`). |
 | `totp` | TOTP helpers that need `cryptography` (if not already installed via `oauth`). |
-| `all` | `redis` + `oauth` + `totp`. |
+| `jwt` | Asymmetric JWT algorithms (RS*/ES*) through PyJWT + `cryptography`; HS* works with core. |
+| `all` | `redis` + `oauth` + `totp` + `jwt`. |
 
 ```bash
 uv add "litestar-auth[all]"
@@ -32,7 +33,9 @@ uv add "litestar-auth[all]"
 
 === "JWT / Bearer API"
 
-The base install at the top of this page is enough. Configure `BearerTransport` + `JWTStrategy` (see [Quickstart](quickstart.md)).
+The base install is enough for the default symmetric HS256 configuration. Install
+`litestar-auth[jwt]` before selecting an asymmetric RS*/ES* algorithm. Configure
+`BearerTransport` + `JWTStrategy` (see [Quickstart](quickstart.md)).
 
 === "Browser sessions (cookies)"
 
@@ -44,6 +47,7 @@ Same core package. Use `CookieTransport` and set `csrf_secret` in production. Se
 uv add "litestar-auth[oauth]"   # OAuth
 uv add "litestar-auth[redis]"   # Redis strategy, denylist, rate limits
 uv add "litestar-auth[totp]"    # TOTP helpers if not already via oauth
+uv add "litestar-auth[jwt]"     # asymmetric RS*/ES* JWT algorithms
 # or
 uv add "litestar-auth[all]"
 ```

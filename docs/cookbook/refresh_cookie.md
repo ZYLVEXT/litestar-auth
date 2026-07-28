@@ -7,7 +7,7 @@ Long-lived sessions often use a **refresh** token in a separate cookie or body f
 Set on `LitestarAuthConfig`:
 
 ```python
-enable_refresh=True
+enable_refresh = True
 ```
 
 Your **strategy** must implement refresh semantics (e.g. rotating refresh tokens for database/Redis strategies, or refresh cookie handling for JWT setups). The auth controller exposes:

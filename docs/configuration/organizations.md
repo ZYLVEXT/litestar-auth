@@ -182,7 +182,10 @@ issuing an org-bound token.
 ## Switch Organization Route
 
 Set `OrganizationConfig.include_switch_organization=True` to mount `POST /auth/switch-organization`
-for the primary JWT-capable backend. Additional JWT-capable backends mount the same route under
+with `requires_password_session`. This guard rejects delegated API keys so they cannot be upgraded
+into organization-bound JWT sessions; it does not require password re-verification. The route is
+mounted for the primary JWT-capable backend.
+Additional JWT-capable backends mount the same route under
 `/auth/{backend_name}/switch-organization`. The controller is not mounted for API-key transports or
 strategies that cannot issue organization-bound tokens.
 
@@ -282,7 +285,7 @@ config = LitestarAuthConfig(
 `OrganizationAdminExtension.validate()` fails closed during startup when organizations are disabled
 or when the controller id parser is not configured directly on `LitestarAuthConfig` or inherited
 from `UserManagerSecurity.id_parser`. The extension contributes the same default `/organizations`
-controller and `[is_superuser]` guard as the manual factory path, marks its routes as
+controller and `[is_superuser, requires_password_session]` guards as the manual factory path, marks its routes as
 litestar-auth-owned for route-scoped exception wiring, and uses the plugin's derived OpenAPI
 security requirements for invitation routes. Pass explicit guards only when the application has an
 equivalent operator authorization policy. Organization create and user-scoped organization listing
@@ -326,12 +329,12 @@ The manual factory remains public and supported for custom route-table layouts:
 
 ```python
 from litestar_auth.contrib.organization_admin import create_organization_admin_controller
-from litestar_auth.guards import is_superuser
+from litestar_auth.guards import is_superuser, requires_password_session
 
 OrganizationAdminController = create_organization_admin_controller(
     config=config,
     route_prefix="organizations",
-    guards=[is_superuser],
+    guards=[is_superuser, requires_password_session],
 )
 ```
 

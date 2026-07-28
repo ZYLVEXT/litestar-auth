@@ -5,7 +5,7 @@ Use this when moving from local development to production, especially for **secr
 ## Process topology
 
 - **Single worker / dev** — in-memory JWT denylist, in-memory rate limiting, and in-memory TOTP stores are acceptable for local testing only.
-- **Multiple workers or restarts that matter** — use **Redis** (or equivalent shared stores) for: JWT `jti` denylist, the auth rate-limit config, `totp_enrollment_store`, `totp_pending_jti_store`, and `totp_used_tokens_store`. When one async Redis client should back auth rate limiting plus the TOTP stores, use `litestar_auth.contrib.redis.RedisAuthPreset` as the shared-client path and keep the three TOTP stores conceptually separate: pending-enrollment secrets, pending-token JTI deduplication, and used-code replay protection.
+- **Multiple workers or restarts that matter** — use **Redis** (or equivalent shared stores) for: JWT `jti` denylist, `account_token_denylist_store`, the auth rate-limit config, `totp_enrollment_store`, `totp_pending_jti_store`, and `totp_used_tokens_store`. When one async Redis client should back auth rate limiting plus the TOTP stores, use `litestar_auth.contrib.redis.RedisAuthPreset` as the shared-client path and keep the replay stores conceptually separate by purpose even when they share one client.
 
 Declare known process topology with `LitestarAuthConfig.deployment_worker_count`. `None` means the
 plugin cannot reliably infer the ASGI host's worker count and preserves warning-only startup
@@ -138,13 +138,12 @@ concerns remain application-owned until the library ships a built-in helper.
 
 ### Privileged controllers and role administration
 
-The contrib role-admin controller (`create_role_admin_controller(...)`) defaults to a single
-`is_superuser` guard when `guards=None`. An explicit guard sequence replaces that default verbatim —
-including an **empty list**, which leaves the role-administration endpoints with **no authorization
-guard**. The empty-override is intentional (it lets you compose a fully custom guard stack), but it is
-a footgun: never pass `guards=[]` to a privileged controller meaning "use the defaults". In
-production, either leave `guards=None` to keep the `is_superuser` default, or supply an explicit
-non-empty guard sequence that enforces at least equivalent privilege. The role-catalog invariants
+The contrib role-admin controller (`create_role_admin_controller(...)`) defaults to the
+`is_superuser` and `requires_password_session` guards when `guards=None`. An explicit non-empty guard
+sequence replaces that default verbatim; `guards=[]` is rejected during controller assembly so the
+privileged surface cannot be mounted accidentally without authorization. In production, either leave
+`guards=None` to keep the non-API-key superuser default, or supply a guard sequence that enforces at
+least equivalent privilege. The role-catalog invariants
 still fail closed regardless of guards — they refuse to modify the system-managed superuser role or
 remove the final superuser assignment — but those are integrity guards, not an authorization
 substitute.

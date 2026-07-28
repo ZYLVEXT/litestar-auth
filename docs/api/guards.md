@@ -33,7 +33,8 @@ API-key guards operate on `ApiKeyContext` from `request.auth`:
 - `has_any_scope(*scopes)` requires at least one listed key scope and, when the key context was
   issued with `scope_subset_check=True`, still downscopes by current user authority.
 - `requires_password_session` rejects API-key callers and is used on self-service API-key
-  create/update/revoke routes plus other credential-rotation boundaries.
+  create/update/revoke routes plus other credential-rotation boundaries. Its historical name
+  denotes this credential-class boundary; it does not perform password re-verification.
 
 Permission-shaped API-key scopes share the permission grammar and wildcard matcher:
 `reports:*` grants `reports:read`, and `*` grants every concrete permission-shaped

@@ -7,7 +7,7 @@ Use this guide for the supported HTTP role-management surface:
 !!! warning "Opt-in admin surface"
     `LitestarAuth` does not auto-mount role administration. Opt in with
     `RoleAdminExtension` or register the factory-built controller explicitly,
-    keep the default `is_superuser` guard unless you have reviewed a stricter
+    keep the default `is_superuser` plus `requires_password_session` guards unless you have reviewed a stricter
     replacement, and treat guard overrides as security-sensitive application
     code.
 
@@ -55,7 +55,7 @@ app = Litestar(plugins=[LitestarAuth(config)])
 ```
 
 By default the extension mounts the same controller as the manual factory path:
-`/roles` with `guards=[is_superuser]`.
+`/roles` with `guards=[is_superuser, requires_password_session]`.
 
 ```python
 from litestar_auth.guards import has_any_role
@@ -140,7 +140,8 @@ For direct grouped settings, pass `RoleAdminControllerConfig(...)` as
 - Mounts under `/roles` by default. `RoleAdminExtension(route_prefix="admin/roles")`
   or `create_role_admin_controller(route_prefix="admin/roles")` becomes
   `/admin/roles`.
-- Applies `guards=[is_superuser]` by default.
+- Applies `guards=[is_superuser, requires_password_session]` by default so delegated API keys cannot
+  inherit global role-administration authority from their owner.
 - Publishes the fixed contrib payloads from
   `litestar_auth.contrib.role_admin._schemas`:
   `RoleCreate`, `RoleUpdate`, `RoleRead`, and `UserBrief`.
@@ -162,7 +163,7 @@ mapping lives in [HTTP API](../http_api.md#contrib-role-administration-opt-in).
 
 ### Custom guard policy
 
-Keep the default `is_superuser` guard unless you have a narrower
+Keep the default `is_superuser` plus `requires_password_session` guards unless you have a narrower
 application-specific admin role and have reviewed the downgrade risk.
 
 ```python

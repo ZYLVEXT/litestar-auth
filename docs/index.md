@@ -41,7 +41,7 @@ Teams building on [Litestar](https://litestar.dev/) who need registration, login
 ## Quick peek
 
 ```python
---8<-- "docs/snippets/home_quick_peek.py"
+--8 < --"docs/snippets/home_quick_peek.py"
 ```
 
 See [Quickstart](quickstart.md) for a runnable pattern with the default `User` model and secrets.

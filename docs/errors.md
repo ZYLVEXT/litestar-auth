@@ -1,6 +1,9 @@
 # Error codes
 
 Auth-related HTTP errors use Litestar `ClientException` (or guard failures) with a machine-readable **`code`** in `extra` where the library controls the response. Clients should rely on **`code`**, not only on `detail` text.
+Transient token-store failures deliberately return the stable public detail
+`Token processing failed.`; backend exception messages are retained for trusted diagnostics and
+are never reflected into the HTTP response.
 
 Typical response shape (conceptual):
 

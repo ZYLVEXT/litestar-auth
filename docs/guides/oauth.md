@@ -13,7 +13,7 @@ OAuth has one plugin-owned route-registration contract plus a manual route-table
   - `POST /auth/associate/{provider}/authorize`
   - `GET /auth/associate/{provider}/callback`
 
-  Associate authorize is **POST + CSRF-protected** to defeat forced-association CSRF (see [Cookbook: OAuth associate](../cookbook/oauth_associate.md) for the browser-flow recipe). Login authorize stays GET because anonymous OAuth login has no victim session to abuse.
+  Associate authorize is **POST + CSRF-protected** to defeat forced-association CSRF, and both associate routes require `requires_password_session` so delegated API keys cannot link identities (see [Cookbook: OAuth associate](../cookbook/oauth_associate.md) for the browser-flow recipe). Login authorize stays GET because anonymous OAuth login has no victim session to abuse.
 - **Manual route table.** If you need a custom route table, custom path prefixes, or direct user-manager wiring, mount `create_provider_oauth_controller()` / `create_oauth_controller()` / `create_oauth_associate_controller()` yourself instead of using the plugin-owned route table.
 
 The plugin no longer treats `oauth_providers` as inert metadata: if providers are declared, login routes are part of the plugin-owned HTTP surface.
@@ -70,8 +70,9 @@ state-only authorization-code flow.
 
 Identity resolution:
 
-- Preferred direct contract: `get_id_email(access_token) -> tuple[str, str] | None`
-  Return `(account_id, email)` as two non-empty strings, or return `None` to fall back to profile lookup.
+- Preferred direct contract: `get_id_email(access_token) -> tuple[str, str | None] | None`
+  Return `(account_id, email)` as two non-empty strings. `(account_id, None)` produces
+  `400 OAUTH_NOT_AVAILABLE_EMAIL`; returning `None` requests profile lookup.
 - Profile fallback: `get_profile(access_token) -> payload`
   The payload may be a mapping or an object with attributes. It must expose `id` or `account_id`, plus `email` or `account_email`.
 

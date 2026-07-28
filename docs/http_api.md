@@ -23,13 +23,13 @@ mount protected controllers manually, pass `security=` to the relevant controlle
 | POST | `{auth}/login` | `LoginCredentials` (`identifier`, `password`) | Always (auth controller) | Credentials → tokens / session. |
 | POST | `{auth}/logout` | None | Always | Authenticated; clears the current access token and its linked DB refresh session, if any. |
 | POST | `{auth}/refresh` | `RefreshTokenRequest` (`refresh_token`) | `enable_refresh=True` | New access token from refresh token / cookie. |
-| GET | `{auth}/sessions` | None | `include_session_devices=True` | Authenticated; list the current user's active DB-backed refresh sessions. CookieTransport clients can be marked current from the refresh cookie. |
-| POST | `{auth}/sessions` | `RefreshTokenRequest` (`refresh_token`) | `include_session_devices=True` | Authenticated; list active refresh sessions while identifying the current bearer refresh session. |
-| DELETE | `{auth}/sessions/{session_id}` | None | `include_session_devices=True` | Authenticated; revoke one of the current user's DB sessions and its linked access tokens by public session id. |
-| POST | `{auth}/sessions/revoke-others` | Optional `RefreshTokenRequest` (`refresh_token`) for bearer clients | `include_session_devices=True` | Authenticated; revoke the current user's other DB sessions and their linked access tokens. |
-| POST | `{auth}/switch-organization` | `SwitchOrganizationRequest` (`organization_slug`) | `organization_config.enabled=True`, `organization_config.include_switch_organization=True`, and a JWT-capable non-API-key backend | Authenticated; verifies target organization membership and returns an organization-bound JWT through the configured transport. |
-| POST | `{auth}/organization-invitations/accept` | `OrganizationInvitationTokenRequest` (`token`) | `organization_config.enabled=True`, `organization_config.include_organization_invitations=True` | Authenticated; validates a single-use invitation token, requires the authenticated user's normalized email to match the invitation, creates membership roles from the invitation, and consumes the invitation. |
-| POST | `{auth}/organization-invitations/decline` | `OrganizationInvitationTokenRequest` (`token`) | `organization_config.enabled=True`, `organization_config.include_organization_invitations=True` | Authenticated; validates the token and authenticated email, then revokes the pending invitation without creating membership. |
+| GET | `{auth}/sessions` | None | `include_session_devices=True` | Non-API-key user session; list the current user's active DB-backed refresh sessions. CookieTransport clients can be marked current from the refresh cookie. |
+| POST | `{auth}/sessions` | `RefreshTokenRequest` (`refresh_token`) | `include_session_devices=True` | Non-API-key user session; list active refresh sessions while identifying the current bearer refresh session. |
+| DELETE | `{auth}/sessions/{session_id}` | None | `include_session_devices=True` | Non-API-key user session; revoke one of the current user's DB sessions and its linked access tokens by public session id. |
+| POST | `{auth}/sessions/revoke-others` | Optional `RefreshTokenRequest` (`refresh_token`) for bearer clients | `include_session_devices=True` | Non-API-key user session; revoke the current user's other DB sessions and their linked access tokens. |
+| POST | `{auth}/switch-organization` | `SwitchOrganizationRequest` (`organization_slug`) | `organization_config.enabled=True`, `organization_config.include_switch_organization=True`, and a JWT-capable non-API-key backend | Non-API-key user session; verifies target organization membership and returns an organization-bound JWT through the configured transport. |
+| POST | `{auth}/organization-invitations/accept` | `OrganizationInvitationTokenRequest` (`token`) | `organization_config.enabled=True`, `organization_config.include_organization_invitations=True` | Active, verified non-API-key user session; validates a single-use invitation token, requires the authenticated user's normalized email to match the invitation, creates membership roles from the invitation, and consumes the invitation. |
+| POST | `{auth}/organization-invitations/decline` | `OrganizationInvitationTokenRequest` (`token`) | `organization_config.enabled=True`, `organization_config.include_organization_invitations=True` | Active, verified non-API-key user session; validates the token and authenticated email, then revokes the pending invitation without creating membership. |
 
 ## Session/device response contracts
 
@@ -71,7 +71,9 @@ List responses use `RefreshSessionListResponse`:
 ```
 
 Plugin-owned session/device routes are opt-in with `include_session_devices=True` and are mounted
-under `auth_path`. They are authenticated routes and always scope strategy calls to `request.user`.
+with `requires_password_session`, so a delegated API key cannot inspect or revoke the owner's
+interactive sessions. They live under `auth_path`, remain authenticated routes, and always scope
+strategy calls to `request.user`.
 The first controller slice supports strategies implementing the refresh-session management protocol,
 including the built-in DB token strategy. JWT and Redis token strategies do not provide a session
 dashboard in this slice.
@@ -104,7 +106,9 @@ For the built-in DB strategy, this revokes all active refresh sessions for the c
 ## Organization activation
 
 `POST {auth}/switch-organization` is an opt-in organization route mounted under the backend's auth
-path. The primary backend uses `{auth}`. Additional capable backends use `{auth}/{backend_name}`,
+path and requires `requires_password_session`; delegated API keys cannot exchange their limited
+authority for an organization-bound JWT. The primary backend uses `{auth}`. Additional capable
+backends use `{auth}/{backend_name}`,
 matching the rest of the backend-specific controller layout.
 
 Request body:
@@ -148,7 +152,8 @@ publish `litestar_auth_current_organization`.
 
 When `OrganizationConfig(enabled=True, include_organization_admin=True, store_factory=...)` is set,
 the plugin mounts the bundled organization-admin controller under `/organizations`. The route surface
-is opt-in and defaults to `guards=[is_superuser]`. Manual mounting uses
+is opt-in and defaults to `guards=[is_superuser, requires_password_session]`, so a delegated API key
+cannot inherit the owning superuser's global administration authority. Manual mounting uses
 `litestar_auth.contrib.organization_admin.create_organization_admin_controller(...)`; keep the
 default guard posture unless the application supplies an equivalent operator-only guard. Passing
 `guards=[]` is rejected during controller assembly so this admin surface cannot be mounted without
@@ -304,8 +309,8 @@ When `oauth_config.include_oauth_associate=True`, the plugin auto-mounts associa
 
 | Method | Path pattern | Description |
 | ------ | ------------ | ----------- |
-| POST | `{auth}/associate/{provider}/authorize` | Authenticated user starts linking. CSRF-protected: cookie-transport deployments must mirror the plugin-managed CSRF cookie into the configured `csrf_header_name` (defaults to `X-CSRF-Token`); bearer-only deployments rely on the cross-origin attachment of `Authorization` to be impossible. The route is **POST** (not GET) so Litestar's CSRF middleware can enforce that token check before the body runs and forced-association attacks fail closed. |
-| GET | `{auth}/associate/{provider}/callback` | Completes linking for `request.user`. Stays GET because OAuth providers redirect there with GET. |
+| POST | `{auth}/associate/{provider}/authorize` | Non-API-key user starts linking; delegated API keys are rejected. CSRF-protected: cookie-transport deployments must mirror the plugin-managed CSRF cookie into the configured `csrf_header_name` (defaults to `X-CSRF-Token`); bearer-only deployments rely on the cross-origin attachment of `Authorization` to be impossible. The route is **POST** (not GET) so Litestar's CSRF middleware can enforce that token check before the body runs and forced-association attacks fail closed. |
+| GET | `{auth}/associate/{provider}/callback` | Completes linking for the non-API-key `request.user`; delegated API keys are rejected. Stays GET because OAuth providers redirect there with GET. |
 
 ## Users CRUD
 
@@ -316,10 +321,10 @@ When `include_users=True`, routes are under `{users}`.
 | GET | `{users}/me` | Authenticated |
 | PATCH | `{users}/me` | Authenticated |
 | POST | `{users}/me/change-password` | Authenticated |
-| GET | `{users}/{id}` | Superuser |
-| PATCH | `{users}/{id}` | Superuser |
-| DELETE | `{users}/{id}` | Superuser |
-| GET | `{users}` | Superuser (list) |
+| GET | `{users}/{id}` | Non-API-key superuser session |
+| PATCH | `{users}/{id}` | Non-API-key superuser session |
+| DELETE | `{users}/{id}` | Non-API-key superuser session |
+| GET | `{users}` | Non-API-key superuser session (list) |
 
 The built-in users surface also serializes `UserRead`, so all `/users` reads include normalized
 `roles`. `PATCH {users}/me` strips `roles` and the other privileged fields from self-service
@@ -346,7 +351,7 @@ surface can opt into [HTTP role administration](guides/role_admin_http.md).
 
 If you mount `litestar_auth.contrib.role_admin.create_role_admin_controller(...)`, the library
 adds an admin-only HTTP role-management surface under its configured prefix (default `/roles`).
-The factory defaults to `guards=[is_superuser]`; see
+The factory defaults to `guards=[is_superuser, requires_password_session]`; see
 [HTTP role administration](guides/role_admin_http.md) for mounting and override guidance.
 In the route table below, `{roles}` means the configured contrib role-admin prefix (default `/roles`).
 

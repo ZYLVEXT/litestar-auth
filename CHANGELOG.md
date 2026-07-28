@@ -1,3 +1,71 @@
+## Unreleased
+
+### Security
+
+- **Delegated API keys can no longer inherit unrestricted user-session authority on built-in sensitive
+  routes.** Organization switching, OAuth account association, session-device management, organization
+  invitation acceptance/decline, core user administration, API-key administration, and the contrib role
+  and organization administration controllers now require `requires_password_session` in addition to
+  their existing authentication or role guard. This prevents a scoped key owned by a superuser from
+  becoming a full administrative or organization-bound JWT credential. Applications that replace contrib
+  controller guards remain responsible for enforcing an equivalent credential boundary.
+- **Verify and reset tokens support atomic single-use consumption.** `JWTReplayStore` and
+  `JWTReplayStoreResult` extend the denylist boundary with `mark_used()`, implemented atomically by the
+  bundled in-memory and Redis stores. Account mutation happens only after successful consumption;
+  concurrent replay is rejected, capacity pressure fails closed with HTTP 503, and known multi-worker
+  deployments reject process-local replay stores at startup. Custom stores supplied through
+  `account_token_denylist_store` must implement the new atomic contract.
+- **Signer-owned account-token claims can no longer be replaced by `extra_claims`.** The library rejects
+  overrides of `aud`, `exp`, `iat`, `jti`, `nbf`, and `sub`, and always derives a reset token's
+  `password_fingerprint` from the current stored password hash.
+- **Security-sensitive numeric configuration now rejects booleans, NaN, and infinities.** Timing floors,
+  rate-limit and lockout windows, API-key signing skew and limits, and secret-entropy thresholds are
+  validated as finite values before routes are registered.
+- **Signed API-key canonicalization now fails closed for malformed paths and query strings.** Arbitrary raw
+  path bytes are percent-encoded without decoding, malformed query input is rejected instead of producing
+  HTTP 500, and signed key identifiers use the same bounded format validation as bearer keys.
+- **Redis-backed security TTLs never expire earlier than configured.** Fractional rate-limit, lockout,
+  opaque-token, JWT replay, and TOTP replay lifetimes are rounded up at their respective second or
+  millisecond precision.
+- **Security events now describe committed outcomes.** Refresh-token replay success is logged only after
+  chain revocation commits; API-key nonce, JWT/account-token replay, TOTP, lockout, and capacity events use
+  stable structured event names. Failed JWT denylist insertion is reported as a failed revocation rather
+  than as fail-closed success.
+- **Backend token-store diagnostics are no longer reflected in HTTP responses.** Transient `TokenError`
+  failures return the stable public `Token processing failed.` detail while retaining the original
+  exception chain for trusted diagnostics.
+
+### Fixed
+
+- OAuth clients compatible with `httpx-oauth` 0.17 now accept the documented
+  `get_id_email() -> tuple[str, str | None] | None` contract. A provider identity without an email maps to
+  the stable `OAUTH_NOT_AVAILABLE_EMAIL` response, and application-defined `BaseOAuth2` subclasses retain
+  sequence-valued scopes instead of joining them character by character.
+- An explicit empty `guards=[]` override for the contrib role-admin controller is rejected with
+  `ConfigurationError` instead of publishing administrative routes without authorization.
+- SQLAlchemy mapper inspection is narrowed explicitly for ty 0.0.64 without changing lazy ORM or optional
+  dependency import boundaries.
+
+### Packaging
+
+- Added the `jwt` extra for asymmetric RS*/ES* JWT algorithms:
+  `litestar-auth[jwt]` installs `cryptography`; the `all` extra now includes it.
+- Refreshed development and documentation tooling, including Ruff 0.16, ty 0.0.64, prek 0.4.11,
+  fakeredis 2.37, rust-just 1.57, commitizen 4.16.5, and Zensical 0.0.51. Ruff configuration and
+  suppressions use the new rule-name syntax.
+
+### CI
+
+- Refreshed GitHub Actions to current stable releases while retaining full commit-SHA pinning:
+  checkout 7.0.1, setup-uv 9.0.0, prek-action 2.0.6, setup-python 7.0.0,
+  gh-action-pypi-publish 1.14.1, and CodeQL 4.37.3. `prune-cache: true` preserves the pre-v9 setup-uv
+  cache behavior explicitly.
+
+### Documentation
+
+- Expanded deployment, HTTP API, OAuth, role/organization administration, token replay, optional-extra,
+  and structured security-event guidance.
+
 ## 5.3.0 (2026-07-14)
 
 ### Security
