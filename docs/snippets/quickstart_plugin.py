@@ -39,7 +39,7 @@ class UserManager(BaseUserManager[User, UUID]):
     async def on_after_register(self, user: User, token: str) -> None:
         """Store and print a verification token for the registered user."""
         self.verification_tokens[user.email] = token
-        print(f"verification token for {user.email}: {token}")  # noqa: T201
+        print(f"verification token for {user.email}: {token}")  # ruff: ignore[print]
 
 
 @get("/protected", guards=[is_authenticated], sync_to_thread=False)

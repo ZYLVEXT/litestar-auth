@@ -43,12 +43,13 @@ tracker = "https://github.com/ZYLVEXT/litestar-auth/issues"
 redis = ["redis>=8.0.1,<9.0.0"]
 oauth = ["httpx-oauth>=0.17.0,<0.18.0", "cryptography>=49.0.0"]
 totp = ["cryptography>=49.0.0"]
-all = ["litestar-auth[redis,oauth,totp]"]
+jwt = ["cryptography>=49.0.0"]
+all = ["litestar-auth[redis,oauth,totp,jwt]"]
 
 [dependency-groups]
 dev = [
     "aiosqlite>=0.22.1,<0.23",
-    "commitizen>=4.16.4",
+    "commitizen>=4.16.5",
     "pip-audit>=2.10.1",
     "pytest>=9.1.1",
     "pytest-cov>=7.1.0",
@@ -57,17 +58,17 @@ dev = [
     "python-dotenv>=1.2.2",
     "pytest-timeout>=2.4.0",
     "pytest-xdist>=3.8.0",
-    "ruff>=0.15.21",
-    "rust-just>=1.56.0",
-    "ty>=0.0.59",
+    "ruff>=0.16.0",
+    "rust-just>=1.57.0",
+    "ty>=0.0.64",
     "deptry>=0.25.1",
-    "prek>=0.4.9",
-    "fakeredis[lua]>=2.36.2",
+    "prek>=0.4.11",
+    "fakeredis[lua]>=2.37.0",
 ]
 docs = [
     "mkdocstrings[python]>=1.0.6",
     "pymdown-extensions>=11.0.1",
-    "zensical>=0.0.50",
+    "zensical>=0.0.51",
 ]
 
 [tool.ty.environment]
@@ -115,33 +116,44 @@ line-ending = "auto"
 preview = true
 select = ["ALL"]
 ignore = [
-    "E501",  # line too long, handled by ruff-format
-    "CPY001",  # Missing copyright notice at top of file
+    "line-too-long",  # handled by ruff-format
+    "missing-trailing-comma",  # conflicts with ruff-format
+    "missing-copyright-notice",
 ]
 
 [tool.ruff.lint.pydocstyle]
 convention = "google"
 
 [tool.ruff.lint.per-file-ignores]
-"litestar_auth/ratelimit/__init__.py" = ["PLC2701"]
-"litestar_auth/models/__init__.py" = ["PLC0415"]
-"litestar_auth/models/user.py" = ["TC001"]
-"litestar_auth/models/_oauth_encrypted_types.py" = ["TC003"]
+"litestar_auth/ratelimit/__init__.py" = ["import-private-name"]
+"litestar_auth/models/__init__.py" = ["import-outside-top-level"]
+"litestar_auth/models/user.py" = ["typing-only-first-party-import"]
+"litestar_auth/models/_oauth_encrypted_types.py" = ["typing-only-standard-library-import"]
 # S105: This module declares public ErrorCode string constants. Their identifier
 # names contain "TOKEN"/"PASSWORD" so Ruff flags them as possible hardcoded
 # secrets, but the values are stable error-code labels surfaced in API responses,
 # never credentials.
-"litestar_auth/exceptions.py" = ["S105"]
+"litestar_auth/exceptions.py" = ["hardcoded-password-string"]
 # S105: JWT audience strings ("litestar-auth:verify", etc.) and secret-role
 # setting names are public protocol/catalog constants, not credentials.
-"litestar_auth/_secret_roles.py" = ["S105"]
+"litestar_auth/_secret_roles.py" = ["hardcoded-password-string"]
 # S105: ORM column/class-name strings ("hashed_password", "AccessToken",
 # "RefreshToken") are SQLAlchemy attribute identifiers, not credentials.
-"litestar_auth/_auth_model_mixins.py" = ["S105"]
+"litestar_auth/_auth_model_mixins.py" = ["hardcoded-password-string"]
 # S105: TOTP controller error-detail strings are user-facing failure messages,
 # not secrets.
-"litestar_auth/controllers/totp.py" = ["S105"]
-"tests/**/*.py" = ["ARG001", "ARG002", "N802", "N806", "PLC2701", "PLR0914", "PLR6301", "S", "SLF"]
+"litestar_auth/controllers/totp.py" = ["hardcoded-password-string"]
+"tests/**/*.py" = [
+    "unused-function-argument",
+    "unused-method-argument",
+    "invalid-function-name",
+    "non-lowercase-variable-in-function",
+    "import-private-name",
+    "too-many-locals",
+    "no-self-use",
+    "S",
+    "SLF",
+]
 
 [tool.pytest.ini_options]
 timeout = 60

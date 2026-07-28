@@ -10,7 +10,7 @@ def main() -> None:
         SystemExit: When ``uvicorn`` is not installed.
     """
     try:
-        import uvicorn  # noqa: PLC0415
+        import uvicorn  # ruff: ignore[import-outside-top-level]
     except ModuleNotFoundError:
         msg = (
             "Install an ASGI server, for example:\n"
